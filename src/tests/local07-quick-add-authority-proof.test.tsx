@@ -119,6 +119,7 @@ describe('LOCAL-07: Frontend Quick Add UI Authority & Installment Parity Proof',
       />
     );
 
+    fireEvent.click(screen.getByRole('button', { name: /รายเทอม/ }));
     expect(screen.getByDisplayValue('12000')).toBeDefined();
 
     // Rerender with Room 102 context
@@ -131,6 +132,7 @@ describe('LOCAL-07: Frontend Quick Add UI Authority & Installment Parity Proof',
       />
     );
 
+    fireEvent.click(screen.getByRole('button', { name: /รายเทอม/ }));
     // TERM tab shows 13,500
     expect(screen.getByDisplayValue('13500')).toBeDefined();
     const fourThousandFiveHundred = screen.getAllByText('฿4,500.00');
@@ -184,6 +186,9 @@ describe('LOCAL-07: Frontend Quick Add UI Authority & Installment Parity Proof',
         onSuccess={vi.fn()}
       />
     );
+
+    // Switch to TERM tab to render rental form
+    fireEvent.click(screen.getByRole('button', { name: /รายเทอม/ }));
 
     const formElement = container.querySelector('form')!;
     expect(formElement).not.toBeNull();

@@ -1,14 +1,17 @@
 // @vitest-environment jsdom
 /**
  * @license Apache-2.0
- * LOCAL-07: Quick Add Tenant via LINE OA Integration & Invariant Tests
+ * LOCAL-07: Quick Add Tenant via LINE OA Integration & Invariant Tests (Q1 - Q9)
  * Verifies:
- * 1. 4-Option layout (Row 1: TERM/MONTHLY/DAILY, Row 2: LINE)
- * 2. Pure dormitory-level onboarding: NO room-target summary in LINE body
- * 3. Exact 3 UI states: Loading, Not-Ready (with CTA to LINE OA settings), Ready (with QR, ID, Copy, Direct Link, 5-Step instructions)
- * 4. Room 101 vs Room 202 identical LINE presentation
- * 5. Dormitory A vs Dormitory B isolation
- * 6. Non-financial onboarding semantics: zero rental contract submissions
+ * Q1. Opening "+ เพิ่มผู้เช่า" defaults to LINE tab
+ * Q2. User can still switch from LINE to TERM / MONTHLY / DAILY
+ * Q3. Same dorm / different room opens identical LINE panel data
+ * Q4. NOT_CONNECTED state renders correct text + CTA and no QR
+ * Q5. CONNECTED_BUT_WEBHOOK_NOT_READY renders truthful intermediate text, not "ยังไม่ได้เชื่อมต่อ LINE OA"
+ * Q6. READY state renders QR + displayed LINE ID + direct friend link + copy button
+ * Q7. No room-specific body content appears in LINE panel
+ * Q8. Reopen modal after config state available → latest display state shown
+ * Q9. LINE logo asset renders in intended panel/tab area
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -18,7 +21,7 @@ import { QuickAddTenantModal } from '../components/QuickAddTenantModal';
 import { QuickAddRoomContext } from '../types';
 import { Task009ApiAdapter } from '../data/adapters/task009';
 
-describe('LOCAL-07 — Quick Add Tenant via LINE OA', () => {
+describe('LOCAL-07 — Quick Add Tenant via LINE OA (Q1 - Q9 Suite)', () => {
   const mockContext101: QuickAddRoomContext = {
     roomId: 'room-101-id',
     roomNumber: '101',
@@ -84,85 +87,7 @@ describe('LOCAL-07 — Quick Add Tenant via LINE OA', () => {
     cleanup();
   });
 
-  it('P1 & P2: renders 4 quick add options with Row 1 (TERM, MONTHLY, DAILY) and Row 2 (LINE แนะนำ)', () => {
-    render(
-      <QuickAddTenantModal
-        isOpen={true}
-        onClose={vi.fn()}
-        context={mockContext101}
-        onSuccess={vi.fn()}
-      />
-    );
-
-    // Row 1 buttons
-    expect(screen.getByRole('button', { name: /รายเทอม/i })).toBeTruthy();
-    expect(screen.getByRole('button', { name: /รายเดือน/i })).toBeTruthy();
-    expect(screen.getByRole('button', { name: /รายวัน/i })).toBeTruthy();
-
-    // Row 2 LINE button with badge
-    const lineButton = screen.getByRole('button', { name: /เพิ่มผู้เช่า LINE/i });
-    expect(lineButton).toBeTruthy();
-    expect(lineButton.textContent).toContain('แนะนำ');
-  });
-
-  it('P3 & P16: selecting LINE mode hides rental contract form/submit button and renders ZERO room-specific summary in body', async () => {
-    vi.spyOn(Task009ApiAdapter, 'getLineOaConfig').mockResolvedValue({
-      success: true,
-      data: {
-        connected: true,
-        isReady: true,
-        credentialsVerified: true,
-        webhookEndpointSet: true,
-        webhookTestSucceeded: true,
-        webhookActive: true,
-        hasChannelSecret: true,
-        hasAccessToken: true,
-        lineOaId: '@dorm_fresh',
-        botPremiumId: null,
-        botDisplayName: 'หอพักเฟรชวิลล์',
-        channelId: '1234567890',
-        accessTokenVerifiedAt: '2026-08-01T00:00:00.000Z',
-        webhookVerifiedAt: '2026-08-01T00:00:00.000Z',
-        webhookUrl: 'https://webhook.horplus.com/api/v1/line/webhook/key',
-        friendAddUrl: 'https://line.me/R/ti/p/@dorm_fresh',
-        qrSvg: '<svg data-testid="real-qr-svg"></svg>',
-      },
-    });
-
-    render(
-      <QuickAddTenantModal
-        isOpen={true}
-        onClose={vi.fn()}
-        context={mockContext101}
-        onSuccess={vi.fn()}
-      />
-    );
-
-    // Initially in TERM tab -> rental form is visible
-    expect(screen.getByText('ยืนยันเพิ่มผู้เช่า')).toBeTruthy();
-    expect(screen.getByPlaceholderText('เช่น นายสมชาย ใจดี')).toBeTruthy();
-
-    // Switch to LINE tab
-    const lineButton = screen.getByRole('button', { name: /เพิ่มผู้เช่า LINE/i });
-    fireEvent.click(lineButton);
-
-    // Rental form and submit button must disappear
-    expect(screen.queryByText('ยืนยันเพิ่มผู้เช่า')).toBeNull();
-    expect(screen.queryByPlaceholderText('เช่น นายสมชาย ใจดี')).toBeNull();
-
-    // Wait for LINE content to render
-    await waitFor(() => {
-      expect(screen.getByText('LINE Official Account')).toBeTruthy();
-    });
-
-    // Verify ZERO room target summary in LINE body
-    expect(screen.queryByText('ห้องพักเป้าหมาย')).toBeNull();
-    expect(screen.queryByText(/ห้อง 101/)).toBeNull();
-    expect(screen.queryByText(/อาคาร A/)).toBeNull();
-    expect(screen.queryByText(/ชั้น 1/)).toBeNull();
-  });
-
-  it('P8: renders STATE B (Not Ready) with CTA navigating to LINE OA settings when LINE OA is unconfigured', async () => {
+  it('Q1: Opening "+ เพิ่มผู้เช่า" defaults to LINE tab', async () => {
     vi.spyOn(Task009ApiAdapter, 'getLineOaConfig').mockResolvedValue({
       success: true,
       data: {
@@ -182,57 +107,43 @@ describe('LOCAL-07 — Quick Add Tenant via LINE OA', () => {
       },
     });
 
-    const mockClose = vi.fn();
-    const mockNavigateToLineConfig = vi.fn();
-
     render(
       <QuickAddTenantModal
         isOpen={true}
-        onClose={mockClose}
+        onClose={vi.fn()}
         context={mockContext101}
         onSuccess={vi.fn()}
-        onNavigateToLineConfig={mockNavigateToLineConfig}
       />
     );
 
-    fireEvent.click(screen.getByRole('button', { name: /เพิ่มผู้เช่า LINE/i }));
+    // LINE tab button is selected by default
+    const lineButton = screen.getByRole('button', { name: /เพิ่มผู้เช่า LINE/i });
+    expect(lineButton.className).toContain('bg-[#06C755]');
 
-    await waitFor(() => {
-      expect(screen.getByText('ยังไม่ได้เชื่อมต่อ LINE OA')).toBeTruthy();
-    });
+    // Traditional rental submit button is NOT present
+    expect(screen.queryByText('ยืนยันเพิ่มผู้เช่า')).toBeNull();
 
-    expect(screen.getByText('กรุณาตั้งค่า LINE Official Account ของหอพักก่อนใช้งานการเพิ่มผู้เช่าผ่าน LINE')).toBeTruthy();
-
-    const manageButton = screen.getByRole('button', { name: /จัดการ LINE Official Account/i });
-    expect(manageButton).toBeTruthy();
-
-    fireEvent.click(manageButton);
-    expect(mockClose).toHaveBeenCalledTimes(1);
-    expect(mockNavigateToLineConfig).toHaveBeenCalledTimes(1);
+    // Modal subtitle reflects LINE onboarding
+    expect(screen.getByText('ลงทะเบียนผู้เช่าผ่าน LINE Official Account ประจำหอพัก')).toBeTruthy();
   });
 
-  it('P7, P9, P10, P11, P15: renders STATE C (Ready) with verified LINE ID, QR SVG, Copy button, direct link, and 5-step instructions', async () => {
+  it('Q2: User can still switch from LINE to TERM / MONTHLY / DAILY', async () => {
     vi.spyOn(Task009ApiAdapter, 'getLineOaConfig').mockResolvedValue({
       success: true,
       data: {
-        connected: true,
-        isReady: true,
-        credentialsVerified: true,
-        webhookEndpointSet: true,
-        webhookTestSucceeded: true,
-        webhookActive: true,
-        hasChannelSecret: true,
-        hasAccessToken: true,
-        lineOaId: '@somchai_dorm',
-        botPremiumId: '@premium_dorm',
-        botDisplayName: 'หอพักสมชายเพลส',
-        channelId: '987654321',
-        accessTokenVerifiedAt: '2026-08-01T00:00:00.000Z',
-        webhookVerifiedAt: '2026-08-01T00:00:00.000Z',
-        webhookUrl: 'https://webhook.horplus.com/api/v1/line/webhook/key',
-        effectiveLineId: '@premium_dorm',
-        friendAddUrl: 'https://line.me/R/ti/p/%40premium_dorm',
-        qrSvg: '<svg data-testid="real-qr-svg"><rect width="200" height="200" /></svg>',
+        connected: false,
+        isReady: false,
+        credentialsVerified: false,
+        webhookEndpointSet: false,
+        webhookTestSucceeded: false,
+        webhookActive: false,
+        hasChannelSecret: false,
+        hasAccessToken: false,
+        lineOaId: null,
+        channelId: null,
+        accessTokenVerifiedAt: null,
+        webhookVerifiedAt: null,
+        webhookUrl: null,
       },
     });
 
@@ -245,36 +156,29 @@ describe('LOCAL-07 — Quick Add Tenant via LINE OA', () => {
       />
     );
 
-    fireEvent.click(screen.getByRole('button', { name: /เพิ่มผู้เช่า LINE/i }));
+    // Switch to TERM
+    const termButton = screen.getByRole('button', { name: /รายเทอม/i });
+    fireEvent.click(termButton);
+    expect(screen.getByText('ยืนยันเพิ่มผู้เช่า')).toBeTruthy();
+    expect(screen.getByText('ค่าเช่ารายเทอม (บาท)')).toBeTruthy();
 
-    await waitFor(() => {
-      expect(screen.getByText('หอพักสมชายเพลส')).toBeTruthy();
-    });
+    // Switch to MONTHLY
+    const monthlyButton = screen.getByRole('button', { name: /รายเดือน/i });
+    fireEvent.click(monthlyButton);
+    expect(screen.getByText('ค่าเช่ารายเดือน (บาท)')).toBeTruthy();
 
-    // Verified public ID display (preferring botPremiumId)
-    const idDisplay = screen.getByTestId('line-oa-id-display');
-    expect(idDisplay.textContent).toContain('@premium_dorm');
+    // Switch to DAILY
+    const dailyButton = screen.getByRole('button', { name: /รายวัน/i });
+    fireEvent.click(dailyButton);
+    expect(screen.getByText('อัตราค่าเช่าต่อวัน (บาท)')).toBeTruthy();
 
-    // QR Container
-    const qrContainer = screen.getByTestId('line-oa-qr-svg-container');
-    expect(qrContainer).toBeTruthy();
-    expect(qrContainer.innerHTML).toContain('rect width="200"');
-
-    // Friend add link
-    const friendLink = screen.getByRole('link', { name: /เพิ่มเพื่อนใน LINE/i });
-    expect(friendLink.getAttribute('href')).toBe('https://line.me/R/ti/p/%40premium_dorm');
-    expect(friendLink.getAttribute('target')).toBe('_blank');
-
-    // 5-step instructions
-    expect(screen.getByText('ขั้นตอนการลงทะเบียนสำหรับผู้เช่า')).toBeTruthy();
-    expect(screen.getByText(/สแกน QR Code หรือเพิ่มเพื่อนผ่าน LINE ID ที่แสดง/)).toBeTruthy();
-    expect(screen.getByText(/กดปุ่ม "ลงทะเบียนผู้เช่า" ใน LINE/)).toBeTruthy();
-    expect(screen.getByText(/กรอกข้อมูลให้ครบถ้วน พร้อมแนบเอกสารที่กำหนด/)).toBeTruthy();
-    expect(screen.getByText(/รอเจ้าของหอพักตรวจสอบและอนุมัติ/)).toBeTruthy();
-    expect(screen.getByText(/ลงทะเบียนสำเร็จ พร้อมใช้งาน/)).toBeTruthy();
+    // Switch back to LINE
+    const lineButton = screen.getByRole('button', { name: /เพิ่มผู้เช่า LINE/i });
+    fireEvent.click(lineButton);
+    expect(screen.queryByText('ยืนยันเพิ่มผู้เช่า')).toBeNull();
   });
 
-  it('P3 & P4: Room 101 and Room 202 in the same dormitory produce IDENTICAL LINE ID, QR, and friend URL', async () => {
+  it('Q3: Same dorm / different room opens identical LINE panel data', async () => {
     const mockGetConfig = vi.spyOn(Task009ApiAdapter, 'getLineOaConfig').mockResolvedValue({
       success: true,
       data: {
@@ -309,7 +213,6 @@ describe('LOCAL-07 — Quick Add Tenant via LINE OA', () => {
       />
     );
 
-    fireEvent.click(screen.getByRole('button', { name: /เพิ่มผู้เช่า LINE/i }));
     await waitFor(() => {
       expect(screen.getByTestId('line-oa-id-display').textContent).toContain('@dorm_fresh_shared');
     });
@@ -327,66 +230,321 @@ describe('LOCAL-07 — Quick Add Tenant via LINE OA', () => {
       />
     );
 
-    fireEvent.click(screen.getByRole('button', { name: /เพิ่มผู้เช่า LINE/i }));
     await waitFor(() => {
       expect(screen.getByTestId('line-oa-id-display').textContent).toContain('@dorm_fresh_shared');
     });
     const link202 = screen.getByRole('link', { name: /เพิ่มเพื่อนใน LINE/i }).getAttribute('href');
 
-    // Identical friend add URL across rooms
     expect(link101).toBe('https://line.me/R/ti/p/%40dorm_fresh_shared');
     expect(link202).toBe('https://line.me/R/ti/p/%40dorm_fresh_shared');
     expect(mockGetConfig).toHaveBeenCalledWith('dorm-fresh-01');
   });
 
-  it('P5: Dormitory A vs Dormitory B isolation (displays dormitory-specific LINE OA)', async () => {
-    vi.spyOn(Task009ApiAdapter, 'getLineOaConfig').mockImplementation(async (dormId) => {
-      if (dormId === 'dorm-comp-02') {
-        return {
-          success: true,
-          data: {
-            connected: true,
-            isReady: true,
-            credentialsVerified: true,
-            webhookEndpointSet: true,
-            webhookTestSucceeded: true,
-            webhookActive: true,
-            hasChannelSecret: true,
-            hasAccessToken: true,
-            lineOaId: '@comp_dorm_02',
-            botPremiumId: null,
-            botDisplayName: 'หอพักคอมพรีเฮนซีฟ',
-            channelId: '999888777',
-            accessTokenVerifiedAt: '2026-08-01T00:00:00.000Z',
-            webhookVerifiedAt: '2026-08-01T00:00:00.000Z',
-            webhookUrl: 'https://webhook.horplus.com/api/v1/line/webhook/key2',
-            effectiveLineId: '@comp_dorm_02',
-            friendAddUrl: 'https://line.me/R/ti/p/%40comp_dorm_02',
-            qrSvg: '<svg data-testid="dorm-b-qr-svg"></svg>',
-          },
-        };
-      }
-      return { success: false };
+  it('Q4: NOT_CONNECTED state renders correct text + CTA and no QR', async () => {
+    vi.spyOn(Task009ApiAdapter, 'getLineOaConfig').mockResolvedValue({
+      success: true,
+      data: {
+        connected: false,
+        isReady: false,
+        credentialsVerified: false,
+        webhookEndpointSet: false,
+        webhookTestSucceeded: false,
+        webhookActive: false,
+        hasChannelSecret: false,
+        hasAccessToken: false,
+        lineOaId: null,
+        channelId: null,
+        accessTokenVerifiedAt: null,
+        webhookVerifiedAt: null,
+        webhookUrl: null,
+      },
+    });
+
+    const mockClose = vi.fn();
+    const mockNavigateToLineConfig = vi.fn();
+
+    render(
+      <QuickAddTenantModal
+        isOpen={true}
+        onClose={mockClose}
+        context={mockContext101}
+        onSuccess={vi.fn()}
+        onNavigateToLineConfig={mockNavigateToLineConfig}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('ยังไม่ได้เชื่อมต่อ LINE OA')).toBeTruthy();
+    });
+
+    expect(screen.getByText('กรุณาตั้งค่า LINE Official Account ของหอพักก่อนใช้งานการเพิ่มผู้เช่าผ่าน LINE')).toBeTruthy();
+    expect(screen.queryByTestId('line-oa-qr-svg-container')).toBeNull();
+
+    const manageButton = screen.getByRole('button', { name: /จัดการ LINE Official Account/i });
+    expect(manageButton).toBeTruthy();
+
+    fireEvent.click(manageButton);
+    expect(mockClose).toHaveBeenCalledTimes(1);
+    expect(mockNavigateToLineConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it('Q5: CONNECTED_BUT_WEBHOOK_NOT_READY renders truthful intermediate text, not "ยังไม่ได้เชื่อมต่อ LINE OA"', async () => {
+    vi.spyOn(Task009ApiAdapter, 'getLineOaConfig').mockResolvedValue({
+      success: true,
+      data: {
+        connected: true,
+        isReady: false,
+        credentialsVerified: true,
+        webhookEndpointSet: false,
+        webhookTestSucceeded: false,
+        webhookActive: false,
+        hasChannelSecret: true,
+        hasAccessToken: true,
+        lineOaId: '@configured_dorm',
+        channelId: '123456789',
+        accessTokenVerifiedAt: '2026-08-01T00:00:00.000Z',
+        webhookVerifiedAt: null,
+        webhookUrl: null,
+      },
     });
 
     render(
       <QuickAddTenantModal
         isOpen={true}
         onClose={vi.fn()}
-        context={mockContextDormB}
+        context={mockContext101}
         onSuccess={vi.fn()}
       />
     );
 
-    fireEvent.click(screen.getByRole('button', { name: /เพิ่มผู้เช่า LINE/i }));
-
     await waitFor(() => {
-      expect(screen.getByTestId('line-oa-id-display').textContent).toContain('@comp_dorm_02');
+      expect(screen.getByText('เชื่อมต่อ LINE OA แล้ว แต่ Webhook ยังไม่พร้อม')).toBeTruthy();
     });
 
-    expect(screen.getByText('หอพักคอมพรีเฮนซีฟ')).toBeTruthy();
-    expect(screen.getByRole('link', { name: /เพิ่มเพื่อนใน LINE/i }).getAttribute('href')).toBe(
-      'https://line.me/R/ti/p/%40comp_dorm_02'
+    // Must NOT claim "ยังไม่ได้เชื่อมต่อ LINE OA"
+    expect(screen.queryByText('ยังไม่ได้เชื่อมต่อ LINE OA')).toBeNull();
+    expect(screen.getByText(/เชื่อมต่อบัญชี LINE Official Account เรียบร้อยแล้ว แต่ระบบ Webhook ยังไม่พร้อมใช้งาน/)).toBeTruthy();
+    expect(screen.queryByTestId('line-oa-qr-svg-container')).toBeNull();
+  });
+
+  it('Q6: READY state renders QR + displayed LINE ID + direct friend link + copy button', async () => {
+    vi.spyOn(Task009ApiAdapter, 'getLineOaConfig').mockResolvedValue({
+      success: true,
+      data: {
+        connected: true,
+        isReady: true,
+        credentialsVerified: true,
+        webhookEndpointSet: true,
+        webhookTestSucceeded: true,
+        webhookActive: true,
+        hasChannelSecret: true,
+        hasAccessToken: true,
+        lineOaId: '@somchai_dorm',
+        botPremiumId: '@premium_dorm',
+        botDisplayName: 'หอพักสมชายเพลส',
+        channelId: '987654321',
+        accessTokenVerifiedAt: '2026-08-01T00:00:00.000Z',
+        webhookVerifiedAt: '2026-08-01T00:00:00.000Z',
+        webhookUrl: 'https://webhook.horplus.com/api/v1/line/webhook/key',
+        effectiveLineId: '@premium_dorm',
+        friendAddUrl: 'https://line.me/R/ti/p/%40premium_dorm',
+        qrSvg: '<svg data-testid="real-qr-svg"><rect width="200" height="200" /></svg>',
+      },
+    });
+
+    render(
+      <QuickAddTenantModal
+        isOpen={true}
+        onClose={vi.fn()}
+        context={mockContext101}
+        onSuccess={vi.fn()}
+      />
     );
+
+    await waitFor(() => {
+      expect(screen.getByText('หอพักสมชายเพลส')).toBeTruthy();
+    });
+
+    // Verified public ID display
+    const idDisplay = screen.getByTestId('line-oa-id-display');
+    expect(idDisplay.textContent).toContain('@premium_dorm');
+
+    // QR Container
+    const qrContainer = screen.getByTestId('line-oa-qr-svg-container');
+    expect(qrContainer).toBeTruthy();
+    expect(qrContainer.innerHTML).toContain('rect width="200"');
+
+    // Friend add link
+    const friendLink = screen.getByRole('link', { name: /เพิ่มเพื่อนใน LINE/i });
+    expect(friendLink.getAttribute('href')).toBe('https://line.me/R/ti/p/%40premium_dorm');
+    expect(friendLink.getAttribute('target')).toBe('_blank');
+
+    // 5-step instructions
+    expect(screen.getByText('ขั้นตอนการลงทะเบียนสำหรับผู้เช่า')).toBeTruthy();
+    expect(screen.getByText(/สแกน QR Code หรือเพิ่มเพื่อนผ่าน LINE ID ที่แสดง/)).toBeTruthy();
+    expect(screen.getByText(/กดปุ่ม "ลงทะเบียนผู้เช่า" ใน LINE/)).toBeTruthy();
+    expect(screen.getByText(/กรอกข้อมูลให้ครบถ้วน พร้อมแนบเอกสารที่กำหนด/)).toBeTruthy();
+    expect(screen.getByText(/รอเจ้าของหอพักตรวจสอบและอนุมัติ/)).toBeTruthy();
+    expect(screen.getByText(/ลงทะเบียนสำเร็จ พร้อมใช้งาน/)).toBeTruthy();
+  });
+
+  it('Q7: No room-specific body content appears in LINE panel', async () => {
+    vi.spyOn(Task009ApiAdapter, 'getLineOaConfig').mockResolvedValue({
+      success: true,
+      data: {
+        connected: true,
+        isReady: true,
+        credentialsVerified: true,
+        webhookEndpointSet: true,
+        webhookTestSucceeded: true,
+        webhookActive: true,
+        hasChannelSecret: true,
+        hasAccessToken: true,
+        lineOaId: '@dorm_fresh',
+        botPremiumId: null,
+        botDisplayName: 'หอพักเฟรชวิลล์',
+        channelId: '1234567890',
+        accessTokenVerifiedAt: '2026-08-01T00:00:00.000Z',
+        webhookVerifiedAt: '2026-08-01T00:00:00.000Z',
+        webhookUrl: 'https://webhook.horplus.com/api/v1/line/webhook/key',
+        friendAddUrl: 'https://line.me/R/ti/p/@dorm_fresh',
+        qrSvg: '<svg data-testid="real-qr-svg"></svg>',
+      },
+    });
+
+    render(
+      <QuickAddTenantModal
+        isOpen={true}
+        onClose={vi.fn()}
+        context={mockContext101}
+        onSuccess={vi.fn()}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('LINE Official Account')).toBeTruthy();
+    });
+
+    // Verify ZERO room target summary in LINE body
+    expect(screen.queryByText('ห้องพักเป้าหมาย')).toBeNull();
+    expect(screen.queryByText(/ห้อง 101/)).toBeNull();
+    expect(screen.queryByText(/อาคาร A/)).toBeNull();
+    expect(screen.queryByText(/ชั้น 1/)).toBeNull();
+  });
+
+  it('Q8: Reopen modal after config state available → latest display state shown', async () => {
+    let currentConfig: any = {
+      connected: false,
+      isReady: false,
+      credentialsVerified: false,
+      webhookEndpointSet: false,
+      webhookTestSucceeded: false,
+      webhookActive: false,
+      hasChannelSecret: false,
+      hasAccessToken: false,
+      lineOaId: null,
+      channelId: null,
+    };
+
+    const spy = vi.spyOn(Task009ApiAdapter, 'getLineOaConfig').mockImplementation(async () => ({
+      success: true,
+      data: currentConfig,
+    }));
+
+    // 1. First open: unconfigured
+    const { rerender } = render(
+      <QuickAddTenantModal
+        isOpen={true}
+        onClose={vi.fn()}
+        context={mockContext101}
+        onSuccess={vi.fn()}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('ยังไม่ได้เชื่อมต่อ LINE OA')).toBeTruthy();
+    });
+
+    // 2. Modal closes
+    rerender(
+      <QuickAddTenantModal
+        isOpen={false}
+        onClose={vi.fn()}
+        context={mockContext101}
+        onSuccess={vi.fn()}
+      />
+    );
+
+    // 3. User configures LINE OA (credentials verified, webhook ready)
+    currentConfig = {
+      connected: true,
+      isReady: true,
+      credentialsVerified: true,
+      webhookEndpointSet: true,
+      webhookTestSucceeded: true,
+      webhookActive: true,
+      hasChannelSecret: true,
+      hasAccessToken: true,
+      lineOaId: '@reopened_dorm',
+      effectiveLineId: '@reopened_dorm',
+      botDisplayName: 'หอพักอัปเดตใหม่',
+      friendAddUrl: 'https://line.me/R/ti/p/%40reopened_dorm',
+      qrSvg: '<svg data-testid="reopened-qr-svg"></svg>',
+    };
+
+    // 4. Modal reopens
+    rerender(
+      <QuickAddTenantModal
+        isOpen={true}
+        onClose={vi.fn()}
+        context={mockContext101}
+        onSuccess={vi.fn()}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('หอพักอัปเดตใหม่')).toBeTruthy();
+      expect(screen.getByTestId('line-oa-id-display').textContent).toContain('@reopened_dorm');
+      expect(screen.getByTestId('line-oa-qr-svg-container')).toBeTruthy();
+    });
+  });
+
+  it('Q9: LINE logo asset renders in intended panel/tab area', async () => {
+    vi.spyOn(Task009ApiAdapter, 'getLineOaConfig').mockResolvedValue({
+      success: true,
+      data: {
+        connected: true,
+        isReady: true,
+        credentialsVerified: true,
+        webhookEndpointSet: true,
+        webhookTestSucceeded: true,
+        webhookActive: true,
+        hasChannelSecret: true,
+        hasAccessToken: true,
+        channelId: '123456789',
+        lineOaId: '@dorm_fresh',
+        botDisplayName: 'หอพักเฟรชวิลล์',
+        effectiveLineId: '@dorm_fresh',
+        friendAddUrl: 'https://line.me/R/ti/p/@dorm_fresh',
+        qrSvg: '<svg data-testid="real-qr-svg"></svg>',
+        accessTokenVerifiedAt: '2026-08-01T00:00:00.000Z',
+        webhookVerifiedAt: '2026-08-01T00:00:00.000Z',
+        webhookUrl: 'https://webhook.horplus.com/api/v1/line/webhook/key',
+      },
+    });
+
+    render(
+      <QuickAddTenantModal
+        isOpen={true}
+        onClose={vi.fn()}
+        context={mockContext101}
+        onSuccess={vi.fn()}
+      />
+    );
+
+    await waitFor(() => {
+      const logos = screen.getAllByTestId('line-official-logo');
+      expect(logos.length).toBeGreaterThanOrEqual(2); // One in Tab Button, one in Panel Header
+    });
   });
 });

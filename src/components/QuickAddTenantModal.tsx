@@ -16,6 +16,7 @@ import { Task009ApiAdapter, LineOaConfigResponse } from '../data/adapters/task00
 import { useQuery } from '@tanstack/react-query';
 import { queryKeys } from '../lib/queryClient';
 import { resolveLineFriendAddUrl } from '../utils/lineOa.util';
+import { LineLogo } from './LineLogo';
 
 interface QuickAddTenantModalProps {
   isOpen: boolean;
@@ -36,7 +37,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
   onNavigateToLineConfig,
   onNavigate,
 }) => {
-  const [activeTab, setActiveTab] = useState<QuickAddMode>('TERM');
+  const [activeTab, setActiveTab] = useState<QuickAddMode>('LINE');
   const [fullName, setFullName] = useState('');
   const [phone, setPhone] = useState('');
   const [startDate, setStartDate] = useState(() => new Date().toISOString().slice(0, 10));
@@ -94,15 +95,25 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
   };
 
   useEffect(() => {
-    if (isOpen && activeTab === 'LINE' && context?.dormitoryId) {
+    if (isOpen && context?.dormitoryId) {
       fetchLineOaConfig();
     }
-  }, [isOpen, activeTab, context?.dormitoryId]);
+  }, [isOpen, context?.dormitoryId]);
 
   const rawPublicId = lineConfig?.botPremiumId || lineConfig?.lineOaId;
   const effectiveLineId = rawPublicId ? (rawPublicId.startsWith('@') ? rawPublicId : `@${rawPublicId}`) : null;
-  const isLineReady = Boolean(lineConfig?.isReady && effectiveLineId);
+  const isLineReady = Boolean(lineConfig?.isReady && effectiveLineId && lineConfig?.qrSvg);
   const friendAddUrl = lineConfig?.friendAddUrl || resolveLineFriendAddUrl(effectiveLineId);
+
+  const isLineConfigured = Boolean(
+    lineConfig?.connected ||
+    lineConfig?.credentialsVerified ||
+    lineConfig?.hasChannelSecret ||
+    lineConfig?.hasAccessToken ||
+    lineConfig?.channelId ||
+    lineConfig?.lineOaId ||
+    lineConfig?.botDisplayName
+  );
 
   const handleCopyLineId = async () => {
     if (!effectiveLineId) return;
@@ -204,12 +215,8 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
       setCheckOutTime('');
       setDepositDeclaredStatus('UNPAID');
 
-      // Set initial active tab based on Term availability
-      if (bldTermMonths && eff?.termRent && Number(eff.termRent) > 0) {
-        setActiveTab('TERM');
-      } else {
-        setActiveTab('MONTHLY');
-      }
+      // Set initial active tab: default = 'LINE' (Requirement R1 / T1)
+      setActiveTab('LINE');
 
       // Clear ID card attachment on open
       if (idCardPreview) {
@@ -510,7 +517,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
                 : 'bg-white text-slate-700 hover:text-slate-900 border-slate-200 hover:border-slate-300'
             }`}
           >
-            <MessageSquare className={`w-4 h-4 ${activeTab === 'LINE' ? 'text-white fill-current' : 'text-[#06C755]'}`} />
+            <LineLogo className="w-4 h-4 shrink-0 rounded-sm" />
             <span>เพิ่มผู้เช่า LINE</span>
             <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${
               activeTab === 'LINE' ? 'bg-white/20 text-white' : 'bg-emerald-50 text-emerald-700 border border-emerald-200/60'
@@ -541,7 +548,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
                   ลองใหม่
                 </button>
               </div>
-            ) : !isLineReady ? (
+            ) : !isLineConfigured ? (
               <div className="p-6 text-center space-y-4 min-h-[320px] flex flex-col items-center justify-center">
                 <div className="w-14 h-14 rounded-2xl bg-amber-50 text-amber-500 flex items-center justify-center mx-auto ring-8 ring-amber-50/50">
                   <AlertCircle className="w-7 h-7 stroke-[2.2]" />
@@ -561,13 +568,33 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
                   <span>จัดการ LINE Official Account (LINE OA)</span>
                 </button>
               </div>
+            ) : !isLineReady ? (
+              <div className="p-6 text-center space-y-4 min-h-[320px] flex flex-col items-center justify-center">
+                <div className="w-14 h-14 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center mx-auto ring-8 ring-amber-50/50">
+                  <AlertCircle className="w-7 h-7 stroke-[2.2]" />
+                </div>
+                <div className="space-y-1.5 max-w-sm mx-auto">
+                  <h4 className="text-base font-extrabold text-slate-900">เชื่อมต่อ LINE OA แล้ว แต่ Webhook ยังไม่พร้อม</h4>
+                  <p className="text-xs text-slate-500 font-medium leading-relaxed">
+                    เชื่อมต่อบัญชี LINE Official Account เรียบร้อยแล้ว แต่ระบบ Webhook ยังไม่พร้อมใช้งาน การลงทะเบียนผ่าน LINE จะเปิดให้ผู้เช่าใช้งานได้เมื่อการตั้งค่า Webhook เสร็จสมบูรณ์
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleManageLineOa}
+                  className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-extrabold rounded-xl transition-all shadow-xs hover:shadow-md cursor-pointer flex items-center gap-2"
+                >
+                  <Settings className="w-4 h-4" />
+                  <span>จัดการ LINE Official Account (LINE OA)</span>
+                </button>
+              </div>
             ) : (
               <div className="p-5 space-y-5 flex-1">
                 {/* LINE OA Header Info */}
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2.5">
-                    <div className="w-9 h-9 rounded-2xl bg-[#06C755] flex items-center justify-center text-white font-bold shadow-xs">
-                      <MessageSquare className="w-5 h-5 fill-current" />
+                    <div className="w-9 h-9 rounded-2xl bg-[#06C755] flex items-center justify-center text-white font-bold shadow-xs p-1">
+                      <LineLogo className="w-full h-full rounded-sm" />
                     </div>
                     <div>
                       <h4 className="text-sm font-extrabold text-slate-900">LINE Official Account</h4>

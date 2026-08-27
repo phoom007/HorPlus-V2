@@ -280,8 +280,9 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
       fireEvent.submit(submitBtn.closest('form')!);
 
       await waitFor(() => {
-        expect(httpSpy).toHaveBeenCalledTimes(1);
-        const [method, url, payload] = httpSpy.mock.calls[0];
+        const postCall = httpSpy.mock.calls.find((c: any) => c[0] === 'POST');
+        expect(postCall).toBeDefined();
+        const [method, url, payload] = postCall!;
         expect(method).toBe('POST');
         expect(url).toBe('/api/v1/meters/provisional-terms');
         expect(payload.rentalType).toBe('MONTHLY');
@@ -315,8 +316,9 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
       fireEvent.submit(submitBtn.closest('form')!);
 
       await waitFor(() => {
-        expect(httpSpy).toHaveBeenCalledTimes(1);
-        const [method, url, payload] = httpSpy.mock.calls[0];
+        const postCall = httpSpy.mock.calls.find((c: any) => c[0] === 'POST');
+        expect(postCall).toBeDefined();
+        const [method, url, payload] = postCall!;
         expect(method).toBe('POST');
         expect(url).toBe('/api/v1/meters/provisional-terms');
         expect(payload.rentalType).toBe('TERM');
@@ -348,8 +350,9 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
       fireEvent.submit(submitBtn.closest('form')!);
 
       await waitFor(() => {
-        expect(httpSpy).toHaveBeenCalledTimes(1);
-        const [method, url, payload] = httpSpy.mock.calls[0];
+        const postCall = httpSpy.mock.calls.find((c: any) => c[0] === 'POST');
+        expect(postCall).toBeDefined();
+        const [method, url, payload] = postCall!;
         expect(method).toBe('POST');
         expect(url).toBe('/api/v1/daily-stays/owner-quick-add');
         expect(payload.dormitoryId).toBe(mockContext.dormitoryId);
@@ -385,8 +388,9 @@ describe('LOCAL-07 Batch 02 — Frontend Quick Add & Claim Boundary Suite', () =
       fireEvent.submit(submitBtn.closest('form')!);
 
       await waitFor(() => {
-        expect(httpSpy).toHaveBeenCalledTimes(1);
-        const payload = httpSpy.mock.calls[0][2];
+        const postCall = httpSpy.mock.calls.find((c: any) => c[0] === 'POST');
+        expect(postCall).toBeDefined();
+        const payload = postCall![2];
         const todayStr = new Date().toISOString().slice(0, 10);
         expect(payload.endDate).toBe(calculateMonthEndDate(todayStr, 1));
       });
