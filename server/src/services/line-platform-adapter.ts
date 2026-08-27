@@ -28,7 +28,10 @@ export type LineReplyDeliveryResult =
     }
   | {
       outcome: 'UNKNOWN';
+      httpStatus?: number;
+      errorCode?: string;
       transportErrorCode?: string;
+      requestId?: string;
     };
 
 export interface LineBotInfo {
@@ -244,6 +247,20 @@ export class HttpLinePlatformAdapter implements LinePlatformAdapter {
         };
       }
 
+      // Server error 5xx (500, 501, 502, 503, 504, etc.) or 408 Request Timeout:
+      // According to official LINE Messaging API documentation, LINE may have accepted/delivered the message despite 5xx or timeout.
+      // MUST NOT treat as definitive failure. Must classify as UNKNOWN.
+      if (res.status >= 500 || res.status === 408) {
+        return {
+          outcome: 'UNKNOWN',
+          httpStatus: res.status,
+          errorCode: `HTTP_${res.status}`,
+          transportErrorCode: res.status === 408 ? 'HTTP_408_REQUEST_TIMEOUT' : `HTTP_${res.status}_SERVER_ERROR`,
+          requestId,
+        };
+      }
+
+      // Deterministic Client Rejection (400, 401, 403, 404, 429)
       return {
         outcome: 'FAILED',
         httpStatus: res.status,
@@ -464,10 +481,20 @@ export class MockLinePlatformAdapter implements LinePlatformAdapter {
       return { outcome: 'UNKNOWN', transportErrorCode: 'NETWORK_TIMEOUT' };
     }
     if (this.simulateReplyExplicitFailStatus) {
+      const status = this.simulateReplyExplicitFailStatus;
+      if (status >= 500 || status === 408) {
+        return {
+          outcome: 'UNKNOWN',
+          httpStatus: status,
+          errorCode: `HTTP_${status}`,
+          transportErrorCode: status === 408 ? 'HTTP_408_REQUEST_TIMEOUT' : `HTTP_${status}_SERVER_ERROR`,
+          requestId: `req_mock_unknown_${Date.now()}`,
+        };
+      }
       return {
         outcome: 'FAILED',
-        httpStatus: this.simulateReplyExplicitFailStatus,
-        errorCode: `HTTP_${this.simulateReplyExplicitFailStatus}`,
+        httpStatus: status,
+        errorCode: `HTTP_${status}`,
         requestId: `req_mock_fail_${Date.now()}`,
       };
     }

@@ -170,8 +170,9 @@ export class TenantRegistrationInviteService {
         data: {
           deliveryStatus: 'UNKNOWN',
           deliveryAttemptedAt: new Date(),
-          deliveryErrorCode: outcome.transportErrorCode || 'NETWORK_TIMEOUT',
-          // CRITICAL C1 INVARIANT: Do NOT revoke on ambiguous UNKNOWN timeout!
+          deliveryErrorCode: outcome.errorCode || outcome.transportErrorCode || 'NETWORK_TIMEOUT',
+          failedAt: null, // Must not set failedAt on UNKNOWN
+          // CRITICAL C1 INVARIANT: Do NOT revoke on ambiguous UNKNOWN timeout/5xx!
         },
       });
     }

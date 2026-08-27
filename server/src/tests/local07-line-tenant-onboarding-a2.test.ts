@@ -692,18 +692,18 @@ describe('LOCAL-07 — Secure LINE Tenant Registration A2 Authority', () => {
       expect(context.id).toBe(invite.id);
     });
 
-    it('DELIVERY-400 / 401 / 429 / 500: explicit non-2xx outcome is FAILED and revokes that specific invite', async () => {
-      const statuses = [400, 401, 429, 500];
+    it('DELIVERY-400 / 401 / 403 / 404 / 429: deterministic client errors are FAILED and revoke that specific invite', async () => {
+      const clientFailStatuses = [400, 401, 403, 404, 429];
 
-      for (const status of statuses) {
+      for (const status of clientFailStatuses) {
         const invite = await inviteService.createInvite(testDormAId, testFriendAId);
 
-        await inviteService.updateDeliveryOutcome(invite.id, {
-          outcome: 'FAILED',
-          httpStatus: status,
-          errorCode: `HTTP_${status}`,
-          requestId: `req-line-${status}`,
-        });
+        mockAdapter.simulateReplyExplicitFailStatus = status;
+        const deliveryResult = await mockAdapter.replyMessage('mock-reply-token', [], 'mock-token');
+        expect(deliveryResult.outcome).toBe('FAILED');
+        expect(deliveryResult.httpStatus).toBe(status);
+
+        await inviteService.updateDeliveryOutcome(invite.id, deliveryResult);
 
         const updated = await prisma.$transaction(async (tx) => {
           await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${testDormAId}, true)`;
@@ -718,6 +718,35 @@ describe('LOCAL-07 — Secure LINE Tenant Registration A2 Authority', () => {
         await expect(inviteService.resolveInvite(invite.rawToken)).rejects.toMatchObject({
           code: 'TENANT_REGISTRATION_INVITE_REVOKED',
         });
+      }
+    });
+
+    it('DELIVERY-500 / 501 / 502 / 503 / 504 / 408: server errors & timeouts are UNKNOWN, invite remains ACTIVE, revokedAt is null, failedAt is null', async () => {
+      const serverUnknownStatuses = [500, 501, 502, 503, 504, 408];
+
+      for (const status of serverUnknownStatuses) {
+        const invite = await inviteService.createInvite(testDormAId, testFriendAId);
+
+        mockAdapter.simulateReplyExplicitFailStatus = status;
+        const deliveryResult = await mockAdapter.replyMessage('mock-reply-token', [], 'mock-token');
+        expect(deliveryResult.outcome).toBe('UNKNOWN');
+        expect(deliveryResult.httpStatus).toBe(status);
+
+        await inviteService.updateDeliveryOutcome(invite.id, deliveryResult);
+
+        const updated = await prisma.$transaction(async (tx) => {
+          await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${testDormAId}, true)`;
+          return tx.tenantRegistrationInvite.findUnique({ where: { id: invite.id } });
+        });
+
+        expect(updated?.deliveryStatus).toBe('UNKNOWN');
+        expect(updated?.revokedAt).toBeNull(); // CRITICAL D3/D4: Not revoked!
+        expect(updated?.failedAt).toBeNull(); // CRITICAL: failedAt is null on UNKNOWN
+        expect(updated?.deliveryErrorCode).toBe(`HTTP_${status}`);
+
+        // Usable
+        const context = await inviteService.resolveInvite(invite.rawToken);
+        expect(context.id).toBe(invite.id);
       }
     });
 
@@ -739,6 +768,7 @@ describe('LOCAL-07 — Secure LINE Tenant Registration A2 Authority', () => {
 
         expect(updated?.deliveryStatus).toBe('UNKNOWN');
         expect(updated?.revokedAt).toBeNull(); // CRITICAL: Not revoked!
+        expect(updated?.failedAt).toBeNull();
 
         // Usable
         const context = await inviteService.resolveInvite(invite.rawToken);
@@ -746,13 +776,14 @@ describe('LOCAL-07 — Secure LINE Tenant Registration A2 Authority', () => {
       }
     });
 
-    it('CRITICAL PROOF: UNKNOWN link works E2E when tenant receives Flex Message despite transport timeout', async () => {
-      // Simulate follow event with timeout
-      mockAdapter.simulateReplyTimeout = true;
+    it('5XX MANDATORY PROOF: UNKNOWN link works E2E when LINE returns HTTP 500 but message was accepted', async () => {
+      // Simulate follow event with LINE HTTP 500
+      mockAdapter.simulateReplyExplicitFailStatus = 500;
 
       const invite = await inviteService.createInvite(testDormAId, testFriendAId);
       const deliveryResult = await mockAdapter.replyMessage('mock-reply-token', [], 'mock-token');
       expect(deliveryResult.outcome).toBe('UNKNOWN');
+      expect(deliveryResult.httpStatus).toBe(500);
 
       await inviteService.updateDeliveryOutcome(invite.id, deliveryResult);
 
@@ -767,7 +798,7 @@ describe('LOCAL-07 — Secure LINE Tenant Registration A2 Authority', () => {
         firstName: 'กิตติพงษ์',
         lastName: 'สุขใจ',
         phone: '0811112222',
-        note: 'ลงทะเบียนสำเร็จแม้ timeout',
+        note: 'ลงทะเบียนสำเร็จแม้ LINE 500',
         agreedTerms: true as const,
         signatureBase64: createTestSignatureBase64(),
         expectedPolicyVersion: 1,
@@ -790,9 +821,13 @@ describe('LOCAL-07 — Secure LINE Tenant Registration A2 Authority', () => {
       const invite1 = await inviteService.createInvite(testDormAId, testFriendAId);
       await inviteService.updateDeliveryOutcome(invite1.id, { outcome: 'DELIVERED', httpStatus: 200 });
 
-      // Follow 2 -> Invite 2 (DELIVERED)
+      // Follow 2 -> Invite 2 (UNKNOWN 503)
       const invite2 = await inviteService.createInvite(testDormAId, testFriendAId);
-      await inviteService.updateDeliveryOutcome(invite2.id, { outcome: 'DELIVERED', httpStatus: 200 });
+      await inviteService.updateDeliveryOutcome(invite2.id, {
+        outcome: 'UNKNOWN',
+        httpStatus: 503,
+        errorCode: 'HTTP_503',
+      });
 
       // Both invites remain active
       expect((await inviteService.resolveInvite(invite1.rawToken)).id).toBe(invite1.id);
