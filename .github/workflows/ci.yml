@@ -37,7 +37,7 @@ jobs:
       postgres:
         image: postgres:16-alpine
         env:
-          POSTGRES_DB: horplus_test
+          POSTGRES_DB: horplus_wave1d_fasttrack_test
           POSTGRES_USER: horplus_test
           POSTGRES_PASSWORD: horplus_test_password
         ports:
@@ -74,8 +74,8 @@ jobs:
 
       - name: Validate Prisma Schema
         env:
-          DATABASE_URL: postgresql://horplus_test:horplus_test_password@localhost:5455/horplus_test?schema=public
-          DIRECT_URL: postgresql://horplus_test:horplus_test_password@localhost:5455/horplus_test?schema=public
+          DATABASE_URL: postgresql://horplus_test:horplus_test_password@127.0.0.1:5455/horplus_wave1d_fasttrack_test?schema=public
+          DIRECT_URL: postgresql://horplus_test:horplus_test_password@127.0.0.1:5455/horplus_wave1d_fasttrack_test?schema=public
         run: |
           cd server
           npm run prisma:validate
@@ -88,27 +88,27 @@ jobs:
 
       - name: Bootstrap Runtime Database Role
         env:
-          PGHOST: localhost
+          PGHOST: 127.0.0.1
           PGPORT: 5455
           PGUSER: horplus_test
           PGPASSWORD: horplus_test_password
-          PGDATABASE: horplus_test
+          PGDATABASE: horplus_wave1d_fasttrack_test
           HORPLUS_APP_DB_USER: horplus_app
           HORPLUS_APP_DB_PASSWORD: horplus_test_password
         run: bash ./docker/bootstrap-runtime-role.sh
 
       - name: Apply Database Migrations
         env:
-          DATABASE_URL: postgresql://horplus_test:horplus_test_password@localhost:5455/horplus_test?schema=public
-          DIRECT_URL: postgresql://horplus_test:horplus_test_password@localhost:5455/horplus_test?schema=public
+          DATABASE_URL: postgresql://horplus_test:horplus_test_password@127.0.0.1:5455/horplus_wave1d_fasttrack_test?schema=public
+          DIRECT_URL: postgresql://horplus_test:horplus_test_password@127.0.0.1:5455/horplus_wave1d_fasttrack_test?schema=public
         run: |
           cd server
           npm run prisma:migrate:deploy
 
       - name: Sync Subscription Catalog
         env:
-          DATABASE_URL: postgresql://horplus_test:horplus_test_password@localhost:5455/horplus_test?schema=public
-          DIRECT_URL: postgresql://horplus_test:horplus_test_password@localhost:5455/horplus_test?schema=public
+          DATABASE_URL: postgresql://horplus_test:horplus_test_password@127.0.0.1:5455/horplus_wave1d_fasttrack_test?schema=public
+          DIRECT_URL: postgresql://horplus_test:horplus_test_password@127.0.0.1:5455/horplus_wave1d_fasttrack_test?schema=public
         run: |
           cd server
           npm run subscription:catalog:sync
@@ -117,8 +117,8 @@ jobs:
         env:
           NODE_ENV: test
           PORT: 3000
-          DATABASE_URL: postgresql://horplus_test:horplus_test_password@localhost:5455/horplus_test?schema=public
-          DIRECT_URL: postgresql://horplus_test:horplus_test_password@localhost:5455/horplus_test?schema=public
+          DATABASE_URL: postgresql://horplus_test:horplus_test_password@127.0.0.1:5455/horplus_wave1d_fasttrack_test?schema=public
+          DIRECT_URL: postgresql://horplus_test:horplus_test_password@127.0.0.1:5455/horplus_wave1d_fasttrack_test?schema=public
           HORPLUS_APP_DB_USER: horplus_app
           HORPLUS_APP_DB_PASSWORD: horplus_test_password
           FIELD_ENCRYPTION_KEY: fedcba9876543210fedcba9876543210
