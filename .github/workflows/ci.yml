@@ -38,7 +38,7 @@ jobs:
         image: postgres:16-alpine
         env:
           POSTGRES_DB: horplus_wave1d_fasttrack_test
-          POSTGRES_USER: horplus_test
+          POSTGRES_USER: horplus
           POSTGRES_PASSWORD: horplus_test_password
         ports:
           - 5455:5432
@@ -61,6 +61,8 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -74,8 +76,8 @@ jobs:
 
       - name: Validate Prisma Schema
         env:
-          DATABASE_URL: postgresql://horplus_test:horplus_test_password@127.0.0.1:5455/horplus_wave1d_fasttrack_test?schema=public
-          DIRECT_URL: postgresql://horplus_test:horplus_test_password@127.0.0.1:5455/horplus_wave1d_fasttrack_test?schema=public
+          DATABASE_URL: postgresql://horplus:horplus_test_password@127.0.0.1:5455/horplus_wave1d_fasttrack_test?schema=public
+          DIRECT_URL: postgresql://horplus:horplus_test_password@127.0.0.1:5455/horplus_wave1d_fasttrack_test?schema=public
         run: |
           cd server
           npm run prisma:validate
@@ -90,7 +92,7 @@ jobs:
         env:
           PGHOST: 127.0.0.1
           PGPORT: 5455
-          PGUSER: horplus_test
+          PGUSER: horplus
           PGPASSWORD: horplus_test_password
           PGDATABASE: horplus_wave1d_fasttrack_test
           HORPLUS_APP_DB_USER: horplus_app
@@ -99,16 +101,16 @@ jobs:
 
       - name: Apply Database Migrations
         env:
-          DATABASE_URL: postgresql://horplus_test:horplus_test_password@127.0.0.1:5455/horplus_wave1d_fasttrack_test?schema=public
-          DIRECT_URL: postgresql://horplus_test:horplus_test_password@127.0.0.1:5455/horplus_wave1d_fasttrack_test?schema=public
+          DATABASE_URL: postgresql://horplus:horplus_test_password@127.0.0.1:5455/horplus_wave1d_fasttrack_test?schema=public
+          DIRECT_URL: postgresql://horplus:horplus_test_password@127.0.0.1:5455/horplus_wave1d_fasttrack_test?schema=public
         run: |
           cd server
           npm run prisma:migrate:deploy
 
       - name: Sync Subscription Catalog
         env:
-          DATABASE_URL: postgresql://horplus_test:horplus_test_password@127.0.0.1:5455/horplus_wave1d_fasttrack_test?schema=public
-          DIRECT_URL: postgresql://horplus_test:horplus_test_password@127.0.0.1:5455/horplus_wave1d_fasttrack_test?schema=public
+          DATABASE_URL: postgresql://horplus:horplus_test_password@127.0.0.1:5455/horplus_wave1d_fasttrack_test?schema=public
+          DIRECT_URL: postgresql://horplus:horplus_test_password@127.0.0.1:5455/horplus_wave1d_fasttrack_test?schema=public
         run: |
           cd server
           npm run subscription:catalog:sync
@@ -117,8 +119,8 @@ jobs:
         env:
           NODE_ENV: test
           PORT: 3000
-          DATABASE_URL: postgresql://horplus_test:horplus_test_password@127.0.0.1:5455/horplus_wave1d_fasttrack_test?schema=public
-          DIRECT_URL: postgresql://horplus_test:horplus_test_password@127.0.0.1:5455/horplus_wave1d_fasttrack_test?schema=public
+          DATABASE_URL: postgresql://horplus:horplus_test_password@127.0.0.1:5455/horplus_wave1d_fasttrack_test?schema=public
+          DIRECT_URL: postgresql://horplus:horplus_test_password@127.0.0.1:5455/horplus_wave1d_fasttrack_test?schema=public
           HORPLUS_APP_DB_USER: horplus_app
           HORPLUS_APP_DB_PASSWORD: horplus_test_password
           FIELD_ENCRYPTION_KEY: fedcba9876543210fedcba9876543210
