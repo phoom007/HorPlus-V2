@@ -118,7 +118,7 @@ jobs:
           CORS_ORIGINS: http://localhost:5173
         run: |
           cd server
-          npm run test
+          npm run test -- --maxWorkers=1 --minWorkers=1 --no-file-parallelism
 
       - name: Build Backend TypeScript
         run: |
