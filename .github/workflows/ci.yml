@@ -41,7 +41,7 @@ jobs:
           POSTGRES_USER: horplus_test
           POSTGRES_PASSWORD: horplus_test_password
         ports:
-          - 5432:5432
+          - 5455:5432
         options: >-
           --health-cmd pg_isready
           --health-interval 5s
@@ -74,8 +74,8 @@ jobs:
 
       - name: Validate Prisma Schema
         env:
-          DATABASE_URL: postgresql://horplus_test:horplus_test_password@localhost:5432/horplus_test?schema=public
-          DIRECT_URL: postgresql://horplus_test:horplus_test_password@localhost:5432/horplus_test?schema=public
+          DATABASE_URL: postgresql://horplus_test:horplus_test_password@localhost:5455/horplus_test?schema=public
+          DIRECT_URL: postgresql://horplus_test:horplus_test_password@localhost:5455/horplus_test?schema=public
         run: |
           cd server
           npm run prisma:validate
@@ -89,7 +89,7 @@ jobs:
       - name: Bootstrap Runtime Database Role
         env:
           PGHOST: localhost
-          PGPORT: 5432
+          PGPORT: 5455
           PGUSER: horplus_test
           PGPASSWORD: horplus_test_password
           PGDATABASE: horplus_test
@@ -99,16 +99,16 @@ jobs:
 
       - name: Apply Database Migrations
         env:
-          DATABASE_URL: postgresql://horplus_test:horplus_test_password@localhost:5432/horplus_test?schema=public
-          DIRECT_URL: postgresql://horplus_test:horplus_test_password@localhost:5432/horplus_test?schema=public
+          DATABASE_URL: postgresql://horplus_test:horplus_test_password@localhost:5455/horplus_test?schema=public
+          DIRECT_URL: postgresql://horplus_test:horplus_test_password@localhost:5455/horplus_test?schema=public
         run: |
           cd server
           npm run prisma:migrate:deploy
 
       - name: Sync Subscription Catalog
         env:
-          DATABASE_URL: postgresql://horplus_test:horplus_test_password@localhost:5432/horplus_test?schema=public
-          DIRECT_URL: postgresql://horplus_test:horplus_test_password@localhost:5432/horplus_test?schema=public
+          DATABASE_URL: postgresql://horplus_test:horplus_test_password@localhost:5455/horplus_test?schema=public
+          DIRECT_URL: postgresql://horplus_test:horplus_test_password@localhost:5455/horplus_test?schema=public
         run: |
           cd server
           npm run subscription:catalog:sync
@@ -117,10 +117,12 @@ jobs:
         env:
           NODE_ENV: test
           PORT: 3000
-          DATABASE_URL: postgresql://horplus_test:horplus_test_password@localhost:5432/horplus_test?schema=public
-          DIRECT_URL: postgresql://horplus_test:horplus_test_password@localhost:5432/horplus_test?schema=public
+          DATABASE_URL: postgresql://horplus_test:horplus_test_password@localhost:5455/horplus_test?schema=public
+          DIRECT_URL: postgresql://horplus_test:horplus_test_password@localhost:5455/horplus_test?schema=public
           HORPLUS_APP_DB_USER: horplus_app
           HORPLUS_APP_DB_PASSWORD: horplus_test_password
+          FIELD_ENCRYPTION_KEY: fedcba9876543210fedcba9876543210
+          FIELD_ENCRYPTION_KEY_VERSION: 1
           REDIS_URL: redis://localhost:6379
           LOG_LEVEL: fatal
           CORS_ORIGINS: http://localhost:5173
