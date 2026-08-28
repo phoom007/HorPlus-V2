@@ -77,6 +77,7 @@ export interface Building {
   termRent?: number;
   dailyRent?: number;
   depositAmount?: number;
+  version?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -127,6 +128,7 @@ export interface Room {
   currentTenantId?: string;
   notes?: string;
   images: string[];
+  version?: number;
   createdAt: string;
   updatedAt: string;
 }

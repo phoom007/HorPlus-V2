@@ -38,6 +38,8 @@ import {
   Modal,
   ConfirmDialog
 } from '../../components/GlobalComponents';
+import { VersionConflictModal } from '../../components/VersionConflictModal';
+import { getDataProvider } from '../../data/dataProvider';
 import { Room, Building, RoomStatus, Tenant, Contract, Bill, BLOCKING_CONTRACT_STATUSES } from '../../types';
 
 interface OwnerRoomsProps {
@@ -154,6 +156,13 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
   const [errorText, setErrorText] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [isToastFading, setIsToastFading] = useState(false);
+  const [versionConflictState, setVersionConflictState] = useState<{
+    isOpen: boolean;
+    entityName: string;
+    currentVersion: number;
+    onRetry?: () => void;
+  } | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     if (toastMessage) {
@@ -263,7 +272,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
     roomStatus
   ]);
 
-  const handleSave = (e: React.FormEvent) => {
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorText(null);
 
@@ -318,62 +327,94 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
 
     const numDeposit = monthlyDeposit === '' ? (depositAmount === '' ? 0 : Number(depositAmount)) : Number(monthlyDeposit);
 
-    let updatedRooms = [...rooms];
-    if (editingRoom) {
-      // Update
-      const preservedDepositStatus = editingRoom.depositStatus || (editingRoom.currentTenantId ? 'paid' : 'unpaid');
-      updatedRooms = rooms.map(r => r.id === editingRoom.id ? {
-        ...r,
-        roomNumber: roomNumber.trim(),
-        buildingId: buildingId || r.buildingId,
-        floor: calculatedFloor,
-        monthlyRent: Number(monthlyRent),
-        termRent: Number(termRent) || undefined,
-        dailyRent: Number(dailyRent) || undefined,
-        rentCycle,
-        depositAmount: numDeposit,
-        depositStatus: preservedDepositStatus,
-        maxOccupants: Number(maxOccupants),
-        status: effectiveStatus,
-        initialWaterMeter: Number(initialWaterMeter) || r.initialWaterMeter || 0,
-        initialElectricMeter: Number(initialElectricMeter) || r.initialElectricMeter || 0,
-        updatedAt: new Date().toISOString()
-      } : r);
+    setIsSubmitting(true);
+    const dataProvider = getDataProvider();
 
-      onAddLog('แก้ไขห้องพัก', `แก้ไขรายละเอียดห้อง ${roomNumber}`, 'Room', editingRoom.id);
-    } else {
-      // Create
-      const newId = `room-${Date.now()}`;
-      const newRoom: Room = {
-        id: newId,
-        roomNumber: roomNumber.trim(),
-        buildingId: buildingId || undefined,
-        floor: calculatedFloor,
-        monthlyRent: Number(monthlyRent),
-        termRent: Number(termRent) || undefined,
-        dailyRent: Number(dailyRent) || undefined,
-        rentCycle,
-        depositAmount: numDeposit,
-        depositStatus: 'unpaid',
-        maxOccupants: Number(maxOccupants),
-        initialWaterMeter: Number(initialWaterMeter) || 0,
-        initialElectricMeter: Number(initialElectricMeter) || 0,
-        status: effectiveStatus,
-        images: ['https://images.unsplash.com/photo-1522771739844-6a9f6d5f14af?w=400'],
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      };
-      updatedRooms.push(newRoom);
-      onAddLog('เพิ่มห้องพักใหม่', `สร้างเลขห้อง ${roomNumber} ใหม่ในระบบ`, 'Room', newId);
+    try {
+      if (editingRoom) {
+        // Update Room via backend API
+        const expectedVersion = editingRoom.version || 1;
+        const changes: Record<string, any> = {
+          roomNumber: roomNumber.trim(),
+          buildingId: buildingId || editingRoom.buildingId,
+          floor: calculatedFloor,
+          status: effectiveStatus,
+          rentCycle,
+          monthlyRent: monthlyRent === '' ? null : String(monthlyRent),
+          termRent: termRent === '' ? null : String(termRent),
+          dailyRent: dailyRent === '' ? null : String(dailyRent),
+          depositAmount: numDeposit === 0 && depositAmount === '' ? null : String(numDeposit),
+          maximumOccupants: Number(maxOccupants) || 2,
+          initialWaterReading: String(initialWaterMeter || 0),
+          initialElectricityReading: String(initialElectricMeter || 0),
+        };
+
+        const res = dataProvider.properties?.updateRoom
+          ? await dataProvider.properties.updateRoom(editingRoom.id, changes, expectedVersion)
+          : await (dataProvider.rooms as any).updateRoom({ ...editingRoom, ...changes, id: editingRoom.id });
+
+        if (!res.success) {
+          if (res.error?.code === 'CONFLICT' || (res.error as any)?.statusCode === 409) {
+            setVersionConflictState({
+              isOpen: true,
+              entityName: `ห้อง ${editingRoom.roomNumber}`,
+              currentVersion: (res.error as any)?.currentVersion || expectedVersion + 1,
+              onRetry: () => {
+                setVersionConflictState(null);
+              },
+            });
+          } else {
+            setErrorText(res.error?.message || 'เกิดข้อผิดพลาดในการบันทึกข้อมูลห้องพัก');
+          }
+          setIsSubmitting(false);
+          return;
+        }
+
+        onAddLog('แก้ไขห้องพัก', `แก้ไขรายละเอียดห้อง ${roomNumber}`, 'Room', editingRoom.id);
+        onSaveRooms(rooms);
+        setIsModalOpen(false);
+        setToastMessage(`เลขห้อง "${roomNumber.trim()}" นี้ได้รับการบันทึกในระบบแล้ว`);
+        setTimeout(() => setToastMessage(null), 3500);
+      } else {
+        // Create Room via backend API
+        const payload = {
+          buildingId: buildingId || (buildings[0]?.id || ''),
+          roomNumber: roomNumber.trim(),
+          floor: calculatedFloor,
+          roomType: 'standard',
+          status: effectiveStatus as any,
+          rentCycle,
+          monthlyRent: monthlyRent === '' ? null : String(monthlyRent),
+          termRent: termRent === '' ? null : String(termRent),
+          dailyRent: dailyRent === '' ? null : String(dailyRent),
+          depositAmount: numDeposit === 0 && depositAmount === '' ? null : String(numDeposit),
+          maximumOccupants: Number(maxOccupants) || 2,
+          initialWaterReading: String(initialWaterMeter || 0),
+          initialElectricityReading: String(initialElectricMeter || 0),
+        };
+
+        const res = dataProvider.properties?.createRoom
+          ? await dataProvider.properties.createRoom(payload)
+          : await (dataProvider.rooms as any).addRoom(payload);
+
+        if (!res.success) {
+          setErrorText(res.error?.message || 'เกิดข้อผิดพลาดในการสร้างห้องพัก');
+          setIsSubmitting(false);
+          return;
+        }
+
+        const createdRoom = res.data;
+        onAddLog('เพิ่มห้องพักใหม่', `สร้างเลขห้อง ${roomNumber} ใหม่ในระบบ`, 'Room', createdRoom?.id || '');
+        onSaveRooms(rooms);
+        setIsModalOpen(false);
+        setToastMessage(`เลขห้อง "${roomNumber.trim()}" นี้ได้รับการบันทึกในระบบแล้ว`);
+        setTimeout(() => setToastMessage(null), 3500);
+      }
+    } catch (err: any) {
+      setErrorText(err?.message || 'เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์');
+    } finally {
+      setIsSubmitting(false);
     }
-
-    const savedRoomNumber = roomNumber.trim();
-    onSaveRooms(updatedRooms);
-    setIsModalOpen(false);
-    setToastMessage(`เลขห้อง "${savedRoomNumber}" นี้ได้รับการบันทึกในระบบแล้ว`);
-    setTimeout(() => {
-      setToastMessage(null);
-    }, 3500);
   };
 
   const handleDeleteFromModal = (roomId: string, roomNum: string) => {
@@ -419,22 +460,55 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
     });
   };
 
-  const executeDeleteRoom = () => {
+  const executeDeleteRoom = async () => {
     if (!deleteConfirmData) return;
     const { roomId, roomNum } = deleteConfirmData;
-    const updated = rooms.filter(r => r.id !== roomId && r.roomNumber !== roomNum);
-    onSaveRooms(updated);
-    onAddLog('ลบห้องพัก', `ลบห้องเลขที่ ${roomNum} ออกจากระบบถาวร`, 'Room', roomId);
-    setIsModalOpen(false);
-    setEditingRoom(null);
-    setDeleteConfirmData(null);
-    setToastMessage(`ลบห้องพัก "${roomNum}" ออกจากระบบเรียบร้อยแล้ว`);
-    setTimeout(() => {
-      setToastMessage(null);
-    }, 3500);
+    const targetRoom = rooms.find(r => r.id === roomId || r.roomNumber === roomNum);
+    const expectedVersion = targetRoom?.version || 1;
+    setIsSubmitting(true);
+
+    try {
+      const dataProvider = getDataProvider();
+      const res = dataProvider.properties?.archiveRoom
+        ? await dataProvider.properties.archiveRoom(roomId, expectedVersion)
+        : await dataProvider.rooms.deleteRoom(roomId);
+
+      if (!res.success) {
+        if (res.error?.code === 'CONFLICT' || (res.error as any)?.statusCode === 409) {
+          setVersionConflictState({
+            isOpen: true,
+            entityName: `ห้อง ${roomNum}`,
+            currentVersion: (res.error as any)?.currentVersion || expectedVersion + 1,
+            onRetry: () => {
+              setVersionConflictState(null);
+            },
+          });
+        } else if ((res.error as any)?.code === 'ROOM_HAS_ACTIVE_TENANT' || res.error?.message?.includes('ผู้เช่า')) {
+          setToastMessage(res.error?.message || 'ไม่สามารถยกเลิกห้องที่มีผู้เช่าอยู่ได้');
+        } else {
+          setToastMessage(res.error?.message || 'เกิดข้อผิดพลาดในการลบห้องพัก');
+        }
+        setIsSubmitting(false);
+        return;
+      }
+
+      onSaveRooms(rooms);
+      onAddLog('ลบห้องพัก', `ลบห้องเลขที่ ${roomNum} ออกจากระบบถาวร`, 'Room', roomId);
+      setIsModalOpen(false);
+      setEditingRoom(null);
+      setDeleteConfirmData(null);
+      setToastMessage(`ลบห้องพัก "${roomNum}" ออกจากระบบเรียบร้อยแล้ว`);
+      setTimeout(() => {
+        setToastMessage(null);
+      }, 3500);
+    } catch (err: any) {
+      setToastMessage(err?.message || 'เกิดข้อผิดพลาดในการลบห้องพัก');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  const handleToggleRoomStatus = (roomId: string, e?: React.MouseEvent) => {
+  const handleToggleRoomStatus = async (roomId: string, e?: React.MouseEvent) => {
     e?.stopPropagation();
     const targetRoom = rooms.find(r => r.id === roomId);
     if (!targetRoom) return;
@@ -448,20 +522,39 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
 
     // Rule: ถ้าห้องนั้น ว่างให้ปิดได้ = ปิดปรับปรุง / เปิดใช้งาน
     const nextStatus: RoomStatus = targetRoom.status === 'maintenance' ? 'vacant' : 'maintenance';
-    const updated = rooms.map(r => r.id === roomId ? {
-      ...r,
-      status: nextStatus,
-      updatedAt: new Date().toISOString()
-    } : r);
+    const expectedVersion = targetRoom.version || 1;
 
-    onSaveRooms(updated);
-    onAddLog(
-      'เปลี่ยนสถานะห้องพัก',
-      `เปลี่ยนสถานะห้อง ${targetRoom.roomNumber} เป็น "${nextStatus === 'maintenance' ? 'ปิดปรับปรุง' : 'เปิดใช้งาน'}"`,
-      'Room',
-      roomId
-    );
-    setToastMessage(`ห้อง ${targetRoom.roomNumber}: เปลี่ยนเป็น "${nextStatus === 'maintenance' ? 'ปิดปรับปรุง' : 'เปิดใช้งาน'}" เรียบร้อยแล้ว`);
+    try {
+      const dataProvider = getDataProvider();
+      const res = dataProvider.properties?.updateRoom
+        ? await dataProvider.properties.updateRoom(targetRoom.id, { status: nextStatus }, expectedVersion)
+        : await (dataProvider.rooms as any).updateStatus(targetRoom.id, nextStatus);
+
+      if (!res.success) {
+        if (res.error?.code === 'CONFLICT' || (res.error as any)?.statusCode === 409) {
+          setVersionConflictState({
+            isOpen: true,
+            entityName: `ห้อง ${targetRoom.roomNumber}`,
+            currentVersion: (res.error as any)?.currentVersion || expectedVersion + 1,
+            onRetry: () => handleToggleRoomStatus(roomId),
+          });
+        } else {
+          setToastMessage(res.error?.message || 'เกิดข้อผิดพลาดในการเปลี่ยนสถานะห้อง');
+        }
+        return;
+      }
+
+      onSaveRooms(rooms);
+      onAddLog(
+        'เปลี่ยนสถานะห้องพัก',
+        `เปลี่ยนสถานะห้อง ${targetRoom.roomNumber} เป็น "${nextStatus === 'maintenance' ? 'ปิดปรับปรุง' : 'เปิดใช้งาน'}"`,
+        'Room',
+        roomId
+      );
+      setToastMessage(`ห้อง ${targetRoom.roomNumber}: เปลี่ยนเป็น "${nextStatus === 'maintenance' ? 'ปิดปรับปรุง' : 'เปิดใช้งาน'}" เรียบร้อยแล้ว`);
+    } catch (err: any) {
+      setToastMessage(err?.message || 'เกิดข้อผิดพลาดในการเปลี่ยนสถานะห้อง');
+    }
   };
 
   // Open Quick Add Tenant modal or Navigate to Tenant Profile
@@ -969,7 +1062,8 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
       {viewMode === 'floor' && (
         <div className="space-y-6">
           {buildings.map((bld) => {
-            const floors = Array.from({ length: bld.floorsCount }, (_, i) => bld.floorsCount - i);
+            const floorsCount = bld.floorsCount || Math.max(...filteredRooms.filter(r => r.buildingId === bld.id).map(r => r.floor || 1), 1);
+            const floors = Array.from({ length: floorsCount }, (_, i) => floorsCount - i);
             return (
               <div key={bld.id} className="bg-white p-4 sm:p-6 rounded-3xl border border-gray-100 shadow-xs space-y-4">
                 <div className="flex items-center justify-between border-b border-gray-100 pb-3">
@@ -1125,27 +1219,44 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                 <span className="font-bold leading-tight">{errorText}</span>
               </div>
             )}
-            <div className="flex items-center justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setIsModalOpen(false)}
-                className="px-4 py-2 border border-gray-200 bg-white hover:bg-slate-50 text-slate-600 rounded-xl text-xs font-bold cursor-pointer transition-colors"
-              >
-                ยกเลิก
-              </button>
-              <button
-                type="submit"
-                form="room-edit-form"
-                disabled={!isFormModified}
-                className={`px-5 py-2 font-extrabold text-xs rounded-xl shadow-xs transition-all flex items-center gap-1.5 ${isFormModified
-                    ? 'bg-indigo-600 hover:bg-indigo-700 text-white cursor-pointer active:scale-95'
-                    : 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-none'
-                  }`}
-                title={!isFormModified && editingRoom ? 'ไม่มีการเปลี่ยนแปลงข้อมูล' : undefined}
-              >
-                <Check className="w-4 h-4" />
-                <span>บันทึกข้อมูล</span>
-              </button>
+            <div className="flex items-center justify-between gap-2">
+              {editingRoom ? (
+                <button
+                  type="button"
+                  data-testid="btn-delete-room"
+                  onClick={() => handleDeleteFromModal(editingRoom.id, editingRoom.roomNumber)}
+                  className="px-3 py-2 text-xs font-bold text-rose-600 hover:text-rose-700 hover:bg-rose-50 rounded-xl flex items-center gap-1.5 transition-colors cursor-pointer"
+                  title="ลบห้องพัก"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  <span>ลบห้องพัก</span>
+                </button>
+              ) : (
+                <div />
+              )}
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsModalOpen(false)}
+                  className="px-4 py-2 border border-gray-200 bg-white hover:bg-slate-50 text-slate-600 rounded-xl text-xs font-bold cursor-pointer transition-colors"
+                >
+                  ยกเลิก
+                </button>
+                <button
+                  type="submit"
+                  form="room-edit-form"
+                  data-testid="btn-save-room"
+                  disabled={!isFormModified || isSubmitting}
+                  className={`px-5 py-2 font-extrabold text-xs rounded-xl shadow-xs transition-all flex items-center gap-1.5 ${isFormModified && !isSubmitting
+                      ? 'bg-indigo-600 hover:bg-indigo-700 text-white cursor-pointer active:scale-95'
+                      : 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-none'
+                    }`}
+                  title={!isFormModified && editingRoom ? 'ไม่มีการเปลี่ยนแปลงข้อมูล' : undefined}
+                >
+                  <Check className="w-4 h-4" />
+                  <span>{isSubmitting ? 'กำลังบันทึก...' : 'บันทึกข้อมูล'}</span>
+                </button>
+              </div>
             </div>
           </div>
         }
@@ -1358,6 +1469,22 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
           {/* Reserved empty space for main project integration */}
         </div>
       </Modal>
+
+      {versionConflictState && (
+        <VersionConflictModal
+          isOpen={versionConflictState.isOpen}
+          entityName={versionConflictState.entityName}
+          staleVersion={versionConflictState.currentVersion - 1}
+          latestVersion={versionConflictState.currentVersion}
+          onReload={() => {
+            onSaveRooms(rooms);
+            setVersionConflictState(null);
+            setIsModalOpen(false);
+          }}
+          onCancel={() => setVersionConflictState(null)}
+          onRetry={versionConflictState.onRetry}
+        />
+      )}
 
     </div>
   );
