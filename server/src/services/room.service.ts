@@ -5,6 +5,7 @@ import { IContractRepository } from '../db/repositories/contract.repository.js';
 import { AuditService } from './audit.service.js';
 import { AppError } from '../types/index.js';
 import { subscriptionEntitlementService } from './subscription-entitlement.service.js';
+import { currentCycleResolverService } from './current-cycle-resolver.js';
 
 export interface RoomFilterQuery {
   buildingId?: string;
@@ -225,20 +226,13 @@ export class RoomService {
         },
       });
 
-      const operationalCycle = await tx.billingCycle.findFirst({
-        where: { dormitoryId, status: 'OPEN' },
-        orderBy: { periodStart: 'desc' },
-      }) || await tx.billingCycle.findFirst({
-        where: { dormitoryId },
-        orderBy: { periodStart: 'desc' },
-      });
-
-      if (operationalCycle) {
+      const operational = await currentCycleResolverService.resolveOperationalBillingCycle(dormitoryId, tx);
+      if (operational && operational.billingCycleId) {
         await tx.roomOperationalStatusChange.create({
           data: {
             dormitoryId,
             roomId: created.id,
-            effectiveBillingCycleId: operationalCycle.id,
+            effectiveBillingCycleId: operational.billingCycleId,
             status: created.status || 'vacant',
             updatedByUserId: userId || null,
             version: 1,
@@ -371,39 +365,41 @@ export class RoomService {
         throw err;
       }
 
-      if (changes.status && changes.status !== existing.status) {
-        const operationalCycle = await tx.billingCycle.findFirst({
-          where: { dormitoryId: targetDormId, status: 'OPEN' },
-          orderBy: { periodStart: 'desc' },
-        }) || await tx.billingCycle.findFirst({
-          where: { dormitoryId: targetDormId },
-          orderBy: { periodStart: 'desc' },
-        });
+      let effectiveStatusCycleId: string | null = null;
+      if (changes.status !== undefined && changes.status !== existing.status) {
+        const operational = await currentCycleResolverService.resolveOperationalBillingCycle(targetDormId, tx);
+        if (!operational || !operational.billingCycleId) {
+          throw new AppError(
+            'ไม่พบข้อมูลงวดบิลที่เปิดใช้งานอยู่ในปัจจุบัน ไม่สามารถเปลี่ยนสถานะห้องพักได้',
+            422,
+            'OPERATIONAL_BILLING_CYCLE_UNAVAILABLE'
+          );
+        }
 
-        if (operationalCycle) {
-          await tx.roomOperationalStatusChange.upsert({
-            where: {
-              dormitory_room_effective_cycle_unique: {
-                dormitoryId: targetDormId,
-                roomId: id,
-                effectiveBillingCycleId: operationalCycle.id,
-              },
-            },
-            create: {
+        effectiveStatusCycleId = operational.billingCycleId;
+
+        await tx.roomOperationalStatusChange.upsert({
+          where: {
+            dormitory_room_effective_cycle_unique: {
               dormitoryId: targetDormId,
               roomId: id,
-              effectiveBillingCycleId: operationalCycle.id,
-              status: changes.status,
-              updatedByUserId: userId || null,
-              version: 1,
+              effectiveBillingCycleId: operational.billingCycleId,
             },
-            update: {
-              status: changes.status,
-              updatedByUserId: userId || null,
-              version: { increment: 1 },
-            },
-          });
-        }
+          },
+          create: {
+            dormitoryId: targetDormId,
+            roomId: id,
+            effectiveBillingCycleId: operational.billingCycleId,
+            status: changes.status,
+            updatedByUserId: userId || null,
+            version: 1,
+          },
+          update: {
+            status: changes.status,
+            updatedByUserId: userId || null,
+            version: { increment: 1 },
+          },
+        });
       }
 
       const updated = await tx.room.findUnique({ where: { id } });
@@ -421,7 +417,10 @@ export class RoomService {
         },
       });
 
-      return updated;
+      return {
+        ...updated,
+        effectiveRoomStatusCycleId: effectiveStatusCycleId,
+      };
     };
 
     try {

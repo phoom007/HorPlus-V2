@@ -460,7 +460,9 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
         }
 
         onAddLog('แก้ไขห้องพัก', `แก้ไขรายละเอียดห้อง ${roomNumber}`, 'Room', editingRoom.id);
-        onSaveRooms(rooms, { kind: 'update', roomNumberChanged });
+        const statusChanged = roomStatus !== (editingRoom.status || 'vacant');
+        const effectiveCycleId = (res.data as any)?.effectiveRoomStatusCycleId;
+        onSaveRooms(rooms, { kind: 'update', roomNumberChanged, statusChanged, effectiveBillingCycleId: effectiveCycleId });
         setIsModalOpen(false);
         setToastMessage(`เลขห้อง "${roomNumber.trim()}" นี้ได้รับการบันทึกในระบบแล้ว`);
         setTimeout(() => setToastMessage(null), 3500);
@@ -651,7 +653,8 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
         return;
       }
 
-      onSaveRooms(rooms, { kind: 'status' });
+      const effectiveCycleId = (res.data as any)?.effectiveRoomStatusCycleId;
+      onSaveRooms(rooms, { kind: 'status', effectiveBillingCycleId: effectiveCycleId });
       onAddLog(
         'เปลี่ยนสถานะห้องพัก',
         `เปลี่ยนสถานะห้อง ${targetRoom.roomNumber} เป็น "${nextStatus === 'maintenance' ? 'ปิดปรับปรุง' : 'เปิดใช้งาน'}"`,

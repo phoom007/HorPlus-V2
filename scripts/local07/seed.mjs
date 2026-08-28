@@ -1,6 +1,6 @@
 /**
  * HorPlus LOCAL-07 — Deterministic Dataset Seeder
- * 
+ *
  * Provisions 2 complete UAT Dormitories:
  * 1. Fresh Owner ("หอพัก HorPlus UAT Fresh Owner")
  *    - EXERCISES REAL ONBOARDING:
@@ -9,7 +9,7 @@
  *      Simulates deferred LINE OA test boundary ->
  *      Finalizes via DormitoryProvisioningService.completeOwnerOnboarding
  *      with Free tier + HORPLUS promo redemption.
- * 
+ *
  * 2. Comprehensive Owner ("หอพัก HorPlus UAT Comprehensive Manor")
  *    - 18 rooms across 2 buildings (Building A standard, Building B override rates)
  *    - 11 occupied rooms with active contracts and tenant profiles
@@ -18,7 +18,7 @@
  *    - Move-out settlement pending refund (Room 204)
  *    - Contract renewal pending (Room 201) & scheduled renewal (Room 202)
  *    - Staff access grants (Manager Pranee & Tech Surachai)
- * 
+ *
  * @license Apache-2.0
  */
 
@@ -37,6 +37,7 @@ import { syncSubscriptionCatalog } from '../../server/src/scripts/subscription-c
 import { subscriptionIntentService } from '../../server/src/services/subscription-intent.service.ts';
 import { BillingCycleService } from '../../server/src/services/billing-cycle.service.ts';
 import { PrismaBillingCycleRepository } from '../../server/src/db/repositories/billing-cycle.repository.ts';
+import { backfillRoomOperationalStatusBaseline } from '../../server/src/services/room-operational-baseline.service.ts';
 
 const targetInfo = assertSafeDatabaseTarget();
 
@@ -1704,6 +1705,7 @@ export async function seedLocal07Data() {
     });
   }
 
+  await backfillRoomOperationalStatusBaseline(undefined, prisma);
   console.log(`✅ Comprehensive Owner provisioned: "${compDorm.name}" (18 rooms, 11 occupied, July 2026 billing cycle seeded with paid & unpaid bills, payments, receipts, and 1 pending tenant registration request)`);
   console.log('\n================================================================================');
   console.log('🎉 LOCAL-07 DATASET SEEDING COMPLETE & FULLY POPULATED');

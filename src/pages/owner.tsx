@@ -875,7 +875,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
 
   // State saving handlers with targeted query invalidation
   const handleSaveRooms = (_newRooms: Room[], impact: RoomMutationImpact = { kind: 'refresh' }) => {
-    invalidateRoomMutationCaches(queryClient, activeDormitoryId, impact);
+    invalidateRoomMutationCaches(queryClient, activeDormitoryId, impact, billingCycles);
   };
 
   const handleSaveBuildings = (_newBuildings: Building[]) => {

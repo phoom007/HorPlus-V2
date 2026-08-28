@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import http from 'http';
 import { cleanupService } from './services/cleanup.service.js';
+import { backfillRoomOperationalStatusBaseline } from './services/room-operational-baseline.service.js';
 import { createApp } from './app.js';
 import { validateEnv, redactSecrets } from './config/env.js';
 import { logger } from './config/logger.js';
@@ -41,6 +42,10 @@ async function startServer() {
   // Start background schedulers and startup catch-up
   cleanupService.startHourly();
   cleanupService.startDailyLateFee();
+  backfillRoomOperationalStatusBaseline().catch((err) => {
+    logger.error({ err }, '[Server] Non-fatal error during room operational status baseline backfill');
+  });
+
   cleanupService.runStartupCatchUp().catch((err) => {
     logger.error({ err }, '[Server] Non-fatal error during late-fee startup catch-up');
   });

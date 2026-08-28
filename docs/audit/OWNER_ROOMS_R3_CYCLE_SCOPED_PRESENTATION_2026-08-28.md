@@ -255,6 +255,55 @@ File: `src/tests/owner-rooms-r2-cycle-deposits.test.tsx`
 
 ---
 
-## 12. Final Status
 
-**READY FOR INDEPENDENT R3.2 REVIEW**
+---
+
+## 13. R3.2a — Independent Review Corrections
+
+### 1. Root Cause Analysis & Corrective Scope
+An independent review of R3.2 identified five blockers:
+1. **Wrong Operational Cycle Authority in RoomService**: R3.2 fell back to `status: 'OPEN'` or latest existing cycle, which was incorrect because future draft cycles exist and `BillingCycle.status` defaults to `draft`.
+2. **Missing Existing Room Baseline**: The initial schema migration left existing rooms without an operational baseline row.
+3. **Frontend UNKNOWN Fallthrough**: When `effectiveRoomOperationalStatus === 'UNKNOWN'` and `NO_AGREEMENT_IN_CYCLE`, the frontend fell through to Decision B1 catalog rates rather than failing closed.
+4. **Cache Invalidation Gap**: Status changes did not invalidate cached Meter Preview Context queries forward from the effective cycle.
+5. **Diff Hygiene Churn**: `server/src/services/room.service.ts` had accidental whole-file CRLF -> LF churn.
+
+### 2. Canonical Operational Cycle Authority (Part A & C1)
+- **Authority Reused**: Replaced custom query logic with `currentCycleResolverService.resolveOperationalBillingCycle(dormitoryId, tx)` from `server/src/services/current-cycle-resolver.ts`.
+- **Status Writes**: Room operational status writes strictly use `operational.billingCycleId`.
+- **Fail Closed**: If no authoritative operational cycle is available, throws `AppError('OPERATIONAL_BILLING_CYCLE_UNAVAILABLE', 422)`.
+- **Onboarding Create**: Room creation establishes baseline at `operational.billingCycleId` without breaking pre-billing onboarding.
+
+### 3. Existing Room Baseline & Pre-Baseline Fallback (Part B)
+- **Follow-up Migration**: `20260828173000_owner_rooms_r32a_operational_status_baseline` preserves existing migration lineage without mutating applied migrations.
+- **Idempotent Service**: `backfillRoomOperationalStatusBaseline(dormitoryId?, prisma?)` resolves the canonical operational cycle per dormitory and upserts exactly one baseline row per room using authoritative current `Room.status`.
+- **Zero Fabrication**: Historical cycles prior to baseline strictly resolve to `UNKNOWN`.
+
+### 4. Strict UNKNOWN Fail-Closed (Part C)
+- In `resolveRoomCyclePresentation`:
+  If `cyclePresentationState === 'NO_AGREEMENT_IN_CYCLE'` AND `effectiveRoomOperationalStatus === 'UNKNOWN'`, returns `state: 'UNAVAILABLE'` (`ไม่พบข้อมูลของงวดนี้`).
+  No B1 current catalog rates are displayed as the conclusion for unknown historical cycles.
+
+### 5. Forward Cache Invalidation Coordinator (Part D)
+- **Implementation**: Updated `src/lib/roomMutationCache.ts` (`invalidateRoomMutationCaches`):
+  - On status mutation, invalidates `queryKeys.rooms(dormitoryId)` and cached `queryKeys.meterPreviewContext(dormitoryId, cycleId)` for cycles with `periodStart >= effectiveStatusCycle.periodStart`.
+  - Older historical cycles (`< periodStart`) and other dormitories are NOT invalidated.
+  - Normal rent/deposit updates without status change do not invalidate preview context queries.
+- Edit modal and direct status toggles pass `effectiveRoomStatusCycleId` to preserve mutation impact metadata.
+
+### 6. RoomService Diff Hygiene Restoration (Part E)
+- Restored `server/src/services/room.service.ts` from R3.1 base (`42095a1399fac91fc1f9f4792e10bfa66298ab1b`) and applied surgical logical edits with original CRLF line endings.
+- `git diff --numstat 42095a1399fac91fc1f9f4792e10bfa66298ab1b -- server/src/services/room.service.ts` shows **56 insertions, 1 deletion**.
+
+### 7. Focused Verification Matrix
+- **Backend Write-Boundary Suite** (`server/src/__tests__/unit/owner-rooms-r32a-write-boundary.test.ts`): **4 / 4 passed (100%)**.
+- **Backend Effective Status Unit Suite** (`server/src/__tests__/unit/owner-rooms-r32-effective-status.test.ts`): **4 / 4 passed (100%)**.
+- **Backend Preview Context Unit Suite** (`server/src/__tests__/unit/owner-rooms-r3-meter-preview-context.test.ts`): **6 / 6 passed (100%)**.
+- **Frontend Cycle Deposits & Cache Suite** (`src/tests/owner-rooms-r2-cycle-deposits.test.tsx`): **52 / 52 passed (100%)**.
+- **LOCAL-07 UAT Refresh**: All 22 rooms seeded with baseline at operational cycle `2026-08`.
+
+---
+
+## 14. Final Status
+
+**READY FOR INDEPENDENT R3.2a REVIEW**

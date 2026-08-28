@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { normalizeAuthoritativeRoom } from '../lib/roomNormalizer';
 import { getOwnerRoomMutationErrorMessage } from '../lib/roomErrorMapper';
 import { getGridRentRates, getListRentRates, getDepositForCycle, getCurrentAgreementDepositDisplay, formatRoomLocation, resolveRoomCyclePresentation } from '../lib/roomRentalSummary';
@@ -1036,6 +1036,147 @@ describe('OWNER ROOMS R2 & R2.1 — Rent-Cycle Deposit Model & Hardened Specific
           return (r.roomNumber.includes(queryToday) || (p.occupancy?.tenantName && p.occupancy.tenantName.includes(queryToday)));
         });
         expect(matchToday).toHaveLength(0); // Zero leakage of current tenant
+      });
+    });
+  });
+  describe('10. OWNER ROOMS R3.2a — Canonical Operational Cycle, Baseline & Cache Coherence', () => {
+    const mockRoom: any = {
+      id: 'room-101',
+      dormitoryId: 'dorm-001',
+      roomNumber: '101',
+      status: 'vacant',
+      monthlyRent: 6000,
+      termRent: 24000,
+      dailyRent: 700,
+      monthlyDeposit: 6000,
+      termDeposit: 12000,
+      dailyDeposit: 1500,
+    };
+
+    describe('Part L — Strict UNKNOWN Operational Status Fail-Closed', () => {
+      it('1. NO_AGREEMENT_IN_CYCLE with UNKNOWN operational status resolves strictly to UNAVAILABLE (no B1 fallback)', () => {
+        const previewUnknown = {
+          roomId: 'room-101',
+          cyclePresentationState: 'NO_AGREEMENT_IN_CYCLE',
+          tenantId: null,
+          tenantName: null,
+          effectiveRoomOperationalStatus: 'UNKNOWN',
+        };
+
+        const res = resolveRoomCyclePresentation(mockRoom, previewUnknown, 'cycle-2026-06');
+        expect(res.state).toBe('UNAVAILABLE');
+        expect(res.occupancy).toBeNull();
+        expect(res.effectiveOperationalStatus).toBe('UNKNOWN');
+      });
+
+      it('2. NO_AGREEMENT_IN_CYCLE with vacant operational status resolves to NO_AGREEMENT_IN_CYCLE with B1 catalog', () => {
+        const previewVacant = {
+          roomId: 'room-101',
+          cyclePresentationState: 'NO_AGREEMENT_IN_CYCLE',
+          tenantId: null,
+          tenantName: null,
+          effectiveRoomOperationalStatus: 'vacant',
+        };
+
+        const res = resolveRoomCyclePresentation(mockRoom, previewVacant, 'cycle-2026-08');
+        expect(res.state).toBe('NO_AGREEMENT_IN_CYCLE');
+        expect(res.occupancy).toBeNull();
+        expect(res.effectiveOperationalStatus).toBe('vacant');
+        expect(res.currentCatalogRates[0].amount).toBe(6000);
+      });
+    });
+
+    describe('Part M — Cache Invalidation Coordinator (invalidateRoomMutationCaches)', () => {
+      const dormId = 'dorm-001';
+      const billingCycles = [
+        { id: 'cycle-2026-06', periodStart: '2026-06-01T00:00:00Z' },
+        { id: 'cycle-2026-07', periodStart: '2026-07-01T00:00:00Z' },
+        { id: 'cycle-2026-08', periodStart: '2026-08-01T00:00:00Z' },
+        { id: 'cycle-2026-09', periodStart: '2026-09-01T00:00:00Z' },
+        { id: 'cycle-2026-10', periodStart: '2026-10-01T00:00:00Z' },
+      ];
+
+      it('3. Status mutation effective at 2026-08 invalidates preview contexts for 2026-08, 2026-09, 2026-10 but NOT 2026-06 or 2026-07', async () => {
+        const { invalidateRoomMutationCaches } = await import('../lib/roomMutationCache');
+        const invalidatedQueries: any[] = [];
+        const mockQueryClient: any = {
+          invalidateQueries: vi.fn(({ queryKey, predicate }) => {
+            if (queryKey) {
+              invalidatedQueries.push({ key: queryKey });
+            }
+            if (predicate) {
+              // Test against our cycle queries
+              for (const cycle of billingCycles) {
+                const qKey = ['meter', dormId, cycle.id, 'preview-context'];
+                if (predicate({ queryKey: qKey })) {
+                  invalidatedQueries.push({ cycleId: cycle.id, key: qKey });
+                }
+              }
+              // Test against other dorm query
+              const otherDormKey = ['meter', 'dorm-other', 'cycle-2026-08', 'preview-context'];
+              if (predicate({ queryKey: otherDormKey })) {
+                invalidatedQueries.push({ dorm: 'other', key: otherDormKey });
+              }
+            }
+          }),
+        };
+
+        invalidateRoomMutationCaches(
+          mockQueryClient,
+          dormId,
+          { kind: 'status', effectiveBillingCycleId: 'cycle-2026-08' },
+          billingCycles
+        );
+
+        // Always invalidates canonical rooms
+        expect(invalidatedQueries.some((q) => q.key?.[0] === 'owner' && q.key?.[1] === dormId && q.key?.[2] === 'rooms')).toBe(true);
+
+        // Validates forward invalidation
+        const invalidatedCycleIds = invalidatedQueries.filter((q) => q.cycleId).map((q) => q.cycleId);
+        expect(invalidatedCycleIds).toContain('cycle-2026-08');
+        expect(invalidatedCycleIds).toContain('cycle-2026-09');
+        expect(invalidatedCycleIds).toContain('cycle-2026-10');
+
+        // Validates older historical cycles are NOT invalidated
+        expect(invalidatedCycleIds).not.toContain('cycle-2026-06');
+        expect(invalidatedCycleIds).not.toContain('cycle-2026-07');
+
+        // Other dorm is NEVER invalidated
+        expect(invalidatedQueries.some((q) => q.dorm === 'other')).toBe(false);
+      });
+
+      it('4. Regular rent/deposit update without status change or rename does NOT invalidate preview context queries', async () => {
+        const { invalidateRoomMutationCaches } = await import('../lib/roomMutationCache');
+        const invalidatedQueries: any[] = [];
+        const mockQueryClient: any = {
+          invalidateQueries: vi.fn(({ queryKey, predicate }) => {
+            if (queryKey) {
+              invalidatedQueries.push({ key: queryKey });
+            }
+            if (predicate) {
+              for (const cycle of billingCycles) {
+                const qKey = ['meter', dormId, cycle.id, 'preview-context'];
+                if (predicate({ queryKey: qKey })) {
+                  invalidatedQueries.push({ cycleId: cycle.id });
+                }
+              }
+            }
+          }),
+        };
+
+        invalidateRoomMutationCaches(
+          mockQueryClient,
+          dormId,
+          { kind: 'update', roomNumberChanged: false, statusChanged: false },
+          billingCycles
+        );
+
+        // Canonical rooms query is invalidated
+        expect(invalidatedQueries.some((q) => q.key?.[0] === 'owner' && q.key?.[1] === dormId && q.key?.[2] === 'rooms')).toBe(true);
+
+        // Zero preview context queries are invalidated
+        const invalidatedCycleIds = invalidatedQueries.filter((q) => q.cycleId);
+        expect(invalidatedCycleIds).toHaveLength(0);
       });
     });
   });

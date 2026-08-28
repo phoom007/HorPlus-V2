@@ -397,6 +397,18 @@ export function resolveRoomCyclePresentation(
   }
 
   // NO_AGREEMENT_IN_CYCLE: Consult effective operational status
+  if (meterPreviewRoom.effectiveRoomOperationalStatus === 'UNKNOWN') {
+    return {
+      roomId: room.id,
+      billingCycleId,
+      state: 'UNAVAILABLE',
+      effectiveOperationalStatus: 'UNKNOWN',
+      isCurrentMaintenance,
+      occupancy: null,
+      currentCatalogRates,
+    };
+  }
+
   if (meterPreviewRoom.effectiveRoomOperationalStatus === 'maintenance') {
     return {
       roomId: room.id,
@@ -413,7 +425,7 @@ export function resolveRoomCyclePresentation(
     roomId: room.id,
     billingCycleId,
     state: 'NO_AGREEMENT_IN_CYCLE',
-    effectiveOperationalStatus,
+    effectiveOperationalStatus: 'vacant',
     isCurrentMaintenance,
     occupancy: null,
     currentCatalogRates,
