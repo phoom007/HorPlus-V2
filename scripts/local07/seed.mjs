@@ -825,6 +825,17 @@ export async function seedLocal07Data() {
   }, COMP_DORM.owner.id);
   const cycleJuly = cycleJulyRes.cycle;
 
+  // Persist authoritative status-history evidence for Room 206 (maintenance since July 2026)
+  await prisma.roomOperationalStatusChange.create({
+    data: {
+      dormitoryId: compDorm.id,
+      roomId: createdRooms['206'].id,
+      effectiveBillingCycleId: cycleJuly.id,
+      status: 'maintenance',
+      version: 1,
+    },
+  });
+
   const cycleAugRes = await compBillingCycleService.createBillingCycle(compDorm.id, {
     cycleCode: '2026-08',
     name: 'รอบบิล สิงหาคม 2569',

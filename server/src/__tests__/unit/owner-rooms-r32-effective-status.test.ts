@@ -108,4 +108,32 @@ describe('OWNER ROOMS R3.2 — Effective Room Operational Status Resolver', () =
     expect(res.status).toBe('UNKNOWN');
     expect(res.sourceCycleId).toBeNull();
   });
+
+  it('5. Room 206 seeded at July 2026 resolves maintenance in 2026-07 and inherits maintenance into August 2026', async () => {
+    // In July 2026 (target cycle):
+    mockPrisma.roomOperationalStatusChange.findFirst.mockResolvedValueOnce({
+      id: 'sc-206-jul',
+      dormitoryId,
+      roomId: 'room-206',
+      effectiveBillingCycleId: 'cycle-2026-07',
+      status: 'maintenance',
+      effectiveBillingCycle: cycles.find(c => c.id === 'cycle-2026-07'),
+    });
+    const resJul = await resolveRoomOperationalStatusForCycle(dormitoryId, 'room-206', 'cycle-2026-07', mockPrisma);
+    expect(resJul.status).toBe('maintenance');
+    expect(resJul.sourceCycleId).toBe('cycle-2026-07');
+
+    // In August 2026 (target cycle): inherits July 2026 maintenance
+    mockPrisma.roomOperationalStatusChange.findFirst.mockResolvedValueOnce({
+      id: 'sc-206-jul',
+      dormitoryId,
+      roomId: 'room-206',
+      effectiveBillingCycleId: 'cycle-2026-07',
+      status: 'maintenance',
+      effectiveBillingCycle: cycles.find(c => c.id === 'cycle-2026-07'),
+    });
+    const resAug = await resolveRoomOperationalStatusForCycle(dormitoryId, 'room-206', 'cycle-2026-08', mockPrisma);
+    expect(resAug.status).toBe('maintenance');
+    expect(resAug.sourceCycleId).toBe('cycle-2026-07');
+  });
 });

@@ -52,12 +52,37 @@ import {
   getListRentRates,
   getDepositForCycle,
   getCurrentAgreementDepositDisplay,
+  formatBuildingDisplayName,
   formatRoomLocation,
+  getPaymentStatusBadge,
   resolveRoomCyclePresentation,
   RoomCyclePresentation
 } from '../../lib/roomRentalSummary';
+import { formatShortThaiBuddhistDate } from '../../utils/calendarDate';
 import { RoomMutationImpact } from '../../lib/roomMutationCache';
 import { Room, Building, RoomStatus, Tenant, Contract, Bill, BLOCKING_CONTRACT_STATUSES } from '../../types';
+
+export interface TenantReturnContext {
+  source: 'meters' | 'rooms';
+  tenantId: string;
+  roomId?: string;
+  cycleId?: string;
+  cycleCode?: string;
+  viewMode?: 'grid' | 'list' | 'floor';
+  selectedBuilding?: string;
+  selectedStatus?: string;
+  searchQuery?: string;
+  scrollY?: number;
+}
+
+export interface RoomsRestoredState {
+  viewMode?: 'grid' | 'list' | 'floor';
+  selectedBuilding?: string;
+  selectedStatus?: string;
+  searchQuery?: string;
+  scrollY?: number;
+  roomId?: string;
+}
 
 interface OwnerRoomsProps {
   dormitoryId: string;
@@ -71,6 +96,9 @@ interface OwnerRoomsProps {
   onSaveContracts?: (contracts: Contract[]) => void;
   onAddLog: (action: string, details: string, type: string, id: string) => void;
   onNavigate: (tab: string, param?: string) => void;
+  onOpenTenant?: (tenantId: string, returnContext: TenantReturnContext) => void;
+  restoredState?: RoomsRestoredState | null;
+  onClearRestoredState?: () => void;
   initialRoomId?: string;
   onClearInitialRoomId?: () => void;
   selectedBillingCycleId?: string;
@@ -132,6 +160,9 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
   onSaveContracts,
   onAddLog,
   onNavigate,
+  onOpenTenant,
+  restoredState,
+  onClearRestoredState,
   initialRoomId,
   onClearInitialRoomId,
   selectedBillingCycleId,
@@ -806,7 +837,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
               <option value="maintenance">ปิดปรับปรุงในงวด</option>
               <option value="reserved">จองแล้ว</option>
               <option value="daily_tail">ค้างชำระ</option>
-              <option value="unavailable">ข้อมูลไม่พร้อม</option>
+              <option value="unavailable">ไม่มีประวัติสถานะ</option>
             </select>
           </div>
 
@@ -853,7 +884,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
       {viewMode === 'grid' && (
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
           {filteredRooms.map((room) => {
-            const bldName = buildings.find(b => b.id === room.buildingId)?.name || 'ไม่ระบุอาคาร';
+            const targetBld = buildings.find(b => b.id === room.buildingId);
             const meterPreviewRoom = previewRoomMap.get(room.id);
             const cyclePresentation = resolveRoomCyclePresentation(room, meterPreviewRoom, selectedBillingCycleId);
             const isCycleOccupied = cyclePresentation.state === 'ACTIVE_AGREEMENT';
@@ -861,7 +892,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
             const isDailyTail = cyclePresentation.state === 'DAILY_FINANCIAL_TAIL';
             const isMaintenanceInCycle = cyclePresentation.state === 'MAINTENANCE_IN_CYCLE';
             const isUnavailable = cyclePresentation.state === 'UNAVAILABLE';
-            const locationStr = formatRoomLocation(bldName, room.floor);
+            const locationStr = formatRoomLocation(targetBld, room.floor);
 
             const displayTenantName = cyclePresentation.occupancy?.tenantName;
             const statusCfg = isCycleOccupied
@@ -873,6 +904,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
             return (
               <div
                 key={room.id}
+                id={`room-card-${room.id}`}
                 className={`rounded-3xl border shadow-2xs hover:shadow-md transition-all duration-300 overflow-hidden flex flex-col justify-between ${statusCfg.bg} ${statusCfg.border}`}
               >
                 <div className="p-5 space-y-3.5">
@@ -903,9 +935,9 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                                 ? 'bg-slate-200 text-slate-700 border-slate-300'
                                 : 'bg-emerald-100 text-emerald-800 border-emerald-200'))
                         }`}
-                      title={`สถานะห้องในงวด: ${isCycleOccupied ? 'มีผู้เช่า' : (isCycleReserved ? 'จองแล้ว' : (isDailyTail ? 'ค้างชำระ (รายวัน)' : (isMaintenanceInCycle ? 'ปิดปรับปรุง' : (isUnavailable ? 'ข้อมูลไม่พร้อม' : 'ว่าง'))))}`}
+                      title={`สถานะห้องในงวด: ${isCycleOccupied ? 'มีผู้เช่า' : (isCycleReserved ? 'จองแล้ว' : (isDailyTail ? 'ค้างชำระ (รายวัน)' : (isMaintenanceInCycle ? 'ปิดปรับปรุง' : (isUnavailable ? 'ไม่มีประวัติสถานะ' : 'ว่าง'))))}`}
                     >
-                      {isCycleOccupied ? 'มีผู้เช่า' : (isCycleReserved ? 'จองแล้ว' : (isDailyTail ? 'ค้างชำระ' : (isMaintenanceInCycle ? 'ปิดปรับปรุง' : (isUnavailable ? 'ข้อมูลไม่พร้อม' : 'ว่าง'))))}
+                      {isCycleOccupied ? 'มีผู้เช่า' : (isCycleReserved ? 'จองแล้ว' : (isDailyTail ? 'ค้างชำระ' : (isMaintenanceInCycle ? 'ปิดปรับปรุง' : (isUnavailable ? 'ไม่มีประวัติสถานะ' : 'ว่าง'))))}
                     </div>
                   </div>
 
@@ -922,7 +954,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                           <p className="font-extrabold text-slate-900 truncate mt-0.5">{displayTenantName}</p>
                         ) : (
                           <p className="text-gray-400 font-medium italic mt-0.5">
-                            {isUnavailable ? 'ไม่พบข้อมูลของงวดนี้' : (isMaintenanceInCycle ? 'ปิดปรับปรุงในงวดนี้' : 'ไม่มีผู้เช่าในงวดนี้')}
+                            {isUnavailable ? 'ไม่พบประวัติสถานะห้องสำหรับงวดนี้' : (isMaintenanceInCycle ? 'ปิดปรับปรุงในงวดนี้' : 'ไม่มีผู้เช่าในงวดนี้')}
                           </p>
                         )}
                       </div>
@@ -932,8 +964,8 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                     {(() => {
                       if (isUnavailable) {
                         return (
-                          <div className="py-2 text-center text-slate-400 italic text-[11px]">
-                            ไม่พบข้อมูลของงวดนี้
+                          <div className="py-2 text-center text-slate-500 italic text-[11px]">
+                            ไม่พบประวัติสถานะห้องสำหรับงวดนี้
                           </div>
                         );
                       }
@@ -949,9 +981,16 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                             </p>
                             <div className="flex justify-between items-center text-slate-700">
                               <span className="text-gray-500 font-medium">{cycleLabel}:</span>
-                              <span className="font-extrabold text-slate-900">
-                                {formatBaht(cyclePresentation.occupancy.rentAmount)} / {unitSuffix}
-                              </span>
+                              <div className="flex items-center gap-1.5">
+                                <span className="font-extrabold text-slate-900">
+                                  {formatBaht(cyclePresentation.occupancy.rentAmount)} / {unitSuffix}
+                                </span>
+                                {cyclePresentation.agreementRentPaymentStatus && (
+                                  <span className={`px-1.5 py-0.5 rounded-md text-[10px] font-bold border ${getPaymentStatusBadge(cyclePresentation.agreementRentPaymentStatus).className}`}>
+                                    {getPaymentStatusBadge(cyclePresentation.agreementRentPaymentStatus).text}
+                                  </span>
+                                )}
+                              </div>
                             </div>
                           </div>
                         );
@@ -974,9 +1013,10 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                       }
 
                       if (isCycleReserved) {
+                        const resDate = cyclePresentation.reservationCheckInDate ? formatShortThaiBuddhistDate(cyclePresentation.reservationCheckInDate) : '';
                         return (
-                          <div className="py-2 text-center text-amber-700 font-bold text-[11px]">
-                            จองห้องพักล่วงหน้าในงวดนี้
+                          <div className="py-2 text-center text-amber-800 font-bold text-[11px]">
+                            จองล่วงหน้า {resDate}
                           </div>
                         );
                       }
@@ -1013,6 +1053,11 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                           return (
                             <div className="flex items-center gap-1.5">
                               <span className="font-extrabold text-slate-900">{formatBaht(dep)}</span>
+                              {cyclePresentation.agreementDepositPaymentStatus && (
+                                <span className={`px-1.5 py-0.5 rounded-md text-[10px] font-bold border ${getPaymentStatusBadge(cyclePresentation.agreementDepositPaymentStatus).className}`}>
+                                  {getPaymentStatusBadge(cyclePresentation.agreementDepositPaymentStatus).text}
+                                </span>
+                              )}
                             </div>
                           );
                         }
@@ -1093,7 +1138,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {filteredRooms.map((room) => {
-                  const bldName = buildings.find(b => b.id === room.buildingId)?.name || 'ไม่ระบุ';
+                  const targetBld = buildings.find(b => b.id === room.buildingId);
                   const meterPreviewRoom = previewRoomMap.get(room.id);
                   const cyclePresentation = resolveRoomCyclePresentation(room, meterPreviewRoom, selectedBillingCycleId);
                   const isCycleOccupied = cyclePresentation.state === 'ACTIVE_AGREEMENT';
@@ -1101,7 +1146,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                   const isDailyTail = cyclePresentation.state === 'DAILY_FINANCIAL_TAIL';
                   const isMaintenanceInCycle = cyclePresentation.state === 'MAINTENANCE_IN_CYCLE';
                   const isUnavailable = cyclePresentation.state === 'UNAVAILABLE';
-                  const locationStr = formatRoomLocation(bldName, room.floor);
+                  const locationStr = formatRoomLocation(targetBld, room.floor);
 
                   const displayTenantName = cyclePresentation.occupancy?.tenantName;
                   const statusCfg = isCycleOccupied
@@ -1126,44 +1171,99 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                       </td>
                       <td className="p-4 space-y-0.5 whitespace-nowrap">
                         {(() => {
+                          if (isUnavailable) {
+                            return <span className="text-slate-400 font-medium italic">ไม่มีประวัติสถานะห้องสำหรับงวดนี้</span>;
+                          }
+
                           if (isCycleOccupied && cyclePresentation.occupancy) {
                             const agrType = cyclePresentation.occupancy.agreementType;
                             const unitSuffix = agrType === 'TERM' ? 'เทอม' : (agrType === 'DAILY' ? 'วัน' : 'เดือน');
                             return (
-                              <>
-                                <div className="font-extrabold text-slate-900 whitespace-nowrap">
-                                  {formatBaht(cyclePresentation.occupancy.rentAmount)} / {unitSuffix}
+                              <div className="space-y-0.5">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-extrabold text-slate-900 whitespace-nowrap">
+                                    {formatBaht(cyclePresentation.occupancy.rentAmount)} / {unitSuffix}
+                                  </span>
+                                  {cyclePresentation.agreementRentPaymentStatus && (
+                                    <span className={`px-1.5 py-0.5 rounded-md text-[10px] font-bold border ${getPaymentStatusBadge(cyclePresentation.agreementRentPaymentStatus).className}`}>
+                                      {getPaymentStatusBadge(cyclePresentation.agreementRentPaymentStatus).text}
+                                    </span>
+                                  )}
                                 </div>
                                 <div className="text-[10px] text-gray-400 whitespace-nowrap">
                                   อัตราตามงวด
                                 </div>
-                              </>
+                              </div>
                             );
                           }
 
-                          // Decision B1: current catalog rates with 'อัตราปัจจุบัน'
-                          const [primary, ...rest] = cyclePresentation.currentCatalogRates;
-                          return (
-                            <>
-                              {primary && (
-                                <div className="font-extrabold text-slate-900 whitespace-nowrap">
-                                  {formatBaht(primary.amount)} / {primary.cycle === 'term' ? 'เทอม' : (primary.cycle === 'daily' ? 'วัน' : 'เดือน')}
+                          if (isDailyTail && cyclePresentation.occupancy) {
+                            return (
+                              <div className="space-y-0.5">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-extrabold text-slate-900 whitespace-nowrap">
+                                    {formatBaht(cyclePresentation.occupancy.rentAmount)} / วัน
+                                  </span>
+                                  {cyclePresentation.agreementRentPaymentStatus && (
+                                    <span className={`px-1.5 py-0.5 rounded-md text-[10px] font-bold border ${getPaymentStatusBadge(cyclePresentation.agreementRentPaymentStatus).className}`}>
+                                      {getPaymentStatusBadge(cyclePresentation.agreementRentPaymentStatus).text}
+                                    </span>
+                                  )}
                                 </div>
-                              )}
-                              <div className="text-[10px] text-gray-500 whitespace-nowrap">
-                                อัตราปัจจุบัน
+                                <div className="text-[10px] text-amber-600 font-bold whitespace-nowrap">
+                                  รายการค้างชำระรายวัน
+                                </div>
                               </div>
-                            </>
+                            );
+                          }
+
+                          if (isCycleReserved) {
+                            const resDate = cyclePresentation.reservationCheckInDate ? formatShortThaiBuddhistDate(cyclePresentation.reservationCheckInDate) : '';
+                            return (
+                              <div className="space-y-0.5">
+                                <div className="font-bold text-amber-800 whitespace-nowrap">
+                                  จองล่วงหน้า {resDate}
+                                </div>
+                                <div className="text-[10px] text-amber-600 whitespace-nowrap">
+                                  การจองห้องพัก
+                                </div>
+                              </div>
+                            );
+                          }
+
+                          // Decision B1: render all configured current catalog rates compactly
+                          return (
+                            <div className="space-y-0.5">
+                              {cyclePresentation.currentCatalogRates.map((r) => (
+                                <div key={r.cycle} className="flex items-center gap-2">
+                                  <span className="text-[11px] text-gray-500 font-medium w-12">{r.label}</span>
+                                  <span className="font-bold text-slate-800">{formatBaht(r.amount)}</span>
+                                </div>
+                              ))}
+                              <div className="text-[10px] text-gray-400 font-semibold pt-0.5 whitespace-nowrap">
+                                {isMaintenanceInCycle ? 'ปิดปรับปรุง (อัตราปัจจุบัน)' : 'อัตราปัจจุบัน'}
+                              </div>
+                            </div>
                           );
                         })()}
                       </td>
                       <td className="p-4 whitespace-nowrap">
                         {(() => {
+                          if (isUnavailable) {
+                            return <span className="text-slate-400 font-medium italic">ไม่มีประวัติสถานะห้องสำหรับงวดนี้</span>;
+                          }
                           if (isCycleOccupied && cyclePresentation.occupancy) {
                             const dep = cyclePresentation.occupancy.depositAmount;
                             if (dep !== null && dep !== undefined && Number.isFinite(dep)) {
                               return (
-                                <div className="font-bold text-slate-800 whitespace-nowrap">{formatBaht(dep)}</div>
+                                <div className="flex items-center gap-2">
+                                  <span className="font-bold text-slate-800 whitespace-nowrap">{formatBaht(dep)}</span>
+                                  {cyclePresentation.agreementDepositPaymentStatus && (
+                                    <span className={`px-1.5 py-0.5 rounded-md text-[10px] font-bold border ${getPaymentStatusBadge(cyclePresentation.agreementDepositPaymentStatus).className}`}>
+                                      {getPaymentStatusBadge(cyclePresentation.agreementDepositPaymentStatus).text}
+                                    </span>
+                                  )}
+                                </div>
                               );
                             }
                             return <span className="text-gray-400 font-medium italic">ไม่พบข้อมูลค่าประกันตามงวด</span>;
@@ -1182,7 +1282,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                                   ? 'bg-rose-50 text-rose-700 border-rose-200'
                                   : 'bg-emerald-50 text-emerald-700 border-emerald-200')
                             }`}
-                          title={`สถานะห้อง: ${isCycleOccupied ? 'มีผู้เช่า' : (isCycleReserved ? 'จองแล้ว' : (isDailyTail ? 'ค้างชำระ' : (room.status === 'maintenance' ? 'ปิดปรับปรุง' : 'ว่าง')))}`}
+                          title={`สถานะห้อง: ${isCycleOccupied ? 'มีผู้เช่า' : (isCycleReserved ? 'จองแล้ว' : (isDailyTail ? 'ค้างชำระ' : (isMaintenanceInCycle ? 'ปิดปรับปรุง' : (isUnavailable ? 'ไม่มีประวัติสถานะ' : 'ว่าง'))))}`}
                         >
                           <span
                             className={`w-1.5 h-1.5 rounded-full shrink-0 ${isCycleOccupied
@@ -1194,7 +1294,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                                     : 'bg-emerald-500')
                               }`}
                           />
-                          <span>{isCycleOccupied ? 'มีผู้เช่า' : (isCycleReserved ? 'จองแล้ว' : (isDailyTail ? 'ค้างชำระ' : (room.status === 'maintenance' ? 'ปิดปรับปรุง' : 'ว่าง')))}</span>
+                          <span>{isCycleOccupied ? 'มีผู้เช่า' : (isCycleReserved ? 'จองแล้ว' : (isDailyTail ? 'ค้างชำระ' : (isMaintenanceInCycle ? 'ปิดปรับปรุง' : (isUnavailable ? 'ไม่มีประวัติสถานะ' : 'ว่าง'))))}</span>
                         </div>
                       </td>
                       <td className="p-4 text-right whitespace-nowrap">
@@ -1249,7 +1349,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
             return (
               <div key={bld.id} className="bg-white p-4 sm:p-6 rounded-3xl border border-gray-100 shadow-xs space-y-4">
                 <div className="flex items-center justify-between border-b border-gray-100 pb-3">
-                  <h3 className="text-base font-black text-slate-900">{bld.name}</h3>
+                  <h3 className="text-base font-black text-slate-900">{formatBuildingDisplayName(bld)}</h3>
                 </div>
 
                 <div className="space-y-4">
@@ -1285,11 +1385,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                               return (
                                 <div
                                   key={room.id}
-                                  onClick={() => {
-                                    if (displayTenantId) {
-                                      onNavigate('tenants', displayTenantId);
-                                    }
-                                  }}
+                                  onClick={(e) => handleTenantAction(room, e)}
                                   title={displayTenantName ? `คลิกเพื่อดูข้อมูลผู้เช่าคุณ ${displayTenantName}` : `ดูข้อมูลห้อง ${room.roomNumber}`}
                                   className="p-2.5 sm:p-3 w-full sm:w-auto sm:min-w-[150px] rounded-2xl border text-center cursor-pointer transition-all hover:scale-105 select-none flex flex-col justify-between items-center shadow-2xs group bg-indigo-50/70 hover:bg-indigo-100/70 border-indigo-200 text-indigo-900"
                                 >
@@ -1327,7 +1423,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                                     </span>
                                   </div>
                                   <div className="text-[10px] sm:text-[11px] font-extrabold opacity-90 my-0.5 text-amber-800 truncate">
-                                    จองล่วงหน้า
+                                    จองล่วงหน้า {cyclePresentation.reservationCheckInDate ? formatShortThaiBuddhistDate(cyclePresentation.reservationCheckInDate) : ''}
                                   </div>
                                   {displayTenantName && (
                                     <div className="text-[9px] sm:text-[10px] font-bold truncate max-w-full sm:max-w-[135px] opacity-90 flex items-center gap-1 mt-1 bg-white/70 group-hover:bg-white px-1.5 sm:px-2 py-0.5 rounded-lg w-full justify-center text-amber-900 border border-amber-100/60 shadow-3xs transition-colors">

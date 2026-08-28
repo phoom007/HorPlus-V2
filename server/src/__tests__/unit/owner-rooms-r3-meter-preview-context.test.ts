@@ -258,4 +258,44 @@ describe('OWNER ROOMS R3 — Meter Service Preview Context DTO & State Authority
     expect(r106.agreementType).toBe('DAILY');
     expect(r106.agreementDepositAmount).toBe('500.00');
   });
+
+  it('7. Resolves authoritative agreementRentPaymentStatus and agreementDepositPaymentStatus', async () => {
+    mockRoomRepo.findAll.mockResolvedValue({
+      items: [{ id: 'room-201', roomNumber: '201', dormitoryId }],
+    });
+    mockPrisma.contract.findMany.mockResolvedValue([
+      {
+        id: 'contract-201',
+        roomId: 'room-201',
+        dormitoryId,
+        tenantId: 'tenant-201',
+        rentBillingType: 'MONTHLY',
+        rentAmount: 4800,
+        depositAmount: 4800,
+        startDate: new Date('2026-08-01T00:00:00.000Z'),
+        endDate: new Date('2027-07-31T23:59:59.999Z'),
+        status: 'active',
+        tenant: { displayName: 'สมหมาย', linkedUserId: null },
+      },
+    ]);
+    mockPrisma.bill.findMany.mockResolvedValue([
+      {
+        id: 'bill-201',
+        dormitoryId,
+        roomId: 'room-201',
+        billingCycleId,
+        billKind: 'DEPOSIT',
+        status: 'paid',
+        totalAmount: 4800,
+        items: [{ id: 'bi-1', type: 'deposit', description: 'ค่าประกัน', amount: 4800 }],
+      },
+    ]);
+    mockPrisma.provisionalRentalTerm.findMany.mockResolvedValue([]);
+    mockPrisma.dailyStay.findMany.mockResolvedValue([]);
+
+    const result = await meterService.getMeterBillingPreviewContext(dormitoryId, billingCycleId);
+    expect(result.rooms).toHaveLength(1);
+    const r201 = result.rooms[0];
+    expect(r201.agreementDepositPaymentStatus).toBe('PAID');
+  });
 });

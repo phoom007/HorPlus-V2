@@ -202,13 +202,84 @@ export function getCurrentAgreementDepositDisplay(room: Room): AgreementDepositD
 }
 
 /**
- * Formats room location using registered building name and room floor.
- * E.g., "อาคาร B • ชั้น 1" or "อาคารชาญวิทย์ (A) • ชั้น 2".
+ * Normalizes and formats building display name according to Product Owner display authority:
+ * 1. Explicit non-empty Building.name (normalized to prevent duplicate "อาคาร" prefix)
+ * 2. Otherwise Building.code / roomPrefix ("อาคาร {code}")
+ * 3. Otherwise safe generic fallback ("ไม่ระบุอาคาร")
  */
-export function formatRoomLocation(buildingName?: string | null, floor?: number | string | null): string {
-  const bld = buildingName?.trim() || 'ไม่ระบุอาคาร';
+export function formatBuildingDisplayName(
+  building?: { name?: string | null; code?: string | null; roomPrefix?: string | null } | string | null
+): string {
+  if (!building) return 'ไม่ระบุอาคาร';
+  const name = (typeof building === 'string' ? building : building.name)?.trim();
+  const code = (typeof building === 'object' ? (building.code || building.roomPrefix) : undefined)?.trim();
+
+  if (name) {
+    if (/^(อาคาร|ตึก|building)\s*/i.test(name)) {
+      return name;
+    }
+    return `อาคาร${name}`;
+  }
+
+  if (code) {
+    if (/^(อาคาร|ตึก|building)\s*/i.test(code)) {
+      return code;
+    }
+    return `อาคาร ${code}`;
+  }
+
+  return 'ไม่ระบุอาคาร';
+}
+
+/**
+ * Formats room location using registered building name/code and room floor.
+ * E.g., "อาคารสมบูรณ์ • ชั้น 1" or "อาคาร B • ชั้น 2".
+ */
+export function formatRoomLocation(
+  building?: { name?: string | null; code?: string | null; roomPrefix?: string | null } | string | null,
+  floor?: number | string | null
+): string {
+  const bld = formatBuildingDisplayName(building);
   const fl = floor !== undefined && floor !== null ? `ชั้น ${floor}` : 'ไม่ระบุชั้น';
   return `${bld} • ${fl}`;
+}
+
+export interface PaymentStatusBadgeConfig {
+  text: string;
+  className: string;
+  dotColor: string;
+}
+
+export function getPaymentStatusBadge(
+  status?: 'PAID' | 'UNPAID' | 'PARTIAL' | 'UNKNOWN' | null
+): PaymentStatusBadgeConfig {
+  switch (status) {
+    case 'PAID':
+      return {
+        text: 'จ่ายแล้ว',
+        className: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+        dotColor: 'bg-emerald-500',
+      };
+    case 'UNPAID':
+      return {
+        text: 'ยังไม่ชำระ',
+        className: 'bg-amber-50 text-amber-700 border-amber-200',
+        dotColor: 'bg-amber-500',
+      };
+    case 'PARTIAL':
+      return {
+        text: 'ชำระบางส่วน',
+        className: 'bg-amber-50 text-amber-700 border-amber-200',
+        dotColor: 'bg-amber-500',
+      };
+    case 'UNKNOWN':
+    default:
+      return {
+        text: 'ไม่พบสถานะการชำระ',
+        className: 'bg-slate-50 text-slate-600 border-slate-200',
+        dotColor: 'bg-slate-400',
+      };
+  }
 }
 
 export interface RoomCycleOccupancy {
@@ -228,6 +299,9 @@ export interface RoomCyclePresentation {
   isCurrentMaintenance: boolean;
   occupancy: RoomCycleOccupancy | null;
   currentCatalogRates: RateItem[];
+  reservationCheckInDate?: string | null;
+  agreementRentPaymentStatus?: 'PAID' | 'UNPAID' | 'PARTIAL' | 'UNKNOWN';
+  agreementDepositPaymentStatus?: 'PAID' | 'UNPAID' | 'PARTIAL' | 'UNKNOWN';
 }
 
 /**
@@ -254,9 +328,15 @@ export function resolveRoomCyclePresentation(
       isCurrentMaintenance,
       occupancy: null,
       currentCatalogRates,
+      reservationCheckInDate: null,
+      agreementRentPaymentStatus: 'UNKNOWN',
+      agreementDepositPaymentStatus: 'UNKNOWN',
     };
   }
 
+  const reservationCheckInDate = meterPreviewRoom.checkInDate ?? null;
+  const agreementRentPaymentStatus = meterPreviewRoom.agreementRentPaymentStatus ?? 'UNKNOWN';
+  const agreementDepositPaymentStatus = meterPreviewRoom.agreementDepositPaymentStatus ?? 'UNKNOWN';
   const rawState = meterPreviewRoom.cyclePresentationState;
   const validStates = ['ACTIVE_AGREEMENT', 'RESERVED_IN_CYCLE', 'DAILY_FINANCIAL_TAIL', 'NO_AGREEMENT_IN_CYCLE'];
   const effectiveOperationalStatus = meterPreviewRoom.effectiveRoomOperationalStatus ?? (isCurrentMaintenance ? 'maintenance' : 'UNKNOWN');
@@ -271,6 +351,9 @@ export function resolveRoomCyclePresentation(
       isCurrentMaintenance,
       occupancy: null,
       currentCatalogRates,
+      reservationCheckInDate,
+      agreementRentPaymentStatus,
+      agreementDepositPaymentStatus,
     };
   }
 
@@ -324,6 +407,9 @@ export function resolveRoomCyclePresentation(
         source,
       },
       currentCatalogRates,
+      reservationCheckInDate,
+      agreementRentPaymentStatus,
+      agreementDepositPaymentStatus,
     };
   }
 
@@ -343,6 +429,9 @@ export function resolveRoomCyclePresentation(
         source: 'NONE',
       },
       currentCatalogRates,
+      reservationCheckInDate,
+      agreementRentPaymentStatus,
+      agreementDepositPaymentStatus,
     };
   }
 
@@ -393,6 +482,9 @@ export function resolveRoomCyclePresentation(
         source: 'DAILY_STAY',
       },
       currentCatalogRates,
+      reservationCheckInDate,
+      agreementRentPaymentStatus,
+      agreementDepositPaymentStatus,
     };
   }
 
@@ -406,6 +498,9 @@ export function resolveRoomCyclePresentation(
       isCurrentMaintenance,
       occupancy: null,
       currentCatalogRates,
+      reservationCheckInDate,
+      agreementRentPaymentStatus,
+      agreementDepositPaymentStatus,
     };
   }
 
@@ -418,6 +513,9 @@ export function resolveRoomCyclePresentation(
       isCurrentMaintenance,
       occupancy: null,
       currentCatalogRates,
+      reservationCheckInDate,
+      agreementRentPaymentStatus,
+      agreementDepositPaymentStatus,
     };
   }
 

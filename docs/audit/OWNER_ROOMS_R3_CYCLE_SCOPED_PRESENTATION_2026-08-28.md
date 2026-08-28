@@ -378,6 +378,70 @@ An independent review of R3.2b identified that while `ApiPropertyAdapter` was up
 
 ---
 
-## 16. Final Status
 
-**READY FOR PRODUCT OWNER R3 MANUAL UAT**
+---
+
+## 16. R3.3 — Product Owner Manual UAT Findings & Corrections
+
+### 1. July Room 206 Fixture Defect & Authoritative Status History
+- **Observed UAT Symptom**: In July 2026, Room 206 displayed `ปิดปรับปรุงปัจจุบัน` + `ข้อมูลไม่พร้อม` (UNKNOWN).
+- **Root Cause**: Comprehensive Manor was seeded with initial status `maintenance`, but R3.2 one-time operational baseline established baseline at canonical operational cycle (August 2026). Prior historical cycles had no status-history rows in Postgres.
+- **Correction (Part A)**: In `scripts/local07/seed.mjs`, explicitly seeded authoritative status-history row for Room 206 at `cycleJuly.id` with `status: 'maintenance'`.
+- **Production Invariant**: Real legacy production data with no defensible historical evidence remains `UNKNOWN`. Production inference is not modified backwards.
+
+### 2. UNKNOWN State User-Facing UX (Part B)
+- Replaced vague `ข้อมูลไม่พร้อม` text with concise truthful Thai presentation:
+  - **Badge / Filter**: `ไม่มีประวัติสถานะ` (slate neutral)
+  - **Detail text**: `ไม่พบประวัติสถานะห้องสำหรับงวดนี้`
+- Retained strict fail-closed presentation without fabricating B1 prices for unrecorded history.
+
+### 3. Room 204 Real Error Reproduction & Error Propagation (Part C & L)
+- **Reproduction Result**: Direct service and HTTP PUT calls with valid version proceed with 200 OK.
+- **Root Cause of Generic Error**: Coarse HTTP-wrapper codes (e.g. `CONFLICT` / `INTERNAL_ERROR`) were previously given higher priority in `src/lib/roomErrorMapper.ts` than specific nested server domain error codes (`details.error.code` / `details.code`).
+- **Correction**: In `src/lib/roomErrorMapper.ts`, nested domain codes are evaluated first, mapping to specific concise Thai messages:
+  - `ROOM_NUMBER_ALREADY_EXISTS` -> `เลขห้องนี้มีอยู่แล้ว`
+  - `BUILDING_NOT_FOUND` -> `ไม่พบอาคารที่เลือก`
+  - `OPERATIONAL_BILLING_CYCLE_UNAVAILABLE` -> `ยังไม่พบงวดดำเนินงานสำหรับการเปลี่ยนสถานะห้อง`
+  - `VERSION_CONFLICT` -> `ข้อมูลห้องถูกแก้ไขจากอุปกรณ์อื่น กรุณาโหลดข้อมูลล่าสุด`
+  - `ACTIVE_AGREEMENT_EXISTS` -> `ไม่สามารถปิดปรับปรุงห้องพักที่มีผู้เช่าอยู่ได้`
+
+### 4. List Mode Rate Presentation (Part D)
+- **Active Agreement**: Displays selected-cycle rent rate (e.g. `4,500.00 / เดือน`) with payment status badge.
+- **No Agreement (Decision B1)**: Compactly displays all configured current catalog rates (รายเทอม, รายเดือน, รายวัน) labeled `อัตราปัจจุบัน` without discarding `rest`.
+- **Reserved**: Displays `จองล่วงหน้า {date}`.
+- **Daily Financial Tail**: Displays authoritative daily rate with payment status.
+
+### 5. Payment Status Beside Rent and Deposit (Part E)
+- Extended `getMeterBillingPreviewContext` in `server/src/services/meter.service.ts` to calculate:
+  - `agreementRentPaymentStatus`: `'PAID' | 'UNPAID' | 'PARTIAL' | 'UNKNOWN'`
+  - `agreementDepositPaymentStatus`: `'PAID' | 'UNPAID' | 'PARTIAL' | 'UNKNOWN'`
+- Both Grid and List modes consume the shared `getPaymentStatusBadge` helper with semantic styling:
+  - `PAID` / `จ่ายแล้ว` (green/emerald)
+  - `UNPAID` / `ยังไม่ชำระ` (amber)
+  - `PARTIAL` / `ชำระบางส่วน` (amber)
+  - `UNKNOWN` / `ไม่พบสถานะการชำระ` (gray)
+
+### 6. Future Reservation Date Display (Part F)
+- Reused canonical Buddhist date formatter `formatShortThaiBuddhistDate` from `src/utils/calendarDate.ts`.
+- Projected across Grid, List, and Floor modes as `จองล่วงหน้า {DD/MM/YY}`.
+
+### 7. Selected-Cycle Tenant Deep Link & Return Context (Part G, H, I, J)
+- **Deep Link**: Tenant action button resolves target tenant from `cyclePresentation.occupancy.tenantId` (never falls back to `room.currentTenantId`).
+- **Return Context**: `onOpenTenant(tenantId, returnContext)` captures `cycleId`, `cycleCode`, `viewMode`, `selectedBuilding`, `selectedStatus`, `searchQuery`, and `scrollY`.
+- **Tenant Detail Actions**:
+  - `กลับ`: Returns to Rooms, restoring all filters, search query, view mode, and scrolling smoothly to target room card/position.
+  - `ดูรายการอื่น`: Closes profile to the Tenant list without returning to Rooms.
+- **Meter Flow**: Preserved existing Meter return flow.
+
+### 8. Building Display Name vs Room Numbering Separation (Part K)
+- **Authority**:
+  1. Explicit non-empty `Building.name` (normalized with `formatBuildingDisplayName` to prevent duplicate `อาคาร` prefixes).
+  2. Otherwise `Building.code` / `roomPrefix` (`อาคาร {code}`).
+  3. Otherwise `ไม่ระบุอาคาร`.
+- Room numbering format (e.g. 101) generates `101, 102...` independently from building name (`สมบูรณ์`).
+
+---
+
+## 17. Final Status
+
+**READY FOR PRODUCT OWNER R3.3 MANUAL UAT**

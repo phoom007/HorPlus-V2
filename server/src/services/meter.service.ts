@@ -1698,6 +1698,8 @@ export class MeterService {
       dailyCheckOutDate?: string | null;
       isDailyUnpaid: boolean;
       hasBookableGap: boolean;
+      agreementRentPaymentStatus: 'PAID' | 'UNPAID' | 'PARTIAL' | 'UNKNOWN';
+      agreementDepositPaymentStatus: 'PAID' | 'UNPAID' | 'PARTIAL' | 'UNKNOWN';
     }>;
   }> {
     const cycle = await this.billingCycleRepo.findById(billingCycleId, dormitoryId);
@@ -2511,6 +2513,36 @@ export class MeterService {
 
       const isOverallPaid = overallFinancialStatus === 'paid';
 
+      // Derive Agreement Rent & Deposit Payment Status for Selected Cycle
+      let agreementRentPaymentStatus: 'PAID' | 'UNPAID' | 'PARTIAL' | 'UNKNOWN' = 'UNKNOWN';
+      let agreementDepositPaymentStatus: 'PAID' | 'UNPAID' | 'PARTIAL' | 'UNKNOWN' = 'UNKNOWN';
+
+      if (billingSource === 'DAILY_STAY' || (billingSource === 'NONE' && unpaidDailyStay)) {
+        agreementRentPaymentStatus = isDailyRentPaid ? 'PAID' : (isDailyUnpaid ? 'UNPAID' : 'UNKNOWN');
+        if (Number(dailyDepositAmount) > 0) {
+          agreementDepositPaymentStatus = dailyDepositStatus === 'PAID' ? 'PAID' : (dailyDepositStatus === 'UNPAID' ? 'UNPAID' : 'UNKNOWN');
+        }
+      } else if (billingSource === 'CONTRACT' || billingSource === 'PROVISIONAL_MONTHLY' || billingSource === 'PROVISIONAL_TERM') {
+        const rentComp = chargeComponents.find(c => c.type === 'rent');
+        if (rentComp) {
+          agreementRentPaymentStatus = rentComp.status === 'PAID' ? 'PAID' : (rentComp.status === 'UNPAID' ? 'UNPAID' : 'UNKNOWN');
+        }
+
+        const depositComp = chargeComponents.find(c => c.type === 'deposit');
+        if (depositComp) {
+          agreementDepositPaymentStatus = depositComp.status === 'PAID' ? 'PAID' : (depositComp.status === 'UNPAID' ? 'UNPAID' : 'UNKNOWN');
+        } else {
+          const depBill = roomBills.find(b =>
+            (b.billKind || '').toString().trim().toUpperCase() === 'DEPOSIT' ||
+            b.items?.some(it => it.type?.toLowerCase() === 'deposit' || it.type?.toLowerCase() === 'rent_deposit')
+          );
+          if (depBill) {
+            const isDepPaid = depBill.status === 'paid' || depBill.status === 'PAID';
+            agreementDepositPaymentStatus = isDepPaid ? 'PAID' : 'UNPAID';
+          }
+        }
+      }
+
       let cyclePresentationState: 'ACTIVE_AGREEMENT' | 'RESERVED_IN_CYCLE' | 'DAILY_FINANCIAL_TAIL' | 'NO_AGREEMENT_IN_CYCLE' = 'NO_AGREEMENT_IN_CYCLE';
       if (billingSource === 'CONTRACT' || billingSource === 'PROVISIONAL_MONTHLY' || billingSource === 'PROVISIONAL_TERM' || billingSource === 'DAILY_STAY') {
         cyclePresentationState = 'ACTIVE_AGREEMENT';
@@ -2568,6 +2600,8 @@ export class MeterService {
         overallFinancialStatus,
         monthlyUtilityBillStatus,
         isMonthlyUtilityPaid,
+        agreementRentPaymentStatus,
+        agreementDepositPaymentStatus,
       };
     });
 

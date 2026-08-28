@@ -1,3 +1,4 @@
+import { formatBuildingDisplayName } from '../../lib/roomRentalSummary';
 import React, { useState, useRef } from 'react';
 import {
   Building2,
@@ -906,7 +907,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
       }
       for (let i = 0; i < formData.buildings.length; i++) {
         const b = formData.buildings[i];
-        const bLabel = b.roomPrefix ? `อาคาร ${b.roomPrefix}` : (b.name || `อาคารที่ ${i + 1}`);
+        const bLabel = (b.name && b.name.trim()) ? formatBuildingDisplayName(b.name) : (b.roomPrefix ? `อาคาร ${b.roomPrefix}` : `อาคารที่ ${i + 1}`);
 
         if (b.mode === 'auto') {
           if (!b.totalFloors || b.totalFloors <= 0) {
@@ -961,7 +962,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
       // Check building rent rates
       for (let i = 0; i < formData.buildings.length; i++) {
         const b = formData.buildings[i];
-        const bLabel = b.roomPrefix ? `อาคาร ${b.roomPrefix}` : (b.name || `อาคารที่ ${i + 1}`);
+        const bLabel = (b.name && b.name.trim()) ? formatBuildingDisplayName(b.name) : (b.roomPrefix ? `อาคาร ${b.roomPrefix}` : `อาคารที่ ${i + 1}`);
         const rates = b.rentRates;
 
         if (!rates || isNaN(rates.monthly) || rates.monthly <= 0) {
@@ -986,7 +987,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
       // Check security deposit per building (0 is explicitly valid)
       for (let i = 0; i < formData.buildings.length; i++) {
         const b = formData.buildings[i];
-        const bLabel = b.roomPrefix ? `อาคาร ${b.roomPrefix}` : (b.name || `อาคารที่ ${i + 1}`);
+        const bLabel = (b.name && b.name.trim()) ? formatBuildingDisplayName(b.name) : (b.roomPrefix ? `อาคาร ${b.roomPrefix}` : `อาคารที่ ${i + 1}`);
         const deposit = (b.securityDeposit !== undefined && b.securityDeposit !== '') ? b.securityDeposit : formData.deposits.securityDeposit;
         if (deposit === undefined || deposit === '' || isNaN(Number(deposit)) || Number(deposit) < 0) {
           return { valid: false, error: `กรุณากรอก "ค่าประกันความเสียหาย" ของ ${bLabel} ให้ถูกต้อง` };
@@ -1533,7 +1534,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                     <div className="flex items-center gap-2">
                       <span className="text-xs font-black text-blue-700 bg-blue-50 border border-blue-100 px-3.5 py-1.5 rounded-xl text-sm flex items-center gap-1.5">
                         <Building2 className="w-4 h-4 text-blue-600" />
-                        {b.roomPrefix ? `อาคาร ${b.roomPrefix}` : (b.name || 'อาคาร ')}
+                        {(b.name && b.name.trim()) ? formatBuildingDisplayName(b.name) : (b.roomPrefix ? `อาคาร ${b.roomPrefix}` : 'อาคาร')}
                       </span>
                     </div>
 
@@ -2341,7 +2342,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                       <div key={b.id} className="flex items-center justify-between gap-3 bg-slate-50/80 p-2.5 rounded-xl border border-slate-200/80">
                         <span className="text-xs font-extrabold text-slate-800 shrink-0 flex items-center gap-1.5">
                           <Building2 className="w-3.5 h-3.5 text-blue-600" />
-                          {b.roomPrefix ? `อาคาร ${b.roomPrefix}` : (b.name || `อาคารที่ ${bIdx + 1}`)}
+                          {(b.name && b.name.trim()) ? formatBuildingDisplayName(b.name) : (b.roomPrefix ? `อาคาร ${b.roomPrefix}` : `อาคารที่ ${bIdx + 1}`)}
                         </span>
                         <div className="flex items-center gap-2 max-w-[180px] w-full">
                           <input

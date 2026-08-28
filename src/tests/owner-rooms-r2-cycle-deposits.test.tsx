@@ -1,7 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import { normalizeAuthoritativeRoom } from '../lib/roomNormalizer';
+import { getGridRentRates, getListRentRates, getDepositForCycle, getCurrentAgreementDepositDisplay, formatBuildingDisplayName, formatRoomLocation, getPaymentStatusBadge, resolveRoomCyclePresentation } from '../lib/roomRentalSummary';
 import { getOwnerRoomMutationErrorMessage } from '../lib/roomErrorMapper';
-import { getGridRentRates, getListRentRates, getDepositForCycle, getCurrentAgreementDepositDisplay, formatRoomLocation, resolveRoomCyclePresentation } from '../lib/roomRentalSummary';
+import { formatShortThaiBuddhistDate } from '../utils/calendarDate';
 import { Room } from '../types';
 import { CreateContractSchema, UpdateRoomSchema } from '../../server/src/schemas/property-tenant-contract.schemas';
 
@@ -1265,6 +1266,185 @@ describe('OWNER ROOMS R2 & R2.1 — Rent-Cycle Deposit Model & Hardened Specific
         } finally {
           globalThis.fetch = originalFetch;
         }
+      });
+    });
+  });
+
+  describe('8. OWNER ROOMS R3.3 — Manual UAT Corrections Suite', () => {
+    describe('Part C & L: Error Mapper Nested Domain Code Prioritization', () => {
+      it('1. nested details.error.code = ROOM_NUMBER_ALREADY_EXISTS beats outer CONFLICT', () => {
+        const errorObj = {
+          code: 'CONFLICT',
+          message: 'Conflict error',
+          details: {
+            error: {
+              code: 'ROOM_NUMBER_ALREADY_EXISTS',
+              message: 'Room number already exists',
+            },
+          },
+        };
+        expect(getOwnerRoomMutationErrorMessage(errorObj)).toBe('เลขห้องนี้มีอยู่แล้ว');
+      });
+
+      it('2. nested details.code = BUILDING_NOT_FOUND beats outer RESOURCE_NOT_FOUND', () => {
+        const errorObj = {
+          code: 'RESOURCE_NOT_FOUND',
+          details: {
+            code: 'BUILDING_NOT_FOUND',
+          },
+        };
+        expect(getOwnerRoomMutationErrorMessage(errorObj)).toBe('ไม่พบอาคารที่เลือก');
+      });
+
+      it('3. nested OPERATIONAL_BILLING_CYCLE_UNAVAILABLE displays concise Thai message', () => {
+        const errorObj = {
+          code: 'INTERNAL_ERROR',
+          details: {
+            error: {
+              code: 'OPERATIONAL_BILLING_CYCLE_UNAVAILABLE',
+            },
+          },
+        };
+        expect(getOwnerRoomMutationErrorMessage(errorObj)).toBe('ยังไม่พบงวดดำเนินงานสำหรับการเปลี่ยนสถานะห้อง');
+      });
+
+      it('4. nested VERSION_CONFLICT displays optimistic concurrency message', () => {
+        const errorObj = {
+          code: 'CONFLICT',
+          details: {
+            error: {
+              code: 'VERSION_CONFLICT',
+            },
+          },
+        };
+        expect(getOwnerRoomMutationErrorMessage(errorObj)).toBe('ข้อมูลห้องถูกแก้ไขจากอุปกรณ์อื่น กรุณาโหลดข้อมูลล่าสุด');
+      });
+
+      it('5. ACTIVE_AGREEMENT_EXISTS displays tenant guard message', () => {
+        const errorObj = {
+          code: 'CONFLICT',
+          details: {
+            error: {
+              code: 'ACTIVE_AGREEMENT_EXISTS',
+            },
+          },
+        };
+        expect(getOwnerRoomMutationErrorMessage(errorObj)).toBe('ไม่สามารถปิดปรับปรุงห้องพักที่มีผู้เช่าอยู่ได้');
+      });
+    });
+
+    describe('Part K: Building Display Name vs Numbering Separation', () => {
+      it('1. explicit non-empty Building.name takes priority without forced code in parentheses', () => {
+        expect(formatBuildingDisplayName({ name: 'สมบูรณ์', code: 'B' })).toBe('อาคารสมบูรณ์');
+        expect(formatBuildingDisplayName({ name: 'อาคารสมบูรณ์', code: 'B' })).toBe('อาคารสมบูรณ์');
+      });
+
+      it('2. empty Building.name falls back cleanly to Building.code', () => {
+        expect(formatBuildingDisplayName({ name: '', code: 'B' })).toBe('อาคาร B');
+        expect(formatBuildingDisplayName({ name: null, code: 'B' })).toBe('อาคาร B');
+      });
+
+      it('3. formatRoomLocation combines normalized building name and floor', () => {
+        expect(formatRoomLocation({ name: 'สมบูรณ์', code: 'B' }, 1)).toBe('อาคารสมบูรณ์ • ชั้น 1');
+        expect(formatRoomLocation({ name: 'อาคารสมบูรณ์', code: 'B' }, 2)).toBe('อาคารสมบูรณ์ • ชั้น 2');
+        expect(formatRoomLocation({ name: '', code: 'B' }, 3)).toBe('อาคาร B • ชั้น 3');
+      });
+    });
+
+    describe('Part E: Payment Status Badges & Presentation Extension', () => {
+      it('1. getPaymentStatusBadge produces correct semantic Thai text and color classes', () => {
+        expect(getPaymentStatusBadge('PAID').text).toBe('จ่ายแล้ว');
+        expect(getPaymentStatusBadge('PAID').className).toContain('emerald');
+
+        expect(getPaymentStatusBadge('UNPAID').text).toBe('ยังไม่ชำระ');
+        expect(getPaymentStatusBadge('UNPAID').className).toContain('amber');
+
+        expect(getPaymentStatusBadge('PARTIAL').text).toBe('ชำระบางส่วน');
+        expect(getPaymentStatusBadge('PARTIAL').className).toContain('amber');
+
+        expect(getPaymentStatusBadge('UNKNOWN').text).toBe('ไม่พบสถานะการชำระ');
+        expect(getPaymentStatusBadge('UNKNOWN').className).toContain('slate');
+      });
+
+      it('2. resolveRoomCyclePresentation carries agreementRentPaymentStatus and agreementDepositPaymentStatus', () => {
+        const roomCatalog: any = {
+          id: 'room-201',
+          roomNumber: '201',
+          status: 'occupied',
+          currentTenantId: 'tenant-1',
+          monthlyRent: 4800,
+        };
+
+        const previewContext: any = {
+          roomId: 'room-201',
+          roomNumber: '201',
+          tenantId: 'tenant-1',
+          tenantName: 'สมใจ รักดี',
+          billingSource: 'CONTRACT',
+          agreementType: 'MONTHLY',
+          rentAmount: '4800.00',
+          agreementDepositAmount: '4800.00',
+          agreementRentPaymentStatus: 'PAID',
+          agreementDepositPaymentStatus: 'UNPAID',
+          cyclePresentationState: 'ACTIVE_AGREEMENT',
+        };
+
+        const presentation = resolveRoomCyclePresentation(roomCatalog, previewContext, 'cycle-2026-08');
+        expect(presentation.state).toBe('ACTIVE_AGREEMENT');
+        expect(presentation.agreementRentPaymentStatus).toBe('PAID');
+        expect(presentation.agreementDepositPaymentStatus).toBe('UNPAID');
+      });
+    });
+
+    describe('Part F: Future Reservation Check-in Date Authority', () => {
+      it('1. resolveRoomCyclePresentation projects reservationCheckInDate from preview room context', () => {
+        const roomCatalog: any = {
+          id: 'room-304',
+          roomNumber: '304',
+          status: 'vacant',
+          monthlyRent: 5000,
+        };
+
+        const previewContext: any = {
+          roomId: 'room-304',
+          roomNumber: '304',
+          tenantId: 'tenant-future',
+          tenantName: 'อนาคต สดใส',
+          checkInDate: '2026-09-15',
+          cyclePresentationState: 'RESERVED_IN_CYCLE',
+        };
+
+        const presentation = resolveRoomCyclePresentation(roomCatalog, previewContext, 'cycle-2026-08');
+        expect(presentation.state).toBe('RESERVED_IN_CYCLE');
+        expect(presentation.reservationCheckInDate).toBe('2026-09-15');
+        expect(formatShortThaiBuddhistDate(presentation.reservationCheckInDate)).toBe('15/09/69');
+      });
+    });
+
+    describe('Part G & H: Selected-Cycle Tenant Navigation Authority', () => {
+      it('1. selected-cycle card projects historical tenantId even if room.currentTenantId differs', () => {
+        const roomCatalog: any = {
+          id: 'room-201',
+          roomNumber: '201',
+          status: 'occupied',
+          currentTenantId: 'tenant-CURRENT-B',
+          monthlyRent: 5000,
+        };
+
+        const previewContextJuly: any = {
+          roomId: 'room-201',
+          roomNumber: '201',
+          tenantId: 'tenant-HISTORICAL-A',
+          tenantName: 'ผู้เช่า กรกฎาคม',
+          billingSource: 'CONTRACT',
+          agreementType: 'MONTHLY',
+          rentAmount: '4500.00',
+          cyclePresentationState: 'ACTIVE_AGREEMENT',
+        };
+
+        const presentation = resolveRoomCyclePresentation(roomCatalog, previewContextJuly, 'cycle-2026-07');
+        expect(presentation.occupancy?.tenantId).toBe('tenant-HISTORICAL-A');
+        expect(presentation.occupancy?.tenantId).not.toBe(roomCatalog.currentTenantId);
       });
     });
   });

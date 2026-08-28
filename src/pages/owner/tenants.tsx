@@ -51,6 +51,19 @@ import { DailyStayApprovalModal } from '../../components/DailyStayApprovalModal'
 export const getDormitory = (): any => null;
 import { convertImageToWebP, UPLOAD_DROPZONE_TEXT } from '../../utils/imageUtils';
 
+export interface TenantReturnContext {
+  source: 'meters' | 'rooms';
+  tenantId: string;
+  roomId?: string;
+  cycleId?: string;
+  cycleCode?: string;
+  viewMode?: 'grid' | 'list' | 'floor';
+  selectedBuilding?: string;
+  selectedStatus?: string;
+  searchQuery?: string;
+  scrollY?: number;
+}
+
 interface OwnerTenantsProps {
   tenants: Tenant[];
   rooms: Room[];
@@ -64,6 +77,8 @@ interface OwnerTenantsProps {
   onAddLog: (action: string, details: string, type: string, id: string) => void;
   initialTenantId?: string;
   onClearInitialTenantId?: () => void;
+  returnContext?: TenantReturnContext | null;
+  onReturnToSource?: (context: TenantReturnContext) => void;
   cameFromMeters?: boolean;
   onBackToMeters?: () => void;
   onViewContract?: (contractId: string, tenantId?: string) => void;
@@ -86,6 +101,8 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
   onAddLog,
   initialTenantId,
   onClearInitialTenantId,
+  returnContext,
+  onReturnToSource,
   cameFromMeters: propCameFromMeters,
   onBackToMeters,
   onViewContract
@@ -913,23 +930,67 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
         {selectedTenant ? (
           <div className="bg-white p-4 sm:p-6 rounded-3xl border border-gray-100 shadow-xs h-[700px] flex flex-col justify-between w-full min-w-0 overflow-hidden">
             <div>
-              {/* Context-Aware Back Button */}
-              {cameFromMeters ? (
-                <button
-                  data-testid="back-to-meters-btn"
-                  onClick={() => {
-                    setCameFromMeters(false);
-                    setSelectedTenant(null);
-                    onClearInitialTenantId?.();
-                    if (onBackToMeters) {
-                      onBackToMeters();
-                    }
-                  }}
-                  className="flex items-center gap-2 text-indigo-600 hover:text-indigo-700 font-extrabold text-xs mb-4 transition-all pb-2 border-b border-gray-100 w-full cursor-pointer"
-                >
-                  <ArrowLeft className="w-4 h-4 animate-pulse text-indigo-500" />
-                  <span>กลับหน้าจดมิเตอร์</span>
-                </button>
+              {/* Context-Aware Back & View Other Buttons (Part H, I, J) */}
+              {returnContext ? (
+                <div className="flex items-center justify-between gap-2 pb-2 mb-4 border-b border-gray-100 w-full">
+                  <button
+                    data-testid="back-to-source-btn"
+                    type="button"
+                    onClick={() => {
+                      if (onReturnToSource && returnContext) {
+                        onReturnToSource(returnContext);
+                      } else if (returnContext.source === 'meters' && onBackToMeters) {
+                        onBackToMeters();
+                      }
+                    }}
+                    className="flex items-center gap-2 text-indigo-600 hover:text-indigo-700 font-extrabold text-xs transition-all cursor-pointer"
+                  >
+                    <ArrowLeft className="w-4 h-4 text-indigo-500" />
+                    <span>กลับ</span>
+                  </button>
+                  <button
+                    data-testid="view-other-tenants-btn"
+                    type="button"
+                    onClick={() => {
+                      setSelectedTenant(null);
+                      onClearInitialTenantId?.();
+                    }}
+                    className="text-xs font-bold text-slate-500 hover:text-slate-700 hover:bg-slate-100 px-2.5 py-1 rounded-lg transition-all cursor-pointer"
+                  >
+                    ดูรายการอื่น
+                  </button>
+                </div>
+              ) : cameFromMeters ? (
+                <div className="flex items-center justify-between gap-2 pb-2 mb-4 border-b border-gray-100 w-full">
+                  <button
+                    data-testid="back-to-meters-btn"
+                    type="button"
+                    onClick={() => {
+                      setCameFromMeters(false);
+                      setSelectedTenant(null);
+                      onClearInitialTenantId?.();
+                      if (onBackToMeters) {
+                        onBackToMeters();
+                      }
+                    }}
+                    className="flex items-center gap-2 text-indigo-600 hover:text-indigo-700 font-extrabold text-xs transition-all cursor-pointer"
+                  >
+                    <ArrowLeft className="w-4 h-4 animate-pulse text-indigo-500" />
+                    <span>กลับ</span>
+                  </button>
+                  <button
+                    data-testid="view-other-tenants-btn"
+                    type="button"
+                    onClick={() => {
+                      setCameFromMeters(false);
+                      setSelectedTenant(null);
+                      onClearInitialTenantId?.();
+                    }}
+                    className="text-xs font-bold text-slate-500 hover:text-slate-700 hover:bg-slate-100 px-2.5 py-1 rounded-lg transition-all cursor-pointer"
+                  >
+                    ดูรายการอื่น
+                  </button>
+                </div>
               ) : (
                 <button
                   onClick={() => setSelectedTenant(null)}
