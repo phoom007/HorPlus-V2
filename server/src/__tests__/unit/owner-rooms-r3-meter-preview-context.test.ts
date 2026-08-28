@@ -253,5 +253,7 @@ describe('OWNER ROOMS R3 — Meter Service Preview Context DTO & State Authority
     const r106 = result.rooms[0];
     expect(r106.cyclePresentationState).toBe('DAILY_FINANCIAL_TAIL');
     expect(r106.dailyTenantName).toBe('คุณ สายัณห์ พักแล้วค้างจ่าย');
+    expect(r106.agreementType).toBe('DAILY');
+    expect(r106.agreementDepositAmount).toBe('500.00');
   });
 });

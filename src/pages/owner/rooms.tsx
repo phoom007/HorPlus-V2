@@ -44,7 +44,7 @@ import { CreateRoomPayload, UpdateRoomChanges } from '../../data/contracts';
 import { httpRequest } from '../../data/httpClient';
 import { getOwnerRoomMutationErrorMessage } from '../../lib/roomErrorMapper';
 import { useQuery } from '@tanstack/react-query';
-import { queryKeys, STALE_TIMES } from '../../lib/queryClient';
+import { queryKeys, STALE_TIMES, fetchMeterPreviewContext } from '../../lib/queryClient';
 import { QuickAddTenantModal } from '../../components/QuickAddTenantModal';
 import { QuickAddRoomContext } from '../../types';
 import {
@@ -60,7 +60,7 @@ import { RoomMutationImpact } from '../../lib/roomMutationCache';
 import { Room, Building, RoomStatus, Tenant, Contract, Bill, BLOCKING_CONTRACT_STATUSES } from '../../types';
 
 interface OwnerRoomsProps {
-  dormitoryId?: string;
+  dormitoryId: string;
   rooms: Room[];
   tenants?: Tenant[];
   contracts?: Contract[];
@@ -140,18 +140,9 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
 }) => {
   const previewContextQuery = useQuery({
     queryKey: selectedBillingCycleId && dormitoryId ? queryKeys.meterPreviewContext(dormitoryId, selectedBillingCycleId) : ['previewContext-disabled'],
-    queryFn: async () => {
+    queryFn: () => {
       if (!selectedBillingCycleId || !dormitoryId) return null;
-      const res = await httpRequest<{ success: boolean; data: any; error?: string }>(
-        'GET',
-        `/api/v1/meters/workspace/preview-context?billingCycleId=${selectedBillingCycleId}`,
-        undefined,
-        { dormitoryId }
-      );
-      if (!res || res.success === false) {
-        throw new Error(res?.error || 'ไม่สามารถโหลดข้อมูลอัตราค่าน้ำค่าไฟได้');
-      }
-      return res.data;
+      return fetchMeterPreviewContext(dormitoryId, selectedBillingCycleId);
     },
     enabled: Boolean(dormitoryId && selectedBillingCycleId),
     staleTime: STALE_TIMES.PREVIEW_CONTEXT,
@@ -182,18 +173,14 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
   const [quickAddLoadingRoomId, setQuickAddLoadingRoomId] = useState<string | null>(null);
 
   const loadDormDefaults = async (): Promise<{ defaultDeposit: number; defaultMonthlyRent: number } | null> => {
+    if (!dormitoryId) return null;
     try {
       setIsDefaultsLoading(true);
-      const targetDormId = (buildings[0] as any)?.dormitoryId || (typeof window !== 'undefined' ? (localStorage.getItem('selected_dormitory_id') || localStorage.getItem('horplus_current_dormitory_id')) : '') || '';
-      const headers: Record<string, string> = {};
-      if (targetDormId) {
-        headers['x-dormitory-id'] = targetDormId;
-      }
       const res = await httpRequest<{ data: { property?: { defaultDeposit?: number | string | null; defaultMonthlyRent?: number | string | null } } }>(
         'GET',
         '/api/v1/properties/dormitory/defaults',
         undefined,
-        Object.keys(headers).length > 0 ? { headers } : undefined
+        { dormitoryId }
       );
       if (res.data?.property) {
         const prop = res.data.property;
@@ -217,7 +204,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
 
   useEffect(() => {
     loadDormDefaults();
-  }, [buildings]);
+  }, [dormitoryId]);
   const [deleteConfirmData, setDeleteConfirmData] = useState<{ roomId: string; roomNum: string; message: string } | null>(null);
 
   // Form Fields
@@ -1179,34 +1166,101 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
 
                         <div className="grid grid-cols-2 sm:flex sm:flex-wrap gap-2 sm:gap-2.5 flex-1 w-full">
                           {floorRooms.map((room) => {
-                            const statusCfg = ROOM_STATUS_CONFIG[room.status] || ROOM_STATUS_CONFIG.vacant;
-                            const currentTenant = tenants.find(t => t.id === room.currentTenantId);
+                            const meterPreviewRoom = previewRoomMap.get(room.id);
+                            const cyclePresentation = resolveRoomCyclePresentation(
+                              room,
+                              meterPreviewRoom,
+                              selectedBillingCycleId
+                            );
 
-                            if (room.status === 'occupied') {
+                            const isCycleOccupied = cyclePresentation.state === 'ACTIVE_AGREEMENT';
+                            const isCycleReserved = cyclePresentation.state === 'RESERVED_IN_CYCLE';
+                            const isDailyTail = cyclePresentation.state === 'DAILY_FINANCIAL_TAIL';
+                            const isUnavailable = cyclePresentation.state === 'UNAVAILABLE';
+                            const displayTenantName = cyclePresentation.occupancy?.tenantName;
+                            const displayTenantId = cyclePresentation.occupancy?.tenantId;
+
+                            if (isCycleOccupied && cyclePresentation.occupancy) {
+                              const agrType = cyclePresentation.occupancy.agreementType;
+                              const unitSuffix = agrType === 'TERM' ? 'เทอม' : (agrType === 'DAILY' ? 'วัน' : 'ด.');
                               return (
                                 <div
                                   key={room.id}
                                   onClick={() => {
-                                    if (room.currentTenantId) {
-                                      onNavigate('tenants', room.currentTenantId);
+                                    if (displayTenantId) {
+                                      onNavigate('tenants', displayTenantId);
                                     }
                                   }}
-                                  title={currentTenant ? `คลิกเพื่อดูข้อมูลผู้เช่าคุณ ${currentTenant.name}` : `ดูข้อมูลห้อง ${room.roomNumber}`}
-                                  className={`p-2.5 sm:p-3 w-full sm:w-auto sm:min-w-[150px] rounded-2xl border text-center cursor-pointer transition-all hover:scale-105 select-none flex flex-col justify-between items-center shadow-2xs group ${statusCfg.bg} ${statusCfg.border} ${statusCfg.text}`}
+                                  title={displayTenantName ? `คลิกเพื่อดูข้อมูลผู้เช่าคุณ ${displayTenantName}` : `ดูข้อมูลห้อง ${room.roomNumber}`}
+                                  className="p-2.5 sm:p-3 w-full sm:w-auto sm:min-w-[150px] rounded-2xl border text-center cursor-pointer transition-all hover:scale-105 select-none flex flex-col justify-between items-center shadow-2xs group bg-indigo-50/70 hover:bg-indigo-100/70 border-indigo-200 text-indigo-900"
                                 >
                                   <div className="flex items-center justify-between w-full gap-1 mb-1">
                                     <span className="font-black text-xs sm:text-sm tracking-tight">{room.roomNumber}</span>
-                                    <span className={`text-[8px] sm:text-[9px] font-black px-1.5 py-0.5 rounded-md shrink-0 ${statusCfg.badgeBg} ${statusCfg.badgeText}`}>
-                                      {statusCfg.label}
+                                    <span className="text-[8px] sm:text-[9px] font-black px-1.5 py-0.5 rounded-md shrink-0 bg-indigo-100 text-indigo-800">
+                                      มีผู้เช่า
                                     </span>
                                   </div>
                                   <div className="text-[10px] sm:text-[11px] font-extrabold opacity-90 my-0.5 truncate">
-                                    {formatBaht(room.monthlyRent)}/ด.
+                                    {formatBaht(cyclePresentation.occupancy.rentAmount)}/{unitSuffix}
                                   </div>
-                                  {currentTenant && (
+                                  {displayTenantName && (
                                     <div className="text-[9px] sm:text-[10px] font-bold truncate max-w-full sm:max-w-[135px] opacity-90 flex items-center gap-1 mt-1 bg-white/70 group-hover:bg-white px-1.5 sm:px-2 py-0.5 rounded-lg w-full justify-center text-indigo-900 border border-indigo-100/60 shadow-3xs transition-colors">
                                       <UserIcon className="w-3 h-3 shrink-0 text-indigo-600" />
-                                      <span className="truncate">{currentTenant.name}</span>
+                                      <span className="truncate">{displayTenantName}</span>
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            }
+
+                            if (isCycleReserved) {
+                              return (
+                                <div
+                                  key={room.id}
+                                  onClick={() => handleOpenModal(room)}
+                                  title={`ห้องพัก ${room.roomNumber} จองแล้วในงวดนี้`}
+                                  className="p-2.5 sm:p-3 w-full sm:w-auto sm:min-w-[150px] rounded-2xl border text-center cursor-pointer transition-all hover:scale-105 select-none flex flex-col justify-between items-center shadow-2xs group bg-amber-50/70 hover:bg-amber-100/70 border-amber-200 text-amber-900"
+                                >
+                                  <div className="flex items-center justify-between w-full gap-1 mb-1">
+                                    <span className="font-black text-xs sm:text-sm tracking-tight">{room.roomNumber}</span>
+                                    <span className="text-[8px] sm:text-[9px] font-black px-1.5 py-0.5 rounded-md shrink-0 bg-amber-100 text-amber-800 border border-amber-200">
+                                      จองแล้ว
+                                    </span>
+                                  </div>
+                                  <div className="text-[10px] sm:text-[11px] font-extrabold opacity-90 my-0.5 text-amber-800 truncate">
+                                    จองล่วงหน้า
+                                  </div>
+                                  {displayTenantName && (
+                                    <div className="text-[9px] sm:text-[10px] font-bold truncate max-w-full sm:max-w-[135px] opacity-90 flex items-center gap-1 mt-1 bg-white/70 group-hover:bg-white px-1.5 sm:px-2 py-0.5 rounded-lg w-full justify-center text-amber-900 border border-amber-100/60 shadow-3xs transition-colors">
+                                      <UserIcon className="w-3 h-3 shrink-0 text-amber-600" />
+                                      <span className="truncate">{displayTenantName}</span>
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            }
+
+                            if (isDailyTail) {
+                              return (
+                                <div
+                                  key={room.id}
+                                  onClick={() => handleOpenModal(room)}
+                                  title={`ห้องพัก ${room.roomNumber} มีรายการค้างชำระจากผู้พักรายวัน`}
+                                  className="p-2.5 sm:p-3 w-full sm:w-auto sm:min-w-[150px] rounded-2xl border text-center cursor-pointer transition-all hover:scale-105 select-none flex flex-col justify-between items-center shadow-2xs group bg-amber-50/70 hover:bg-amber-100/70 border-amber-200 text-amber-900"
+                                >
+                                  <div className="flex items-center justify-between w-full gap-1 mb-1">
+                                    <span className="font-black text-xs sm:text-sm tracking-tight">{room.roomNumber}</span>
+                                    <span className="text-[8px] sm:text-[9px] font-black px-1.5 py-0.5 rounded-md shrink-0 bg-amber-100 text-amber-800 border border-amber-200">
+                                      ค้างชำระ
+                                    </span>
+                                  </div>
+                                  <div className="text-[10px] sm:text-[11px] font-extrabold opacity-90 my-0.5 text-amber-800 truncate">
+                                    {cyclePresentation.occupancy?.rentAmount ? `${formatBaht(cyclePresentation.occupancy.rentAmount)}/วัน` : 'ค้างชำระ'}
+                                  </div>
+                                  {displayTenantName && (
+                                    <div className="text-[9px] sm:text-[10px] font-bold truncate max-w-full sm:max-w-[135px] opacity-90 flex items-center gap-1 mt-1 bg-white/70 group-hover:bg-white px-1.5 sm:px-2 py-0.5 rounded-lg w-full justify-center text-amber-900 border border-amber-100/60 shadow-3xs transition-colors">
+                                      <UserIcon className="w-3 h-3 shrink-0 text-amber-600" />
+                                      <span className="truncate">{displayTenantName}</span>
                                     </div>
                                   )}
                                 </div>
@@ -1219,12 +1273,12 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                                   key={room.id}
                                   onClick={() => handleOpenModal(room)}
                                   title={`คลิกเพื่อแก้ไขห้องพัก ${room.roomNumber}`}
-                                  className={`p-2.5 sm:p-3 w-full sm:w-auto sm:min-w-[150px] rounded-2xl border text-center cursor-pointer transition-all hover:scale-105 select-none flex flex-col justify-between items-center shadow-2xs group ${statusCfg.bg} ${statusCfg.border} ${statusCfg.text}`}
+                                  className="p-2.5 sm:p-3 w-full sm:w-auto sm:min-w-[150px] rounded-2xl border text-center cursor-pointer transition-all hover:scale-105 select-none flex flex-col justify-between items-center shadow-2xs group bg-rose-50/70 hover:bg-rose-100/70 border-rose-200 text-rose-900"
                                 >
                                   <div className="flex items-center justify-between w-full gap-1 mb-1">
                                     <span className="font-black text-xs sm:text-sm tracking-tight">{room.roomNumber}</span>
-                                    <span className={`text-[8px] sm:text-[9px] font-black px-1.5 py-0.5 rounded-md shrink-0 ${statusCfg.badgeBg} ${statusCfg.badgeText}`}>
-                                      {statusCfg.label}
+                                    <span className="text-[8px] sm:text-[9px] font-black px-1.5 py-0.5 rounded-md shrink-0 bg-rose-100 text-rose-800">
+                                      ปิดปรับปรุง
                                     </span>
                                   </div>
                                   <div className="text-[10px] sm:text-[11px] font-extrabold opacity-90 my-0.5 truncate">
@@ -1238,20 +1292,27 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                               );
                             }
 
-                            // Vacant room
+                            // NO_AGREEMENT_IN_CYCLE: Product Owner Decision B1
+                            // Shows current catalog primary price with explicit 'อัตราปัจจุบัน' label
+                            const primaryCatalog = cyclePresentation.currentCatalogRates[0] || { amount: room.monthlyRent, label: 'รายเดือน', cycle: 'monthly' };
+                            const unitSuffix = primaryCatalog.cycle === 'term' ? 'เทอม' : (primaryCatalog.cycle === 'daily' ? 'วัน' : 'ด.');
+
                             return (
                               <div
                                 key={room.id}
-                                className={`p-2.5 sm:p-3 w-full sm:w-auto sm:min-w-[150px] rounded-2xl border text-center select-none flex flex-col justify-between items-center shadow-2xs ${statusCfg.bg} ${statusCfg.border} ${statusCfg.text}`}
+                                className="p-2.5 sm:p-3 w-full sm:w-auto sm:min-w-[150px] rounded-2xl border text-center select-none flex flex-col justify-between items-center shadow-2xs bg-emerald-50/70 hover:bg-emerald-100/70 border-emerald-200 text-emerald-900"
                               >
                                 <div className="flex items-center justify-between w-full gap-1 mb-1">
                                   <span className="font-black text-xs sm:text-sm tracking-tight">{room.roomNumber}</span>
-                                  <span className={`text-[8px] sm:text-[9px] font-black px-1.5 py-0.5 rounded-md shrink-0 ${statusCfg.badgeBg} ${statusCfg.badgeText}`}>
-                                    {statusCfg.label}
+                                  <span className="text-[8px] sm:text-[9px] font-black px-1.5 py-0.5 rounded-md shrink-0 bg-emerald-100 text-emerald-800">
+                                    {isUnavailable ? 'ไม่พบข้อมูล' : 'ว่างในงวดนี้'}
                                   </span>
                                 </div>
-                                <div className="text-[10px] sm:text-[11px] font-extrabold opacity-90 my-0.5 text-emerald-800 truncate">
-                                  {formatBaht(room.monthlyRent)}/ด.
+                                <div className="my-0.5 w-full">
+                                  <div className="text-[8px] font-bold text-slate-500 uppercase tracking-tight">อัตราปัจจุบัน</div>
+                                  <div className="text-[10px] sm:text-[11px] font-extrabold opacity-90 text-emerald-800 truncate">
+                                    {formatBaht(primaryCatalog.amount)}/{unitSuffix}
+                                  </div>
                                 </div>
                                 <div className="flex items-center gap-1 w-full mt-1.5 pt-1.5 border-t border-emerald-200/60">
                                   <button

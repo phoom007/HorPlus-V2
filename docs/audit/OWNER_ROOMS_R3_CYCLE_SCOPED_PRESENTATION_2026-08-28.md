@@ -167,6 +167,46 @@ File: `src/tests/owner-rooms-r2-cycle-deposits.test.tsx`
 
 ---
 
-## 8. Final Status
 
-**READY FOR INDEPENDENT R3 REVIEW**
+---
+
+## 9. R3.1 — Independent Review Corrections
+
+### 1. Defect Analysis & Floor Mode Correction
+- **R3 Defect**: While Grid and List modes consumed `resolveRoomCyclePresentation`, Floor mode JSX continued to directly inspect `room.status`, `room.currentTenantId`, and `room.monthlyRent`.
+- **R3.1 Correction**: Floor mode room rendering is refactored to consume the exact same `resolveRoomCyclePresentation(room, meterPreviewRoom, selectedBillingCycleId)` projection as Grid and List:
+  - **ACTIVE_AGREEMENT**: Displays `มีผู้เช่า` badge, cycle agreement rent amount with proper unit suffix (e.g. `4,500 / ด.`), and cycle tenant name (`occupancy.tenantName`). Click navigates to `onNavigate('tenants', occupancy.tenantId)`.
+  - **NO_AGREEMENT_IN_CYCLE**: Displays `ว่างในงวดนี้`, Product Owner Decision B1 primary current catalog rate explicitly marked as `อัตราปัจจุบัน` (`฿ 6,000 / ด.`). Does not leak current operational tenant into historical cycle.
+  - **RESERVED_IN_CYCLE**: Displays `จองแล้ว` badge and reservation applicant name.
+  - **DAILY_FINANCIAL_TAIL**: Displays `ค้างชำระ` badge and daily guest name with daily rent amount.
+
+### 2. Strict Backend DTO Projection (Part C)
+- Removed all frontend fallback reconstruction logic from `resolveRoomCyclePresentation`:
+  - `cyclePresentationState` is strictly read from backend DTO. Missing/malformed -> fails closed to `UNAVAILABLE`.
+  - `agreementType` (`MONTHLY` | `TERM` | `DAILY`) is required from backend for `ACTIVE_AGREEMENT`. Missing -> fails closed to `UNAVAILABLE`.
+  - `agreementDepositAmount` is strictly read from backend DTO (explicit numeric zero `0` / `"0.00"` is preserved). No fallback to `dailyDepositAmount` or catalog deposits.
+  - Zero date arithmetic in frontend presentation layer.
+
+### 3. Dormitory Authority & Defaults Loader Hardening (Parts D & E)
+- `OwnerRoomsProps` now requires `dormitoryId: string` (no optionality).
+- `loadDormDefaults` communicates with `{ dormitoryId }` option directly without deriving dormitory identity from `buildings[0].dormitoryId` or `localStorage` keys. Reloads on `[dormitoryId]` dependency.
+
+### 4. Shared Preview Query Function (Part F)
+- Extracted pure query function `fetchMeterPreviewContext(dormitoryId, billingCycleId)` in `src/lib/queryClient.ts`.
+- Both `getTargetQueriesForTab('rooms')` in `src/pages/owner.tsx` and `useQuery` in `src/pages/owner/rooms.tsx` share the identical fetch implementation and canonical query key `queryKeys.meterPreviewContext(dormitoryId, selectedBillingCycleId)`.
+
+### 5. Verification Matrix (R3.1)
+- **Frontend Focused Vitest Suite**: `src/tests/owner-rooms-r2-cycle-deposits.test.tsx` -> **40 / 40 passed (100%)**.
+  - Strict projection validation (ACTIVE_AGREEMENT, UNAVAILABLE on missing state/type, explicit zero deposit, B1 NO_AGREEMENT, unselected/missing cycle responses).
+  - Floor mode production scenarios (Historical occupied A, Historical vacant B, Reserved C, Daily tail D).
+  - Grid/List/Floor consistency verification.
+- **Backend Targeted Vitest Suite**: `server/src/__tests__/unit/owner-rooms-r3-meter-preview-context.test.ts` -> **6 / 6 passed (100%)**.
+- **TypeScript Typecheck**: `npm run lint` (`tsc --noEmit`) -> **0 errors**.
+- **Backend Build**: `npm --prefix server run build` (`tsc -p tsconfig.build.json`) -> **0 errors**.
+- **Git Diff Hygiene**: `git diff --check` -> **0 warnings**.
+
+---
+
+## 10. Final Status
+
+**READY FOR PRODUCT OWNER R3 MANUAL UAT**

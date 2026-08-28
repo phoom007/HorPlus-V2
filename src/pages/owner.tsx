@@ -39,7 +39,7 @@ import {
 
 import { User, Room, Tenant, Bill, Contract, MaintenanceRequest, Announcement, AuditLog, Building } from '../types';
 import { useQuery, useQueries, useQueryClient, QueryClient } from '@tanstack/react-query';
-import { queryKeys, STALE_TIMES, clearDormitoryQueryCache } from '../lib/queryClient';
+import { queryKeys, STALE_TIMES, clearDormitoryQueryCache, fetchMeterPreviewContext } from '../lib/queryClient';
 import { invalidateRoomMutationCaches, RoomMutationImpact } from '../lib/roomMutationCache';
 import { normalizeAuthoritativeRooms } from '../lib/roomNormalizer';
 import { meterDraftStore, clearMeterDraftStore } from '../lib/meterDraftStore';
@@ -240,18 +240,7 @@ export function getTargetQueriesForTab(targetTab: string, dormId: string, cycleI
       if (cycleId) {
         queries.push({
           queryKey: queryKeys.meterPreviewContext(dormId, cycleId),
-          queryFn: async () => {
-            const res = await httpRequest<{ success: boolean; data: any; error?: string }>(
-              'GET',
-              `/api/v1/meters/workspace/preview-context?billingCycleId=${cycleId}`,
-              undefined,
-              { dormitoryId: dormId }
-            );
-            if (!res || res.success === false) {
-              throw new Error(res?.error || 'ไม่สามารถโหลดข้อมูลอัตราค่าน้ำค่าไฟได้');
-            }
-            return res.data;
-          },
+          queryFn: () => fetchMeterPreviewContext(dormId, cycleId),
           staleTime: STALE_TIMES.PREVIEW_CONTEXT,
         });
       }

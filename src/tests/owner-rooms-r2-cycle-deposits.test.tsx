@@ -614,5 +614,242 @@ describe('OWNER ROOMS R2 & R2.1 — Rent-Cycle Deposit Model & Hardened Specific
       expect(roomCatalog.dailyDeposit).toBe(1500);
     });
   });
+  describe('8. OWNER ROOMS R3.1 — Strict DTO Projection & Floor Mode Cycle Authority', () => {
+    const mockRoomCatalog: any = {
+      id: 'room-101',
+      roomNumber: '101',
+      status: 'vacant',
+      currentTenantId: null,
+      monthlyRent: 6000,
+      termRent: 24000,
+      dailyRent: 700,
+      monthlyDeposit: 6000,
+      termDeposit: 12000,
+      dailyDeposit: 1500,
+      rentCycle: 'monthly',
+    };
+
+    describe('Strict DTO Projection (Part C)', () => {
+      it('1. ACTIVE_AGREEMENT preserves backend values exactly without modification', () => {
+        const previewRoom = {
+          roomId: 'room-101',
+          cyclePresentationState: 'ACTIVE_AGREEMENT',
+          agreementType: 'MONTHLY',
+          rentAmount: '4500.00',
+          agreementDepositAmount: '5000.00',
+          tenantId: 'tenant-hist-A',
+          tenantName: 'นาย สมชาย ประวัติ',
+          billingSource: 'CONTRACT',
+        };
+
+        const res = resolveRoomCyclePresentation(mockRoomCatalog, previewRoom, 'cycle-2026-06');
+        expect(res.state).toBe('ACTIVE_AGREEMENT');
+        expect(res.occupancy?.agreementType).toBe('MONTHLY');
+        expect(res.occupancy?.rentAmount).toBe(4500);
+        expect(res.occupancy?.depositAmount).toBe(5000);
+        expect(res.occupancy?.tenantId).toBe('tenant-hist-A');
+        expect(res.occupancy?.tenantName).toBe('นาย สมชาย ประวัติ');
+      });
+
+      it('2. Missing or malformed cyclePresentationState fails closed to UNAVAILABLE (no inference from billingSource)', () => {
+        const previewRoomMissingState = {
+          roomId: 'room-101',
+          billingSource: 'CONTRACT',
+          rentAmount: '4500.00',
+        };
+
+        const res1 = resolveRoomCyclePresentation(mockRoomCatalog, previewRoomMissingState, 'cycle-2026-06');
+        expect(res1.state).toBe('UNAVAILABLE');
+        expect(res1.occupancy).toBeNull();
+
+        const previewRoomInvalidState = {
+          roomId: 'room-101',
+          cyclePresentationState: 'UNKNOWN_CUSTOM_STATE',
+          billingSource: 'CONTRACT',
+        };
+        const res2 = resolveRoomCyclePresentation(mockRoomCatalog, previewRoomInvalidState, 'cycle-2026-06');
+        expect(res2.state).toBe('UNAVAILABLE');
+      });
+
+      it('3. ACTIVE_AGREEMENT missing agreementType fails closed to UNAVAILABLE (no inference from rentDescription)', () => {
+        const previewRoomMissingType = {
+          roomId: 'room-101',
+          cyclePresentationState: 'ACTIVE_AGREEMENT',
+          rentDescription: 'ค่าเช่าห้องพักรายเทอม 1/2569',
+          rentAmount: '18000.00',
+        };
+
+        const res = resolveRoomCyclePresentation(mockRoomCatalog, previewRoomMissingType, 'cycle-2026-06');
+        expect(res.state).toBe('UNAVAILABLE');
+        expect(res.occupancy).toBeNull();
+      });
+
+      it('4. Explicit numeric/string zero deposit is preserved as 0 (not converted to null/undefined)', () => {
+        const previewRoomZeroDep = {
+          roomId: 'room-101',
+          cyclePresentationState: 'ACTIVE_AGREEMENT',
+          agreementType: 'MONTHLY',
+          rentAmount: '4500.00',
+          agreementDepositAmount: '0.00',
+          tenantId: 'tenant-1',
+          tenantName: 'นาย ศูนย์ ประกัน',
+        };
+
+        const res = resolveRoomCyclePresentation(mockRoomCatalog, previewRoomZeroDep, 'cycle-2026-06');
+        expect(res.state).toBe('ACTIVE_AGREEMENT');
+        expect(res.occupancy?.depositAmount).toBe(0);
+      });
+
+      it('5. NO_AGREEMENT_IN_CYCLE exposes occupancy: null and catalog rates under B1', () => {
+        const previewRoomNoAgr = {
+          roomId: 'room-101',
+          cyclePresentationState: 'NO_AGREEMENT_IN_CYCLE',
+          tenantId: null,
+          tenantName: null,
+        };
+
+        const res = resolveRoomCyclePresentation(mockRoomCatalog, previewRoomNoAgr, 'cycle-2026-06');
+        expect(res.state).toBe('NO_AGREEMENT_IN_CYCLE');
+        expect(res.occupancy).toBeNull();
+        expect(res.currentCatalogRates).toHaveLength(3);
+        expect(res.currentCatalogRates[0].amount).toBe(6000);
+      });
+
+      it('6. Missing backend preview room returns UNAVAILABLE when cycleId is specified, and NO_AGREEMENT when unselected', () => {
+        // When cycleId is specified but no room in response -> incomplete backend response -> UNAVAILABLE
+        const resWithCycle = resolveRoomCyclePresentation(mockRoomCatalog, undefined, 'cycle-2026-06');
+        expect(resWithCycle.state).toBe('UNAVAILABLE');
+        expect(resWithCycle.occupancy).toBeNull();
+
+        // When cycleId is unselected / empty -> default view -> NO_AGREEMENT_IN_CYCLE
+        const resNoCycle = resolveRoomCyclePresentation(mockRoomCatalog, undefined, undefined);
+        expect(resNoCycle.state).toBe('NO_AGREEMENT_IN_CYCLE');
+      });
+    });
+
+    describe('Floor Mode Cycle Presentation Scenarios (Part A & B)', () => {
+      it('Scenario A: Historical occupied room renders cycle tenant (Tenant A, 4500) and NOT current vacant status (6000)', () => {
+        const currentVacantRoom: any = {
+          id: 'room-101',
+          roomNumber: '101',
+          status: 'vacant',
+          currentTenantId: null,
+          monthlyRent: 6000,
+        };
+
+        const previewHistoricalOccupied = {
+          roomId: 'room-101',
+          cyclePresentationState: 'ACTIVE_AGREEMENT',
+          agreementType: 'MONTHLY',
+          rentAmount: '4500.00',
+          tenantId: 'tenant-A',
+          tenantName: 'นาย ก. ประวัติ',
+        };
+
+        const presentation = resolveRoomCyclePresentation(currentVacantRoom, previewHistoricalOccupied, 'cycle-2026-06');
+        expect(presentation.state).toBe('ACTIVE_AGREEMENT');
+        expect(presentation.occupancy?.tenantName).toBe('นาย ก. ประวัติ');
+        expect(presentation.occupancy?.rentAmount).toBe(4500); // Historical rate, NOT 6000
+        expect(presentation.occupancy?.agreementType).toBe('MONTHLY');
+      });
+
+      it('Scenario B: Historical no agreement renders Decision B1 current catalog labeled อัตราปัจจุบัน and NOT current tenant B', () => {
+        const currentOccupiedRoom: any = {
+          id: 'room-102',
+          roomNumber: '102',
+          status: 'occupied',
+          currentTenantId: 'tenant-B',
+          monthlyRent: 6000,
+        };
+
+        const previewOldCycleNoAgr = {
+          roomId: 'room-102',
+          cyclePresentationState: 'NO_AGREEMENT_IN_CYCLE',
+          tenantId: null,
+          tenantName: null,
+        };
+
+        const presentation = resolveRoomCyclePresentation(currentOccupiedRoom, previewOldCycleNoAgr, 'cycle-2026-01');
+        expect(presentation.state).toBe('NO_AGREEMENT_IN_CYCLE');
+        expect(presentation.occupancy).toBeNull(); // Must NOT leak current tenant B
+        expect(presentation.currentCatalogRates[0].amount).toBe(6000); // Current catalog rate
+      });
+
+      it('Scenario C: RESERVED_IN_CYCLE exposes reserved state and applicant name without labeling มีผู้เช่า', () => {
+        const room: any = {
+          id: 'room-103',
+          roomNumber: '103',
+          status: 'vacant',
+          currentTenantId: null,
+          monthlyRent: 6000,
+        };
+
+        const previewReserved = {
+          roomId: 'room-103',
+          cyclePresentationState: 'RESERVED_IN_CYCLE',
+          tenantId: 'tenant-fut',
+          tenantName: 'นาย จอง ล่วงหน้า',
+          rentAmount: '6000.00',
+        };
+
+        const presentation = resolveRoomCyclePresentation(room, previewReserved, 'cycle-2026-09');
+        expect(presentation.state).toBe('RESERVED_IN_CYCLE');
+        expect(presentation.occupancy?.tenantName).toBe('นาย จอง ล่วงหน้า');
+      });
+
+      it('Scenario D: DAILY_FINANCIAL_TAIL exposes daily tail state without presenting room as physically occupied', () => {
+        const room: any = {
+          id: 'room-104',
+          roomNumber: '104',
+          status: 'vacant',
+          currentTenantId: null,
+          monthlyRent: 6000,
+        };
+
+        const previewDailyTail = {
+          roomId: 'room-104',
+          cyclePresentationState: 'DAILY_FINANCIAL_TAIL',
+          agreementType: 'DAILY',
+          rentAmount: '800.00',
+          agreementDepositAmount: '500.00',
+          tenantId: 'tenant-tail',
+          tenantName: 'คุณ สายัณห์ ค้างจ่าย',
+        };
+
+        const presentation = resolveRoomCyclePresentation(room, previewDailyTail, 'cycle-2026-08');
+        expect(presentation.state).toBe('DAILY_FINANCIAL_TAIL');
+        expect(presentation.occupancy?.agreementType).toBe('DAILY');
+        expect(presentation.occupancy?.rentAmount).toBe(800);
+        expect(presentation.occupancy?.depositAmount).toBe(500);
+        expect(presentation.occupancy?.tenantName).toBe('คุณ สายัณห์ ค้างจ่าย');
+      });
+    });
+
+    describe('Grid, List, and Floor Consistency (Part G)', () => {
+      it('All 3 presentation modes consume the identical RoomCyclePresentation projection without frontend date arithmetic', () => {
+        const room: any = {
+          id: 'room-105',
+          roomNumber: '105',
+          status: 'vacant',
+          monthlyRent: 5000,
+        };
+        const preview = {
+          roomId: 'room-105',
+          cyclePresentationState: 'ACTIVE_AGREEMENT',
+          agreementType: 'MONTHLY',
+          rentAmount: '4200.00',
+          agreementDepositAmount: '4200.00',
+          tenantId: 'tenant-5',
+          tenantName: 'สมใจ สดใส',
+        };
+
+        const projection = resolveRoomCyclePresentation(room, preview, 'cycle-2026-07');
+        expect(projection.state).toBe('ACTIVE_AGREEMENT');
+        expect(projection.occupancy?.rentAmount).toBe(4200);
+        expect(projection.occupancy?.depositAmount).toBe(4200);
+        expect(projection.occupancy?.tenantName).toBe('สมใจ สดใส');
+      });
+    });
+  });
 
 });

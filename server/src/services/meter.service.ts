@@ -2192,6 +2192,10 @@ export class MeterService {
         isDailyFinancialTail = true;
         rentAmount = formatDecimal(toDecimal(unpaidDailyStay.totalRentAmount.toString()));
         rentDescription = 'ค่าเช่ารายวัน';
+        agreementType = 'DAILY';
+        const depositItem = unpaidDailyStay.invoice?.items?.find((i) => i.itemType === 'DEPOSIT');
+        const depAmt = depositItem ? formatDecimal(depositItem.amount) : (unpaidDailyStay.depositAmount != null ? formatDecimal(unpaidDailyStay.depositAmount) : null);
+        agreementDepositAmount = depAmt;
       } else if (billingSource === 'NONE' && roomDailyStaysInCycle.length > 0 && !tenantName) {
         tenantName = dailyTenantName;
         tenantId = dailyTenantId;

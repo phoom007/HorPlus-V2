@@ -212,25 +212,25 @@ export function formatRoomLocation(buildingName?: string | null, floor?: number 
 }
 
 export interface RoomCycleOccupancy {
-  tenantId: string;
+  tenantId: string | null;
   tenantName?: string | null;
   agreementType: 'MONTHLY' | 'TERM' | 'DAILY' | null;
   rentAmount: number;
   depositAmount?: number | null;
-  source: 'CONTRACT_SNAPSHOT' | 'CONTRACT' | 'PROVISIONAL_TERM' | 'PROVISIONAL_MONTHLY' | 'DAILY_STAY' | 'NONE';
+  source: 'CONTRACT' | 'PROVISIONAL_TERM' | 'PROVISIONAL_MONTHLY' | 'DAILY_STAY' | 'NONE';
 }
 
 export interface RoomCyclePresentation {
   roomId: string;
   billingCycleId?: string;
-  state: 'ACTIVE_AGREEMENT' | 'RESERVED_IN_CYCLE' | 'DAILY_FINANCIAL_TAIL' | 'NO_AGREEMENT_IN_CYCLE';
+  state: 'ACTIVE_AGREEMENT' | 'RESERVED_IN_CYCLE' | 'DAILY_FINANCIAL_TAIL' | 'NO_AGREEMENT_IN_CYCLE' | 'UNAVAILABLE';
   occupancy: RoomCycleOccupancy | null;
   currentCatalogRates: RateItem[];
 }
 
 /**
  * Single presentation authority for Cycle-Scoped Room Presentation (Grid, List, Floor):
- * Projects backend Meter preview room context without re-evaluating date logic on frontend.
+ * Strictly projects backend Meter preview room context without re-evaluating or guessing date/pricing logic on frontend.
  */
 export function resolveRoomCyclePresentation(
   room: Room,
@@ -239,33 +239,59 @@ export function resolveRoomCyclePresentation(
 ): RoomCyclePresentation {
   const currentCatalogRates = getCatalogRates(room);
 
+  // If no preview room context available:
+  // If a billingCycleId was explicitly requested, this is an incomplete/failed response -> UNAVAILABLE.
+  // If no billingCycleId was provided (unselected), default cleanly to NO_AGREEMENT_IN_CYCLE.
   if (!meterPreviewRoom) {
     return {
       roomId: room.id,
       billingCycleId,
-      state: 'NO_AGREEMENT_IN_CYCLE',
+      state: billingCycleId ? 'UNAVAILABLE' : 'NO_AGREEMENT_IN_CYCLE',
       occupancy: null,
       currentCatalogRates,
     };
   }
 
   const rawState = meterPreviewRoom.cyclePresentationState;
-  const state: 'ACTIVE_AGREEMENT' | 'RESERVED_IN_CYCLE' | 'DAILY_FINANCIAL_TAIL' | 'NO_AGREEMENT_IN_CYCLE' =
-    rawState ||
-    (meterPreviewRoom.billingSource && meterPreviewRoom.billingSource !== 'NONE'
-      ? 'ACTIVE_AGREEMENT'
-      : (meterPreviewRoom.isFutureReservation ? 'RESERVED_IN_CYCLE' : 'NO_AGREEMENT_IN_CYCLE'));
+  const validStates = ['ACTIVE_AGREEMENT', 'RESERVED_IN_CYCLE', 'DAILY_FINANCIAL_TAIL', 'NO_AGREEMENT_IN_CYCLE'];
 
-  if (state === 'ACTIVE_AGREEMENT') {
-    const agreementType: 'MONTHLY' | 'TERM' | 'DAILY' | null =
-      meterPreviewRoom.agreementType ||
-      (meterPreviewRoom.billingSource === 'PROVISIONAL_TERM' || meterPreviewRoom.rentDescription?.includes('เทอม')
-        ? 'TERM'
-        : (meterPreviewRoom.billingSource === 'DAILY_STAY' ? 'DAILY' : 'MONTHLY'));
+  // Strict Fail-Closed: If cyclePresentationState is missing or not a canonical state, FAIL CLOSED
+  if (!rawState || !validStates.includes(rawState)) {
+    return {
+      roomId: room.id,
+      billingCycleId,
+      state: 'UNAVAILABLE',
+      occupancy: null,
+      currentCatalogRates,
+    };
+  }
 
-    const rentAmount = Number(meterPreviewRoom.rentAmount) || 0;
-    const rawDep = meterPreviewRoom.agreementDepositAmount ?? meterPreviewRoom.dailyDepositAmount ?? meterPreviewRoom.depositAmount;
-    const depositAmount = rawDep !== null && rawDep !== undefined && Number.isFinite(Number(rawDep))
+  if (rawState === 'ACTIVE_AGREEMENT') {
+    const agreementType: 'MONTHLY' | 'TERM' | 'DAILY' | undefined = meterPreviewRoom.agreementType;
+    // Strict requirement: agreementType must be explicitly supplied by backend
+    if (!agreementType || !['MONTHLY', 'TERM', 'DAILY'].includes(agreementType)) {
+      return {
+        roomId: room.id,
+        billingCycleId,
+        state: 'UNAVAILABLE',
+        occupancy: null,
+        currentCatalogRates,
+      };
+    }
+
+    const rentAmount = Number(meterPreviewRoom.rentAmount);
+    if (!Number.isFinite(rentAmount)) {
+      return {
+        roomId: room.id,
+        billingCycleId,
+        state: 'UNAVAILABLE',
+        occupancy: null,
+        currentCatalogRates,
+      };
+    }
+
+    const rawDep = meterPreviewRoom.agreementDepositAmount;
+    const depositAmount = rawDep !== null && rawDep !== undefined && rawDep !== '' && Number.isFinite(Number(rawDep))
       ? Number(rawDep)
       : null;
 
@@ -276,8 +302,8 @@ export function resolveRoomCyclePresentation(
       billingCycleId,
       state: 'ACTIVE_AGREEMENT',
       occupancy: {
-        tenantId: meterPreviewRoom.tenantId,
-        tenantName: meterPreviewRoom.tenantName,
+        tenantId: meterPreviewRoom.tenantId ?? null,
+        tenantName: meterPreviewRoom.tenantName ?? null,
         agreementType,
         rentAmount,
         depositAmount,
@@ -287,14 +313,14 @@ export function resolveRoomCyclePresentation(
     };
   }
 
-  if (state === 'RESERVED_IN_CYCLE') {
+  if (rawState === 'RESERVED_IN_CYCLE') {
     return {
       roomId: room.id,
       billingCycleId,
       state: 'RESERVED_IN_CYCLE',
       occupancy: {
-        tenantId: meterPreviewRoom.tenantId,
-        tenantName: meterPreviewRoom.tenantName,
+        tenantId: meterPreviewRoom.tenantId ?? null,
+        tenantName: meterPreviewRoom.tenantName ?? null,
         agreementType: meterPreviewRoom.agreementType || null,
         rentAmount: Number(meterPreviewRoom.rentAmount) || 0,
         depositAmount: null,
@@ -304,17 +330,22 @@ export function resolveRoomCyclePresentation(
     };
   }
 
-  if (state === 'DAILY_FINANCIAL_TAIL') {
+  if (rawState === 'DAILY_FINANCIAL_TAIL') {
+    const rawDep = meterPreviewRoom.agreementDepositAmount;
+    const depositAmount = rawDep !== null && rawDep !== undefined && rawDep !== '' && Number.isFinite(Number(rawDep))
+      ? Number(rawDep)
+      : null;
+
     return {
       roomId: room.id,
       billingCycleId,
       state: 'DAILY_FINANCIAL_TAIL',
       occupancy: {
-        tenantId: meterPreviewRoom.tenantId || meterPreviewRoom.dailyTenantId,
-        tenantName: meterPreviewRoom.tenantName || meterPreviewRoom.dailyTenantName,
+        tenantId: meterPreviewRoom.tenantId ?? null,
+        tenantName: meterPreviewRoom.tenantName ?? null,
         agreementType: 'DAILY',
         rentAmount: Number(meterPreviewRoom.rentAmount) || 0,
-        depositAmount: meterPreviewRoom.dailyDepositAmount ? Number(meterPreviewRoom.dailyDepositAmount) : null,
+        depositAmount,
         source: 'DAILY_STAY',
       },
       currentCatalogRates,
