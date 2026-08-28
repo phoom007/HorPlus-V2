@@ -17,6 +17,8 @@ import {
   NotificationDataSource,
   AuditDataSource,
   PropertyDataSource,
+  CreateRoomPayload,
+  UpdateRoomChanges,
 
   StaffRoleDataSource,
   TenantRegistrationDataSource,
@@ -1206,30 +1208,9 @@ export class ApiPropertyAdapter implements PropertyDataSource {
     }
   }
 
-  async createRoom(payload: {
-    buildingId: string;
-    roomNumber: string;
-    floor?: number;
-    roomType?: string;
-    status?: string;
-    rentCycle?: string;
-    monthlyRent?: string | number | null;
-    termRent?: string | number | null;
-    dailyRent?: string | number | null;
-    depositAmount?: string | number | null;
-    depositInheritsBuildingDefault?: boolean;
-    parkingFee?: string | number | null;
-    maximumOccupants?: number;
-    waterMeterNumber?: string | null;
-    electricityMeterNumber?: string | null;
-    initialWaterReading?: string | number | null;
-    initialElectricityReading?: string | number | null;
-    amenities?: string[];
-    images?: string[];
-    notes?: string | null;
-  }): Promise<DataResult<Room>> {
+  async createRoom(payload: CreateRoomPayload): Promise<DataResult<Room>> {
     try {
-      const body: any = {
+      const body: Record<string, unknown> = {
         ...payload,
         monthlyRent: payload.monthlyRent != null && payload.monthlyRent !== '' ? String(payload.monthlyRent) : undefined,
         termRent: payload.termRent != null && payload.termRent !== '' ? String(payload.termRent) : undefined,
@@ -1238,17 +1219,17 @@ export class ApiPropertyAdapter implements PropertyDataSource {
         initialWaterReading: payload.initialWaterReading != null && payload.initialWaterReading !== '' ? String(payload.initialWaterReading) : undefined,
         initialElectricityReading: payload.initialElectricityReading != null && payload.initialElectricityReading !== '' ? String(payload.initialElectricityReading) : undefined,
       };
-      const response = await httpRequest<any>('POST', '/properties/rooms', body);
-      const room = response?.data || response;
+      const response = await httpRequest<{ data: Room } | Room>('POST', '/properties/rooms', body);
+      const room = ('data' in response && response.data) ? response.data : (response as Room);
       return { success: true, data: room };
-    } catch (err: any) {
-      return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
+    } catch (err: unknown) {
+      return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: (err as Error)?.message || 'Internal error' } };
     }
   }
 
-  async updateRoom(roomId: string, changes: Record<string, any>, expectedVersion: number): Promise<DataResult<Room>> {
+  async updateRoom(roomId: string, changes: UpdateRoomChanges, expectedVersion: number): Promise<DataResult<Room>> {
     try {
-      const body: any = {
+      const body: Record<string, unknown> = {
         ...changes,
         expectedVersion,
       };
@@ -1270,11 +1251,11 @@ export class ApiPropertyAdapter implements PropertyDataSource {
       if ('initialElectricityReading' in changes) {
         body.initialElectricityReading = changes.initialElectricityReading != null && changes.initialElectricityReading !== '' ? String(changes.initialElectricityReading) : '0.00';
       }
-      const response = await httpRequest<any>('PUT', `/properties/rooms/${roomId}`, body);
-      const room = response?.data || response;
+      const response = await httpRequest<{ data: Room } | Room>('PUT', `/properties/rooms/${roomId}`, body);
+      const room = ('data' in response && response.data) ? response.data : (response as Room);
       return { success: true, data: room };
-    } catch (err: any) {
-      return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
+    } catch (err: unknown) {
+      return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: (err as Error)?.message || 'Internal error' } };
     }
   }
 

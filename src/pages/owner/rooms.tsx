@@ -40,6 +40,7 @@ import {
 } from '../../components/GlobalComponents';
 import { VersionConflictModal } from '../../components/VersionConflictModal';
 import { getDataProvider } from '../../data/dataProvider';
+import { CreateRoomPayload, UpdateRoomChanges } from '../../data/contracts';
 import { Room, Building, RoomStatus, Tenant, Contract, Bill, BLOCKING_CONTRACT_STATUSES } from '../../types';
 
 interface OwnerRoomsProps {
@@ -123,6 +124,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
   const [editingRoom, setEditingRoom] = useState<Room | null>(null);
   const [deleteConfirmData, setDeleteConfirmData] = useState<{ roomId: string; roomNum: string; message: string } | null>(null);
 
+
   // Quick Add Tenant Modal state
   const [isAddTenantModalOpen, setIsAddTenantModalOpen] = useState(false);
   const [selectedRoomForTenant, setSelectedRoomForTenant] = useState<Room | null>(null);
@@ -146,9 +148,6 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
   const [dailyRent, setDailyRent] = useState<number | ''>(500);
   const [rentCycle, setRentCycle] = useState<'term' | 'monthly' | 'daily'>('monthly');
   const [depositAmount, setDepositAmount] = useState<number | ''>(9000);
-  const [monthlyDeposit, setMonthlyDeposit] = useState<number | ''>(9000);
-  const [termDeposit, setTermDeposit] = useState<number | ''>(10000);
-  const [dailyDeposit, setDailyDeposit] = useState<number | ''>(500);
   const [maxOccupants, setMaxOccupants] = useState(2);
   const [roomStatus, setRoomStatus] = useState<RoomStatus>('vacant');
   const [initialWaterMeter, setInitialWaterMeter] = useState(100);
@@ -159,8 +158,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
   const [versionConflictState, setVersionConflictState] = useState<{
     isOpen: boolean;
     entityName: string;
-    currentVersion: number;
-    onRetry?: () => void;
+    currentVersion?: number;
   } | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -194,11 +192,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
       setTermRent(room.termRent || (room.monthlyRent ? room.monthlyRent * 4 : 18000));
       setDailyRent(room.dailyRent || 500);
       setRentCycle(room.rentCycle || 'monthly');
-      const depositVal = room.depositAmount || 0;
-      setDepositAmount(depositVal);
-      setMonthlyDeposit(depositVal);
-      setTermDeposit(depositVal || 10000);
-      setDailyDeposit(room.dailyRent || 500);
+      setDepositAmount(room.depositAmount ?? 9000);
       setMaxOccupants(room.maxOccupants || 2);
       setRoomStatus(room.status || 'vacant');
       setInitialWaterMeter(room.initialWaterMeter || 100);
@@ -213,9 +207,6 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
       setDailyRent(500);
       setRentCycle('monthly');
       setDepositAmount(9000);
-      setMonthlyDeposit(9000);
-      setTermDeposit(10000);
-      setDailyDeposit(500);
       setMaxOccupants(2);
       setRoomStatus('vacant');
       setInitialWaterMeter(100);
@@ -248,7 +239,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
     const curMonthly = monthlyRent === '' ? 0 : Number(monthlyRent);
     const curTerm = termRent === '' ? (curMonthly * 4) : Number(termRent);
     const curDaily = dailyRent === '' ? 500 : Number(dailyRent);
-    const curDeposit = monthlyDeposit === '' ? (depositAmount === '' ? 0 : Number(depositAmount)) : Number(monthlyDeposit);
+    const curDeposit = depositAmount === '' ? 0 : Number(depositAmount);
 
     const hasChanged =
       curMonthly !== origMonthlyRent ||
@@ -265,9 +256,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
     monthlyRent,
     termRent,
     dailyRent,
-    monthlyDeposit,
-    termDeposit,
-    dailyDeposit,
+    depositAmount,
     maxOccupants,
     roomStatus
   ]);
@@ -325,43 +314,45 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
       effectiveStatus = 'vacant';
     }
 
-    const numDeposit = monthlyDeposit === '' ? (depositAmount === '' ? 0 : Number(depositAmount)) : Number(monthlyDeposit);
-
     setIsSubmitting(true);
     const dataProvider = getDataProvider();
+    const propertyApi = dataProvider.properties;
+
+    if (!propertyApi) {
+      setErrorText('ระบบไม่สามารถเชื่อมต่อบริการจัดการห้องพักหลักได้ (PropertyDataSource unavailable)');
+      setIsSubmitting(false);
+      return;
+    }
 
     try {
       if (editingRoom) {
-        // Update Room via backend API
+        // Update Room via authoritative backend API
         const expectedVersion = editingRoom.version || 1;
-        const changes: Record<string, any> = {
+        const changes: UpdateRoomChanges = {
           roomNumber: roomNumber.trim(),
-          buildingId: buildingId || editingRoom.buildingId,
+          buildingId: buildingId || editingRoom.buildingId || undefined,
           floor: calculatedFloor,
           status: effectiveStatus,
           rentCycle,
           monthlyRent: monthlyRent === '' ? null : String(monthlyRent),
           termRent: termRent === '' ? null : String(termRent),
           dailyRent: dailyRent === '' ? null : String(dailyRent),
-          depositAmount: numDeposit === 0 && depositAmount === '' ? null : String(numDeposit),
+          depositAmount: depositAmount === '' ? null : String(depositAmount),
           maximumOccupants: Number(maxOccupants) || 2,
           initialWaterReading: String(initialWaterMeter || 0),
           initialElectricityReading: String(initialElectricMeter || 0),
         };
 
-        const res = dataProvider.properties?.updateRoom
-          ? await dataProvider.properties.updateRoom(editingRoom.id, changes, expectedVersion)
-          : await (dataProvider.rooms as any).updateRoom({ ...editingRoom, ...changes, id: editingRoom.id });
+        const res = await propertyApi.updateRoom(editingRoom.id, changes, expectedVersion);
 
         if (!res.success) {
-          if (res.error?.code === 'CONFLICT' || (res.error as any)?.statusCode === 409) {
+          if (res.error?.code === 'CONFLICT') {
+            const details = res.error.details as { currentVersion?: number; error?: { currentVersion?: number } } | undefined;
+            const serverVersion = details?.currentVersion ?? details?.error?.currentVersion;
             setVersionConflictState({
               isOpen: true,
               entityName: `ห้อง ${editingRoom.roomNumber}`,
-              currentVersion: (res.error as any)?.currentVersion || expectedVersion + 1,
-              onRetry: () => {
-                setVersionConflictState(null);
-              },
+              currentVersion: serverVersion,
             });
           } else {
             setErrorText(res.error?.message || 'เกิดข้อผิดพลาดในการบันทึกข้อมูลห้องพัก');
@@ -376,26 +367,24 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
         setToastMessage(`เลขห้อง "${roomNumber.trim()}" นี้ได้รับการบันทึกในระบบแล้ว`);
         setTimeout(() => setToastMessage(null), 3500);
       } else {
-        // Create Room via backend API
-        const payload = {
+        // Create Room via authoritative backend API
+        const payload: CreateRoomPayload = {
           buildingId: buildingId || (buildings[0]?.id || ''),
           roomNumber: roomNumber.trim(),
           floor: calculatedFloor,
           roomType: 'standard',
-          status: effectiveStatus as any,
+          status: effectiveStatus,
           rentCycle,
           monthlyRent: monthlyRent === '' ? null : String(monthlyRent),
           termRent: termRent === '' ? null : String(termRent),
           dailyRent: dailyRent === '' ? null : String(dailyRent),
-          depositAmount: numDeposit === 0 && depositAmount === '' ? null : String(numDeposit),
+          depositAmount: depositAmount === '' ? null : String(depositAmount),
           maximumOccupants: Number(maxOccupants) || 2,
           initialWaterReading: String(initialWaterMeter || 0),
           initialElectricityReading: String(initialElectricMeter || 0),
         };
 
-        const res = dataProvider.properties?.createRoom
-          ? await dataProvider.properties.createRoom(payload)
-          : await (dataProvider.rooms as any).addRoom(payload);
+        const res = await propertyApi.createRoom(payload);
 
         if (!res.success) {
           setErrorText(res.error?.message || 'เกิดข้อผิดพลาดในการสร้างห้องพัก');
@@ -410,8 +399,8 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
         setToastMessage(`เลขห้อง "${roomNumber.trim()}" นี้ได้รับการบันทึกในระบบแล้ว`);
         setTimeout(() => setToastMessage(null), 3500);
       }
-    } catch (err: any) {
-      setErrorText(err?.message || 'เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์');
+    } catch (err: unknown) {
+      setErrorText((err as Error)?.message || 'เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์');
     } finally {
       setIsSubmitting(false);
     }
@@ -448,9 +437,9 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
       }
     }
 
-    let confirmPrompt = `คุณแน่ใจหรือไม่ว่าต้องการลบห้องพัก ${roomNum} ออกจากระบบอย่างถาวร?`;
+    let confirmPrompt = `คุณแน่ใจหรือไม่ว่าต้องการจัดเก็บห้องพัก ${roomNum} ออกจากระบบ? (ห้องพักที่ถูกจัดเก็บจะไม่แสดงในรายการห้องว่าง)`;
     if (infoList.length > 0) {
-      confirmPrompt = `คำเตือน: ห้องพัก ${roomNum} มีข้อมูลผูกอยู่ในระบบ:\n\n• ` + infoList.join('\n• ') + `\n\nคุณยังคงต้องการยืนยันลบห้องพัก ${roomNum} ออกจากระบบถาวรหรือไม่?`;
+      confirmPrompt = `คำเตือน: ห้องพัก ${roomNum} มีข้อมูลผูกอยู่ในระบบ:\n\n• ` + infoList.join('\n• ') + `\n\nคุณยังคงต้องการยืนยันจัดเก็บห้องพัก ${roomNum} ออกจากระบบหรือไม่?`;
     }
 
     setDeleteConfirmData({
@@ -467,42 +456,47 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
     const expectedVersion = targetRoom?.version || 1;
     setIsSubmitting(true);
 
+    const dataProvider = getDataProvider();
+    const propertyApi = dataProvider.properties;
+
+    if (!propertyApi) {
+      setToastMessage('ระบบไม่สามารถเชื่อมต่อบริการจัดการห้องพักหลักได้ (PropertyDataSource unavailable)');
+      setIsSubmitting(false);
+      return;
+    }
+
     try {
-      const dataProvider = getDataProvider();
-      const res = dataProvider.properties?.archiveRoom
-        ? await dataProvider.properties.archiveRoom(roomId, expectedVersion)
-        : await dataProvider.rooms.deleteRoom(roomId);
+      const res = await propertyApi.archiveRoom(roomId, expectedVersion);
 
       if (!res.success) {
-        if (res.error?.code === 'CONFLICT' || (res.error as any)?.statusCode === 409) {
+        if (res.error?.code === 'CONFLICT') {
+          const details = res.error.details as { currentVersion?: number; error?: { currentVersion?: number } } | undefined;
+          const serverVersion = details?.currentVersion ?? details?.error?.currentVersion;
           setVersionConflictState({
             isOpen: true,
             entityName: `ห้อง ${roomNum}`,
-            currentVersion: (res.error as any)?.currentVersion || expectedVersion + 1,
-            onRetry: () => {
-              setVersionConflictState(null);
-            },
+            currentVersion: serverVersion,
           });
-        } else if ((res.error as any)?.code === 'ROOM_HAS_ACTIVE_TENANT' || res.error?.message?.includes('ผู้เช่า')) {
+        } else if ((res.error?.details as { code?: string } | undefined)?.code === 'ROOM_HAS_ACTIVE_TENANT' || res.error?.message?.includes('ผู้เช่า')) {
           setToastMessage(res.error?.message || 'ไม่สามารถยกเลิกห้องที่มีผู้เช่าอยู่ได้');
         } else {
-          setToastMessage(res.error?.message || 'เกิดข้อผิดพลาดในการลบห้องพัก');
+          setToastMessage(res.error?.message || 'เกิดข้อผิดพลาดในการจัดเก็บห้องพัก');
         }
         setIsSubmitting(false);
         return;
       }
 
       onSaveRooms(rooms);
-      onAddLog('ลบห้องพัก', `ลบห้องเลขที่ ${roomNum} ออกจากระบบถาวร`, 'Room', roomId);
+      onAddLog('จัดเก็บห้องพัก', `จัดเก็บห้องเลขที่ ${roomNum} (Archive)`, 'Room', roomId);
       setIsModalOpen(false);
       setEditingRoom(null);
       setDeleteConfirmData(null);
-      setToastMessage(`ลบห้องพัก "${roomNum}" ออกจากระบบเรียบร้อยแล้ว`);
+      setToastMessage(`จัดเก็บห้องพัก "${roomNum}" เรียบร้อยแล้ว`);
       setTimeout(() => {
         setToastMessage(null);
       }, 3500);
-    } catch (err: any) {
-      setToastMessage(err?.message || 'เกิดข้อผิดพลาดในการลบห้องพัก');
+    } catch (err: unknown) {
+      setToastMessage((err as Error)?.message || 'เกิดข้อผิดพลาดในการจัดเก็บห้องพัก');
     } finally {
       setIsSubmitting(false);
     }
@@ -524,19 +518,25 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
     const nextStatus: RoomStatus = targetRoom.status === 'maintenance' ? 'vacant' : 'maintenance';
     const expectedVersion = targetRoom.version || 1;
 
+    const dataProvider = getDataProvider();
+    const propertyApi = dataProvider.properties;
+
+    if (!propertyApi) {
+      setToastMessage('ระบบไม่สามารถเชื่อมต่อบริการจัดการห้องพักหลักได้ (PropertyDataSource unavailable)');
+      return;
+    }
+
     try {
-      const dataProvider = getDataProvider();
-      const res = dataProvider.properties?.updateRoom
-        ? await dataProvider.properties.updateRoom(targetRoom.id, { status: nextStatus }, expectedVersion)
-        : await (dataProvider.rooms as any).updateStatus(targetRoom.id, nextStatus);
+      const res = await propertyApi.updateRoom(targetRoom.id, { status: nextStatus }, expectedVersion);
 
       if (!res.success) {
-        if (res.error?.code === 'CONFLICT' || (res.error as any)?.statusCode === 409) {
+        if (res.error?.code === 'CONFLICT') {
+          const details = res.error.details as { currentVersion?: number; error?: { currentVersion?: number } } | undefined;
+          const serverVersion = details?.currentVersion ?? details?.error?.currentVersion;
           setVersionConflictState({
             isOpen: true,
             entityName: `ห้อง ${targetRoom.roomNumber}`,
-            currentVersion: (res.error as any)?.currentVersion || expectedVersion + 1,
-            onRetry: () => handleToggleRoomStatus(roomId),
+            currentVersion: serverVersion,
           });
         } else {
           setToastMessage(res.error?.message || 'เกิดข้อผิดพลาดในการเปลี่ยนสถานะห้อง');
@@ -552,8 +552,8 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
         roomId
       );
       setToastMessage(`ห้อง ${targetRoom.roomNumber}: เปลี่ยนเป็น "${nextStatus === 'maintenance' ? 'ปิดปรับปรุง' : 'เปิดใช้งาน'}" เรียบร้อยแล้ว`);
-    } catch (err: any) {
-      setToastMessage(err?.message || 'เกิดข้อผิดพลาดในการเปลี่ยนสถานะห้อง');
+    } catch (err: unknown) {
+      setToastMessage((err as Error)?.message || 'เกิดข้อผิดพลาดในการเปลี่ยนสถานะห้อง');
     }
   };
 
@@ -1226,10 +1226,10 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                   data-testid="btn-delete-room"
                   onClick={() => handleDeleteFromModal(editingRoom.id, editingRoom.roomNumber)}
                   className="px-3 py-2 text-xs font-bold text-rose-600 hover:text-rose-700 hover:bg-rose-50 rounded-xl flex items-center gap-1.5 transition-colors cursor-pointer"
-                  title="ลบห้องพัก"
+                  title="จัดเก็บห้องพัก"
                 >
                   <Trash2 className="w-4 h-4" />
-                  <span>ลบห้องพัก</span>
+                  <span>จัดเก็บห้องพัก</span>
                 </button>
               ) : (
                 <div />
@@ -1343,48 +1343,26 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
             </div>
           </div>
 
-          {/* Deposit Rates Breakdown (รายเทอม -> รายเดือน -> รายวัน) */}
-          <div className="space-y-3 bg-slate-50/80 p-3.5 rounded-2xl border border-gray-100">
+          {/* Deposit Amount (เงินประกันห้องพัก) */}
+          <div className="space-y-2 bg-slate-50/80 p-3.5 rounded-2xl border border-gray-100">
             <div className="flex items-center gap-2">
               <div className="p-1 bg-emerald-100 text-emerald-700 rounded-lg">
                 <ShieldCheck className="w-3.5 h-3.5" />
               </div>
-              <label className="block text-xs font-black text-slate-900">อัตราค่าประกันตามรูปแบบต่างๆ</label>
+              <label className="block text-xs font-black text-slate-900">เงินประกันห้องพัก (บาท)</label>
             </div>
-            <div className="grid grid-cols-3 gap-3">
-              <div className="space-y-1">
-                <label className="block text-[11px] font-bold text-slate-700">รายเทอม</label>
-                <input
-                  type="number"
-                  min={0}
-                  value={termDeposit}
-                  onChange={(e) => setTermDeposit(e.target.value === '' ? '' : Number(e.target.value))}
-                  placeholder="เช่น 10000"
-                  className="w-full px-3 py-2 text-xs border border-gray-200 rounded-xl bg-white font-bold"
-                />
-              </div>
-              <div className="space-y-1">
-                <label className="block text-[11px] font-bold text-slate-700">รายเดือน</label>
-                <input
-                  type="number"
-                  min={0}
-                  value={monthlyDeposit}
-                  onChange={(e) => setMonthlyDeposit(e.target.value === '' ? '' : Number(e.target.value))}
-                  placeholder="เช่น 9000"
-                  className="w-full px-3 py-2 text-xs border border-gray-200 rounded-xl bg-white font-bold"
-                />
-              </div>
-              <div className="space-y-1">
-                <label className="block text-[11px] font-bold text-slate-700">รายวัน</label>
-                <input
-                  type="number"
-                  min={0}
-                  value={dailyDeposit}
-                  onChange={(e) => setDailyDeposit(e.target.value === '' ? '' : Number(e.target.value))}
-                  placeholder="เช่น 500"
-                  className="w-full px-3 py-2 text-xs border border-gray-200 rounded-xl bg-white font-bold"
-                />
-              </div>
+            <div>
+              <input
+                type="number"
+                min={0}
+                value={depositAmount}
+                onChange={(e) => setDepositAmount(e.target.value === '' ? '' : Number(e.target.value))}
+                placeholder="เช่น 9000"
+                className="w-full px-3 py-2 text-xs border border-gray-200 rounded-xl bg-white font-bold text-slate-800 focus:border-indigo-600 focus:outline-none"
+              />
+              <p className="text-[11px] text-gray-500 font-medium mt-1">
+                เงินประกันสัญญาเช่าสำหรับห้องพักนี้ (ค่าเริ่มต้นสัญญาใหม่)
+              </p>
             </div>
           </div>
 
@@ -1441,9 +1419,9 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
         isOpen={!!deleteConfirmData}
         onClose={() => setDeleteConfirmData(null)}
         onConfirm={executeDeleteRoom}
-        title={`ยืนยันการลบห้องพัก ${deleteConfirmData?.roomNum || ''}`}
+        title={`ยืนยันการจัดเก็บห้องพัก ${deleteConfirmData?.roomNum || ''}`}
         message={deleteConfirmData?.message || ''}
-        confirmText="ลบห้องพักถาวร"
+        confirmText="จัดเก็บห้องพัก"
         cancelText="ยกเลิก"
         type="danger"
       />
@@ -1474,15 +1452,15 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
         <VersionConflictModal
           isOpen={versionConflictState.isOpen}
           entityName={versionConflictState.entityName}
-          staleVersion={versionConflictState.currentVersion - 1}
+          currentVersion={versionConflictState.currentVersion}
           latestVersion={versionConflictState.currentVersion}
           onReload={() => {
             onSaveRooms(rooms);
             setVersionConflictState(null);
             setIsModalOpen(false);
+            setEditingRoom(null);
           }}
           onCancel={() => setVersionConflictState(null)}
-          onRetry={versionConflictState.onRetry}
         />
       )}
 

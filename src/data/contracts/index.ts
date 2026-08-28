@@ -7,6 +7,7 @@ import {
   Dormitory,
   Building,
   Room,
+  RoomStatus,
   Tenant,
   Contract,
   MeterReading,
@@ -171,32 +172,57 @@ export interface TenantRegistrationDataSource {
   updateRequestRoom?(requestId: string, requestedRoomId: string): Promise<DataResult<any>>;
 }
 
+export interface CreateRoomPayload {
+  buildingId: string;
+  roomNumber: string;
+  floor?: number;
+  roomType?: string;
+  status?: RoomStatus;
+  rentCycle?: 'monthly' | 'term' | 'daily';
+  monthlyRent?: string | number | null;
+  termRent?: string | number | null;
+  dailyRent?: string | number | null;
+  depositAmount?: string | number | null;
+  depositInheritsBuildingDefault?: boolean;
+  parkingFee?: string | number | null;
+  maximumOccupants?: number;
+  waterMeterNumber?: string | null;
+  electricityMeterNumber?: string | null;
+  initialWaterReading?: string | number | null;
+  initialElectricityReading?: string | number | null;
+  amenities?: string[];
+  images?: string[];
+  notes?: string | null;
+}
+
+export interface UpdateRoomChanges {
+  roomNumber?: string;
+  buildingId?: string;
+  floor?: number;
+  roomType?: string;
+  status?: RoomStatus;
+  rentCycle?: 'monthly' | 'term' | 'daily';
+  monthlyRent?: string | number | null;
+  termRent?: string | number | null;
+  dailyRent?: string | number | null;
+  depositAmount?: string | number | null;
+  depositInheritsBuildingDefault?: boolean;
+  parkingFee?: string | number | null;
+  maximumOccupants?: number;
+  waterMeterNumber?: string | null;
+  electricityMeterNumber?: string | null;
+  initialWaterReading?: string | number | null;
+  initialElectricityReading?: string | number | null;
+  amenities?: string[];
+  images?: string[];
+  notes?: string | null;
+}
+
 export interface PropertyDataSource {
   getAuthoritativeRooms(params?: Record<string, any>): Promise<DataResult<{ items: Room[]; pagination: any }>>;
   getAuthoritativeRoom(id: string): Promise<DataResult<Room>>;
-  createRoom(payload: {
-    buildingId: string;
-    roomNumber: string;
-    floor?: number;
-    roomType?: string;
-    status?: string;
-    rentCycle?: string;
-    monthlyRent?: string | number | null;
-    termRent?: string | number | null;
-    dailyRent?: string | number | null;
-    depositAmount?: string | number | null;
-    depositInheritsBuildingDefault?: boolean;
-    parkingFee?: string | number | null;
-    maximumOccupants?: number;
-    waterMeterNumber?: string | null;
-    electricityMeterNumber?: string | null;
-    initialWaterReading?: string | number | null;
-    initialElectricityReading?: string | number | null;
-    amenities?: string[];
-    images?: string[];
-    notes?: string | null;
-  }): Promise<DataResult<Room>>;
-  updateRoom(roomId: string, changes: Record<string, any>, expectedVersion: number): Promise<DataResult<Room>>;
+  createRoom(payload: CreateRoomPayload): Promise<DataResult<Room>>;
+  updateRoom(roomId: string, changes: UpdateRoomChanges, expectedVersion: number): Promise<DataResult<Room>>;
   getAuthoritativeBuildings(): Promise<DataResult<Building[]>>;
   getAuthoritativeBuilding(id: string): Promise<DataResult<Building>>;
   getDormitoryDefaults(): Promise<DataResult<{ property: any; billing: any }>>;
