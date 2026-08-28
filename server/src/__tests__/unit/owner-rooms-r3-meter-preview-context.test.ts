@@ -283,10 +283,13 @@ describe('OWNER ROOMS R3 — Meter Service Preview Context DTO & State Authority
         id: 'bill-201',
         dormitoryId,
         roomId: 'room-201',
+        contractId: 'contract-201',
         billingCycleId,
         billKind: 'DEPOSIT',
         status: 'paid',
         totalAmount: 4800,
+        paidAmount: 4800,
+        outstandingAmount: 0,
         items: [{ id: 'bi-1', type: 'deposit', description: 'ค่าประกัน', amount: 4800 }],
       },
     ]);
@@ -297,5 +300,98 @@ describe('OWNER ROOMS R3 — Meter Service Preview Context DTO & State Authority
     expect(result.rooms).toHaveLength(1);
     const r201 = result.rooms[0];
     expect(r201.agreementDepositPaymentStatus).toBe('PAID');
+  });
+
+  it('8. Contract deposit paid in prior cycle (July) resolves PAID in current cycle (August) from agreement lifecycle evidence', async () => {
+    mockRoomRepo.findAll.mockResolvedValue({
+      items: [{ id: 'room-202', roomNumber: '202', dormitoryId }],
+    });
+    mockPrisma.contract.findMany.mockResolvedValue([
+      {
+        id: 'contract-202',
+        roomId: 'room-202',
+        dormitoryId,
+        tenantId: 'tenant-202',
+        rentBillingType: 'MONTHLY',
+        rentAmount: 5000,
+        depositAmount: 5000,
+        startDate: new Date('2026-07-01T00:00:00.000Z'),
+        endDate: new Date('2027-06-30T23:59:59.999Z'),
+        status: 'active',
+        tenant: { displayName: 'นาย สมเกียรติ', linkedUserId: null },
+      },
+    ]);
+    // Note: No bills in August cycle, but lifecycle bills contains July paid deposit bill
+    mockPrisma.bill.findMany.mockImplementation(async (query: any) => {
+      if (query?.where?.billingCycleId) {
+        return []; // No bills in selected August cycle
+      }
+      // Lifecycle bills query for contract-202:
+      return [
+        {
+          id: 'bill-deposit-july',
+          dormitoryId,
+          roomId: 'room-202',
+          contractId: 'contract-202',
+          billingCycleId: 'cycle-2026-07',
+          billKind: 'DEPOSIT',
+          status: 'paid',
+          totalAmount: 5000,
+          paidAmount: 5000,
+          outstandingAmount: 0,
+          items: [{ id: 'bi-dep-1', type: 'deposit', description: 'ค่าประกัน', amount: 5000 }],
+        },
+      ];
+    });
+    mockPrisma.provisionalRentalTerm.findMany.mockResolvedValue([]);
+    mockPrisma.dailyStay.findMany.mockResolvedValue([]);
+
+    const result = await meterService.getMeterBillingPreviewContext(dormitoryId, billingCycleId);
+    expect(result.rooms).toHaveLength(1);
+    const r202 = result.rooms[0];
+    expect(r202.agreementDepositPaymentStatus).toBe('PAID');
+  });
+
+  it('9. Emits PARTIAL when rent bill has paidAmount > 0 and outstandingAmount > 0', async () => {
+    mockRoomRepo.findAll.mockResolvedValue({
+      items: [{ id: 'room-203', roomNumber: '203', dormitoryId }],
+    });
+    mockPrisma.contract.findMany.mockResolvedValue([
+      {
+        id: 'contract-203',
+        roomId: 'room-203',
+        dormitoryId,
+        tenantId: 'tenant-203',
+        rentBillingType: 'MONTHLY',
+        rentAmount: 6000,
+        depositAmount: 6000,
+        startDate: new Date('2026-08-01T00:00:00.000Z'),
+        endDate: new Date('2027-07-31T23:59:59.999Z'),
+        status: 'active',
+        tenant: { displayName: 'นาย สมชาย', linkedUserId: null },
+      },
+    ]);
+    mockPrisma.bill.findMany.mockResolvedValue([
+      {
+        id: 'bill-rent-partial',
+        dormitoryId,
+        roomId: 'room-203',
+        contractId: 'contract-203',
+        billingCycleId,
+        billKind: 'RENT',
+        status: 'partial',
+        totalAmount: 6000,
+        paidAmount: 2000,
+        outstandingAmount: 4000,
+        items: [{ id: 'bi-rent-1', type: 'rent', description: 'ค่าเช่า', amount: 6000 }],
+      },
+    ]);
+    mockPrisma.provisionalRentalTerm.findMany.mockResolvedValue([]);
+    mockPrisma.dailyStay.findMany.mockResolvedValue([]);
+
+    const result = await meterService.getMeterBillingPreviewContext(dormitoryId, billingCycleId);
+    expect(result.rooms).toHaveLength(1);
+    const r203 = result.rooms[0];
+    expect(r203.agreementRentPaymentStatus).toBe('PARTIAL');
   });
 });

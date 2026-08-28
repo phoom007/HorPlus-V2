@@ -387,9 +387,9 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
               return {
                 ...b,
                 roomPrefix: pfx,
-                name: (b.name && b.name.trim())
-                  ? (rawPrefix ? b.name.replace(new RegExp(`(อาคาร\\s*)${rawPrefix}`, 'i'), `$1${pfx}`) : b.name)
-                  : (pfx ? `อาคาร ${pfx}` : 'อาคาร '),
+                name: (b.name && b.name.trim() && b.name.trim() !== 'อาคาร ')
+                  ? b.name.trim()
+                  : (b.name || ''),
               };
             })
             : undefined;
@@ -1588,17 +1588,31 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                   {/* AUTO GENERATE MODE */}
                   {b.mode === 'auto' && (
                     <div className="space-y-4">
-                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
                         <div>
-                          <label className="block text-xs font-bold text-slate-700 mb-1">รหัสตึก</label>
+                          <label className="block text-xs font-bold text-slate-700 mb-1">ชื่ออาคาร</label>
                           <input
                             type="text"
-                            value={b.roomPrefix}
+                            value={b.name || ''}
+                            onChange={(e) => {
+                              const updated = [...formData.buildings];
+                              updated[idx].name = e.target.value;
+                              setFormData({ ...formData, buildings: updated });
+                            }}
+                            placeholder="เช่น สมบูรณ์, อาคาร A"
+                            className="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:border-blue-500 outline-none font-bold text-slate-800"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 mb-1">รหัสตึก / คำนำหน้าเลขห้อง (ไม่บังคับ)</label>
+                          <input
+                            type="text"
+                            value={b.roomPrefix || ''}
                             onChange={(e) => {
                               const val = e.target.value.toUpperCase();
                               const updated = [...formData.buildings];
                               updated[idx].roomPrefix = val;
-                              updated[idx].name = val ? `อาคาร ${val}` : 'อาคาร ';
                               setFormData({ ...formData, buildings: updated });
                             }}
                             placeholder="เช่น A, B (เว้นว่างได้)"

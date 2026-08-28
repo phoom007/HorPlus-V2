@@ -1066,6 +1066,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
             initialTenantId={initialTenantId}
             onClearInitialTenantId={() => setInitialTenantId(undefined)}
             returnContext={tenantReturnContext}
+            onDismissReturnContext={() => setTenantReturnContext(null)}
             onReturnToSource={(ctx) => {
               if (ctx.source === 'rooms') {
                 if (ctx.cycleId) {

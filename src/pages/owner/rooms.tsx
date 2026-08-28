@@ -42,7 +42,7 @@ import { VersionConflictModal } from '../../components/VersionConflictModal';
 import { getDataProvider } from '../../data/dataProvider';
 import { CreateRoomPayload, UpdateRoomChanges } from '../../data/contracts';
 import { httpRequest } from '../../data/httpClient';
-import { getOwnerRoomMutationErrorMessage } from '../../lib/roomErrorMapper';
+import { getOwnerRoomMutationErrorMessage, getOwnerRoomMutationDomainCode } from '../../lib/roomErrorMapper';
 import { useQuery } from '@tanstack/react-query';
 import { queryKeys, STALE_TIMES, fetchMeterPreviewContext } from '../../lib/queryClient';
 import { QuickAddTenantModal } from '../../components/QuickAddTenantModal';
@@ -147,6 +147,47 @@ const ROOM_STATUS_CONFIG: Record<string, {
     activeBtnBg: 'bg-rose-600 text-white border-rose-600 shadow-xs'
   }
 };
+
+export function resolveRoomTenantAction(
+  room: Room,
+  presentation: RoomCyclePresentation
+):
+  | { kind: 'OPEN_CYCLE_TENANT'; tenantId: string }
+  | { kind: 'QUICK_ADD_CURRENT' }
+  | { kind: 'DISABLED'; reason?: string } {
+  // 1. If selected-cycle presentation represents an active/reserved/tail agreement with an authoritative tenantId
+  if (
+    (presentation.state === 'ACTIVE_AGREEMENT' ||
+      presentation.state === 'RESERVED_IN_CYCLE' ||
+      presentation.state === 'DAILY_FINANCIAL_TAIL') &&
+    presentation.occupancy?.tenantId
+  ) {
+    return {
+      kind: 'OPEN_CYCLE_TENANT',
+      tenantId: presentation.occupancy.tenantId,
+    };
+  }
+
+  // 2. If selected-cycle has applicant name but NO tenantId (e.g. anonymous or pending reservation without tenant record)
+  if (presentation.occupancy?.tenantName && !presentation.occupancy.tenantId) {
+    return {
+      kind: 'DISABLED',
+      reason: 'ไม่มีข้อมูลบัญชีผู้เช่าสำหรับรายการจองนี้',
+    };
+  }
+
+  // 3. Quick Add is an operational action for current room state:
+  // Only offer Quick Add when CURRENT room state is actually eligible (vacant and not occupied today)
+  if (room.status === 'vacant' && !room.currentTenantId) {
+    return { kind: 'QUICK_ADD_CURRENT' };
+  }
+
+  // If today is occupied or maintenance while selected cycle has no agreement:
+  return {
+    kind: 'DISABLED',
+    reason: room.status === 'maintenance' ? 'ห้องพักปิดปรับปรุงปัจจุบัน' : 'ห้องพักมีผู้เช่าปัจจุบันแล้ว',
+  };
+}
 
 export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
   dormitoryId,
@@ -1129,7 +1170,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                 <tr>
                   <th className="p-4 whitespace-nowrap">เลขห้อง</th>
                   <th className="p-4 whitespace-nowrap">อาคาร/ชั้น</th>
-                  <th className="p-4 whitespace-nowrap">ผู้เช่าปัจจุบัน</th>
+                  <th className="p-4 whitespace-nowrap">ผู้เช่าตามงวด</th>
                   <th className="p-4 whitespace-nowrap">อัตราค่าเช่า</th>
                   <th className="p-4 whitespace-nowrap">ค่าประกัน</th>
                   <th className="p-4 whitespace-nowrap">สถานะห้อง</th>

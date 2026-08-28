@@ -1,31 +1,47 @@
 /**
  * @license Apache-2.0
- * Concise Room Mutation Error UX Mapper
+ * Concise Room Mutation Error UX Mapper & Domain Classifier
  *
  * Maps authoritative error codes to concise, user-friendly Thai error messages.
  * Prioritizes nested specific server domain codes over coarse HTTP wrapper codes.
  */
+
+export function getOwnerRoomMutationDomainCode(error: any): string {
+  if (!error) return '';
+
+  const nestedCode =
+    error?.details?.error?.code ||
+    error?.details?.code ||
+    error?.response?.data?.error?.code ||
+    error?.error?.details?.code ||
+    error?.error?.code;
+
+  if (nestedCode && nestedCode !== 'CONFLICT' && nestedCode !== 'INTERNAL_ERROR' && nestedCode !== 'BAD_REQUEST' && nestedCode !== 'NOT_FOUND') {
+    return nestedCode;
+  }
+
+  if (error?.code && error.code !== 'CONFLICT' && error.code !== 'INTERNAL_ERROR' && error.code !== 'BAD_REQUEST' && error.code !== 'NOT_FOUND') {
+    return error.code;
+  }
+
+  if (typeof error?.message === 'string') {
+    if (error.message.includes('ROOM_NUMBER_ALREADY_EXISTS')) return 'ROOM_NUMBER_ALREADY_EXISTS';
+    if (error.message.includes('BUILDING_NOT_FOUND')) return 'BUILDING_NOT_FOUND';
+    if (error.message.includes('OPERATIONAL_BILLING_CYCLE_UNAVAILABLE')) return 'OPERATIONAL_BILLING_CYCLE_UNAVAILABLE';
+    if (error.message.includes('VERSION_CONFLICT')) return 'VERSION_CONFLICT';
+    if (error.message.includes('ROOM_LIMIT_REACHED') || error.message.includes('ROOM_LIMIT_EXCEEDED')) return 'ROOM_LIMIT_REACHED';
+    if (error.message.includes('ACTIVE_AGREEMENT')) return 'ACTIVE_AGREEMENT_GUARD';
+  }
+
+  return nestedCode || error?.code || '';
+}
 
 export function getOwnerRoomMutationErrorMessage(error: any): string {
   if (!error) {
     return 'ระบบขัดข้องชั่วคราว กรุณาลองใหม่';
   }
 
-  // Extract specific domain code prioritizing nested authoritative server code over coarse wrappers
-  const code =
-    error?.details?.error?.code ||
-    error?.details?.code ||
-    error?.response?.data?.error?.code ||
-    error?.error?.details?.code ||
-    error?.error?.code ||
-    error?.code ||
-    (typeof error?.message === 'string' && error.message.includes('ROOM_NUMBER_ALREADY_EXISTS') ? 'ROOM_NUMBER_ALREADY_EXISTS' : undefined) ||
-    (typeof error?.message === 'string' && error.message.includes('BUILDING_NOT_FOUND') ? 'BUILDING_NOT_FOUND' : undefined) ||
-    (typeof error?.message === 'string' && error.message.includes('OPERATIONAL_BILLING_CYCLE_UNAVAILABLE') ? 'OPERATIONAL_BILLING_CYCLE_UNAVAILABLE' : undefined) ||
-    (typeof error?.message === 'string' && error.message.includes('VERSION_CONFLICT') ? 'VERSION_CONFLICT' : undefined) ||
-    (typeof error?.message === 'string' && error.message.includes('ROOM_LIMIT_REACHED') ? 'ROOM_LIMIT_REACHED' : undefined) ||
-    (typeof error?.message === 'string' && error.message.includes('FORBIDDEN') ? 'FORBIDDEN' : undefined) ||
-    '';
+  const code = getOwnerRoomMutationDomainCode(error);
 
   switch (code) {
     case 'ROOM_NUMBER_ALREADY_EXISTS':

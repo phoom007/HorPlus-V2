@@ -448,7 +448,7 @@ export async function seedLocal07Data() {
   const bldA = await prisma.building.create({
     data: {
       dormitoryId: compDorm.id,
-      name: 'อาคารชาญวิทย์ (A)',
+      name: COMP_DORM.buildings[0].name,
       code: 'BLD-A',
       floorCount: 3,
       roomsPerFloor: 6,
@@ -465,7 +465,7 @@ export async function seedLocal07Data() {
   const bldB = await prisma.building.create({
     data: {
       dormitoryId: compDorm.id,
-      name: 'อาคารสมบูรณ์ (B)',
+      name: COMP_DORM.buildings[1].name,
       code: 'BLD-B',
       floorCount: 2,
       roomsPerFloor: 1,

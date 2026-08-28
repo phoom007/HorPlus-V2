@@ -1924,6 +1924,41 @@ export class MeterService {
       billsByRoomMap.set(b.roomId, list);
     }
 
+    // Batch load agreement lifecycle deposit & payment bills for all contracts & terms
+    const allRepContractIds = Array.from(new Set([...visibleContracts.map((c) => c.id), ...futureContracts.map((c) => c.id)]));
+    const allRepProvisionalIds = Array.from(new Set([...visibleProvisionalTerms.map((p) => p.id), ...futureProvisionalTerms.map((p) => p.id)]));
+
+    const lifecycleBills = (allRepContractIds.length > 0 || allRepProvisionalIds.length > 0)
+      ? await prisma.bill.findMany({
+          where: {
+            dormitoryId,
+            status: { notIn: ['cancelled', 'void'] },
+            OR: [
+              ...(allRepContractIds.length > 0 ? [{ contractId: { in: allRepContractIds } }] : []),
+              ...(allRepProvisionalIds.length > 0 ? [{ provisionalRentalTermId: { in: allRepProvisionalIds } }] : []),
+            ],
+          },
+          include: {
+            items: true,
+          },
+        })
+      : [];
+
+    const lifecycleBillsByContractMap = new Map<string, typeof lifecycleBills>();
+    const lifecycleBillsByProvisionalMap = new Map<string, typeof lifecycleBills>();
+    for (const b of lifecycleBills) {
+      if (b.contractId) {
+        const list = lifecycleBillsByContractMap.get(b.contractId) || [];
+        list.push(b);
+        lifecycleBillsByContractMap.set(b.contractId, list);
+      }
+      if (b.provisionalRentalTermId) {
+        const list = lifecycleBillsByProvisionalMap.get(b.provisionalRentalTermId) || [];
+        list.push(b);
+        lifecycleBillsByProvisionalMap.set(b.provisionalRentalTermId, list);
+      }
+    }
+
     // Load effective room operational status changes up to this cycle
     const allStatusChanges = await prisma.roomOperationalStatusChange.findMany({
       where: {
@@ -2517,28 +2552,86 @@ export class MeterService {
       let agreementRentPaymentStatus: 'PAID' | 'UNPAID' | 'PARTIAL' | 'UNKNOWN' = 'UNKNOWN';
       let agreementDepositPaymentStatus: 'PAID' | 'UNPAID' | 'PARTIAL' | 'UNKNOWN' = 'UNKNOWN';
 
+      const helperDeriveBillPaymentStatus = (bill: any): 'PAID' | 'UNPAID' | 'PARTIAL' | 'UNKNOWN' => {
+        if (!bill) return 'UNKNOWN';
+        const st = (bill.status || '').toLowerCase();
+        if (st === 'paid') return 'PAID';
+        if (st === 'partial') return 'PARTIAL';
+
+        const total = Number(bill.totalAmount ?? 0);
+        const paid = Number(bill.paidAmount ?? 0);
+        const outstanding = Number(bill.outstandingAmount ?? (total - paid));
+
+        if (paid > 0 && outstanding > 0) return 'PARTIAL';
+        if (outstanding === 0 && (paid > 0 || total === 0)) return 'PAID';
+        if (paid === 0 && outstanding > 0) return 'UNPAID';
+        if (st === 'issued' || st === 'pending' || st === 'unpaid') return 'UNPAID';
+        return 'UNKNOWN';
+      };
+
       if (billingSource === 'DAILY_STAY' || (billingSource === 'NONE' && unpaidDailyStay)) {
-        agreementRentPaymentStatus = isDailyRentPaid ? 'PAID' : (isDailyUnpaid ? 'UNPAID' : 'UNKNOWN');
-        if (Number(dailyDepositAmount) > 0) {
+        const dStay = primaryDailyStay || unpaidDailyStay;
+        const rentItem = dStay?.invoice?.items?.find((i: any) => i.itemType === 'RENT');
+        if (rentItem) {
+          const itemSt = (rentItem.status || '').toUpperCase();
+          agreementRentPaymentStatus = itemSt === 'PAID' ? 'PAID' : (itemSt === 'UNPAID' ? 'UNPAID' : (itemSt === 'PARTIAL' ? 'PARTIAL' : 'UNKNOWN'));
+        } else {
+          agreementRentPaymentStatus = isDailyRentPaid ? 'PAID' : (isDailyUnpaid ? 'UNPAID' : 'UNKNOWN');
+        }
+
+        const depositItem = dStay?.invoice?.items?.find((i: any) => i.itemType === 'DEPOSIT');
+        if (depositItem) {
+          const depItemSt = (depositItem.status || '').toUpperCase();
+          agreementDepositPaymentStatus = depItemSt === 'PAID' ? 'PAID' : (depItemSt === 'UNPAID' ? 'UNPAID' : (depItemSt === 'PARTIAL' ? 'PARTIAL' : 'UNKNOWN'));
+        } else if (Number(dailyDepositAmount) > 0) {
           agreementDepositPaymentStatus = dailyDepositStatus === 'PAID' ? 'PAID' : (dailyDepositStatus === 'UNPAID' ? 'UNPAID' : 'UNKNOWN');
         }
       } else if (billingSource === 'CONTRACT' || billingSource === 'PROVISIONAL_MONTHLY' || billingSource === 'PROVISIONAL_TERM') {
-        const rentComp = chargeComponents.find(c => c.type === 'rent');
-        if (rentComp) {
-          agreementRentPaymentStatus = rentComp.status === 'PAID' ? 'PAID' : (rentComp.status === 'UNPAID' ? 'UNPAID' : 'UNKNOWN');
+        const repContract = contract || futureC;
+        const repProv = prov || futureP;
+
+        // 1. Rent in selected cycle
+        const cycleRentBill = roomBills.find((b) => {
+          const isLinked = (repContract && b.contractId === repContract.id) || (repProv && b.provisionalRentalTermId === repProv.id);
+          const isRentKind = (b.billKind || '').toString().trim().toUpperCase() === 'RENT' || (b.billKind || '').toString().trim().toUpperCase() === 'MONTHLY_RENT';
+          const hasRentItem = b.items?.some((it) => it.type?.toLowerCase() === 'rent' || it.type?.toLowerCase() === 'monthly_rent' || it.type?.toLowerCase() === 'term_rent');
+          return isLinked || isRentKind || hasRentItem;
+        });
+
+        if (cycleRentBill) {
+          const isCombined = (cycleRentBill.billKind || '').toString().trim().toUpperCase() === 'LEGACY_COMBINED' || (cycleRentBill.items && cycleRentBill.items.length > 1);
+          const st = (cycleRentBill.status || '').toLowerCase();
+          if (isCombined && (st === 'partial' || (Number(cycleRentBill.paidAmount) > 0 && Number(cycleRentBill.outstandingAmount) > 0))) {
+            agreementRentPaymentStatus = 'UNKNOWN';
+          } else {
+            agreementRentPaymentStatus = helperDeriveBillPaymentStatus(cycleRentBill);
+          }
+        } else {
+          const rentComp = chargeComponents.find((c) => c.type === 'rent');
+          if (rentComp) {
+            agreementRentPaymentStatus = rentComp.status === 'PAID' ? 'PAID' : (rentComp.status === 'UNPAID' ? 'UNPAID' : 'UNKNOWN');
+          }
         }
 
-        const depositComp = chargeComponents.find(c => c.type === 'deposit');
-        if (depositComp) {
-          agreementDepositPaymentStatus = depositComp.status === 'PAID' ? 'PAID' : (depositComp.status === 'UNPAID' ? 'UNPAID' : 'UNKNOWN');
+        // 2. Deposit across agreement lifecycle
+        const relevantLifecycleBills = repContract
+          ? (lifecycleBillsByContractMap.get(repContract.id) || [])
+          : (repProv ? (lifecycleBillsByProvisionalMap.get(repProv.id) || []) : []);
+
+        const allRelevantBills = [...relevantLifecycleBills, ...roomBills];
+        const depBill = allRelevantBills.find((b) =>
+          (b.billKind || '').toString().trim().toUpperCase() === 'DEPOSIT' ||
+          b.items?.some((it) => it.type?.toLowerCase() === 'deposit' || it.type?.toLowerCase() === 'rent_deposit')
+        );
+
+        if (depBill) {
+          agreementDepositPaymentStatus = helperDeriveBillPaymentStatus(depBill);
         } else {
-          const depBill = roomBills.find(b =>
-            (b.billKind || '').toString().trim().toUpperCase() === 'DEPOSIT' ||
-            b.items?.some(it => it.type?.toLowerCase() === 'deposit' || it.type?.toLowerCase() === 'rent_deposit')
-          );
-          if (depBill) {
-            const isDepPaid = depBill.status === 'paid' || depBill.status === 'PAID';
-            agreementDepositPaymentStatus = isDepPaid ? 'PAID' : 'UNPAID';
+          const depositComp = chargeComponents.find((c) => c.type === 'deposit');
+          if (depositComp) {
+            agreementDepositPaymentStatus = depositComp.status === 'PAID' ? 'PAID' : (depositComp.status === 'UNPAID' ? 'UNPAID' : 'UNKNOWN');
+          } else {
+            agreementDepositPaymentStatus = 'UNKNOWN';
           }
         }
       }

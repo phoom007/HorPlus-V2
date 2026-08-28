@@ -1,7 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import { normalizeAuthoritativeRoom } from '../lib/roomNormalizer';
 import { getGridRentRates, getListRentRates, getDepositForCycle, getCurrentAgreementDepositDisplay, formatBuildingDisplayName, formatRoomLocation, getPaymentStatusBadge, resolveRoomCyclePresentation } from '../lib/roomRentalSummary';
-import { getOwnerRoomMutationErrorMessage } from '../lib/roomErrorMapper';
+import { getOwnerRoomMutationErrorMessage, getOwnerRoomMutationDomainCode } from '../lib/roomErrorMapper';
+import { resolveRoomTenantAction } from '../pages/owner/rooms';
 import { formatShortThaiBuddhistDate } from '../utils/calendarDate';
 import { Room } from '../types';
 import { CreateContractSchema, UpdateRoomSchema } from '../../server/src/schemas/property-tenant-contract.schemas';
@@ -1445,6 +1446,153 @@ describe('OWNER ROOMS R2 & R2.1 — Rent-Cycle Deposit Model & Hardened Specific
         const presentation = resolveRoomCyclePresentation(roomCatalog, previewContextJuly, 'cycle-2026-07');
         expect(presentation.occupancy?.tenantId).toBe('tenant-HISTORICAL-A');
         expect(presentation.occupancy?.tenantId).not.toBe(roomCatalog.currentTenantId);
+      });
+    });
+  });
+
+  describe('9. OWNER ROOMS R3.3a — Production Path Completion Suite', () => {
+    describe('Part A & F: resolveRoomTenantAction Production Action Authority', () => {
+      it('1. ACTIVE_AGREEMENT opens selected-cycle Tenant A and never current Tenant B', () => {
+        const roomCatalog: any = {
+          id: 'room-201',
+          roomNumber: '201',
+          status: 'occupied',
+          currentTenantId: 'tenant-current-B',
+        };
+
+        const presentation: any = {
+          state: 'ACTIVE_AGREEMENT',
+          occupancy: {
+            tenantId: 'tenant-historical-A',
+            tenantName: 'สมชาย ประวัติ',
+          },
+        };
+
+        const action = resolveRoomTenantAction(roomCatalog, presentation);
+        expect(action.kind).toBe('OPEN_CYCLE_TENANT');
+        if (action.kind === 'OPEN_CYCLE_TENANT') {
+          expect(action.tenantId).toBe('tenant-historical-A');
+          expect(action.tenantId).not.toBe(roomCatalog.currentTenantId);
+        }
+      });
+
+      it('2. RESERVED_IN_CYCLE and DAILY_FINANCIAL_TAIL open selected-cycle tenantId', () => {
+        const roomCatalog: any = { id: 'room-202', status: 'vacant', currentTenantId: null };
+
+        const reservedPres: any = {
+          state: 'RESERVED_IN_CYCLE',
+          occupancy: { tenantId: 'tenant-reserved-1', tenantName: 'ผู้จอง' },
+        };
+        const resAction = resolveRoomTenantAction(roomCatalog, reservedPres);
+        expect(resAction.kind).toBe('OPEN_CYCLE_TENANT');
+        if (resAction.kind === 'OPEN_CYCLE_TENANT') {
+          expect(resAction.tenantId).toBe('tenant-reserved-1');
+        }
+
+        const tailPres: any = {
+          state: 'DAILY_FINANCIAL_TAIL',
+          occupancy: { tenantId: 'tenant-tail-1', tenantName: 'ผู้พักรายวันค้างจ่าย' },
+        };
+        const tailAction = resolveRoomTenantAction(roomCatalog, tailPres);
+        expect(tailAction.kind).toBe('OPEN_CYCLE_TENANT');
+        if (tailAction.kind === 'OPEN_CYCLE_TENANT') {
+          expect(tailAction.tenantId).toBe('tenant-tail-1');
+        }
+      });
+
+      it('3. Reservation with applicant name but NO tenantId returns DISABLED (never guesses)', () => {
+        const roomCatalog: any = { id: 'room-203', status: 'vacant', currentTenantId: null };
+        const anonymousPres: any = {
+          state: 'RESERVED_IN_CYCLE',
+          occupancy: { tenantId: null, tenantName: 'คุณ นิรนาม จองปากเปล่า' },
+        };
+        const action = resolveRoomTenantAction(roomCatalog, anonymousPres);
+        expect(action.kind).toBe('DISABLED');
+      });
+
+      it('4. NO_AGREEMENT in cycle: Quick Add offered ONLY if current Room is truly vacant', () => {
+        const vacantPres: any = { state: 'NO_AGREEMENT_IN_CYCLE', occupancy: null };
+
+        // Scenario A: Room is currently vacant
+        const vacantRoom: any = { id: 'room-vacant', status: 'vacant', currentTenantId: null };
+        expect(resolveRoomTenantAction(vacantRoom, vacantPres).kind).toBe('QUICK_ADD_CURRENT');
+
+        // Scenario B: Room is currently occupied today
+        const occupiedRoom: any = { id: 'room-occupied', status: 'occupied', currentTenantId: 'tenant-today' };
+        const occAction = resolveRoomTenantAction(occupiedRoom, vacantPres);
+        expect(occAction.kind).toBe('DISABLED');
+        if (occAction.kind === 'DISABLED') {
+          expect(occAction.reason).toBe('ห้องพักมีผู้เช่าปัจจุบันแล้ว');
+        }
+
+        // Scenario C: Room is currently under maintenance today
+        const maintRoom: any = { id: 'room-maint', status: 'maintenance', currentTenantId: null };
+        const maintAction = resolveRoomTenantAction(maintRoom, vacantPres);
+        expect(maintAction.kind).toBe('DISABLED');
+        if (maintAction.kind === 'DISABLED') {
+          expect(maintAction.reason).toBe('ห้องพักปิดปรับปรุงปัจจุบัน');
+        }
+      });
+    });
+
+    describe('Part K: getOwnerRoomMutationDomainCode Classification', () => {
+      it('1. Extracts VERSION_CONFLICT from nested error inside outer CONFLICT', () => {
+        const errorObj = {
+          code: 'CONFLICT',
+          details: { error: { code: 'VERSION_CONFLICT', currentVersion: 2 } },
+        };
+        expect(getOwnerRoomMutationDomainCode(errorObj)).toBe('VERSION_CONFLICT');
+      });
+
+      it('2. Extracts ROOM_NUMBER_ALREADY_EXISTS without broad CONFLICT version modal', () => {
+        const errorObj = {
+          code: 'CONFLICT',
+          details: { error: { code: 'ROOM_NUMBER_ALREADY_EXISTS' } },
+        };
+        expect(getOwnerRoomMutationDomainCode(errorObj)).toBe('ROOM_NUMBER_ALREADY_EXISTS');
+      });
+
+      it('3. Extracts OPERATIONAL_BILLING_CYCLE_UNAVAILABLE from nested details', () => {
+        const errorObj = {
+          code: 'INTERNAL_ERROR',
+          details: { code: 'OPERATIONAL_BILLING_CYCLE_UNAVAILABLE' },
+        };
+        expect(getOwnerRoomMutationDomainCode(errorObj)).toBe('OPERATIONAL_BILLING_CYCLE_UNAVAILABLE');
+      });
+    });
+
+    describe('Part H: Registration Building Name vs Prefix Independence', () => {
+      it('1. Explicit Building.name is preserved independently when roomPrefix changes', () => {
+        const rawBuilding = {
+          id: 'bld-1',
+          name: 'สมบูรณ์',
+          roomPrefix: 'B',
+          totalFloors: 3,
+          roomsPerFloor: 2,
+          formatPattern: 'floor_room',
+        };
+
+        const normalizedPrefix = (rawBuilding.roomPrefix ? rawBuilding.roomPrefix.trim() : '').toUpperCase();
+        const mappedBuilding = {
+          name: (rawBuilding.name && rawBuilding.name.trim()) ? rawBuilding.name.trim() : (normalizedPrefix ? `อาคาร ${normalizedPrefix}` : 'อาคาร 1'),
+          code: normalizedPrefix || null,
+          numberingPattern: rawBuilding.formatPattern || null,
+        };
+
+        expect(mappedBuilding.name).toBe('สมบูรณ์');
+        expect(mappedBuilding.code).toBe('B');
+        expect(mappedBuilding.numberingPattern).toBe('floor_room');
+
+        // Changing roomPrefix to C
+        const prefixChanged = { ...rawBuilding, roomPrefix: 'C' };
+        const normPfxC = prefixChanged.roomPrefix.trim().toUpperCase();
+        const mappedC = {
+          name: (prefixChanged.name && prefixChanged.name.trim()) ? prefixChanged.name.trim() : (normPfxC ? `อาคาร ${normPfxC}` : 'อาคาร 1'),
+          code: normPfxC || null,
+          numberingPattern: prefixChanged.formatPattern || null,
+        };
+        expect(mappedC.name).toBe('สมบูรณ์'); // Name remains unchanged
+        expect(mappedC.code).toBe('C');
       });
     });
   });

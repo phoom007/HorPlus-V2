@@ -442,6 +442,51 @@ An independent review of R3.2b identified that while `ApiPropertyAdapter` was up
 
 ---
 
-## 17. Final Status
+
+---
+
+## 17. R3.3a — Production Path Completion
+
+### 1. Selected-Cycle Tenant Navigation & Action Authority (Part A & B)
+- Implemented and exported `resolveRoomTenantAction(room, presentation)` in `src/pages/owner/rooms.tsx`.
+- **Selected-cycle Agreement**: For `ACTIVE_AGREEMENT`, `RESERVED_IN_CYCLE`, and `DAILY_FINANCIAL_TAIL`, returns `OPEN_CYCLE_TENANT` with `presentation.occupancy.tenantId`. `room.currentTenantId` is NEVER used as selected-cycle navigation authority.
+- **Reservation without Tenant ID**: Returns `DISABLED` with reason `ไม่มีข้อมูลบัญชีผู้เช่าสำหรับรายการจองนี้` (does not guess).
+- **Quick Add Eligibility**: Offered ONLY when current room is actually eligible (`status === 'vacant'` and no current tenant). If room is occupied or in maintenance today, returns `DISABLED` with truthful reason.
+- **Direct Dispatch**: Invokes `onOpenTenant(tenantId, returnContext)` directly instead of generic `onNavigate`.
+
+### 2. Scroll Container & Return State Restoration (Part C, D, E)
+- **Container Accuracy**: Captures `scrollTop` from `#owner-main-content` (with `window.scrollY` fallback).
+- **Restoration Execution**: `OwnerRooms` consumes `restoredState` in a layout-safe effect, restoring `viewMode`, `selectedBuilding`, `selectedStatus`, `searchQuery`, and `scrollTop` (or target room anchor: `room-card-{id}`, `room-row-{id}`, `room-floor-{id}`) before calling `onClearRestoredState()`.
+- **Dismiss Return Context**: `OwnerTenants` "ดูรายการอื่น" button calls `onDismissReturnContext()` to clear parent return context, preventing stale return links when viewing subsequent tenants.
+
+### 3. Registration Building Identity & Name Independence (Part H)
+- In Step 2 (Auto mode), separated input fields:
+  - **ชื่ออาคาร** (`b.name`)
+  - **รหัสตึก / คำนำหน้าเลขห้อง (ไม่บังคับ)** (`b.roomPrefix`)
+- Editing `roomPrefix` no longer mutates or overwrites `b.name`.
+- Draft restore preserves user-entered name and does not synthesize fake `อาคาร ` placeholder strings.
+
+### 4. LOCAL-07 Fixture Building Identity (Part I)
+- Updated `scripts/local07/seed.mjs` to seed buildings directly from `COMP_DORM.buildings` without injected `"(A)"` / `"(B)"` suffixes in `Building.name`.
+- Resulting UAT display: `อาคารชาญวิทย์ • ชั้น N` and `อาคารสมบูรณ์ • ชั้น N`.
+
+### 5. Room 204 Investigation Status & Error Domain Classifier (Part K & L)
+- **Room 204 Status**: `ORIGINAL ROOM 204 FAILURE UNPROVEN — CURRENT VALID PUT PASS`.
+- **Domain Classifier**: Created `getOwnerRoomMutationDomainCode(error)` in `src/lib/roomErrorMapper.ts` which prioritizes nested server domain codes (`VERSION_CONFLICT`, `ROOM_NUMBER_ALREADY_EXISTS`, `BUILDING_NOT_FOUND`, `OPERATIONAL_BILLING_CYCLE_UNAVAILABLE`, etc.).
+- **Version Modal**: Opens `VersionConflictModal` ONLY when resolved domain code is strictly `VERSION_CONFLICT`, avoiding false modal triggers on other 409 errors (such as room number duplicates).
+
+### 6. Agreement Payment Status Lifecycle & Partial Rent (Part M & N)
+- In `server/src/services/meter.service.ts`:
+  - **Deposit**: Batch loads and evaluates bills linked across the agreement's entire lifecycle (`contractId` / `provisionalRentalTermId`), ensuring deposit status remains `PAID` in future cycles without new bills.
+  - **Rent**: Evaluates unambiguous rent bills in selected cycle. Correctly emits `PARTIAL` when `paidAmount > 0` and `outstandingAmount > 0`. Ambiguous legacy combined bills remain `UNKNOWN`.
+  - **Daily Tail**: Evaluates and displays daily deposit payment status alongside unpaid rent.
+
+### 7. List Mode Selected-Cycle Semantics (Part J)
+- Updated column header to `ผู้เช่าตามงวด`.
+- Primary status badge styling is derived purely from `RoomCyclePresentation.state` (`ACTIVE_AGREEMENT` -> occupied indigo, `NO_AGREEMENT_IN_CYCLE` -> vacant emerald, `MAINTENANCE_IN_CYCLE` -> maintenance rose, `UNAVAILABLE` -> neutral slate). Current `Room.status` no longer overrides selected-cycle badge colors.
+
+---
+
+## 18. Final Status
 
 **READY FOR PRODUCT OWNER R3.3 MANUAL UAT**
