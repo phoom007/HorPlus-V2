@@ -860,6 +860,9 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
   // State saving handlers with targeted query invalidation
   const handleSaveRooms = (_newRooms: Room[]) => {
     queryClient.invalidateQueries({ queryKey: queryKeys.rooms(activeDormitoryId) });
+    if (selectedBillingCycleId) {
+      queryClient.invalidateQueries({ queryKey: queryKeys.meterPreviewContext(activeDormitoryId, selectedBillingCycleId) });
+    }
   };
 
   const handleSaveBuildings = (_newBuildings: Building[]) => {
