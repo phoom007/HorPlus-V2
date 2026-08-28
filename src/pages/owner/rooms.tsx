@@ -460,7 +460,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
         }
 
         onAddLog('แก้ไขห้องพัก', `แก้ไขรายละเอียดห้อง ${roomNumber}`, 'Room', editingRoom.id);
-        const statusChanged = roomStatus !== (editingRoom.status || 'vacant');
+        const statusChanged = effectiveStatus !== (editingRoom.status || 'vacant');
         const effectiveCycleId = (res.data as any)?.effectiveRoomStatusCycleId;
         onSaveRooms(rooms, { kind: 'update', roomNumberChanged, statusChanged, effectiveBillingCycleId: effectiveCycleId });
         setIsModalOpen(false);
@@ -676,12 +676,11 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
     } else {
       try {
         setQuickAddLoadingRoomId(room.id);
-        const dId = buildings[0]?.dormitoryId || (typeof window !== 'undefined' ? (localStorage.getItem('selected_dormitory_id') || localStorage.getItem('horplus_current_dormitory_id')) : '') || '';
         const res = await httpRequest<{ data: QuickAddRoomContext }>(
           'GET',
           `/api/v1/properties/rooms/${room.id}/quick-add-context`,
           undefined,
-          { headers: dId ? { 'x-dormitory-id': dId } : {} }
+          { headers: dormitoryId ? { 'x-dormitory-id': dormitoryId } : {} }
         );
 
         if (!res.data || !res.data.effective) {

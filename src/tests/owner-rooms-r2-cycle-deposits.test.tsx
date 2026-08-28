@@ -1179,6 +1179,94 @@ describe('OWNER ROOMS R2 & R2.1 — Rent-Cycle Deposit Model & Hardened Specific
         expect(invalidatedCycleIds).toHaveLength(0);
       });
     });
+    describe('Part F — ApiPropertyAdapter Mutation Metadata Preservation & Cache Transport Path', () => {
+      it('5. ApiPropertyAdapter.updateRoom preserves effectiveRoomStatusCycleId and drives forward cache invalidation', async () => {
+        const { ApiPropertyAdapter } = await import('../data/adapters/api/index');
+        const { invalidateRoomMutationCaches } = await import('../lib/roomMutationCache');
+
+        const dormId = 'dorm-001';
+        const billingCycles = [
+          { id: 'cycle-2026-06', periodStart: '2026-06-01T00:00:00Z' },
+          { id: 'cycle-2026-07', periodStart: '2026-07-01T00:00:00Z' },
+          { id: 'cycle-2026-08', periodStart: '2026-08-01T00:00:00Z' },
+          { id: 'cycle-2026-09', periodStart: '2026-09-01T00:00:00Z' },
+          { id: 'cycle-2026-10', periodStart: '2026-10-01T00:00:00Z' },
+        ];
+
+        // Mock global fetch to return backend updateRoom payload with effectiveRoomStatusCycleId
+        const originalFetch = globalThis.fetch;
+        globalThis.fetch = vi.fn().mockResolvedValue({
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => ({
+            id: 'room-101',
+            dormitoryId: dormId,
+            roomNumber: '101',
+            status: 'maintenance',
+            monthlyRent: '5000.00',
+            termRent: '20000.00',
+            dailyRent: '600.00',
+            termDeposit: '10000.00',
+            monthlyDeposit: '5000.00',
+            dailyDeposit: '1000.00',
+            floor: 1,
+            roomType: 'standard',
+            rentCycle: 'monthly',
+            maximumOccupants: 2,
+            version: 2,
+            effectiveRoomStatusCycleId: 'cycle-2026-08',
+          }),
+        }) as any;
+
+        try {
+          const adapter = new ApiPropertyAdapter();
+          const res = await adapter.updateRoom('room-101', { status: 'maintenance' }, 1);
+
+          expect(res.success).toBe(true);
+          expect(res.data?.effectiveRoomStatusCycleId).toBe('cycle-2026-08');
+
+          // Test cache invalidation using the exact returned metadata
+          const invalidatedQueries: any[] = [];
+          const mockQueryClient: any = {
+            invalidateQueries: vi.fn(({ queryKey, predicate }) => {
+              if (queryKey) {
+                invalidatedQueries.push({ key: queryKey });
+              }
+              if (predicate) {
+                for (const cycle of billingCycles) {
+                  const qKey = ['meter', dormId, cycle.id, 'preview-context'];
+                  if (predicate({ queryKey: qKey })) {
+                    invalidatedQueries.push({ cycleId: cycle.id });
+                  }
+                }
+              }
+            }),
+          };
+
+          invalidateRoomMutationCaches(
+            mockQueryClient,
+            dormId,
+            {
+              kind: 'update',
+              roomNumberChanged: false,
+              statusChanged: true,
+              effectiveBillingCycleId: res.data?.effectiveRoomStatusCycleId,
+            },
+            billingCycles
+          );
+
+          const invalidatedCycleIds = invalidatedQueries.filter((q) => q.cycleId).map((q) => q.cycleId);
+          // Validates 08, 09, 10 invalidated
+          expect(invalidatedCycleIds).toEqual(['cycle-2026-08', 'cycle-2026-09', 'cycle-2026-10']);
+          // Validates 06, 07 preserved
+          expect(invalidatedCycleIds).not.toContain('cycle-2026-06');
+          expect(invalidatedCycleIds).not.toContain('cycle-2026-07');
+        } finally {
+          globalThis.fetch = originalFetch;
+        }
+      });
+    });
   });
 
 });

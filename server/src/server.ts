@@ -39,13 +39,17 @@ async function startServer() {
   const app = createApp();
   const server = http.createServer(app);
 
+  // Establish room operational status baseline synchronously before accepting traffic
+  try {
+    await backfillRoomOperationalStatusBaseline();
+  } catch (err: any) {
+    logger.error({ err }, 'Fatal: Failed to initialize room operational status baseline on startup.');
+    process.exit(1);
+  }
+
   // Start background schedulers and startup catch-up
   cleanupService.startHourly();
   cleanupService.startDailyLateFee();
-  backfillRoomOperationalStatusBaseline().catch((err) => {
-    logger.error({ err }, '[Server] Non-fatal error during room operational status baseline backfill');
-  });
-
   cleanupService.runStartupCatchUp().catch((err) => {
     logger.error({ err }, '[Server] Non-fatal error during late-fee startup catch-up');
   });

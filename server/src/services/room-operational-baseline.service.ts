@@ -9,10 +9,14 @@ export interface BackfillBaselineResult {
 }
 
 /**
- * Idempotent Room Operational Status Baseline Seeder (R3.2a).
- * Establishes exactly one baseline row per existing Room at the canonical operational cycle
- * resolved via currentCycleResolverService.resolveOperationalBillingCycle().
- * Does NOT copy rows retroactively to older historical cycles.
+ * Idempotent One-Time Room Operational Status Baseline Seeder (R3.2b).
+ *
+ * Rules:
+ * 1. Establishes an initial baseline row ONLY for Rooms that have NO status history at all.
+ * 2. If a room already has any RoomOperationalStatusChange, it is SKIPPED (no synthetic monthly rows).
+ * 3. Uses canonical operational cycle resolved via currentCycleResolverService.resolveOperationalBillingCycle().
+ * 4. Uses createMany with skipDuplicates: true for concurrency/idempotency safety.
+ * 5. Pre-onboarding dormitories without a BillingCycle are skipped safely.
  */
 export async function backfillRoomOperationalStatusBaseline(
   targetDormitoryId?: string,
@@ -38,43 +42,45 @@ export async function backfillRoomOperationalStatusBaseline(
     processedDormitories++;
     const operational = await currentCycleResolverService.resolveOperationalBillingCycle(dorm.id, prisma);
     if (!operational || !operational.billingCycleId) {
+      // Pre-onboarding or no operational cycle yet -> skip safely
       continue;
     }
 
-    const rooms = await prisma.room.findMany({
-      where: { dormitoryId: dorm.id, deletedAt: null },
+    // One-Time Rule: Query ONLY rooms that have NO status history at all
+    const roomsWithoutHistory = await prisma.room.findMany({
+      where: {
+        dormitoryId: dorm.id,
+        deletedAt: null,
+        operationalStatusChanges: {
+          none: {},
+        },
+      },
       select: { id: true, status: true },
     });
 
-    for (const room of rooms) {
-      processedRooms++;
-      const existingBaseline = await prisma.roomOperationalStatusChange.findUnique({
-        where: {
-          dormitory_room_effective_cycle_unique: {
-            dormitoryId: dorm.id,
-            roomId: room.id,
-            effectiveBillingCycleId: operational.billingCycleId,
-          },
-        },
+    processedRooms += roomsWithoutHistory.length;
+
+    if (roomsWithoutHistory.length > 0) {
+      const recordsToCreate = roomsWithoutHistory.map((room: { id: string; status: string }) => ({
+        dormitoryId: dorm.id,
+        roomId: room.id,
+        effectiveBillingCycleId: operational.billingCycleId as string,
+        status: room.status || 'vacant',
+        version: 1,
+      }));
+
+      // createMany with skipDuplicates ensures concurrency safety without throwing P2002
+      const createRes = await prisma.roomOperationalStatusChange.createMany({
+        data: recordsToCreate,
+        skipDuplicates: true,
       });
 
-      if (!existingBaseline) {
-        await prisma.roomOperationalStatusChange.create({
-          data: {
-            dormitoryId: dorm.id,
-            roomId: room.id,
-            effectiveBillingCycleId: operational.billingCycleId,
-            status: room.status || 'vacant',
-            version: 1,
-          },
-        });
-        createdBaselines++;
-      }
+      createdBaselines += createRes.count;
     }
   }
 
   if (createdBaselines > 0) {
-    logger.info({ processedDormitories, processedRooms, createdBaselines }, '[Baseline] Established operational status baseline for existing rooms');
+    logger.info({ processedDormitories, processedRooms, createdBaselines }, '[Baseline] Established one-time operational status baseline for existing rooms');
   }
 
   return { processedDormitories, processedRooms, createdBaselines };

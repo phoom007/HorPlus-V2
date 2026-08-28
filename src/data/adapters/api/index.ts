@@ -17,6 +17,7 @@ import {
   NotificationDataSource,
   AuditDataSource,
   PropertyDataSource,
+  RoomMutationResult,
   CreateRoomPayload,
   UpdateRoomChanges,
 
@@ -1213,7 +1214,7 @@ export class ApiPropertyAdapter implements PropertyDataSource {
     }
   }
 
-  async createRoom(payload: CreateRoomPayload): Promise<DataResult<Room>> {
+  async createRoom(payload: CreateRoomPayload): Promise<DataResult<RoomMutationResult>> {
     try {
       const body: Record<string, unknown> = {
         ...payload,
@@ -1227,13 +1228,19 @@ export class ApiPropertyAdapter implements PropertyDataSource {
       const response = await httpRequest<{ data: any } | any>('POST', '/properties/rooms', body);
       const raw = ('data' in response && response.data) ? response.data : response;
       const room = normalizeAuthoritativeRoom(raw);
-      return { success: true, data: room };
+      return {
+        success: true,
+        data: {
+          ...room,
+          effectiveRoomStatusCycleId: raw?.effectiveRoomStatusCycleId ?? null,
+        },
+      };
     } catch (err: unknown) {
       return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: (err as Error)?.message || 'Internal error' } };
     }
   }
 
-  async updateRoom(roomId: string, changes: UpdateRoomChanges, expectedVersion: number): Promise<DataResult<Room>> {
+  async updateRoom(roomId: string, changes: UpdateRoomChanges, expectedVersion: number): Promise<DataResult<RoomMutationResult>> {
     try {
       const body: Record<string, unknown> = {
         ...changes,
@@ -1260,7 +1267,13 @@ export class ApiPropertyAdapter implements PropertyDataSource {
       const response = await httpRequest<{ data: any } | any>('PUT', `/properties/rooms/${roomId}`, body);
       const raw = ('data' in response && response.data) ? response.data : response;
       const room = normalizeAuthoritativeRoom(raw);
-      return { success: true, data: room };
+      return {
+        success: true,
+        data: {
+          ...room,
+          effectiveRoomStatusCycleId: raw?.effectiveRoomStatusCycleId ?? null,
+        },
+      };
     } catch (err: unknown) {
       return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: (err as Error)?.message || 'Internal error' } };
     }

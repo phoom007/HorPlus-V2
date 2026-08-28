@@ -304,6 +304,46 @@ An independent review of R3.2 identified five blockers:
 
 ---
 
-## 14. Final Status
 
-**READY FOR INDEPENDENT R3.2a REVIEW**
+---
+
+## 14. R3.2b — Baseline and Mutation Metadata Corrections
+
+### 1. Root Cause Analysis & Corrective Scope
+An independent review of R3.2a identified four production blockers:
+1. **Per-Cycle Synthetic Rows in Baseline**: The previous baseline checked existence only for the exact current operational cycle, which generated synthetic baseline rows every month even when no user status change occurred.
+2. **Non-blocking Startup Race Condition**: Baseline backfill was initiated in the background via `.catch(...)`, allowing API requests to be served before baseline initialization was complete.
+3. **Dropped Mutation Metadata in ApiPropertyAdapter**: `normalizeAuthoritativeRoom` stripped `effectiveRoomStatusCycleId` from the update mutation response, preventing frontend runtime forward cache invalidation from receiving the authoritative cycle ID.
+4. **Quick Add Dormitory Identity Fallback**: Quick Add derived dormitory ID from `buildings[0]` / `localStorage` rather than using the authoritative `dormitoryId` component prop.
+
+### 2. One-Time Baseline Semantics (Part A & D)
+- **One-Time Rule**: Baseline backfill establishes an initial row ONLY for Rooms that have **zero** (`operationalStatusChanges: { none: {} }`) status history.
+- **Inheritance Invariant**: When operational cycle advances (e.g. from `2026-08` to `2026-09`), baseline rerun creates **0** additional rows. Future cycles inherit from the latest actual status change row (`sourceCycleId = '2026-08'`).
+- **Concurrency / Idempotency**: Uses `createMany` with `skipDuplicates: true` to eliminate duplicate key errors during concurrent startup or deployment.
+
+### 3. Synchronous Startup Readiness (Part C)
+- In `server/src/server.ts`, `await backfillRoomOperationalStatusBaseline()` executes synchronously before `server.listen()`.
+- If baseline initialization fails unexpectedly, startup fails closed (`process.exit(1)`).
+- Dormitories without an authoritative billing cycle (pre-onboarding) are safely skipped without failing startup.
+
+### 4. Mutation Response Metadata Preservation & Cache Transport (Part E, F & H)
+- **Data Contract**: Added `RoomMutationResult = Room & { effectiveRoomStatusCycleId?: string | null }` in `src/data/contracts/index.ts`.
+- **ApiPropertyAdapter**: `updateRoom` and `createRoom` explicitly attach `raw.effectiveRoomStatusCycleId` to the returned result while preserving the pure projection in `normalizeAuthoritativeRoom`.
+- **End-to-End Cache Invalidation**: Status mutation response flows through the adapter and drives `invalidateRoomMutationCaches`, invalidating cached preview contexts for cycles with `periodStart >= effectivePeriodStart` (`2026-08`, `2026-09`, `2026-10`) while preserving older cycles (`2026-06`, `2026-07`) and other dormitories.
+
+### 5. Edit Modal & Quick Add Authority (Part G & I)
+- **Edit Modal**: `statusChanged` compares actual `effectiveStatus` sent against `editingRoom.status`.
+- **Quick Add**: `handleTenantAction` strictly passes `dormitoryId` component prop to `/quick-add-context` via headers, eliminating `buildings[0]` and `localStorage` fallbacks.
+
+### 6. Focused Verification Matrix
+- **Backend Write-Boundary & Baseline Suite** (`server/src/__tests__/unit/owner-rooms-r32a-write-boundary.test.ts`): **5 / 5 passed (100%)**.
+- **Backend Effective Status Unit Suite** (`server/src/__tests__/unit/owner-rooms-r32-effective-status.test.ts`): **4 / 4 passed (100%)**.
+- **Backend Preview Context Unit Suite** (`server/src/__tests__/unit/owner-rooms-r3-meter-preview-context.test.ts`): **6 / 6 passed (100%)**.
+- **Frontend Cycle Deposits & Adapter Suite** (`src/tests/owner-rooms-r2-cycle-deposits.test.tsx`): **53 / 53 passed (100%)**.
+- **LOCAL-07 Database Proof**: 22 rooms seeded with baseline at `2026-08`; baseline rerun created 0 additional rows.
+
+---
+
+## 15. Final Status
+
+**READY FOR PRODUCT OWNER R3 MANUAL UAT**

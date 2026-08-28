@@ -224,11 +224,15 @@ export interface UpdateRoomChanges {
   notes?: string | null;
 }
 
+export type RoomMutationResult = Room & {
+  effectiveRoomStatusCycleId?: string | null;
+};
+
 export interface PropertyDataSource {
   getAuthoritativeRooms(params?: Record<string, any>): Promise<DataResult<{ items: Room[]; pagination: any }>>;
   getAuthoritativeRoom(id: string): Promise<DataResult<Room>>;
-  createRoom(payload: CreateRoomPayload): Promise<DataResult<Room>>;
-  updateRoom(roomId: string, changes: UpdateRoomChanges, expectedVersion: number): Promise<DataResult<Room>>;
+  createRoom(payload: CreateRoomPayload): Promise<DataResult<RoomMutationResult>>;
+  updateRoom(roomId: string, changes: UpdateRoomChanges, expectedVersion: number): Promise<DataResult<RoomMutationResult>>;
   getAuthoritativeBuildings(): Promise<DataResult<Building[]>>;
   getAuthoritativeBuilding(id: string): Promise<DataResult<Building>>;
   getDormitoryDefaults(): Promise<DataResult<{ property: any; billing: any }>>;
