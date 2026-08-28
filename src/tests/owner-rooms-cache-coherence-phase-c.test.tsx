@@ -3,14 +3,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import React from 'react';
 import { render, screen, cleanup, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { queryKeys, STALE_TIMES } from '../lib/queryClient';
+import { QueryClient } from '@tanstack/react-query';
+import { queryKeys } from '../lib/queryClient';
 import { meterDraftStore } from '../lib/meterDraftStore';
+import { invalidateRoomMutationCaches, RoomMutationImpact } from '../lib/roomMutationCache';
 import { OwnerRooms } from '../pages/owner/rooms';
 import { ApiPropertyAdapter } from '../data/adapters/api';
 import { Room, Building } from '../types';
 
-describe('Owner Rooms — Phase C Cache Coherence & Dependency-Aware Invalidation Suite', () => {
+describe('Owner Rooms — Phase C.1 Precise Cache Invalidation Suite', () => {
   let testQueryClient: QueryClient;
 
   beforeEach(() => {
@@ -52,145 +53,258 @@ describe('Owner Rooms — Phase C Cache Coherence & Dependency-Aware Invalidatio
     },
   ];
 
-  describe('Test A & C: Dependency-Aware Invalidation on Room Mutation', () => {
-    it('invalidates queryKeys.rooms(dormId) and queryKeys.meterPreviewContext(dormId, cycleId) but leaves unrelated caches untouched', async () => {
-      const dormId = 'dorm-001';
-      const cycleId = 'cycle-2026-08';
+  describe('Test 1: Price, Deposit, Status, and Refresh do NOT invalidate Preview Context', () => {
+    it.each([
+      { impact: { kind: 'update' as const, roomNumberChanged: false }, desc: 'update without roomNumber change (price/deposit/floor/capacity)' },
+      { impact: { kind: 'status' as const }, desc: 'status toggle (vacant <-> maintenance)' },
+      { impact: { kind: 'refresh' as const }, desc: 'OCC conflict refresh' },
+    ])('proves $desc invalidates rooms but leaves all preview contexts and workspace untouched', ({ impact }) => {
+      const dormId = 'dorm-A';
+      const cycle1 = 'cycle-2026-08';
+      const cycle2 = 'cycle-2026-09';
 
-      // Seed query client with multiple resources
+      // Seed queries
       testQueryClient.setQueryData(queryKeys.rooms(dormId), mockRooms);
-      testQueryClient.setQueryData(queryKeys.tenants(dormId), [{ id: 't-1', name: 'Somchai' }]);
-      testQueryClient.setQueryData(queryKeys.contracts(dormId), [{ id: 'c-1', rentAmount: 4500 }]);
-      testQueryClient.setQueryData(queryKeys.bills(dormId), [{ id: 'b-1', total: 5000 }]);
-      testQueryClient.setQueryData(queryKeys.meterWorkspace(dormId, cycleId), { serverReadings: [] });
-      testQueryClient.setQueryData(queryKeys.meterPreviewContext(dormId, cycleId), { rooms: [] });
+      testQueryClient.setQueryData(queryKeys.meterPreviewContext(dormId, cycle1), { rooms: [{ roomId: 'rm-101', roomNumber: '101' }] });
+      testQueryClient.setQueryData(queryKeys.meterPreviewContext(dormId, cycle2), { rooms: [{ roomId: 'rm-101', roomNumber: '101' }] });
+      testQueryClient.setQueryData(queryKeys.meterWorkspace(dormId, cycle1), { serverReadings: [] });
+      testQueryClient.setQueryData(queryKeys.tenants(dormId), [{ id: 't-1' }]);
+      testQueryClient.setQueryData(queryKeys.contracts(dormId), [{ id: 'c-1' }]);
+      testQueryClient.setQueryData(queryKeys.bills(dormId), [{ id: 'b-1' }]);
 
-      // Spy on invalidateQueries
-      const invalidateSpy = vi.spyOn(testQueryClient, 'invalidateQueries');
+      // Call REAL production helper
+      invalidateRoomMutationCaches(testQueryClient, dormId, impact);
 
-      // Helper function matching OwnerWorkspace.handleSaveRooms
-      const handleSaveRooms = (activeDormitoryId: string, selectedBillingCycleId?: string) => {
-        testQueryClient.invalidateQueries({ queryKey: queryKeys.rooms(activeDormitoryId) });
-        if (selectedBillingCycleId) {
-          testQueryClient.invalidateQueries({ queryKey: queryKeys.meterPreviewContext(activeDormitoryId, selectedBillingCycleId) });
-        }
-      };
+      // Rooms must be invalidated
+      expect(testQueryClient.getQueryState(queryKeys.rooms(dormId))?.isInvalidated).toBe(true);
 
-      // Trigger room save
-      handleSaveRooms(dormId, cycleId);
+      // Meter preview contexts must NOT be invalidated
+      expect(testQueryClient.getQueryState(queryKeys.meterPreviewContext(dormId, cycle1))?.isInvalidated).toBe(false);
+      expect(testQueryClient.getQueryState(queryKeys.meterPreviewContext(dormId, cycle2))?.isInvalidated).toBe(false);
 
-      // Verify exact keys invalidated
-      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.rooms(dormId) });
-      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.meterPreviewContext(dormId, cycleId) });
-
-      // Verify unrelated keys were NOT invalidated
-      expect(invalidateSpy).not.toHaveBeenCalledWith(expect.objectContaining({ queryKey: queryKeys.tenants(dormId) }));
-      expect(invalidateSpy).not.toHaveBeenCalledWith(expect.objectContaining({ queryKey: queryKeys.contracts(dormId) }));
-      expect(invalidateSpy).not.toHaveBeenCalledWith(expect.objectContaining({ queryKey: queryKeys.bills(dormId) }));
-      expect(invalidateSpy).not.toHaveBeenCalledWith(expect.objectContaining({ queryKey: queryKeys.meterWorkspace(dormId, cycleId) }));
+      // Meter workspace and unrelated resources must NOT be invalidated
+      expect(testQueryClient.getQueryState(queryKeys.meterWorkspace(dormId, cycle1))?.isInvalidated).toBe(false);
+      expect(testQueryClient.getQueryState(queryKeys.tenants(dormId))?.isInvalidated).toBe(false);
+      expect(testQueryClient.getQueryState(queryKeys.contracts(dormId))?.isInvalidated).toBe(false);
+      expect(testQueryClient.getQueryState(queryKeys.bills(dormId))?.isInvalidated).toBe(false);
     });
   });
 
-  describe('Test B: No Unnecessary Resource Invalidation for Catalog Price Edits', () => {
-    it('proves catalog price edits do not invalidate contract or tenant caches', () => {
-      const dormId = 'dorm-001';
-      const invalidateSpy = vi.spyOn(testQueryClient, 'invalidateQueries');
+  describe('Test 2: Room Rename invalidates all preview cycles in the SAME dorm only', () => {
+    it('invalidates rooms and all cached preview contexts for Dorm A, but leaves Dorm B and workspace untouched', () => {
+      const dormA = 'dorm-A';
+      const dormB = 'dorm-B';
+      const cycle1 = 'cycle-2026-08';
+      const cycle2 = 'cycle-2026-09';
 
-      const handleSaveRooms = (activeDormitoryId: string) => {
-        testQueryClient.invalidateQueries({ queryKey: queryKeys.rooms(activeDormitoryId) });
-      };
+      // Seed Dorm A
+      testQueryClient.setQueryData(queryKeys.rooms(dormA), mockRooms);
+      testQueryClient.setQueryData(queryKeys.meterPreviewContext(dormA, cycle1), { rooms: [{ roomId: 'rm-101', roomNumber: '101' }] });
+      testQueryClient.setQueryData(queryKeys.meterPreviewContext(dormA, cycle2), { rooms: [{ roomId: 'rm-101', roomNumber: '101' }] });
+      testQueryClient.setQueryData(queryKeys.meterWorkspace(dormA, cycle1), { serverReadings: [] });
 
-      handleSaveRooms(dormId);
+      // Seed Dorm B
+      testQueryClient.setQueryData(queryKeys.rooms(dormB), [{ id: 'rm-B201', roomNumber: '201' }]);
+      testQueryClient.setQueryData(queryKeys.meterPreviewContext(dormB, cycle1), { rooms: [{ roomId: 'rm-B201', roomNumber: '201' }] });
 
-      expect(invalidateSpy).toHaveBeenCalledTimes(1);
-      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.rooms(dormId) });
-      expect(invalidateSpy).not.toHaveBeenCalledWith({ queryKey: queryKeys.contracts(dormId) });
-      expect(invalidateSpy).not.toHaveBeenCalledWith({ queryKey: queryKeys.tenants(dormId) });
-      expect(invalidateSpy).not.toHaveBeenCalledWith({ queryKey: queryKeys.bills(dormId) });
+      // Call REAL production helper for room rename in Dorm A
+      invalidateRoomMutationCaches(testQueryClient, dormA, { kind: 'update', roomNumberChanged: true });
+
+      // Dorm A rooms and ALL preview cycles must be invalidated
+      expect(testQueryClient.getQueryState(queryKeys.rooms(dormA))?.isInvalidated).toBe(true);
+      expect(testQueryClient.getQueryState(queryKeys.meterPreviewContext(dormA, cycle1))?.isInvalidated).toBe(true);
+      expect(testQueryClient.getQueryState(queryKeys.meterPreviewContext(dormA, cycle2))?.isInvalidated).toBe(true);
+
+      // Dorm A workspace must remain valid
+      expect(testQueryClient.getQueryState(queryKeys.meterWorkspace(dormA, cycle1))?.isInvalidated).toBe(false);
+
+      // Dorm B queries must remain completely clean
+      expect(testQueryClient.getQueryState(queryKeys.rooms(dormB))?.isInvalidated).toBe(false);
+      expect(testQueryClient.getQueryState(queryKeys.meterPreviewContext(dormB, cycle1))?.isInvalidated).toBe(false);
     });
   });
 
-  describe('Test D: Multi-Dormitory Cache Isolation', () => {
-    it('proves mutations in Dorm A do NOT invalidate or corrupt Dorm B cache', () => {
-      const dormA = 'dorm-alpha';
-      const dormB = 'dorm-beta';
+  describe('Test 3: Create and Archive invalidate rooms and all preview cycles in same dorm', () => {
+    it.each([
+      { impact: { kind: 'create' as const }, desc: 'create room' },
+      { impact: { kind: 'archive' as const }, desc: 'archive room' },
+    ])('proves $desc invalidates rooms and all cached preview contexts for that dormitory', ({ impact }) => {
+      const dormId = 'dorm-A';
+      const cycle1 = 'cycle-2026-08';
+      const cycle2 = 'cycle-2026-09';
+
+      testQueryClient.setQueryData(queryKeys.rooms(dormId), mockRooms);
+      testQueryClient.setQueryData(queryKeys.meterPreviewContext(dormId, cycle1), { rooms: [] });
+      testQueryClient.setQueryData(queryKeys.meterPreviewContext(dormId, cycle2), { rooms: [] });
+      testQueryClient.setQueryData(queryKeys.meterWorkspace(dormId, cycle1), { serverReadings: [] });
+
+      invalidateRoomMutationCaches(testQueryClient, dormId, impact);
+
+      expect(testQueryClient.getQueryState(queryKeys.rooms(dormId))?.isInvalidated).toBe(true);
+      expect(testQueryClient.getQueryState(queryKeys.meterPreviewContext(dormId, cycle1))?.isInvalidated).toBe(true);
+      expect(testQueryClient.getQueryState(queryKeys.meterPreviewContext(dormId, cycle2))?.isInvalidated).toBe(true);
+      expect(testQueryClient.getQueryState(queryKeys.meterWorkspace(dormId, cycle1))?.isInvalidated).toBe(false);
+    });
+  });
+
+  describe('Test 4: OwnerRooms Component Mutation Metadata Bridge', () => {
+    it('sends { kind: "create" } on successful room creation', async () => {
+      const user = userEvent.setup();
+      const onSaveRoomsSpy = vi.fn();
+      vi.spyOn(ApiPropertyAdapter.prototype, 'createRoom').mockResolvedValue({
+        success: true,
+        data: { ...mockRooms[0], id: 'rm-901', roomNumber: '901' },
+      });
+
+      render(
+        <OwnerRooms
+          rooms={mockRooms}
+          buildings={mockBuildings}
+          onSaveRooms={onSaveRoomsSpy}
+          onAddLog={vi.fn()}
+          onNavigate={vi.fn()}
+        />
+      );
+
+      await user.click(screen.getByText(/เพิ่มห้องพัก/i));
+      await user.type(screen.getByPlaceholderText('เช่น A101'), '901');
+      await user.click(screen.getByTestId('btn-save-room'));
+
+      await waitFor(() => {
+        expect(onSaveRoomsSpy).toHaveBeenCalledWith(
+          mockRooms,
+          expect.objectContaining({ kind: 'create' })
+        );
+      });
+    });
+
+    it('sends { kind: "update", roomNumberChanged: false } on price/deposit edit', async () => {
+      const user = userEvent.setup();
+      const onSaveRoomsSpy = vi.fn();
+      vi.spyOn(ApiPropertyAdapter.prototype, 'updateRoom').mockResolvedValue({
+        success: true,
+        data: { ...mockRooms[0], monthlyRent: 5500 },
+      });
+
+      render(
+        <OwnerRooms
+          rooms={mockRooms}
+          buildings={mockBuildings}
+          initialRoomId="rm-101"
+          onSaveRooms={onSaveRoomsSpy}
+          onAddLog={vi.fn()}
+          onNavigate={vi.fn()}
+        />
+      );
+
+      const rentInput = screen.getByPlaceholderText('เช่น 4500');
+      await user.clear(rentInput);
+      await user.type(rentInput, '5500');
+      await user.click(screen.getByTestId('btn-save-room'));
+
+      await waitFor(() => {
+        expect(onSaveRoomsSpy).toHaveBeenCalledWith(
+          mockRooms,
+          expect.objectContaining({ kind: 'update', roomNumberChanged: false })
+        );
+      });
+    });
+
+    it('sends { kind: "archive" } on room archive', async () => {
+      const user = userEvent.setup();
+      const onSaveRoomsSpy = vi.fn();
+      vi.spyOn(ApiPropertyAdapter.prototype, 'archiveRoom').mockResolvedValue({
+        success: true,
+        data: true,
+      });
+
+      render(
+        <OwnerRooms
+          rooms={mockRooms}
+          buildings={mockBuildings}
+          initialRoomId="rm-101"
+          onSaveRooms={onSaveRoomsSpy}
+          onAddLog={vi.fn()}
+          onNavigate={vi.fn()}
+        />
+      );
+
+      const deleteBtn = screen.getByTestId('btn-delete-room');
+      await user.click(deleteBtn);
+
+      const allArchiveButtons = screen.getAllByRole('button', { name: 'จัดเก็บห้องพัก' });
+      const confirmArchiveBtn = allArchiveButtons[allArchiveButtons.length - 1];
+      await user.click(confirmArchiveBtn);
+
+      await waitFor(() => {
+        expect(onSaveRoomsSpy).toHaveBeenCalledWith(
+          mockRooms,
+          expect.objectContaining({ kind: 'archive' })
+        );
+      });
+    });
+  });
+
+  describe('Test 5: OCC Conflict Reload Metadata', () => {
+    it('passes { kind: "refresh" } on VersionConflictModal reload action', async () => {
+      const user = userEvent.setup();
+      const onSaveRoomsSpy = vi.fn();
+
+      vi.spyOn(ApiPropertyAdapter.prototype, 'updateRoom').mockResolvedValue({
+        success: false,
+        error: {
+          code: 'CONFLICT',
+          message: 'ข้อมูลห้องพักถูกแก้ไขโดยผู้อื่น กรุณาโหลดข้อมูลใหม่',
+        },
+      });
+
+      render(
+        <OwnerRooms
+          rooms={mockRooms}
+          buildings={mockBuildings}
+          initialRoomId="rm-101"
+          onSaveRooms={onSaveRoomsSpy}
+          onAddLog={vi.fn()}
+          onNavigate={vi.fn()}
+        />
+      );
+
+      const rentInput = screen.getByPlaceholderText('เช่น 4500');
+      await user.clear(rentInput);
+      await user.type(rentInput, '5500');
+      await user.click(screen.getByTestId('btn-save-room'));
+
+      await waitFor(() => {
+        expect(screen.getByTestId('version-conflict-modal')).toBeDefined();
+      });
+
+      const reloadBtn = screen.getByTestId('btn-reload-latest');
+      await user.click(reloadBtn);
+
+      expect(onSaveRoomsSpy).toHaveBeenCalledWith(
+        mockRooms,
+        expect.objectContaining({ kind: 'refresh' })
+      );
+    });
+  });
+
+  describe('Test 6: Invariant Verification & Draft Store Integrity', () => {
+    it('proves invalidateRoomMutationCaches never clears or touches meterDraftStore', () => {
+      const dormId = 'dorm-A';
       const cycleId = 'cycle-2026-08';
 
-      // Seed Dorm A and Dorm B
-      testQueryClient.setQueryData(queryKeys.rooms(dormA), [{ id: 'rm-A101', roomNumber: 'A101' }]);
-      testQueryClient.setQueryData(queryKeys.rooms(dormB), [{ id: 'rm-B201', roomNumber: 'B201' }]);
-      testQueryClient.setQueryData(queryKeys.meterPreviewContext(dormA, cycleId), { rooms: ['A101'] });
-      testQueryClient.setQueryData(queryKeys.meterPreviewContext(dormB, cycleId), { rooms: ['B201'] });
-
-      // Invalidate Dorm A only
-      testQueryClient.invalidateQueries({ queryKey: queryKeys.rooms(dormA) });
-      testQueryClient.invalidateQueries({ queryKey: queryKeys.meterPreviewContext(dormA, cycleId) });
-
-      // Check Dorm A state (invalidated)
-      const dormARoomState = testQueryClient.getQueryState(queryKeys.rooms(dormA));
-      const dormAPreviewState = testQueryClient.getQueryState(queryKeys.meterPreviewContext(dormA, cycleId));
-      expect(dormARoomState?.isInvalidated).toBe(true);
-      expect(dormAPreviewState?.isInvalidated).toBe(true);
-
-      // Check Dorm B state (clean, NOT invalidated)
-      const dormBRoomState = testQueryClient.getQueryState(queryKeys.rooms(dormB));
-      const dormBPreviewState = testQueryClient.getQueryState(queryKeys.meterPreviewContext(dormB, cycleId));
-      expect(dormBRoomState?.isInvalidated).toBe(false);
-      expect(dormBPreviewState?.isInvalidated).toBe(false);
-      expect(testQueryClient.getQueryData(queryKeys.rooms(dormB))).toEqual([{ id: 'rm-B201', roomNumber: 'B201' }]);
-    });
-  });
-
-  describe('Test E: Active Contract Rent Snapshot Protection', () => {
-    it('proves room catalog price edit does not alter active contract rent snapshot', () => {
-      const roomCatalogPriceBefore = 5000;
-      const roomCatalogPriceAfter = 5500;
-      const activeContractSnapshotRent = 4500;
-
-      const contract = {
-        id: 'contract-active-1',
-        roomId: 'rm-101',
-        rentAmount: activeContractSnapshotRent,
-        status: 'active',
-      };
-
-      // Room catalog price changes
-      const updatedRoom = {
-        ...mockRooms[0],
-        monthlyRent: roomCatalogPriceAfter,
-      };
-
-      // Active contract rent must strictly remain 4,500
-      expect(contract.rentAmount).toBe(4500);
-      expect(contract.rentAmount).not.toBe(updatedRoom.monthlyRent);
-    });
-  });
-
-  describe('Test F: Meter Draft Store Preservation', () => {
-    it('proves room mutation does NOT clear or destroy user unsaved meter drafts', () => {
-      const dormId = 'dorm-001';
-      const cycleId = 'cycle-2026-08';
-
-      // Seed meter draft store with unsaved readings
-      meterDraftStore.setDraft(dormId, cycleId, [
-        { roomId: 'rm-101', waterCurr: '150', elecCurr: '1350' },
-      ]);
+      meterDraftStore.setDraft(dormId, cycleId, [{ roomId: 'rm-101', waterCurr: '200' }]);
 
       const clearDormSpy = vi.spyOn(meterDraftStore, 'clearDormitoryDrafts');
       const clearDraftSpy = vi.spyOn(meterDraftStore, 'clearDraft');
 
-      // Simulate room save invalidation
-      testQueryClient.invalidateQueries({ queryKey: queryKeys.rooms(dormId) });
-      testQueryClient.invalidateQueries({ queryKey: queryKeys.meterPreviewContext(dormId, cycleId) });
+      invalidateRoomMutationCaches(testQueryClient, dormId, { kind: 'create' });
+      invalidateRoomMutationCaches(testQueryClient, dormId, { kind: 'update', roomNumberChanged: true });
+      invalidateRoomMutationCaches(testQueryClient, dormId, { kind: 'archive' });
 
-      // Verify draft store was NOT cleared
       expect(clearDormSpy).not.toHaveBeenCalled();
       expect(clearDraftSpy).not.toHaveBeenCalled();
-
-      const preservedDraft = meterDraftStore.getDraft(dormId, cycleId);
-      expect(preservedDraft).toEqual([
-        { roomId: 'rm-101', waterCurr: '150', elecCurr: '1350' },
-      ]);
+      expect(meterDraftStore.getDraft(dormId, cycleId)).toEqual([{ roomId: 'rm-101', waterCurr: '200' }]);
     });
   });
 });
