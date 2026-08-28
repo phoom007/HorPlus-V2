@@ -185,11 +185,11 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
       setTermRent(room.termRent || (room.monthlyRent ? room.monthlyRent * 4 : 18000));
       setDailyRent(room.dailyRent || 500);
       setRentCycle(room.rentCycle || 'monthly');
-      const depositVal = room.monthlyDeposit !== undefined ? room.monthlyDeposit : (room.depositAmount || 0);
+      const depositVal = room.depositAmount || 0;
       setDepositAmount(depositVal);
       setMonthlyDeposit(depositVal);
-      setTermDeposit(room.termDeposit !== undefined ? room.termDeposit : (room.depositAmount || 10000));
-      setDailyDeposit(room.dailyDeposit !== undefined ? room.dailyDeposit : (room.dailyRent || 500));
+      setTermDeposit(depositVal || 10000);
+      setDailyDeposit(room.dailyRent || 500);
       setMaxOccupants(room.maxOccupants || 2);
       setRoomStatus(room.status || 'vacant');
       setInitialWaterMeter(room.initialWaterMeter || 100);
@@ -232,26 +232,20 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
     const origMonthlyRent = editingRoom.monthlyRent || 0;
     const origTermRent = editingRoom.termRent || (editingRoom.monthlyRent ? editingRoom.monthlyRent * 4 : 18000);
     const origDailyRent = editingRoom.dailyRent || 500;
-    const origMonthlyDeposit = editingRoom.monthlyDeposit !== undefined ? editingRoom.monthlyDeposit : (editingRoom.depositAmount || 0);
-    const origTermDeposit = editingRoom.termDeposit !== undefined ? editingRoom.termDeposit : (editingRoom.depositAmount || 10000);
-    const origDailyDeposit = editingRoom.dailyDeposit !== undefined ? editingRoom.dailyDeposit : (editingRoom.dailyRent || 500);
+    const origDeposit = editingRoom.depositAmount || 0;
     const origMaxOccupants = editingRoom.maxOccupants || 2;
     const origStatus = editingRoom.status || 'vacant';
 
     const curMonthly = monthlyRent === '' ? 0 : Number(monthlyRent);
     const curTerm = termRent === '' ? (curMonthly * 4) : Number(termRent);
     const curDaily = dailyRent === '' ? 500 : Number(dailyRent);
-    const curMonthlyDeposit = monthlyDeposit === '' ? 0 : Number(monthlyDeposit);
-    const curTermDeposit = termDeposit === '' ? 10000 : Number(termDeposit);
-    const curDailyDeposit = dailyDeposit === '' ? 500 : Number(dailyDeposit);
+    const curDeposit = monthlyDeposit === '' ? (depositAmount === '' ? 0 : Number(depositAmount)) : Number(monthlyDeposit);
 
     const hasChanged =
       curMonthly !== origMonthlyRent ||
       curTerm !== origTermRent ||
       curDaily !== origDailyRent ||
-      curMonthlyDeposit !== origMonthlyDeposit ||
-      curTermDeposit !== origTermDeposit ||
-      curDailyDeposit !== origDailyDeposit ||
+      curDeposit !== origDeposit ||
       Number(maxOccupants) !== origMaxOccupants ||
       roomStatus !== origStatus;
 
@@ -322,9 +316,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
       effectiveStatus = 'vacant';
     }
 
-    const numMonthlyDeposit = monthlyDeposit === '' ? (depositAmount === '' ? 0 : Number(depositAmount)) : Number(monthlyDeposit);
-    const numTermDeposit = termDeposit === '' ? undefined : Number(termDeposit);
-    const numDailyDeposit = dailyDeposit === '' ? undefined : Number(dailyDeposit);
+    const numDeposit = monthlyDeposit === '' ? (depositAmount === '' ? 0 : Number(depositAmount)) : Number(monthlyDeposit);
 
     let updatedRooms = [...rooms];
     if (editingRoom) {
@@ -339,10 +331,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
         termRent: Number(termRent) || undefined,
         dailyRent: Number(dailyRent) || undefined,
         rentCycle,
-        depositAmount: numMonthlyDeposit,
-        monthlyDeposit: numMonthlyDeposit,
-        termDeposit: numTermDeposit,
-        dailyDeposit: numDailyDeposit,
+        depositAmount: numDeposit,
         depositStatus: preservedDepositStatus,
         maxOccupants: Number(maxOccupants),
         status: effectiveStatus,
@@ -364,10 +353,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
         termRent: Number(termRent) || undefined,
         dailyRent: Number(dailyRent) || undefined,
         rentCycle,
-        depositAmount: numMonthlyDeposit,
-        monthlyDeposit: numMonthlyDeposit,
-        termDeposit: numTermDeposit,
-        dailyDeposit: numDailyDeposit,
+        depositAmount: numDeposit,
         depositStatus: 'unpaid',
         maxOccupants: Number(maxOccupants),
         initialWaterMeter: Number(initialWaterMeter) || 0,
@@ -558,13 +544,11 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
       roomId: selectedRoomForTenant.id,
       startDate: newTenantStartDate,
       endDate: calculatedEndDate,
-      stayDate: newTenantStartDate,
       durationMonths: Number(newTenantDuration),
       rentAmount: Number(newTenantRent),
       depositAmount: Number(newTenantDeposit),
       depositStatus: newTenantDepositStatus,
       depositType: 'refundable',
-      advancePaymentAmount: 0,
       status: 'active',
       terms: 'สัญญาเช่าห้องพักมาตรฐาน',
       createdAt: new Date().toISOString(),
