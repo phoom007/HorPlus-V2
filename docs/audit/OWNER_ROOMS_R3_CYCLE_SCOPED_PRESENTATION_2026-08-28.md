@@ -487,6 +487,34 @@ An independent review of R3.2b identified that while `ApiPropertyAdapter` was up
 
 ---
 
-## 18. Final Status
+
+## 18. R3.3aR — Remote Source / Handoff Reconciliation: Production Wiring Only
+
+### 1. Reconciliation Context
+Independent review of the R3.3a handoff at commit `d6571c184c5fac36a21daa94c1c8d0472423de9d` revealed that although several pure helpers and schemas were added in R3.3a, 5 core production paths were not fully wired into rendered JSX components or had line-ending churn. R3.3aR systematically resolved all 5 blockers:
+
+### 2. Reconciliation Matrix (R3.3a State vs R3.3aR Corrected Truth)
+| Area | R3.3a Previous State | R3.3aR Corrected Truth |
+| :--- | :--- | :--- |
+| **Line Endings & Diff Hygiene** | 4 files converted to LF causing 7,422 whole-file diff churn | Restored native CRLF for `owner.tsx`, `rooms.tsx`, `tenants.tsx`, and `owner-rooms-r2-cycle-deposits.test.tsx`. `git diff --stat` matches `git diff --ignore-space-at-eol --stat` (12 files changed, ~905 insertions / ~131 deletions). |
+| **Blocker A: Tenant Click Path** | `resolveRoomTenantAction` helper existed, but `handleTenantAction` bypassed it and fell back to `onNavigate('tenants', room.currentTenantId)`. | `handleTenantAction` derives presentation from `roomCyclePresentationsById.get(room.id)` and `action = resolveRoomTenantAction(room, presentation)`. Invokes `onOpenTenant(action.tenantId, returnContext)` directly. Grid, List, and Floor mode buttons derive label, title, and enabled state directly from `action`. |
+| **Blocker B: Return State & Scroll** | `restoredState` was in props interface but not consumed in `OwnerRooms`. | Added layout-safe `useEffect` consuming `restoredState`: restores `viewMode`, `selectedBuilding`, `selectedStatus`, `searchQuery`, and uses `requestAnimationFrame` to restore `#owner-main-content.scrollTop` (or scrolls target room anchor `room-card-{id}`, `room-row-{id}`, `room-floor-{id}` into view) before invoking `onClearRestoredState()`. |
+| **Blocker C: Domain Error Modal Routing** | `getOwnerRoomMutationDomainCode` existed, but `saveRoom`, `executeDeleteRoom`, and `handleToggleRoomStatus` opened `VersionConflictModal` on outer `CONFLICT` HTTP code. | Extracted domain code via `getOwnerRoomMutationDomainCode(err)`. `VersionConflictModal` opens strictly when `domainCode === 'VERSION_CONFLICT'`. Other conflicts (e.g. `ROOM_NUMBER_ALREADY_EXISTS`) display inline/toast errors. |
+| **Blocker D: List Status Badge Derivation** | List primary status badge styling evaluated `room.status === 'maintenance'` and overrode cycle presentation. | Primary status badge styling is derived 100% from `cyclePresentation.state` (`ACTIVE_AGREEMENT` -> indigo, `RESERVED_IN_CYCLE` -> amber, `DAILY_FINANCIAL_TAIL` -> amber, `MAINTENANCE_IN_CYCLE` -> rose, `UNAVAILABLE` -> slate, `NO_AGREEMENT_IN_CYCLE` -> emerald). Current room maintenance does NOT override selected-cycle badge. |
+| **Blocker E: Registration Helper & Test Quality** | Step 2 finalize inline logic wasn't exported; tests tested helper in isolation rather than rendered JSX component. | Exported pure `mapRegistrationBuildingForFinalize(b, idx, fallbackDeposit)` from `src/pages/owner/register.tsx`. Added comprehensive component render tests in `src/tests/owner-rooms-r2-cycle-deposits.test.tsx` verifying rendered Grid, List, and Floor click paths, return state restoration, domain error routing, and list status badge rendering. |
+
+---
+
+## 19. Final Verification & Product Owner Readiness
+
+### Focused Verification Suite Summary:
+- **Backend Write-Boundary Suite** (`server/src/__tests__/unit/owner-rooms-r32a-write-boundary.test.ts`): **6 / 6 passed (100%)**
+- **Backend Effective Status Unit Suite** (`server/src/__tests__/unit/owner-rooms-r32-effective-status.test.ts`): **5 / 5 passed (100%)**
+- **Backend Preview Context Unit Suite** (`server/src/__tests__/unit/owner-rooms-r3-meter-preview-context.test.ts`): **9 / 9 passed (100%)**
+- **Frontend Cycle Deposits & Action Wiring Suite** (`src/tests/owner-rooms-r2-cycle-deposits.test.tsx`): **74 / 74 passed (100%)**
+- **Frontend Cache Coherence Suite** (`src/tests/owner-rooms-cache-coherence-phase-c.test.tsx`): **11 / 11 passed (100%)**
+- **TypeScript Linting** (`npm run lint`): **Passed with 0 errors**
+- **Backend Production Build** (`npm --prefix server run build`): **Passed with 0 errors**
+- **Diff & Line Ending Hygiene** (`git -c core.whitespace=cr-at-eol diff --check`): **Passed with 0 warnings**
 
 **READY FOR PRODUCT OWNER R3.3 MANUAL UAT**

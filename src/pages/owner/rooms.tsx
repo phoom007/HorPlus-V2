@@ -72,6 +72,7 @@ export interface TenantReturnContext {
   selectedBuilding?: string;
   selectedStatus?: string;
   searchQuery?: string;
+  scrollTop?: number;
   scrollY?: number;
 }
 
@@ -80,6 +81,7 @@ export interface RoomsRestoredState {
   selectedBuilding?: string;
   selectedStatus?: string;
   searchQuery?: string;
+  scrollTop?: number;
   scrollY?: number;
   roomId?: string;
 }
@@ -383,6 +385,47 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
     }
   }, [initialRoomId, rooms]);
 
+  // Consume restoredState
+  useEffect(() => {
+    if (!restoredState) return;
+
+    if (restoredState.viewMode && restoredState.viewMode !== viewMode) {
+      setViewMode(restoredState.viewMode);
+    }
+    if (restoredState.selectedBuilding !== undefined && restoredState.selectedBuilding !== selectedBuilding) {
+      setSelectedBuilding(restoredState.selectedBuilding);
+    }
+    if (restoredState.selectedStatus !== undefined && restoredState.selectedStatus !== selectedStatus) {
+      setSelectedStatus(restoredState.selectedStatus);
+    }
+    if (restoredState.searchQuery !== undefined && restoredState.searchQuery !== searchQuery) {
+      setSearchQuery(restoredState.searchQuery);
+    }
+
+    const rafId = requestAnimationFrame(() => {
+      const mainEl = document.getElementById('owner-main-content');
+      const targetScroll = restoredState.scrollTop ?? restoredState.scrollY;
+
+      if (targetScroll !== undefined && targetScroll > 0 && mainEl) {
+        mainEl.scrollTop = targetScroll;
+      } else if (restoredState.roomId) {
+        const anchorId =
+          restoredState.viewMode === 'list'
+            ? `room-row-${restoredState.roomId}`
+            : restoredState.viewMode === 'floor'
+              ? `room-floor-${restoredState.roomId}`
+              : `room-card-${restoredState.roomId}`;
+        const anchorEl = document.getElementById(anchorId);
+        if (anchorEl) {
+          anchorEl.scrollIntoView({ block: 'center', behavior: 'instant' as any });
+        }
+      }
+      onClearRestoredState?.();
+    });
+
+    return () => cancelAnimationFrame(rafId);
+  }, [restoredState]);
+
   const isFormModified = React.useMemo(() => {
     if (!editingRoom) {
       return roomNumber.trim().length > 0;
@@ -516,7 +559,8 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
         const res = await propertyApi.updateRoom(editingRoom.id, changes, expectedVersion);
 
         if (!res.success) {
-          if (res.error?.code === 'CONFLICT') {
+          const domainCode = getOwnerRoomMutationDomainCode(res.error || res);
+          if (domainCode === 'VERSION_CONFLICT') {
             const details = res.error.details as { currentVersion?: number; error?: { currentVersion?: number } } | undefined;
             const serverVersion = details?.currentVersion ?? details?.error?.currentVersion;
             setVersionConflictState({
@@ -650,7 +694,8 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
       const res = await propertyApi.archiveRoom(roomId, expectedVersion);
 
       if (!res.success) {
-        if (res.error?.code === 'CONFLICT') {
+        const domainCode = getOwnerRoomMutationDomainCode(res.error || res);
+        if (domainCode === 'VERSION_CONFLICT') {
           const details = res.error.details as { currentVersion?: number; error?: { currentVersion?: number } } | undefined;
           const serverVersion = details?.currentVersion ?? details?.error?.currentVersion;
           setVersionConflictState({
@@ -711,7 +756,8 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
       const res = await propertyApi.updateRoom(targetRoom.id, { status: nextStatus }, expectedVersion);
 
       if (!res.success) {
-        if (res.error?.code === 'CONFLICT') {
+        const domainCode = getOwnerRoomMutationDomainCode(res.error || res);
+        if (domainCode === 'VERSION_CONFLICT') {
           const details = res.error.details as { currentVersion?: number; error?: { currentVersion?: number } } | undefined;
           const serverVersion = details?.currentVersion ?? details?.error?.currentVersion;
           setVersionConflictState({
@@ -742,10 +788,38 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
   // Open canonical Quick Add Tenant modal or Navigate to Tenant Profile
   const handleTenantAction = async (room: Room, e?: React.MouseEvent) => {
     e?.stopPropagation();
-    if (room.currentTenantId) {
-      // Room has tenant -> Navigate to tenant detail in tenants tab
-      onNavigate('tenants', room.currentTenantId);
-    } else {
+    const presentation =
+      roomCyclePresentationsById.get(room.id) ??
+      resolveRoomCyclePresentation(room, previewRoomMap.get(room.id), selectedBillingCycleId);
+    const action = resolveRoomTenantAction(room, presentation);
+
+    if (action.kind === 'OPEN_CYCLE_TENANT') {
+      const mainEl = typeof document !== 'undefined' ? document.getElementById('owner-main-content') : null;
+      const currentScrollTop = mainEl ? mainEl.scrollTop : (typeof window !== 'undefined' ? window.scrollY : 0);
+
+      const returnContext: TenantReturnContext = {
+        source: 'rooms',
+        tenantId: action.tenantId,
+        roomId: room.id,
+        cycleId: selectedBillingCycleId,
+        cycleCode: selectedCycleCode,
+        viewMode,
+        selectedBuilding,
+        selectedStatus,
+        searchQuery,
+        scrollTop: currentScrollTop,
+        scrollY: currentScrollTop,
+      };
+
+      if (onOpenTenant) {
+        onOpenTenant(action.tenantId, returnContext);
+      } else {
+        onNavigate('tenants', action.tenantId);
+      }
+      return;
+    }
+
+    if (action.kind === 'QUICK_ADD_CURRENT') {
       try {
         setQuickAddLoadingRoomId(room.id);
         const res = await httpRequest<{ data: QuickAddRoomContext }>(
@@ -766,6 +840,11 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
       } finally {
         setQuickAddLoadingRoomId(null);
       }
+      return;
+    }
+
+    if (action.kind === 'DISABLED' && action.reason) {
+      setToastMessage(action.reason);
     }
   };
 
@@ -1127,27 +1206,46 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                     <Edit2 className="w-3.5 h-3.5 text-slate-500" />
                     <span>แก้ไข</span>
                   </button>
-                  <button
-                    type="button"
-                    onClick={(e) => handleTenantAction(room, e)}
-                    className={`flex-1 py-1.5 text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-2xs ${room.currentTenantId
-                        ? 'bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200'
-                        : 'bg-indigo-600 hover:bg-indigo-700 text-white border border-indigo-600'
-                      }`}
-                    title={room.currentTenantId ? 'ดูข้อมูลผู้เช่าในหน้ารายชื่อ' : 'เพิ่มผู้เช่าเข้าห้องพักนี้'}
-                  >
-                    {room.currentTenantId ? (
-                      <>
+                  {(() => {
+                    const action = resolveRoomTenantAction(room, cyclePresentation);
+                    if (action.kind === 'OPEN_CYCLE_TENANT') {
+                      return (
+                        <button
+                          type="button"
+                          onClick={(e) => handleTenantAction(room, e)}
+                          className="flex-1 py-1.5 text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-2xs bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200"
+                          title="ดูข้อมูลผู้เช่าตามงวด"
+                        >
+                          <UserIcon className="w-3.5 h-3.5" />
+                          <span>ผู้เช่า</span>
+                        </button>
+                      );
+                    }
+                    if (action.kind === 'QUICK_ADD_CURRENT') {
+                      return (
+                        <button
+                          type="button"
+                          onClick={(e) => handleTenantAction(room, e)}
+                          className="flex-1 py-1.5 text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-2xs bg-indigo-600 hover:bg-indigo-700 text-white border border-indigo-600"
+                          title="เพิ่มผู้เช่าเข้าห้องพักนี้"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          <span>เพิ่มผู้เช่า</span>
+                        </button>
+                      );
+                    }
+                    return (
+                      <button
+                        type="button"
+                        disabled
+                        className="flex-1 py-1.5 text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition-all shadow-2xs bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed opacity-60"
+                        title={action.reason || 'ไม่พร้อมทำรายการ'}
+                      >
                         <UserIcon className="w-3.5 h-3.5" />
-                        <span>ข้อมูลผู้เช่า</span>
-                      </>
-                    ) : (
-                      <>
-                        <Plus className="w-3.5 h-3.5" />
-                        <span>เพิ่มผู้เช่า</span>
-                      </>
-                    )}
-                  </button>
+                        <span>ผู้เช่า</span>
+                      </button>
+                    );
+                  })()}
                 </div>
               </div>
             );
@@ -1197,7 +1295,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                       : (isCycleReserved || isDailyTail ? ROOM_STATUS_CONFIG.occupied : ROOM_STATUS_CONFIG.vacant));
 
                   return (
-                    <tr key={room.id} className="hover:bg-slate-50/60 transition-colors">
+                    <tr key={room.id} id={`room-row-${room.id}`} className="hover:bg-slate-50/60 transition-colors">
                       <td className="p-4 font-black text-slate-900 text-sm whitespace-nowrap">{room.roomNumber}</td>
                       <td className="p-4 text-gray-600 font-semibold whitespace-nowrap">{locationStr}</td>
                       <td className="p-4 font-bold text-slate-800 whitespace-nowrap">
@@ -1317,22 +1415,30 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                         <div
                           className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold select-none border shadow-2xs cursor-default whitespace-nowrap ${isCycleOccupied
                               ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
-                              : (isCycleReserved || isDailyTail)
+                              : isCycleReserved
                                 ? 'bg-amber-50 text-amber-700 border-amber-200'
-                                : (room.status === 'maintenance'
-                                  ? 'bg-rose-50 text-rose-700 border-rose-200'
-                                  : 'bg-emerald-50 text-emerald-700 border-emerald-200')
+                                : isDailyTail
+                                  ? 'bg-amber-50 text-amber-700 border-amber-200'
+                                  : isMaintenanceInCycle
+                                    ? 'bg-rose-50 text-rose-700 border-rose-200'
+                                    : isUnavailable
+                                      ? 'bg-slate-100 text-slate-600 border-slate-200'
+                                      : 'bg-emerald-50 text-emerald-700 border-emerald-200'
                             }`}
                           title={`สถานะห้อง: ${isCycleOccupied ? 'มีผู้เช่า' : (isCycleReserved ? 'จองแล้ว' : (isDailyTail ? 'ค้างชำระ' : (isMaintenanceInCycle ? 'ปิดปรับปรุง' : (isUnavailable ? 'ไม่มีประวัติสถานะ' : 'ว่าง'))))}`}
                         >
                           <span
                             className={`w-1.5 h-1.5 rounded-full shrink-0 ${isCycleOccupied
                                 ? 'bg-indigo-500'
-                                : (isCycleReserved || isDailyTail)
+                                : isCycleReserved
                                   ? 'bg-amber-500'
-                                  : (room.status === 'maintenance'
-                                    ? 'bg-rose-500'
-                                    : 'bg-emerald-500')
+                                  : isDailyTail
+                                    ? 'bg-amber-500'
+                                    : isMaintenanceInCycle
+                                      ? 'bg-rose-500'
+                                      : isUnavailable
+                                        ? 'bg-slate-400'
+                                        : 'bg-emerald-500'
                               }`}
                           />
                           <span>{isCycleOccupied ? 'มีผู้เช่า' : (isCycleReserved ? 'จองแล้ว' : (isDailyTail ? 'ค้างชำระ' : (isMaintenanceInCycle ? 'ปิดปรับปรุง' : (isUnavailable ? 'ไม่มีประวัติสถานะ' : 'ว่าง'))))}</span>
@@ -1349,27 +1455,46 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                             <Edit2 className="w-3.5 h-3.5 text-slate-500" />
                             <span>แก้ไข</span>
                           </button>
-                          <button
-                            type="button"
-                            onClick={(e) => handleTenantAction(room, e)}
-                            className={`px-2.5 py-1.5 text-xs font-bold rounded-xl inline-flex items-center gap-1 transition-all cursor-pointer shadow-2xs ${room.currentTenantId
-                                ? 'bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200'
-                                : 'bg-indigo-600 hover:bg-indigo-700 text-white border border-indigo-600'
-                              }`}
-                            title={room.currentTenantId ? 'ดูข้อมูลผู้เช่า' : 'เพิ่มผู้เช่าเข้าห้องพัก'}
-                          >
-                            {room.currentTenantId ? (
-                              <>
+                          {(() => {
+                            const action = resolveRoomTenantAction(room, cyclePresentation);
+                            if (action.kind === 'OPEN_CYCLE_TENANT') {
+                              return (
+                                <button
+                                  type="button"
+                                  onClick={(e) => handleTenantAction(room, e)}
+                                  className="px-2.5 py-1.5 text-xs font-bold rounded-xl inline-flex items-center gap-1 transition-all cursor-pointer shadow-2xs bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200"
+                                  title="ดูข้อมูลผู้เช่าตามงวด"
+                                >
+                                  <UserIcon className="w-3.5 h-3.5" />
+                                  <span>ผู้เช่า</span>
+                                </button>
+                              );
+                            }
+                            if (action.kind === 'QUICK_ADD_CURRENT') {
+                              return (
+                                <button
+                                  type="button"
+                                  onClick={(e) => handleTenantAction(room, e)}
+                                  className="px-2.5 py-1.5 text-xs font-bold rounded-xl inline-flex items-center gap-1 transition-all cursor-pointer shadow-2xs bg-indigo-600 hover:bg-indigo-700 text-white border border-indigo-600"
+                                  title="เพิ่มผู้เช่าเข้าห้องพัก"
+                                >
+                                  <Plus className="w-3.5 h-3.5" />
+                                  <span>เพิ่มผู้เช่า</span>
+                                </button>
+                              );
+                            }
+                            return (
+                              <button
+                                type="button"
+                                disabled
+                                className="px-2.5 py-1.5 text-xs font-bold rounded-xl inline-flex items-center gap-1 transition-all shadow-2xs bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed opacity-60"
+                                title={action.reason || 'ไม่พร้อมทำรายการ'}
+                              >
                                 <UserIcon className="w-3.5 h-3.5" />
                                 <span>ผู้เช่า</span>
-                              </>
-                            ) : (
-                              <>
-                                <Plus className="w-3.5 h-3.5" />
-                                <span>เพิ่มผู้เช่า</span>
-                              </>
-                            )}
-                          </button>
+                              </button>
+                            );
+                          })()}
                         </div>
                       </td>
                     </tr>
@@ -1426,6 +1551,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                               return (
                                 <div
                                   key={room.id}
+                                  id={`room-floor-${room.id}`}
                                   onClick={(e) => handleTenantAction(room, e)}
                                   title={displayTenantName ? `คลิกเพื่อดูข้อมูลผู้เช่าคุณ ${displayTenantName}` : `ดูข้อมูลห้อง ${room.roomNumber}`}
                                   className="p-2.5 sm:p-3 w-full sm:w-auto sm:min-w-[150px] rounded-2xl border text-center cursor-pointer transition-all hover:scale-105 select-none flex flex-col justify-between items-center shadow-2xs group bg-indigo-50/70 hover:bg-indigo-100/70 border-indigo-200 text-indigo-900"
@@ -1453,6 +1579,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                               return (
                                 <div
                                   key={room.id}
+                                  id={`room-floor-${room.id}`}
                                   onClick={() => handleOpenModal(room)}
                                   title={`ห้องพัก ${room.roomNumber} จองแล้วในงวดนี้`}
                                   className="p-2.5 sm:p-3 w-full sm:w-auto sm:min-w-[150px] rounded-2xl border text-center cursor-pointer transition-all hover:scale-105 select-none flex flex-col justify-between items-center shadow-2xs group bg-amber-50/70 hover:bg-amber-100/70 border-amber-200 text-amber-900"
@@ -1480,6 +1607,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                               return (
                                 <div
                                   key={room.id}
+                                  id={`room-floor-${room.id}`}
                                   onClick={() => handleOpenModal(room)}
                                   title={`ห้องพัก ${room.roomNumber} มีรายการค้างชำระจากผู้พักรายวัน`}
                                   className="p-2.5 sm:p-3 w-full sm:w-auto sm:min-w-[150px] rounded-2xl border text-center cursor-pointer transition-all hover:scale-105 select-none flex flex-col justify-between items-center shadow-2xs group bg-amber-50/70 hover:bg-amber-100/70 border-amber-200 text-amber-900"
@@ -1507,6 +1635,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                               return (
                                 <div
                                   key={room.id}
+                                  id={`room-floor-${room.id}`}
                                   onClick={() => handleOpenModal(room)}
                                   title={`คลิกเพื่อแก้ไขห้องพัก ${room.roomNumber}`}
                                   className="p-2.5 sm:p-3 w-full sm:w-auto sm:min-w-[150px] rounded-2xl border text-center cursor-pointer transition-all hover:scale-105 select-none flex flex-col justify-between items-center shadow-2xs group bg-rose-50/70 hover:bg-rose-100/70 border-rose-200 text-rose-900"
@@ -1536,6 +1665,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                             return (
                               <div
                                 key={room.id}
+                                id={`room-floor-${room.id}`}
                                 className="p-2.5 sm:p-3 w-full sm:w-auto sm:min-w-[150px] rounded-2xl border text-center select-none flex flex-col justify-between items-center shadow-2xs bg-emerald-50/70 hover:bg-emerald-100/70 border-emerald-200 text-emerald-900"
                               >
                                 <div className="flex items-center justify-between w-full gap-1 mb-1">

@@ -79,6 +79,7 @@ interface OwnerTenantsProps {
   onClearInitialTenantId?: () => void;
   returnContext?: TenantReturnContext | null;
   onReturnToSource?: (context: TenantReturnContext) => void;
+  onDismissReturnContext?: () => void;
   cameFromMeters?: boolean;
   onBackToMeters?: () => void;
   onViewContract?: (contractId: string, tenantId?: string) => void;
@@ -103,6 +104,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
   onClearInitialTenantId,
   returnContext,
   onReturnToSource,
+  onDismissReturnContext,
   cameFromMeters: propCameFromMeters,
   onBackToMeters,
   onViewContract
@@ -954,6 +956,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                     onClick={() => {
                       setSelectedTenant(null);
                       onClearInitialTenantId?.();
+                      onDismissReturnContext?.();
                     }}
                     className="text-xs font-bold text-slate-500 hover:text-slate-700 hover:bg-slate-100 px-2.5 py-1 rounded-lg transition-all cursor-pointer"
                   >
@@ -985,6 +988,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                       setCameFromMeters(false);
                       setSelectedTenant(null);
                       onClearInitialTenantId?.();
+                      onDismissReturnContext?.();
                     }}
                     className="text-xs font-bold text-slate-500 hover:text-slate-700 hover:bg-slate-100 px-2.5 py-1 rounded-lg transition-all cursor-pointer"
                   >

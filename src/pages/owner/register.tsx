@@ -1,3 +1,30 @@
+export function mapRegistrationBuildingForFinalize(
+  b: any,
+  idx: number,
+  fallbackDeposit?: number | string
+) {
+  const normalizedPrefix = (b.roomPrefix ? b.roomPrefix.trim() : '').toUpperCase();
+  return {
+    id: b.id || `bld-${idx + 1}`,
+    name: (b.name && b.name.trim()) ? b.name.trim() : (normalizedPrefix ? `อาคาร ${normalizedPrefix}` : `อาคาร ${idx + 1}`),
+    code: normalizedPrefix || null,
+    floorsCount: Number(b.totalFloors) || 1,
+    roomsPerFloor: b.roomsPerFloor !== '' ? Number(b.roomsPerFloor) : null,
+    roomPrefix: normalizedPrefix || null,
+    hasElevator: b.hasElevator ?? false,
+    numberingPattern: b.formatPattern || null,
+    description: `อาคาร ${(b.name && b.name.trim()) ? b.name.trim() : (normalizedPrefix ? normalizedPrefix : idx + 1)}`,
+    monthlyRent: Number(b.rentRates?.monthly) || 0,
+    dailyRent: b.rentRates?.daily ? Number(b.rentRates.daily) : null,
+    termRent: b.rentRates?.term ? Number(b.rentRates.term) : null,
+    termMonths: Number(b.rentRates?.termMonths) || 4,
+    maxInstallmentMonths: Number(b.rentRates?.maxInstallmentMonths) || 2,
+    depositAmount: b.securityDeposit !== undefined && b.securityDeposit !== '' ? (Number(b.securityDeposit) || 0) : (Number(fallbackDeposit) || 0),
+    securityDeposit: b.securityDeposit !== undefined && b.securityDeposit !== '' ? (Number(b.securityDeposit) || 0) : (Number(fallbackDeposit) || 0),
+    maximumOccupants: Number(b.rentRates?.maxOccupants) || 2,
+  };
+}
+
 import { formatBuildingDisplayName } from '../../lib/roomRentalSummary';
 import React, { useState, useRef } from 'react';
 import {
@@ -1131,28 +1158,9 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
       }
 
       // 3. Map Buildings
-      const mappedBuildings = formData.buildings.map((b, idx) => {
-        const normalizedPrefix = (b.roomPrefix ? b.roomPrefix.trim() : '').toUpperCase();
-        return {
-          id: b.id || `bld-${idx + 1}`,
-          name: (b.name && b.name.trim()) ? b.name.trim() : (normalizedPrefix ? `อาคาร ${normalizedPrefix}` : `อาคาร ${idx + 1}`),
-          code: normalizedPrefix || null,
-          floorsCount: Number(b.totalFloors) || 1,
-          roomsPerFloor: b.roomsPerFloor !== '' ? Number(b.roomsPerFloor) : null,
-          roomPrefix: normalizedPrefix || null,
-          hasElevator: b.hasElevator ?? false,
-          numberingPattern: b.formatPattern || null,
-          description: `อาคาร ${(b.name && b.name.trim()) ? b.name.trim() : (normalizedPrefix ? normalizedPrefix : idx + 1)}`,
-          monthlyRent: Number(b.rentRates?.monthly) || 0,
-          dailyRent: b.rentRates?.daily ? Number(b.rentRates.daily) : null,
-          termRent: b.rentRates?.term ? Number(b.rentRates.term) : null,
-          termMonths: Number(b.rentRates?.termMonths) || 4,
-          maxInstallmentMonths: Number(b.rentRates?.maxInstallmentMonths) || 2,
-          depositAmount: b.securityDeposit !== undefined && b.securityDeposit !== '' ? (Number(b.securityDeposit) || 0) : (Number(formData.deposits.securityDeposit) || 0),
-          securityDeposit: b.securityDeposit !== undefined && b.securityDeposit !== '' ? (Number(b.securityDeposit) || 0) : (Number(formData.deposits.securityDeposit) || 0),
-          maximumOccupants: Number(b.rentRates?.maxOccupants) || 2,
-        };
-      });
+      const mappedBuildings = formData.buildings.map((b, idx) =>
+        mapRegistrationBuildingForFinalize(b, idx, formData.deposits.securityDeposit)
+      );
 
       // 4. Map Rooms
       const mappedRooms: any[] = [];

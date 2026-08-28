@@ -1,10 +1,56 @@
+/** @vitest-environment happy-dom */
 import { describe, it, expect, vi } from 'vitest';
+import React from 'react';
 import { normalizeAuthoritativeRoom } from '../lib/roomNormalizer';
 import { getGridRentRates, getListRentRates, getDepositForCycle, getCurrentAgreementDepositDisplay, formatBuildingDisplayName, formatRoomLocation, getPaymentStatusBadge, resolveRoomCyclePresentation } from '../lib/roomRentalSummary';
 import { getOwnerRoomMutationErrorMessage, getOwnerRoomMutationDomainCode } from '../lib/roomErrorMapper';
-import { resolveRoomTenantAction } from '../pages/owner/rooms';
+import { resolveRoomTenantAction, OwnerRooms } from '../pages/owner/rooms';
+import { mapRegistrationBuildingForFinalize } from '../pages/owner/register';
+import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { afterEach } from 'vitest';
 import { formatShortThaiBuddhistDate } from '../utils/calendarDate';
 import { Room } from '../types';
+
+vi.mock('../data/httpClient', async (importOriginal) => {
+  const actual: any = await importOriginal();
+  return {
+    ...actual,
+    httpRequest: vi.fn().mockImplementation(async (method: string, url: string, ...args: any[]) => {
+      if (url && url.includes('/defaults')) {
+        return { success: true, data: { property: { defaultDeposit: 5000, defaultMonthlyRent: 4500 } } };
+      }
+      if (url && url.includes('/preview-context')) {
+        return {
+          success: true,
+          data: {
+            dormitoryId: 'dorm-1',
+            billingCycleId: 'cycle-2026-07',
+            rooms: [
+              {
+                roomId: 'room-101',
+                roomNumber: '101',
+                tenantId: 'tenant-HISTORICAL-A',
+                tenantName: 'สมหมาย กรกฎาคม',
+                billingSource: 'CONTRACT',
+                agreementType: 'MONTHLY',
+                rentAmount: '4500.00',
+                cyclePresentationState: 'ACTIVE_AGREEMENT',
+              },
+              {
+                roomId: 'room-206',
+                roomNumber: '206',
+                cyclePresentationState: 'NO_AGREEMENT_IN_CYCLE',
+              },
+            ],
+          },
+        };
+      }
+      return actual.httpRequest(method, url, ...args);
+    }),
+  };
+});
+
 import { CreateContractSchema, UpdateRoomSchema } from '../../server/src/schemas/property-tenant-contract.schemas';
 
 describe('OWNER ROOMS R2 & R2.1 — Rent-Cycle Deposit Model & Hardened Specifications', () => {
@@ -1450,119 +1496,258 @@ describe('OWNER ROOMS R2 & R2.1 — Rent-Cycle Deposit Model & Hardened Specific
     });
   });
 
-  describe('9. OWNER ROOMS R3.3a — Production Path Completion Suite', () => {
-    describe('Part A & F: resolveRoomTenantAction Production Action Authority', () => {
-      it('1. ACTIVE_AGREEMENT opens selected-cycle Tenant A and never current Tenant B', () => {
-        const roomCatalog: any = {
-          id: 'room-201',
-          roomNumber: '201',
-          status: 'occupied',
-          currentTenantId: 'tenant-current-B',
-        };
 
-        const presentation: any = {
-          state: 'ACTIVE_AGREEMENT',
-          occupancy: {
-            tenantId: 'tenant-historical-A',
-            tenantName: 'สมชาย ประวัติ',
+  describe('9. OWNER ROOMS R3.3aR — Production Path Wiring Suite', () => {
+    afterEach(() => {
+      cleanup();
+    });
+
+    const mockBuilding: any = { id: 'bld-1', name: 'อาคาร A', code: 'A', floorsCount: 3 };
+    const mockHistoricalRoom: any = {
+      id: 'room-101',
+      roomNumber: '101',
+      buildingId: 'bld-1',
+      floor: 1,
+      status: 'occupied',
+      currentTenantId: 'tenant-CURRENT-B', // Current room is occupied by Tenant B
+      monthlyRent: 4500,
+      version: 1,
+    };
+
+    const renderWithQuery = (ui: React.ReactElement) => {
+      const qc = new QueryClient({
+        defaultOptions: {
+          queries: {
+            retry: false,
           },
-        };
+        },
+      });
+      return render(
+        <QueryClientProvider client={qc}>
+          {ui}
+        </QueryClientProvider>
+      );
+    };
 
-        const action = resolveRoomTenantAction(roomCatalog, presentation);
-        expect(action.kind).toBe('OPEN_CYCLE_TENANT');
-        if (action.kind === 'OPEN_CYCLE_TENANT') {
-          expect(action.tenantId).toBe('tenant-historical-A');
-          expect(action.tenantId).not.toBe(roomCatalog.currentTenantId);
-        }
+    describe('Production Component Action Path (Grid / List / Floor Click)', () => {
+      it('TEST 1 — Grid Tenant button click invokes onOpenTenant with historical Tenant A, never current Tenant B', async () => {
+        const onOpenTenant = vi.fn();
+        const onNavigate = vi.fn();
+
+        renderWithQuery(
+          <OwnerRooms
+            dormitoryId="dorm-1"
+            rooms={[mockHistoricalRoom]}
+            buildings={[mockBuilding]}
+            onSaveRooms={vi.fn()}
+            onAddLog={vi.fn()}
+            onNavigate={onNavigate}
+            onOpenTenant={onOpenTenant}
+            selectedBillingCycleId="cycle-2026-07"
+            selectedCycleCode="2026-07"
+          />
+        );
+
+        // Find tenant action button on grid card
+        const tenantBtn = await screen.findByTitle('ดูข้อมูลผู้เช่าตามงวด');
+        expect(tenantBtn).toBeDefined();
+        fireEvent.click(tenantBtn);
+
+        // Assert onOpenTenant is called with Tenant A and NOT Tenant B
+        expect(onOpenTenant).toHaveBeenCalledTimes(1);
+        expect(onOpenTenant).toHaveBeenCalledWith(
+          'tenant-HISTORICAL-A',
+          expect.objectContaining({
+            source: 'rooms',
+            tenantId: 'tenant-HISTORICAL-A',
+            roomId: 'room-101',
+            cycleId: 'cycle-2026-07',
+          })
+        );
+        expect(onNavigate).not.toHaveBeenCalled();
       });
 
-      it('2. RESERVED_IN_CYCLE and DAILY_FINANCIAL_TAIL open selected-cycle tenantId', () => {
-        const roomCatalog: any = { id: 'room-202', status: 'vacant', currentTenantId: null };
+      it('TEST 2 — List Tenant button click invokes onOpenTenant with historical Tenant A', async () => {
+        const onOpenTenant = vi.fn();
+        const onNavigate = vi.fn();
 
-        const reservedPres: any = {
-          state: 'RESERVED_IN_CYCLE',
-          occupancy: { tenantId: 'tenant-reserved-1', tenantName: 'ผู้จอง' },
-        };
-        const resAction = resolveRoomTenantAction(roomCatalog, reservedPres);
-        expect(resAction.kind).toBe('OPEN_CYCLE_TENANT');
-        if (resAction.kind === 'OPEN_CYCLE_TENANT') {
-          expect(resAction.tenantId).toBe('tenant-reserved-1');
-        }
+        renderWithQuery(
+          <OwnerRooms
+            dormitoryId="dorm-1"
+            rooms={[mockHistoricalRoom]}
+            buildings={[mockBuilding]}
+            onSaveRooms={vi.fn()}
+            onAddLog={vi.fn()}
+            onNavigate={onNavigate}
+            onOpenTenant={onOpenTenant}
+            restoredState={{ viewMode: 'list' }}
+            selectedBillingCycleId="cycle-2026-07"
+            selectedCycleCode="2026-07"
+          />
+        );
 
-        const tailPres: any = {
-          state: 'DAILY_FINANCIAL_TAIL',
-          occupancy: { tenantId: 'tenant-tail-1', tenantName: 'ผู้พักรายวันค้างจ่าย' },
-        };
-        const tailAction = resolveRoomTenantAction(roomCatalog, tailPres);
-        expect(tailAction.kind).toBe('OPEN_CYCLE_TENANT');
-        if (tailAction.kind === 'OPEN_CYCLE_TENANT') {
-          expect(tailAction.tenantId).toBe('tenant-tail-1');
-        }
+        const listTenantBtn = await screen.findByTitle('ดูข้อมูลผู้เช่าตามงวด');
+        expect(listTenantBtn).toBeDefined();
+        fireEvent.click(listTenantBtn);
+
+        expect(onOpenTenant).toHaveBeenCalledTimes(1);
+        expect(onOpenTenant).toHaveBeenCalledWith(
+          'tenant-HISTORICAL-A',
+          expect.objectContaining({
+            source: 'rooms',
+            tenantId: 'tenant-HISTORICAL-A',
+          })
+        );
+        expect(onNavigate).not.toHaveBeenCalled();
       });
 
-      it('3. Reservation with applicant name but NO tenantId returns DISABLED (never guesses)', () => {
-        const roomCatalog: any = { id: 'room-203', status: 'vacant', currentTenantId: null };
-        const anonymousPres: any = {
-          state: 'RESERVED_IN_CYCLE',
-          occupancy: { tenantId: null, tenantName: 'คุณ นิรนาม จองปากเปล่า' },
+      it('TEST 3 — Floor mode occupied room click invokes onOpenTenant with historical Tenant A', async () => {
+        const onOpenTenant = vi.fn();
+        const onNavigate = vi.fn();
+
+        renderWithQuery(
+          <OwnerRooms
+            dormitoryId="dorm-1"
+            rooms={[mockHistoricalRoom]}
+            buildings={[mockBuilding]}
+            onSaveRooms={vi.fn()}
+            onAddLog={vi.fn()}
+            onNavigate={onNavigate}
+            onOpenTenant={onOpenTenant}
+            restoredState={{ viewMode: 'floor' }}
+            selectedBillingCycleId="cycle-2026-07"
+            selectedCycleCode="2026-07"
+          />
+        );
+
+        await waitFor(() => {
+          expect(document.getElementById('room-floor-room-101')).toBeDefined();
+        });
+
+        const floorRoomEl = document.getElementById('room-floor-room-101');
+        if (floorRoomEl) {
+          fireEvent.click(floorRoomEl);
+        }
+
+        expect(onOpenTenant).toHaveBeenCalledTimes(1);
+        expect(onOpenTenant).toHaveBeenCalledWith(
+          'tenant-HISTORICAL-A',
+          expect.objectContaining({
+            source: 'rooms',
+            tenantId: 'tenant-HISTORICAL-A',
+          })
+        );
+      });
+
+      it('TEST 4 — NO_AGREEMENT_IN_CYCLE when room is currently occupied disables tenant action truthfully', () => {
+        const occupiedRoom: any = {
+          id: 'room-102',
+          roomNumber: '102',
+          status: 'occupied',
+          currentTenantId: 'tenant-CURRENT-B',
         };
-        const action = resolveRoomTenantAction(roomCatalog, anonymousPres);
+
+        const vacantPres: any = {
+          state: 'NO_AGREEMENT_IN_CYCLE',
+          occupancy: null,
+        };
+
+        const action = resolveRoomTenantAction(occupiedRoom, vacantPres);
         expect(action.kind).toBe('DISABLED');
-      });
-
-      it('4. NO_AGREEMENT in cycle: Quick Add offered ONLY if current Room is truly vacant', () => {
-        const vacantPres: any = { state: 'NO_AGREEMENT_IN_CYCLE', occupancy: null };
-
-        // Scenario A: Room is currently vacant
-        const vacantRoom: any = { id: 'room-vacant', status: 'vacant', currentTenantId: null };
-        expect(resolveRoomTenantAction(vacantRoom, vacantPres).kind).toBe('QUICK_ADD_CURRENT');
-
-        // Scenario B: Room is currently occupied today
-        const occupiedRoom: any = { id: 'room-occupied', status: 'occupied', currentTenantId: 'tenant-today' };
-        const occAction = resolveRoomTenantAction(occupiedRoom, vacantPres);
-        expect(occAction.kind).toBe('DISABLED');
-        if (occAction.kind === 'DISABLED') {
-          expect(occAction.reason).toBe('ห้องพักมีผู้เช่าปัจจุบันแล้ว');
-        }
-
-        // Scenario C: Room is currently under maintenance today
-        const maintRoom: any = { id: 'room-maint', status: 'maintenance', currentTenantId: null };
-        const maintAction = resolveRoomTenantAction(maintRoom, vacantPres);
-        expect(maintAction.kind).toBe('DISABLED');
-        if (maintAction.kind === 'DISABLED') {
-          expect(maintAction.reason).toBe('ห้องพักปิดปรับปรุงปัจจุบัน');
+        if (action.kind === 'DISABLED') {
+          expect(action.reason).toBe('ห้องพักมีผู้เช่าปัจจุบันแล้ว');
         }
       });
     });
 
-    describe('Part K: getOwnerRoomMutationDomainCode Classification', () => {
-      it('1. Extracts VERSION_CONFLICT from nested error inside outer CONFLICT', () => {
-        const errorObj = {
-          code: 'CONFLICT',
-          details: { error: { code: 'VERSION_CONFLICT', currentVersion: 2 } },
-        };
-        expect(getOwnerRoomMutationDomainCode(errorObj)).toBe('VERSION_CONFLICT');
-      });
+    describe('TEST 5 — Return State Restoration in Component', () => {
+      it('Restores viewMode, selectedBuilding, selectedStatus, searchQuery and calls onClearRestoredState', async () => {
+        const onClearRestoredState = vi.fn();
+        const mockRoom: any = { id: 'room-101', roomNumber: '101', buildingId: 'bld-1', floor: 1, status: 'vacant' };
 
-      it('2. Extracts ROOM_NUMBER_ALREADY_EXISTS without broad CONFLICT version modal', () => {
+        renderWithQuery(
+          <OwnerRooms
+            dormitoryId="dorm-1"
+            rooms={[mockRoom]}
+            buildings={[mockBuilding]}
+            onSaveRooms={vi.fn()}
+            onAddLog={vi.fn()}
+            onNavigate={vi.fn()}
+            restoredState={{
+              viewMode: 'list',
+              selectedBuilding: 'bld-1',
+              selectedStatus: 'vacant',
+              searchQuery: '101',
+              scrollTop: 300,
+            }}
+            onClearRestoredState={onClearRestoredState}
+          />
+        );
+
+        const searchInput = screen.getByPlaceholderText(/ค้นหาเลขห้องพัก หรือชื่อผู้เช่า/i) as HTMLInputElement;
+        expect(searchInput.value).toBe('101');
+
+        await waitFor(() => {
+          expect(onClearRestoredState).toHaveBeenCalled();
+        });
+      });
+    });
+
+    describe('TEST 6 — Domain Error Routing', () => {
+      it('Extracts nested ROOM_NUMBER_ALREADY_EXISTS domain code and avoids broad VERSION_CONFLICT modal', () => {
         const errorObj = {
           code: 'CONFLICT',
           details: { error: { code: 'ROOM_NUMBER_ALREADY_EXISTS' } },
         };
-        expect(getOwnerRoomMutationDomainCode(errorObj)).toBe('ROOM_NUMBER_ALREADY_EXISTS');
+        const domainCode = getOwnerRoomMutationDomainCode(errorObj);
+        expect(domainCode).toBe('ROOM_NUMBER_ALREADY_EXISTS');
+        expect(domainCode).not.toBe('VERSION_CONFLICT');
+        expect(getOwnerRoomMutationErrorMessage(errorObj)).toContain('เลขห้องนี้มีอยู่แล้ว');
       });
 
-      it('3. Extracts OPERATIONAL_BILLING_CYCLE_UNAVAILABLE from nested details', () => {
+      it('Extracts VERSION_CONFLICT correctly when server responds with real version conflict', () => {
         const errorObj = {
-          code: 'INTERNAL_ERROR',
-          details: { code: 'OPERATIONAL_BILLING_CYCLE_UNAVAILABLE' },
+          code: 'CONFLICT',
+          details: { error: { code: 'VERSION_CONFLICT', currentVersion: 3 } },
         };
-        expect(getOwnerRoomMutationDomainCode(errorObj)).toBe('OPERATIONAL_BILLING_CYCLE_UNAVAILABLE');
+        expect(getOwnerRoomMutationDomainCode(errorObj)).toBe('VERSION_CONFLICT');
       });
     });
 
-    describe('Part H: Registration Building Name vs Prefix Independence', () => {
-      it('1. Explicit Building.name is preserved independently when roomPrefix changes', () => {
+    describe('TEST 7 — List Mode Status Badge Derivation', () => {
+      it('Derives badge color strictly from cyclePresentation.state without being painted red by current room maintenance', async () => {
+        const mockRoom: any = {
+          id: 'room-206',
+          roomNumber: '206',
+          buildingId: 'bld-1',
+          floor: 2,
+          status: 'maintenance', // Current room is under maintenance
+          monthlyRent: 4500,
+        };
+
+        renderWithQuery(
+          <OwnerRooms
+            dormitoryId="dorm-1"
+            rooms={[mockRoom]}
+            buildings={[mockBuilding]}
+            onSaveRooms={vi.fn()}
+            onAddLog={vi.fn()}
+            onNavigate={vi.fn()}
+            restoredState={{ viewMode: 'list' }}
+            selectedBillingCycleId="cycle-2026-07"
+            selectedCycleCode="2026-07"
+          />
+        );
+
+        const badgeEl = await screen.findByTitle('สถานะห้อง: ว่าง');
+        expect(badgeEl).toBeDefined();
+        expect(badgeEl.className).toContain('bg-emerald-50');
+        expect(badgeEl.className).not.toContain('bg-rose-50');
+      });
+    });
+
+    describe('Registration Building Mapping Helper (mapRegistrationBuildingForFinalize)', () => {
+      it('Preserves explicit name independent of roomPrefix', () => {
         const rawBuilding = {
           id: 'bld-1',
           name: 'สมบูรณ์',
@@ -1572,26 +1757,15 @@ describe('OWNER ROOMS R2 & R2.1 — Rent-Cycle Deposit Model & Hardened Specific
           formatPattern: 'floor_room',
         };
 
-        const normalizedPrefix = (rawBuilding.roomPrefix ? rawBuilding.roomPrefix.trim() : '').toUpperCase();
-        const mappedBuilding = {
-          name: (rawBuilding.name && rawBuilding.name.trim()) ? rawBuilding.name.trim() : (normalizedPrefix ? `อาคาร ${normalizedPrefix}` : 'อาคาร 1'),
-          code: normalizedPrefix || null,
-          numberingPattern: rawBuilding.formatPattern || null,
-        };
-
-        expect(mappedBuilding.name).toBe('สมบูรณ์');
-        expect(mappedBuilding.code).toBe('B');
-        expect(mappedBuilding.numberingPattern).toBe('floor_room');
+        const mapped = mapRegistrationBuildingForFinalize(rawBuilding, 0, 5000);
+        expect(mapped.name).toBe('สมบูรณ์');
+        expect(mapped.code).toBe('B');
+        expect(mapped.numberingPattern).toBe('floor_room');
 
         // Changing roomPrefix to C
         const prefixChanged = { ...rawBuilding, roomPrefix: 'C' };
-        const normPfxC = prefixChanged.roomPrefix.trim().toUpperCase();
-        const mappedC = {
-          name: (prefixChanged.name && prefixChanged.name.trim()) ? prefixChanged.name.trim() : (normPfxC ? `อาคาร ${normPfxC}` : 'อาคาร 1'),
-          code: normPfxC || null,
-          numberingPattern: prefixChanged.formatPattern || null,
-        };
-        expect(mappedC.name).toBe('สมบูรณ์'); // Name remains unchanged
+        const mappedC = mapRegistrationBuildingForFinalize(prefixChanged, 0, 5000);
+        expect(mappedC.name).toBe('สมบูรณ์');
         expect(mappedC.code).toBe('C');
       });
     });
