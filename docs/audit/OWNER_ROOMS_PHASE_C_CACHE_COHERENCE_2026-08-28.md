@@ -1,12 +1,12 @@
-# HORPLUS-V2 — OWNER ROOMS PHASE C CACHE COHERENCE REPORT
+# HORPLUS-V2 — OWNER ROOMS PHASE C & C.1 CACHE COHERENCE REPORT
 
-**Document ID**: `DOC-OWNER-ROOMS-PHASE-C-20260828`  
-**Date**: August 28, 2026  
-**Repository**: `phoom007/HorPlus-V2`  
-**Implementation Branch**: `fix/owner-rooms-cache-coherence-phase-c-20260828`  
-**Base AB.1 Commit**: `71a563f25c228e87b92972d6c39d3c1222d9a704`  
-**Current `origin/main`**: `7609817303e1403b87ab790935941ee8f90f1258`  
-**Scope**: Phase C — Dependency-Aware Cross-Menu Cache Coherence (Phases D–G strictly deferred)
+**Document ID**: `DOC-OWNER-ROOMS-PHASE-C1-20260828`
+**Date**: August 28, 2026
+**Repository**: `phoom007/HorPlus-V2`
+**Base Phase C Commit**: `15364a2e36a741603a089ea829c6dc475f4bb84d`
+**Current `origin/main`**: `7609817303e1403b87ab790935941ee8f90f1258`
+**Implementation Branch**: `fix/owner-rooms-cache-coherence-phase-c1-20260828`
+**Scope**: Phase C.1 — Precise Room-Mutation Cache Invalidation Correction
 
 ---
 
@@ -15,8 +15,8 @@
 | Parameter | Value / Commit SHA |
 | :--- | :--- |
 | **Top-Level Directory** | `D:/HorPlus-V2` |
-| **Implementation Branch** | `fix/owner-rooms-cache-coherence-phase-c-20260828` |
-| **Base AB.1 Commit** | `71a563f25c228e87b92972d6c39d3c1222d9a704` |
+| **Implementation Branch** | `fix/owner-rooms-cache-coherence-phase-c1-20260828` |
+| **Base Phase C Commit** | `15364a2e36a741603a089ea829c6dc475f4bb84d` |
 | **Current origin/main** | `7609817303e1403b87ab790935941ee8f90f1258` |
 | **Working Tree Isolation** | `docs/uat/local07-expected-results.json` preserved untouched. |
 
@@ -40,73 +40,101 @@ queryKeys.meterWorkspace(dormId, cycle)  // ['meter', dormId, cycleId, 'workspac
 queryKeys.meterPreviewContext(dorm, cyc) // ['meter', dormId, cycleId, 'preview-context']
 ```
 
-### Resource Consumer Mapping
+---
 
-| Tab / Menu | Canonical Queries Consumed via `getTargetQueriesForTab` |
-| :--- | :--- |
-| **Dashboard** | `rooms`, `buildings`, `billingCycles`, `bills`, `maintenance`, `tenants`, `contracts`, `meterReadings` (if cycle active) |
-| **Rooms** | `rooms`, `buildings`, `tenants`, `contracts`, `bills` |
-| **Tenants** | `tenants`, `rooms`, `contracts`, `bills` |
-| **Contracts** | `contracts`, `rooms`, `tenants`, `bills` |
-| **Meters** | `rooms`, `buildings`, `billingCycles`, `bills`, `tenants`, `contracts`, `meterWorkspace`, `meterPreviewContext` |
-| **Maintenance** | `maintenance`, `rooms`, `tenants` |
-| **Announcements** | `announcements`, `rooms`, `buildings` |
-| **Reports** | `rooms`, `bills`, `buildings`, `tenants`, `contracts`, `billingCycles` |
+## 3. Precise Room-Mutation Invalidation Matrix (Phase C.1)
+
+| Mutation | Rooms Cache | Meter Preview Context | Unrelated Resources (`meterWorkspace`, `contracts`, `tenants`, `bills`) | Downstream Invariant & Reason |
+| :--- | :---: | :---: | :---: | :--- |
+| **Create** | **INVALIDATE** | **INVALIDATE** (all cached cycles in same dorm) | **NO** | Adds a new room row in PostgreSQL `rooms`. All billing-cycle preview queries in the dormitory require room membership sync. Unrelated resources are untouched. |
+| **Archive** | **INVALIDATE** | **INVALIDATE** (all cached cycles in same dorm) | **NO** | Marks `deletedAt` on room. Dropped from `roomRepo.findAll`. All cached preview cycles in the dormitory must drop the archived room. |
+| **Room number change** | **INVALIDATE** | **INVALIDATE** (all cached cycles in same dorm) | **NO** | Renames room identity displayed in `meterPreviewContext.rooms[].roomNumber`. |
+| **Floor** | **INVALIDATE** | **NO** | **NO** | Floor is not a field in `MeterBillingPreviewContext`. Preview context is preserved. |
+| **Building** | **INVALIDATE** | **NO** | **NO** | Building assignment is not represented in `MeterBillingPreviewContext`. |
+| **Rent prices** (`monthlyRent`, `termRent`, `dailyRent`) | **INVALIDATE** | **NO** | **NO** | Default catalog prices apply strictly to future contracts. Active rental billing uses locked snapshots (`contract.rentAmount`). Meter preview context is snapshot-based and NOT stale. |
+| **Deposit** (`depositAmount`) | **INVALIDATE** | **NO** | **NO** | Default catalog deposit applies to future contracts. Active contract deposits are locked snapshots. |
+| **Initial meter values** | **INVALIDATE** | **NO** | **NO** | Baseline counter configuration. Does not alter past/current billing cycle `meter_readings` or preview calculations. |
+| **Status** (`vacant` ↔ `maintenance`) | **INVALIDATE** | **NO** | **NO** | Operational status. Dashboard occupancy counters and dropdown filters derive directly from `queryKeys.rooms`. |
+| **OCC refresh** | **INVALIDATE** | **NO** | **NO** | Conflict resolution reload. Refetches fresh `rooms` state only without invalidating preview context. |
+
+### Explicit Cache Invalidation Guarantees
+
+```text
+meterWorkspace: NEVER invalidated by Room mutations
+meterReadings: NEVER invalidated by Room mutations
+meterDraftStore: NEVER cleared or destroyed on Room mutations
+contracts: NOT invalidated
+tenants: NOT invalidated
+bills: NOT invalidated
+payments: NOT invalidated
+```
 
 ---
 
-## 3. Room Mutation Dependency Matrix
+## 4. Implementation Details
 
-For each Room mutation type, the following table details which cached server-state resources genuinely become stale versus those that remain valid:
+### A. Shared Impact Type & Helper (`src/lib/roomMutationCache.ts`)
 
-| Room Mutation Type | `rooms(dormId)` | `tenants(dormId)` | `contracts(dormId)` | `bills(dormId)` | `meterWorkspace` | `meterPreviewContext` | `meterReadings` | Page-Specific Caches | Downstream Invariant & Rationale |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
-| **1. Create Room** | **INVALIDATE** | NO | NO | NO | NO | **INVALIDATE (cycle)** | NO | NONE | Adds a new row in PostgreSQL `rooms`. `queryKeys.rooms` refetches. `meterPreviewContext` contains the list of all dormitory rooms; must be refreshed if a cycle is cached. Unrelated resources are untouched. |
-| **2. Update Room Identity** (`roomNumber`, `floor`, `buildingId`) | **INVALIDATE** | NO | NO | NO | NO | **INVALIDATE (cycle)** | NO | NONE | Renames room or changes floor/building assignment in `rooms`. `meterPreviewContext` displays `roomNumber`. Tenants/contracts/bills untouched. |
-| **3. Update Room Pricing** (`monthlyRent`, `termRent`, `dailyRent`) | **INVALIDATE** | NO | NO | NO | NO | NO | NO | NONE | Modifies default catalog prices in `rooms`. Active contract billing uses immutable snapshots (`contract.rentAmount`), not raw catalog prices. Existing bills, contracts, and meter workspace remain strictly unchanged. |
-| **4. Update Room Deposit** (`depositAmount`) | **INVALIDATE** | NO | NO | NO | NO | NO | NO | NONE | Modifies default catalog deposit. Active contract deposits are locked snapshots. No tenant or bill affected. |
-| **5. Update Initial Meter Reading** (`initialWaterReading`, `initialElectricityReading`) | **INVALIDATE** | NO | NO | NO | NO | NO | NO | NONE | Updates baseline counter for future initialization. Does not retroactively alter billing cycle `meterReading` records. |
-| **6. Status Toggle** (`vacant` ↔ `maintenance`) | **INVALIDATE** | NO | NO | NO | NO | NO | NO | NONE | Updates status in `rooms`. Dashboard occupancy calculations and dropdown filters derive directly from the refreshed `rooms` array. Meter readings and contracts are unaffected. |
-| **7. Archive Room** (`archiveRoom` / soft-delete) | **INVALIDATE** | NO | NO | NO | NO | **INVALIDATE (cycle)** | NO | NONE | Marks `deletedAt` timestamp on room. `rooms` query excludes deleted rooms. `meterPreviewContext` server implementation calls `findAll` without deleted rooms; invalidating it drops the archived room from cached cycle previews. |
+```ts
+export type RoomMutationImpact =
+  | { kind: 'create' }
+  | { kind: 'update'; roomNumberChanged: boolean }
+  | { kind: 'archive' }
+  | { kind: 'status' }
+  | { kind: 'refresh' };
+
+export function invalidateRoomMutationCaches(
+  queryClient: QueryClient,
+  dormitoryId: string,
+  impact: RoomMutationImpact
+): void {
+  // Always invalidate canonical rooms query for this dormitory
+  queryClient.invalidateQueries({ queryKey: queryKeys.rooms(dormitoryId) });
+
+  const shouldInvalidatePreview =
+    impact.kind === 'create' ||
+    impact.kind === 'archive' ||
+    (impact.kind === 'update' && impact.roomNumberChanged);
+
+  if (shouldInvalidatePreview) {
+    // Invalidate all cached preview-context queries for the SAME dormitory across all cycles
+    queryClient.invalidateQueries({
+      predicate: (query) => {
+        const key = query.queryKey;
+        return (
+          Array.isArray(key) &&
+          key[0] === 'meter' &&
+          key[1] === dormitoryId &&
+          key[3] === 'preview-context'
+        );
+      },
+    });
+  }
+}
+```
+
+### B. Parent Coordinator Integration (`src/pages/owner.tsx`)
+
+```ts
+  const handleSaveRooms = (_newRooms: Room[], impact: RoomMutationImpact = { kind: 'refresh' }) => {
+    invalidateRoomMutationCaches(queryClient, activeDormitoryId, impact);
+  };
+```
+
+### C. Child Component Mutation Bridge (`src/pages/owner/rooms.tsx`)
+
+- **Create Room**: calls `onSaveRooms(rooms, { kind: 'create' })`
+- **Update Room (price/deposit/floor/etc.)**: calls `onSaveRooms(rooms, { kind: 'update', roomNumberChanged: false })`
+- **Update Room (room number changed)**: calls `onSaveRooms(rooms, { kind: 'update', roomNumberChanged: true })`
+- **Archive Room**: calls `onSaveRooms(rooms, { kind: 'archive' })`
+- **Status Toggle**: calls `onSaveRooms(rooms, { kind: 'status' })`
+- **OCC Reload**: calls `onSaveRooms(rooms, { kind: 'refresh' })`
 
 ---
 
-## 4. Shared Consumer Analysis
+## 5. Active Rental Snapshot Protection
 
-In HorPlus-V2, UI screens/tabs do **not** own isolated copies of room data. Page names are navigation routes, not server resources.
-
-- **Dashboard**: Receives `rooms: Room[]` via props from `OwnerWorkspace`. When `queryKeys.rooms(dormId)` is invalidated, Dashboard metrics (total rooms, occupied, vacant, maintenance) immediately reflect the new server state without any dedicated "dashboard invalidation".
-- **Tenants**: Receives `rooms` via props. Room selectors and room badges update automatically. Tenant records are untouched.
-- **Contracts**: Receives `rooms` via props. Room catalog information updates; active contract rent snapshots remain unchanged.
-- **Maintenance / Announcements**: Room selectors receive the updated room list through the shared `rooms` prop.
-- **Reports**: Occupancy and revenue projections consume the shared `rooms` prop.
-
-**Conclusion**: No dedicated tab invalidations are required. Invalidation targets the true resource (`queryKeys.rooms(dormId)`), and all consumers update seamlessly.
-
----
-
-## 5. Meter Dependency Analysis
-
-1. **`meterWorkspace`**:
-   - Represents `meter_readings` and `RoomBillingCycleSnapshot` data for a cycle.
-   - Room catalog updates (rent, deposit, status) do NOT alter meter readings or cycle snapshots.
-   - `meterWorkspace` is **NOT** invalidated upon room metadata changes.
-2. **`meterPreviewContext`**:
-   - Resolved by `GET /api/v1/meters/workspace/preview-context?billingCycleId={cycleId}` (`MeterService.getMeterBillingPreviewContext`).
-   - Returns room-by-room billing preview. The room list is derived from `roomRepo.findAll(dormitoryId)`.
-   - When a room is **Created**, **Renamed (Identity)**, or **Archived**, `meterPreviewContext` becomes stale for the active cycle.
-   - When `selectedBillingCycleId` is present, `handleSaveRooms` invalidates `queryKeys.meterPreviewContext(activeDormitoryId, selectedBillingCycleId)`.
-3. **`meterReadings`**:
-   - Holds raw meter utility readings. Untouched by room catalog edits.
-4. **`meterDraftStore`**:
-   - In-memory sparse draft store preserving user typing before Save.
-   - Room mutations never call `clearDormitoryDrafts`. Unsaved user inputs in the Meter workspace are strictly preserved.
-
----
-
-## 6. Active Rental Snapshot Protection
-
-A core product invariant in HorPlus is that editing catalog prices in `/owner/rooms` **never** alters historical or active rental billing:
+A core invariant of the HorPlus billing architecture:
 
 ```text
 Room Catalog Rent: 5,000 → 5,500
@@ -116,133 +144,62 @@ Daily Stay: Locked at daily stay invoice totalRentAmount
 Meter Billing Preview: Continues to bill 4,500 based on Contract Snapshot
 ```
 
-Catalog prices apply strictly to new, future contract creations. Active agreement snapshots are immutable to room catalog edits.
+Room catalog edits apply strictly to new, future contracts. Active agreement snapshots and existing bills are immutable to room catalog edits.
 
 ---
 
-## 7. Implementation Details
+## 6. Multi-Dormitory and Multi-Cycle Isolation
 
-In `src/pages/owner.tsx`:
-
-```ts
-  // State saving handlers with targeted query invalidation
-  const handleSaveRooms = (_newRooms: Room[]) => {
-    queryClient.invalidateQueries({ queryKey: queryKeys.rooms(activeDormitoryId) });
-    if (selectedBillingCycleId) {
-      queryClient.invalidateQueries({ queryKey: queryKeys.meterPreviewContext(activeDormitoryId, selectedBillingCycleId) });
-    }
-  };
-```
-
-- **Keys Invalidated**:
-  - `queryKeys.rooms(activeDormitoryId)`
-  - `queryKeys.meterPreviewContext(activeDormitoryId, selectedBillingCycleId)` (if cycle selected)
-- **Keys Intentionally NOT Invalidated**:
-  - `queryKeys.tenants(activeDormitoryId)`
-  - `queryKeys.contracts(activeDormitoryId)`
-  - `queryKeys.bills(activeDormitoryId)`
-  - `queryKeys.payments(activeDormitoryId)`
-  - `queryKeys.maintenance(activeDormitoryId)`
-  - `queryKeys.announcements(activeDormitoryId)`
-  - `queryKeys.meterWorkspace(activeDormitoryId, selectedBillingCycleId)`
-  - `meterDraftStore`
+1. **Dormitory Isolation**:
+   - Predicate matches `key[1] === dormitoryId`.
+   - Mutations in Dormitory A invalidate Dormitory A queries only. Dormitory B queries remain completely clean (`isInvalidated: false`).
+2. **Multi-Cycle Invalidation**:
+   - On Room creation, archive, or rename, all cached cycles for that dormitory (`dormId`) are invalidated via the predicate.
+   - `selectedBillingCycleId` is no longer a restriction for stale preview queries.
+   - `meterWorkspace` (`key[3] === 'workspace'`) and `meterReadings` (`key[3] === 'readings'`) are never matched by the predicate and remain valid.
 
 ---
 
-## 8. Dormitory & Cycle Isolation
-
-- **Dormitory Isolation**: Every query key is strictly prefixed with `['owner', activeDormitoryId, ...]` or `['meter', activeDormitoryId, ...]`. Mutations in Dormitory A will never invalidate or refetch queries belonging to Dormitory B.
-- **Cycle Isolation**: `meterPreviewContext` invalidation targets only the currently active `selectedBillingCycleId`. Inactive past cycles are not prematurely invalidated.
-
----
-
-## 9. Test Impact Matrix
-
-| Test Case | Target Behavior Protected |
-| :--- | :--- |
-| **Test A & C: Dependency-Aware Invalidation** | Proves `queryKeys.rooms(dormId)` and `queryKeys.meterPreviewContext(dormId, cycleId)` are invalidated on save, while `tenants`, `contracts`, `bills`, and `meterWorkspace` are NOT invalidated. |
-| **Test B: No Unnecessary Invalidation** | Proves catalog price edits do not cause spurious invalidations of unrelated resources. |
-| **Test D: Multi-Dormitory Isolation** | Proves invalidation in Dormitory Alpha leaves Dormitory Beta cache completely clean (`isInvalidated: false`). |
-| **Test E: Active Contract Snapshot Protection** | Proves changing a room catalog price from 5,000 to 5,500 leaves active contract rent snapshot strictly at 4,500. |
-| **Test F: Meter Draft Store Preservation** | Proves room invalidations never invoke `meterDraftStore.clearDormitoryDrafts` or wipe unsaved dirty meter drafts. |
-
----
-
-## 10. Verification Results
+## 7. Verification Results
 
 ```text
-# 1. Static TypeScript Compilation
+# 1. Static TypeScript Compilation & Formatting
+$ git diff --check
 $ npm run lint
 > tsc --noEmit
 Result: PASS (0 errors)
 
-# 2. Phase C Focused Cache Coherence Suite
+# 2. Phase C.1 Focused Cache Coherence Suite
 $ npx vitest run src/tests/owner-rooms-cache-coherence-phase-c.test.tsx --environment happy-dom
- ✓ src/tests/owner-rooms-cache-coherence-phase-c.test.tsx (5 tests) 35ms
-   ✓ Test A & C: Dependency-Aware Invalidation on Room Mutation > invalidates queryKeys.rooms(dormId) and queryKeys.meterPreviewContext(dormId, cycleId) but leaves unrelated caches untouched
-   ✓ Test B: No Unnecessary Resource Invalidation for Catalog Price Edits > proves catalog price edits do not invalidate contract or tenant caches
-   ✓ Test D: Multi-Dormitory Cache Isolation > proves mutations in Dorm A do NOT invalidate or corrupt Dorm B cache
-   ✓ Test E: Active Contract Rent Snapshot Protection > proves room catalog price edit does not alter active contract rent snapshot
-   ✓ Test F: Meter Draft Store Preservation > proves room mutation does NOT clear or destroy user unsaved meter drafts
+ ✓ src/tests/owner-rooms-cache-coherence-phase-c.test.tsx (11 tests) 1781ms
+   ✓ Test 1: Price, Deposit, Status, and Refresh do NOT invalidate Preview Context (3 cases)
+   ✓ Test 2: Room Rename invalidates all preview cycles in the SAME dorm only
+   ✓ Test 3: Create and Archive invalidate rooms and all preview cycles in same dorm (2 cases)
+   ✓ Test 4: OwnerRooms Component Mutation Metadata Bridge (3 cases: create, price update, archive)
+   ✓ Test 5: OCC Conflict Reload Metadata (passes { kind: 'refresh' } on reload action)
+   ✓ Test 6: Invariant Verification & Draft Store Integrity (proves draft store never cleared)
+Result: PASS (11/11 tests passed)
 
-# 3. Phase AB.1 Persistence & Data-Ready Navigation Suites
-$ npx vitest run src/tests/owner-rooms-persistence-phase-ab.test.tsx src/tests/local07-owner-data-ready-navigation.test.tsx --environment happy-dom
- ✓ src/tests/local07-owner-data-ready-navigation.test.tsx (23 tests) 474ms
- ✓ src/tests/owner-rooms-persistence-phase-ab.test.tsx (8 tests) 6852ms
-Result: PASS (31/31 tests passed)
+# 3. Phase AB.1 Persistence & OCC Suite
+$ npx vitest run src/tests/owner-rooms-persistence-phase-ab.test.tsx --environment happy-dom
+ ✓ src/tests/owner-rooms-persistence-phase-ab.test.tsx (8 tests) 3693ms
+Result: PASS (8/8 tests passed)
 ```
 
 ---
 
-## 11. Tests Deliberately Not Run
+## 8. Tests Deliberately Not Run
 
-Under the HorPlus **Impact-Based Testing Policy**, the following test suites were deliberately omitted because they are outside the impact set of the Phase C cache invalidation diff:
+Under the HorPlus **Impact-Based Testing Policy**, the following test suites were deliberately omitted:
 
-- Full backend regression suite (921 tests across 62 files): No backend code was modified in Phase C.
-- Full frontend regression suite (481 tests across 32 files): Unrelated pages (payments, LINE OA onboarding, login, etc.) were not modified.
-- Legacy prototype tests (`wave1g-owner-ui.test.tsx`): Known legacy prototype tests scheduled for Phase G.
-
----
-
-## 12. Manual UAT Walkthrough for Product Owner
-
-### UAT 1 — Room Price Edit → Dashboard Verification
-1. Navigate to `/owner/rooms`.
-2. Edit Room `101` catalog price from `4500` to `5000`. Click Save.
-3. Click **Dashboard** tab in sidebar.
-4. **Expected**: Dashboard renders updated room pricing/overview without requiring full browser reload (F5).
-
-### UAT 2 — Room Price Edit → Contracts Snapshot Verification
-1. Note Room `102` has an active contract with rent `4500`.
-2. Go to `/owner/rooms`, edit Room `102` catalog price to `6000`. Click Save.
-3. Open **Contracts** tab.
-4. **Expected**: The active contract for Room `102` continues to show rent `4,500` (snapshot preserved).
-
-### UAT 3 — Room Price Edit → Meter Billing Preview Verification
-1. Note Room `102` in **Meters** tab has rent `4,500` (from active contract).
-2. In `/owner/rooms`, change catalog price of Room `102` to `6,000`. Click Save.
-3. Navigate back to **Meters** tab.
-4. **Expected**: Room `102` monthly rent in meter preview remains `4,500.00` (snapshot authority preserved).
-
-### UAT 4 — Create Room → Cross-Menu Propagation
-1. In `/owner/rooms`, click **"+ เพิ่มห้องพัก"** and create Room `901`.
-2. Navigate to **Dashboard**, **Meters**, and **Reports**.
-3. **Expected**: Room `901` is visible across all three tabs automatically via canonical `queryKeys.rooms`.
-
-### UAT 5 — Archive Room Verification
-1. In `/owner/rooms`, open a vacant room without tenant and click **"จัดเก็บห้องพัก"**.
-2. Confirm the archive action.
-3. Navigate to **Meters** and **Dashboard**.
-4. **Expected**: The archived room disappears from active lists without leaving orphaned rows.
-
-### UAT 6 — Multi-Dormitory Isolation Verification
-1. Edit a room in **Dormitory A**.
-2. Switch to **Dormitory B** via the dormitory selector.
-3. **Expected**: Dormitory B's cached rooms and billing previews are unaffected and retain their own separate server state.
+- Full backend regression suite (921 tests across 62 files): No backend files were touched in Phase C.1.
+- Backend lint / Prisma validation: No backend or Prisma changes.
+- Full frontend regression suite (481 tests across 32 files): Unrelated features (payments, LINE OA, tenant onboarding, billing engine) were not modified.
+- Full LOCAL-07 navigation suite: Navigation routing and query registration were not modified.
 
 ---
 
-## 13. Deferred Work (Phases D–G)
+## 9. Deferred Work (Phases D–G)
 
 - **Phase D**: Quick Add Tenant modal connection (`POST /contracts`).
 - **Phase E**: Dynamic contract deposit formula policy.
