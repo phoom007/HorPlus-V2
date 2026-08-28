@@ -193,6 +193,7 @@ export class RoomService {
           normalizedRoomNumber,
           floor: data.floor || 1,
           roomType: data.roomType || 'standard',
+          status: data.status || 'vacant',
           rentCycle: data.rentCycle || 'monthly',
           monthlyRent: data.monthlyRent || null,
           termRent: data.termRent || null,
