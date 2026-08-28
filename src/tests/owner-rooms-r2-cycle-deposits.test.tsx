@@ -11,6 +11,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach } from 'vitest';
 import { formatShortThaiBuddhistDate } from '../utils/calendarDate';
 import { Room } from '../types';
+import { httpRequest } from '../data/httpClient';
 
 vi.mock('../data/httpClient', async (importOriginal) => {
   const actual: any = await importOriginal();
@@ -2952,6 +2953,359 @@ describe('OWNER ROOMS R2 & R2.1 — Rent-Cycle Deposit Model & Hardened Specific
         const modalMaintenanceBtn = screen.getByRole('button', { name: /ปิดปรับปรุง/ });
         expect((modalMaintenanceBtn as HTMLButtonElement).disabled).toBe(true);
         expect(modalMaintenanceBtn.getAttribute('title')).toBe('มีผู้เช่าพักอยู่ ต้องย้ายหรือสิ้นสุดการเช่าก่อน');
+      });
+      it('T21 — Part E Stale Pointer Modal: Reopening maintenance room with stale currentTenantId sets status=vacant and shows no false warning', async () => {
+        cleanup();
+        let capturedChanges: any = null;
+        (httpRequest as any).mockImplementation(async (method: string, url: string, ...args: any[]) => {
+          if (method === 'PUT' && url && url.includes('/properties/rooms/')) {
+            capturedChanges = args[0];
+            return {
+              data: {
+                id: 'room-reopen-stale-1',
+                buildingId: 'bld-1',
+                roomNumber: '401',
+                floor: 4,
+                status: args[0]?.status || 'vacant',
+                monthlyRent: 4500,
+                depositAmount: 5000,
+                createdAt: '2026-01-01T00:00:00.000Z',
+                updatedAt: '2026-01-01T00:00:00.000Z',
+                ...args[0],
+              },
+            };
+          }
+          if (url && url.includes('/defaults')) {
+            return { success: true, data: { property: { defaultDeposit: 5000, defaultMonthlyRent: 4500 } } };
+          }
+          if (url && url.includes('/preview-context')) {
+            return { success: true, data: { dormitoryId: 'dorm-1', billingCycleId: 'cycle-2026-07', rooms: [] } };
+          }
+          return { success: true, data: {} };
+        });
+
+        const roomMaintenanceStaleTenant: Room = {
+          id: 'room-reopen-stale-1',
+          buildingId: 'bld-1',
+          roomNumber: '401',
+          floor: 4,
+          status: 'maintenance',
+          currentTenantId: 'stale-tenant-legacy-999',
+          monthlyRent: 4500,
+          depositAmount: 5000,
+          maxOccupants: 2,
+          initialWaterMeter: 0,
+          initialElectricMeter: 0,
+          images: [],
+          amenities: [],
+          createdAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+          currentOperationalActions: {
+            canSetMaintenance: true,
+            maintenanceBlockReason: null,
+          },
+        };
+
+        const testBuilding = { id: 'bld-1', name: 'Building A', floors: 4 };
+
+        renderWithQuery(
+          <OwnerRooms
+            dormitoryId="dorm-1"
+            rooms={[roomMaintenanceStaleTenant]}
+            buildings={[testBuilding as any]}
+            onSaveRooms={vi.fn()}
+            onAddLog={vi.fn()}
+            onNavigate={vi.fn()}
+            restoredState={{ viewMode: 'grid' }}
+          />
+        );
+
+        // Open edit modal
+        const editBtn = await screen.findByTitle('แก้ไขรายละเอียดห้องพัก');
+        fireEvent.click(editBtn);
+
+        // Assert NO warning 'ห้องนี้มีผู้เช่าพักอยู่' is displayed
+        expect(screen.queryByText(/ห้องนี้มีผู้เช่าพักอยู่/)).toBeNull();
+
+        // Click 'เปิดใช้งาน'
+        const openBtn = screen.getByRole('button', { name: /เปิดใช้งาน/ });
+        fireEvent.click(openBtn);
+
+        // Submit form
+        const formEl = document.getElementById('room-edit-form');
+        expect(formEl).toBeDefined();
+        fireEvent.submit(formEl!);
+
+        // Assert mutation sends status: 'vacant' (NOT 'occupied')
+        await waitFor(() => {
+          expect(capturedChanges).toBeDefined();
+          expect(capturedChanges.status).toBe('vacant');
+        });
+      });
+
+      it('T22 — Part F Occupied Room Safe-Edit: Editing catalog field on occupied room preserves status=occupied', async () => {
+        cleanup();
+        let capturedChanges: any = null;
+        (httpRequest as any).mockImplementation(async (method: string, url: string, ...args: any[]) => {
+          if (method === 'PUT' && url && url.includes('/properties/rooms/')) {
+            capturedChanges = args[0];
+            return {
+              data: {
+                id: 'room-occupied-safe-1',
+                buildingId: 'bld-1',
+                roomNumber: '402',
+                floor: 4,
+                status: args[0]?.status || 'occupied',
+                monthlyRent: args[0]?.monthlyRent || 4500,
+                depositAmount: 5000,
+                createdAt: '2026-01-01T00:00:00.000Z',
+                updatedAt: '2026-01-01T00:00:00.000Z',
+                ...args[0],
+              },
+            };
+          }
+          if (url && url.includes('/defaults')) {
+            return { success: true, data: { property: { defaultDeposit: 5000, defaultMonthlyRent: 4500 } } };
+          }
+          if (url && url.includes('/preview-context')) {
+            return { success: true, data: { dormitoryId: 'dorm-1', billingCycleId: 'cycle-2026-07', rooms: [] } };
+          }
+          return { success: true, data: {} };
+        });
+
+        const roomOccupied: Room = {
+          id: 'room-occupied-safe-1',
+          buildingId: 'bld-1',
+          roomNumber: '402',
+          floor: 4,
+          status: 'occupied',
+          currentTenantId: 'active-tenant-1',
+          monthlyRent: 4500,
+          depositAmount: 5000,
+          maxOccupants: 2,
+          initialWaterMeter: 0,
+          initialElectricMeter: 0,
+          images: [],
+          amenities: [],
+          createdAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+          currentOperationalActions: {
+            canSetMaintenance: false,
+            maintenanceBlockReason: 'ACTIVE_OCCUPANCY',
+          },
+        };
+
+        const testBuilding = { id: 'bld-1', name: 'Building A', floors: 4 };
+
+        renderWithQuery(
+          <OwnerRooms
+            dormitoryId="dorm-1"
+            rooms={[roomOccupied]}
+            buildings={[testBuilding as any]}
+            onSaveRooms={vi.fn()}
+            onAddLog={vi.fn()}
+            onNavigate={vi.fn()}
+            restoredState={{ viewMode: 'grid' }}
+          />
+        );
+
+        // Open edit modal
+        const editBtn = await screen.findByTitle('แก้ไขรายละเอียดห้องพัก');
+        fireEvent.click(editBtn);
+
+        // Change monthly rent only (find input with value 4500)
+        const rentInput = screen.getByDisplayValue('4500');
+        fireEvent.change(rentInput, { target: { value: '5200' } });
+
+        // Submit form
+        const formEl = document.getElementById('room-edit-form');
+        expect(formEl).toBeDefined();
+        fireEvent.submit(formEl!);
+
+        // Assert mutation preserves status: 'occupied'
+        await waitFor(() => {
+          expect(capturedChanges).toBeDefined();
+          expect(capturedChanges.status).toBe('occupied');
+          expect(capturedChanges.monthlyRent).toBe('5200');
+        });
+      });
+
+      it('T23 — Part G Reserved Room Safe-Edit: Editing catalog field on reserved room preserves status=reserved', async () => {
+        cleanup();
+        let capturedChanges: any = null;
+        (httpRequest as any).mockImplementation(async (method: string, url: string, ...args: any[]) => {
+          if (method === 'PUT' && url && url.includes('/properties/rooms/')) {
+            capturedChanges = args[0];
+            return {
+              data: {
+                id: 'room-reserved-safe-1',
+                buildingId: 'bld-1',
+                roomNumber: '403',
+                floor: 4,
+                status: args[0]?.status || 'reserved',
+                monthlyRent: args[0]?.monthlyRent || 4500,
+                depositAmount: 5000,
+                createdAt: '2026-01-01T00:00:00.000Z',
+                updatedAt: '2026-01-01T00:00:00.000Z',
+                ...args[0],
+              },
+            };
+          }
+          if (url && url.includes('/defaults')) {
+            return { success: true, data: { property: { defaultDeposit: 5000, defaultMonthlyRent: 4500 } } };
+          }
+          if (url && url.includes('/preview-context')) {
+            return { success: true, data: { dormitoryId: 'dorm-1', billingCycleId: 'cycle-2026-07', rooms: [] } };
+          }
+          return { success: true, data: {} };
+        });
+
+        const roomReserved: Room = {
+          id: 'room-reserved-safe-1',
+          buildingId: 'bld-1',
+          roomNumber: '403',
+          floor: 4,
+          status: 'reserved' as any,
+          monthlyRent: 4500,
+          depositAmount: 5000,
+          maxOccupants: 2,
+          initialWaterMeter: 0,
+          initialElectricMeter: 0,
+          images: [],
+          amenities: [],
+          createdAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+          currentOperationalActions: {
+            canSetMaintenance: false,
+            maintenanceBlockReason: 'ACTIVE_RESERVATION',
+          },
+        };
+
+        const testBuilding = { id: 'bld-1', name: 'Building A', floors: 4 };
+
+        renderWithQuery(
+          <OwnerRooms
+            dormitoryId="dorm-1"
+            rooms={[roomReserved]}
+            buildings={[testBuilding as any]}
+            onSaveRooms={vi.fn()}
+            onAddLog={vi.fn()}
+            onNavigate={vi.fn()}
+            restoredState={{ viewMode: 'grid' }}
+          />
+        );
+
+        // Open edit modal
+        const editBtn = await screen.findByTitle('แก้ไขรายละเอียดห้องพัก');
+        fireEvent.click(editBtn);
+
+        // Change monthly rent only
+        const rentInput = screen.getByDisplayValue('4500');
+        fireEvent.change(rentInput, { target: { value: '4800' } });
+
+        // Submit form
+        const formEl = document.getElementById('room-edit-form');
+        expect(formEl).toBeDefined();
+        fireEvent.submit(formEl!);
+
+        // Assert mutation preserves status: 'reserved'
+        await waitFor(() => {
+          expect(capturedChanges).toBeDefined();
+          expect(capturedChanges.status).toBe('reserved');
+          expect(capturedChanges.monthlyRent).toBe('4800');
+        });
+      });
+
+      it('T24 — Part H Warning Texts: Modal warning reflects canonical maintenanceBlockReason exactly', async () => {
+        cleanup();
+
+        // 1. ACTIVE_OCCUPANCY warning
+        const roomOccupied: Room = {
+          id: 'room-warn-1',
+          buildingId: 'bld-1',
+          roomNumber: '404',
+          floor: 4,
+          status: 'occupied',
+          currentOperationalActions: {
+            canSetMaintenance: false,
+            maintenanceBlockReason: 'ACTIVE_OCCUPANCY',
+          },
+        } as any;
+
+        const testBuilding = { id: 'bld-1', name: 'Building A', floors: 4 };
+
+        renderWithQuery(
+          <OwnerRooms
+            dormitoryId="dorm-1"
+            rooms={[roomOccupied]}
+            buildings={[testBuilding as any]}
+            onSaveRooms={vi.fn()}
+            onAddLog={vi.fn()}
+            onNavigate={vi.fn()}
+            restoredState={{ viewMode: 'grid' }}
+          />
+        );
+
+        const editBtn1 = await screen.findByTitle('แก้ไขรายละเอียดห้องพัก');
+        fireEvent.click(editBtn1);
+        expect(screen.getByText('⚠️ มีผู้เช่าพักอยู่ ต้องย้ายหรือสิ้นสุดการเช่าก่อน')).toBeDefined();
+
+        // 2. ACTIVE_RESERVATION warning
+        cleanup();
+        const roomReserved: Room = {
+          id: 'room-warn-2',
+          buildingId: 'bld-1',
+          roomNumber: '405',
+          floor: 4,
+          status: 'vacant',
+          currentOperationalActions: {
+            canSetMaintenance: false,
+            maintenanceBlockReason: 'ACTIVE_RESERVATION',
+          },
+        } as any;
+
+        renderWithQuery(
+          <OwnerRooms
+            dormitoryId="dorm-1"
+            rooms={[roomReserved]}
+            buildings={[testBuilding as any]}
+            onSaveRooms={vi.fn()}
+            onAddLog={vi.fn()}
+            onNavigate={vi.fn()}
+            restoredState={{ viewMode: 'grid' }}
+          />
+        );
+
+        const editBtn2 = await screen.findByTitle('แก้ไขรายละเอียดห้องพัก');
+        fireEvent.click(editBtn2);
+        expect(screen.getByText('⚠️ มีการจองล่วงหน้า ต้องจัดการการจองก่อน')).toBeDefined();
+
+        // 3. Missing metadata fail-closed warning
+        cleanup();
+        const roomMissingMeta: Room = {
+          id: 'room-warn-3',
+          buildingId: 'bld-1',
+          roomNumber: '406',
+          floor: 4,
+          status: 'vacant',
+          currentOperationalActions: null as any,
+        } as any;
+
+        renderWithQuery(
+          <OwnerRooms
+            dormitoryId="dorm-1"
+            rooms={[roomMissingMeta]}
+            buildings={[testBuilding as any]}
+            onSaveRooms={vi.fn()}
+            onAddLog={vi.fn()}
+            onNavigate={vi.fn()}
+            restoredState={{ viewMode: 'grid' }}
+          />
+        );
+
+        const editBtn3 = await screen.findByTitle('แก้ไขรายละเอียดห้องพัก');
+        fireEvent.click(editBtn3);
+        expect(screen.getByText('⚠️ ไม่สามารถตรวจสอบสถานะการเปิดปิดห้องได้ กรุณาโหลดข้อมูลใหม่')).toBeDefined();
       });
     });
 

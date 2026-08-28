@@ -886,3 +886,42 @@ Following the independent audit of R3.4c, two critical commit boundary and autho
 | Backend Production Build | `npm --prefix server run build` | **0 Errors (PASS)** |
 | UAT Expected Results Baseline Diff | `git diff 17330a94ef40a67b513e698334673558c880ac8d..HEAD -- docs/uat/local07-expected-results.json` | **0 Diff / Clean Baseline** |
 | Line Ending & Whitespace Hygiene | `git -c core.whitespace=cr-at-eol diff --check` | **0 Warnings / Clean** |
+
+---
+
+## 28. OWNER ROOMS R3.4e — Edit Modal Status Single-Authority Finalization (2026-08-28)
+
+### Context & Independent Review Findings
+Following the independent audit of R3.4d, a final authority defect in the Edit Room modal was identified and corrected:
+- **Defect**: While direct status toggle in R3.4d was made single-authority, the Edit Room modal's "เปิดใช้งาน" action still evaluated `setRoomStatus(editingRoom?.currentTenantId ? 'occupied' : 'vacant')`, and rendered a warning `⚠️ ห้องนี้มีผู้เช่าพักอยู่` solely on `editingRoom?.currentTenantId`.
+- **Consequence**: If a room was in `maintenance` with a stale compatibility `currentTenantId` pointer, opening the room via the Edit modal would falsely fabricate `status: 'occupied'`.
+
+---
+
+### Surgical Implementations & Architectural Guarantees (R3.4e)
+
+#### Part A: Reopening Maintenance Room Sets `vacant`
+- When reopening a room currently in `maintenance`, pressing "เปิดใช้งาน" and saving explicitly sets target `status = 'vacant'`.
+- Stale `currentTenantId` pointers are never used to infer operational occupancy.
+
+#### Part B: Safe Catalog Editing Preserves Authoritative Operational Status
+- When editing catalog fields (e.g. monthly rent, deposits, floor, initial meters) on an existing room that is `occupied` or `reserved`, saving strictly preserves the original authoritative `Room.status`.
+- Non-maintenance statuses do not accidentally collapse to `vacant` when saving general details.
+
+#### Part C: Single Authority Warning Presentation
+- Replaced `editingRoom?.currentTenantId` warning trigger with canonical `currentOperationalActions.maintenanceBlockReason`:
+  - `ACTIVE_OCCUPANCY`: *"⚠️ มีผู้เช่าพักอยู่ ต้องย้ายหรือสิ้นสุดการเช่าก่อน"*
+  - `ACTIVE_RESERVATION`: *"⚠️ มีการจองล่วงหน้า ต้องจัดการการจองก่อน"*
+  - `canSetMaintenance = true`: No warning rendered (even if stale `currentTenantId` is present).
+  - Missing metadata: *"⚠️ ไม่สามารถตรวจสอบสถานะการเปิดปิดห้องได้ กรุณาโหลดข้อมูลใหม่"*.
+
+---
+
+### Verification Matrix (R3.4e)
+
+| Test / Check Suite | Target Command / Path | Result |
+|---|---|---|
+| Frontend Vitest Test Suite (incl. T1-T24) | `npx vitest run src/tests/owner-rooms-r2-cycle-deposits.test.tsx --environment happy-dom` | **112 / 112 PASS (100%)** |
+| Frontend TypeScript Check | `npm run lint` | **0 Errors (PASS)** |
+| Line Ending & Whitespace Hygiene | `git -c core.whitespace=cr-at-eol diff --check` | **0 Warnings / Clean** |
+| UAT Expected Results Baseline Diff | `git diff 73b583990c8197c40a17475e160816ea0a19752b..HEAD -- docs/uat/local07-expected-results.json` | **0 Diff / Clean Baseline** |

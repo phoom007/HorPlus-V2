@@ -522,12 +522,18 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
     const digitsOnly = roomNumber.replace(/\D/g, '');
     const calculatedFloor = Number(floor) || (digitsOnly ? (parseInt(digitsOnly.charAt(0)) || 1) : 1);
 
-    // Calculate effective status based on operational vs maintenance
-    let effectiveStatus: RoomStatus = roomStatus;
+    // Calculate effective status based on operational vs maintenance (Part A & B Single Authority)
+    let effectiveStatus: RoomStatus;
     if (roomStatus === 'maintenance') {
       effectiveStatus = 'maintenance';
-    } else if (editingRoom?.currentTenantId) {
-      effectiveStatus = 'occupied';
+    } else if (editingRoom) {
+      if (editingRoom.status === 'maintenance') {
+        // Explicitly reopening a maintenance room -> vacant
+        effectiveStatus = 'vacant';
+      } else {
+        // Preserving existing authoritative operational status (occupied, reserved, vacant)
+        effectiveStatus = editingRoom.status;
+      }
     } else {
       effectiveStatus = 'vacant';
     }
@@ -2083,7 +2089,13 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                 type="button"
                 onClick={() => {
                   setErrorText(null);
-                  setRoomStatus(editingRoom?.currentTenantId ? 'occupied' : 'vacant');
+                  if (editingRoom?.status === 'maintenance') {
+                    setRoomStatus('vacant');
+                  } else if (editingRoom) {
+                    setRoomStatus(editingRoom.status);
+                  } else {
+                    setRoomStatus('vacant');
+                  }
                 }}
                 className={`py-2 px-3 text-xs font-extrabold rounded-xl border transition-all cursor-pointer text-center truncate ${roomStatus !== 'maintenance'
                     ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
@@ -2131,11 +2143,35 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                 );
               })()}
             </div>
-            {editingRoom?.currentTenantId && (
-              <p className="text-[11px] text-amber-600 font-semibold mt-1">
-                ⚠️ ห้องนี้มีผู้เช่าพักอยู่
-              </p>
-            )}
+            {(() => {
+              if (!editingRoom) return null;
+              const opActions = editingRoom.currentOperationalActions;
+              if (!opActions) {
+                return (
+                  <p className="text-[11px] text-amber-600 font-semibold mt-1">
+                    ⚠️ ไม่สามารถตรวจสอบสถานะการเปิดปิดห้องได้ กรุณาโหลดข้อมูลใหม่
+                  </p>
+                );
+              }
+              if (opActions.canSetMaintenance) {
+                return null;
+              }
+              if (opActions.maintenanceBlockReason === 'ACTIVE_OCCUPANCY') {
+                return (
+                  <p className="text-[11px] text-amber-600 font-semibold mt-1">
+                    ⚠️ มีผู้เช่าพักอยู่ ต้องย้ายหรือสิ้นสุดการเช่าก่อน
+                  </p>
+                );
+              }
+              if (opActions.maintenanceBlockReason === 'ACTIVE_RESERVATION') {
+                return (
+                  <p className="text-[11px] text-amber-600 font-semibold mt-1">
+                    ⚠️ มีการจองล่วงหน้า ต้องจัดการการจองก่อน
+                  </p>
+                );
+              }
+              return null;
+            })()}
           </div>
         </form>
       </Modal>
