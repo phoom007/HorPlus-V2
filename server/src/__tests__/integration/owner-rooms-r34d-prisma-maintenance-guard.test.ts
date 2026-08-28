@@ -1,18 +1,19 @@
 /**
  * @license Apache-2.0
- * Real Prisma / PostgreSQL Boundary & Concurrency Integration Tests for Owner Rooms Decision F1 (R3.4c)
+ * Real Prisma / PostgreSQL Boundary & Concurrency Integration Tests for Owner Rooms Decision F1 (R3.4d)
  *
  * Proves:
  * 1. Real Prisma schema field compatibility across DailyStay, Contract, and ProvisionalRentalTerm.
  * 2. RoomService.updateRoom transactional maintenance guard on live PostgreSQL database.
  * 3. Unified shared room-availability advisory lock across RoomService, Contract, Provisional, and DailyStay.
- * 4. Concurrency serialization invariants:
- *    - Maintenance vs Daily Stay Quick Add (correct DTO)
- *    - Maintenance vs Contract Creation / Activation
- *    - Maintenance vs Provisional Term Creation
- * 5. Committed status semantics (PENDING_APPROVAL does not block, RESERVED does block).
- * 6. Terminated contract physical interval semantics (future terminationEffectiveDate blocks).
- * 7. DefaultsService single & batch authoritative DTO enrichment with currentOperationalActions.
+ * 4. approveDailyStay commit boundary:
+ *    - Sequential Proof: Pending Daily -> Room Maintenance -> Approval Rejection (ROOM_UNDER_MAINTENANCE) with zero side effects.
+ *    - Concurrency Invariant: Room Maintenance toggle vs approveDailyStay.
+ *    - Double-Approval Stale-Read Invariant: Two concurrent approvals on same request produce exactly 1 approval and 0 duplicate effects.
+ * 5. Concurrency serialization invariants for Daily Quick Add, Contract Creation, and Provisional Term Creation.
+ * 6. Committed status semantics (PENDING_APPROVAL does not block, RESERVED does block).
+ * 7. Terminated contract physical interval semantics (future terminationEffectiveDate blocks).
+ * 8. Single shared eligibility resolver consistency (GET DTO matches PUT guard).
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
@@ -29,12 +30,13 @@ import { defaultsService } from '../../services/defaults.service.js';
 import { dailyStayService } from '../../services/daily-stay.service.js';
 import { provisionalRentalTermService } from '../../services/provisional-rental-term.service.js';
 import { subscriptionEntitlementService } from '../../services/subscription-entitlement.service.js';
+import { resolveCurrentMaintenanceEligibilityByRoom } from '../../utils/occupancy-interval.util.js';
 import { resetCachedEnv } from '../../config/env.js';
 
 const prisma = getPrismaClient();
 
-describe('HORPLUS R3.4c — Real Prisma / PostgreSQL Boundary & Concurrency Suite', () => {
-  const testRunId = `r34c_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+describe('HORPLUS R3.4d — Real Prisma / PostgreSQL Boundary & Concurrency Suite', () => {
+  const testRunId = `r34d_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
   let dormId: string;
   let bldId: string;
   let userId: string;
@@ -72,7 +74,7 @@ describe('HORPLUS R3.4c — Real Prisma / PostgreSQL Boundary & Concurrency Suit
         googleSubject: `sub_${testRunId}`,
         email: ownerEmail,
         emailNormalized: ownerEmail.toLowerCase(),
-        name: 'Test Owner R3.4c',
+        name: 'Test Owner R3.4d',
       },
     });
     userId = user.id;
@@ -80,7 +82,7 @@ describe('HORPLUS R3.4c — Real Prisma / PostgreSQL Boundary & Concurrency Suit
     // 2. Create Dormitory
     const dorm = await prisma.dormitory.create({
       data: {
-        name: `Dorm R3.4c ${testRunId}`,
+        name: `Dorm R3.4d ${testRunId}`,
         type: 'apartment',
         addressLine1: '123 Real Prisma St',
         status: 'active',
@@ -109,7 +111,7 @@ describe('HORPLUS R3.4c — Real Prisma / PostgreSQL Boundary & Concurrency Suit
       },
     });
 
-    // Subscription (PAID plan for unlimited room entitlement in integration tests)
+    // Subscription
     if (paidPlan) {
       await prisma.dormitorySubscription.create({
         data: {
@@ -195,6 +197,9 @@ describe('HORPLUS R3.4c — Real Prisma / PostgreSQL Boundary & Concurrency Suit
       'concurrencyDailyRoom',
       'concurrencyContractRoom',
       'concurrencyProvisionalRoom',
+      'sequentialPendingApprovalRoom',
+      'concurrencyPendingApprovalRoom',
+      'doubleApprovalRoom',
     ];
 
     for (let i = 0; i < keys.length; i++) {
@@ -224,6 +229,9 @@ describe('HORPLUS R3.4c — Real Prisma / PostgreSQL Boundary & Concurrency Suit
 
   afterAll(async () => {
     try {
+      await prisma.dailyStayInvoiceItem.deleteMany({ where: { invoice: { dormitoryId: dormId } } });
+      await prisma.dailyStayInvoice.deleteMany({ where: { dormitoryId: dormId } });
+      await prisma.occupancy.deleteMany({ where: { dormitoryId: dormId } });
       await prisma.dailyStay.deleteMany({ where: { dormitoryId: dormId } });
       await prisma.contract.deleteMany({ where: { dormitoryId: dormId } });
       await prisma.provisionalRentalTerm.deleteMany({ where: { dormitoryId: dormId } });
@@ -731,7 +739,7 @@ describe('HORPLUS R3.4c — Real Prisma / PostgreSQL Boundary & Concurrency Suit
 
   // --- Concurrency Invariant Tests ---
 
-  it('Case 15 — Daily Concurrency Invariant: Maintenance toggle vs Quick Add Daily Stay with valid production DTO', async () => {
+  it('Case 15 — Daily Quick Add Concurrency Invariant: Maintenance toggle vs Quick Add Daily Stay with valid production DTO', async () => {
     const roomId = roomIds.concurrencyDailyRoom;
     const now = new Date();
     const startDateStr = new Date(now.getTime() + 5 * 24 * 3600 * 1000).toISOString().split('T')[0];
@@ -769,7 +777,7 @@ describe('HORPLUS R3.4c — Real Prisma / PostgreSQL Boundary & Concurrency Suit
 
     // Assert rejected reason is an availability/F1 conflict (NOT validation error)
     const failureReason: any = (rejected[0] as PromiseRejectedResult).reason;
-    const errorCode = failureReason?.code || failureReason?.errorCode || failureReason?.message;
+    const errorCode = failureReason?.code || failureReason?.errorCode;
     expect([
       'ROOM_UNDER_MAINTENANCE',
       'ROOM_OCCUPIED_OR_HAS_ACTIVE_AGREEMENT',
@@ -887,7 +895,7 @@ describe('HORPLUS R3.4c — Real Prisma / PostgreSQL Boundary & Concurrency Suit
     expect(rejected.length).toBe(1);
 
     const failureReason: any = (rejected[0] as PromiseRejectedResult).reason;
-    const errorCode = failureReason?.code || failureReason?.errorCode || failureReason?.message;
+    const errorCode = failureReason?.code || failureReason?.errorCode;
     expect([
       'ROOM_UNDER_MAINTENANCE',
       'ROOM_OCCUPIED_OR_HAS_ACTIVE_AGREEMENT',
@@ -907,8 +915,6 @@ describe('HORPLUS R3.4c — Real Prisma / PostgreSQL Boundary & Concurrency Suit
       expect(finalRoom?.status).not.toBe('maintenance');
     }
   });
-
-  // --- DefaultsService Production DTO Attachment Test ---
 
   it('Case 18 — Authoritative Room DTO: Single and Batch responses attach canonical currentOperationalActions', async () => {
     const reservedRoomId = roomIds.dailyReserved;
@@ -930,5 +936,198 @@ describe('HORPLUS R3.4c — Real Prisma / PostgreSQL Boundary & Concurrency Suit
     expect(batchReserved?.currentOperationalActions).toBeDefined();
     expect(batchReserved?.currentOperationalActions.canSetMaintenance).toBe(false);
     expect(batchReserved?.currentOperationalActions.maintenanceBlockReason).toBe('ACTIVE_RESERVATION');
+  });
+
+  // --- R3.4d Daily Approval Commit Boundary Cases ---
+
+  it('Case 19 — Part D Sequential Proof: Pending Daily -> Room Maintenance -> Approval Rejection with zero side effects', async () => {
+    const roomId = roomIds.sequentialPendingApprovalRoom;
+    const now = new Date();
+    const startDate = new Date(now.getTime() + 10 * 24 * 3600 * 1000);
+    const endDate = new Date(now.getTime() + 13 * 24 * 3600 * 1000);
+
+    // 1. Create DailyStay PENDING_APPROVAL
+    const pendingStay = await prisma.dailyStay.create({
+      data: {
+        dormitoryId: dormId,
+        roomId,
+        applicantFullName: 'Pending Guest Seq',
+        applicantPhone: '0855555555',
+        startDate,
+        endDate,
+        checkInAt: startDate,
+        checkOutAt: endDate,
+        inclusiveDayCount: 3,
+        dailyRateAmount: 600,
+        totalRentAmount: 1800,
+        depositAmount: 0,
+        status: 'PENDING_APPROVAL',
+      },
+    });
+
+    // 2. Successfully set Room to maintenance (PENDING_APPROVAL does not block)
+    const updateRes = await roomService.updateRoom({
+      roomId,
+      dormitoryId: dormId,
+      changes: { status: 'maintenance' },
+      expectedVersion: 1,
+      actorUserId: userId,
+    });
+    expect(updateRes.status).toBe('maintenance');
+
+    // 3. Attempt to approve the pending stay while Room is under maintenance -> MUST FAIL
+    await expect(
+      dailyStayService.approveDailyStay(dormId, pendingStay.id, userId)
+    ).rejects.toThrow('ไม่สามารถอนุมัติการเข้าพักได้ เนื่องจากห้องนี้อยู่ระหว่างปิดปรับปรุง');
+
+    // 4. Assert DB state: Zero side effects created
+    const finalRoom = await prisma.room.findUnique({ where: { id: roomId } });
+    expect(finalRoom?.status).toBe('maintenance');
+
+    const finalStay = await prisma.dailyStay.findUnique({ where: { id: pendingStay.id } });
+    expect(finalStay?.status).toBe('PENDING_APPROVAL');
+    expect(finalStay?.tenantId).toBeNull();
+    expect(finalStay?.occupancyId).toBeNull();
+
+    const invoiceCount = await prisma.dailyStayInvoice.count({ where: { dailyStayId: pendingStay.id } });
+    expect(invoiceCount).toBe(0);
+
+    const occupancyCount = await prisma.occupancy.count({ where: { roomId } });
+    expect(occupancyCount).toBe(0);
+  });
+
+  it('Case 20 — Part E Concurrency Proof: Maintenance toggle vs approveDailyStay for SAME room', async () => {
+    const roomId = roomIds.concurrencyPendingApprovalRoom;
+    const now = new Date();
+    const startDate = new Date(now.getTime() + 12 * 24 * 3600 * 1000);
+    const endDate = new Date(now.getTime() + 15 * 24 * 3600 * 1000);
+
+    // 1. Create DailyStay PENDING_APPROVAL
+    const pendingStay = await prisma.dailyStay.create({
+      data: {
+        dormitoryId: dormId,
+        roomId,
+        applicantFullName: 'Pending Guest Concurrent',
+        applicantPhone: '0866666666',
+        startDate,
+        endDate,
+        checkInAt: startDate,
+        checkOutAt: endDate,
+        inclusiveDayCount: 3,
+        dailyRateAmount: 600,
+        totalRentAmount: 1800,
+        depositAmount: 0,
+        status: 'PENDING_APPROVAL',
+      },
+    });
+
+    // 2. Concurrently run RoomService.updateRoom(status=maintenance) and DailyStayService.approveDailyStay(pendingStay.id)
+    const op1 = roomService.updateRoom({
+      roomId,
+      dormitoryId: dormId,
+      changes: { status: 'maintenance' },
+      expectedVersion: 1,
+      actorUserId: userId,
+    });
+
+    const op2 = dailyStayService.approveDailyStay(dormId, pendingStay.id, userId);
+
+    const results = await Promise.allSettled([op1, op2]);
+    const fulfilled = results.filter(r => r.status === 'fulfilled');
+    const rejected = results.filter(r => r.status === 'rejected');
+
+    // Exactly one succeeds, exactly one fails
+    expect(fulfilled.length).toBe(1);
+    expect(rejected.length).toBe(1);
+
+    const failureReason: any = (rejected[0] as PromiseRejectedResult).reason;
+    const errorCode = failureReason?.code || failureReason?.errorCode;
+    expect([
+      'ROOM_UNDER_MAINTENANCE',
+      'ROOM_OCCUPIED_OR_HAS_ACTIVE_AGREEMENT',
+      'ROOM_HAS_ACTIVE_RESERVATION',
+      'ROOM_HAS_ACTIVE_OCCUPANCY',
+    ]).toContain(errorCode);
+
+    // DB Invariant: Forbidden state: Room === maintenance AND DailyStay === RESERVED/ACTIVE
+    const finalRoom = await prisma.room.findUnique({ where: { id: roomId } });
+    const finalStay = await prisma.dailyStay.findUnique({ where: { id: pendingStay.id } });
+
+    if (finalRoom?.status === 'maintenance') {
+      expect(finalStay?.status).toBe('PENDING_APPROVAL');
+      expect(finalStay?.tenantId).toBeNull();
+    } else {
+      expect(finalStay?.status).toBe('RESERVED');
+      expect(finalRoom?.status).not.toBe('maintenance');
+    }
+  });
+
+  it('Case 21 — Part F Double Approval Stale-Read Proof: Two concurrent approvals produce exactly 1 approval and 0 duplicate effects', async () => {
+    const roomId = roomIds.doubleApprovalRoom;
+    const now = new Date();
+    const startDate = new Date(now.getTime() + 20 * 24 * 3600 * 1000);
+    const endDate = new Date(now.getTime() + 23 * 24 * 3600 * 1000);
+
+    // 1. Create DailyStay PENDING_APPROVAL
+    const pendingStay = await prisma.dailyStay.create({
+      data: {
+        dormitoryId: dormId,
+        roomId,
+        applicantFullName: 'Pending Double Approval Guest',
+        applicantPhone: '0877777777',
+        startDate,
+        endDate,
+        checkInAt: startDate,
+        checkOutAt: endDate,
+        inclusiveDayCount: 3,
+        dailyRateAmount: 600,
+        totalRentAmount: 1800,
+        depositAmount: 0,
+        status: 'PENDING_APPROVAL',
+      },
+    });
+
+    // 2. Concurrently run approveDailyStay twice on the EXACT same pending stay
+    const op1 = dailyStayService.approveDailyStay(dormId, pendingStay.id, userId);
+    const op2 = dailyStayService.approveDailyStay(dormId, pendingStay.id, userId);
+
+    const results = await Promise.allSettled([op1, op2]);
+    const fulfilled = results.filter(r => r.status === 'fulfilled');
+    const rejected = results.filter(r => r.status === 'rejected');
+
+    // Exactly one succeeds, exactly one fails with DAILY_STAY_ALREADY_PROCESSED
+    expect(fulfilled.length).toBe(1);
+    expect(rejected.length).toBe(1);
+
+    const failureReason: any = (rejected[0] as PromiseRejectedResult).reason;
+    const errorCode = failureReason?.code || failureReason?.errorCode;
+    expect(errorCode).toBe('DAILY_STAY_ALREADY_PROCESSED');
+
+    // Assert exact single side effect records:
+    const finalStay = await prisma.dailyStay.findUnique({ where: { id: pendingStay.id } });
+    expect(finalStay?.status).toBe('RESERVED');
+    expect(finalStay?.tenantId).toBeDefined();
+
+    const occupancyCount = await prisma.occupancy.count({ where: { roomId } });
+    expect(occupancyCount).toBe(1);
+
+    const invoiceCount = await prisma.dailyStayInvoice.count({ where: { dailyStayId: pendingStay.id } });
+    expect(invoiceCount).toBe(1);
+  });
+
+  it('Case 22 — Part I Shared Authority Proof: resolveCurrentMaintenanceEligibilityByRoom provides identical eligibility for GET and PUT', async () => {
+    const allRooms = await prisma.room.findMany({ where: { dormitoryId: dormId } });
+    const roomIdsList = allRooms.map(r => r.id);
+
+    const batchMap = await resolveCurrentMaintenanceEligibilityByRoom(dormId, roomIdsList, prisma);
+
+    for (const room of allRooms) {
+      const eligibility = batchMap.get(room.id);
+      expect(eligibility).toBeDefined();
+
+      const singleDto = await defaultsService.buildAuthoritativeRoomResponse(dormId, room);
+      expect(singleDto.currentOperationalActions.canSetMaintenance).toBe(eligibility?.canSetMaintenance);
+      expect(singleDto.currentOperationalActions.maintenanceBlockReason).toBe(eligibility?.maintenanceBlockReason);
+    }
   });
 });

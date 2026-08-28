@@ -408,7 +408,7 @@ export async function resolveCurrentMaintenanceEligibilityByRoom(
   }
 
   // 1. Batch load contracts (include terminated to evaluate canonical physical interval)
-  const contracts = await db.contract.findMany({
+  const contracts = db.contract ? await db.contract.findMany({
     where: {
       dormitoryId,
       roomId: { in: roomIds },
@@ -425,10 +425,10 @@ export async function resolveCurrentMaintenanceEligibilityByRoom(
       terminationEffectiveDate: true,
       deletedAt: true,
     },
-  });
+  }) : [];
 
   // 2. Batch load provisional terms (only committed statuses)
-  const provisionals = await db.provisionalRentalTerm.findMany({
+  const provisionals = db.provisionalRentalTerm ? await db.provisionalRentalTerm.findMany({
     where: {
       dormitoryId,
       roomId: { in: roomIds },
@@ -443,10 +443,10 @@ export async function resolveCurrentMaintenanceEligibilityByRoom(
       endDate: true,
       deletedAt: true,
     },
-  });
+  }) : [];
 
   // 3. Batch load daily stays (only committed statuses)
-  const dailyStays = await db.dailyStay.findMany({
+  const dailyStays = db.dailyStay ? await db.dailyStay.findMany({
     where: {
       dormitoryId,
       roomId: { in: roomIds },
@@ -464,7 +464,7 @@ export async function resolveCurrentMaintenanceEligibilityByRoom(
       actualCheckedOutAt: true,
       deletedAt: true,
     },
-  });
+  }) : [];
 
   // Group by roomId
   const contractsByRoom = new Map<string, any[]>();

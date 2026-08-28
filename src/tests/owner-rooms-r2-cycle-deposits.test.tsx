@@ -2858,6 +2858,101 @@ describe('OWNER ROOMS R2 & R2.1 — Rent-Cycle Deposit Model & Hardened Specific
         expect((modalMaintenanceBtn as HTMLButtonElement).disabled).toBe(true);
         expect(modalMaintenanceBtn.getAttribute('title')).toBe('ไม่สามารถตรวจสอบสถานะการเปิดปิดห้องได้ กรุณาโหลดข้อมูลใหม่');
       });
+      it('T19 — Part H Stale Pointer: Stale currentTenantId with canSetMaintenance=true allows direct toggle', async () => {
+        cleanup();
+        const updateRoomSpy = vi.fn().mockResolvedValue({ success: true });
+        const roomStaleTenant: Room = {
+          id: 'room-toggle-stale-1',
+          buildingId: 'bld-1',
+          roomNumber: '301',
+          floor: 3,
+          status: 'vacant',
+          currentTenantId: 'stale-tenant-id-123', // Stale compatibility pointer
+          monthlyRent: 4500,
+          depositAmount: 5000,
+          maxOccupants: 2,
+          initialWaterMeter: 0,
+          initialElectricMeter: 0,
+          images: [],
+          amenities: [],
+          createdAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+          currentOperationalActions: {
+            canSetMaintenance: true,
+            maintenanceBlockReason: null,
+          },
+        };
+
+        const testBuilding = { id: 'bld-1', name: 'Building A', floors: 3 };
+
+        renderWithQuery(
+          <OwnerRooms
+            dormitoryId="dorm-1"
+            rooms={[roomStaleTenant]}
+            buildings={[testBuilding as any]}
+            onSaveRooms={updateRoomSpy}
+            onAddLog={vi.fn()}
+            onNavigate={vi.fn()}
+            restoredState={{ viewMode: 'grid' }}
+          />
+        );
+
+        // Open edit modal
+        const editBtn = await screen.findByTitle('แก้ไขรายละเอียดห้องพัก');
+        fireEvent.click(editBtn);
+
+        // Maintenance button in modal must be ENABLED because canonical canSetMaintenance is true
+        const modalMaintenanceBtn = screen.getByRole('button', { name: /ปิดปรับปรุง/ });
+        expect((modalMaintenanceBtn as HTMLButtonElement).disabled).toBe(false);
+      });
+
+      it('T20 — Part H Blocking: canSetMaintenance=false blocks setting maintenance in modal', async () => {
+        cleanup();
+        const updateRoomSpy = vi.fn().mockResolvedValue({ success: true });
+        const roomBlocked: Room = {
+          id: 'room-toggle-blocked-1',
+          buildingId: 'bld-1',
+          roomNumber: '302',
+          floor: 3,
+          status: 'vacant',
+          monthlyRent: 4500,
+          depositAmount: 5000,
+          maxOccupants: 2,
+          initialWaterMeter: 0,
+          initialElectricMeter: 0,
+          images: [],
+          amenities: [],
+          createdAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+          currentOperationalActions: {
+            canSetMaintenance: false,
+            maintenanceBlockReason: 'ACTIVE_OCCUPANCY',
+          },
+        };
+
+        const testBuilding = { id: 'bld-1', name: 'Building A', floors: 3 };
+
+        renderWithQuery(
+          <OwnerRooms
+            dormitoryId="dorm-1"
+            rooms={[roomBlocked]}
+            buildings={[testBuilding as any]}
+            onSaveRooms={updateRoomSpy}
+            onAddLog={vi.fn()}
+            onNavigate={vi.fn()}
+            restoredState={{ viewMode: 'grid' }}
+          />
+        );
+
+        // Open edit modal
+        const editBtn = await screen.findByTitle('แก้ไขรายละเอียดห้องพัก');
+        fireEvent.click(editBtn);
+
+        // Maintenance button in modal must be DISABLED with canonical message
+        const modalMaintenanceBtn = screen.getByRole('button', { name: /ปิดปรับปรุง/ });
+        expect((modalMaintenanceBtn as HTMLButtonElement).disabled).toBe(true);
+        expect(modalMaintenanceBtn.getAttribute('title')).toBe('มีผู้เช่าพักอยู่ ต้องย้ายหรือสิ้นสุดการเช่าก่อน');
+      });
     });
 
 });

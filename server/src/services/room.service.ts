@@ -4,7 +4,7 @@ import { ISubscriptionRepository } from '../db/repositories/subscription.reposit
 import { IContractRepository } from '../db/repositories/contract.repository.js';
 import { AuditService } from './audit.service.js';
 import { AppError } from '../types/index.js';
-import { evaluateMaintenanceEligibilityFromRecords, acquireRoomAvailabilityLock } from '../utils/occupancy-interval.util.js';
+import { evaluateMaintenanceEligibilityFromRecords, resolveCurrentMaintenanceEligibilityByRoom, acquireRoomAvailabilityLock } from '../utils/occupancy-interval.util.js';
 import { subscriptionEntitlementService } from './subscription-entitlement.service.js';
 import { currentCycleResolverService } from './current-cycle-resolver.js';
 
@@ -346,49 +346,31 @@ export class RoomService {
         }
       }
 
-      // Product Decision F1: Maintenance Occupancy & Reservation Guard
+      // Product Decision F1: Maintenance Occupancy & Reservation Guard (Part I Single Shared Authority)
       if (changes.status !== undefined && changes.status !== existing.status && changes.status === 'maintenance') {
         const now = new Date();
+        const eligibilityMap = await resolveCurrentMaintenanceEligibilityByRoom(
+          targetDormId,
+          [id],
+          tx,
+          now
+        );
+        const eligibility = eligibilityMap.get(id);
 
-        const [contracts, provisionals, dailyStays] = await Promise.all([
-          tx.contract ? tx.contract.findMany({
-            where: {
-              roomId: id,
-              dormitoryId: targetDormId,
-              deletedAt: null,
-              status: { notIn: ['cancelled', 'void', 'rejected', 'draft'] },
-            },
-          }) : [],
-          tx.provisionalRentalTerm ? tx.provisionalRentalTerm.findMany({
-            where: {
-              roomId: id,
-              dormitoryId: targetDormId,
-              deletedAt: null,
-              status: { in: ['ACTIVE', 'RESERVED'] },
-            },
-          }) : [],
-          tx.dailyStay ? tx.dailyStay.findMany({
-            where: {
-              roomId: id,
-              dormitoryId: targetDormId,
-              deletedAt: null,
-              status: { in: ['ACTIVE', 'RESERVED', 'CHECKED_IN'] },
-            },
-          }) : [],
-        ]);
-
-        const eligibility = evaluateMaintenanceEligibilityFromRecords({
-          contracts,
-          provisionals,
-          dailyStays,
-          now,
-        });
-
-        if (!eligibility.canSetMaintenance) {
-          if (eligibility.maintenanceBlockReason === 'ACTIVE_OCCUPANCY') {
-            throw new AppError(eligibility.message || 'ไม่สามารถปิดปรับปรุงได้ เนื่องจากห้องนี้มีผู้เช่าพักอยู่', 409, 'ROOM_HAS_ACTIVE_OCCUPANCY');
+        if (!eligibility || !eligibility.canSetMaintenance) {
+          const reason = eligibility?.maintenanceBlockReason;
+          if (reason === 'ACTIVE_RESERVATION') {
+            throw new AppError(
+              'ไม่สามารถปิดปรับปรุงได้ เนื่องจากห้องนี้มีการจองล่วงหน้า',
+              409,
+              'ROOM_HAS_ACTIVE_RESERVATION'
+            );
           } else {
-            throw new AppError(eligibility.message || 'ไม่สามารถปิดปรับปรุงได้ เนื่องจากห้องนี้มีการจองล่วงหน้า', 409, 'ROOM_HAS_ACTIVE_RESERVATION');
+            throw new AppError(
+              'ไม่สามารถปิดปรับปรุงได้ เนื่องจากห้องนี้มีผู้เช่าพักอยู่',
+              409,
+              'ROOM_HAS_ACTIVE_OCCUPANCY'
+            );
           }
         }
       }

@@ -502,14 +502,21 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
       return;
     }
 
-    // Validation: ปิดปรับปรุง ต้องไม่มีผู้เช่า/ว่าง เท่านั้นถึงจะบันทึกข้อมูลได้
-    if (roomStatus === 'maintenance' && editingRoom?.currentTenantId) {
-      const tenant = tenants.find(t => t.id === editingRoom.currentTenantId);
-      const err = `ไม่สามารถเปลี่ยนสถานะเป็น "ปิดปรับปรุง" ได้ เนื่องจากห้องพักนี้มีผู้เช่าอยู่ (${tenant ? tenant.name : 'มีผู้เช่าผูกอยู่'}) ต้องเป็นห้องว่างเท่านั้น`;
-      setErrorText(err);
-      const formEl = document.getElementById('room-edit-form');
-      if (formEl) formEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      return;
+    // Validation: Check currentOperationalActions as single canonical authority (Part G)
+    if (roomStatus === 'maintenance' && editingRoom) {
+      const opActions = editingRoom.currentOperationalActions;
+      if (!opActions || !opActions.canSetMaintenance) {
+        const blockReason = opActions?.maintenanceBlockReason;
+        const err = blockReason === 'ACTIVE_RESERVATION'
+          ? 'ไม่สามารถปิดปรับปรุงได้ เนื่องจากห้องนี้มีการจองล่วงหน้า'
+          : blockReason === 'ACTIVE_OCCUPANCY'
+            ? 'ไม่สามารถปิดปรับปรุงได้ เนื่องจากห้องนี้มีผู้เช่าพักอยู่'
+            : 'ไม่สามารถตรวจสอบสถานะการเปิดปิดห้องได้ กรุณาโหลดข้อมูลใหม่';
+        setErrorText(err);
+        const formEl = document.getElementById('room-edit-form');
+        if (formEl) formEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        return;
+      }
     }
 
     const digitsOnly = roomNumber.replace(/\D/g, '');
@@ -734,7 +741,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
     const targetRoom = rooms.find(r => r.id === roomId);
     if (!targetRoom) return;
 
-    // Current Operational Action Guard: Check maintenance eligibility (Part H Fail Closed)
+    // Current Operational Action Guard: Check maintenance eligibility (Part G Single Authority)
     const opActions = targetRoom.currentOperationalActions;
     if (targetRoom.status !== 'maintenance') {
       if (!opActions) {
@@ -746,11 +753,6 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
           ? `ห้อง ${targetRoom.roomNumber} มีการจองล่วงหน้า ต้องจัดการการจองก่อน - ไม่สามารถปิดปรับปรุงได้`
           : `ห้อง ${targetRoom.roomNumber} มีผู้เช่าพักอยู่ - ระบบเปิดใช้งานค้างไว้`;
         setToastMessage(msg);
-        return;
-      }
-      if (targetRoom.currentTenantId) {
-        const tenant = tenants.find(t => t.id === targetRoom.currentTenantId);
-        setToastMessage(`ห้อง ${targetRoom.roomNumber} มีผู้เช่าพักอยู่ (${tenant ? tenant.name : 'มีผู้เช่า'}) - ระบบเปิดใช้งานค้างไว้`);
         return;
       }
     }

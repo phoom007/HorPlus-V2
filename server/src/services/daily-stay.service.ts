@@ -467,6 +467,22 @@ export class DailyStayService {
     txClient?: any
   ) {
     const runInTx = async (tx: any) => {
+      // 1. Locate minimal DailyStay identity / roomId for lock acquisition (Part A)
+      const preliminary = await tx.dailyStay.findFirst({
+        where: { id: stayId, dormitoryId, deletedAt: null },
+      });
+
+      if (!preliminary) {
+        const err = new Error('ไม่พบข้อมูลคำขอเข้าพักรายวัน');
+        (err as any).statusCode = 404;
+        (err as any).code = 'DAILY_STAY_NOT_FOUND';
+        throw err;
+      }
+
+      // 2. Acquire common room availability advisory lock BEFORE reading authoritative state (Part A)
+      await acquireRoomAvailabilityLock(tx, dormitoryId, preliminary.roomId);
+
+      // 3. RE-READ authoritative DailyStay record under the acquired lock (Part A & F)
       const stay = await tx.dailyStay.findFirst({
         where: { id: stayId, dormitoryId, deletedAt: null },
       });
@@ -479,24 +495,42 @@ export class DailyStayService {
       }
 
       if (stay.status !== 'PENDING_APPROVAL') {
-        const err = new Error('คำขอนี้ได้รับการดำเนินการไปแล้ว');
-        (err as any).statusCode = 400;
+        const err = new Error('ไม่สามารถอนุมัติได้ คำขอเข้าพักนี้ได้รับการอนุมัติหรือดำเนินการไปแล้ว');
+        (err as any).statusCode = 409;
         (err as any).code = 'DAILY_STAY_ALREADY_PROCESSED';
         throw err;
       }
 
-      // 1. Advisory room lock
-      await acquireRoomAvailabilityLock(tx, dormitoryId, stay.roomId);
+      // 4. Read current Room under the same lock and validate maintenance status (Part B)
+      const room = await tx.room.findFirst({
+        where: { id: stay.roomId, dormitoryId, deletedAt: null },
+        include: { building: true },
+      });
 
-      // 2. Validate operational room entitlement
+      if (!room) {
+        const err = new Error('ไม่พบข้อมูลห้องพัก');
+        (err as any).statusCode = 404;
+        (err as any).code = 'ROOM_NOT_FOUND';
+        throw err;
+      }
+
+      if (room.status === 'maintenance') {
+        const err = new Error('ไม่สามารถอนุมัติการเข้าพักได้ เนื่องจากห้องนี้อยู่ระหว่างปิดปรับปรุง');
+        (err as any).statusCode = 409;
+        (err as any).code = 'ROOM_UNDER_MAINTENANCE';
+        throw err;
+      }
+
+      // 5. Validate operational room entitlement
       await this.entitlementService.assertRoomOperationalEntitlement(dormitoryId, stay.roomId, new Date(), tx);
 
-      // 3. Check room availability
+      // 6. Check room availability using canonical physical interval (Part C)
+      const stayInterval = getDailyStayPhysicalInterval(stay);
       const availability = await this.checkRoomAvailability(
         dormitoryId,
         stay.roomId,
-        stay.startDate,
-        stay.endDate,
+        stayInterval.start,
+        stayInterval.end,
         stay.id,
         tx
       );

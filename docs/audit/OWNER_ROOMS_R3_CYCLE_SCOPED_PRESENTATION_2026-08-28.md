@@ -837,3 +837,52 @@ Updated integration test suite in `server/src/__tests__/integration/owner-rooms-
 | LOCAL-07 Oracle Sandbox Verification | `npm run uat:refresh` | **100% PASS (All 13 Sections)** |
 | Expected Results Baseline Diff | `git diff 04eec07ea166858b035ff06eb608a1c003111952..HEAD -- docs/uat/local07-expected-results.json` | **0 Diff / Clean** |
 | Line Ending & Whitespace Hygiene | `git -c core.whitespace=cr-at-eol diff --check` | **0 Warnings / Clean** |
+
+---
+
+## 27. OWNER ROOMS R3.4d — Daily Approval Commit Boundary & Single Maintenance Authority (2026-08-28)
+
+### Context & Independent Review Findings
+Following the independent audit of R3.4c, two critical commit boundary and authority defects were resolved:
+1. **Unsafe Daily Approval Commit Boundary**: In `approveDailyStay`, the pending request was read and validated prior to acquiring the room availability advisory lock, and the room's current maintenance status was not re-validated under the lock. Because `PENDING_APPROVAL` intentionally does not block maintenance, a room could transition to `maintenance` while an approval was in flight, and subsequent approval could commit occupancy onto a maintenance room.
+2. **Dual Maintenance Authority on Frontend**: `src/pages/owner/rooms.tsx` checked `currentOperationalActions`, but then separately blocked on `room.currentTenantId`. Stale compatibility pointers could permanently block room maintenance even when canonical occupancy truth proved the room was empty.
+3. **Duplicated Server Eligibility Selection**: `RoomService.updateRoom` duplicated database query filtering instead of consuming the canonical `resolveCurrentMaintenanceEligibilityByRoom` batch resolver used by `DefaultsService`.
+
+---
+
+### Surgical Implementations & Architectural Guarantees (R3.4d)
+
+#### Part A: Two-Stage Lock-Then-Re-Read approveDailyStay Boundary
+`approveDailyStay` now strictly executes a two-stage transaction:
+1. Preliminary lookup of `stay.roomId`.
+2. Advisory room-availability lock: `await acquireRoomAvailabilityLock(tx, dormitoryId, preliminary.roomId)`.
+3. Authoritative fresh re-read of `DailyStay` under the acquired lock:
+   - Revalidates `deletedAt: null` and `status === 'PENDING_APPROVAL'`.
+   - If already processed (`RESERVED` / `ACTIVE`), rejects with `DAILY_STAY_ALREADY_PROCESSED` (409).
+4. Authoritative fresh read of `Room` under the same lock:
+   - If `room.status === 'maintenance'`, rejects with `ROOM_UNDER_MAINTENANCE` (409) and Thai message: `ไม่สามารถอนุมัติการเข้าพักได้ เนื่องจากห้องนี้อยู่ระหว่างปิดปรับปรุง`.
+5. Canonical physical interval availability check via `getDailyStayPhysicalInterval(stay)`.
+6. Only after all post-lock validations pass are side effects committed (Tenant creation, Occupancy creation, Invoice generation, DailyStay status transition).
+
+#### Part B: Single Server-Side Maintenance Authority
+- `RoomService.updateRoom` now directly invokes `resolveCurrentMaintenanceEligibilityByRoom(targetDormId, [id], tx, now)` inside the transaction after acquiring the advisory lock.
+- Both `GET /properties/rooms` (DTO builder) and `PUT /properties/rooms/:id` (mutation guard) now share 100% identical database selection, filtering, and interval evaluation authority.
+
+#### Part C: Single Frontend Maintenance Action Authority
+- `src/pages/owner/rooms.tsx` removed `room.currentTenantId` as a secondary blocking authority for direct status toggle and edit modal save.
+- Maintenance actions are strictly governed by `currentOperationalActions` (`canSetMaintenance` and `maintenanceBlockReason`).
+- Stale `currentTenantId` pointers do not block maintenance when canonical `canSetMaintenance === true`.
+
+---
+
+### Verification Matrix (R3.4d)
+
+| Test / Check Suite | Target Command / Path | Result |
+|---|---|---|
+| Real PostgreSQL / Prisma Concurrency & Boundary Suite | `npm --prefix server run test -- src/__tests__/integration/owner-rooms-r34d-prisma-maintenance-guard.test.ts` | **22 / 22 PASS (100%)** |
+| All Backend Unit Test Suites | `npm --prefix server run test -- src/__tests__/unit/` | **59 / 59 PASS (100%)** |
+| Frontend Vitest Test Suite (incl. T11-T20) | `npx vitest run src/tests/owner-rooms-r2-cycle-deposits.test.tsx --environment happy-dom` | **108 / 108 PASS (100%)** |
+| Frontend TypeScript Check | `npm run lint` | **0 Errors (PASS)** |
+| Backend Production Build | `npm --prefix server run build` | **0 Errors (PASS)** |
+| UAT Expected Results Baseline Diff | `git diff 17330a94ef40a67b513e698334673558c880ac8d..HEAD -- docs/uat/local07-expected-results.json` | **0 Diff / Clean Baseline** |
+| Line Ending & Whitespace Hygiene | `git -c core.whitespace=cr-at-eol diff --check` | **0 Warnings / Clean** |
