@@ -734,10 +734,14 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
     const targetRoom = rooms.find(r => r.id === roomId);
     if (!targetRoom) return;
 
-    // Current Operational Action Guard: Check maintenance eligibility
+    // Current Operational Action Guard: Check maintenance eligibility (Part H Fail Closed)
     const opActions = targetRoom.currentOperationalActions;
     if (targetRoom.status !== 'maintenance') {
-      if (opActions && !opActions.canSetMaintenance) {
+      if (!opActions) {
+        setToastMessage('ไม่สามารถตรวจสอบสถานะการเปิดปิดห้องได้ กรุณาโหลดข้อมูลใหม่');
+        return;
+      }
+      if (!opActions.canSetMaintenance) {
         const msg = opActions.maintenanceBlockReason === 'ACTIVE_RESERVATION'
           ? `ห้อง ${targetRoom.roomNumber} มีการจองล่วงหน้า ต้องจัดการการจองก่อน - ไม่สามารถปิดปรับปรุงได้`
           : `ห้อง ${targetRoom.roomNumber} มีผู้เช่าพักอยู่ - ระบบเปิดใช้งานค้างไว้`;

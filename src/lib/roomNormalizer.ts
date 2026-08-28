@@ -232,10 +232,26 @@ export function normalizeAuthoritativeRoom(dto: AuthoritativeRoomDto | any): Roo
     maintenanceBlockReason: 'ACTIVE_OCCUPANCY' | 'ACTIVE_RESERVATION' | null;
   } | null = null;
   if (dto.currentOperationalActions && typeof dto.currentOperationalActions === 'object') {
-    currentOperationalActions = {
-      canSetMaintenance: Boolean(dto.currentOperationalActions.canSetMaintenance),
-      maintenanceBlockReason: dto.currentOperationalActions.maintenanceBlockReason || null,
-    };
+    const rawCanSet = dto.currentOperationalActions.canSetMaintenance;
+    const rawReason = dto.currentOperationalActions.maintenanceBlockReason;
+
+    // Strict validation (Part I): typeof must be boolean, valid cross-field consistency
+    if (typeof rawCanSet === 'boolean') {
+      if (rawCanSet === true && (rawReason === null || rawReason === undefined)) {
+        currentOperationalActions = {
+          canSetMaintenance: true,
+          maintenanceBlockReason: null,
+        };
+      } else if (
+        rawCanSet === false &&
+        (rawReason === 'ACTIVE_OCCUPANCY' || rawReason === 'ACTIVE_RESERVATION')
+      ) {
+        currentOperationalActions = {
+          canSetMaintenance: false,
+          maintenanceBlockReason: rawReason,
+        };
+      }
+    }
   }
 
   return {

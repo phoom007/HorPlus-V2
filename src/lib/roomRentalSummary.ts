@@ -433,21 +433,29 @@ export function resolveRoomCyclePresentation(
   }
 
   if (rawState === 'RESERVED_IN_CYCLE') {
-    let rentAmount = 0;
-    if (meterPreviewRoom.rentAmount !== undefined && meterPreviewRoom.rentAmount !== null && meterPreviewRoom.rentAmount !== '') {
-      const parsed = Number(meterPreviewRoom.rentAmount);
-      if (!Number.isFinite(parsed)) {
-        return {
-          roomId: room.id,
-          billingCycleId,
-          state: 'UNAVAILABLE',
-          effectiveOperationalStatus,
-          isCurrentMaintenance,
-          occupancy: null,
-          currentCatalogRates,
-        };
-      }
-      rentAmount = parsed;
+    // Strict DTO (Part J): Require explicit finite rentAmount, do not fabricate zero
+    if (meterPreviewRoom.rentAmount === undefined || meterPreviewRoom.rentAmount === null || meterPreviewRoom.rentAmount === '') {
+      return {
+        roomId: room.id,
+        billingCycleId,
+        state: 'UNAVAILABLE',
+        effectiveOperationalStatus,
+        isCurrentMaintenance,
+        occupancy: null,
+        currentCatalogRates,
+      };
+    }
+    const rentAmount = Number(meterPreviewRoom.rentAmount);
+    if (!Number.isFinite(rentAmount)) {
+      return {
+        roomId: room.id,
+        billingCycleId,
+        state: 'UNAVAILABLE',
+        effectiveOperationalStatus,
+        isCurrentMaintenance,
+        occupancy: null,
+        currentCatalogRates,
+      };
     }
 
     return {
@@ -474,7 +482,8 @@ export function resolveRoomCyclePresentation(
   if (rawState === 'DAILY_FINANCIAL_TAIL') {
     const agreementType = meterPreviewRoom.agreementType;
     const billingSource = meterPreviewRoom.billingSource;
-    if (agreementType !== 'DAILY' || (billingSource !== 'DAILY_STAY' && billingSource !== 'NONE')) {
+    // Strict DTO (Part K): Require authoritative DAILY_STAY source only (no NONE fallback/fabrication)
+    if (agreementType !== 'DAILY' || billingSource !== 'DAILY_STAY') {
       return {
         roomId: room.id,
         billingCycleId,

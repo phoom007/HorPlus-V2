@@ -21,6 +21,7 @@ import {
   getProvisionalTermPhysicalInterval,
   getDailyStayPhysicalInterval,
   doHalfOpenIntervalsOverlap,
+  acquireRoomAvailabilityLock,
 } from '../utils/occupancy-interval.util.js';
 
 export interface CreateTenantDailyStayRequestDto {
@@ -485,7 +486,7 @@ export class DailyStayService {
       }
 
       // 1. Advisory room lock
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${dormitoryId + ':' + stay.roomId}))`;
+      await acquireRoomAvailabilityLock(tx, dormitoryId, stay.roomId);
 
       // 2. Validate operational room entitlement
       await this.entitlementService.assertRoomOperationalEntitlement(dormitoryId, stay.roomId, new Date(), tx);
@@ -678,7 +679,7 @@ export class DailyStayService {
 
     return this.prisma.$transaction(async (tx) => {
       // 1. Advisory room lock
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${dormitoryId + ':' + data.roomId}))`;
+      await acquireRoomAvailabilityLock(tx, dormitoryId, data.roomId);
 
       // 2. Validate operational room entitlement
       await this.entitlementService.assertRoomOperationalEntitlement(dormitoryId, data.roomId, new Date(), tx);
@@ -692,6 +693,13 @@ export class DailyStayService {
         const err = new Error('ไม่พบข้อมูลห้องพัก');
         (err as any).statusCode = 404;
         (err as any).code = 'ROOM_NOT_FOUND';
+        throw err;
+      }
+
+      if (room.status === 'maintenance') {
+        const err = new Error('ไม่สามารถบันทึกการเข้าพักสำหรับห้องที่อยู่ระหว่างปิดปรับปรุงได้');
+        (err as any).statusCode = 409;
+        (err as any).code = 'ROOM_UNDER_MAINTENANCE';
         throw err;
       }
 
@@ -970,7 +978,7 @@ export class DailyStayService {
       }
 
       // Advisory room lock
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${dormitoryId + ':' + stay.roomId}))`;
+      await acquireRoomAvailabilityLock(tx, dormitoryId, stay.roomId);
 
       const now = new Date();
 
@@ -1054,7 +1062,7 @@ export class DailyStayService {
     for (const stay of reservedStays) {
       try {
         const result = await this.prisma.$transaction(async (tx) => {
-          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${stay.dormitoryId + ':' + stay.roomId}))`;
+          await acquireRoomAvailabilityLock(tx, stay.dormitoryId, stay.roomId);
 
           const freshStay = await tx.dailyStay.findFirst({
             where: { id: stay.id, deletedAt: null },
@@ -1148,7 +1156,7 @@ export class DailyStayService {
     for (const stay of endedStays) {
       try {
         await this.prisma.$transaction(async (tx) => {
-          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${stay.dormitoryId + ':' + stay.roomId}))`;
+          await acquireRoomAvailabilityLock(tx, stay.dormitoryId, stay.roomId);
 
           await tx.dailyStay.update({
             where: { id: stay.id },

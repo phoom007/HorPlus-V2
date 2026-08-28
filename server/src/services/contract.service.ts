@@ -4,6 +4,7 @@ import { ITenantRepository } from '../db/repositories/tenant.repository.js';
 import { AuditService } from './audit.service.js';
 import { DocumentPdfService } from './document-pdf.service.js';
 import { getPrismaClient } from '../db/prisma.js';
+import { acquireRoomAvailabilityLock } from '../utils/occupancy-interval.util.js';
 
 export class ContractService {
   constructor(
@@ -102,9 +103,19 @@ export class ContractService {
     if (this.contractRepo.constructor.name === 'PrismaContractRepository') {
       const contract = await prisma.$transaction(async (tx) => {
         // Ensure atomicity: Lock the room for new contract creation
-        // This prevents race conditions where two requests might pass validation
-        // and create overlapping contracts.
+        // Unified shared advisory lock (Part A & B) followed by row lock
+        await acquireRoomAvailabilityLock(tx, dormitoryId, data.roomId);
         await tx.$executeRaw`SELECT id FROM rooms WHERE id = ${data.roomId}::uuid FOR UPDATE`;
+
+        const currentRoom = await tx.room.findFirst({
+          where: { id: data.roomId, dormitoryId, deletedAt: null },
+        });
+        if (currentRoom?.status === 'maintenance') {
+          const err = new Error('ไม่สามารถสร้างสัญญาสำหรับห้องที่อยู่ระหว่างปิดปรับปรุงได้');
+          (err as any).code = 'ROOM_UNDER_MAINTENANCE';
+          (err as any).statusCode = 409;
+          throw err;
+        }
 
         // Look for exact duplicate
         const duplicate = await tx.contract.findFirst({
@@ -263,11 +274,18 @@ export class ContractService {
     // Check if we can use transactions
     if (this.contractRepo.constructor.name === 'PrismaContractRepository') {
       const updated = await prisma.$transaction(async (tx: any) => {
-        // 1. Lock the room and fetch room data
+        // 1. Unified shared advisory lock (Part A & B) followed by row lock
+        await acquireRoomAvailabilityLock(tx, dormitoryId, contract.roomId);
         await tx.$executeRaw`SELECT id FROM rooms WHERE id = ${contract.roomId}::uuid FOR UPDATE`;
         const room = await tx.room.findFirst({ where: { id: contract.roomId } });
         if (!room) {
           throw new Error('ไม่พบห้องพักที่ระบุในสัญญา');
+        }
+        if (room.status === 'maintenance') {
+          const err = new Error('ไม่สามารถเปิดใช้งานสัญญาสำหรับห้องที่อยู่ระหว่างปิดปรับปรุงได้');
+          (err as any).code = 'ROOM_UNDER_MAINTENANCE';
+          (err as any).statusCode = 409;
+          throw err;
         }
 
         // 2. Double check status inside transaction

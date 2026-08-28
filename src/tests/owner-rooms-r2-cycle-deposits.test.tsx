@@ -1519,6 +1519,7 @@ describe('OWNER ROOMS R2 & R2.1 — Rent-Cycle Deposit Model & Hardened Specific
           roomNumber: '304',
           tenantId: 'tenant-future',
           tenantName: 'อนาคต สดใส',
+          rentAmount: '4500.00',
           checkInDate: '2026-09-15',
           cyclePresentationState: 'RESERVED_IN_CYCLE',
         };
@@ -2642,5 +2643,221 @@ describe('OWNER ROOMS R2 & R2.1 — Rent-Cycle Deposit Model & Hardened Specific
       expect(res.state).toBe('UNAVAILABLE');
     });
   });
+    describe('OWNER ROOMS R3.4c — Strict Normalizer, Direct Toggle Fail-Closed & Strict Projection Suite', () => {
+      const renderWithQuery = (ui: React.ReactElement) => {
+        const qc = new QueryClient({
+          defaultOptions: { queries: { retry: false, gcTime: 0 } },
+        });
+        return render(
+          <QueryClientProvider client={qc}>
+            {ui}
+          </QueryClientProvider>
+        );
+      };
+      it('T11 — Strict Normalizer: Malformed boolean string "false" fails closed to null', () => {
+        const dtoWithStrBoolean: any = {
+          id: 'room-norm-1',
+          buildingId: 'bld-1',
+          roomNumber: '101',
+          floor: 1,
+          status: 'vacant',
+          monthlyRent: 4500,
+          maxOccupants: 2,
+          currentOperationalActions: {
+            canSetMaintenance: 'false', // String instead of boolean
+            maintenanceBlockReason: 'ACTIVE_RESERVATION',
+          },
+        };
+
+        const normalized = normalizeAuthoritativeRoom(dtoWithStrBoolean);
+        expect(normalized.currentOperationalActions).toBeNull();
+      });
+
+      it('T12 — Strict Normalizer: Malformed boolean number 1 fails closed to null', () => {
+        const dtoWithNumBoolean: any = {
+          id: 'room-norm-2',
+          buildingId: 'bld-1',
+          roomNumber: '102',
+          floor: 1,
+          status: 'vacant',
+          monthlyRent: 4500,
+          maxOccupants: 2,
+          currentOperationalActions: {
+            canSetMaintenance: 1, // Number instead of boolean
+            maintenanceBlockReason: null,
+          },
+        };
+
+        const normalized = normalizeAuthoritativeRoom(dtoWithNumBoolean);
+        expect(normalized.currentOperationalActions).toBeNull();
+      });
+
+      it('T13 — Strict Normalizer: Invalid maintenanceBlockReason fails closed to null', () => {
+        const dtoWithBadReason: any = {
+          id: 'room-norm-3',
+          buildingId: 'bld-1',
+          roomNumber: '103',
+          floor: 1,
+          status: 'vacant',
+          monthlyRent: 4500,
+          maxOccupants: 2,
+          currentOperationalActions: {
+            canSetMaintenance: false,
+            maintenanceBlockReason: 'UNKNOWN_CUSTOM_REASON',
+          },
+        };
+
+        const normalized = normalizeAuthoritativeRoom(dtoWithBadReason);
+        expect(normalized.currentOperationalActions).toBeNull();
+      });
+
+      it('T14 — Strict Normalizer: Cross-field inconsistency (true with non-null reason) fails closed to null', () => {
+        const dtoInconsistent: any = {
+          id: 'room-norm-4',
+          buildingId: 'bld-1',
+          roomNumber: '104',
+          floor: 1,
+          status: 'vacant',
+          monthlyRent: 4500,
+          maxOccupants: 2,
+          currentOperationalActions: {
+            canSetMaintenance: true,
+            maintenanceBlockReason: 'ACTIVE_OCCUPANCY', // Conflict
+          },
+        };
+
+        const normalized = normalizeAuthoritativeRoom(dtoInconsistent);
+        expect(normalized.currentOperationalActions).toBeNull();
+      });
+
+      it('T15 — Strict Normalizer: Valid canonical shapes are accurately preserved', () => {
+        const dtoValidTrue: any = {
+          id: 'room-norm-5',
+          buildingId: 'bld-1',
+          roomNumber: '105',
+          floor: 1,
+          status: 'vacant',
+          monthlyRent: 4500,
+          maxOccupants: 2,
+          currentOperationalActions: {
+            canSetMaintenance: true,
+            maintenanceBlockReason: null,
+          },
+        };
+        const normTrue = normalizeAuthoritativeRoom(dtoValidTrue);
+        expect(normTrue.currentOperationalActions).toEqual({
+          canSetMaintenance: true,
+          maintenanceBlockReason: null,
+        });
+
+        const dtoValidFalse: any = {
+          id: 'room-norm-6',
+          buildingId: 'bld-1',
+          roomNumber: '106',
+          floor: 1,
+          status: 'vacant',
+          monthlyRent: 4500,
+          maxOccupants: 2,
+          currentOperationalActions: {
+            canSetMaintenance: false,
+            maintenanceBlockReason: 'ACTIVE_RESERVATION',
+          },
+        };
+        const normFalse = normalizeAuthoritativeRoom(dtoValidFalse);
+        expect(normFalse.currentOperationalActions).toEqual({
+          canSetMaintenance: false,
+          maintenanceBlockReason: 'ACTIVE_RESERVATION',
+        });
+      });
+
+      it('T16 — Strict DTO: RESERVED_IN_CYCLE missing rentAmount evaluates to UNAVAILABLE (no zero fabrication)', () => {
+        const room: any = {
+          id: 'room-strict-res-1',
+          buildingId: 'bld-1',
+          roomNumber: '107',
+          floor: 1,
+          status: 'vacant',
+          monthlyRent: 4500,
+        };
+
+        const previewMissingRent: any = {
+          roomId: 'room-strict-res-1',
+          cyclePresentationState: 'RESERVED_IN_CYCLE',
+          effectiveRoomOperationalStatus: 'vacant',
+          agreementType: 'MONTHLY',
+          rentAmount: undefined, // Missing rent
+        };
+
+        const res = resolveRoomCyclePresentation(room, previewMissingRent, 'cycle-2026-07');
+        expect(res.state).toBe('UNAVAILABLE');
+      });
+
+      it('T17 — Strict DTO: DAILY_FINANCIAL_TAIL with billingSource = NONE evaluates to UNAVAILABLE (no DAILY_STAY fabrication)', () => {
+        const room: any = {
+          id: 'room-strict-tail-1',
+          buildingId: 'bld-1',
+          roomNumber: '108',
+          floor: 1,
+          status: 'vacant',
+          monthlyRent: 4500,
+        };
+
+        const previewNoneSource: any = {
+          roomId: 'room-strict-tail-1',
+          cyclePresentationState: 'DAILY_FINANCIAL_TAIL',
+          effectiveRoomOperationalStatus: 'vacant',
+          agreementType: 'DAILY',
+          rentAmount: '600.00',
+          billingSource: 'NONE', // Disallowed NONE source
+        };
+
+        const res = resolveRoomCyclePresentation(room, previewNoneSource, 'cycle-2026-07');
+        expect(res.state).toBe('UNAVAILABLE');
+      });
+      it('T18 — Edit Modal Status Toggle: Missing metadata fails closed and disables maintenance option', async () => {
+        cleanup();
+        const updateRoomSpy = vi.fn().mockResolvedValue({ success: true });
+        const roomMissingMeta: Room = {
+          id: 'room-toggle-fail-1',
+          buildingId: 'bld-1',
+          roomNumber: '201',
+          floor: 2,
+          status: 'vacant',
+          monthlyRent: 4500,
+          depositAmount: 5000,
+          maxOccupants: 2,
+          initialWaterMeter: 0,
+          initialElectricMeter: 0,
+          images: [],
+          amenities: [],
+          createdAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+          currentOperationalActions: null,
+        };
+
+        const testBuilding = { id: 'bld-1', name: 'Building A', floors: 3 };
+
+        renderWithQuery(
+          <OwnerRooms
+            dormitoryId="dorm-1"
+            rooms={[roomMissingMeta]}
+            buildings={[testBuilding as any]}
+            onSaveRooms={updateRoomSpy}
+            onAddLog={vi.fn()}
+            onNavigate={vi.fn()}
+            restoredState={{ viewMode: 'grid' }}
+          />
+        );
+
+        // Open edit modal
+        const editBtn = await screen.findByTitle('แก้ไขรายละเอียดห้องพัก');
+        fireEvent.click(editBtn);
+
+        // Maintenance button in modal must be disabled due to fail-closed guard
+        const modalMaintenanceBtn = screen.getByRole('button', { name: /ปิดปรับปรุง/ });
+        expect((modalMaintenanceBtn as HTMLButtonElement).disabled).toBe(true);
+        expect(modalMaintenanceBtn.getAttribute('title')).toBe('ไม่สามารถตรวจสอบสถานะการเปิดปิดห้องได้ กรุณาโหลดข้อมูลใหม่');
+      });
+    });
 
 });

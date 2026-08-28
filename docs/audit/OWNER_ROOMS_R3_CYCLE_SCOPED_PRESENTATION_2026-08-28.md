@@ -739,3 +739,101 @@ An independent technical audit of R3.4a identified critical gaps between documen
 | Backend TypeScript Build | `npm --prefix server run build` | **0 Errors (PASS)** |
 | LOCAL-07 Oracle Sandbox Verification | `npm run uat:refresh` | **100% PASS (All 13 Sections)** |
 | Whitespace & Line Ending Hygiene | `git -c core.whitespace=cr-at-eol diff --check` | **0 Warnings / Clean** |
+
+---
+
+## 26. OWNER ROOMS R3.4c — Real Shared Availability Lock, Concurrency Proofs & Fail-Closed Transport Hardening (2026-08-28)
+
+### Context & Independent R3.4b Audit Findings
+Following an independent remote audit of R3.4b, several critical defects and test validity issues were identified and addressed:
+1. **Uninvoked Advisory Lock**: `RoomService` imported `acquireRoomAvailabilityLock` but failed to call it inside `runInTx`.
+2. **Malformed Concurrency Test DTO**: The R3.4b concurrency test passed legacy property names (`applicantFullName`, `applicantPhone`) to `ownerQuickAddDailyStay` instead of production fields (`fullName`, `phone`), causing validation rejection before exercising concurrency.
+3. **Disjoint Locking Schemes**: Contract creation used `SELECT ... FOR UPDATE` while Daily and Provisional paths used advisory locks.
+4. **Direct Status Toggle Guard**: `handleToggleRoomStatus` in `rooms.tsx` was not fail-closed when `currentOperationalActions` was missing.
+5. **Normalizer Boolean Coercion**: `roomNormalizer.ts` used loose `Boolean()` coercion on `canSetMaintenance` without runtime schema and cross-field consistency checks.
+6. **Zero Rent Fabrication**: `RESERVED_IN_CYCLE` projection defaulted missing `rentAmount` to `0` instead of failing closed to `UNAVAILABLE`.
+7. **Daily Tail Source Rewrite**: `DAILY_FINANCIAL_TAIL` accepted `billingSource = 'NONE'` and rewrote it to `'DAILY_STAY'`.
+8. **UAT Artifact Churn**: `docs/uat/local07-expected-results.json` contained `generatedAt` timestamp churn.
+
+---
+
+### Surgical Implementations & Architectural Guarantees (R3.4c)
+
+#### Part A: Unified Shared Room-Availability Advisory Lock
+All services modifying room availability now acquire the canonical advisory lock as the very first step in their transactions:
+```ts
+export async function acquireRoomAvailabilityLock(
+  tx: any,
+  dormitoryId: string,
+  roomId: string
+): Promise<void> {
+  if (typeof tx?.$executeRaw === 'function') {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${dormitoryId + ':' + roomId}))`;
+  }
+}
+```
+- **Lock Ordering Invariant**:
+  1. Advisory room-availability lock: `await acquireRoomAvailabilityLock(tx, dormitoryId, roomId)`
+  2. Row-level lock (if needed): `SELECT id FROM rooms WHERE id = ... FOR UPDATE`
+  3. Domain reads & conflict checks (contracts, provisional terms, daily stays, room maintenance status)
+  4. Write operations
+  5. Transaction commit
+
+- **Shared Authority Coverage**:
+  - `RoomService.updateRoom` (when `changes.status` affects maintenance/availability)
+  - `ContractService.createContract` & `activateContract`
+  - `DailyStayService.ownerQuickAddDailyStay`, `approveDailyStay`, `checkoutDailyStay`, `activateScheduledDailyStays`, `completeEndedDailyStays`
+  - `ProvisionalRentalTermService.createProvisionalTenantAndTerm` & `extendProvisionalRentalTerm`
+
+#### Part B: Real Concurrency Serialization Invariants
+Updated integration test suite in `server/src/__tests__/integration/owner-rooms-r34c-prisma-maintenance-guard.test.ts` against live PostgreSQL:
+1. **Daily Quick Add vs Maintenance Toggle**: Uses valid `OwnerQuickAddDailyStayDto` (`fullName`, `phone`, `startDate`, `endDate`, `dailyRateAmount`, `depositAmount`). Parallel execution proves exactly ONE operation commits, exactly ONE rejects with room availability conflict (`ROOM_UNDER_MAINTENANCE`, `ROOM_OCCUPIED_OR_HAS_ACTIVE_AGREEMENT`, `ROOM_HAS_ACTIVE_RESERVATION`), and never with validation errors.
+2. **Contract Creation vs Maintenance Toggle**: Proves contract creation and maintenance toggle serialize cleanly.
+3. **Provisional Term Creation vs Maintenance Toggle**: Proves provisional term creation and maintenance toggle serialize cleanly.
+4. **Database Invariant**: Proved that `NOT (Room.status === 'maintenance' AND committed reservation/occupancy exists)` is strictly maintained under all concurrent interleavings.
+
+#### Part C: Committed Status & Termination Physical Interval Semantics
+- **DailyStay**:
+  - `PENDING_APPROVAL`: Uncommitted tenant request -> `canSetMaintenance: true`.
+  - `RESERVED`: Committed future reservation -> `canSetMaintenance: false`, `maintenanceBlockReason: 'ACTIVE_RESERVATION'`.
+  - `ACTIVE` / `CHECKED_IN`: Physical occupancy -> `canSetMaintenance: false`, `maintenanceBlockReason: 'ACTIVE_OCCUPANCY'`.
+  - `CHECKED_OUT`, `COMPLETED`, `CANCELLED`, `REJECTED`: Non-blocking.
+- **Contract**:
+  - `draft`, `cancelled`, `void`, `rejected`: Non-blocking.
+  - `terminated`: Evaluated by canonical `getContractPhysicalInterval(c)`. If `now < terminationEffectiveDate`, blocks as `ACTIVE_OCCUPANCY`. If `terminationEffectiveDate <= now`, allows maintenance.
+  - `active`, `pending_signature`, `approved`, etc.: Evaluated by canonical physical interval.
+- **ProvisionalRentalTerm**:
+  - `ACTIVE`: Blocks as `ACTIVE_OCCUPANCY`.
+  - `RESERVED`: Blocks as `ACTIVE_RESERVATION`.
+  - `ENDED`, `CANCELLED`, `REJECTED`, `CONVERTED`: Non-blocking.
+
+#### Part D: Fail-Closed Direct Toggle & Normalizer
+- `src/pages/owner/rooms.tsx`: `handleToggleRoomStatus` checks `currentOperationalActions`. If null, undefined, or `canSetMaintenance !== true`, aborts mutation and shows toast: `ไม่สามารถตรวจสอบสถานะการเปิดปิดห้องได้ กรุณาโหลดข้อมูลใหม่`.
+- `src/lib/roomNormalizer.ts`: Strict runtime schema validation:
+  - Requires `typeof canSetMaintenance === 'boolean'`.
+  - Validates reason: `null | 'ACTIVE_OCCUPANCY' | 'ACTIVE_RESERVATION'`.
+  - Cross-field consistency: `canSetMaintenance === true` requires `maintenanceBlockReason === null`; `canSetMaintenance === false` requires non-null valid reason.
+  - Malformed payloads fail closed to `currentOperationalActions = null`.
+
+#### Part E: Strict Cycle Projections (No Fabrication)
+- `src/lib/roomRentalSummary.ts`:
+  - `RESERVED_IN_CYCLE`: Explicitly requires finite, non-empty `rentAmount`. Missing/malformed rent fails closed to `UNAVAILABLE` (never fabricates 0).
+  - `DAILY_FINANCIAL_TAIL`: Requires `billingSource === 'DAILY_STAY'`. Missing, `'NONE'`, or invalid sources fail closed to `UNAVAILABLE` (never fabricates `DAILY_STAY` from `NONE`).
+
+#### Part F: Expected Results Baseline Hygiene
+- Reverted `docs/uat/local07-expected-results.json` to clean baseline (`04eec07ea166858b035ff06eb608a1c003111952`), removing all `generatedAt` timestamp churn.
+
+---
+
+### Verification Matrix (R3.4c)
+
+| Test / Check Suite | Target Command / Path | Result |
+|---|---|---|
+| Real PostgreSQL / Prisma Concurrency & Boundary Suite | `npm --prefix server run test -- src/__tests__/integration/owner-rooms-r34c-prisma-maintenance-guard.test.ts` | **18 / 18 PASS (100%)** |
+| All Backend Unit Test Suites | `npm --prefix server run test -- src/__tests__/unit/` | **59 / 59 PASS (100%)** |
+| Frontend Vitest Test Suite (incl. T11-T18) | `npx vitest run src/tests/owner-rooms-r2-cycle-deposits.test.tsx --environment happy-dom` | **106 / 106 PASS (100%)** |
+| Frontend TypeScript Check | `npm run lint` | **0 Errors (PASS)** |
+| Backend Production Build | `npm --prefix server run build` | **0 Errors (PASS)** |
+| LOCAL-07 Oracle Sandbox Verification | `npm run uat:refresh` | **100% PASS (All 13 Sections)** |
+| Expected Results Baseline Diff | `git diff 04eec07ea166858b035ff06eb608a1c003111952..HEAD -- docs/uat/local07-expected-results.json` | **0 Diff / Clean** |
+| Line Ending & Whitespace Hygiene | `git -c core.whitespace=cr-at-eol diff --check` | **0 Warnings / Clean** |

@@ -14,6 +14,7 @@ import {
   getProvisionalTermPhysicalInterval,
   getDailyStayPhysicalInterval,
   doHalfOpenIntervalsOverlap,
+  acquireRoomAvailabilityLock,
 } from '../utils/occupancy-interval.util.js';
 
 export interface CreateProvisionalRentalTermDto {
@@ -129,7 +130,7 @@ export class ProvisionalRentalTermService {
 
     return this.prisma.$transaction(async (tx) => {
       // Room advisory lock to prevent concurrent double-submit or race conditions
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${dormitoryId + ':' + data.roomId}))`;
+      await acquireRoomAvailabilityLock(tx, dormitoryId, data.roomId);
 
       const room = await tx.room.findFirst({
         where: { id: data.roomId, dormitoryId, deletedAt: null },
@@ -139,6 +140,13 @@ export class ProvisionalRentalTermService {
         const err = new Error('ไม่พบห้องพักที่ระบุ');
         (err as any).statusCode = 404;
         (err as any).code = 'ROOM_NOT_FOUND';
+        throw err;
+      }
+
+      if (room.status === 'maintenance') {
+        const err = new Error('ไม่สามารถสร้างสัญญาสำหรับห้องที่อยู่ระหว่างปิดปรับปรุงได้');
+        (err as any).statusCode = 409;
+        (err as any).code = 'ROOM_UNDER_MAINTENANCE';
         throw err;
       }
 
@@ -417,7 +425,7 @@ export class ProvisionalRentalTermService {
     for (const term of reservedTerms) {
       try {
         const result = await this.prisma.$transaction(async (tx) => {
-          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${term.dormitoryId + ':' + term.roomId}))`;
+          await acquireRoomAvailabilityLock(tx, term.dormitoryId, term.roomId);
 
           // Re-verify status
           const freshTerm = await tx.provisionalRentalTerm.findFirst({

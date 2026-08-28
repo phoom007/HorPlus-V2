@@ -299,6 +299,11 @@ export class RoomService {
     const { getPrismaClient } = await import('../db/prisma.js');
 
     const runInTx = async (tx: any) => {
+      // 1. Advisory room lock for availability-affecting mutations (Part A & B)
+      if (changes.status !== undefined) {
+        await acquireRoomAvailabilityLock(tx, targetDormId, id);
+      }
+
       const existing = await tx.room.findFirst({
         where: { id, dormitoryId: targetDormId, deletedAt: null },
       });
@@ -351,7 +356,7 @@ export class RoomService {
               roomId: id,
               dormitoryId: targetDormId,
               deletedAt: null,
-              status: { notIn: ['cancelled', 'void', 'rejected', 'terminated'] },
+              status: { notIn: ['cancelled', 'void', 'rejected', 'draft'] },
             },
           }) : [],
           tx.provisionalRentalTerm ? tx.provisionalRentalTerm.findMany({
@@ -359,7 +364,7 @@ export class RoomService {
               roomId: id,
               dormitoryId: targetDormId,
               deletedAt: null,
-              status: { notIn: ['CANCELLED', 'cancelled', 'ENDED', 'ended', 'REJECTED', 'rejected'] },
+              status: { in: ['ACTIVE', 'RESERVED'] },
             },
           }) : [],
           tx.dailyStay ? tx.dailyStay.findMany({
@@ -367,7 +372,7 @@ export class RoomService {
               roomId: id,
               dormitoryId: targetDormId,
               deletedAt: null,
-              status: { notIn: ['CANCELLED', 'cancelled', 'REJECTED', 'rejected', 'CHECKED_OUT', 'checked_out', 'COMPLETED', 'completed'] },
+              status: { in: ['ACTIVE', 'RESERVED', 'CHECKED_IN'] },
             },
           }) : [],
         ]);

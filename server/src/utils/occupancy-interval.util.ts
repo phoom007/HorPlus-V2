@@ -298,11 +298,11 @@ export function evaluateMaintenanceEligibilityFromRecords(params: {
     }
   }
 
-  // 1c. Daily stay active physical occupancy
+  // 1c. Daily stay active physical occupancy (only committed active/checked-in statuses)
   for (const d of dailyStays) {
     if (d.deletedAt) continue;
     const st = (d.status || '').toUpperCase();
-    if (['CANCELLED', 'REJECTED', 'CHECKED_OUT', 'COMPLETED'].includes(st)) continue;
+    if (!['ACTIVE', 'RESERVED', 'CHECKED_IN'].includes(st)) continue;
     if (d.actualCheckedOutAt && new Date(d.actualCheckedOutAt) <= now) continue;
     const interval = getDailyStayPhysicalInterval(d);
     if (interval.start <= now && now < interval.end) {
@@ -316,13 +316,13 @@ export function evaluateMaintenanceEligibilityFromRecords(params: {
   }
 
   // --- Step 2: Committed Future Reservation Check (start > now) ---
-  // 2a. Future Contract reservation
+  // 2a. Future Contract reservation (exclude draft/cancelled/void/rejected; terminated contracts evaluated by canonical interval)
   for (const c of contracts) {
     if (c.deletedAt) continue;
     const st = (c.status || '').toLowerCase();
-    if (['cancelled', 'void', 'rejected', 'terminated', 'draft'].includes(st)) continue;
+    if (['cancelled', 'void', 'rejected', 'draft'].includes(st)) continue;
     const interval = getContractPhysicalInterval(c);
-    if (interval.start > now) {
+    if (interval.start > now && now < interval.end) {
       return {
         canSetMaintenance: false,
         maintenanceBlockReason: 'ACTIVE_RESERVATION',
@@ -332,13 +332,13 @@ export function evaluateMaintenanceEligibilityFromRecords(params: {
     }
   }
 
-  // 2b. Future Provisional reservation
+  // 2b. Future Provisional reservation (only committed RESERVED / ACTIVE)
   for (const p of provisionals) {
     if (p.deletedAt) continue;
     const st = (p.status || '').toUpperCase();
-    if (['CANCELLED', 'REJECTED', 'ENDED'].includes(st)) continue;
+    if (st !== 'RESERVED' && st !== 'ACTIVE') continue;
     const interval = getProvisionalTermPhysicalInterval(p);
-    if (interval.start > now) {
+    if (interval.start > now && now < interval.end) {
       return {
         canSetMaintenance: false,
         maintenanceBlockReason: 'ACTIVE_RESERVATION',
@@ -348,13 +348,13 @@ export function evaluateMaintenanceEligibilityFromRecords(params: {
     }
   }
 
-  // 2c. Future Daily stay reservation
+  // 2c. Future Daily stay reservation (only committed RESERVED / ACTIVE - PENDING_APPROVAL does not block)
   for (const d of dailyStays) {
     if (d.deletedAt) continue;
     const st = (d.status || '').toUpperCase();
-    if (['CANCELLED', 'REJECTED', 'CHECKED_OUT', 'COMPLETED'].includes(st)) continue;
+    if (st !== 'RESERVED' && st !== 'ACTIVE') continue;
     const interval = getDailyStayPhysicalInterval(d);
-    if (interval.start > now) {
+    if (interval.start > now && now < interval.end) {
       return {
         canSetMaintenance: false,
         maintenanceBlockReason: 'ACTIVE_RESERVATION',
@@ -384,7 +384,9 @@ export async function acquireRoomAvailabilityLock(
   dormitoryId: string,
   roomId: string
 ): Promise<void> {
-  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${dormitoryId + ':' + roomId}))`;
+  if (typeof tx?.$executeRaw === 'function') {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${dormitoryId + ':' + roomId}))`;
+  }
 }
 
 /**
@@ -405,13 +407,13 @@ export async function resolveCurrentMaintenanceEligibilityByRoom(
     return resultMap;
   }
 
-  // 1. Batch load contracts
+  // 1. Batch load contracts (include terminated to evaluate canonical physical interval)
   const contracts = await db.contract.findMany({
     where: {
       dormitoryId,
       roomId: { in: roomIds },
       deletedAt: null,
-      status: { notIn: ['cancelled', 'void', 'rejected', 'terminated'] },
+      status: { notIn: ['cancelled', 'void', 'rejected', 'draft'] },
     },
     select: {
       id: true,
@@ -425,13 +427,13 @@ export async function resolveCurrentMaintenanceEligibilityByRoom(
     },
   });
 
-  // 2. Batch load provisional terms
+  // 2. Batch load provisional terms (only committed statuses)
   const provisionals = await db.provisionalRentalTerm.findMany({
     where: {
       dormitoryId,
       roomId: { in: roomIds },
       deletedAt: null,
-      status: { notIn: ['CANCELLED', 'REJECTED', 'ENDED'] },
+      status: { in: ['ACTIVE', 'RESERVED'] },
     },
     select: {
       id: true,
@@ -443,13 +445,13 @@ export async function resolveCurrentMaintenanceEligibilityByRoom(
     },
   });
 
-  // 3. Batch load daily stays
+  // 3. Batch load daily stays (only committed statuses)
   const dailyStays = await db.dailyStay.findMany({
     where: {
       dormitoryId,
       roomId: { in: roomIds },
       deletedAt: null,
-      status: { notIn: ['CANCELLED', 'REJECTED', 'CHECKED_OUT', 'COMPLETED'] },
+      status: { in: ['ACTIVE', 'RESERVED', 'CHECKED_IN'] },
     },
     select: {
       id: true,
