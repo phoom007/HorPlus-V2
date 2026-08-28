@@ -200,3 +200,133 @@ export function getCurrentAgreementDepositDisplay(room: Room): AgreementDepositD
     unavailableText: 'ไม่พบข้อมูลค่าประกันปัจจุบัน',
   };
 }
+
+/**
+ * Formats room location using registered building name and room floor.
+ * E.g., "อาคาร B • ชั้น 1" or "อาคารชาญวิทย์ (A) • ชั้น 2".
+ */
+export function formatRoomLocation(buildingName?: string | null, floor?: number | string | null): string {
+  const bld = buildingName?.trim() || 'ไม่ระบุอาคาร';
+  const fl = floor !== undefined && floor !== null ? `ชั้น ${floor}` : 'ไม่ระบุชั้น';
+  return `${bld} • ${fl}`;
+}
+
+export interface RoomCycleOccupancy {
+  tenantId: string;
+  tenantName?: string | null;
+  agreementType: 'MONTHLY' | 'TERM' | 'DAILY' | null;
+  rentAmount: number;
+  depositAmount?: number | null;
+  source: 'CONTRACT_SNAPSHOT' | 'CONTRACT' | 'PROVISIONAL_TERM' | 'PROVISIONAL_MONTHLY' | 'DAILY_STAY' | 'NONE';
+}
+
+export interface RoomCyclePresentation {
+  roomId: string;
+  billingCycleId?: string;
+  state: 'ACTIVE_AGREEMENT' | 'RESERVED_IN_CYCLE' | 'DAILY_FINANCIAL_TAIL' | 'NO_AGREEMENT_IN_CYCLE';
+  occupancy: RoomCycleOccupancy | null;
+  currentCatalogRates: RateItem[];
+}
+
+/**
+ * Single presentation authority for Cycle-Scoped Room Presentation (Grid, List, Floor):
+ * Projects backend Meter preview room context without re-evaluating date logic on frontend.
+ */
+export function resolveRoomCyclePresentation(
+  room: Room,
+  meterPreviewRoom?: any,
+  billingCycleId?: string
+): RoomCyclePresentation {
+  const currentCatalogRates = getCatalogRates(room);
+
+  if (!meterPreviewRoom) {
+    return {
+      roomId: room.id,
+      billingCycleId,
+      state: 'NO_AGREEMENT_IN_CYCLE',
+      occupancy: null,
+      currentCatalogRates,
+    };
+  }
+
+  const rawState = meterPreviewRoom.cyclePresentationState;
+  const state: 'ACTIVE_AGREEMENT' | 'RESERVED_IN_CYCLE' | 'DAILY_FINANCIAL_TAIL' | 'NO_AGREEMENT_IN_CYCLE' =
+    rawState ||
+    (meterPreviewRoom.billingSource && meterPreviewRoom.billingSource !== 'NONE'
+      ? 'ACTIVE_AGREEMENT'
+      : (meterPreviewRoom.isFutureReservation ? 'RESERVED_IN_CYCLE' : 'NO_AGREEMENT_IN_CYCLE'));
+
+  if (state === 'ACTIVE_AGREEMENT') {
+    const agreementType: 'MONTHLY' | 'TERM' | 'DAILY' | null =
+      meterPreviewRoom.agreementType ||
+      (meterPreviewRoom.billingSource === 'PROVISIONAL_TERM' || meterPreviewRoom.rentDescription?.includes('เทอม')
+        ? 'TERM'
+        : (meterPreviewRoom.billingSource === 'DAILY_STAY' ? 'DAILY' : 'MONTHLY'));
+
+    const rentAmount = Number(meterPreviewRoom.rentAmount) || 0;
+    const rawDep = meterPreviewRoom.agreementDepositAmount ?? meterPreviewRoom.dailyDepositAmount ?? meterPreviewRoom.depositAmount;
+    const depositAmount = rawDep !== null && rawDep !== undefined && Number.isFinite(Number(rawDep))
+      ? Number(rawDep)
+      : null;
+
+    const source = (meterPreviewRoom.billingSource as any) || 'CONTRACT';
+
+    return {
+      roomId: room.id,
+      billingCycleId,
+      state: 'ACTIVE_AGREEMENT',
+      occupancy: {
+        tenantId: meterPreviewRoom.tenantId,
+        tenantName: meterPreviewRoom.tenantName,
+        agreementType,
+        rentAmount,
+        depositAmount,
+        source,
+      },
+      currentCatalogRates,
+    };
+  }
+
+  if (state === 'RESERVED_IN_CYCLE') {
+    return {
+      roomId: room.id,
+      billingCycleId,
+      state: 'RESERVED_IN_CYCLE',
+      occupancy: {
+        tenantId: meterPreviewRoom.tenantId,
+        tenantName: meterPreviewRoom.tenantName,
+        agreementType: meterPreviewRoom.agreementType || null,
+        rentAmount: Number(meterPreviewRoom.rentAmount) || 0,
+        depositAmount: null,
+        source: 'NONE',
+      },
+      currentCatalogRates,
+    };
+  }
+
+  if (state === 'DAILY_FINANCIAL_TAIL') {
+    return {
+      roomId: room.id,
+      billingCycleId,
+      state: 'DAILY_FINANCIAL_TAIL',
+      occupancy: {
+        tenantId: meterPreviewRoom.tenantId || meterPreviewRoom.dailyTenantId,
+        tenantName: meterPreviewRoom.tenantName || meterPreviewRoom.dailyTenantName,
+        agreementType: 'DAILY',
+        rentAmount: Number(meterPreviewRoom.rentAmount) || 0,
+        depositAmount: meterPreviewRoom.dailyDepositAmount ? Number(meterPreviewRoom.dailyDepositAmount) : null,
+        source: 'DAILY_STAY',
+      },
+      currentCatalogRates,
+    };
+  }
+
+  // NO_AGREEMENT_IN_CYCLE: Product Owner Decision B1
+  return {
+    roomId: room.id,
+    billingCycleId,
+    state: 'NO_AGREEMENT_IN_CYCLE',
+    occupancy: null,
+    currentCatalogRates,
+  };
+}

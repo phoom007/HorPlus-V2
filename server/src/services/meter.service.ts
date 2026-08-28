@@ -1675,6 +1675,9 @@ export class MeterService {
       tenantId: string | null;
       tenantName: string | null;
       billingSource: 'CONTRACT' | 'PROVISIONAL_MONTHLY' | 'PROVISIONAL_TERM' | 'DAILY_STAY' | 'NONE';
+      agreementType: 'MONTHLY' | 'TERM' | 'DAILY' | null;
+      agreementDepositAmount: string | null;
+      cyclePresentationState: 'ACTIVE_AGREEMENT' | 'RESERVED_IN_CYCLE' | 'DAILY_FINANCIAL_TAIL' | 'NO_AGREEMENT_IN_CYCLE';
       rentAmount: string;
       rentDescription: string;
       isLineLinked: boolean;
@@ -1933,6 +1936,8 @@ export class MeterService {
 
     const roomContexts = rooms.map((room) => {
       let billingSource: 'CONTRACT' | 'PROVISIONAL_MONTHLY' | 'PROVISIONAL_TERM' | 'DAILY_STAY' | 'NONE' = 'NONE';
+      let agreementType: 'MONTHLY' | 'TERM' | 'DAILY' | null = null;
+      let agreementDepositAmount: string | null = null;
       let rentAmount = '0.00';
       let rentDescription = 'ค่าเช่าห้องพัก';
       let tenantId: string | null = null;
@@ -1957,9 +1962,16 @@ export class MeterService {
 
       if (contract) {
         billingSource = 'CONTRACT';
+        agreementType = (contract.rentBillingType || '').toUpperCase() === 'TERM' ? 'TERM' : 'MONTHLY';
         tenantId = contract.tenantId;
         tenantName = contract.tenant ? (contract.tenant.displayName || `${contract.tenant.firstName || ''} ${contract.tenant.lastName || ''}`.trim()) : null;
         isLineLinked = Boolean(contract.tenant?.linkedUserId);
+
+        const snapObj = contract.snapshot as any;
+        const snapDep = snapObj?.resolvedDeposit != null && snapObj?.resolvedDeposit !== ''
+          ? snapObj.resolvedDeposit
+          : (contract.depositAmount != null ? contract.depositAmount.toString() : null);
+        agreementDepositAmount = snapDep != null ? formatDecimal(toDecimal(snapDep)) : null;
 
         const endStr = toBangkokDateString(contract.endDate);
         if (endStr >= cycleStartStr && endStr <= cycleEndStr) {
@@ -1996,11 +2008,14 @@ export class MeterService {
           if (endStr >= cycleStartStr && endStr <= cycleEndStr) {
             contractEndDate = endStr;
           }
+          agreementDepositAmount = prov.depositAmount != null ? formatDecimal(toDecimal(prov.depositAmount.toString())) : null;
           if (prov.rentalType === 'MONTHLY') {
             billingSource = 'PROVISIONAL_MONTHLY';
+            agreementType = 'MONTHLY';
             rentAmount = formatDecimal(toDecimal(prov.unitRentAmount.toString()));
           } else {
             billingSource = 'PROVISIONAL_TERM';
+            agreementType = 'TERM';
             const totalRent = Number(prov.totalRentAmount);
             const installments = prov.termInstallmentCount || 1;
             const termStart = new Date(prov.startDate);
@@ -2019,6 +2034,7 @@ export class MeterService {
         }
       } else if (dailyStay) {
         billingSource = 'DAILY_STAY';
+        agreementType = 'DAILY';
         tenantId = dailyStay.tenantId;
         tenantName = dailyStay.applicantFullName || (dailyStay.tenant ? (dailyStay.tenant.displayName || `${dailyStay.tenant.firstName || ''} ${dailyStay.tenant.lastName || ''}`.trim()) : 'ผู้พักรายวัน');
         rentAmount = formatDecimal(toDecimal(dailyStay.totalRentAmount.toString()));
@@ -2027,6 +2043,7 @@ export class MeterService {
 
             const depositItem = dailyStay.invoice?.items.find((i) => i.itemType === 'DEPOSIT');
             dailyDepositAmount = depositItem ? formatDecimal(depositItem.amount) : formatDecimal(dailyStay.depositAmount);
+            agreementDepositAmount = dailyDepositAmount;
             const isPaid = depositItem?.status === 'DECLARED_PAID' || depositItem?.status === 'SETTLED' || dailyStay.depositDeclaredStatus === 'PAID';
             const paidAt = depositItem?.paidAt || null;
             dailyDepositStatus = isPaid ? 'PAID' : 'UNPAID';
@@ -2465,12 +2482,26 @@ export class MeterService {
 
       const isOverallPaid = overallFinancialStatus === 'paid';
 
+      let cyclePresentationState: 'ACTIVE_AGREEMENT' | 'RESERVED_IN_CYCLE' | 'DAILY_FINANCIAL_TAIL' | 'NO_AGREEMENT_IN_CYCLE' = 'NO_AGREEMENT_IN_CYCLE';
+      if (billingSource === 'CONTRACT' || billingSource === 'PROVISIONAL_MONTHLY' || billingSource === 'PROVISIONAL_TERM' || billingSource === 'DAILY_STAY') {
+        cyclePresentationState = 'ACTIVE_AGREEMENT';
+      } else if (isFutureReservation) {
+        cyclePresentationState = 'RESERVED_IN_CYCLE';
+      } else if (unpaidDailyStay) {
+        cyclePresentationState = 'DAILY_FINANCIAL_TAIL';
+      } else {
+        cyclePresentationState = 'NO_AGREEMENT_IN_CYCLE';
+      }
+
       return {
         roomId: room.id,
         roomNumber: room.roomNumber,
         tenantId,
         tenantName,
         billingSource,
+        agreementType,
+        agreementDepositAmount,
+        cyclePresentationState,
         rentAmount,
         rentDescription,
         isLineLinked,

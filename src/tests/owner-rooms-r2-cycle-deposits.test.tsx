@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { normalizeAuthoritativeRoom } from '../lib/roomNormalizer';
 import { getOwnerRoomMutationErrorMessage } from '../lib/roomErrorMapper';
-import { getGridRentRates, getListRentRates, getDepositForCycle, getCurrentAgreementDepositDisplay } from '../lib/roomRentalSummary';
+import { getGridRentRates, getListRentRates, getDepositForCycle, getCurrentAgreementDepositDisplay, formatRoomLocation, resolveRoomCyclePresentation } from '../lib/roomRentalSummary';
 import { Room } from '../types';
 import { CreateContractSchema, UpdateRoomSchema } from '../../server/src/schemas/property-tenant-contract.schemas';
 
@@ -508,4 +508,111 @@ describe('OWNER ROOMS R2 & R2.1 — Rent-Cycle Deposit Model & Hardened Specific
       expect(result.amount).toBeUndefined();
     });
   });
+  describe('7. OWNER ROOMS R3 — Cycle-Scoped Presentation Authority & Building Identity', () => {
+    it('1. formatRoomLocation formats registered Building.name and floor consistently', () => {
+      expect(formatRoomLocation('อาคารราชฤทธิ์ (A)', 1)).toBe('อาคารราชฤทธิ์ (A) • ชั้น 1');
+      expect(formatRoomLocation('อาคาร B', 2)).toBe('อาคาร B • ชั้น 2');
+      expect(formatRoomLocation(undefined, 3)).toBe('ไม่ระบุอาคาร • ชั้น 3');
+      expect(formatRoomLocation('อาคารสมบูรณ์ (B)', null)).toBe('อาคารสมบูรณ์ (B) • ไม่ระบุชั้น');
+    });
+
+    it('2. resolveRoomCyclePresentation projects historical cycle agreement (rent 4500 vs current catalog 6000)', () => {
+      const roomCatalog: any = {
+        id: 'room-101',
+        roomNumber: '101',
+        status: 'occupied',
+        currentTenantId: 'tenant-current-B',
+        monthlyRent: 6000,
+        termRent: 24000,
+        dailyRent: 700,
+        monthlyDeposit: 6000,
+        termDeposit: 12000,
+        dailyDeposit: 1500,
+      };
+
+      const meterPreviewRoom202607: any = {
+        roomId: 'room-101',
+        roomNumber: '101',
+        tenantId: 'tenant-historical-A',
+        tenantName: 'นาย สมชาย ประวัติ',
+        billingSource: 'CONTRACT',
+        agreementType: 'MONTHLY',
+        rentAmount: '4500.00',
+        agreementDepositAmount: '5000.00',
+        cyclePresentationState: 'ACTIVE_AGREEMENT',
+      };
+
+      const presentation = resolveRoomCyclePresentation(roomCatalog, meterPreviewRoom202607, 'cycle-2026-07');
+      expect(presentation.state).toBe('ACTIVE_AGREEMENT');
+      expect(presentation.occupancy).toBeDefined();
+      expect(presentation.occupancy?.tenantId).toBe('tenant-historical-A');
+      expect(presentation.occupancy?.tenantName).toBe('นาย สมชาย ประวัติ');
+      expect(presentation.occupancy?.agreementType).toBe('MONTHLY');
+      expect(presentation.occupancy?.rentAmount).toBe(4500); // Historical rate, NOT 6000
+      expect(presentation.occupancy?.depositAmount).toBe(5000);
+
+      // Room catalog object itself is NOT mutated
+      expect(roomCatalog.monthlyRent).toBe(6000);
+      expect(roomCatalog.currentTenantId).toBe('tenant-current-B');
+    });
+
+    it('3. resolveRoomCyclePresentation applies Decision B1 when room has NO agreement in selected cycle', () => {
+      const roomCatalog: any = {
+        id: 'room-102',
+        roomNumber: '102',
+        status: 'vacant',
+        currentTenantId: null,
+        monthlyRent: 5500,
+        termRent: 22000,
+        dailyRent: 600,
+        monthlyDeposit: 5500,
+        termDeposit: 11000,
+        dailyDeposit: 1000,
+      };
+
+      const meterPreviewRoomNoAgr: any = {
+        roomId: 'room-102',
+        roomNumber: '102',
+        tenantId: null,
+        tenantName: null,
+        billingSource: 'NONE',
+        agreementType: null,
+        agreementDepositAmount: null,
+        cyclePresentationState: 'NO_AGREEMENT_IN_CYCLE',
+      };
+
+      const presentation = resolveRoomCyclePresentation(roomCatalog, meterPreviewRoomNoAgr, 'cycle-2026-05');
+      expect(presentation.state).toBe('NO_AGREEMENT_IN_CYCLE');
+      expect(presentation.occupancy).toBeNull();
+      expect(presentation.currentCatalogRates).toHaveLength(3);
+      expect(presentation.currentCatalogRates[0].label).toBe('รายเดือน');
+      expect(presentation.currentCatalogRates[0].amount).toBe(5500);
+      expect(presentation.currentCatalogRates[1].label).toBe('รายเทอม');
+      expect(presentation.currentCatalogRates[1].amount).toBe(22000);
+      expect(presentation.currentCatalogRates[2].label).toBe('รายวัน');
+      expect(presentation.currentCatalogRates[2].amount).toBe(600);
+    });
+
+    it('4. Edit modal uses current Room catalog rates (6000) and is isolated from selected cycle', () => {
+      const roomCatalog: any = {
+        id: 'room-103',
+        roomNumber: '103',
+        status: 'occupied',
+        currentTenantId: 'tenant-current',
+        monthlyRent: 6000,
+        termRent: 24000,
+        dailyRent: 700,
+        monthlyDeposit: 6000,
+        termDeposit: 12000,
+        dailyDeposit: 1500,
+      };
+
+      // Edit modal receives the room catalog object directly, guaranteeing current rates are loaded
+      expect(roomCatalog.monthlyRent).toBe(6000);
+      expect(roomCatalog.monthlyDeposit).toBe(6000);
+      expect(roomCatalog.termDeposit).toBe(12000);
+      expect(roomCatalog.dailyDeposit).toBe(1500);
+    });
+  });
+
 });

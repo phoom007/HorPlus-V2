@@ -43,13 +43,24 @@ import { getDataProvider } from '../../data/dataProvider';
 import { CreateRoomPayload, UpdateRoomChanges } from '../../data/contracts';
 import { httpRequest } from '../../data/httpClient';
 import { getOwnerRoomMutationErrorMessage } from '../../lib/roomErrorMapper';
+import { useQuery } from '@tanstack/react-query';
+import { queryKeys, STALE_TIMES } from '../../lib/queryClient';
 import { QuickAddTenantModal } from '../../components/QuickAddTenantModal';
 import { QuickAddRoomContext } from '../../types';
-import { getGridRentRates, getListRentRates, getDepositForCycle, getCurrentAgreementDepositDisplay } from '../../lib/roomRentalSummary';
+import {
+  getGridRentRates,
+  getListRentRates,
+  getDepositForCycle,
+  getCurrentAgreementDepositDisplay,
+  formatRoomLocation,
+  resolveRoomCyclePresentation,
+  RoomCyclePresentation
+} from '../../lib/roomRentalSummary';
 import { RoomMutationImpact } from '../../lib/roomMutationCache';
 import { Room, Building, RoomStatus, Tenant, Contract, Bill, BLOCKING_CONTRACT_STATUSES } from '../../types';
 
 interface OwnerRoomsProps {
+  dormitoryId?: string;
   rooms: Room[];
   tenants?: Tenant[];
   contracts?: Contract[];
@@ -62,6 +73,9 @@ interface OwnerRoomsProps {
   onNavigate: (tab: string, param?: string) => void;
   initialRoomId?: string;
   onClearInitialRoomId?: () => void;
+  selectedBillingCycleId?: string;
+  selectedCycleCode?: string;
+  billingCycles?: any[];
 }
 
 const ROOM_STATUS_CONFIG: Record<string, {
@@ -107,6 +121,7 @@ const ROOM_STATUS_CONFIG: Record<string, {
 };
 
 export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
+  dormitoryId,
   rooms,
   tenants = [],
   contracts = [],
@@ -118,8 +133,40 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
   onAddLog,
   onNavigate,
   initialRoomId,
-  onClearInitialRoomId
+  onClearInitialRoomId,
+  selectedBillingCycleId,
+  selectedCycleCode,
+  billingCycles = []
 }) => {
+  const previewContextQuery = useQuery({
+    queryKey: selectedBillingCycleId && dormitoryId ? queryKeys.meterPreviewContext(dormitoryId, selectedBillingCycleId) : ['previewContext-disabled'],
+    queryFn: async () => {
+      if (!selectedBillingCycleId || !dormitoryId) return null;
+      const res = await httpRequest<{ success: boolean; data: any; error?: string }>(
+        'GET',
+        `/api/v1/meters/workspace/preview-context?billingCycleId=${selectedBillingCycleId}`,
+        undefined,
+        { dormitoryId }
+      );
+      if (!res || res.success === false) {
+        throw new Error(res?.error || 'ไม่สามารถโหลดข้อมูลอัตราค่าน้ำค่าไฟได้');
+      }
+      return res.data;
+    },
+    enabled: Boolean(dormitoryId && selectedBillingCycleId),
+    staleTime: STALE_TIMES.PREVIEW_CONTEXT,
+  });
+
+  const previewContext = previewContextQuery.data;
+  const previewRoomMap = React.useMemo(() => {
+    const map = new Map<string, any>();
+    if (previewContext && Array.isArray(previewContext.rooms)) {
+      for (const r of previewContext.rooms) {
+        map.set(r.roomId, r);
+      }
+    }
+    return map;
+  }, [previewContext]);
   const [viewMode, setViewMode] = useState<'grid' | 'list' | 'floor'>('grid');
   const [selectedBuilding, setSelectedBuilding] = useState<string>('all');
   const [selectedStatus, setSelectedStatus] = useState<string>('all');
@@ -783,8 +830,17 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
           {filteredRooms.map((room) => {
             const bldName = buildings.find(b => b.id === room.buildingId)?.name || 'ไม่ระบุอาคาร';
-            const currentTenant = tenants.find(t => t.id === room.currentTenantId);
-            const statusCfg = ROOM_STATUS_CONFIG[room.status] || ROOM_STATUS_CONFIG.vacant;
+            const meterPreviewRoom = previewRoomMap.get(room.id);
+            const cyclePresentation = resolveRoomCyclePresentation(room, meterPreviewRoom, selectedBillingCycleId);
+            const isCycleOccupied = cyclePresentation.state === 'ACTIVE_AGREEMENT';
+            const isCycleReserved = cyclePresentation.state === 'RESERVED_IN_CYCLE';
+            const isDailyTail = cyclePresentation.state === 'DAILY_FINANCIAL_TAIL';
+            const locationStr = formatRoomLocation(bldName, room.floor);
+
+            const displayTenantName = cyclePresentation.occupancy?.tenantName;
+            const statusCfg = isCycleOccupied
+              ? ROOM_STATUS_CONFIG.occupied
+              : (room.status === 'maintenance' ? ROOM_STATUS_CONFIG.maintenance : ROOM_STATUS_CONFIG.vacant);
 
             return (
               <div
@@ -796,20 +852,22 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                   <div className="flex justify-between items-start gap-2">
                     <div>
                       <h4 className="text-xl font-black text-slate-900 tracking-tight">{room.roomNumber}</h4>
-                      <p className="text-[11px] text-gray-500 font-semibold mt-0.5">{bldName} &bull; ชั้น {room.floor}</p>
+                      <p className="text-[11px] text-gray-500 font-semibold mt-0.5">{locationStr}</p>
                     </div>
 
-                    {/* Status Badge (View-only) */}
+                    {/* Status Badge (Cycle-scoped view) */}
                     <div
-                      className={`px-2.5 py-1 rounded-full text-xs font-black border shadow-2xs select-none cursor-default ${room.status === 'occupied'
+                      className={`px-2.5 py-1 rounded-full text-xs font-black border shadow-2xs select-none cursor-default ${isCycleOccupied
                           ? 'bg-indigo-100 text-indigo-800 border-indigo-200'
-                          : room.status === 'vacant'
-                            ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
-                            : 'bg-rose-100 text-rose-800 border-rose-200'
+                          : (isCycleReserved || isDailyTail)
+                            ? 'bg-amber-100 text-amber-800 border-amber-200'
+                            : (room.status === 'maintenance'
+                              ? 'bg-rose-100 text-rose-800 border-rose-200'
+                              : 'bg-emerald-100 text-emerald-800 border-emerald-200')
                         }`}
-                      title={`สถานะห้อง: ${statusCfg.label}`}
+                      title={`สถานะห้องในงวด: ${isCycleOccupied ? 'มีผู้เช่า' : (isCycleReserved ? 'จองแล้ว' : (isDailyTail ? 'ค้างชำระ (รายวัน)' : (room.status === 'maintenance' ? 'ปิดปรับปรุง' : 'ว่าง')))}`}
                     >
-                      {statusCfg.label}
+                      {isCycleOccupied ? 'มีผู้เช่า' : (isCycleReserved ? 'จองแล้ว' : (isDailyTail ? 'ค้างชำระ' : (room.status === 'maintenance' ? 'ปิดปรับปรุง' : 'ว่าง')))}
                     </div>
                   </div>
 
@@ -821,36 +879,43 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                         <UserIcon className="w-4 h-4" />
                       </div>
                       <div className="min-w-0 flex-1">
-                        <p className="text-[10px] text-gray-400 font-extrabold uppercase leading-none">ผู้เช่าปัจจุบัน</p>
-                        {currentTenant ? (
-                          <p className="font-extrabold text-slate-900 truncate mt-0.5">{currentTenant.name}</p>
+                        <p className="text-[10px] text-gray-400 font-extrabold uppercase leading-none">ผู้เช่าตามงวด</p>
+                        {displayTenantName ? (
+                          <p className="font-extrabold text-slate-900 truncate mt-0.5">{displayTenantName}</p>
                         ) : (
-                          <p className="text-gray-400 font-medium italic mt-0.5">ไม่มีผู้เช่าลงทะเบียน</p>
+                          <p className="text-gray-400 font-medium italic mt-0.5">ไม่มีผู้เช่าในงวดนี้</p>
                         )}
                       </div>
                     </div>
 
                     {/* Rates Breakdown */}
                     {(() => {
-                      const gridRates = getGridRentRates(room);
-                      if (gridRates.isOccupied && (!gridRates.rates || gridRates.rates.length === 0)) {
+                      if (isCycleOccupied && cyclePresentation.occupancy) {
+                        const agrType = cyclePresentation.occupancy.agreementType;
+                        const cycleLabel = agrType === 'TERM' ? 'รายเทอม' : (agrType === 'DAILY' ? 'รายวัน' : 'รายเดือน');
+                        const unitSuffix = agrType === 'TERM' ? 'เทอม' : (agrType === 'DAILY' ? 'วัน' : 'เดือน');
                         return (
                           <div className="space-y-1.5">
                             <p className="text-[10px] font-black uppercase text-indigo-700 tracking-wider">
-                              อัตราค่าเช่าตามสัญญา
+                              อัตราค่าเช่าตามงวด
                             </p>
-                            <p className="text-xs text-gray-400 font-medium italic">
-                              {gridRates.unavailableText || 'ไม่พบข้อมูลอัตราค่าเช่าปัจจุบัน'}
-                            </p>
+                            <div className="flex justify-between items-center text-slate-700">
+                              <span className="text-gray-500 font-medium">{cycleLabel}:</span>
+                              <span className="font-extrabold text-slate-900">
+                                {formatBaht(cyclePresentation.occupancy.rentAmount)} / {unitSuffix}
+                              </span>
+                            </div>
                           </div>
                         );
                       }
+
+                      // Product Owner Decision B1: Fallback to current room catalog rates labeled 'อัตราปัจจุบัน'
                       return (
                         <div className="space-y-1.5">
-                          <p className="text-[10px] font-black uppercase text-indigo-700 tracking-wider">
-                            {gridRates.isOccupied ? 'อัตราค่าเช่าตามสัญญา' : 'อัตราค่าเช่าพัก'}
+                          <p className="text-[10px] font-black uppercase text-slate-600 tracking-wider">
+                            อัตราปัจจุบัน
                           </p>
-                          {gridRates.rates.map((rate) => (
+                          {cyclePresentation.currentCatalogRates.map((rate) => (
                             <div key={rate.cycle} className="flex justify-between items-center text-slate-700">
                               <span className="text-gray-500 font-medium">{rate.label}:</span>
                               <span className="font-extrabold text-slate-900">
@@ -867,28 +932,18 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                   <div className="flex items-center justify-between text-xs px-1 pt-0.5">
                     <span className="text-gray-600 font-bold">ค่าประกัน:</span>
                     {(() => {
-                      const depDisplay = getCurrentAgreementDepositDisplay(room);
-                      if (!depDisplay.isOccupied) {
-                        return <span className="text-gray-400 font-medium italic">ไม่มีผู้เช่าลงทะเบียน</span>;
+                      if (isCycleOccupied && cyclePresentation.occupancy) {
+                        const dep = cyclePresentation.occupancy.depositAmount;
+                        if (dep !== null && dep !== undefined && Number.isFinite(dep)) {
+                          return (
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-extrabold text-slate-900">{formatBaht(dep)}</span>
+                            </div>
+                          );
+                        }
+                        return <span className="text-gray-400 font-medium italic">ไม่พบข้อมูลค่าประกันตามงวด</span>;
                       }
-                      if (depDisplay.amount !== undefined) {
-                        return (
-                          <div className="flex items-center gap-1.5">
-                            <span className="font-extrabold text-slate-900">{formatBaht(depDisplay.amount)}</span>
-                            {room.depositStatus === 'paid' && (
-                              <span className="px-1.5 py-0.5 bg-emerald-100 text-emerald-800 text-[10px] font-black rounded-md border border-emerald-200">
-                                จ่ายแล้ว
-                              </span>
-                            )}
-                            {room.depositStatus === 'unpaid' && (
-                              <span className="px-1.5 py-0.5 bg-rose-100 text-rose-800 text-[10px] font-black rounded-md border border-rose-200">
-                                ยังไม่จ่าย
-                              </span>
-                            )}
-                          </div>
-                        );
-                      }
-                      return <span className="text-gray-400 font-medium italic">{depDisplay.unavailableText}</span>;
+                      return <span className="text-gray-400 font-medium italic">ไม่มีผู้เช่าลงทะเบียน</span>;
                     })()}
                   </div>
                 </div>
@@ -957,18 +1012,27 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
               <tbody className="divide-y divide-gray-100">
                 {filteredRooms.map((room) => {
                   const bldName = buildings.find(b => b.id === room.buildingId)?.name || 'ไม่ระบุ';
-                  const currentTenant = tenants.find(t => t.id === room.currentTenantId);
-                  const statusCfg = ROOM_STATUS_CONFIG[room.status] || ROOM_STATUS_CONFIG.vacant;
+                  const meterPreviewRoom = previewRoomMap.get(room.id);
+                  const cyclePresentation = resolveRoomCyclePresentation(room, meterPreviewRoom, selectedBillingCycleId);
+                  const isCycleOccupied = cyclePresentation.state === 'ACTIVE_AGREEMENT';
+                  const isCycleReserved = cyclePresentation.state === 'RESERVED_IN_CYCLE';
+                  const isDailyTail = cyclePresentation.state === 'DAILY_FINANCIAL_TAIL';
+                  const locationStr = formatRoomLocation(bldName, room.floor);
+
+                  const displayTenantName = cyclePresentation.occupancy?.tenantName;
+                  const statusCfg = isCycleOccupied
+                    ? ROOM_STATUS_CONFIG.occupied
+                    : (room.status === 'maintenance' ? ROOM_STATUS_CONFIG.maintenance : ROOM_STATUS_CONFIG.vacant);
 
                   return (
                     <tr key={room.id} className="hover:bg-slate-50/60 transition-colors">
                       <td className="p-4 font-black text-slate-900 text-sm whitespace-nowrap">{room.roomNumber}</td>
-                      <td className="p-4 text-gray-600 font-semibold whitespace-nowrap">{bldName} (ชั้น {room.floor})</td>
+                      <td className="p-4 text-gray-600 font-semibold whitespace-nowrap">{locationStr}</td>
                       <td className="p-4 font-bold text-slate-800 whitespace-nowrap">
-                        {currentTenant ? (
+                        {displayTenantName ? (
                           <div className="flex items-center gap-1.5 text-indigo-700 whitespace-nowrap">
                             <UserIcon className="w-3.5 h-3.5 shrink-0" />
-                            <span>{currentTenant.name}</span>
+                            <span>{displayTenantName}</span>
                           </div>
                         ) : (
                           <span className="text-gray-400 font-normal italic">-</span>
@@ -976,80 +1040,75 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                       </td>
                       <td className="p-4 space-y-0.5 whitespace-nowrap">
                         {(() => {
-                          const { primaryRate, secondaryRates, unavailableText } = getListRentRates(room);
-                          if (room.status === 'occupied' && !primaryRate) {
+                          if (isCycleOccupied && cyclePresentation.occupancy) {
+                            const agrType = cyclePresentation.occupancy.agreementType;
+                            const unitSuffix = agrType === 'TERM' ? 'เทอม' : (agrType === 'DAILY' ? 'วัน' : 'เดือน');
                             return (
                               <>
-                                <div className="text-xs text-gray-400 font-medium italic">
-                                  {unavailableText || 'ไม่พบข้อมูลอัตราค่าเช่าปัจจุบัน'}
+                                <div className="font-extrabold text-slate-900 whitespace-nowrap">
+                                  {formatBaht(cyclePresentation.occupancy.rentAmount)} / {unitSuffix}
                                 </div>
-                                {secondaryRates.map((sec) => (
-                                  <div key={sec.cycle} className="text-[10px] text-gray-400 whitespace-nowrap">
-                                    {sec.label}: {formatBaht(sec.amount)} / {sec.cycle === 'term' ? 'เทอม' : (sec.cycle === 'daily' ? 'วัน' : 'เดือน')}
-                                  </div>
-                                ))}
+                                <div className="text-[10px] text-gray-400 whitespace-nowrap">
+                                  อัตราตามงวด
+                                </div>
                               </>
                             );
                           }
-                          const unitSuffix = primaryRate?.cycle === 'term' ? 'เทอม' : (primaryRate?.cycle === 'daily' ? 'วัน' : 'เดือน');
+
+                          // Decision B1: current catalog rates with 'อัตราปัจจุบัน'
+                          const [primary, ...rest] = cyclePresentation.currentCatalogRates;
                           return (
                             <>
-                              {primaryRate && (
+                              {primary && (
                                 <div className="font-extrabold text-slate-900 whitespace-nowrap">
-                                  {formatBaht(primaryRate.amount)} / {unitSuffix}
+                                  {formatBaht(primary.amount)} / {primary.cycle === 'term' ? 'เทอม' : (primary.cycle === 'daily' ? 'วัน' : 'เดือน')}
                                 </div>
                               )}
-                              {secondaryRates.map((sec) => (
-                                <div key={sec.cycle} className="text-[10px] text-gray-500 whitespace-nowrap">
-                                  {formatBaht(sec.amount)} / {sec.cycle === 'term' ? 'เทอม' : (sec.cycle === 'daily' ? 'วัน' : 'เดือน')}
-                                </div>
-                              ))}
+                              <div className="text-[10px] text-gray-500 whitespace-nowrap">
+                                อัตราปัจจุบัน
+                              </div>
                             </>
                           );
                         })()}
                       </td>
                       <td className="p-4 whitespace-nowrap">
                         {(() => {
-                          const depDisplay = getCurrentAgreementDepositDisplay(room);
-                          if (!depDisplay.isOccupied) {
-                            return <span className="text-gray-400 font-medium italic">ไม่มีผู้เช่าลงทะเบียน</span>;
+                          if (isCycleOccupied && cyclePresentation.occupancy) {
+                            const dep = cyclePresentation.occupancy.depositAmount;
+                            if (dep !== null && dep !== undefined && Number.isFinite(dep)) {
+                              return (
+                                <div className="font-bold text-slate-800 whitespace-nowrap">{formatBaht(dep)}</div>
+                              );
+                            }
+                            return <span className="text-gray-400 font-medium italic">ไม่พบข้อมูลค่าประกันตามงวด</span>;
                           }
-                          if (depDisplay.amount !== undefined) {
-                            return (
-                              <>
-                                <div className="font-bold text-slate-800 whitespace-nowrap">{formatBaht(depDisplay.amount)}</div>
-                                {room.depositStatus === 'paid' && (
-                                  <span className="text-[10px] font-black text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200 inline-block mt-0.5 whitespace-nowrap">จ่ายแล้ว</span>
-                                )}
-                                {room.depositStatus === 'unpaid' && (
-                                  <span className="text-[10px] font-black text-rose-700 bg-rose-50 px-1.5 py-0.5 rounded border border-rose-200 inline-block mt-0.5 whitespace-nowrap">ยังไม่จ่าย</span>
-                                )}
-                              </>
-                            );
-                          }
-                          return <span className="text-gray-400 font-medium italic">{depDisplay.unavailableText}</span>;
+                          return <span className="text-gray-400 font-medium italic">ไม่มีผู้เช่าลงทะเบียน</span>;
                         })()}
                       </td>
                       <td className="p-4 whitespace-nowrap">
-                        {/* Status minimal badge (View-only) */}
+                        {/* Status minimal badge (Cycle-scoped view) */}
                         <div
-                          className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold select-none border shadow-2xs cursor-default whitespace-nowrap ${room.status === 'occupied'
+                          className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold select-none border shadow-2xs cursor-default whitespace-nowrap ${isCycleOccupied
                               ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
-                              : room.status === 'vacant'
-                                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                                : 'bg-rose-50 text-rose-700 border-rose-200'
+                              : (isCycleReserved || isDailyTail)
+                                ? 'bg-amber-50 text-amber-700 border-amber-200'
+                                : (room.status === 'maintenance'
+                                  ? 'bg-rose-50 text-rose-700 border-rose-200'
+                                  : 'bg-emerald-50 text-emerald-700 border-emerald-200')
                             }`}
-                          title={`สถานะห้อง: ${statusCfg.label}`}
+                          title={`สถานะห้อง: ${isCycleOccupied ? 'มีผู้เช่า' : (isCycleReserved ? 'จองแล้ว' : (isDailyTail ? 'ค้างชำระ' : (room.status === 'maintenance' ? 'ปิดปรับปรุง' : 'ว่าง')))}`}
                         >
                           <span
-                            className={`w-1.5 h-1.5 rounded-full shrink-0 ${room.status === 'occupied'
+                            className={`w-1.5 h-1.5 rounded-full shrink-0 ${isCycleOccupied
                                 ? 'bg-indigo-500'
-                                : room.status === 'vacant'
-                                  ? 'bg-emerald-500'
-                                  : 'bg-rose-500'
+                                : (isCycleReserved || isDailyTail)
+                                  ? 'bg-amber-500'
+                                  : (room.status === 'maintenance'
+                                    ? 'bg-rose-500'
+                                    : 'bg-emerald-500')
                               }`}
                           />
-                          <span>{statusCfg.label}</span>
+                          <span>{isCycleOccupied ? 'มีผู้เช่า' : (isCycleReserved ? 'จองแล้ว' : (isDailyTail ? 'ค้างชำระ' : (room.status === 'maintenance' ? 'ปิดปรับปรุง' : 'ว่าง')))}</span>
                         </div>
                       </td>
                       <td className="p-4 text-right whitespace-nowrap">

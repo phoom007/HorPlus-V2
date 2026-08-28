@@ -229,14 +229,34 @@ export function getTargetQueriesForTab(targetTab: string, dormId: string, cycleI
       }
       return queries;
     }
-    case 'rooms':
-      return [
+    case 'rooms': {
+      const queries: any[] = [
         { queryKey: queryKeys.rooms(dormId), queryFn: () => fetchAuthoritativeRooms(dormHeader), staleTime: STALE_TIMES.ROOMS },
         { queryKey: queryKeys.buildings(dormId), queryFn: () => fetchAllPaginated<Building>('/api/v1/properties/buildings', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.BUILDINGS },
         { queryKey: queryKeys.tenants(dormId), queryFn: () => fetchAllPaginated<Tenant>('/api/v1/tenants', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.TENANTS },
         { queryKey: queryKeys.contracts(dormId), queryFn: () => fetchAllPaginated<Contract>('/api/v1/contracts', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.CONTRACTS },
         { queryKey: queryKeys.bills(dormId), queryFn: () => fetchAllPaginated<Bill>('/api/v1/bills', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.BILLS },
       ];
+      if (cycleId) {
+        queries.push({
+          queryKey: queryKeys.meterPreviewContext(dormId, cycleId),
+          queryFn: async () => {
+            const res = await httpRequest<{ success: boolean; data: any; error?: string }>(
+              'GET',
+              `/api/v1/meters/workspace/preview-context?billingCycleId=${cycleId}`,
+              undefined,
+              { dormitoryId: dormId }
+            );
+            if (!res || res.success === false) {
+              throw new Error(res?.error || 'ไม่สามารถโหลดข้อมูลอัตราค่าน้ำค่าไฟได้');
+            }
+            return res.data;
+          },
+          staleTime: STALE_TIMES.PREVIEW_CONTEXT,
+        });
+      }
+      return queries;
+    }
     case 'tenants':
       return [
         { queryKey: queryKeys.tenants(dormId), queryFn: () => fetchAllPaginated<Tenant>('/api/v1/tenants', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.TENANTS },
@@ -1015,6 +1035,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
       case 'rooms':
         return (
           <OwnerRooms
+            dormitoryId={activeDormitoryId}
             rooms={rooms}
             tenants={tenants}
             contracts={contracts}
@@ -1026,6 +1047,9 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
             onNavigate={(tab) => changeTab(tab)}
             initialRoomId={initialRoomId}
             onClearInitialRoomId={() => setInitialRoomId(undefined)}
+            selectedBillingCycleId={selectedBillingCycleId || billingCycles.find(c => c.cycleCode === selectedCycleCode)?.id}
+            selectedCycleCode={selectedCycleCode}
+            billingCycles={billingCycles}
           />
         );
       case 'tenants':
