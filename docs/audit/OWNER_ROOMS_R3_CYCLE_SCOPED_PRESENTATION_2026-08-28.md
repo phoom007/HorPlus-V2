@@ -505,16 +505,31 @@ Independent review of the R3.3a handoff at commit `d6571c184c5fac36a21daa94c1c8d
 
 ---
 
-## 19. Final Verification & Product Owner Readiness
+
+## 19. R3.3aR1 — Floor Cycle Authority & Daily Tail Financial UX
+
+### 1. Independent Review Findings & Scope of Correction
+Independent review of the R3.3aR branch confirmed that Grid/List action wiring, restoredState consumption, #owner-main-content scroll restoration, domain-code VersionConflict routing, List badge derivation, registration mapping helper, and prior CRLF line-ending churn were successfully corrected. The remaining defects resolved in R3.3aR1 are:
+1. **Floor Mode State Authority & Tenant Actions**: Refactored Floor rendering into an explicit switch on `RoomCyclePresentation.state` (`ACTIVE_AGREEMENT`, `RESERVED_IN_CYCLE`, `DAILY_FINANCIAL_TAIL`, `MAINTENANCE_IN_CYCLE`, `NO_AGREEMENT_IN_CYCLE`, `UNAVAILABLE`). Floor cards for `RESERVED_IN_CYCLE` and `DAILY_FINANCIAL_TAIL` now invoke `handleTenantAction` (navigating to selected-cycle tenant) instead of opening Edit Room modal.
+2. **Floor Maintenance Authority & Secondary Context**: Floor mode uses `cyclePresentation.state === 'MAINTENANCE_IN_CYCLE'` as primary authority (not current `room.status === 'maintenance'`). When current room is under maintenance today but historical cycle was vacant, primary card remains green (`ว่างในงวดนี้`) and displays a small secondary badge (`ปิดปรับปรุงปัจจุบัน`).
+3. **Floor UNAVAILABLE Fail-Closed Semantics**: When historical status is `UNAVAILABLE`, displays neutral slate card (`ไม่มีประวัติสถานะ` / `ไม่พบประวัติสถานะห้องสำหรับงวดนี้`) without B1 catalog rates or premature tenant conclusions.
+4. **Daily Tail Financial UX (Grid & List)**:
+   - **Grid Mode**: In `DAILY_FINANCIAL_TAIL`, rent displays amount/day with authoritative `agreementRentPaymentStatus` badge (e.g. `ยังไม่ชำระ`, `ชำระบางส่วน`); deposit displays amount with `agreementDepositPaymentStatus` badge (e.g. `500.00 จ่ายแล้ว`).
+   - **List Mode**: In `DAILY_FINANCIAL_TAIL`, deposit column displays authoritative deposit amount and payment badge without falling through to `ไม่มีผู้เช่าลงทะเบียน`.
+5. **UAT Fixture Hygiene**: Reverted local refresh artifact `docs/uat/local07-expected-results.json` to exact base state (`d6571c184c5fac36a21daa94c1c8d0472423de9d`), ensuring zero unrelated diff churn.
+
+---
+
+## 20. Final Verification & Product Owner Readiness
 
 ### Focused Verification Suite Summary:
 - **Backend Write-Boundary Suite** (`server/src/__tests__/unit/owner-rooms-r32a-write-boundary.test.ts`): **6 / 6 passed (100%)**
 - **Backend Effective Status Unit Suite** (`server/src/__tests__/unit/owner-rooms-r32-effective-status.test.ts`): **5 / 5 passed (100%)**
 - **Backend Preview Context Unit Suite** (`server/src/__tests__/unit/owner-rooms-r3-meter-preview-context.test.ts`): **9 / 9 passed (100%)**
-- **Frontend Cycle Deposits & Action Wiring Suite** (`src/tests/owner-rooms-r2-cycle-deposits.test.tsx`): **74 / 74 passed (100%)**
-- **Frontend Cache Coherence Suite** (`src/tests/owner-rooms-cache-coherence-phase-c.test.tsx`): **11 / 11 passed (100%)**
+- **Frontend Cycle Deposits, Floor Authority & Financial UX Suite** (`src/tests/owner-rooms-r2-cycle-deposits.test.tsx`): **82 / 82 passed (100%)**
 - **TypeScript Linting** (`npm run lint`): **Passed with 0 errors**
 - **Backend Production Build** (`npm --prefix server run build`): **Passed with 0 errors**
 - **Diff & Line Ending Hygiene** (`git -c core.whitespace=cr-at-eol diff --check`): **Passed with 0 warnings**
+- **UAT Expected Results File Hygiene** (`git diff d6571c184c5fac36a21daa94c1c8d0472423de9d..HEAD -- docs/uat/local07-expected-results.json`): **EMPTY**
 
 **READY FOR PRODUCT OWNER R3.3 MANUAL UAT**

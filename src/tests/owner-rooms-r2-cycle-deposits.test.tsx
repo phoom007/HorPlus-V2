@@ -35,7 +35,43 @@ vi.mock('../data/httpClient', async (importOriginal) => {
                 billingSource: 'CONTRACT',
                 agreementType: 'MONTHLY',
                 rentAmount: '4500.00',
+                agreementDepositAmount: '5000.00',
+                agreementRentPaymentStatus: 'PAID',
+                agreementDepositPaymentStatus: 'PAID',
                 cyclePresentationState: 'ACTIVE_AGREEMENT',
+              },
+              {
+                roomId: 'room-102',
+                roomNumber: '102',
+                tenantId: 'tenant-RESERVED-R',
+                tenantName: 'ผู้จอง รวี',
+                agreementType: 'MONTHLY',
+                rentAmount: '4500.00',
+                checkInDate: '2026-09-01',
+                cyclePresentationState: 'RESERVED_IN_CYCLE',
+              },
+              {
+                roomId: 'room-103',
+                roomNumber: '103',
+                tenantId: 'tenant-DAILY-D',
+                tenantName: 'ผู้พัก ดนัย',
+                agreementType: 'DAILY',
+                rentAmount: '3850.00',
+                agreementDepositAmount: '500.00',
+                agreementRentPaymentStatus: 'UNPAID',
+                agreementDepositPaymentStatus: 'PAID',
+                cyclePresentationState: 'DAILY_FINANCIAL_TAIL',
+              },
+              {
+                roomId: 'room-104',
+                roomNumber: '104',
+                cyclePresentationState: 'NO_AGREEMENT_IN_CYCLE',
+                effectiveRoomOperationalStatus: 'maintenance',
+              },
+              {
+                roomId: 'room-105',
+                roomNumber: '105',
+                cyclePresentationState: 'UNAVAILABLE',
               },
               {
                 roomId: 'room-206',
@@ -49,6 +85,297 @@ vi.mock('../data/httpClient', async (importOriginal) => {
       return actual.httpRequest(method, url, ...args);
     }),
   };
+  describe('10. OWNER ROOMS R3.3aR1 — Floor Cycle Authority & Daily Tail Financial UX Suite', () => {
+    const mockBuilding: any = {
+      id: 'bld-1',
+      name: 'อาคาร A',
+      code: 'A',
+      totalFloors: 2,
+      roomsPerFloor: 5,
+    };
+
+    const renderWithQuery = (ui: React.ReactElement) => {
+      const qc = new QueryClient({
+        defaultOptions: {
+          queries: { retry: false },
+        },
+      });
+      return render(
+        <QueryClientProvider client={qc}>
+          {ui}
+        </QueryClientProvider>
+      );
+    };
+
+    it('T1 — FLOOR ACTIVE: click invokes onOpenTenant with historical Tenant A, never current Tenant B', async () => {
+      const onOpenTenant = vi.fn();
+      const mockRoom: any = {
+        id: 'room-101',
+        roomNumber: '101',
+        buildingId: 'bld-1',
+        floor: 1,
+        status: 'occupied',
+        currentTenantId: 'tenant-CURRENT-B',
+      };
+
+      renderWithQuery(
+        <OwnerRooms
+          dormitoryId="dorm-1"
+          rooms={[mockRoom]}
+          buildings={[mockBuilding]}
+          onSaveRooms={vi.fn()}
+          onAddLog={vi.fn()}
+          onNavigate={vi.fn()}
+          onOpenTenant={onOpenTenant}
+          restoredState={{ viewMode: 'floor' }}
+          selectedBillingCycleId="cycle-2026-07"
+          selectedCycleCode="2026-07"
+        />
+      );
+
+      await waitFor(() => {
+        expect(document.getElementById('room-floor-room-101')).toBeDefined();
+      });
+
+      const floorEl = document.getElementById('room-floor-room-101');
+      if (floorEl) fireEvent.click(floorEl);
+
+      expect(onOpenTenant).toHaveBeenCalledWith('tenant-HISTORICAL-A', expect.objectContaining({ tenantId: 'tenant-HISTORICAL-A' }));
+    });
+
+    it('T1 — FLOOR RESERVED: click invokes onOpenTenant with Tenant R (not handleOpenModal)', async () => {
+      const onOpenTenant = vi.fn();
+      const mockRoom: any = {
+        id: 'room-102',
+        roomNumber: '102',
+        buildingId: 'bld-1',
+        floor: 1,
+        status: 'vacant',
+      };
+
+      renderWithQuery(
+        <OwnerRooms
+          dormitoryId="dorm-1"
+          rooms={[mockRoom]}
+          buildings={[mockBuilding]}
+          onSaveRooms={vi.fn()}
+          onAddLog={vi.fn()}
+          onNavigate={vi.fn()}
+          onOpenTenant={onOpenTenant}
+          restoredState={{ viewMode: 'floor' }}
+          selectedBillingCycleId="cycle-2026-07"
+          selectedCycleCode="2026-07"
+        />
+      );
+
+      await waitFor(() => {
+        expect(document.getElementById('room-floor-room-102')).toBeDefined();
+      });
+
+      const floorEl = document.getElementById('room-floor-room-102');
+      if (floorEl) fireEvent.click(floorEl);
+
+      expect(onOpenTenant).toHaveBeenCalledWith('tenant-RESERVED-R', expect.objectContaining({ tenantId: 'tenant-RESERVED-R' }));
+    });
+
+    it('T1 — FLOOR DAILY TAIL: click invokes onOpenTenant with Tenant D (not handleOpenModal)', async () => {
+      const onOpenTenant = vi.fn();
+      const mockRoom: any = {
+        id: 'room-103',
+        roomNumber: '103',
+        buildingId: 'bld-1',
+        floor: 1,
+        status: 'vacant',
+      };
+
+      renderWithQuery(
+        <OwnerRooms
+          dormitoryId="dorm-1"
+          rooms={[mockRoom]}
+          buildings={[mockBuilding]}
+          onSaveRooms={vi.fn()}
+          onAddLog={vi.fn()}
+          onNavigate={vi.fn()}
+          onOpenTenant={onOpenTenant}
+          restoredState={{ viewMode: 'floor' }}
+          selectedBillingCycleId="cycle-2026-07"
+          selectedCycleCode="2026-07"
+        />
+      );
+
+      await waitFor(() => {
+        expect(document.getElementById('room-floor-room-103')).toBeDefined();
+      });
+
+      const floorEl = document.getElementById('room-floor-room-103');
+      if (floorEl) fireEvent.click(floorEl);
+
+      expect(onOpenTenant).toHaveBeenCalledWith('tenant-DAILY-D', expect.objectContaining({ tenantId: 'tenant-DAILY-D' }));
+    });
+
+    it('T1 — FLOOR HISTORICAL MAINTENANCE: primary rose ปิดปรับปรุง when current room is vacant', async () => {
+      const mockRoom: any = {
+        id: 'room-104',
+        roomNumber: '104',
+        buildingId: 'bld-1',
+        floor: 1,
+        status: 'vacant', // Currently vacant
+      };
+
+      renderWithQuery(
+        <OwnerRooms
+          dormitoryId="dorm-1"
+          rooms={[mockRoom]}
+          buildings={[mockBuilding]}
+          onSaveRooms={vi.fn()}
+          onAddLog={vi.fn()}
+          onNavigate={vi.fn()}
+          restoredState={{ viewMode: 'floor' }}
+          selectedBillingCycleId="cycle-2026-07"
+          selectedCycleCode="2026-07"
+        />
+      );
+
+      await waitFor(() => {
+        expect(document.getElementById('room-floor-room-104')).toBeDefined();
+      });
+
+      const floorEl = document.getElementById('room-floor-room-104');
+      expect(floorEl?.className).toContain('bg-rose-50');
+      expect(floorEl?.textContent).toContain('ปิดปรับปรุง');
+    });
+
+    it('T1 — FLOOR HISTORICAL VACANT / CURRENT MAINTENANCE: primary green ว่างในงวดนี้ and secondary ปิดปรับปรุงปัจจุบัน', async () => {
+      const mockRoom: any = {
+        id: 'room-206',
+        roomNumber: '206',
+        buildingId: 'bld-1',
+        floor: 2,
+        status: 'maintenance', // Currently maintenance
+        monthlyRent: 4500,
+      };
+
+      renderWithQuery(
+        <OwnerRooms
+          dormitoryId="dorm-1"
+          rooms={[mockRoom]}
+          buildings={[mockBuilding]}
+          onSaveRooms={vi.fn()}
+          onAddLog={vi.fn()}
+          onNavigate={vi.fn()}
+          restoredState={{ viewMode: 'floor' }}
+          selectedBillingCycleId="cycle-2026-07"
+          selectedCycleCode="2026-07"
+        />
+      );
+
+      await waitFor(() => {
+        expect(document.getElementById('room-floor-room-206')).toBeDefined();
+      });
+
+      const floorEl = document.getElementById('room-floor-room-206');
+      expect(floorEl?.className).toContain('bg-emerald-50');
+      expect(floorEl?.textContent).toContain('ว่างในงวดนี้');
+      expect(floorEl?.textContent).toContain('ปิดปรับปรุงปัจจุบัน');
+    });
+
+    it('T1 — FLOOR UNAVAILABLE: neutral slate ไม่มีประวัติสถานะ with no current rate', async () => {
+      const mockRoom: any = {
+        id: 'room-105',
+        roomNumber: '105',
+        buildingId: 'bld-1',
+        floor: 1,
+        status: 'maintenance',
+        monthlyRent: 4500,
+      };
+
+      renderWithQuery(
+        <OwnerRooms
+          dormitoryId="dorm-1"
+          rooms={[mockRoom]}
+          buildings={[mockBuilding]}
+          onSaveRooms={vi.fn()}
+          onAddLog={vi.fn()}
+          onNavigate={vi.fn()}
+          restoredState={{ viewMode: 'floor' }}
+          selectedBillingCycleId="cycle-2026-07"
+          selectedCycleCode="2026-07"
+        />
+      );
+
+      await waitFor(() => {
+        expect(document.getElementById('room-floor-room-105')).toBeDefined();
+      });
+
+      const floorEl = document.getElementById('room-floor-room-105');
+      expect(floorEl?.className).toContain('bg-slate-100');
+      expect(floorEl?.textContent).toContain('ไม่มีประวัติสถานะ');
+      expect(floorEl?.textContent).toContain('ไม่พบประวัติสถานะห้องสำหรับงวดนี้');
+      expect(floorEl?.textContent).not.toContain('อัตราปัจจุบัน');
+    });
+
+    it('T1 — DAILY TAIL GRID FINANCIAL UX: displays rent payment badge and deposit payment badge', async () => {
+      const mockRoom: any = {
+        id: 'room-103',
+        roomNumber: '103',
+        buildingId: 'bld-1',
+        floor: 1,
+        status: 'vacant',
+      };
+
+      renderWithQuery(
+        <OwnerRooms
+          dormitoryId="dorm-1"
+          rooms={[mockRoom]}
+          buildings={[mockBuilding]}
+          onSaveRooms={vi.fn()}
+          onAddLog={vi.fn()}
+          onNavigate={vi.fn()}
+          restoredState={{ viewMode: 'grid' }}
+          selectedBillingCycleId="cycle-2026-07"
+          selectedCycleCode="2026-07"
+        />
+      );
+
+      const rentBadge = await screen.findByText('ยังไม่ชำระ');
+      expect(rentBadge).toBeDefined();
+
+      const depositBadge = await screen.findByText('จ่ายแล้ว');
+      expect(depositBadge).toBeDefined();
+    });
+
+    it('T1 — DAILY TAIL LIST FINANCIAL UX: displays deposit amount and payment badge without ไม่มีผู้เช่าลงทะเบียน', async () => {
+      const mockRoom: any = {
+        id: 'room-103',
+        roomNumber: '103',
+        buildingId: 'bld-1',
+        floor: 1,
+        status: 'vacant',
+      };
+
+      renderWithQuery(
+        <OwnerRooms
+          dormitoryId="dorm-1"
+          rooms={[mockRoom]}
+          buildings={[mockBuilding]}
+          onSaveRooms={vi.fn()}
+          onAddLog={vi.fn()}
+          onNavigate={vi.fn()}
+          restoredState={{ viewMode: 'list' }}
+          selectedBillingCycleId="cycle-2026-07"
+          selectedCycleCode="2026-07"
+        />
+      );
+
+      const rentBadge = await screen.findByText('ยังไม่ชำระ');
+      expect(rentBadge).toBeDefined();
+
+      const depositBadge = await screen.findByText('จ่ายแล้ว');
+      expect(depositBadge).toBeDefined();
+      expect(screen.queryByText('ไม่มีผู้เช่าลงทะเบียน')).toBeNull();
+    });
+  });
+
 });
 
 import { CreateContractSchema, UpdateRoomSchema } from '../../server/src/schemas/property-tenant-contract.schemas';
@@ -1768,6 +2095,308 @@ describe('OWNER ROOMS R2 & R2.1 — Rent-Cycle Deposit Model & Hardened Specific
         expect(mappedC.name).toBe('สมบูรณ์');
         expect(mappedC.code).toBe('C');
       });
+    });
+  });
+
+
+  describe('10. OWNER ROOMS R3.3aR1 — Floor Cycle Authority & Daily Tail Financial UX Suite', () => {
+    afterEach(() => {
+      cleanup();
+    });
+
+    const mockBuilding: any = {
+      id: 'bld-1',
+      name: 'อาคาร A',
+      code: 'A',
+      totalFloors: 2,
+      roomsPerFloor: 5,
+    };
+
+    const renderWithQuery = (ui: React.ReactElement) => {
+      const qc = new QueryClient({
+        defaultOptions: {
+          queries: { retry: false },
+        },
+      });
+      return render(
+        <QueryClientProvider client={qc}>
+          {ui}
+        </QueryClientProvider>
+      );
+    };
+
+    it('T1 — FLOOR ACTIVE: click invokes onOpenTenant with historical Tenant A, never current Tenant B', async () => {
+      const onOpenTenant = vi.fn();
+      const mockRoom: any = {
+        id: 'room-101',
+        roomNumber: '101',
+        buildingId: 'bld-1',
+        floor: 1,
+        status: 'occupied',
+        currentTenantId: 'tenant-CURRENT-B',
+        monthlyRent: 4500,
+      };
+
+      renderWithQuery(
+        <OwnerRooms
+          dormitoryId="dorm-1"
+          rooms={[mockRoom]}
+          buildings={[mockBuilding]}
+          onSaveRooms={vi.fn()}
+          onAddLog={vi.fn()}
+          onNavigate={vi.fn()}
+          onOpenTenant={onOpenTenant}
+          restoredState={{ viewMode: 'floor' }}
+          selectedBillingCycleId="cycle-2026-07"
+          selectedCycleCode="2026-07"
+        />
+      );
+
+      await waitFor(() => {
+        expect(document.getElementById('room-floor-room-101')).toBeDefined();
+      });
+
+      const floorEl = document.getElementById('room-floor-room-101');
+      if (floorEl) fireEvent.click(floorEl);
+
+      expect(onOpenTenant).toHaveBeenCalledWith('tenant-HISTORICAL-A', expect.objectContaining({ tenantId: 'tenant-HISTORICAL-A' }));
+    });
+
+    it('T1 — FLOOR RESERVED: click invokes onOpenTenant with Tenant R (not handleOpenModal)', async () => {
+      const onOpenTenant = vi.fn();
+      const mockRoom: any = {
+        id: 'room-102',
+        roomNumber: '102',
+        buildingId: 'bld-1',
+        floor: 1,
+        status: 'vacant',
+        monthlyRent: 4500,
+      };
+
+      renderWithQuery(
+        <OwnerRooms
+          dormitoryId="dorm-1"
+          rooms={[mockRoom]}
+          buildings={[mockBuilding]}
+          onSaveRooms={vi.fn()}
+          onAddLog={vi.fn()}
+          onNavigate={vi.fn()}
+          onOpenTenant={onOpenTenant}
+          restoredState={{ viewMode: 'floor' }}
+          selectedBillingCycleId="cycle-2026-07"
+          selectedCycleCode="2026-07"
+        />
+      );
+
+      await waitFor(() => {
+        expect(document.getElementById('room-floor-room-102')).toBeDefined();
+      });
+
+      const floorEl = document.getElementById('room-floor-room-102');
+      if (floorEl) fireEvent.click(floorEl);
+
+      expect(onOpenTenant).toHaveBeenCalledWith('tenant-RESERVED-R', expect.objectContaining({ tenantId: 'tenant-RESERVED-R' }));
+    });
+
+    it('T1 — FLOOR DAILY TAIL: click invokes onOpenTenant with Tenant D (not handleOpenModal)', async () => {
+      const onOpenTenant = vi.fn();
+      const mockRoom: any = {
+        id: 'room-103',
+        roomNumber: '103',
+        buildingId: 'bld-1',
+        floor: 1,
+        status: 'vacant',
+        monthlyRent: 4500,
+      };
+
+      renderWithQuery(
+        <OwnerRooms
+          dormitoryId="dorm-1"
+          rooms={[mockRoom]}
+          buildings={[mockBuilding]}
+          onSaveRooms={vi.fn()}
+          onAddLog={vi.fn()}
+          onNavigate={vi.fn()}
+          onOpenTenant={onOpenTenant}
+          restoredState={{ viewMode: 'floor' }}
+          selectedBillingCycleId="cycle-2026-07"
+          selectedCycleCode="2026-07"
+        />
+      );
+
+      await waitFor(() => {
+        expect(document.getElementById('room-floor-room-103')).toBeDefined();
+      });
+
+      const floorEl = document.getElementById('room-floor-room-103');
+      if (floorEl) fireEvent.click(floorEl);
+
+      expect(onOpenTenant).toHaveBeenCalledWith('tenant-DAILY-D', expect.objectContaining({ tenantId: 'tenant-DAILY-D' }));
+    });
+
+    it('T1 — FLOOR HISTORICAL MAINTENANCE: primary rose ปิดปรับปรุง when current room is vacant', async () => {
+      const mockRoom: any = {
+        id: 'room-104',
+        roomNumber: '104',
+        buildingId: 'bld-1',
+        floor: 1,
+        status: 'vacant',
+        monthlyRent: 4500,
+      };
+
+      renderWithQuery(
+        <OwnerRooms
+          dormitoryId="dorm-1"
+          rooms={[mockRoom]}
+          buildings={[mockBuilding]}
+          onSaveRooms={vi.fn()}
+          onAddLog={vi.fn()}
+          onNavigate={vi.fn()}
+          restoredState={{ viewMode: 'floor' }}
+          selectedBillingCycleId="cycle-2026-07"
+          selectedCycleCode="2026-07"
+        />
+      );
+
+      await waitFor(() => {
+        expect(document.getElementById('room-floor-room-104')).toBeDefined();
+      });
+
+      const floorEl = document.getElementById('room-floor-room-104');
+      expect(floorEl?.className).toContain('bg-rose-50');
+      expect(floorEl?.textContent).toContain('ปิดปรับปรุง');
+    });
+
+    it('T1 — FLOOR HISTORICAL VACANT / CURRENT MAINTENANCE: primary green ว่างในงวดนี้ and secondary ปิดปรับปรุงปัจจุบัน', async () => {
+      const mockRoom: any = {
+        id: 'room-206',
+        roomNumber: '206',
+        buildingId: 'bld-1',
+        floor: 2,
+        status: 'maintenance',
+        monthlyRent: 4500,
+      };
+
+      renderWithQuery(
+        <OwnerRooms
+          dormitoryId="dorm-1"
+          rooms={[mockRoom]}
+          buildings={[mockBuilding]}
+          onSaveRooms={vi.fn()}
+          onAddLog={vi.fn()}
+          onNavigate={vi.fn()}
+          restoredState={{ viewMode: 'floor' }}
+          selectedBillingCycleId="cycle-2026-07"
+          selectedCycleCode="2026-07"
+        />
+      );
+
+      await waitFor(() => {
+        expect(document.getElementById('room-floor-room-206')).toBeDefined();
+      });
+
+      const floorEl = document.getElementById('room-floor-room-206');
+      expect(floorEl?.className).toContain('bg-emerald-50');
+      expect(floorEl?.textContent).toContain('ว่างในงวดนี้');
+      expect(floorEl?.textContent).toContain('ปิดปรับปรุงปัจจุบัน');
+    });
+
+    it('T1 — FLOOR UNAVAILABLE: neutral slate ไม่มีประวัติสถานะ with no current rate', async () => {
+      const mockRoom: any = {
+        id: 'room-105',
+        roomNumber: '105',
+        buildingId: 'bld-1',
+        floor: 1,
+        status: 'maintenance',
+        monthlyRent: 4500,
+      };
+
+      renderWithQuery(
+        <OwnerRooms
+          dormitoryId="dorm-1"
+          rooms={[mockRoom]}
+          buildings={[mockBuilding]}
+          onSaveRooms={vi.fn()}
+          onAddLog={vi.fn()}
+          onNavigate={vi.fn()}
+          restoredState={{ viewMode: 'floor' }}
+          selectedBillingCycleId="cycle-2026-07"
+          selectedCycleCode="2026-07"
+        />
+      );
+
+      await waitFor(() => {
+        expect(document.getElementById('room-floor-room-105')).toBeDefined();
+      });
+
+      const floorEl = document.getElementById('room-floor-room-105');
+      expect(floorEl?.className).toContain('bg-slate-100');
+      expect(floorEl?.textContent).toContain('ไม่มีประวัติสถานะ');
+      expect(floorEl?.textContent).toContain('ไม่พบประวัติสถานะห้องสำหรับงวดนี้');
+      expect(floorEl?.textContent).not.toContain('อัตราปัจจุบัน');
+    });
+
+    it('T1 — DAILY TAIL GRID FINANCIAL UX: displays rent payment badge and deposit payment badge', async () => {
+      const mockRoom: any = {
+        id: 'room-103',
+        roomNumber: '103',
+        buildingId: 'bld-1',
+        floor: 1,
+        status: 'vacant',
+        monthlyRent: 4500,
+      };
+
+      renderWithQuery(
+        <OwnerRooms
+          dormitoryId="dorm-1"
+          rooms={[mockRoom]}
+          buildings={[mockBuilding]}
+          onSaveRooms={vi.fn()}
+          onAddLog={vi.fn()}
+          onNavigate={vi.fn()}
+          restoredState={{ viewMode: 'grid' }}
+          selectedBillingCycleId="cycle-2026-07"
+          selectedCycleCode="2026-07"
+        />
+      );
+
+      const rentBadge = await screen.findByText('ยังไม่ชำระ');
+      expect(rentBadge).toBeDefined();
+
+      const depositBadge = await screen.findByText('จ่ายแล้ว');
+      expect(depositBadge).toBeDefined();
+    });
+
+    it('T1 — DAILY TAIL LIST FINANCIAL UX: displays deposit amount and payment badge without ไม่มีผู้เช่าลงทะเบียน', async () => {
+      const mockRoom: any = {
+        id: 'room-103',
+        roomNumber: '103',
+        buildingId: 'bld-1',
+        floor: 1,
+        status: 'vacant',
+        monthlyRent: 4500,
+      };
+
+      renderWithQuery(
+        <OwnerRooms
+          dormitoryId="dorm-1"
+          rooms={[mockRoom]}
+          buildings={[mockBuilding]}
+          onSaveRooms={vi.fn()}
+          onAddLog={vi.fn()}
+          onNavigate={vi.fn()}
+          restoredState={{ viewMode: 'list' }}
+          selectedBillingCycleId="cycle-2026-07"
+          selectedCycleCode="2026-07"
+        />
+      );
+
+      const rentBadge = await screen.findByText('ยังไม่ชำระ');
+      expect(rentBadge).toBeDefined();
+
+      const depositBadge = await screen.findByText('จ่ายแล้ว');
+      expect(depositBadge).toBeDefined();
+      expect(screen.queryByText('ไม่มีผู้เช่าลงทะเบียน')).toBeNull();
     });
   });
 
