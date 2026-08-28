@@ -394,4 +394,106 @@ describe('OWNER ROOMS R3 — Meter Service Preview Context DTO & State Authority
     const r203 = result.rooms[0];
     expect(r203.agreementRentPaymentStatus).toBe('PARTIAL');
   });
+  it('10. Emits NOT_ISSUED when active contract has no rent bill issued in selected cycle', async () => {
+    mockRoomRepo.findAll.mockResolvedValue({
+      items: [{ id: 'room-301', roomNumber: '301', dormitoryId }],
+    });
+    mockPrisma.contract.findMany.mockResolvedValue([
+      {
+        id: 'contract-301',
+        roomId: 'room-301',
+        dormitoryId,
+        tenantId: 'tenant-301',
+        rentBillingType: 'MONTHLY',
+        rentAmount: 5000,
+        depositAmount: 5000,
+        startDate: new Date('2026-08-01T00:00:00.000Z'),
+        endDate: new Date('2027-07-31T23:59:59.999Z'),
+        status: 'active',
+        tenant: { displayName: 'นาย ภูมิ', linkedUserId: null },
+      },
+    ]);
+    mockPrisma.bill.findMany.mockResolvedValue([]);
+    mockPrisma.provisionalRentalTerm.findMany.mockResolvedValue([]);
+    mockPrisma.dailyStay.findMany.mockResolvedValue([]);
+
+    const result = await meterService.getMeterBillingPreviewContext(dormitoryId, billingCycleId);
+    expect(result.rooms).toHaveLength(1);
+    const r301 = result.rooms[0];
+    expect(r301.agreementRentPaymentStatus).toBe('NOT_ISSUED');
+  });
+
+  it('11. Emits NOT_ISSUED when active contract requires deposit > 0 but no deposit bill exists', async () => {
+    mockRoomRepo.findAll.mockResolvedValue({
+      items: [{ id: 'room-302', roomNumber: '302', dormitoryId }],
+    });
+    mockPrisma.contract.findMany.mockResolvedValue([
+      {
+        id: 'contract-302',
+        roomId: 'room-302',
+        dormitoryId,
+        tenantId: 'tenant-302',
+        rentBillingType: 'MONTHLY',
+        rentAmount: 5000,
+        depositAmount: 5000,
+        startDate: new Date('2026-08-01T00:00:00.000Z'),
+        endDate: new Date('2027-07-31T23:59:59.999Z'),
+        status: 'active',
+        tenant: { displayName: 'นาย สมศักดิ์', linkedUserId: null },
+      },
+    ]);
+    mockPrisma.bill.findMany.mockResolvedValue([]);
+    mockPrisma.provisionalRentalTerm.findMany.mockResolvedValue([]);
+    mockPrisma.dailyStay.findMany.mockResolvedValue([]);
+
+    const result = await meterService.getMeterBillingPreviewContext(dormitoryId, billingCycleId);
+    expect(result.rooms).toHaveLength(1);
+    const r302 = result.rooms[0];
+    expect(r302.agreementDepositPaymentStatus).toBe('NOT_ISSUED');
+  });
+
+  it('12. New agreement resets deposit authority and does NOT inherit old agreement deposit state', async () => {
+    mockRoomRepo.findAll.mockResolvedValue({
+      items: [{ id: 'room-101', roomNumber: '101', dormitoryId }],
+    });
+    // New Contract B in August (active)
+    mockPrisma.contract.findMany.mockResolvedValue([
+      {
+        id: 'contract-B',
+        roomId: 'room-101',
+        dormitoryId,
+        tenantId: 'tenant-B',
+        rentBillingType: 'MONTHLY',
+        rentAmount: 4500,
+        depositAmount: 4500,
+        startDate: new Date('2026-08-01T00:00:00.000Z'),
+        endDate: new Date('2027-07-31T23:59:59.999Z'),
+        status: 'active',
+        tenant: { displayName: 'ผู้เช่าใหม่ B', linkedUserId: null },
+      },
+    ]);
+    // Old bill belongs to old contract-A
+    mockPrisma.bill.findMany.mockResolvedValue([
+      {
+        id: 'bill-deposit-A',
+        dormitoryId,
+        roomId: 'room-101',
+        contractId: 'contract-A',
+        billKind: 'DEPOSIT',
+        status: 'paid',
+        totalAmount: 4500,
+        paidAmount: 4500,
+        outstandingAmount: 0,
+        items: [{ id: 'bi-dep-A', type: 'deposit', description: 'เงินประกัน A', amount: 4500 }],
+      },
+    ]);
+    mockPrisma.provisionalRentalTerm.findMany.mockResolvedValue([]);
+    mockPrisma.dailyStay.findMany.mockResolvedValue([]);
+
+    const result = await meterService.getMeterBillingPreviewContext(dormitoryId, billingCycleId);
+    expect(result.rooms).toHaveLength(1);
+    const r101 = result.rooms[0];
+    // Contract B has no deposit bill -> NOT_ISSUED (does not inherit Contract A's paid deposit)
+    expect(r101.agreementDepositPaymentStatus).toBe('NOT_ISSUED');
+  });
 });

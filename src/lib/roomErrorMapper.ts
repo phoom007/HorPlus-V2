@@ -54,9 +54,15 @@ export function getOwnerRoomMutationErrorMessage(error: any): string {
       return 'ข้อมูลห้องถูกแก้ไขจากอุปกรณ์อื่น กรุณาโหลดข้อมูลล่าสุด';
     case 'CONFLICT':
       return 'ข้อมูลมีความขัดแย้งหรือซ้ำซ้อนกับในระบบ กรุณาตรวจสอบอีกครั้ง';
+    case 'ROOM_HAS_ACTIVE_OCCUPANCY':
+      return 'ไม่สามารถปิดปรับปรุงได้ เนื่องจากห้องนี้มีผู้เช่าพักอยู่';
     case 'ACTIVE_AGREEMENT_EXISTS':
     case 'ACTIVE_AGREEMENT_GUARD':
       return 'ไม่สามารถปิดปรับปรุงห้องพักที่มีผู้เช่าอยู่ได้';
+    case 'ROOM_HAS_ACTIVE_RESERVATION':
+      return 'ไม่สามารถปิดปรับปรุงได้ เนื่องจากห้องนี้มีการจองล่วงหน้า';
+    case 'ROOM_NOT_AVAILABLE_FOR_MAINTENANCE':
+      return 'ไม่สามารถปิดปรับปรุงห้องพักที่มีผู้เช่าอยู่หรือมีการจองล่วงหน้าได้';
     case 'ROOM_LIMIT_REACHED':
     case 'ROOM_LIMIT_EXCEEDED':
       return 'จำนวนห้องถึงขีดจำกัดแพ็กเกจแล้ว';

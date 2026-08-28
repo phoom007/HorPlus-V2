@@ -251,7 +251,7 @@ export interface PaymentStatusBadgeConfig {
 }
 
 export function getPaymentStatusBadge(
-  status?: 'PAID' | 'UNPAID' | 'PARTIAL' | 'UNKNOWN' | null
+  status?: 'PAID' | 'UNPAID' | 'PARTIAL' | 'NOT_ISSUED' | 'UNKNOWN' | null
 ): PaymentStatusBadgeConfig {
   switch (status) {
     case 'PAID':
@@ -262,7 +262,7 @@ export function getPaymentStatusBadge(
       };
     case 'UNPAID':
       return {
-        text: 'ยังไม่ชำระ',
+        text: 'รอชำระ',
         className: 'bg-amber-50 text-amber-700 border-amber-200',
         dotColor: 'bg-amber-500',
       };
@@ -272,10 +272,16 @@ export function getPaymentStatusBadge(
         className: 'bg-amber-50 text-amber-700 border-amber-200',
         dotColor: 'bg-amber-500',
       };
+    case 'NOT_ISSUED':
+      return {
+        text: 'ยังไม่ออกบิล',
+        className: 'bg-sky-50 text-sky-700 border-sky-200',
+        dotColor: 'bg-sky-500',
+      };
     case 'UNKNOWN':
     default:
       return {
-        text: 'ไม่พบสถานะการชำระ',
+        text: 'ไม่พบข้อมูลการชำระ',
         className: 'bg-slate-50 text-slate-600 border-slate-200',
         dotColor: 'bg-slate-400',
       };
@@ -300,8 +306,8 @@ export interface RoomCyclePresentation {
   occupancy: RoomCycleOccupancy | null;
   currentCatalogRates: RateItem[];
   reservationCheckInDate?: string | null;
-  agreementRentPaymentStatus?: 'PAID' | 'UNPAID' | 'PARTIAL' | 'UNKNOWN';
-  agreementDepositPaymentStatus?: 'PAID' | 'UNPAID' | 'PARTIAL' | 'UNKNOWN';
+  agreementRentPaymentStatus?: 'PAID' | 'UNPAID' | 'PARTIAL' | 'NOT_ISSUED' | 'UNKNOWN';
+  agreementDepositPaymentStatus?: 'PAID' | 'UNPAID' | 'PARTIAL' | 'NOT_ISSUED' | 'UNKNOWN';
 }
 
 /**

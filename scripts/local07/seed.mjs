@@ -658,6 +658,7 @@ export async function seedLocal07Data() {
 
   let tCount = 1;
   const createdTenants = {};
+  const createdContracts = {};
   for (const tc of tenantConfigs) {
     const tCode = `TNT-${String(tCount).padStart(3, '0')}`;
     const room = createdRooms[tc.num];
@@ -698,6 +699,7 @@ export async function seedLocal07Data() {
         createdAt: contractCreatedAt,
       },
     });
+    createdContracts[tc.num] = contract;
 
     // Occupancy
     await prisma.occupancy.create({
@@ -1377,15 +1379,16 @@ export async function seedLocal07Data() {
         billingCycleId: cycleJuly.id,
         roomId: room.id,
         tenantId: tenant.id,
+        contractId: createdContracts[bf.roomNum]?.id || null,
         billNumber,
         billKind: 'LEGACY_COMBINED',
         billingDate: new Date('2026-07-25'),
         dueDate: new Date('2026-08-05'),
         subtotal,
         totalAmount: subtotal,
-        paidAmount: bf.paid ? subtotal : 0.0,
-        outstandingAmount: bf.paid ? 0.0 : subtotal,
-        status: bf.paid ? 'paid' : 'unpaid',
+        paidAmount: bf.paid ? subtotal : (bf.partial ? bf.paidAmt : 0.0),
+        outstandingAmount: bf.paid ? 0.0 : (bf.partial ? (subtotal - bf.paidAmt) : subtotal),
+        status: bf.paid ? 'paid' : (bf.partial ? 'partial' : 'unpaid'),
       },
     });
 
@@ -1468,6 +1471,8 @@ export async function seedLocal07Data() {
     },
   });
 
+
+
   // August 2026 Multi-Component Bills for Deterministic Matrix Testing (0, 1, 2, 3 components)
   // 1 Component: Room 101 (MONTHLY_UTILITY) -> ฿1,268.00 unpaid
   const bill101Aug = await prisma.bill.create({
@@ -1508,6 +1513,37 @@ export async function seedLocal07Data() {
       },
     });
   }
+  // Room 203 August Rent PARTIAL (total ฿4,800, paid ฿2,000, outstanding ฿2,800)
+  const bill203Rent = await prisma.bill.create({
+    data: {
+      dormitoryId: compDorm.id,
+      billingCycleId: cycleAug.id,
+      roomId: createdRooms['203'].id,
+      tenantId: createdTenants['203'].id,
+      contractId: createdContracts['203']?.id || null,
+      billNumber: 'INV-202608-203-R',
+      billKind: 'RENT',
+      billingDate: new Date('2026-08-25'),
+      dueDate: new Date('2026-09-05'),
+      subtotal: 4800.0,
+      totalAmount: 4800.0,
+      paidAmount: 2000.0,
+      outstandingAmount: 2800.0,
+      status: 'partial',
+    },
+  });
+  await prisma.billItem.create({
+    data: {
+      dormitoryId: compDorm.id,
+      billId: bill203Rent.id,
+      type: 'rent',
+      description: 'ค่าเช่าห้องพัก 203 (ชำระบางส่วน)',
+      quantity: 1,
+      unitPrice: 4800,
+      amount: 4800,
+    },
+  });
+
 
   // 2 Components: Room 201 (RENT unpaid ฿4,800 + DEPOSIT paid ฿4,800)
   const bill201Rent = await prisma.bill.create({
@@ -1516,6 +1552,7 @@ export async function seedLocal07Data() {
       billingCycleId: cycleAug.id,
       roomId: createdRooms['201'].id,
       tenantId: createdTenants['201'].id,
+      contractId: createdContracts['201']?.id || null,
       billNumber: 'INV-202608-201-R',
       billKind: 'RENT',
       billingDate: new Date('2026-08-25'),
@@ -1545,6 +1582,7 @@ export async function seedLocal07Data() {
       billingCycleId: cycleAug.id,
       roomId: createdRooms['201'].id,
       tenantId: createdTenants['201'].id,
+      contractId: createdContracts['201']?.id || null,
       billNumber: 'INV-202608-201-D',
       billKind: 'DEPOSIT',
       billingDate: new Date('2026-08-25'),
@@ -1576,6 +1614,7 @@ export async function seedLocal07Data() {
       billingCycleId: cycleAug.id,
       roomId: createdRooms['202'].id,
       tenantId: createdTenants['202'].id,
+      contractId: createdContracts['202']?.id || null,
       billNumber: 'INV-202608-202-R',
       billKind: 'RENT',
       billingDate: new Date('2026-08-25'),
@@ -1605,6 +1644,7 @@ export async function seedLocal07Data() {
       billingCycleId: cycleAug.id,
       roomId: createdRooms['202'].id,
       tenantId: createdTenants['202'].id,
+      contractId: createdContracts['202']?.id || null,
       billNumber: 'INV-202608-202-D',
       billKind: 'DEPOSIT',
       billingDate: new Date('2026-08-25'),

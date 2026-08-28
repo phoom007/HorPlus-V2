@@ -1033,7 +1033,12 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                     <div>
                       <div className="flex items-center gap-2">
                         <h4 className="text-xl font-black text-slate-900 tracking-tight">{room.roomNumber}</h4>
-                        {/* Part H: Secondary badge for current maintenance when viewing past cycle */}
+                        {/* Part H: Secondary badges for current state when viewing historical vacant cycle */}
+                        {cyclePresentation.state === 'NO_AGREEMENT_IN_CYCLE' && (room.status === 'occupied' || room.currentTenantId) && (
+                          <span className="px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-indigo-100 text-indigo-800 border border-indigo-200" title="สถานะห้องพักปัจจุบันคือมีผู้เช่า">
+                            ปัจจุบันมีผู้เช่า
+                          </span>
+                        )}
                         {cyclePresentation.isCurrentMaintenance && !isMaintenanceInCycle && (
                           <span className="px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-rose-100 text-rose-800 border border-rose-200" title="สถานะห้องพักปัจจุบันคือปิดปรับปรุง">
                             ปิดปรับปรุงปัจจุบัน
@@ -1312,7 +1317,21 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
 
                   return (
                     <tr key={room.id} id={`room-row-${room.id}`} className="hover:bg-slate-50/60 transition-colors">
-                      <td className="p-4 font-black text-slate-900 text-sm whitespace-nowrap">{room.roomNumber}</td>
+                      <td className="p-4 font-black text-slate-900 text-sm whitespace-nowrap">
+                        <div className="flex items-center gap-1.5">
+                          <span>{room.roomNumber}</span>
+                          {cyclePresentation.state === 'NO_AGREEMENT_IN_CYCLE' && (room.status === 'occupied' || room.currentTenantId) && (
+                            <span className="px-1.5 py-0.5 rounded-md text-[9px] font-bold bg-indigo-100 text-indigo-800 border border-indigo-200" title="สถานะห้องพักปัจจุบันคือมีผู้เช่า">
+                              ปัจจุบันมีผู้เช่า
+                            </span>
+                          )}
+                          {cyclePresentation.isCurrentMaintenance && !isMaintenanceInCycle && (
+                            <span className="px-1.5 py-0.5 rounded-md text-[9px] font-bold bg-rose-100 text-rose-800 border border-rose-200" title="สถานะห้องพักปัจจุบันคือปิดปรับปรุง">
+                              ปิดปรับปรุงปัจจุบัน
+                            </span>
+                          )}
+                        </div>
+                      </td>
                       <td className="p-4 text-gray-600 font-semibold whitespace-nowrap">{locationStr}</td>
                       <td className="p-4 font-bold text-slate-800 whitespace-nowrap">
                         {displayTenantName ? (
@@ -1389,12 +1408,14 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                           // Decision B1: render all configured current catalog rates compactly
                           return (
                             <div className="space-y-0.5">
-                              {cyclePresentation.currentCatalogRates.map((r) => (
-                                <div key={r.cycle} className="flex items-center gap-2">
-                                  <span className="text-[11px] text-gray-500 font-medium w-12">{r.label}</span>
-                                  <span className="font-bold text-slate-800">{formatBaht(r.amount)}</span>
-                                </div>
-                              ))}
+                              {cyclePresentation.currentCatalogRates.map((r) => {
+                                const unitSuffix = r.cycle === 'term' ? 'เทอม' : (r.cycle === 'daily' ? 'วัน' : 'เดือน');
+                                return (
+                                  <div key={r.cycle} className="font-bold text-slate-800 text-xs">
+                                    <span>{formatBaht(r.amount)} / {unitSuffix}</span>
+                                  </div>
+                                );
+                              })}
                               <div className="text-[10px] text-gray-400 font-semibold pt-0.5 whitespace-nowrap">
                                 {isMaintenanceInCycle ? 'ปิดปรับปรุง (อัตราปัจจุบัน)' : 'อัตราปัจจุบัน'}
                               </div>
@@ -1579,6 +1600,11 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                                     <div className="flex items-center justify-between w-full gap-1 mb-1">
                                       <div className="flex items-center gap-1.5 min-w-0">
                                         <span className="font-black text-xs sm:text-sm tracking-tight">{room.roomNumber}</span>
+                                        {(room.status === 'occupied' || room.currentTenantId) && (
+                                          <span className="text-[7px] sm:text-[8px] font-bold px-1 py-0.5 rounded bg-indigo-100 text-indigo-800 shrink-0" title="สถานะห้องพักปัจจุบันคือมีผู้เช่า">
+                                            ปัจจุบันมีผู้เช่า
+                                          </span>
+                                        )}
                                         {isSecondaryCurrentMaintenance && (
                                           <span className="text-[7px] sm:text-[8px] font-bold px-1 py-0.5 rounded bg-rose-100 text-rose-800 shrink-0" title="สถานะห้องพักปัจจุบันคือปิดปรับปรุง">
                                             ปิดปรับปรุงปัจจุบัน
@@ -1791,7 +1817,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                                     <div className="my-0.5 w-full">
                                       <div className="text-[8px] font-bold text-slate-500 uppercase tracking-tight">อัตราปัจจุบัน</div>
                                       <div className="text-[10px] sm:text-[11px] font-extrabold opacity-90 text-emerald-800 truncate">
-                                        {formatBaht(primaryCatalog.amount)}/${unitSuffix}
+                                        {`${formatBaht(primaryCatalog.amount)}/${unitSuffix}`}
                                       </div>
                                     </div>
                                     <div className="flex items-center gap-1 w-full mt-1.5 pt-1.5 border-t border-emerald-200/60">
@@ -2049,28 +2075,45 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
               >
                 เปิดใช้งาน
               </button>
-              <button
-                type="button"
-                onClick={() => {
-                  if (editingRoom?.currentTenantId) {
-                    const tenant = tenants.find(t => t.id === editingRoom.currentTenantId);
-                    const err = `ไม่สามารถเลือก "ปิดปรับปรุง" ได้ เนื่องจากห้องนี้มีผู้เช่าพักอยู่ (${tenant ? tenant.name : 'มีผู้เช่า'}) ต้องเป็นห้องว่างเท่านั้น`;
-                    setErrorText(err);
-                    return;
-                  }
-                  setErrorText(null);
-                  setRoomStatus('maintenance');
-                }}
-                className={`py-2 px-3 text-xs font-extrabold rounded-xl border transition-all cursor-pointer text-center truncate ${roomStatus === 'maintenance'
-                    ? 'bg-rose-600 text-white border-rose-600 shadow-xs'
-                    : editingRoom?.currentTenantId
-                      ? 'bg-slate-50 text-slate-400 border-slate-200 cursor-not-allowed opacity-75'
-                      : 'bg-white hover:bg-slate-50 text-slate-700 border-gray-200'
-                  }`}
-                title={editingRoom?.currentTenantId ? 'ห้องนี้มีผู้เช่าอยู่ ต้องเป็นห้องว่างเท่านั้นถึงจะปิดปรับปรุงได้' : undefined}
-              >
-                ปิดปรับปรุง
-              </button>
+              {(() => {
+                const isEditingRoomOccupied = Boolean(editingRoom && (editingRoom.status === 'occupied' || editingRoom.currentTenantId));
+                const previewInfo = editingRoom ? previewRoomMap.get(editingRoom.id) : null;
+                const isEditingRoomReserved = Boolean(editingRoom && (previewInfo?.isFutureReservation || previewInfo?.cyclePresentationState === 'RESERVED_IN_CYCLE'));
+
+                return (
+                  <button
+                    type="button"
+                    disabled={isEditingRoomOccupied || isEditingRoomReserved}
+                    onClick={() => {
+                      if (isEditingRoomOccupied) {
+                        setErrorText('มีผู้เช่าพักอยู่ ต้องย้ายหรือสิ้นสุดการเช่าก่อน');
+                        return;
+                      }
+                      if (isEditingRoomReserved) {
+                        setErrorText('มีการจองล่วงหน้า ต้องจัดการการจองก่อน');
+                        return;
+                      }
+                      setErrorText(null);
+                      setRoomStatus('maintenance');
+                    }}
+                    className={`py-2 px-3 text-xs font-extrabold rounded-xl border transition-all text-center truncate ${roomStatus === 'maintenance'
+                        ? 'bg-rose-600 text-white border-rose-600 shadow-xs'
+                        : isEditingRoomOccupied || isEditingRoomReserved
+                          ? 'bg-slate-50 text-slate-400 border-slate-200 cursor-not-allowed opacity-75'
+                          : 'bg-white hover:bg-slate-50 text-slate-700 border-gray-200 cursor-pointer'
+                      }`}
+                    title={
+                      isEditingRoomOccupied
+                        ? 'มีผู้เช่าพักอยู่ ต้องย้ายหรือสิ้นสุดการเช่าก่อน'
+                        : isEditingRoomReserved
+                          ? 'มีการจองล่วงหน้า ต้องจัดการการจองก่อน'
+                          : undefined
+                    }
+                  >
+                    ปิดปรับปรุง
+                  </button>
+                );
+              })()}
             </div>
             {editingRoom?.currentTenantId && (
               <p className="text-[11px] text-amber-600 font-semibold mt-1">

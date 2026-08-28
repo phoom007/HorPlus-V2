@@ -340,6 +340,102 @@ export class RoomService {
         }
       }
 
+      // Product Decision F1: Maintenance Occupancy & Reservation Guard
+      if (changes.status !== undefined && changes.status !== existing.status && changes.status === 'maintenance') {
+        const now = new Date();
+
+        // 1. Physical Occupant Check
+        if (existing.currentTenantId || existing.status === 'occupied') {
+          throw new AppError('ไม่สามารถปิดปรับปรุงได้ เนื่องจากห้องนี้มีผู้เช่าพักอยู่', 409, 'ROOM_HAS_ACTIVE_OCCUPANCY');
+        }
+
+        const activeContract = tx.contract ? await tx.contract.findFirst({
+          where: {
+            roomId: id,
+            dormitoryId: targetDormId,
+            status: { in: ['active', 'ACTIVE', 'approved', 'pending_signature', 'waiting_extension', 'checking_out', 'expiring_soon'] },
+            startDate: { lte: now },
+            OR: [
+              { endDate: null },
+              { endDate: { gte: now } },
+            ],
+          },
+        }) : null;
+        if (activeContract) {
+          throw new AppError('ไม่สามารถปิดปรับปรุงได้ เนื่องจากห้องนี้มีผู้เช่าพักอยู่', 409, 'ROOM_HAS_ACTIVE_OCCUPANCY');
+        }
+
+        const activeProv = tx.provisionalRentalTerm ? await tx.provisionalRentalTerm.findFirst({
+          where: {
+            roomId: id,
+            dormitoryId: targetDormId,
+            status: { in: ['ACTIVE', 'active'] },
+            startDate: { lte: now },
+            OR: [
+              { endDate: null },
+              { endDate: { gte: now } },
+            ],
+          },
+        }) : null;
+        if (activeProv) {
+          throw new AppError('ไม่สามารถปิดปรับปรุงได้ เนื่องจากห้องนี้มีผู้เช่าพักอยู่', 409, 'ROOM_HAS_ACTIVE_OCCUPANCY');
+        }
+
+        const activeDaily = tx.dailyStay ? await tx.dailyStay.findFirst({
+          where: {
+            roomId: id,
+            dormitoryId: targetDormId,
+            status: { in: ['ACTIVE', 'active', 'CHECKED_IN', 'OCCUPIED', 'checked_in', 'occupied'] },
+            checkInDate: { lte: now },
+            checkOutDate: { gte: now },
+          },
+        }) : null;
+        if (activeDaily) {
+          throw new AppError('ไม่สามารถปิดปรับปรุงได้ เนื่องจากห้องนี้มีผู้เช่าพักอยู่', 409, 'ROOM_HAS_ACTIVE_OCCUPANCY');
+        }
+
+        // 2. Active Future Reservation / Committed Booking Check
+        const futureContract = tx.contract ? await tx.contract.findFirst({
+          where: {
+            roomId: id,
+            dormitoryId: targetDormId,
+            status: { in: ['active', 'ACTIVE', 'approved', 'pending_signature', 'waiting_extension', 'pending_deposit', 'reserved', 'upcoming'] },
+            startDate: { gt: now },
+          },
+        }) : null;
+        if (futureContract) {
+          throw new AppError('ไม่สามารถปิดปรับปรุงได้ เนื่องจากห้องนี้มีการจองล่วงหน้า', 409, 'ROOM_HAS_ACTIVE_RESERVATION');
+        }
+
+        const futureProv = tx.provisionalRentalTerm ? await tx.provisionalRentalTerm.findFirst({
+          where: {
+            roomId: id,
+            dormitoryId: targetDormId,
+            OR: [
+              { status: { in: ['RESERVED', 'reserved', 'PENDING', 'pending'] } },
+              { status: { in: ['ACTIVE', 'active'] }, startDate: { gt: now } },
+            ],
+          },
+        }) : null;
+        if (futureProv) {
+          throw new AppError('ไม่สามารถปิดปรับปรุงได้ เนื่องจากห้องนี้มีการจองล่วงหน้า', 409, 'ROOM_HAS_ACTIVE_RESERVATION');
+        }
+
+        const futureDaily = tx.dailyStay ? await tx.dailyStay.findFirst({
+          where: {
+            roomId: id,
+            dormitoryId: targetDormId,
+            OR: [
+              { status: { in: ['RESERVED', 'reserved', 'CONFIRMED', 'confirmed'] } },
+              { status: { in: ['ACTIVE', 'active'] }, checkInDate: { gt: now } },
+            ],
+          },
+        }) : null;
+        if (futureDaily) {
+          throw new AppError('ไม่สามารถปิดปรับปรุงได้ เนื่องจากห้องนี้มีการจองล่วงหน้า', 409, 'ROOM_HAS_ACTIVE_RESERVATION');
+        }
+      }
+
       const finalChanges = { ...changes };
       if (finalChanges.depositAmount !== undefined && finalChanges.depositInheritsBuildingDefault === undefined) {
         if (finalChanges.depositAmount !== null) {

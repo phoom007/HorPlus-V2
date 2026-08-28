@@ -533,3 +533,62 @@ Independent review of the R3.3aR branch confirmed that Grid/List action wiring, 
 - **UAT Expected Results File Hygiene** (`git diff d6571c184c5fac36a21daa94c1c8d0472423de9d..HEAD -- docs/uat/local07-expected-results.json`): **EMPTY**
 
 **READY FOR PRODUCT OWNER R3.3 MANUAL UAT**
+
+
+## 21. R3.4 — Payment State Semantics, Maintenance Guard & UAT Data Completeness
+
+### 1. 5-State Canonical Payment Model (Part A, B, C, E)
+- **Canonical Payment States**:
+  - `PAID` (Thai: `จ่ายแล้ว`, Badge: `emerald-50 / emerald-700 / emerald-200`)
+  - `UNPAID` (Thai: `รอชำระ`, Badge: `amber-50 / amber-700 / amber-200`)
+  - `PARTIAL` (Thai: `ชำระบางส่วน`, Badge: `amber-50 / amber-700 / amber-200`)
+  - `NOT_ISSUED` (Thai: `ยังไม่ออกบิล`, Badge: `sky-50 / sky-700 / sky-200`)
+  - `UNKNOWN` (Thai: `ไม่พบข้อมูลการชำระ`, Badge: `slate-50 / slate-600 / slate-200`)
+- **Rent Authority (Selected Cycle)**: Rent payment state is evaluated per cycle. When an active agreement is present in the cycle but no rent bill has been issued, it evaluates to `NOT_ISSUED` (not `UNKNOWN` or `UNPAID`).
+- **Deposit Authority (Agreement Lifecycle)**: Deposit is paid once per agreement lifecycle. When a tenant's deposit is paid in their start cycle (e.g. July), it remains `PAID` across all subsequent cycles (August, September, etc.) for that contract without requiring new monthly deposit bills. A new tenant/agreement has an independent lifecycle and will resolve to `NOT_ISSUED` if deposit > 0 and no bill is issued yet.
+
+### 2. Locked Product Decision F1: Maintenance Occupancy & Reservation Guard (Part F & G)
+- **Server-Side Enforcement**: Inside `updateRoom` transaction in `server/src/services/room.service.ts`, when transitioning `status` to `maintenance`:
+  - Physical Occupancy Check: Checks `existing.currentTenantId`, `existing.status === 'occupied'`, active `Contract`, active `ProvisionalRentalTerm`, or active `DailyStay`. If active occupancy exists, throws `409 Conflict` with domain error code `ROOM_HAS_ACTIVE_OCCUPANCY` and Thai message `ไม่สามารถปิดปรับปรุงได้ เนื่องจากห้องนี้มีผู้เช่าพักอยู่`.
+  - Future Reservation Check: Checks future `Contract` (startDate > now), `ProvisionalRentalTerm` (RESERVED/PENDING or startDate > now), and `DailyStay` (RESERVED/CONFIRMED or checkInDate > now). If active reservation exists, throws `409 Conflict` with domain error code `ROOM_HAS_ACTIVE_RESERVATION` and Thai message `ไม่สามารถปิดปรับปรุงได้ เนื่องจากห้องนี้มีการจองล่วงหน้า`.
+  - Permitted Catalog Edits: Room catalog fields (monthlyRent, termRent, dailyRent, depositAmount, maxOccupants, roomType) remain fully editable on occupied and reserved rooms.
+- **Frontend Edit Modal UI**: In `src/pages/owner/rooms.tsx`, the 'ปิดปรับปรุง' button in Edit Room modal is disabled when the room is currently occupied or has a future reservation, with clear tooltip explaining the reason (`มีผู้เช่าพักอยู่ ต้องย้ายหรือสิ้นสุดการเช่าก่อน` / `มีการจองล่วงหน้า ต้องจัดการการจองก่อน`).
+
+### 3. Historical Vacancy Secondary Current State (Part H)
+- When `cyclePresentation.state === 'NO_AGREEMENT_IN_CYCLE'`:
+  - If current room is occupied today: displays primary green `ว่างในงวดนี้` and secondary `ปัจจุบันมีผู้เช่า`. Quick Add is suppressed.
+  - If current room is in maintenance today: displays primary green `ว่างในงวดนี้` and secondary `ปิดปรับปรุงปัจจุบัน`. Quick Add is suppressed.
+  - If current room is vacant today: displays `เพิ่มผู้เช่า` button (Quick Add available).
+
+### 4. List Mode & Floor Map Visual Formatting (Part I & J)
+- **List Mode Rates**: Rendered cleanly as `฿ 19,200.00 / เทอม`, `฿ 4,800.00 / เดือน`, `฿ 550.00 / วัน` + `อัตราปัจจุบัน`. Redundant left column labels (`รายเทอม`, `รายเดือน`, `รายวัน`) were removed.
+- **Floor Map Currency**: Currency formatted strictly as `฿ 5,000.00/ด.`. Fixed JSX template string escaping to eliminate all literal `$` characters across Floor Map cards.
+
+### 5. LOCAL-07 Seed & Verification Matrix (Part D & N)
+- Seeded deterministic scenarios for all financial states:
+  - RENT PAID (`INV-202607-001`)
+  - RENT UNPAID (`INV-202608-201-R`)
+  - RENT PARTIAL (`INV-202608-203-R`)
+  - RENT NOT_ISSUED (Room 303 contract with no issued bill)
+  - DEPOSIT PAID in start cycle (`INV-202608-201-D`, `INV-202608-202-D`)
+  - DEPOSIT NOT_ISSUED (Room 303 contract requiring deposit > 0 with no deposit bill)
+  - DAILY Rent & Deposit (Daily stay Room 103)
+  - RESERVED in cycle (Room 102)
+  - UNKNOWN for ambiguous legacy combined without item breakdown
+- All 12 LOCAL-07 verification checks passed with 0 failures.
+
+---
+
+## 22. Summary of Verification Test Results
+
+- **Maintenance Occupancy Guard Suite** (`server/src/__tests__/unit/owner-rooms-r34-maintenance-guard.test.ts`): **8 / 8 passed (100%)**
+- **Preview Context Unit Suite** (`server/src/__tests__/unit/owner-rooms-r3-meter-preview-context.test.ts`): **12 / 12 passed (100%)**
+- **Write-Boundary Unit Suite** (`server/src/__tests__/unit/owner-rooms-r32a-write-boundary.test.ts`): **6 / 6 passed (100%)**
+- **Effective Status Unit Suite** (`server/src/__tests__/unit/owner-rooms-r32-effective-status.test.ts`): **5 / 5 passed (100%)**
+- **Frontend Cycle Deposits & R3.4 UX Suite** (`src/tests/owner-rooms-r2-cycle-deposits.test.tsx`): **88 / 88 passed (100%)**
+- **All Backend Unit Test Suites** (`npm --prefix server run test -- src/__tests__/unit/`): **57 / 57 passed (100%)**
+- **TypeScript Linting** (`npm run lint`): **Passed with 0 errors**
+- **Backend Production Build** (`npm --prefix server run build`): **Passed with 0 errors**
+- **Diff & Line Ending Hygiene** (`git -c core.whitespace=cr-at-eol diff --check`): **Passed with 0 warnings**
+- **LOCAL-07 UAT Refresh & Verification** (`npm run uat:refresh`): **0 Failures (100% PASS)**
+- **UAT Expected Results File Hygiene** (`git diff 82e503a51c11bb372d059904ff1deda601869172..HEAD -- docs/uat/local07-expected-results.json`): **EMPTY**
