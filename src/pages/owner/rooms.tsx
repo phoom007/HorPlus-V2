@@ -889,11 +889,12 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                     ) : (
                       <div className="flex items-center gap-1.5">
                         <span className="font-extrabold text-slate-900">{formatBaht(room.depositAmount)}</span>
-                        {room.depositStatus === 'paid' ? (
+                        {room.depositStatus === 'paid' && (
                           <span className="px-1.5 py-0.5 bg-emerald-100 text-emerald-800 text-[10px] font-black rounded-md border border-emerald-200">
                             จ่ายแล้ว
                           </span>
-                        ) : (
+                        )}
+                        {room.depositStatus === 'unpaid' && (
                           <span className="px-1.5 py-0.5 bg-rose-100 text-rose-800 text-[10px] font-black rounded-md border border-rose-200">
                             ยังไม่จ่าย
                           </span>
@@ -995,9 +996,10 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                         ) : (
                           <>
                             <div className="font-bold text-slate-800 whitespace-nowrap">{formatBaht(room.depositAmount)}</div>
-                            {room.depositStatus === 'paid' ? (
+                            {room.depositStatus === 'paid' && (
                               <span className="text-[10px] font-black text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200 inline-block mt-0.5 whitespace-nowrap">จ่ายแล้ว</span>
-                            ) : (
+                            )}
+                            {room.depositStatus === 'unpaid' && (
                               <span className="text-[10px] font-black text-rose-700 bg-rose-50 px-1.5 py-0.5 rounded border border-rose-200 inline-block mt-0.5 whitespace-nowrap">ยังไม่จ่าย</span>
                             )}
                           </>

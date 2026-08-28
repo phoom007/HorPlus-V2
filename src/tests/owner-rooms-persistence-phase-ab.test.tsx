@@ -348,6 +348,7 @@ describe('Owner Rooms — Phase AB.1 Correctness & Persistence Suite', () => {
         buildingId: 'bld-1',
         depositAmount: 9000,
         monthlyRent: 4500,
+        maximumOccupants: 2,
         version: 1,
       });
 
@@ -380,7 +381,10 @@ describe('Owner Rooms — Phase AB.1 Correctness & Persistence Suite', () => {
       const httpSpy = vi.spyOn(HttpClientModule, 'httpRequest').mockResolvedValue({
         id: 'rm-101',
         roomNumber: '101',
+        buildingId: 'bld-1',
+        depositAmount: 9500,
         monthlyRent: 4800,
+        maximumOccupants: 2,
         version: 2,
       });
 

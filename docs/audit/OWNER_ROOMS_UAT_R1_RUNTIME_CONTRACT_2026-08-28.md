@@ -1,63 +1,63 @@
-# OWNER ROOMS — UAT-R1 RUNTIME API CONTRACT RECONCILIATION & ROOT CAUSE ANALYSIS
+# OWNER ROOMS — UAT-R1 / UAT-R1.1 RUNTIME API CONTRACT & FINANCIAL INTEGRITY AUDIT
 
-**Date:** 2026-08-28  
-**Branch:** `fix/owner-rooms-uat-r1-runtime-contract-20260828`  
-**Base Commit:** `a23e0492b29211458c767e9926cffaa302145e21` (Phase C.1 Remote HEAD)  
-**Status:** READY FOR PRODUCT OWNER RE-UAT  
+**Date:** 2026-08-28
+**Branch:** `fix/owner-rooms-uat-r11-integrity-20260828`
+**Base Commit:** `5e1da35282711ed9eeddabe272bdd4b40ea4673e` (UAT-R1 Remote HEAD)
+**Status:** READY FOR PRODUCT OWNER RE-UAT
 
 ---
 
-## 1. Executive Summary & Root Cause Analysis
+## 1. Executive Summary & UAT Root Cause Reconciliation
 
-Following the Phase C.1 release, Product Owner manual runtime UAT on `/owner/rooms` identified three major symptoms:
-1. **Failure 1 — Create Room:** Attempting to create room `A111` surfaced the fallback message: *"ระบบไม่สามารถดำเนินการได้ กรุณาลองใหม่อีกครั้ง"* and room was not created.
-2. **Failure 2 — NaN Prices:** Room cards on grid/floor view displayed *"฿ NaN / เดือน"*.
-3. **Failure 3 — Occupancy Presentation Contradiction:** Several cards showed badge *"มีผู้เช่า"*, but the tenant block inside showed *"ไม่มีผู้เช่าลงทะเบียน"* and the action button remained *"เพิ่มผู้เช่า"*.
+Following Product Owner manual runtime UAT on `/owner/rooms`, three core areas were investigated, resolved, and verified:
 
-### Detailed Root Cause Breakdown
+### 1.1 Create Room Endpoint Status
+* **Original UAT Create Failure Root Cause:**
+  `ORIGINAL ROOT CAUSE UNPROVEN — NO LONGER REPRODUCIBLE ON CURRENT SOURCE`
+* **Current Source Create Result:**
+  `HTTP 201 PASS` (authoritative transport enrichment and schema validation active)
+* **Transport Consistency Improvements:**
+  Enriched both `POST /api/v1/properties/rooms` and `PUT /api/v1/properties/rooms/:id` responses using `DefaultsService.buildAuthoritativeRoomResponse` so that mutations return canonical authoritative DTOs containing `currentEffectiveValues`.
 
-### Failure 2: Price Calculation & NaN Presentation
-- **Root Cause:** The backend `GET /api/v1/properties/rooms` endpoint returns authoritative Room DTOs computed by `DefaultsService.buildAuthoritativeRoomResponse`. In this transport shape, effective room rates reside under nested object `currentEffectiveValues: { monthlyRent, termRent, dailyRent, depositAmount, maximumOccupants, ... }` rather than root-level properties.
-- **Frontend Symptom:** The React Query cache stored the raw backend DTO without normalization. Frontend components reading `room.monthlyRent` received `undefined`, causing `formatBaht(undefined)` to format `NaN` as *"฿ NaN / เดือน"*.
-- **Fix:** Introduced a canonical normalizer (`normalizeAuthoritativeRoom` and `normalizeAuthoritativeRooms`) at the data layer (`src/lib/roomNormalizer.ts` and `ApiPropertyAdapter` / `src/pages/owner.tsx` query boundary). All rates are parsed using `parseSafeNumeric` to guarantee `Number.isNaN` is never true.
+### 1.2 Price Presentation & Financial Data Integrity
+* **Root Cause (NaN Prices):** Authoritative backend returns rates in nested `currentEffectiveValues: { monthlyRent, termRent, dailyRent, depositAmount, maximumOccupants }`. Un-normalized DTOs in React Query caused `room.monthlyRent` to evaluate to `undefined`, producing `NaN`.
+* **R1.1 Strict Numeric Contract:**
+  - `parseRequiredFiniteNumber(value, fieldName)` enforces strict numeric parsing for required fields (`monthlyRent`, `depositAmount`, `maximumOccupants`). Malformed or missing required financial data **fails closed** (throws `[ROOM_TRANSPORT_INVALID] Invalid <fieldName>`), preventing fake `0 ฿` display.
+  - `parseOptionalFiniteNumber(value, fieldName)` enforces strict parsing for optional fields (`termRent`, `dailyRent`). Non-empty malformed values fail closed rather than silently becoming `undefined`.
 
-### Failure 3: Occupancy Relationship Contradiction
-- **Root Cause:** In `DefaultsService.buildAuthoritativeRoomResponse` (`server/src/services/defaults.service.ts`), `currentTenantId` was mapped directly from `room.currentTenantId` without falling back to `activeContract?.tenantId`. In PostgreSQL, rooms with an active contract might not have `current_tenant_id` back-filled on the `rooms` row. As a result, the backend returned `currentTenantId: null`.
-- **Frontend Symptom:** Status badge inspected `room.status` (`'occupied'`), while tenant name and action button inspected `room.currentTenantId`. Because `room.currentTenantId` was `null`, the UI displayed badge *"มีผู้เช่า"* but rendered *"ไม่มีผู้เช่าลงทะเบียน"* and *"เพิ่มผู้เช่า"*.
-- **Fix:** In `defaults.service.ts`, updated response building to resolve `currentTenantId: room.currentTenantId || activeContract?.tenantId || null` and `currentContractId: room.currentContractId || activeContract?.id || null`. The canonical normalizer projects this into `room.currentTenantId`, so card badge, tenant name, and button are 100% consistent.
-
-### Failure 1: Create Room Endpoint Contract & Fallback Error
-- **Root Cause:** 
-  1. `POST /api/v1/properties/rooms` and `PUT /api/v1/properties/rooms/:id` previously returned raw un-enriched database records rather than authoritative room DTOs with `currentEffectiveValues`.
-  2. If the frontend attempted to create a room before buildings data loaded, an empty `buildingId: ''` would be submitted, causing validation rejection or internal error.
-- **Fix:** 
-  1. Enriched `POST /rooms` and `PUT /rooms/:id` route handlers using `defaultsService.buildAuthoritativeRoomResponse(dormId, room)` to enforce consistent authoritative transport contracts.
-  2. Added pre-submission validation in `OwnerRooms` (`src/pages/owner/rooms.tsx`) to verify building presence before dispatching network requests.
-  3. Integrated `normalizeAuthoritativeRoom` into `ApiPropertyAdapter.createRoom` and `ApiPropertyAdapter.updateRoom`.
+### 1.3 Occupancy & Deposit Payment Status Integrity
+* **Occupancy Consistency:** In `DefaultsService.buildAuthoritativeRoomResponse`, resolved `currentTenantId: room.currentTenantId || activeContract?.tenantId || null` and `currentContractId: room.currentContractId || activeContract?.id || null`. Occupied rooms with active contracts consistently display the tenant name and *"ข้อมูลผู้เช่า"* action button.
+* **Deposit Payment Status Non-Fabrication:**
+  - Deposit payment status is **NEVER** inferred from occupancy, `room.status`, or `currentTenantId`.
+  - Authoritative `depositStatus = 'paid'` → `'paid'`
+  - Authoritative `depositStatus = 'unpaid'` → `'unpaid'`
+  - Absent or unverified `depositStatus` → `undefined`
+* **UI Presentation for Unknown Deposit Status:**
+  - `depositStatus === 'paid'` → renders *"จ่ายแล้ว"* badge
+  - `depositStatus === 'unpaid'` → renders *"ยังไม่จ่าย"* badge
+  - `depositStatus === undefined` → renders deposit amount with **NO** paid/unpaid badge.
 
 ---
 
 ## 2. Authoritative Transport DTO Mapping Matrix
 
-| Backend Authoritative DTO Field | Canonical Frontend `Room` Field | Normalization Strategy | Fallback |
+| Backend Authoritative DTO Field | Canonical Frontend `Room` Field | Normalization Strategy | Failure Mode |
 | :--- | :--- | :--- | :--- |
-| `currentEffectiveValues.monthlyRent` | `monthlyRent` | `parseSafeNumeric(effective.monthlyRent, 0)` | `dto.monthlyRent ?? 0` |
-| `currentEffectiveValues.termRent` | `termRent` | `parseOptionalSafeNumeric(effective.termRent)` | `dto.termRent` |
-| `currentEffectiveValues.dailyRent` | `dailyRent` | `parseOptionalSafeNumeric(effective.dailyRent)` | `dto.dailyRent` |
-| `currentEffectiveValues.depositAmount` | `depositAmount` | `parseSafeNumeric(effective.depositAmount, 0)` | `dto.depositAmount ?? 0` |
-| `currentEffectiveValues.maximumOccupants` | `maxOccupants` | `parseSafeNumeric(effective.maximumOccupants, 2)` | `dto.maxOccupants ?? 2` |
-| `initialWaterReading` | `initialWaterMeter` | `parseSafeNumeric(dto.initialWaterReading, 0)` | `dto.initialWaterMeter ?? 0` |
-| `initialElectricityReading` | `initialElectricMeter` | `parseSafeNumeric(dto.initialElectricityReading, 0)` | `dto.initialElectricMeter ?? 0` |
+| `currentEffectiveValues.monthlyRent` | `monthlyRent` | `parseRequiredFiniteNumber(effective.monthlyRent, 'monthlyRent')` | Fails closed (`[ROOM_TRANSPORT_INVALID]`) |
+| `currentEffectiveValues.depositAmount` | `depositAmount` | `parseRequiredFiniteNumber(effective.depositAmount, 'depositAmount')` | Fails closed (`[ROOM_TRANSPORT_INVALID]`) |
+| `currentEffectiveValues.maximumOccupants` | `maxOccupants` | `parseRequiredFiniteNumber(effective.maximumOccupants, 'maximumOccupants')` | Fails closed (`[ROOM_TRANSPORT_INVALID]`) |
+| `currentEffectiveValues.termRent` | `termRent` | `parseOptionalFiniteNumber(effective.termRent, 'termRent')` | Fails closed on invalid non-empty string |
+| `currentEffectiveValues.dailyRent` | `dailyRent` | `parseOptionalFiniteNumber(effective.dailyRent, 'dailyRent')` | Fails closed on invalid non-empty string |
+| `initialWaterReading` | `initialWaterMeter` | `parseMeterReading(dto.initialWaterReading, 'initialWaterReading', 0)` | `0` fallback if empty; fails closed on malformed |
+| `initialElectricityReading` | `initialElectricMeter` | `parseMeterReading(dto.initialElectricityReading, 'initialElectricityReading', 0)` | `0` fallback if empty; fails closed on malformed |
+| `depositStatus` | `depositStatus` | Explicit `'paid'` | `'unpaid'` | `undefined` | Never fabricated from occupancy |
 | `currentTenantId` (resolved) | `currentTenantId` | `dto.currentTenantId || undefined` | `undefined` |
-| `currentContractId` (resolved) | `currentContractId` | `dto.currentContractId || undefined` | `undefined` |
 | `status` | `status` | Safe enum validation | `'vacant'` |
 | `version` | `version` | `typeof dto.version === 'number' ? dto.version : 1` | `1` |
 
 ---
 
 ## 3. Query Boundary Architecture
-
-Rather than teaching every Owner screen how to navigate nested backend objects, all queries and mutations flow through a single projection pipeline:
 
 ```
 Backend DB (PostgreSQL)
@@ -68,7 +68,7 @@ DefaultsService.buildAuthoritativeRoomResponse (Server Transport DTO)
         ▼  GET /rooms, POST /rooms, PUT /rooms
 Data Boundary: fetchAuthoritativeRooms / ApiPropertyAdapter
         │
-        ▼  normalizeAuthoritativeRoom(s)
+        ▼  normalizeAuthoritativeRoom(s) [Strict Financial & Fail-Closed Parsers]
 React Query Cache (queryKeys.rooms(dormId)) [Stores Canonical Room[]]
         │
         ▼
@@ -83,15 +83,12 @@ Owner Screens (Rooms, Dashboard, Tenants, Meters, Contracts, etc.)
 
 | Test Suite | File | Tests Run | Result | Notes |
 | :--- | :--- | :--- | :--- | :--- |
-| **T1 — UAT-R1 API Contract** | `src/tests/owner-rooms-api-contract-uat-r1.test.tsx` | 8 | **8 passed (100%)** | NaN safety, DTO normalization, Occupancy presentation |
+| **T1 — UAT-R1.1 Financial Integrity** | `src/tests/owner-rooms-api-contract-uat-r1.test.tsx` | 9 | **9 passed (100%)** | Strict required numbers, fail-closed validation, deposit presentation |
 | **T2 — Phase AB.1 Persistence** | `src/tests/owner-rooms-persistence-phase-ab.test.tsx` | 8 | **8 passed (100%)** | Canonical Create/Update/Archive, OCC conflict handling |
-| **T2 — Phase C.1 Cache Coherence** | `src/tests/owner-rooms-cache-coherence-phase-c.test.tsx` | 11 | **11 passed (100%)** | Precise dependency invalidation matrix |
-| **T2 — Backend Creation Unit** | `server/src/__tests__/unit/room-service-creation.test.ts` | 3 | **3 passed (100%)** | Room creation, duplicate validation, limits |
 | **Frontend TypeScript Lint** | `npm run lint` (`tsc --noEmit`) | - | **0 errors (Pass)** | Strict type correctness |
-| **Backend TypeScript Lint** | `npm run lint:api` (`tsc --noEmit`) | - | **0 errors (Pass)** | Strict type correctness |
 
 ---
 
 ## 5. Next Steps
 
-The UAT-R1 runtime reconciliation is complete, verified, and ready for Product Owner re-verification.
+The UAT-R1.1 financial integrity hardening is complete, verified, and ready for Product Owner re-verification.

@@ -3,6 +3,7 @@
  * Canonical Authoritative Room Transport DTO & Frontend Normalizer
  * 
  * Single authoritative projection from backend AuthoritativeRoomDto to UI Room.
+ * Enforces strict financial integrity and fail-closed validation on required fields.
  */
 
 import { Room, RoomStatus } from '../types';
@@ -65,7 +66,7 @@ export interface AuthoritativeRoomDto {
   currentTenantId?: string | null;
   currentContractId?: string | null;
 
-  depositStatus?: 'paid' | 'unpaid';
+  depositStatus?: 'paid' | 'unpaid' | null;
 
   images?: string[] | null;
   amenities?: string[] | null;
@@ -85,21 +86,49 @@ export interface AuthoritativeRoomDto {
 }
 
 /**
- * Safe numeric parser that guarantees Number.isNaN(result) === false.
+ * Strict parser for required finite numbers in authoritative room DTOs.
+ * Throws explicit Error if value is null, undefined, empty string, or non-finite number.
  */
-export function parseSafeNumeric(val: unknown, fallback: number = 0): number {
-  if (val === null || val === undefined || val === '') return fallback;
-  const num = typeof val === 'number' ? val : Number(val);
-  return Number.isFinite(num) ? num : fallback;
+export function parseRequiredFiniteNumber(value: unknown, fieldName: string): number {
+  if (value === null || value === undefined || value === '') {
+    throw new Error(`[ROOM_TRANSPORT_INVALID] Missing required ${fieldName}`);
+  }
+  const num = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(num)) {
+    throw new Error(`[ROOM_TRANSPORT_INVALID] Invalid ${fieldName}`);
+  }
+  return num;
 }
 
 /**
- * Safe optional numeric parser. Returns undefined for null/undefined/empty string.
+ * Strict parser for optional finite numbers.
+ * Returns undefined for null, undefined, or empty string.
+ * Throws Error if a non-empty string or invalid value cannot be parsed to a finite number.
  */
-export function parseOptionalSafeNumeric(val: unknown): number | undefined {
-  if (val === null || val === undefined || val === '') return undefined;
-  const num = typeof val === 'number' ? val : Number(val);
-  return Number.isFinite(num) ? num : undefined;
+export function parseOptionalFiniteNumber(value: unknown, fieldName: string): number | undefined {
+  if (value === null || value === undefined || value === '') {
+    return undefined;
+  }
+  const num = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(num)) {
+    throw new Error(`[ROOM_TRANSPORT_INVALID] Invalid ${fieldName}`);
+  }
+  return num;
+}
+
+/**
+ * Permissive parser with default fallback for non-financial metrics (meters) where zero is a legitimate default.
+ * If value is a malformed non-empty string, throws transport error to fail closed.
+ */
+export function parseMeterReading(value: unknown, fieldName: string, fallback: number = 0): number {
+  if (value === null || value === undefined || value === '') {
+    return fallback;
+  }
+  const num = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(num)) {
+    throw new Error(`[ROOM_TRANSPORT_INVALID] Invalid ${fieldName}`);
+  }
+  return num;
 }
 
 /**
@@ -112,14 +141,29 @@ export function normalizeAuthoritativeRoom(dto: AuthoritativeRoomDto | any): Roo
 
   const effective = dto.currentEffectiveValues || dto.effectiveValues;
 
-  const monthlyRent = parseSafeNumeric(effective?.monthlyRent ?? dto.monthlyRent, 0);
-  const termRent = parseOptionalSafeNumeric(effective?.termRent ?? dto.termRent);
-  const dailyRent = parseOptionalSafeNumeric(effective?.dailyRent ?? dto.dailyRent);
-  const depositAmount = parseSafeNumeric(effective?.depositAmount ?? dto.depositAmount, 0);
-  const maxOccupants = parseSafeNumeric(effective?.maximumOccupants ?? dto.maximumOccupants ?? dto.maxOccupants, 2);
+  // Strict required financial values (fail closed if missing or malformed)
+  const rawMonthly = effective?.monthlyRent ?? dto.monthlyRent;
+  const monthlyRent = parseRequiredFiniteNumber(rawMonthly, 'monthlyRent');
 
-  const initialWaterMeter = parseSafeNumeric(dto.initialWaterReading ?? dto.initialWaterMeter, 0);
-  const initialElectricMeter = parseSafeNumeric(dto.initialElectricityReading ?? dto.initialElectricMeter, 0);
+  const rawDeposit = effective?.depositAmount ?? dto.depositAmount;
+  const depositAmount = parseRequiredFiniteNumber(rawDeposit, 'depositAmount');
+
+  const rawOccupants = effective?.maximumOccupants ?? dto.maximumOccupants ?? dto.maxOccupants;
+  const maxOccupants = parseRequiredFiniteNumber(rawOccupants, 'maximumOccupants');
+
+  // Optional financial values
+  const rawTerm = effective?.termRent ?? dto.termRent;
+  const termRent = parseOptionalFiniteNumber(rawTerm, 'termRent');
+
+  const rawDaily = effective?.dailyRent ?? dto.dailyRent;
+  const dailyRent = parseOptionalFiniteNumber(rawDaily, 'dailyRent');
+
+  // Meter readings
+  const rawWater = dto.initialWaterReading ?? dto.initialWaterMeter;
+  const initialWaterMeter = parseMeterReading(rawWater, 'initialWaterReading', 0);
+
+  const rawElectric = dto.initialElectricityReading ?? dto.initialElectricMeter;
+  const initialElectricMeter = parseMeterReading(rawElectric, 'initialElectricityReading', 0);
 
   const rawImages = dto.images;
   const images: string[] = Array.isArray(rawImages) ? rawImages : (typeof rawImages === 'string' ? [rawImages] : []);
@@ -129,11 +173,19 @@ export function normalizeAuthoritativeRoom(dto: AuthoritativeRoomDto | any): Roo
 
   const status: RoomStatus = (['vacant', 'occupied', 'reserved', 'maintenance'].includes(dto.status) ? dto.status : 'vacant') as RoomStatus;
 
+  // Financial integrity: Never fabricate deposit payment status from occupancy or tenant presence.
+  const depositStatus: 'paid' | 'unpaid' | undefined = (dto.depositStatus === 'paid' || dto.depositStatus === 'unpaid')
+    ? dto.depositStatus
+    : undefined;
+
+  const floorNum = typeof dto.floor === 'number' ? dto.floor : (dto.floor ? Number(dto.floor) : 1);
+  const floor = Number.isFinite(floorNum) ? floorNum : 1;
+
   return {
     id: String(dto.id || ''),
     buildingId: String(dto.buildingId || ''),
     roomNumber: String(dto.roomNumber || ''),
-    floor: parseSafeNumeric(dto.floor, 1),
+    floor,
     status,
     currentTenantId: dto.currentTenantId || undefined,
     rentCycle: (dto.rentCycle || 'monthly') as 'monthly' | 'term' | 'daily',
@@ -141,7 +193,7 @@ export function normalizeAuthoritativeRoom(dto: AuthoritativeRoomDto | any): Roo
     termRent,
     dailyRent,
     depositAmount,
-    depositStatus: dto.depositStatus || (status === 'vacant' || !dto.currentTenantId ? 'unpaid' : 'paid'),
+    depositStatus,
     maxOccupants,
     initialWaterMeter,
     initialElectricMeter,
