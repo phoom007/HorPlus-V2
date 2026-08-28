@@ -165,6 +165,7 @@ export const CreateProvisionalRentalTermSchema = z
     durationMonths: z.number().int().min(1).optional(),
     unitRentAmount: z.string().regex(/^\d+(\.\d{1,2})?$/, 'ค่าเช่าต้องเป็นตัวเลขทศนิยมไม่เกิน 2 ตำแหน่งและไม่ติดลบ'),
     totalRentAmount: z.string().regex(/^\d+(\.\d{1,2})?$/, 'ค่าเช่ารวมต้องเป็นตัวเลขทศนิยมไม่เกิน 2 ตำแหน่งและไม่ติดลบ').optional(),
+    depositAmount: z.string().regex(/^\d+(\.\d{1,2})?$/, 'เงินประกันต้องเป็นตัวเลขทศนิยมไม่เกิน 2 ตำแหน่งและไม่ติดลบ').optional().nullable(),
     termInstallmentCount: z.number().int().min(1).max(12).optional(),
   })
   .superRefine((val, ctx) => {

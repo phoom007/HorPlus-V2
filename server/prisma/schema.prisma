@@ -425,6 +425,9 @@ model Room {
   termRent                       Decimal?  @map("term_rent") @db.Decimal(12, 2)
   termMonths                     Int?      @default(6) @map("term_months")
   dailyRent                      Decimal?  @map("daily_rent") @db.Decimal(12, 2)
+  termDeposit                    Decimal?  @map("term_deposit") @db.Decimal(12, 2)
+  monthlyDeposit                 Decimal?  @map("monthly_deposit") @db.Decimal(12, 2)
+  dailyDeposit                   Decimal?  @map("daily_deposit") @db.Decimal(12, 2)
   depositAmount                  Decimal?  @map("deposit_amount") @db.Decimal(12, 2)
   depositInheritsBuildingDefault Boolean   @default(true) @map("deposit_inherits_building_default")
   advancePaymentAmount           Decimal?  @map("advance_payment_amount") @db.Decimal(12, 2)
@@ -1057,6 +1060,7 @@ model ProvisionalRentalTerm {
   durationMonths       Int       @default(1) @map("duration_months")
   unitRentAmount       Decimal   @default(0.00) @map("unit_rent_amount") @db.Decimal(12, 2)
   totalRentAmount      Decimal   @default(0.00) @map("total_rent_amount") @db.Decimal(12, 2)
+  depositAmount        Decimal?  @map("deposit_amount") @db.Decimal(12, 2)
   termMonthsSnapshot   Int?      @map("term_months_snapshot")
   termInstallmentCount Int?      @map("term_installment_count")
   status               String    @default("ACTIVE") @db.VarChar(50) // RESERVED, ACTIVE, CONVERTED, ENDED, CANCELLED

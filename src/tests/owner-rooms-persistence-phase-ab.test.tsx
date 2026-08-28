@@ -108,8 +108,9 @@ describe('Owner Rooms — Phase AB.1 Correctness & Persistence Suite', () => {
       const maintenanceBtn = screen.getByRole('button', { name: 'ปิดปรับปรุง' });
       await user.click(maintenanceBtn);
 
-      // Fill canonical deposit
-      const depositInput = screen.getByPlaceholderText('เช่น 9000');
+      // Fill canonical monthly deposit
+      const depositInputs = screen.getAllByPlaceholderText('เช่น 9000');
+      const depositInput = depositInputs[1]; // monthly deposit
       await user.clear(depositInput);
       await user.type(depositInput, '10000');
 
@@ -163,8 +164,9 @@ describe('Owner Rooms — Phase AB.1 Correctness & Persistence Suite', () => {
       const editButtons = screen.getAllByTitle('แก้ไขรายละเอียดห้องพัก');
       await user.click(editButtons[0]);
 
-      // Change single canonical deposit
-      const depositInput = screen.getByPlaceholderText('เช่น 9000');
+      // Change single canonical deposit (monthly deposit)
+      const depositInputs = screen.getAllByPlaceholderText('เช่น 9000');
+      const depositInput = depositInputs[1]; // monthly deposit
       await user.clear(depositInput);
       await user.type(depositInput, '12000');
 

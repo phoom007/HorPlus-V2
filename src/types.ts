@@ -117,6 +117,9 @@ export interface Room {
   termRent?: number; // Rent per term (รายเทอม)
   dailyRent?: number; // Rent per day (รายวัน)
   rentCycle?: 'term' | 'monthly' | 'daily';
+  termDeposit?: number;
+  monthlyDeposit?: number;
+  dailyDeposit?: number;
   depositAmount: number;
   depositStatus?: 'paid' | 'unpaid'; // Status of deposit payment (จ่ายแล้ว/ยังไม่จ่าย)
   parkingFee?: number;
@@ -129,6 +132,7 @@ export interface Room {
   notes?: string;
   images: string[];
   version?: number;
+  activeRentalSummary?: ActiveRentalSummary | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -566,12 +570,23 @@ export const formatItemDescription = (desc: string): string => {
   return str;
 };
 
+export interface ActiveRentalSummary {
+  type: 'TERM' | 'MONTHLY' | 'DAILY';
+  rentAmount: number;
+  depositAmount?: number | null;
+  source: 'CONTRACT_SNAPSHOT' | 'CONTRACT' | 'PROVISIONAL_TERM' | 'DAILY_STAY' | string;
+  termInstallmentCount?: number | null;
+}
+
 export type FieldSource = 'DORMITORY' | 'BUILDING' | 'ROOM' | 'CONTRACT_SNAPSHOT';
 
 export interface RoomFieldSources {
   monthlyRent?: FieldSource;
   termRent?: FieldSource;
   dailyRent?: FieldSource;
+  termDeposit?: FieldSource;
+  monthlyDeposit?: FieldSource;
+  dailyDeposit?: FieldSource;
   depositAmount?: FieldSource;
   advancePaymentAmount?: FieldSource;
   parkingFee?: FieldSource;
@@ -591,6 +606,9 @@ export interface EffectiveValues {
   monthlyRent: number;
   termRent?: number | null;
   dailyRent?: number | null;
+  termDeposit?: number;
+  monthlyDeposit?: number;
+  dailyDeposit?: number;
   depositAmount: number;
   advancePaymentAmount: number;
   parkingFee: number;

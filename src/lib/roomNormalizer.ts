@@ -1,7 +1,7 @@
 /**
  * @license Apache-2.0
  * Canonical Authoritative Room Transport DTO & Frontend Normalizer
- * 
+ *
  * Single authoritative projection from backend AuthoritativeRoomDto to UI Room.
  * Enforces strict financial integrity and fail-closed validation on required fields.
  */
@@ -24,6 +24,9 @@ export interface AuthoritativeRoomDto {
     monthlyRent?: string | null;
     termRent?: string | null;
     dailyRent?: string | null;
+    termDeposit?: string | null;
+    monthlyDeposit?: string | null;
+    dailyDeposit?: string | null;
     depositAmount?: string | null;
     maximumOccupants?: number | null;
     parkingFee?: string | null;
@@ -41,6 +44,9 @@ export interface AuthoritativeRoomDto {
     monthlyRent?: number | string | null;
     termRent?: number | string | null;
     dailyRent?: number | string | null;
+    termDeposit?: number | string | null;
+    monthlyDeposit?: number | string | null;
+    dailyDeposit?: number | string | null;
     depositAmount?: number | string | null;
     maximumOccupants?: number | null;
     parkingFee?: number | string | null;
@@ -53,6 +59,14 @@ export interface AuthoritativeRoomDto {
     rentBillingType?: string | null;
     roomType?: string | null;
   };
+
+  activeRentalSummary?: {
+    type: 'TERM' | 'MONTHLY' | 'DAILY';
+    rentAmount: number | string;
+    depositAmount?: number | string | null;
+    source: string;
+    termInstallmentCount?: number | null;
+  } | null;
 
   effectiveValues?: Record<string, any>;
   fieldSources?: Record<string, any>;
@@ -146,7 +160,16 @@ export function normalizeAuthoritativeRoom(dto: AuthoritativeRoomDto | any): Roo
   const monthlyRent = parseRequiredFiniteNumber(rawMonthly, 'monthlyRent');
 
   const rawDeposit = effective?.depositAmount ?? dto.depositAmount;
-  const depositAmount = parseRequiredFiniteNumber(rawDeposit, 'depositAmount');
+  const depositAmount = parseRequiredFiniteNumber(rawDeposit ?? 0, 'depositAmount');
+
+  const rawMonthlyDeposit = effective?.monthlyDeposit ?? dto.monthlyDeposit ?? rawDeposit;
+  const monthlyDeposit = parseRequiredFiniteNumber(rawMonthlyDeposit ?? 0, 'monthlyDeposit');
+
+  const rawTermDeposit = effective?.termDeposit ?? dto.termDeposit ?? rawDeposit;
+  const termDeposit = parseRequiredFiniteNumber(rawTermDeposit ?? 0, 'termDeposit');
+
+  const rawDailyDeposit = effective?.dailyDeposit ?? dto.dailyDeposit ?? rawDeposit;
+  const dailyDeposit = parseRequiredFiniteNumber(rawDailyDeposit ?? 0, 'dailyDeposit');
 
   const rawOccupants = effective?.maximumOccupants ?? dto.maximumOccupants ?? dto.maxOccupants;
   const maxOccupants = parseRequiredFiniteNumber(rawOccupants, 'maximumOccupants');
@@ -157,6 +180,24 @@ export function normalizeAuthoritativeRoom(dto: AuthoritativeRoomDto | any): Roo
 
   const rawDaily = effective?.dailyRent ?? dto.dailyRent;
   const dailyRent = parseOptionalFiniteNumber(rawDaily, 'dailyRent');
+
+  // Active rental summary projection
+  let activeRentalSummary = null;
+  if (dto.activeRentalSummary && typeof dto.activeRentalSummary === 'object') {
+    const ars = dto.activeRentalSummary;
+    const type = ars.type === 'TERM' || ars.type === 'DAILY' ? ars.type : 'MONTHLY';
+    const rentAmount = Number.isFinite(Number(ars.rentAmount)) ? Number(ars.rentAmount) : 0;
+    const depositAmountVal = ars.depositAmount !== undefined && ars.depositAmount !== null && Number.isFinite(Number(ars.depositAmount))
+      ? Number(ars.depositAmount)
+      : null;
+    activeRentalSummary = {
+      type,
+      rentAmount,
+      depositAmount: depositAmountVal,
+      source: String(ars.source || 'UNKNOWN'),
+      termInstallmentCount: typeof ars.termInstallmentCount === 'number' ? ars.termInstallmentCount : null,
+    };
+  }
 
   // Meter readings
   const rawWater = dto.initialWaterReading ?? dto.initialWaterMeter;
@@ -192,7 +233,10 @@ export function normalizeAuthoritativeRoom(dto: AuthoritativeRoomDto | any): Roo
     monthlyRent,
     termRent,
     dailyRent,
-    depositAmount,
+    termDeposit,
+    monthlyDeposit,
+    dailyDeposit,
+    depositAmount: monthlyDeposit || depositAmount,
     depositStatus,
     maxOccupants,
     initialWaterMeter,
@@ -200,6 +244,7 @@ export function normalizeAuthoritativeRoom(dto: AuthoritativeRoomDto | any): Roo
     images,
     amenities,
     version: typeof dto.version === 'number' ? dto.version : 1,
+    activeRentalSummary,
     createdAt: dto.createdAt ? String(dto.createdAt) : undefined,
     updatedAt: dto.updatedAt ? String(dto.updatedAt) : undefined,
   };

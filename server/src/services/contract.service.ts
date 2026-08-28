@@ -59,7 +59,7 @@ export class ContractService {
 
     // Idempotency: exact duplicate check using Prisma transaction and row-level lock
     const prisma = getPrismaClient();
-    
+
     // Check if this is an in-memory mock or real DB to apply transactions appropriately
     // If it's Prisma, we can safely use $transaction
     if (this.contractRepo.constructor.name === 'PrismaContractRepository') {
@@ -68,7 +68,7 @@ export class ContractService {
         // This prevents race conditions where two requests might pass validation
         // and create overlapping contracts.
         await tx.$executeRaw`SELECT id FROM rooms WHERE id = ${data.roomId}::uuid FOR UPDATE`;
-        
+
         // Look for exact duplicate
         const duplicate = await tx.contract.findFirst({
           where: {
@@ -81,7 +81,7 @@ export class ContractService {
             status: data.status || 'draft'
           }
         });
-        
+
         if (duplicate) {
           return {
             ...duplicate,
@@ -112,7 +112,25 @@ export class ContractService {
         }
 
         // Create the contract using the transaction client
+        // Determine default deposit by rentBillingType if not provided
+        const rentBillingType = data.rentBillingType || 'monthly';
+        let contractDeposit = data.depositAmount;
+        if (contractDeposit === undefined || contractDeposit === null) {
+          if (rentBillingType === 'term' && (room as any).termDeposit) {
+            contractDeposit = String((room as any).termDeposit);
+          } else if (rentBillingType === 'daily' && (room as any).dailyDeposit) {
+            contractDeposit = String((room as any).dailyDeposit);
+          } else if ((room as any).monthlyDeposit) {
+            contractDeposit = String((room as any).monthlyDeposit);
+          } else if (room.depositAmount) {
+            contractDeposit = String(room.depositAmount);
+          } else {
+            contractDeposit = '0.00';
+          }
+        }
+
         const contractNumber = data.contractNumber || `CTR${Date.now().toString().slice(-6)}`;
+
         const created = await tx.contract.create({
           data: {
             id: data.id,
@@ -124,15 +142,15 @@ export class ContractService {
             startDate,
             endDate,
             durationMonths: data.durationMonths || 1,
-            rentBillingType: data.rentBillingType || 'monthly',
+            rentBillingType,
             rentAmount: data.rentAmount,
-            depositAmount: data.depositAmount || '0.00',
+            depositAmount: contractDeposit,
             advancePaymentAmount: data.advancePaymentAmount || '0.00',
             terms: data.terms || null,
             createdByUserId: actorUserId,
           },
         });
-        
+
         return {
           ...created,
           rentAmount: created.rentAmount ? created.rentAmount.toString() : '0.00',
@@ -140,7 +158,7 @@ export class ContractService {
           advancePaymentAmount: created.advancePaymentAmount ? created.advancePaymentAmount.toString() : '0.00'
         };
       });
-      
+
       // Log audit
       if (this.auditService && actorUserId) {
         await this.auditService.log({
@@ -316,8 +334,8 @@ export class ContractService {
             roomId: contract.roomId,
             tenantId: contract.tenantId,
             exactRoomNumber: room.roomNumber,
-            resolvedRent: contract.rentAmount || (resolvedRentType === 'term' && room.termRent ? room.termRent : resolvedDefaults.monthlyRent.value),
-            resolvedDeposit: contract.depositAmount || resolvedDefaults.depositAmount.value,
+            resolvedRent: contract.rentAmount !== null && contract.rentAmount !== undefined ? contract.rentAmount : (resolvedRentType === 'term' && room.termRent ? room.termRent : resolvedDefaults.monthlyRent.value),
+            resolvedDeposit: contract.depositAmount !== null && contract.depositAmount !== undefined ? contract.depositAmount : (resolvedRentType === 'term' ? ((room as any).termDeposit ?? resolvedDefaults.depositAmount.value) : (resolvedRentType === 'daily' ? ((room as any).dailyDeposit ?? resolvedDefaults.depositAmount.value) : ((room as any).monthlyDeposit ?? resolvedDefaults.depositAmount.value))),
             resolvedAdvancePayment: contract.advancePaymentAmount || resolvedDefaults.advancePaymentAmount.value,
             resolvedWaterRate: resolvedDefaults.waterRate.value,
             resolvedElectricityRate: resolvedDefaults.electricityRate.value,

@@ -41,6 +41,8 @@ import {
 import { VersionConflictModal } from '../../components/VersionConflictModal';
 import { getDataProvider } from '../../data/dataProvider';
 import { CreateRoomPayload, UpdateRoomChanges } from '../../data/contracts';
+import { getOwnerRoomMutationErrorMessage } from '../../lib/roomErrorMapper';
+import { getGridRentRates, getListRentRates, getDepositForCycle } from '../../lib/roomRentalSummary';
 import { RoomMutationImpact } from '../../lib/roomMutationCache';
 import { Room, Building, RoomStatus, Tenant, Contract, Bill, BLOCKING_CONTRACT_STATUSES } from '../../types';
 
@@ -148,7 +150,9 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
   const [termRent, setTermRent] = useState<number | ''>(18000);
   const [dailyRent, setDailyRent] = useState<number | ''>(500);
   const [rentCycle, setRentCycle] = useState<'term' | 'monthly' | 'daily'>('monthly');
-  const [depositAmount, setDepositAmount] = useState<number | ''>(9000);
+  const [termDeposit, setTermDeposit] = useState<number | ''>(9000);
+  const [monthlyDeposit, setMonthlyDeposit] = useState<number | ''>(9000);
+  const [dailyDeposit, setDailyDeposit] = useState<number | ''>(1000);
   const [maxOccupants, setMaxOccupants] = useState(2);
   const [roomStatus, setRoomStatus] = useState<RoomStatus>('vacant');
   const [initialWaterMeter, setInitialWaterMeter] = useState(100);
@@ -193,7 +197,9 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
       setTermRent(room.termRent || (room.monthlyRent ? room.monthlyRent * 4 : 18000));
       setDailyRent(room.dailyRent || 500);
       setRentCycle(room.rentCycle || 'monthly');
-      setDepositAmount(room.depositAmount ?? 9000);
+      setTermDeposit(room.termDeposit ?? room.depositAmount ?? 9000);
+      setMonthlyDeposit(room.monthlyDeposit ?? room.depositAmount ?? 9000);
+      setDailyDeposit(room.dailyDeposit ?? (room.dailyRent ? Number(room.dailyRent) * 2 : 1000));
       setMaxOccupants(room.maxOccupants || 2);
       setRoomStatus(room.status || 'vacant');
       setInitialWaterMeter(room.initialWaterMeter || 100);
@@ -207,7 +213,9 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
       setTermRent(18000);
       setDailyRent(500);
       setRentCycle('monthly');
-      setDepositAmount(9000);
+      setTermDeposit(9000);
+      setMonthlyDeposit(9000);
+      setDailyDeposit(1000);
       setMaxOccupants(2);
       setRoomStatus('vacant');
       setInitialWaterMeter(100);
@@ -233,21 +241,27 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
     const origMonthlyRent = editingRoom.monthlyRent || 0;
     const origTermRent = editingRoom.termRent || (editingRoom.monthlyRent ? editingRoom.monthlyRent * 4 : 18000);
     const origDailyRent = editingRoom.dailyRent || 500;
-    const origDeposit = editingRoom.depositAmount || 0;
+    const origTermDeposit = editingRoom.termDeposit ?? editingRoom.depositAmount ?? 0;
+    const origMonthlyDeposit = editingRoom.monthlyDeposit ?? editingRoom.depositAmount ?? 0;
+    const origDailyDeposit = editingRoom.dailyDeposit ?? 0;
     const origMaxOccupants = editingRoom.maxOccupants || 2;
     const origStatus = editingRoom.status || 'vacant';
 
     const curMonthly = monthlyRent === '' ? 0 : Number(monthlyRent);
     const curTerm = termRent === '' ? (curMonthly * 4) : Number(termRent);
     const curDaily = dailyRent === '' ? 500 : Number(dailyRent);
-    const curDeposit = depositAmount === '' ? 0 : Number(depositAmount);
+    const curTermDeposit = termDeposit === '' ? 0 : Number(termDeposit);
+    const curMonthlyDeposit = monthlyDeposit === '' ? 0 : Number(monthlyDeposit);
+    const curDailyDeposit = dailyDeposit === '' ? 0 : Number(dailyDeposit);
 
     const hasChanged =
       roomNumber.trim() !== editingRoom.roomNumber ||
       curMonthly !== origMonthlyRent ||
       curTerm !== origTermRent ||
       curDaily !== origDailyRent ||
-      curDeposit !== origDeposit ||
+      curTermDeposit !== origTermDeposit ||
+      curMonthlyDeposit !== origMonthlyDeposit ||
+      curDailyDeposit !== origDailyDeposit ||
       Number(maxOccupants) !== origMaxOccupants ||
       roomStatus !== origStatus;
 
@@ -258,7 +272,9 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
     monthlyRent,
     termRent,
     dailyRent,
-    depositAmount,
+    termDeposit,
+    monthlyDeposit,
+    dailyDeposit,
     maxOccupants,
     roomStatus
   ]);
@@ -339,7 +355,10 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
           monthlyRent: monthlyRent === '' ? null : String(monthlyRent),
           termRent: termRent === '' ? null : String(termRent),
           dailyRent: dailyRent === '' ? null : String(dailyRent),
-          depositAmount: depositAmount === '' ? null : String(depositAmount),
+          termDeposit: termDeposit === '' ? null : String(termDeposit),
+          monthlyDeposit: monthlyDeposit === '' ? null : String(monthlyDeposit),
+          dailyDeposit: dailyDeposit === '' ? null : String(dailyDeposit),
+          depositAmount: monthlyDeposit === '' ? null : String(monthlyDeposit),
           maximumOccupants: Number(maxOccupants) || 2,
           initialWaterReading: String(initialWaterMeter || 0),
           initialElectricityReading: String(initialElectricMeter || 0),
@@ -388,7 +407,10 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
           monthlyRent: monthlyRent === '' ? null : String(monthlyRent),
           termRent: termRent === '' ? null : String(termRent),
           dailyRent: dailyRent === '' ? null : String(dailyRent),
-          depositAmount: depositAmount === '' ? null : String(depositAmount),
+          termDeposit: termDeposit === '' ? null : String(termDeposit),
+          monthlyDeposit: monthlyDeposit === '' ? null : String(monthlyDeposit),
+          dailyDeposit: dailyDeposit === '' ? null : String(dailyDeposit),
+          depositAmount: monthlyDeposit === '' ? null : String(monthlyDeposit),
           maximumOccupants: Number(maxOccupants) || 2,
           initialWaterReading: String(initialWaterMeter || 0),
           initialElectricityReading: String(initialElectricMeter || 0),
@@ -860,25 +882,24 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                     </div>
 
                     {/* Rates Breakdown */}
-                    <div className="space-y-1.5">
-                      <p className="text-[10px] font-black uppercase text-indigo-700 tracking-wider">อัตราค่าเช่าพัก</p>
-                      <div className="flex justify-between items-center text-slate-700">
-                        <span className="text-gray-500 font-medium">รายเดือน:</span>
-                        <span className="font-extrabold text-slate-900">{formatBaht(room.monthlyRent)} / เดือน</span>
-                      </div>
-                      {room.termRent && (
-                        <div className="flex justify-between items-center text-slate-700">
-                          <span className="text-gray-500 font-medium">รายเทอม:</span>
-                          <span className="font-extrabold text-slate-900">{formatBaht(room.termRent)} / เทอม</span>
+                    {(() => {
+                      const gridRates = getGridRentRates(room);
+                      return (
+                        <div className="space-y-1.5">
+                          <p className="text-[10px] font-black uppercase text-indigo-700 tracking-wider">
+                            {gridRates.isOccupied ? 'อัตราค่าเช่าตามสัญญา' : 'อัตราค่าเช่าพัก'}
+                          </p>
+                          {gridRates.rates.map((rate) => (
+                            <div key={rate.cycle} className="flex justify-between items-center text-slate-700">
+                              <span className="text-gray-500 font-medium">{rate.label}:</span>
+                              <span className="font-extrabold text-slate-900">
+                                {formatBaht(rate.amount)} / {rate.cycle === 'term' ? 'เทอม' : (rate.cycle === 'daily' ? 'วัน' : 'เดือน')}
+                              </span>
+                            </div>
+                          ))}
                         </div>
-                      )}
-                      {room.dailyRent && (
-                        <div className="flex justify-between items-center text-slate-700">
-                          <span className="text-gray-500 font-medium">รายวัน:</span>
-                          <span className="font-extrabold text-slate-900">{formatBaht(room.dailyRent)} / วัน</span>
-                        </div>
-                      )}
-                    </div>
+                      );
+                    })()}
                   </div>
 
                   {/* Deposit Amount & Status */}
@@ -986,9 +1007,22 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                         )}
                       </td>
                       <td className="p-4 space-y-0.5 whitespace-nowrap">
-                        <div className="font-extrabold text-slate-900 whitespace-nowrap">{formatBaht(room.monthlyRent)} / เดือน</div>
-                        {room.termRent && <div className="text-[10px] text-gray-500 whitespace-nowrap">{formatBaht(room.termRent)} / เทอม</div>}
-                        {room.dailyRent && <div className="text-[10px] text-gray-500 whitespace-nowrap">{formatBaht(room.dailyRent)} / วัน</div>}
+                        {(() => {
+                          const { primaryRate, secondaryRates } = getListRentRates(room);
+                          const unitSuffix = primaryRate.cycle === 'term' ? 'เทอม' : (primaryRate.cycle === 'daily' ? 'วัน' : 'เดือน');
+                          return (
+                            <>
+                              <div className="font-extrabold text-slate-900 whitespace-nowrap">
+                                {formatBaht(primaryRate.amount)} / {unitSuffix}
+                              </div>
+                              {secondaryRates.map((sec) => (
+                                <div key={sec.cycle} className="text-[10px] text-gray-500 whitespace-nowrap">
+                                  {formatBaht(sec.amount)} / {sec.cycle === 'term' ? 'เทอม' : (sec.cycle === 'daily' ? 'วัน' : 'เดือน')}
+                                </div>
+                              ))}
+                            </>
+                          );
+                        })()}
                       </td>
                       <td className="p-4 whitespace-nowrap">
                         {room.status === 'vacant' || !room.currentTenantId ? (
@@ -1355,27 +1389,52 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
             </div>
           </div>
 
-          {/* Deposit Amount (เงินประกันห้องพัก) */}
+          {/* Deposit Defaults by Cycle (เงินประกันตามรอบเช่า) */}
           <div className="space-y-2 bg-slate-50/80 p-3.5 rounded-2xl border border-gray-100">
             <div className="flex items-center gap-2">
               <div className="p-1 bg-emerald-100 text-emerald-700 rounded-lg">
                 <ShieldCheck className="w-3.5 h-3.5" />
               </div>
-              <label className="block text-xs font-black text-slate-900">เงินประกันห้องพัก (บาท)</label>
+              <label className="block text-xs font-black text-slate-900">เงินประกันตามรอบเช่า (บาท)</label>
             </div>
-            <div>
-              <input
-                type="number"
-                min={0}
-                value={depositAmount}
-                onChange={(e) => setDepositAmount(e.target.value === '' ? '' : Number(e.target.value))}
-                placeholder="เช่น 9000"
-                className="w-full px-3 py-2 text-xs border border-gray-200 rounded-xl bg-white font-bold text-slate-800 focus:border-indigo-600 focus:outline-none"
-              />
-              <p className="text-[11px] text-gray-500 font-medium mt-1">
-                เงินประกันสัญญาเช่าสำหรับห้องพักนี้ (ค่าเริ่มต้นสัญญาใหม่)
-              </p>
+            <div className="grid grid-cols-3 gap-2">
+              <div>
+                <label className="block text-[10px] font-bold text-gray-500 mb-1">รายเทอม</label>
+                <input
+                  type="number"
+                  min={0}
+                  value={termDeposit}
+                  onChange={(e) => setTermDeposit(e.target.value === '' ? '' : Number(e.target.value))}
+                  placeholder="เช่น 9000"
+                  className="w-full px-3 py-2 text-xs border border-gray-200 rounded-xl bg-white font-bold text-slate-800 focus:border-indigo-600 focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold text-gray-500 mb-1">รายเดือน</label>
+                <input
+                  type="number"
+                  min={0}
+                  value={monthlyDeposit}
+                  onChange={(e) => setMonthlyDeposit(e.target.value === '' ? '' : Number(e.target.value))}
+                  placeholder="เช่น 9000"
+                  className="w-full px-3 py-2 text-xs border border-gray-200 rounded-xl bg-white font-bold text-slate-800 focus:border-indigo-600 focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold text-gray-500 mb-1">รายวัน</label>
+                <input
+                  type="number"
+                  min={0}
+                  value={dailyDeposit}
+                  onChange={(e) => setDailyDeposit(e.target.value === '' ? '' : Number(e.target.value))}
+                  placeholder="เช่น 1000"
+                  className="w-full px-3 py-2 text-xs border border-gray-200 rounded-xl bg-white font-bold text-slate-800 focus:border-indigo-600 focus:outline-none"
+                />
+              </div>
             </div>
+            <p className="text-[11px] text-gray-500 font-medium mt-1">
+              กำหนดเงินประกันเริ่มต้นแยกตามแต่ละรอบการเช่า (ใช้เป็นค่าเริ่มต้นเมื่อทำสัญญาใหม่)
+            </p>
           </div>
 
           {/* Room Status Selector - อยู่ด้านล่าง อัตราค่าประกัน */}

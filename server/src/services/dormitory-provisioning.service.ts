@@ -849,8 +849,10 @@ export class DormitoryProvisioningService {
             const rDepositStr = !depositInheritsBuildingDefault && r.depositAmount !== undefined && r.depositAmount !== null
               ? String(r.depositAmount)
               : (bDepositStr !== null ? bDepositStr : (r.depositAmount !== undefined && r.depositAmount !== null ? String(r.depositAmount) : '0'));
-
-            const rMaxOcc = r.maximumOccupants ?? bMaxOcc;
+            const rMaxOcc = (r as any).maximumOccupants ?? bMaxOcc;
+            const rTermDeposit = (r as any).termDeposit !== undefined && (r as any).termDeposit !== null ? String((r as any).termDeposit) : rDepositStr;
+            const rMonthlyDeposit = (r as any).monthlyDeposit !== undefined && (r as any).monthlyDeposit !== null ? String((r as any).monthlyDeposit) : rDepositStr;
+            const rDailyDeposit = (r as any).dailyDeposit !== undefined && (r as any).dailyDeposit !== null ? String((r as any).dailyDeposit) : rDepositStr;
 
             await tx.room.upsert({
               where: {
@@ -870,6 +872,9 @@ export class DormitoryProvisioningService {
                 dailyRent: rDailyStr,
                 termRent: rTermStr,
                 termMonths: rTermMonths,
+                termDeposit: rTermDeposit,
+                monthlyDeposit: rMonthlyDeposit,
+                dailyDeposit: rDailyDeposit,
                 depositAmount: rDepositStr,
                 depositInheritsBuildingDefault,
                 maximumOccupants: rMaxOcc,
@@ -884,6 +889,9 @@ export class DormitoryProvisioningService {
                 dailyRent: rDailyStr,
                 termRent: rTermStr,
                 termMonths: rTermMonths,
+                termDeposit: rTermDeposit,
+                monthlyDeposit: rMonthlyDeposit,
+                dailyDeposit: rDailyDeposit,
                 depositAmount: rDepositStr,
                 depositInheritsBuildingDefault,
                 maximumOccupants: rMaxOcc,

@@ -206,7 +206,9 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
 
       // 3. Daily defaults: strictly from authoritative server context (preserves null vs 0, and explicit 0 deposit)
       const dRent = eff?.dailyRent !== null && eff?.dailyRent !== undefined ? Number(eff.dailyRent) : null;
-      const dDep = eff?.depositAmount !== null && eff?.depositAmount !== undefined ? Number(eff.depositAmount) : 0;
+      const dDep = eff?.dailyDeposit !== null && eff?.dailyDeposit !== undefined
+        ? Number(eff.dailyDeposit)
+        : (eff?.depositAmount !== null && eff?.depositAmount !== undefined ? Number(eff.depositAmount) : 0);
 
       setDailyRate(dRent);
       setDailyDeposit(dDep);
@@ -336,6 +338,8 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
 
     try {
       if (activeTab === 'MONTHLY') {
+        const eff = context.effective;
+        const mDep = eff?.monthlyDeposit !== null && eff?.monthlyDeposit !== undefined ? Number(eff.monthlyDeposit) : (eff?.depositAmount !== null && eff?.depositAmount !== undefined ? Number(eff.depositAmount) : 0);
         const payload = {
           roomId: context.roomId,
           fullName: fullName.trim(),
@@ -346,6 +350,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
           durationMonths: Number(durationMonths),
           unitRentAmount: monthlyRent.toFixed(2),
           totalRentAmount: (monthlyRent * durationMonths).toFixed(2),
+          depositAmount: mDep.toFixed(2),
         };
 
         if (idCardFile) {
@@ -364,6 +369,8 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
         onSuccess(`เพิ่มผู้เช่ารายเดือน (${context.roomNumber}) เรียบร้อยแล้ว`);
         onClose();
       } else if (activeTab === 'TERM') {
+        const eff = context.effective;
+        const tDep = eff?.termDeposit !== null && eff?.termDeposit !== undefined ? Number(eff.termDeposit) : (eff?.depositAmount !== null && eff?.depositAmount !== undefined ? Number(eff.depositAmount) : 0);
         const payload = {
           roomId: context.roomId,
           fullName: fullName.trim(),
@@ -374,6 +381,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
           durationMonths: termMonths ? Number(termMonths) : undefined,
           unitRentAmount: Number(termRent).toFixed(2),
           totalRentAmount: Number(termRent).toFixed(2),
+          depositAmount: tDep.toFixed(2),
           termInstallmentCount: Number(termInstallmentCount),
         };
 

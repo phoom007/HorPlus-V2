@@ -56,6 +56,14 @@ export interface EffectiveValueResult<T> {
   sourceVersion: number;
 }
 
+export interface ActiveRentalSummary {
+  type: 'TERM' | 'MONTHLY' | 'DAILY';
+  rentAmount: number;
+  depositAmount?: number | null;
+  source: 'CONTRACT_SNAPSHOT' | 'CONTRACT' | 'PROVISIONAL_TERM' | 'DAILY_STAY';
+  termInstallmentCount?: number | null;
+}
+
 export interface EffectiveRoomDefaults {
   dormitoryId: string;
   buildingId: string;
@@ -64,6 +72,9 @@ export interface EffectiveRoomDefaults {
   monthlyRent: EffectiveValueResult<number>;
   termRent: EffectiveValueResult<number | null>;
   dailyRent: EffectiveValueResult<number | null>;
+  termDeposit: EffectiveValueResult<number>;
+  monthlyDeposit: EffectiveValueResult<number>;
+  dailyDeposit: EffectiveValueResult<number>;
   depositAmount: EffectiveValueResult<number>;
   advancePaymentAmount: EffectiveValueResult<number>;
   parkingFee: EffectiveValueResult<number>;
@@ -172,14 +183,36 @@ export class DefaultsService {
         dormPropVer,
         (v) => (v !== null && v !== undefined ? Number(v) : null)
       ),
-      depositAmount: (room as any).depositInheritsBuildingDefault === false && room.depositAmount !== null && room.depositAmount !== undefined
-        ? { value: Number(room.depositAmount), source: 'ROOM' as const, sourceVersion: (room as any).version || 1 }
-        : resolveField(
-            null,
-            building.depositAmount,
-            propertyDefaults?.defaultDeposit || 0,
-            dormPropVer
-          ),
+      termDeposit: {
+        value: (room as any).termDeposit !== null && (room as any).termDeposit !== undefined
+          ? Number((room as any).termDeposit)
+          : Number(propertyDefaults?.defaultDeposit || 0),
+        source: (room as any).termDeposit !== null && (room as any).termDeposit !== undefined ? ('ROOM' as const) : ('DORMITORY' as const),
+        sourceVersion: (room as any).termDeposit !== null && (room as any).termDeposit !== undefined ? rmVer : dormPropVer,
+      },
+      monthlyDeposit: {
+        value: (room as any).monthlyDeposit !== null && (room as any).monthlyDeposit !== undefined
+          ? Number((room as any).monthlyDeposit)
+          : Number(propertyDefaults?.defaultDeposit || 0),
+        source: (room as any).monthlyDeposit !== null && (room as any).monthlyDeposit !== undefined ? ('ROOM' as const) : ('DORMITORY' as const),
+        sourceVersion: (room as any).monthlyDeposit !== null && (room as any).monthlyDeposit !== undefined ? rmVer : dormPropVer,
+      },
+      dailyDeposit: {
+        value: (room as any).dailyDeposit !== null && (room as any).dailyDeposit !== undefined
+          ? Number((room as any).dailyDeposit)
+          : Number(propertyDefaults?.defaultDeposit || 0),
+        source: (room as any).dailyDeposit !== null && (room as any).dailyDeposit !== undefined ? ('ROOM' as const) : ('DORMITORY' as const),
+        sourceVersion: (room as any).dailyDeposit !== null && (room as any).dailyDeposit !== undefined ? rmVer : dormPropVer,
+      },
+      depositAmount: {
+        value: (room as any).monthlyDeposit !== null && (room as any).monthlyDeposit !== undefined
+          ? Number((room as any).monthlyDeposit)
+          : ((room as any).depositInheritsBuildingDefault === false && room.depositAmount !== null && room.depositAmount !== undefined
+              ? Number(room.depositAmount)
+              : Number(building?.depositAmount ?? propertyDefaults?.defaultDeposit ?? 0)),
+        source: 'ROOM' as const,
+        sourceVersion: rmVer,
+      },
       advancePaymentAmount: resolveField(
         room.advancePaymentAmount,
         building.advancePaymentAmount,
@@ -1050,15 +1083,81 @@ export class DefaultsService {
       prisma
     );
 
-    const activeContract = await prisma.contract.findFirst({
-      where: {
-        roomId: room.id,
-        dormitoryId,
-        status: { in: ['active', 'approved', 'expiring_soon', 'waiting_extension', 'checking_out'] },
-        deletedAt: null,
-      },
-      include: { snapshot: true },
-    });
+    const [activeContract, activeProvisional, activeDailyStay] = await Promise.all([
+      prisma.contract.findFirst({
+        where: {
+          roomId: room.id,
+          dormitoryId,
+          status: { in: ['active', 'approved', 'expiring_soon', 'waiting_extension', 'checking_out'] },
+          deletedAt: null,
+        },
+        include: { snapshot: true },
+      }),
+      prisma.provisionalRentalTerm.findFirst({
+        where: {
+          roomId: room.id,
+          dormitoryId,
+          status: 'ACTIVE',
+          deletedAt: null,
+        },
+      }),
+      prisma.dailyStay.findFirst({
+        where: {
+          roomId: room.id,
+          dormitoryId,
+          status: { in: ['ACTIVE', 'RESERVED'] },
+          deletedAt: null,
+        },
+      }),
+    ]);
+
+    let activeCount = 0;
+    let activeRentalSummary: ActiveRentalSummary | null = null;
+
+    if (activeContract) {
+      activeCount++;
+      const billingType = activeContract.snapshot?.rentBillingType || activeContract.rentBillingType || 'monthly';
+      const type: 'TERM' | 'MONTHLY' | 'DAILY' = billingType === 'term' ? 'TERM' : (billingType === 'daily' ? 'DAILY' : 'MONTHLY');
+      const rentAmount = Number(activeContract.snapshot?.resolvedRent ?? activeContract.rentAmount ?? 0);
+      const depositAmount = activeContract.snapshot?.resolvedDeposit !== undefined && activeContract.snapshot?.resolvedDeposit !== null
+        ? Number(activeContract.snapshot.resolvedDeposit)
+        : (activeContract.depositAmount ? Number(activeContract.depositAmount) : null);
+      activeRentalSummary = {
+        type,
+        rentAmount,
+        depositAmount,
+        source: activeContract.snapshot ? 'CONTRACT_SNAPSHOT' : 'CONTRACT',
+      };
+    }
+
+    if (activeProvisional) {
+      activeCount++;
+      const type: 'TERM' | 'MONTHLY' = activeProvisional.rentalType === 'TERM' ? 'TERM' : 'MONTHLY';
+      const rentAmount = Number(type === 'TERM' ? (activeProvisional.totalRentAmount || activeProvisional.unitRentAmount) : activeProvisional.unitRentAmount);
+      const depositAmount = activeProvisional.depositAmount ? Number(activeProvisional.depositAmount) : null;
+      activeRentalSummary = {
+        type,
+        rentAmount,
+        depositAmount,
+        source: 'PROVISIONAL_TERM',
+        termInstallmentCount: activeProvisional.termInstallmentCount || null,
+      };
+    }
+
+    if (activeDailyStay) {
+      activeCount++;
+      activeRentalSummary = {
+        type: 'DAILY',
+        rentAmount: Number(activeDailyStay.dailyRateAmount),
+        depositAmount: activeDailyStay.depositAmount ? Number(activeDailyStay.depositAmount) : null,
+        source: 'DAILY_STAY',
+      };
+    }
+
+    if (activeCount > 1) {
+      console.warn(`[SECURITY_DATA_CONFLICT] Multiple active agreement sources found for room ${room.id} in dorm ${dormitoryId}`);
+      activeRentalSummary = null;
+    }
 
     const snapshotLocked = !!(activeContract && activeContract.snapshot);
     const activeContractSnapshotId = activeContract?.snapshot?.id || null;
@@ -1067,6 +1166,9 @@ export class DefaultsService {
       monthlyRent: room.monthlyRent !== null && room.monthlyRent !== undefined ? String(room.monthlyRent) : null,
       termRent: room.termRent !== null && room.termRent !== undefined ? String(room.termRent) : null,
       dailyRent: room.dailyRent !== null && room.dailyRent !== undefined ? String(room.dailyRent) : null,
+      termDeposit: room.termDeposit !== null && room.termDeposit !== undefined ? String(room.termDeposit) : null,
+      monthlyDeposit: room.monthlyDeposit !== null && room.monthlyDeposit !== undefined ? String(room.monthlyDeposit) : null,
+      dailyDeposit: room.dailyDeposit !== null && room.dailyDeposit !== undefined ? String(room.dailyDeposit) : null,
       depositAmount: room.depositAmount !== null && room.depositAmount !== undefined ? String(room.depositAmount) : null,
       advancePaymentAmount: room.advancePaymentAmount !== null && room.advancePaymentAmount !== undefined ? String(room.advancePaymentAmount) : null,
       parkingFee: room.parkingFee !== null && room.parkingFee !== undefined ? String(room.parkingFee) : null,
@@ -1085,6 +1187,9 @@ export class DefaultsService {
       monthlyRent: effective.monthlyRent.value,
       termRent: effective.termRent.value,
       dailyRent: effective.dailyRent.value,
+      termDeposit: effective.termDeposit.value,
+      monthlyDeposit: effective.monthlyDeposit.value,
+      dailyDeposit: effective.dailyDeposit.value,
       depositAmount: effective.depositAmount.value,
       advancePaymentAmount: effective.advancePaymentAmount.value,
       parkingFee: effective.parkingFee.value,
@@ -1103,6 +1208,9 @@ export class DefaultsService {
       monthlyRent: effective.monthlyRent.source,
       termRent: effective.termRent.source,
       dailyRent: effective.dailyRent.source,
+      termDeposit: effective.termDeposit.source,
+      monthlyDeposit: effective.monthlyDeposit.source,
+      dailyDeposit: effective.dailyDeposit.source,
       depositAmount: effective.depositAmount.source,
       advancePaymentAmount: effective.advancePaymentAmount.source,
       parkingFee: effective.parkingFee.source,
@@ -1169,6 +1277,7 @@ export class DefaultsService {
       notes: room.notes,
       currentTenantId: room.currentTenantId || activeContract?.tenantId || null,
       currentContractId: room.currentContractId || activeContract?.id || null,
+      activeRentalSummary,
       createdAt: room.createdAt,
     };
   }
@@ -1287,7 +1396,302 @@ export class DefaultsService {
       createdAt: building.createdAt,
     };
   }
+
+  /**
+   * Batch builds server-authoritative Room responses to prevent N+1 query overhead.
+   * Product Owner Amendment 5: Batch-loads Contract, Snapshot, Provisional, and Daily records.
+   */
+  public async buildAuthoritativeRoomsResponseBatch(
+    dormitoryId: string,
+    rooms: any[],
+    txClient?: any
+  ): Promise<any[]> {
+    if (!rooms || rooms.length === 0) return [];
+
+    const prisma = txClient || getPrismaClient();
+    const roomIds = rooms.map((r) => r.id);
+    const buildingIds = Array.from(new Set(rooms.map((r) => r.buildingId).filter(Boolean)));
+
+    const [billingSettings, propertyDefaults, buildings, activeContracts, activeProvisionals, activeDailyStays] = await Promise.all([
+      prisma.dormitoryBillingSettings.findUnique({ where: { dormitoryId } }),
+      prisma.dormitoryPropertyDefaults.findUnique({ where: { dormitoryId } }),
+      prisma.building.findMany({ where: { id: { in: buildingIds }, dormitoryId, deletedAt: null } }),
+      prisma.contract.findMany({
+        where: {
+          dormitoryId,
+          roomId: { in: roomIds },
+          status: { in: ['active', 'approved', 'expiring_soon', 'waiting_extension', 'checking_out'] },
+          deletedAt: null,
+        },
+        include: { snapshot: true },
+      }),
+      prisma.provisionalRentalTerm.findMany({
+        where: {
+          dormitoryId,
+          roomId: { in: roomIds },
+          status: 'ACTIVE',
+          deletedAt: null,
+        },
+      }),
+      prisma.dailyStay.findMany({
+        where: {
+          dormitoryId,
+          roomId: { in: roomIds },
+          status: { in: ['ACTIVE', 'RESERVED'] },
+          deletedAt: null,
+        },
+      }),
+    ]);
+
+    const buildingMap = new Map(buildings.map((b: any) => [b.id, b]));
+    const dormBillVer = billingSettings?.version || 1;
+    const dormPropVer = propertyDefaults?.version || 1;
+
+    const activeRentalMap = new Map<string, ActiveRentalSummary | null>();
+    const activeContractMap = new Map<string, any>();
+
+    for (const roomId of roomIds) {
+      const roomContracts = activeContracts.filter((c: any) => c.roomId === roomId);
+      const roomProvisionals = activeProvisionals.filter((p: any) => p.roomId === roomId);
+      const roomDailyStays = activeDailyStays.filter((d: any) => d.roomId === roomId);
+
+      let activeCount = 0;
+      let summary: ActiveRentalSummary | null = null;
+
+      if (roomContracts.length > 0) {
+        activeCount++;
+        const contract = roomContracts[0];
+        activeContractMap.set(roomId, contract);
+        const billingType = contract.snapshot?.rentBillingType || contract.rentBillingType || 'monthly';
+        const type: 'TERM' | 'MONTHLY' | 'DAILY' = billingType === 'term' ? 'TERM' : (billingType === 'daily' ? 'DAILY' : 'MONTHLY');
+        const rentAmount = Number(contract.snapshot?.resolvedRent ?? contract.rentAmount ?? 0);
+        const depositAmount = contract.snapshot?.resolvedDeposit !== undefined && contract.snapshot?.resolvedDeposit !== null
+          ? Number(contract.snapshot.resolvedDeposit)
+          : (contract.depositAmount ? Number(contract.depositAmount) : null);
+        summary = {
+          type,
+          rentAmount,
+          depositAmount,
+          source: contract.snapshot ? 'CONTRACT_SNAPSHOT' : 'CONTRACT',
+        };
+      }
+
+      if (roomProvisionals.length > 0) {
+        activeCount++;
+        const prov = roomProvisionals[0];
+        const type: 'TERM' | 'MONTHLY' = prov.rentalType === 'TERM' ? 'TERM' : 'MONTHLY';
+        const rentAmount = Number(type === 'TERM' ? (prov.totalRentAmount || prov.unitRentAmount) : prov.unitRentAmount);
+        const depositAmount = prov.depositAmount ? Number(prov.depositAmount) : null;
+        summary = {
+          type,
+          rentAmount,
+          depositAmount,
+          source: 'PROVISIONAL_TERM',
+          termInstallmentCount: prov.termInstallmentCount || null,
+        };
+      }
+
+      if (roomDailyStays.length > 0) {
+        activeCount++;
+        const daily = roomDailyStays[0];
+        summary = {
+          type: 'DAILY',
+          rentAmount: Number(daily.dailyRateAmount),
+          depositAmount: daily.depositAmount ? Number(daily.depositAmount) : null,
+          source: 'DAILY_STAY',
+        };
+      }
+
+      if (activeCount > 1) {
+        console.warn(`[SECURITY_DATA_CONFLICT] Multiple active agreement sources found for room ${roomId} in dorm ${dormitoryId}`);
+        activeRentalMap.set(roomId, null);
+      } else {
+        activeRentalMap.set(roomId, summary);
+      }
+    }
+
+    return rooms.map((room) => {
+      const building: any = buildingMap.get(room.buildingId);
+      const bldVer = building?.version || 1;
+      const rmVer = room.version || 1;
+
+      const resolveField = <T>(
+        roomVal: any,
+        buildingVal: any,
+        dormVal: T,
+        dormVer: number,
+        parseFn: (v: any) => T = (v) => Number(v) as any
+      ): EffectiveValueResult<T> => {
+        if (roomVal !== null && roomVal !== undefined) {
+          return { value: parseFn(roomVal), source: 'ROOM', sourceVersion: rmVer };
+        }
+        if (buildingVal !== null && buildingVal !== undefined) {
+          return { value: parseFn(buildingVal), source: 'BUILDING', sourceVersion: bldVer };
+        }
+        return { value: parseFn(dormVal), source: 'DORMITORY', sourceVersion: dormVer };
+      };
+
+      const monthlyRent = resolveField(room.monthlyRent, building?.monthlyRent, propertyDefaults?.defaultMonthlyRent || 0, dormPropVer);
+      const termRent = resolveField(room.termRent, building?.termRent, propertyDefaults?.defaultTermRent || null, dormPropVer, (v) => (v !== null && v !== undefined ? Number(v) : null));
+      const dailyRent = resolveField(room.dailyRent, building?.dailyRent, propertyDefaults?.defaultDailyRent || null, dormPropVer, (v) => (v !== null && v !== undefined ? Number(v) : null));
+
+      const termDeposit = {
+        value: room.termDeposit !== null && room.termDeposit !== undefined
+          ? Number(room.termDeposit)
+          : Number(propertyDefaults?.defaultDeposit || 0),
+        source: room.termDeposit !== null && room.termDeposit !== undefined ? ('ROOM' as const) : ('DORMITORY' as const),
+        sourceVersion: room.termDeposit !== null && room.termDeposit !== undefined ? rmVer : dormPropVer,
+      };
+
+      const monthlyDeposit = {
+        value: room.monthlyDeposit !== null && room.monthlyDeposit !== undefined
+          ? Number(room.monthlyDeposit)
+          : Number(propertyDefaults?.defaultDeposit || 0),
+        source: room.monthlyDeposit !== null && room.monthlyDeposit !== undefined ? ('ROOM' as const) : ('DORMITORY' as const),
+        sourceVersion: room.monthlyDeposit !== null && room.monthlyDeposit !== undefined ? rmVer : dormPropVer,
+      };
+
+      const dailyDeposit = {
+        value: room.dailyDeposit !== null && room.dailyDeposit !== undefined
+          ? Number(room.dailyDeposit)
+          : Number(propertyDefaults?.defaultDeposit || 0),
+        source: room.dailyDeposit !== null && room.dailyDeposit !== undefined ? ('ROOM' as const) : ('DORMITORY' as const),
+        sourceVersion: room.dailyDeposit !== null && room.dailyDeposit !== undefined ? rmVer : dormPropVer,
+      };
+
+      const depositAmount = {
+        value: room.monthlyDeposit !== null && room.monthlyDeposit !== undefined
+          ? Number(room.monthlyDeposit)
+          : (room.depositInheritsBuildingDefault === false && room.depositAmount !== null && room.depositAmount !== undefined
+              ? Number(room.depositAmount)
+              : Number(building?.depositAmount ?? propertyDefaults?.defaultDeposit ?? 0)),
+        source: 'ROOM' as const,
+        sourceVersion: rmVer,
+      };
+
+      const advancePaymentAmount = resolveField(room.advancePaymentAmount, building?.advancePaymentAmount, propertyDefaults?.defaultAdvancePayment || 0, dormPropVer);
+      const parkingFee = resolveField(room.parkingFee, building?.parkingFee, propertyDefaults?.defaultParkingFee || 0, dormPropVer);
+      const waterRate = resolveField(room.waterRate, building?.waterRate, billingSettings?.waterRate || 0, dormBillVer);
+      const electricityRate = resolveField(room.electricityRate, building?.electricityRate, billingSettings?.electricityRate || 0, dormBillVer);
+      const commonFee = resolveField(room.commonFee, building?.commonFee, billingSettings?.commonFee || 0, dormBillVer);
+      const internetFee = resolveField(room.internetFee, building?.internetFee, billingSettings?.internetFee || 0, dormBillVer);
+      const waterBillingType = resolveField(room.waterBillingType, building?.waterBillingType, billingSettings?.waterBillingType || 'per_person', dormBillVer, String);
+      const electricityBillingType = resolveField(room.electricityBillingType, building?.electricityBillingType, billingSettings?.electricityBillingType || 'per_unit', dormBillVer, String);
+      const rentBillingType = resolveField(room.rentBillingType, building?.rentBillingType, billingSettings?.rentBillingType || 'monthly', dormBillVer, String);
+      const maximumOccupants = resolveField(room.maximumOccupants, building?.maximumOccupants, propertyDefaults?.defaultMaxOccupants || 2, dormPropVer);
+      const roomType = resolveField(room.roomType, building?.roomType, propertyDefaults?.defaultRoomType || 'standard', dormPropVer, String);
+
+      const rawOverrides = {
+        monthlyRent: room.monthlyRent !== null && room.monthlyRent !== undefined ? String(room.monthlyRent) : null,
+        termRent: room.termRent !== null && room.termRent !== undefined ? String(room.termRent) : null,
+        dailyRent: room.dailyRent !== null && room.dailyRent !== undefined ? String(room.dailyRent) : null,
+        termDeposit: room.termDeposit !== null && room.termDeposit !== undefined ? String(room.termDeposit) : null,
+        monthlyDeposit: room.monthlyDeposit !== null && room.monthlyDeposit !== undefined ? String(room.monthlyDeposit) : null,
+        dailyDeposit: room.dailyDeposit !== null && room.dailyDeposit !== undefined ? String(room.dailyDeposit) : null,
+        depositAmount: room.depositAmount !== null && room.depositAmount !== undefined ? String(room.depositAmount) : null,
+        advancePaymentAmount: room.advancePaymentAmount !== null && room.advancePaymentAmount !== undefined ? String(room.advancePaymentAmount) : null,
+        parkingFee: room.parkingFee !== null && room.parkingFee !== undefined ? String(room.parkingFee) : null,
+        waterRate: room.waterRate !== null && room.waterRate !== undefined ? String(room.waterRate) : null,
+        electricityRate: room.electricityRate !== null && room.electricityRate !== undefined ? String(room.electricityRate) : null,
+        commonFee: room.commonFee !== null && room.commonFee !== undefined ? String(room.commonFee) : null,
+        internetFee: room.internetFee !== null && room.internetFee !== undefined ? String(room.internetFee) : null,
+        waterBillingType: room.waterBillingType || null,
+        electricityBillingType: room.electricityBillingType || null,
+        rentBillingType: room.rentBillingType || null,
+        maximumOccupants: room.maximumOccupants || null,
+        roomType: room.roomType || null,
+      };
+
+      const currentEffectiveValues = {
+        monthlyRent: monthlyRent.value,
+        termRent: termRent.value,
+        dailyRent: dailyRent.value,
+        termDeposit: termDeposit.value,
+        monthlyDeposit: monthlyDeposit.value,
+        dailyDeposit: dailyDeposit.value,
+        depositAmount: depositAmount.value,
+        advancePaymentAmount: advancePaymentAmount.value,
+        parkingFee: parkingFee.value,
+        waterRate: waterRate.value,
+        electricityRate: electricityRate.value,
+        commonFee: commonFee.value,
+        internetFee: internetFee.value,
+        waterBillingType: waterBillingType.value,
+        electricityBillingType: electricityBillingType.value,
+        rentBillingType: rentBillingType.value,
+        maximumOccupants: maximumOccupants.value,
+        roomType: roomType.value,
+      };
+
+      const currentFieldSources = {
+        monthlyRent: monthlyRent.source,
+        termRent: termRent.source,
+        dailyRent: dailyRent.source,
+        termDeposit: termDeposit.source,
+        monthlyDeposit: monthlyDeposit.source,
+        dailyDeposit: dailyDeposit.source,
+        depositAmount: depositAmount.source,
+        advancePaymentAmount: advancePaymentAmount.source,
+        parkingFee: parkingFee.source,
+        waterRate: waterRate.source,
+        electricityRate: electricityRate.source,
+        commonFee: commonFee.source,
+        internetFee: internetFee.source,
+        waterBillingType: waterBillingType.source,
+        electricityBillingType: electricityBillingType.source,
+        rentBillingType: rentBillingType.source,
+        maximumOccupants: maximumOccupants.source,
+        roomType: roomType.source,
+      };
+
+      const activeContract = activeContractMap.get(room.id);
+      const activeRentalSummary = activeRentalMap.get(room.id) || null;
+      const snapshotLocked = !!(activeContract && activeContract.snapshot);
+      const activeContractSnapshotId = activeContract?.snapshot?.id || null;
+
+      const sourceVersions = {
+        dormitoryBillingVersion: dormBillVer,
+        dormitoryPropertyVersion: dormPropVer,
+        buildingVersion: bldVer,
+        roomVersion: rmVer,
+      };
+
+      return {
+        id: room.id,
+        dormitoryId: room.dormitoryId,
+        buildingId: room.buildingId,
+        buildingName: building ? building.name : (room.buildingName || 'Building'),
+        roomNumber: room.roomNumber,
+        normalizedRoomNumber: room.normalizedRoomNumber,
+        status: room.status,
+        version: room.version,
+        rawOverrides,
+        currentEffectiveValues,
+        effectiveValues: currentEffectiveValues,
+        currentFieldSources,
+        fieldSources: currentFieldSources,
+        currentSourceVersions: sourceVersions,
+        sourceVersions,
+        snapshotLocked,
+        activeContractSnapshotId,
+        contractSnapshot: null,
+        updatedAt: room.updatedAt,
+        floor: room.floor,
+        rentCycle: room.rentCycle,
+        waterMeterNumber: room.waterMeterNumber,
+        electricityMeterNumber: room.electricityMeterNumber,
+        initialWaterReading: room.initialWaterReading,
+        initialElectricityReading: room.initialElectricityReading,
+        amenities: room.amenities,
+        images: room.images,
+        notes: room.notes,
+        currentTenantId: room.currentTenantId || activeContract?.tenantId || null,
+        currentContractId: room.currentContractId || activeContract?.id || null,
+        activeRentalSummary,
+        createdAt: room.createdAt,
+      };
+    });
+  }
 }
 
 export const defaultsService = new DefaultsService();
-

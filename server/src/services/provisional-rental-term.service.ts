@@ -26,6 +26,7 @@ export interface CreateProvisionalRentalTermDto {
   durationMonths?: number;
   unitRentAmount: string | number;
   totalRentAmount?: string | number;
+  depositAmount?: string | number | null;
   termInstallmentCount?: number;
 }
 
@@ -286,6 +287,7 @@ export class ProvisionalRentalTermService {
           durationMonths,
           unitRentAmount: unitRent,
           totalRentAmount: totalRent,
+          depositAmount: data.depositAmount ? new Prisma.Decimal(data.depositAmount) : null,
           termMonthsSnapshot,
           termInstallmentCount,
           status: termStatus,

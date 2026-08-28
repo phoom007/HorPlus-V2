@@ -182,6 +182,9 @@ export interface CreateRoomPayload {
   monthlyRent?: string | number | null;
   termRent?: string | number | null;
   dailyRent?: string | number | null;
+  termDeposit?: string | number | null;
+  monthlyDeposit?: string | number | null;
+  dailyDeposit?: string | number | null;
   depositAmount?: string | number | null;
   depositInheritsBuildingDefault?: boolean;
   parkingFee?: string | number | null;
@@ -205,6 +208,9 @@ export interface UpdateRoomChanges {
   monthlyRent?: string | number | null;
   termRent?: string | number | null;
   dailyRent?: string | number | null;
+  termDeposit?: string | number | null;
+  monthlyDeposit?: string | number | null;
+  dailyDeposit?: string | number | null;
   depositAmount?: string | number | null;
   depositInheritsBuildingDefault?: boolean;
   parkingFee?: string | number | null;

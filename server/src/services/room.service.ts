@@ -183,7 +183,15 @@ export class RoomService {
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${dormitoryId}))`;
       }
 
-      await subscriptionEntitlementService.assertRoomCreationAllowed(dormitoryId, new Date(), tx);
+      // Seed cycle deposits from DormitoryPropertyDefaults.defaultDeposit if omitted
+      const dormPropertyDefaults = await tx.dormitoryPropertyDefaults.findUnique({
+        where: { dormitoryId },
+      });
+      const defaultDepositStr = dormPropertyDefaults?.defaultDeposit ? String(dormPropertyDefaults.defaultDeposit) : '0.00';
+
+      const termDeposit = data.termDeposit !== undefined && data.termDeposit !== null ? data.termDeposit : (data.depositAmount || defaultDepositStr);
+      const monthlyDeposit = data.monthlyDeposit !== undefined && data.monthlyDeposit !== null ? data.monthlyDeposit : (data.depositAmount || defaultDepositStr);
+      const dailyDeposit = data.dailyDeposit !== undefined && data.dailyDeposit !== null ? data.dailyDeposit : (data.depositAmount || defaultDepositStr);
 
       const created = await tx.room.create({
         data: {
@@ -198,7 +206,10 @@ export class RoomService {
           monthlyRent: data.monthlyRent || null,
           termRent: data.termRent || null,
           dailyRent: data.dailyRent || null,
-          depositAmount: data.depositAmount || null,
+          termDeposit,
+          monthlyDeposit,
+          dailyDeposit,
+          depositAmount: data.depositAmount || monthlyDeposit,
           parkingFee: data.parkingFee || null,
           maximumOccupants: data.maximumOccupants || 2,
           waterMeterNumber: data.waterMeterNumber || null,
