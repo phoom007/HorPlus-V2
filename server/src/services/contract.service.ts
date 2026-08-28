@@ -64,16 +64,33 @@ export class ContractService {
       contractDeposit = String(data.depositAmount);
     } else {
       const r = room as any;
-      if (rentBillingType === 'term' && r.termDeposit !== null && r.termDeposit !== undefined) {
-        contractDeposit = String(r.termDeposit);
-      } else if (rentBillingType === 'daily' && r.dailyDeposit !== null && r.dailyDeposit !== undefined) {
-        contractDeposit = String(r.dailyDeposit);
-      } else if (r.monthlyDeposit !== null && r.monthlyDeposit !== undefined) {
-        contractDeposit = String(r.monthlyDeposit);
-      } else if (r.depositAmount !== null && r.depositAmount !== undefined) {
-        contractDeposit = String(r.depositAmount);
+      if (rentBillingType === 'term') {
+        if (r.termDeposit !== null && r.termDeposit !== undefined) {
+          contractDeposit = String(r.termDeposit);
+        } else {
+          const err = new Error('ไม่พบข้อมูลเงินประกันรายเทอมสำหรับห้องพักนี้');
+          (err as any).code = 'ROOM_DEPOSIT_NOT_CONFIGURED';
+          (err as any).statusCode = 409;
+          throw err;
+        }
+      } else if (rentBillingType === 'daily') {
+        if (r.dailyDeposit !== null && r.dailyDeposit !== undefined) {
+          contractDeposit = String(r.dailyDeposit);
+        } else {
+          const err = new Error('ไม่พบข้อมูลเงินประกันรายวันสำหรับห้องพักนี้');
+          (err as any).code = 'ROOM_DEPOSIT_NOT_CONFIGURED';
+          (err as any).statusCode = 409;
+          throw err;
+        }
       } else {
-        contractDeposit = '0.00';
+        if (r.monthlyDeposit !== null && r.monthlyDeposit !== undefined) {
+          contractDeposit = String(r.monthlyDeposit);
+        } else {
+          const err = new Error('ไม่พบข้อมูลเงินประกันรายเดือนสำหรับห้องพักนี้');
+          (err as any).code = 'ROOM_DEPOSIT_NOT_CONFIGURED';
+          (err as any).statusCode = 409;
+          throw err;
+        }
       }
     }
 
@@ -193,6 +210,8 @@ export class ContractService {
 
     const contract = await this.contractRepo.create(dormitoryId, {
       ...data,
+      rentBillingType,
+      depositAmount: contractDeposit,
       startDate,
       endDate,
       createdByUserId: actorUserId,

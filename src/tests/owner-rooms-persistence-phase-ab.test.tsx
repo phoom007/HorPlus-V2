@@ -13,6 +13,12 @@ describe('Owner Rooms — Phase AB.1 Correctness & Persistence Suite', () => {
   beforeEach(() => {
     cleanup();
     vi.restoreAllMocks();
+    vi.spyOn(HttpClientModule, 'httpRequest').mockImplementation(async (method, url) => {
+      if (typeof url === 'string' && url.includes('/properties/dormitory/defaults')) {
+        return { data: { property: { defaultDeposit: 4500, defaultMonthlyRent: 4500 } } } as any;
+      }
+      return { data: {} } as any;
+    });
   });
 
   const mockBuildings: Building[] = [

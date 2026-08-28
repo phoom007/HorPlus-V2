@@ -128,48 +128,50 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
   // Create / Edit modal state
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingRoom, setEditingRoom] = useState<Room | null>(null);
-  const [dormDefaults, setDormDefaults] = useState<{ defaultDeposit?: number; defaultMonthlyRent?: number } | null>(null);
+  const [dormDefaults, setDormDefaults] = useState<{ defaultDeposit: number; defaultMonthlyRent: number } | null>(null);
+  const [isDefaultsLoading, setIsDefaultsLoading] = useState(false);
   const [quickAddModalOpen, setQuickAddModalOpen] = useState(false);
   const [selectedQuickAddContext, setSelectedQuickAddContext] = useState<QuickAddRoomContext | null>(null);
   const [quickAddLoadingRoomId, setQuickAddLoadingRoomId] = useState<string | null>(null);
 
+  const loadDormDefaults = async (): Promise<{ defaultDeposit: number; defaultMonthlyRent: number } | null> => {
+    try {
+      setIsDefaultsLoading(true);
+      const targetDormId = (buildings[0] as any)?.dormitoryId || (typeof window !== 'undefined' ? (localStorage.getItem('selected_dormitory_id') || localStorage.getItem('horplus_current_dormitory_id')) : '') || '';
+      const headers: Record<string, string> = {};
+      if (targetDormId) {
+        headers['x-dormitory-id'] = targetDormId;
+      }
+      const res = await httpRequest<{ data: { property?: { defaultDeposit?: number | string | null; defaultMonthlyRent?: number | string | null } } }>(
+        'GET',
+        '/api/v1/properties/dormitory/defaults',
+        undefined,
+        Object.keys(headers).length > 0 ? { headers } : undefined
+      );
+      if (res.data?.property) {
+        const prop = res.data.property;
+        const defaultDeposit = prop.defaultDeposit !== null && prop.defaultDeposit !== undefined
+          ? Number(prop.defaultDeposit)
+          : 0;
+        const defaultMonthlyRent = prop.defaultMonthlyRent !== null && prop.defaultMonthlyRent !== undefined
+          ? Number(prop.defaultMonthlyRent)
+          : 0;
+        const loaded = { defaultDeposit, defaultMonthlyRent };
+        setDormDefaults(loaded);
+        return loaded;
+      }
+      return null;
+    } catch {
+      return null;
+    } finally {
+      setIsDefaultsLoading(false);
+    }
+  };
+
   useEffect(() => {
-    const fetchDormDefaults = async () => {
-      try {
-        const dId = buildings[0]?.dormitoryId || (typeof window !== 'undefined' ? (localStorage.getItem('selected_dormitory_id') || localStorage.getItem('horplus_current_dormitory_id')) : '') || '';
-        if (!dId) return;
-        const res = await httpRequest<{ data: { property?: { defaultDeposit?: number; defaultMonthlyRent?: number } } }>(
-          'GET',
-          '/api/v1/properties/dormitory/defaults',
-          undefined,
-          { headers: { 'x-dormitory-id': dId } }
-        );
-        if (res.data?.property) {
-          setDormDefaults({
-            defaultDeposit: res.data.property.defaultDeposit ? Number(res.data.property.defaultDeposit) : undefined,
-            defaultMonthlyRent: res.data.property.defaultMonthlyRent ? Number(res.data.property.defaultMonthlyRent) : undefined,
-          });
-        }
-      } catch {}
-    };
-    fetchDormDefaults();
+    loadDormDefaults();
   }, [buildings]);
   const [deleteConfirmData, setDeleteConfirmData] = useState<{ roomId: string; roomNum: string; message: string } | null>(null);
-
-
-  // Quick Add Tenant Modal state
-  const [isAddTenantModalOpen, setIsAddTenantModalOpen] = useState(false);
-  const [selectedRoomForTenant, setSelectedRoomForTenant] = useState<Room | null>(null);
-  const [newTenantName, setNewTenantName] = useState('');
-  const [newTenantPhone, setNewTenantPhone] = useState('');
-  const [newTenantIdCard, setNewTenantIdCard] = useState('');
-  const [newTenantStartDate, setNewTenantStartDate] = useState(new Date().toISOString().split('T')[0]);
-  const [newTenantDuration, setNewTenantDuration] = useState(6);
-  const [newTenantRent, setNewTenantRent] = useState(4500);
-  const [newTenantDeposit, setNewTenantDeposit] = useState(9000);
-  const [newTenantDepositStatus, setNewTenantDepositStatus] = useState<'paid' | 'unpaid'>('paid');
-  const [newTenantNotes, setNewTenantNotes] = useState('');
-  const [addTenantError, setAddTenantError] = useState<string | null>(null);
 
   // Form Fields
   const [roomNumber, setRoomNumber] = useState('');
@@ -215,7 +217,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
   }, [toastMessage]);
 
   // Handle open modal
-  const handleOpenModal = (room: Room | null = null) => {
+  const handleOpenModal = async (room: Room | null = null) => {
     setErrorText(null);
     if (room) {
       setEditingRoom(room);
@@ -226,16 +228,26 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
       setTermRent(room.termRent || (room.monthlyRent ? room.monthlyRent * 4 : 18000));
       setDailyRent(room.dailyRent || 500);
       setRentCycle(room.rentCycle || 'monthly');
-      setTermDeposit(room.termDeposit ?? room.depositAmount ?? 9000);
-      setMonthlyDeposit(room.monthlyDeposit ?? room.depositAmount ?? 9000);
-      setDailyDeposit(room.dailyDeposit ?? (room.dailyRent ? Number(room.dailyRent) * 2 : 1000));
+      setTermDeposit(room.termDeposit ?? room.depositAmount ?? 0);
+      setMonthlyDeposit(room.monthlyDeposit ?? room.depositAmount ?? 0);
+      setDailyDeposit(room.dailyDeposit ?? (room.dailyRent ? Number(room.dailyRent) * 2 : 0));
       setMaxOccupants(room.maxOccupants || 2);
       setRoomStatus(room.status || 'vacant');
       setInitialWaterMeter(room.initialWaterMeter || 100);
       setInitialElectricMeter(room.initialElectricMeter || 1200);
+      setIsModalOpen(true);
     } else {
-      const initialDeposit = dormDefaults?.defaultDeposit !== undefined ? Number(dormDefaults.defaultDeposit) : 4500;
-      const initialRent = dormDefaults?.defaultMonthlyRent !== undefined ? Number(dormDefaults.defaultMonthlyRent) : 4500;
+      let currentDefaults = dormDefaults;
+      if (!currentDefaults) {
+        currentDefaults = await loadDormDefaults();
+      }
+      if (!currentDefaults) {
+        setToastMessage('ไม่สามารถโหลดข้อมูลการตั้งค่าเริ่มต้นของหอพักได้ กรุณาลองใหม่');
+        return;
+      }
+
+      const initialDeposit = currentDefaults.defaultDeposit;
+      const initialRent = currentDefaults.defaultMonthlyRent;
       setEditingRoom(null);
       setRoomNumber('');
       setBuildingId(buildings[0]?.id || '');
@@ -251,8 +263,8 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
       setRoomStatus('vacant');
       setInitialWaterMeter(100);
       setInitialElectricMeter(1200);
+      setIsModalOpen(true);
     }
-    setIsModalOpen(true);
   };
 
   useEffect(() => {
@@ -647,106 +659,6 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
         setQuickAddLoadingRoomId(null);
       }
     }
-  };
-
-  const handleSaveNewTenant = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!selectedRoomForTenant) return;
-    setAddTenantError(null);
-
-    if (!newTenantName.trim()) {
-      setAddTenantError('กรุณากรอกชื่อ-นามสกุลของผู้เช่า');
-      return;
-    }
-
-    if (!newTenantPhone.trim()) {
-      setAddTenantError('กรุณากรอกเบอร์โทรศัพท์ของผู้เช่า');
-      return;
-    }
-
-    const timestamp = Date.now();
-    const newTenantId = `tenant-${timestamp}`;
-    const newContractId = `contract-${timestamp}`;
-
-    // Calculate contract end date
-    const start = new Date(newTenantStartDate);
-    const end = new Date(start);
-    end.setMonth(end.getMonth() + Number(newTenantDuration));
-    const calculatedEndDate = end.toISOString().split('T')[0];
-
-    const newTenant: Tenant = {
-      id: newTenantId,
-      name: newTenantName.trim(),
-      phone: newTenantPhone.trim(),
-      email: '',
-      citizenId: newTenantIdCard.trim() || '',
-      coOccupants: [],
-      emergencyContact: {
-        name: '',
-        relationship: '',
-        phone: ''
-      },
-      vehicle: {
-        type: 'none',
-        licensePlate: ''
-      },
-      pet: {
-        hasPet: false
-      },
-      rentalHistory: [selectedRoomForTenant.id],
-      status: 'active',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
-
-    const newContract: Contract = {
-      id: newContractId,
-      contractNumber: `CTR-${Date.now().toString().slice(-6)}`,
-      tenantId: newTenantId,
-      roomId: selectedRoomForTenant.id,
-      startDate: newTenantStartDate,
-      endDate: calculatedEndDate,
-      durationMonths: Number(newTenantDuration),
-      rentAmount: Number(newTenantRent),
-      depositAmount: Number(newTenantDeposit),
-      depositStatus: newTenantDepositStatus,
-      depositType: 'refundable',
-      status: 'active',
-      terms: 'สัญญาเช่าห้องพักมาตรฐาน',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
-
-    // 1. Update room status to occupied
-    const updatedRooms = rooms.map(r => r.id === selectedRoomForTenant.id ? {
-      ...r,
-      status: 'occupied' as RoomStatus,
-      currentTenantId: newTenantId,
-      depositStatus: newTenantDepositStatus,
-      updatedAt: new Date().toISOString()
-    } : r);
-    onSaveRooms(updatedRooms, { kind: 'refresh' });
-
-    // 2. Save tenant
-    if (onSaveTenants) {
-      onSaveTenants([...tenants, newTenant]);
-    }
-
-    // 3. Save contract
-    if (onSaveContracts) {
-      onSaveContracts([...contracts, newContract]);
-    }
-
-    onAddLog(
-      'เพิ่มผู้เช่าใหม่',
-      `เพิ่มผู้เช่า ${newTenant.name} เข้าห้องพัก ${selectedRoomForTenant.roomNumber} (สัญญา ${newTenantDuration} เดือน)`,
-      'Tenant',
-      newTenantId
-    );
-
-    setIsAddTenantModalOpen(false);
-    setSelectedRoomForTenant(null);
-    setToastMessage(`เพิ่มผู้เช่า "${newTenant.name}" เข้าห้องพัก ${selectedRoomForTenant.roomNumber} เรียบร้อยแล้ว`);
   };
 
   // Filter Logic (Search by Room Number, Tenant Name, and Phone)
@@ -1562,27 +1474,19 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
         type="danger"
       />
 
-      {/* Quick Add Tenant Modal (Blank / Reserved for Main Project Integration) */}
-      <Modal
-        isOpen={isAddTenantModalOpen}
-        onClose={() => setIsAddTenantModalOpen(false)}
-        title={`เพิ่มผู้เช่าเข้าห้องพัก ${selectedRoomForTenant?.roomNumber || ''}`}
-        footer={
-          <div className="flex items-center justify-end gap-2">
-            <button
-              type="button"
-              onClick={() => setIsAddTenantModalOpen(false)}
-              className="px-5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition-all cursor-pointer"
-            >
-              ปิด
-            </button>
-          </div>
-        }
-      >
-        <div className="py-12 px-4 text-center">
-          {/* Reserved empty space for main project integration */}
-        </div>
-      </Modal>
+      {/* Canonical Quick Add Tenant Modal (TERM / MONTHLY / DAILY) */}
+      <QuickAddTenantModal
+        isOpen={quickAddModalOpen}
+        onClose={() => {
+          setQuickAddModalOpen(false);
+          setSelectedQuickAddContext(null);
+        }}
+        context={selectedQuickAddContext}
+        onSuccess={async (msg) => {
+          setToastMessage(msg);
+          onSaveRooms(rooms, { kind: 'refresh' });
+        }}
+      />
 
       {versionConflictState && (
         <VersionConflictModal

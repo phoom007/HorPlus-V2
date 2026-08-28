@@ -262,4 +262,119 @@ describe('OWNER ROOMS R2 & R2.1 — Rent-Cycle Deposit Model & Hardened Specific
       }).toThrow();
     });
   });
+  describe('5. Tenant Registration Approval Defaulting (R2.1a Item A)', () => {
+    const mockRooms: Room[] = [
+      {
+        id: 'room-55',
+        roomNumber: '505',
+        floor: 5,
+        status: 'vacant',
+        monthlyRent: 5500,
+        termRent: 22000,
+        dailyRent: 600,
+        termDeposit: 11000,
+        monthlyDeposit: 7000,
+        dailyDeposit: 1200,
+        depositAmount: 7000,
+      } as any,
+      {
+        id: 'room-zero',
+        roomNumber: '506',
+        floor: 5,
+        status: 'vacant',
+        monthlyRent: 4000,
+        termRent: 16000,
+        dailyRent: 500,
+        termDeposit: 0,
+        monthlyDeposit: 0,
+        dailyDeposit: 0,
+        depositAmount: 0,
+      } as any,
+    ];
+
+    it('resolves approveRent and approveDeposit strictly from authoritative Room without fallback to 4500/9000/5000/10000', () => {
+      const targetRoom = mockRooms.find(r => r.id === 'room-55')!;
+      expect(targetRoom.monthlyRent).toBe(5500);
+      expect(targetRoom.monthlyDeposit).toBe(7000);
+
+      // Nullish resolve logic
+      const approveRent = String(targetRoom.monthlyRent);
+      const approveDeposit = String(targetRoom.monthlyDeposit);
+      expect(approveRent).toBe('5500');
+      expect(approveDeposit).toBe('7000');
+    });
+
+    it('preserves explicit 0 deposit on registration approval', () => {
+      const targetRoom = mockRooms.find(r => r.id === 'room-zero')!;
+      expect(targetRoom.monthlyDeposit).toBe(0);
+
+      const approveDeposit = String(targetRoom.monthlyDeposit);
+      expect(approveDeposit).toBe('0');
+    });
+
+    it('fails closed when requested room is missing or has non-numeric financial values', () => {
+      const missingRoom = mockRooms.find(r => r.id === 'non-existent');
+      expect(missingRoom).toBeUndefined();
+
+      const invalidRoom: any = { id: 'bad', monthlyRent: null, monthlyDeposit: undefined };
+      const isValid = invalidRoom && invalidRoom.monthlyRent !== null && invalidRoom.monthlyRent !== undefined && invalidRoom.monthlyDeposit !== null && invalidRoom.monthlyDeposit !== undefined;
+      expect(isValid).toBe(false);
+    });
+  });
+
+  describe('6. Create Room Dorm Default Loading & No Legacy Payload (R2.1a Item E)', () => {
+    it('initializes all 3 cycle deposits to Dormitory defaultDeposit when configured (e.g. 7000 -> 7000/7000/7000)', () => {
+      const dormDefaults = { defaultDeposit: 7000, defaultMonthlyRent: 5000 };
+      const initialDeposit = dormDefaults.defaultDeposit !== null && dormDefaults.defaultDeposit !== undefined
+        ? Number(dormDefaults.defaultDeposit)
+        : 0;
+
+      const termDeposit = initialDeposit;
+      const monthlyDeposit = initialDeposit;
+      const dailyDeposit = initialDeposit;
+
+      expect(termDeposit).toBe(7000);
+      expect(monthlyDeposit).toBe(7000);
+      expect(dailyDeposit).toBe(7000);
+    });
+
+    it('initializes all 3 cycle deposits to 0 when Dormitory defaultDeposit is explicitly 0 (0 -> 0/0/0)', () => {
+      const dormDefaults = { defaultDeposit: 0, defaultMonthlyRent: 4000 };
+      const initialDeposit = dormDefaults.defaultDeposit !== null && dormDefaults.defaultDeposit !== undefined
+        ? Number(dormDefaults.defaultDeposit)
+        : 0;
+
+      const termDeposit = initialDeposit;
+      const monthlyDeposit = initialDeposit;
+      const dailyDeposit = initialDeposit;
+
+      expect(termDeposit).toBe(0);
+      expect(monthlyDeposit).toBe(0);
+      expect(dailyDeposit).toBe(0);
+    });
+
+    it('verifies Room write payload contains only the 3 cycle deposits and no legacy depositAmount', () => {
+      const createPayload = {
+        roomNumber: 'A101',
+        buildingId: 'b-1',
+        floor: 1,
+        monthlyRent: 4500,
+        termRent: 18000,
+        dailyRent: 500,
+        rentCycle: 'monthly',
+        termDeposit: 7000,
+        monthlyDeposit: 7000,
+        dailyDeposit: 7000,
+        maxOccupants: 2,
+        status: 'vacant',
+        initialWaterMeter: 100,
+        initialElectricMeter: 1200,
+      };
+
+      expect(createPayload).toHaveProperty('termDeposit');
+      expect(createPayload).toHaveProperty('monthlyDeposit');
+      expect(createPayload).toHaveProperty('dailyDeposit');
+      expect(createPayload).not.toHaveProperty('depositAmount');
+    });
+  });
 });

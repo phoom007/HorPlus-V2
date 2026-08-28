@@ -208,9 +208,9 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
   const [approveStartDate, setApproveStartDate] = useState(new Date().toISOString().slice(0, 10));
   const [approveEndDate, setApproveEndDate] = useState(new Date(Date.now() + 365 * 86400000).toISOString().slice(0, 10));
   const [approveDuration, setApproveDuration] = useState(12);
-  const [approveRent, setApproveRent] = useState('4500');
-  const [approveDeposit, setApproveDeposit] = useState('9000');
-  const [approveAdvance, setApproveAdvance] = useState('4500');
+  const [approveRent, setApproveRent] = useState('');
+  const [approveDeposit, setApproveDeposit] = useState('');
+  const [approveAdvance, setApproveAdvance] = useState('');
 
   // Co-occupants modal state for existing tenant
   const [isAddCoModalOpen, setIsAddCoModalOpen] = useState(false);
@@ -258,12 +258,29 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
     const confirmReplacement = confirmReplacementInput === true;
     console.log('[handleApproveRegistration] START id:', selectedRegReq.id, 'confirmReplacement:', confirmReplacement);
     try {
-      const startDate = approveStartDate && approveStartDate.trim() ? approveStartDate : '2026-11-01';
-      const endDate = approveEndDate && approveEndDate.trim() ? approveEndDate : '2027-04-30';
+      const matchedRoom = selectedRegReq ? rooms.find(r => r.id === selectedRegReq.requestedRoomId) : null;
+      if (
+        !matchedRoom ||
+        matchedRoom.monthlyRent === null ||
+        matchedRoom.monthlyRent === undefined ||
+        matchedRoom.monthlyDeposit === null ||
+        matchedRoom.monthlyDeposit === undefined
+      ) {
+        alert('ไม่พบข้อมูลห้องพักหรืออัตราค่าเช่าที่กำหนดสำหรับคำขอนี้');
+        return;
+      }
+      const startDate = approveStartDate && approveStartDate.trim() ? approveStartDate.trim() : new Date().toISOString().slice(0, 10);
+      const endDate = approveEndDate && approveEndDate.trim() ? approveEndDate.trim() : new Date(Date.now() + 180 * 86400000).toISOString().slice(0, 10);
       const durationMonths = approveDuration ? Number(approveDuration) : 6;
-      const rentAmount = approveRent && approveRent.trim() ? approveRent : '5000';
-      const depositAmount = approveDeposit && approveDeposit.trim() ? approveDeposit : '10000';
-      const advancePaymentAmount = approveAdvance && approveAdvance.trim() ? approveAdvance : '5000';
+      const rentAmount = approveRent !== undefined && approveRent !== null && approveRent.trim() !== ''
+        ? approveRent.trim()
+        : String(matchedRoom.monthlyRent);
+      const depositAmount = approveDeposit !== undefined && approveDeposit !== null && approveDeposit.trim() !== ''
+        ? approveDeposit.trim()
+        : String(matchedRoom.monthlyDeposit);
+      const advancePaymentAmount = approveAdvance !== undefined && approveAdvance !== null && approveAdvance.trim() !== ''
+        ? approveAdvance.trim()
+        : rentAmount;
 
       const res = await approveTenantRegistrationRequest(selectedRegReq.id, {
         startDate,
@@ -2567,12 +2584,25 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                         <button
                           type="button"
                           onClick={() => {
+                            const matchedRoom = rooms.find(r => r.id === req.requestedRoomId);
+                            if (
+                              !matchedRoom ||
+                              matchedRoom.monthlyRent === null ||
+                              matchedRoom.monthlyRent === undefined ||
+                              matchedRoom.monthlyDeposit === null ||
+                              matchedRoom.monthlyDeposit === undefined
+                            ) {
+                              alert('ไม่พบข้อมูลห้องพักหรืออัตราค่าเช่าที่กำหนดสำหรับคำขอนี้');
+                              return;
+                            }
                             setSelectedRegReq(req);
-                            if (!approveStartDate) setApproveStartDate('2026-11-01');
-                            if (!approveEndDate) setApproveEndDate('2027-04-30');
-                            if (!approveRent) setApproveRent('5000');
-                            if (!approveDeposit) setApproveDeposit('10000');
-                            if (!approveAdvance) setApproveAdvance('5000');
+                            const rRent = String(matchedRoom.monthlyRent);
+                            const rDeposit = String(matchedRoom.monthlyDeposit);
+                            setApproveRent(rRent);
+                            setApproveDeposit(rDeposit);
+                            setApproveAdvance(rRent);
+                            if (!approveStartDate) setApproveStartDate(new Date().toISOString().slice(0, 10));
+                            if (!approveEndDate) setApproveEndDate(new Date(Date.now() + 180 * 86400000).toISOString().slice(0, 10));
                             setIsApproveTermsOpen(true);
                           }}
                           className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl"

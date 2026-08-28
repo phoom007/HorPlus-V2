@@ -3,6 +3,12 @@ import { getPrismaClient } from '../db/prisma.js';
 import { AppError } from '../types/index.js';
 import { BLOCKING_CONTRACT_STATUSES } from './blocking-contract-policy.js';
 import { normalizeUtilityBillingMode } from '../utils/billing-mode-normalizer.util.js';
+import {
+  getContractPhysicalInterval,
+  getProvisionalTermPhysicalInterval,
+  getDailyStayPhysicalInterval,
+  PhysicalInterval,
+} from '../utils/occupancy-interval.util.js';
 
 export function valuesEquivalent(val1: any, val2: any): boolean {
   if (val1 === val2) return true;
@@ -54,6 +60,101 @@ export interface EffectiveValueResult<T> {
   value: T;
   source: 'DORMITORY' | 'BUILDING' | 'ROOM';
   sourceVersion: number;
+}
+
+
+export function isNowInsidePhysicalInterval(interval: PhysicalInterval, now: Date): boolean {
+  const t = now.getTime();
+  return interval.start.getTime() <= t && t < interval.end.getTime();
+}
+
+export function resolveCurrentActiveRentalSummary(
+  roomId: string,
+  contracts: any[],
+  provisionals: any[],
+  dailyStays: any[],
+  now: Date = new Date()
+): { activeRentalSummary: ActiveRentalSummary | null; activeContract: any | null } {
+  // 1. Physically active Contracts
+  const activeContracts = (contracts || []).filter((c: any) => {
+    if (c.roomId !== roomId) return false;
+    if (!['active', 'approved', 'expiring_soon', 'waiting_extension', 'checking_out'].includes(c.status)) return false;
+    const interval = getContractPhysicalInterval(c);
+    return isNowInsidePhysicalInterval(interval, now);
+  });
+
+  // 2. Physically active Provisional terms (status === 'ACTIVE' only)
+  const activeProvisionals = (provisionals || []).filter((p: any) => {
+    if (p.roomId !== roomId || p.status !== 'ACTIVE') return false;
+    const interval = getProvisionalTermPhysicalInterval(p);
+    return isNowInsidePhysicalInterval(interval, now);
+  });
+
+  // 3. Physically active Daily stays (status === 'ACTIVE' or 'CHECKED_IN' only)
+  const activeDailyStays = (dailyStays || []).filter((d: any) => {
+    if (d.roomId !== roomId) return false;
+    if (d.status !== 'ACTIVE' && d.status !== 'CHECKED_IN') return false;
+    const interval = getDailyStayPhysicalInterval(d);
+    return isNowInsidePhysicalInterval(interval, now);
+  });
+
+  const totalActive = activeContracts.length + activeProvisionals.length + activeDailyStays.length;
+
+  if (totalActive > 1) {
+    console.warn(`[SECURITY_DATA_CONFLICT] Multiple active agreements (${totalActive}) detected for room ${roomId}`);
+    return { activeRentalSummary: null, activeContract: null };
+  }
+
+  if (activeContracts.length === 1) {
+    const c = activeContracts[0];
+    const billingType = c.snapshot?.rentBillingType || c.rentBillingType || 'monthly';
+    const type: 'TERM' | 'MONTHLY' | 'DAILY' = billingType === 'term' ? 'TERM' : (billingType === 'daily' ? 'DAILY' : 'MONTHLY');
+    const rentAmount = Number(c.snapshot?.resolvedRent ?? c.rentAmount ?? 0);
+    const depositAmount = c.snapshot?.resolvedDeposit !== undefined && c.snapshot?.resolvedDeposit !== null
+      ? Number(c.snapshot.resolvedDeposit)
+      : (c.depositAmount ? Number(c.depositAmount) : null);
+    return {
+      activeRentalSummary: {
+        type,
+        rentAmount,
+        depositAmount,
+        source: c.snapshot ? 'CONTRACT_SNAPSHOT' : 'CONTRACT',
+      },
+      activeContract: c,
+    };
+  }
+
+  if (activeProvisionals.length === 1) {
+    const p = activeProvisionals[0];
+    const type: 'TERM' | 'MONTHLY' = p.rentalType === 'TERM' ? 'TERM' : 'MONTHLY';
+    const rentAmount = Number(type === 'TERM' ? (p.totalRentAmount || p.unitRentAmount) : p.unitRentAmount);
+    const depositAmount = p.depositAmount ? Number(p.depositAmount) : null;
+    return {
+      activeRentalSummary: {
+        type,
+        rentAmount,
+        depositAmount,
+        source: 'PROVISIONAL_TERM',
+        termInstallmentCount: p.termInstallmentCount || null,
+      },
+      activeContract: null,
+    };
+  }
+
+  if (activeDailyStays.length === 1) {
+    const d = activeDailyStays[0];
+    return {
+      activeRentalSummary: {
+        type: 'DAILY',
+        rentAmount: Number(d.dailyRateAmount),
+        depositAmount: d.depositAmount ? Number(d.depositAmount) : null,
+        source: 'DAILY_STAY',
+      },
+      activeContract: null,
+    };
+  }
+
+  return { activeRentalSummary: null, activeContract: null };
 }
 
 export interface ActiveRentalSummary {
@@ -1087,9 +1188,6 @@ export class DefaultsService {
       prisma
     );
 
-    const now = new Date();
-    const todayIso = now.toISOString().slice(0, 10);
-
     const [allContracts, allProvisionals, allDailyStays] = await Promise.all([
       prisma.contract.findMany({
         where: {
@@ -1118,64 +1216,14 @@ export class DefaultsService {
       }),
     ]);
 
-    const activeContracts = allContracts.filter((c: any) => {
-      const s = new Date(c.startDate);
-      const e = c.endDate ? new Date(c.endDate) : null;
-      return s <= now && (!e || e > now);
-    });
-
-    const activeProvisionals = allProvisionals.filter((p: any) => {
-      const s = new Date(p.startDate);
-      const e = p.endDate ? new Date(p.endDate) : null;
-      return s <= now && (!e || e >= now);
-    });
-
-    const activeDailyStays = allDailyStays.filter((d: any) => {
-      return d.startDate <= todayIso && d.endDate >= todayIso;
-    });
-
-    const totalActive = activeContracts.length + activeProvisionals.length + activeDailyStays.length;
-    let activeRentalSummary: ActiveRentalSummary | null = null;
-    const activeContract = activeContracts.length === 1 ? activeContracts[0] : null;
-
-    if (totalActive > 1) {
-      console.warn(`[SECURITY_DATA_CONFLICT] Multiple active agreements (${totalActive}) detected for room ${room.id}`);
-      activeRentalSummary = null;
-    } else if (activeContracts.length === 1) {
-      const c = activeContracts[0];
-      const billingType = c.snapshot?.rentBillingType || c.rentBillingType || 'monthly';
-      const type: 'TERM' | 'MONTHLY' | 'DAILY' = billingType === 'term' ? 'TERM' : (billingType === 'daily' ? 'DAILY' : 'MONTHLY');
-      const rentAmount = Number(c.snapshot?.resolvedRent ?? c.rentAmount ?? 0);
-      const depositAmount = c.snapshot?.resolvedDeposit !== undefined && c.snapshot?.resolvedDeposit !== null
-        ? Number(c.snapshot.resolvedDeposit)
-        : (c.depositAmount ? Number(c.depositAmount) : null);
-      activeRentalSummary = {
-        type,
-        rentAmount,
-        depositAmount,
-        source: c.snapshot ? 'CONTRACT_SNAPSHOT' : 'CONTRACT',
-      };
-    } else if (activeProvisionals.length === 1) {
-      const p = activeProvisionals[0];
-      const type: 'TERM' | 'MONTHLY' = p.rentalType === 'TERM' ? 'TERM' : 'MONTHLY';
-      const rentAmount = Number(type === 'TERM' ? (p.totalRentAmount || p.unitRentAmount) : p.unitRentAmount);
-      const depositAmount = p.depositAmount ? Number(p.depositAmount) : null;
-      activeRentalSummary = {
-        type,
-        rentAmount,
-        depositAmount,
-        source: 'PROVISIONAL_TERM',
-        termInstallmentCount: p.termInstallmentCount || null,
-      };
-    } else if (activeDailyStays.length === 1) {
-      const d = activeDailyStays[0];
-      activeRentalSummary = {
-        type: 'DAILY',
-        rentAmount: Number(d.dailyRateAmount),
-        depositAmount: d.depositAmount ? Number(d.depositAmount) : null,
-        source: 'DAILY_STAY',
-      };
-    }
+    const now = new Date();
+    const { activeRentalSummary, activeContract } = resolveCurrentActiveRentalSummary(
+      room.id,
+      allContracts,
+      allProvisionals,
+      allDailyStays,
+      now
+    );
 
     const snapshotLocked = !!(activeContract && activeContract.snapshot);
     const activeContractSnapshotId = activeContract?.snapshot?.id || null;
@@ -1468,76 +1516,19 @@ export class DefaultsService {
     const activeRentalMap = new Map<string, ActiveRentalSummary | null>();
     const activeContractMap = new Map<string, any>();
 
-    const now = new Date();
-    const todayIso = now.toISOString().slice(0, 10);
-
+        const now = new Date();
     for (const roomId of roomIds) {
-      // 1. Physically active Contracts (startDate <= now and (!endDate || endDate > now))
-      const roomContracts = activeContracts.filter((c: any) => {
-        if (c.roomId !== roomId) return false;
-        const s = new Date(c.startDate);
-        const e = c.endDate ? new Date(c.endDate) : null;
-        return s <= now && (!e || e > now);
-      });
-
-      // 2. Physically active Provisional terms (ACTIVE only, startDate <= now and (!endDate || endDate >= now))
-      const roomProvisionals = activeProvisionals.filter((p: any) => {
-        if (p.roomId !== roomId || p.status !== 'ACTIVE') return false;
-        const s = new Date(p.startDate);
-        const e = p.endDate ? new Date(p.endDate) : null;
-        return s <= now && (!e || e >= now);
-      });
-
-      // 3. Physically active Daily stays (ACTIVE/CHECKED_IN only, startDate <= todayIso and endDate >= todayIso)
-      const roomDailyStays = activeDailyStays.filter((d: any) => {
-        if (d.roomId !== roomId || (d.status !== 'ACTIVE' && d.status !== 'CHECKED_IN')) return false;
-        return d.startDate <= todayIso && d.endDate >= todayIso;
-      });
-
-      const totalActiveAgreements = roomContracts.length + roomProvisionals.length + roomDailyStays.length;
-
-      // Fail-closed on duplicate active records (same-source or cross-source conflict)
-      if (totalActiveAgreements > 1) {
-        console.warn(`[SECURITY_DATA_CONFLICT] Multiple active agreements (${totalActiveAgreements}) detected for room ${roomId}`);
-        activeRentalMap.set(roomId, null);
-      } else if (roomContracts.length === 1) {
-        const contract = roomContracts[0];
-        activeContractMap.set(roomId, contract);
-        const billingType = contract.snapshot?.rentBillingType || contract.rentBillingType || 'monthly';
-        const type: 'TERM' | 'MONTHLY' | 'DAILY' = billingType === 'term' ? 'TERM' : (billingType === 'daily' ? 'DAILY' : 'MONTHLY');
-        const rentAmount = Number(contract.snapshot?.resolvedRent ?? contract.rentAmount ?? 0);
-        const depositAmount = contract.snapshot?.resolvedDeposit !== undefined && contract.snapshot?.resolvedDeposit !== null
-          ? Number(contract.snapshot.resolvedDeposit)
-          : (contract.depositAmount ? Number(contract.depositAmount) : null);
-        activeRentalMap.set(roomId, {
-          type,
-          rentAmount,
-          depositAmount,
-          source: contract.snapshot ? 'CONTRACT_SNAPSHOT' : 'CONTRACT',
-        });
-      } else if (roomProvisionals.length === 1) {
-        const prov = roomProvisionals[0];
-        const type: 'TERM' | 'MONTHLY' = prov.rentalType === 'TERM' ? 'TERM' : 'MONTHLY';
-        const rentAmount = Number(type === 'TERM' ? (prov.totalRentAmount || prov.unitRentAmount) : prov.unitRentAmount);
-        const depositAmount = prov.depositAmount ? Number(prov.depositAmount) : null;
-        activeRentalMap.set(roomId, {
-          type,
-          rentAmount,
-          depositAmount,
-          source: 'PROVISIONAL_TERM',
-          termInstallmentCount: prov.termInstallmentCount || null,
-        });
-      } else if (roomDailyStays.length === 1) {
-        const daily = roomDailyStays[0];
-        activeRentalMap.set(roomId, {
-          type: 'DAILY',
-          rentAmount: Number(daily.dailyRateAmount),
-          depositAmount: daily.depositAmount ? Number(daily.depositAmount) : null,
-          source: 'DAILY_STAY',
-        });
-      } else {
-        activeRentalMap.set(roomId, null);
+      const { activeRentalSummary, activeContract } = resolveCurrentActiveRentalSummary(
+        roomId,
+        activeContracts,
+        activeProvisionals,
+        activeDailyStays,
+        now
+      );
+      if (activeContract) {
+        activeContractMap.set(roomId, activeContract);
       }
+      activeRentalMap.set(roomId, activeRentalSummary);
     }
 
     return rooms.map((room) => {

@@ -1,11 +1,11 @@
 # OWNER ROOMS R2 & R2.1 — Rent-Cycle Deposit Model, Rent Presentation & Behavior Hardening Audit
 
-**Date:** 2026-08-28  
-**Base Commit:** `07ff8de69d2aadb9dfc6dceb2b58b72b36beaa45`  
-**R2 Commit:** `1833799b165d49c645b42a02d367eb530600a77e`  
-**R2.1 Hardening Branch:** `fix/owner-rooms-r21-hardening-20260828`  
-**Author:** HorPlus Senior Full-Stack Engineering  
-**Status:** COMPLETED & VERIFIED  
+**Date:** 2026-08-28
+**Base Commit:** `07ff8de69d2aadb9dfc6dceb2b58b72b36beaa45`
+**R2 Commit:** `1833799b165d49c645b42a02d367eb530600a77e`
+**R2.1 Hardening Branch:** `fix/owner-rooms-r21-hardening-20260828`
+**Author:** HorPlus Senior Full-Stack Engineering
+**Status:** COMPLETED & VERIFIED
 
 ---
 
@@ -118,25 +118,66 @@ This implementation round executes **OWNER ROOMS R2 & R2.1** according to the Pr
 
 ---
 
+
+### 3.1. R2.1a — Independent Review Corrections
+
+Independent review of R2.1 identified surgical gaps that required correction before runtime UAT:
+
+1. **Tenant Registration Hardcoded Defaults**:
+   - *Prior Gap*: `src/pages/owner/tenants.tsx` still had initial state '4500' / '9000', on-click fallbacks '5000' / '10000', and submit fallbacks '5000' / '10000'.
+   - *R2.1a Correction*: All initial states and hardcoded fallbacks removed. Requested room is resolved from `rooms` prop. `approveRent = room.monthlyRent`, `approveDeposit = room.monthlyDeposit` with nullish semantics. Explicit 0 deposit is preserved. If room or required financial data is missing, fails closed with user-visible alert ('ไม่พบข้อมูลห้องพักหรืออัตราค่าเช่าที่กำหนดสำหรับคำขอนี้').
+
+2. **Daily Agreement Defaulting**:
+   - *Prior Gap*: `ownerQuickAddDailyStay` in `server/src/services/daily-stay.service.ts` still fell back to legacy `effective.depositAmount`.
+   - *R2.1a Correction*: Fallback changed strictly to `effective.dailyDeposit`. Explicit 0 is preserved. Legacy `effective.depositAmount` fallback completely removed.
+
+3. **Contract Single Authority Execution**:
+   - *Prior Gap*: Non-Prisma repository create path in `server/src/services/contract.service.ts` spread original data without the resolved `contractDeposit`. Cross-cycle fallbacks were still present in fallback branches.
+   - *R2.1a Correction*: `contractDeposit` resolved strictly per cycle (`term` -> `termDeposit`, `daily` -> `dailyDeposit`, `monthly` -> `monthlyDeposit`) and fails closed (`ROOM_DEPOSIT_NOT_CONFIGURED`) if unconfigured. Both Prisma and non-Prisma execution paths call create with `depositAmount: contractDeposit`.
+
+4. **Active Rental Summary Bangkok Physical Intervals**:
+   - *Prior Gap*: Date strings were compared directly against UTC `now`, missing inclusive Bangkok end-of-day boundaries and exact Daily Stay check-in/out timestamps.
+   - *R2.1a Correction*: Integrated canonical interval utilities from `server/src/utils/occupancy-interval.util.ts` (`getContractPhysicalInterval`, `getProvisionalTermPhysicalInterval`, `getDailyStayPhysicalInterval`). Created shared pure helper `resolveCurrentActiveRentalSummary` used identically in `buildAuthoritativeRoomResponse` (single) and `buildAuthoritativeRoomsResponseBatch` (batch). Contract inclusive final day in Bangkok is CURRENT; future agreements/stays are NOT CURRENT; RESERVED daily stays are NOT CURRENT; conflicts fail closed (`null`).
+
+5. **Create Room Dorm Default Loading & Race Prevention**:
+   - *Prior Gap*: Truthy checks in `rooms.tsx` prevented `defaultDeposit = 0` from resolving correctly. Potential race existed if modal opened before defaults loaded.
+   - *R2.1a Correction*: Explicit nullish checks (`value !== null && value !== undefined`) implemented. Explicit 0 resolves to `TERM: 0, MONTHLY: 0, DAILY: 0`. `handleOpenModal` awaits `loadDormDefaults()`; if defaults fail to load, fails closed with a concise Thai message without guessing 4500.
+
+6. **Fake Quick Add Legacy Code Elimination**:
+   - *Prior Gap*: Unreachable fake local modal state and handler generating fake tenant and contract IDs remained in `rooms.tsx`.
+   - *R2.1a Correction*: Completely purged dead fake handler and state variables. Canonical `QuickAddTenantModal` is the sole authority.
+
 ## 4. Verification & Quality Gates
 
 ### Automated Impact Tests
-1. `src/tests/owner-rooms-r2-cycle-deposits.test.tsx` (14 tests): **PASSED**
+1. `src/tests/owner-rooms-r2-cycle-deposits.test.tsx` (20 tests): **PASSED**
    - 3 cycle deposits and activeRentalSummary normalization.
    - Fail-closed transport validation on malformed numbers.
    - Error mapper exact Thai mappings and nested shapes.
    - Grid mode active-only vs vacant-all vs fail-closed neutral text.
    - List mode primary first + secondary catalog rates.
    - Cycle deposit resolver.
-   - Schema defaulting: `CreateContractSchema.depositAmount` is optional; `UpdateRoomSchema` rejects `null` cycle deposits.
-2. `src/tests/owner-rooms-persistence-phase-ab.test.tsx` (8 tests): **PASSED**
-3. `server/src/__tests__/unit/room-service-creation.test.ts` (3 tests): **PASSED**
-4. `server/src/__tests__/unit/room-number.normalizer.test.ts` (11 tests): **PASSED**
+   - Schema defaulting: `CreateContractSchema.depositAmount` optional; `UpdateRoomSchema` rejects `null` cycle deposits.
+   - Tenant registration approval defaulting strictly to `room.monthlyRent` / `room.monthlyDeposit` with 0 preserved and fail-closed validation.
+   - Dormitory `defaultDeposit` seeding (7000 -> 7000/7000/7000, 0 -> 0/0/0) and absence of legacy `depositAmount` in create payload.
 
-**Total Test Count:** 36 passed, 0 failed.
+2. `server/src/__tests__/unit/owner-rooms-r21a-services.test.ts` (12 tests): **PASSED**
+   - `ContractService.createContract` on non-Prisma repository (MONTHLY -> monthlyDeposit, TERM -> termDeposit, explicit 0 preserved).
+   - `DailyStayService.ownerQuickAddDailyStay` (omitted -> dailyDeposit, explicit 0 preserved, legacy depositAmount unused).
+   - `DefaultsService` and canonical Bangkok physical intervals:
+     - 1. Contract on its inclusive final Bangkok date -> CURRENT
+     - 2. Contract starting tomorrow -> NOT CURRENT
+     - 3. Active provisional within physical interval -> CURRENT
+     - 4. Daily stay before check-in -> NOT CURRENT
+     - 5. Daily stay during stay interval -> CURRENT
+     - 6. RESERVED future daily stay -> NOT CURRENT
+     - 7. Two current sources -> conflict fail-closed (`null`)
+
+3. `src/tests/owner-rooms-persistence-phase-ab.test.tsx` (8 tests): **PASSED**
+
+**Total Test Count:** 40 passed, 0 failed.
 
 ### Static Code & Type Checking
 - `npm run lint` (`tsc --noEmit`): **PASSED (0 errors)**
 - `npm run lint:api` (`tsc --noEmit`): **PASSED (0 errors)**
-- `npm --prefix server run prisma:validate`: **PASSED (Schema valid)**
 - `docs/uat/local07-expected-results.json`: **Preserved untouched, uncommitted, and unstaged**.
