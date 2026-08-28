@@ -295,5 +295,125 @@ describe('OWNER ROOMS R3.2b — Canonical Operational Cycle, One-Time Baseline &
         })
       );
     });
+
+  describe('Part C — Real Property Route Mutation Response Boundary (R3.2c)', () => {
+    it('6. PUT /properties/rooms/:id preserves effectiveRoomStatusCycleId while GET remains pure Room DTO', async () => {
+      const express = (await import('express')).default;
+      const request = (await import('supertest')).default;
+      const { createPropertyRouter } = await import('../../routes/property.routes.js');
+      const { defaultsService } = await import('../../services/defaults.service.js');
+
+      // Mock auth service with permissive test auth
+      const mockAuthService: any = {
+        verifyCsrf: vi.fn().mockReturnValue(true),
+        validateSession: vi.fn().mockResolvedValue({
+          userId: 'user-1',
+          sessionId: 'sess-1',
+          dormitoryId,
+          role: 'OWNER',
+        }),
+      };
+
+      // Mock building service
+      const mockBuildingService: any = {
+        getBuildingsByDormitory: vi.fn().mockResolvedValue([]),
+      };
+
+      // Spy on defaultsService.buildAuthoritativeRoomResponse to return pure enriched DTO
+      vi.spyOn(defaultsService, 'buildAuthoritativeRoomResponse').mockImplementation(async (_dormId, r: any) => ({
+        id: r.id,
+        dormitoryId: r.dormitoryId,
+        buildingId: r.buildingId,
+        roomNumber: r.roomNumber,
+        status: r.status,
+        monthlyRent: '5000.00',
+        termRent: '20000.00',
+        dailyRent: '600.00',
+        termDeposit: '10000.00',
+        monthlyDeposit: '5000.00',
+        dailyDeposit: '1000.00',
+        floor: 1,
+        roomType: 'standard',
+        rentCycle: 'monthly',
+        maximumOccupants: 2,
+        version: r.version || 2,
+      } as any));
+
+      // Spy on roomService.updateRoom to return room with mutation metadata
+      vi.spyOn(roomService, 'updateRoom').mockResolvedValue({
+        id: roomId,
+        dormitoryId,
+        buildingId,
+        roomNumber: '101',
+        status: 'maintenance',
+        version: 2,
+        effectiveRoomStatusCycleId: 'cycle-2026-08',
+      } as any);
+
+      // Spy on roomService.getRoomById to return standard room without mutation metadata
+      vi.spyOn(roomService, 'getRoomById').mockResolvedValue({
+        id: roomId,
+        dormitoryId,
+        buildingId,
+        roomNumber: '101',
+        status: 'maintenance',
+        version: 2,
+      } as any);
+
+      const app = express();
+      app.use(express.json());
+      // Attach mock test session & dormitory context
+      app.use((req, _res, next) => {
+        req.headers['x-csrf-token'] = 'test-csrf';
+        req.headers['x-dormitory-id'] = dormitoryId;
+        (req as any).auth = {
+          userId: 'user-1',
+          sessionId: 'sess-1',
+          dormitoryId,
+          role: 'OWNER',
+          user: { id: 'user-1', role: 'OWNER' },
+          memberships: [{ dormitoryId, role: 'OWNER', roleCode: 'OWNER', status: 'active', permissions: ['*'] }],
+        };
+        (req as any).dormitoryContext = {
+          dormitoryId,
+          roleCode: 'OWNER',
+          userId: 'user-1',
+          permissions: ['*'],
+          membership: { dormitoryId, role: 'OWNER', roleCode: 'OWNER', status: 'active' },
+        };
+        next();
+      });
+
+      app.use('/api/v1/properties', createPropertyRouter(mockAuthService, mockBuildingService, roomService));
+
+      // 1. Test PUT /properties/rooms/:id response composition
+      const putRes = await request(app)
+        .put(`/api/v1/properties/rooms/${roomId}`)
+        .send({
+          status: 'maintenance',
+          expectedVersion: 1,
+        })
+        .set('x-csrf-token', 'test-csrf');
+
+      expect(putRes.status).toBe(200);
+      expect(putRes.body.data).toBeDefined();
+      // Crucial R3.2c invariant: mutation metadata preserved on PUT response
+      expect(putRes.body.data.effectiveRoomStatusCycleId).toBe('cycle-2026-08');
+      // Crucial invariant: authoritative room fields intact
+      expect(putRes.body.data.roomNumber).toBe('101');
+      expect(putRes.body.data.status).toBe('maintenance');
+      expect(putRes.body.data.monthlyRent).toBe('5000.00');
+
+      // 2. Test GET /properties/rooms/:id remains pure Room DTO without mutation metadata
+      const getRes = await request(app)
+        .get(`/api/v1/properties/rooms/${roomId}`)
+        .set('x-csrf-token', 'test-csrf');
+
+      expect(getRes.status).toBe(200);
+      expect(getRes.body.data).toBeDefined();
+      expect(getRes.body.data.roomNumber).toBe('101');
+      expect(getRes.body.data.effectiveRoomStatusCycleId).toBeUndefined();
+    });
+  });
   });
 });

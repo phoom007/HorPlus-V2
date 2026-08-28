@@ -434,7 +434,12 @@ export function createPropertyRouter(
       });
       const { defaultsService } = await import('../services/defaults.service.js');
       const enriched = await defaultsService.buildAuthoritativeRoomResponse(dormId, room);
-      res.json({ data: enriched });
+      res.json({
+        data: {
+          ...enriched,
+          effectiveRoomStatusCycleId: (room as any).effectiveRoomStatusCycleId ?? null,
+        },
+      });
     } catch (err) {
       handleServiceError(res, err, req);
     }

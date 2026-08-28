@@ -344,6 +344,40 @@ An independent review of R3.2a identified four production blockers:
 
 ---
 
-## 15. Final Status
+
+---
+
+## 15. R3.2c — Property Mutation Metadata Boundary
+
+### 1. Root Cause Analysis & Corrective Scope
+An independent review of R3.2b identified that while `ApiPropertyAdapter` was updated to preserve `effectiveRoomStatusCycleId`, the backend route handler in `server/src/routes/property.routes.ts` (`PUT /api/v1/properties/rooms/:id`) previously dropped this field when wrapping the updated room with `defaultsService.buildAuthoritativeRoomResponse(dormId, room)`.
+
+### 2. Backend Property Route Mutation Response (Part A & B)
+- In `server/src/routes/property.routes.ts`, the `PUT /api/v1/properties/rooms/:id` handler now explicitly composes the response payload:
+  ```ts
+  const enriched = await defaultsService.buildAuthoritativeRoomResponse(dormId, room);
+  res.json({
+    data: {
+      ...enriched,
+      effectiveRoomStatusCycleId: (room as any).effectiveRoomStatusCycleId ?? null,
+    },
+  });
+  ```
+- **Pure Query Invariant**: Regular query endpoints (`GET /properties/rooms`, `GET /properties/rooms/:id`) remain pure current Room DTOs and are not contaminated with mutation metadata.
+
+### 3. Server Route-Boundary Verification (Part C)
+- Added an automated route-boundary test using `supertest` in `server/src/__tests__/unit/owner-rooms-r32a-write-boundary.test.ts`.
+- Proves that `PUT /properties/rooms/:id` returns `data.effectiveRoomStatusCycleId === 'cycle-2026-08'` with all authoritative Room fields intact.
+- Confirms that `GET /properties/rooms/:id` returns a pure Room DTO where `effectiveRoomStatusCycleId` is `undefined`.
+
+### 4. Focused Verification Matrix
+- **Backend Write-Boundary Suite** (`server/src/__tests__/unit/owner-rooms-r32a-write-boundary.test.ts`): **6 / 6 passed (100%)**.
+- **Backend Effective Status Unit Suite** (`server/src/__tests__/unit/owner-rooms-r32-effective-status.test.ts`): **4 / 4 passed (100%)**.
+- **Backend Preview Context Unit Suite** (`server/src/__tests__/unit/owner-rooms-r3-meter-preview-context.test.ts`): **6 / 6 passed (100%)**.
+- **Frontend Cycle Deposits & Adapter Suite** (`src/tests/owner-rooms-r2-cycle-deposits.test.tsx`): **53 / 53 passed (100%)**.
+
+---
+
+## 16. Final Status
 
 **READY FOR PRODUCT OWNER R3 MANUAL UAT**
