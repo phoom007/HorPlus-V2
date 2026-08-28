@@ -15,20 +15,30 @@ import {
   Search,
   AlertCircle,
   User as UserIcon,
+  UserPlus,
   CheckCircle2,
+  Clock,
+  Wrench,
+  Ban,
+  Phone,
+  CreditCard,
   Calendar,
-  Building as BuildingIcon
+  FileText,
+  Check,
+  MessageCircle,
+  QrCode,
+  Info,
+  Copy,
+  Coins,
+  ShieldCheck,
+  DoorOpen
 } from 'lucide-react';
 import {
   formatBaht,
   Modal,
-  ConfirmDialog,
-  OwnerDateInput
+  ConfirmDialog
 } from '../../components/GlobalComponents';
-import { getDataProvider } from '../../data/dataProvider';
 import { Room, Building, RoomStatus, Tenant, Contract, Bill, BLOCKING_CONTRACT_STATUSES } from '../../types';
-import { SourceBadge } from '../../components/PropertyBadges';
-import { VersionConflictModal } from '../../components/VersionConflictModal';
 
 interface OwnerRoomsProps {
   rooms: Room[];
@@ -37,7 +47,8 @@ interface OwnerRoomsProps {
   bills?: Bill[];
   buildings: Building[];
   onSaveRooms: (rooms: Room[]) => void;
-  onSaveBuildings?: (buildings: Building[]) => void;
+  onSaveTenants?: (tenants: Tenant[]) => void;
+  onSaveContracts?: (contracts: Contract[]) => void;
   onAddLog: (action: string, details: string, type: string, id: string) => void;
   onNavigate: (tab: string, param?: string) => void;
   initialRoomId?: string;
@@ -46,6 +57,7 @@ interface OwnerRoomsProps {
 
 const ROOM_STATUS_CONFIG: Record<string, {
   label: string;
+  subLabel: string;
   bg: string;
   border: string;
   text: string;
@@ -55,6 +67,7 @@ const ROOM_STATUS_CONFIG: Record<string, {
 }> = {
   vacant: {
     label: 'ว่าง',
+    subLabel: 'ห้องว่าง',
     bg: 'bg-emerald-50/70 hover:bg-emerald-100/70',
     border: 'border-emerald-200',
     text: 'text-emerald-900',
@@ -64,6 +77,7 @@ const ROOM_STATUS_CONFIG: Record<string, {
   },
   occupied: {
     label: 'มีผู้เช่า',
+    subLabel: 'มีผู้เช่า',
     bg: 'bg-indigo-50/70 hover:bg-indigo-100/70',
     border: 'border-indigo-200',
     text: 'text-indigo-900',
@@ -73,6 +87,7 @@ const ROOM_STATUS_CONFIG: Record<string, {
   },
   maintenance: {
     label: 'ปิดปรับปรุง',
+    subLabel: 'ปิดปรับปรุง',
     bg: 'bg-rose-50/70 hover:bg-rose-100/70',
     border: 'border-rose-200',
     text: 'text-rose-900',
@@ -83,268 +98,74 @@ const ROOM_STATUS_CONFIG: Record<string, {
 };
 
 export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
-  rooms = [],
+  rooms,
   tenants = [],
   contracts = [],
   bills = [],
-  buildings = [],
+  buildings,
   onSaveRooms,
-  onSaveBuildings,
+  onSaveTenants,
+  onSaveContracts,
   onAddLog,
   onNavigate,
   initialRoomId,
   onClearInitialRoomId
 }) => {
-  const DataProvider = getDataProvider();
   const [viewMode, setViewMode] = useState<'grid' | 'list' | 'floor'>('grid');
   const [selectedBuilding, setSelectedBuilding] = useState<string>('all');
   const [selectedStatus, setSelectedStatus] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
-
-  // Version Conflict Modal State
-  const [versionConflictState, setVersionConflictState] = useState<{
-    isOpen: boolean;
-    entityName: string;
-    currentVersion: number;
-    onRetry?: () => void;
-  } | null>(null);
-
-  // Availability UI State (Requirement 7)
-  const [availBuildingId, setAvailBuildingId] = useState<string>('all');
-  const [availStartDate, setAvailStartDate] = useState<string>('2026-09-01');
-  const [availEndDate, setAvailEndDate] = useState<string>('2026-10-01');
-  const [availResult, setAvailResult] = useState<{ available: Room[]; total: number } | null>(null);
-  const [availError, setAvailError] = useState<string | null>(null);
-  const [availSearching, setAvailSearching] = useState<boolean>(false);
 
   // Create / Edit modal state
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingRoom, setEditingRoom] = useState<Room | null>(null);
   const [deleteConfirmData, setDeleteConfirmData] = useState<{ roomId: string; roomNum: string; message: string } | null>(null);
 
+  // Quick Add Tenant Modal state
+  const [isAddTenantModalOpen, setIsAddTenantModalOpen] = useState(false);
+  const [selectedRoomForTenant, setSelectedRoomForTenant] = useState<Room | null>(null);
+  const [newTenantName, setNewTenantName] = useState('');
+  const [newTenantPhone, setNewTenantPhone] = useState('');
+  const [newTenantIdCard, setNewTenantIdCard] = useState('');
+  const [newTenantStartDate, setNewTenantStartDate] = useState(new Date().toISOString().split('T')[0]);
+  const [newTenantDuration, setNewTenantDuration] = useState(6);
+  const [newTenantRent, setNewTenantRent] = useState(4500);
+  const [newTenantDeposit, setNewTenantDeposit] = useState(9000);
+  const [newTenantDepositStatus, setNewTenantDepositStatus] = useState<'paid' | 'unpaid'>('paid');
+  const [newTenantNotes, setNewTenantNotes] = useState('');
+  const [addTenantError, setAddTenantError] = useState<string | null>(null);
+
   // Form Fields
   const [roomNumber, setRoomNumber] = useState('');
   const [buildingId, setBuildingId] = useState('');
   const [floor, setFloor] = useState(1);
-  const [monthlyRent, setMonthlyRent] = useState(4500);
-  const [termRent, setTermRent] = useState(18000);
-  const [dailyRent, setDailyRent] = useState(500);
+  const [monthlyRent, setMonthlyRent] = useState<number | ''>(4500);
+  const [termRent, setTermRent] = useState<number | ''>(18000);
+  const [dailyRent, setDailyRent] = useState<number | ''>(500);
   const [rentCycle, setRentCycle] = useState<'term' | 'monthly' | 'daily'>('monthly');
-  const [depositAmount, setDepositAmount] = useState(9000);
-  const [depositStatus, setDepositStatus] = useState<'paid' | 'unpaid'>('paid');
+  const [depositAmount, setDepositAmount] = useState<number | ''>(9000);
+  const [monthlyDeposit, setMonthlyDeposit] = useState<number | ''>(9000);
+  const [termDeposit, setTermDeposit] = useState<number | ''>(10000);
+  const [dailyDeposit, setDailyDeposit] = useState<number | ''>(500);
   const [maxOccupants, setMaxOccupants] = useState(2);
   const [roomStatus, setRoomStatus] = useState<RoomStatus>('vacant');
   const [initialWaterMeter, setInitialWaterMeter] = useState(100);
   const [initialElectricMeter, setInitialElectricMeter] = useState(1200);
-  const [notes, setNotes] = useState('');
   const [errorText, setErrorText] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [isToastFading, setIsToastFading] = useState(false);
 
-  // Building UI State
-  const [isBuildingModalOpen, setIsBuildingModalOpen] = useState(false);
-  const [editingBuilding, setEditingBuilding] = useState<Building | null>(null);
-  const [buildingName, setBuildingName] = useState('');
-  const [buildingCode, setBuildingCode] = useState('');
-  const [buildingFloorsCount, setBuildingFloorCount] = useState<number>(1);
-  const [buildingDescription, setBuildingNotes] = useState('');
-  const [bldOverrideMonthlyRent, setBldOverrideMonthlyRent] = useState<number>(0);
-  const [bldOverrideDepositAmount, setBldOverrideDepositAmount] = useState<number>(0);
-  const [deleteBuildingConfirmData, setDeleteBuildingConfirmData] = useState<{ id: string; name: string } | null>(null);
-
-  // Fetch Authoritative Data on Mount
-  const fetchAuthoritativeData = async () => {
-    try {
-      if (DataProvider.properties) {
-        const roomsRes = await DataProvider.properties.getAuthoritativeRooms();
-        if (roomsRes.success && roomsRes.data) {
-          const rawData = roomsRes.data as any;
-          const fetchedItems = Array.isArray(rawData) ? rawData : (rawData.items || rawData.data || []);
-          if (fetchedItems.length > 0) {
-            onSaveRooms(fetchedItems);
-          }
-        }
-        const bldRes = await DataProvider.properties.getAuthoritativeBuildings();
-        if (bldRes.success && bldRes.data && onSaveBuildings) {
-          const rawBld = bldRes.data as any;
-          const fetchedBld = Array.isArray(rawBld) ? rawBld : (rawBld.data || rawBld.items || []);
-          onSaveBuildings(fetchedBld);
-        }
-      }
-    } catch (err) {
-      // Fall back silently to props data
-    }
-  };
-
-  useEffect(() => {
-    fetchAuthoritativeData();
-  }, []);
-
-  const handleOpenBuildingModal = (bld: Building | null = null) => {
-    setErrorText(null);
-    if (bld) {
-      setEditingBuilding(bld);
-      setBuildingName(bld.name);
-      setBuildingCode((bld as any).code || '');
-      setBuildingFloorCount(bld.floorsCount || 1);
-      setBuildingNotes(bld.description || '');
-      setBldOverrideMonthlyRent((bld as any).rawOverrides?.monthlyRent || 0);
-      setBldOverrideDepositAmount((bld as any).rawOverrides?.depositAmount || 0);
-    } else {
-      setEditingBuilding(null);
-      setBuildingName('');
-      setBuildingCode('');
-      setBuildingFloorCount(1);
-      setBuildingNotes('');
-      setBldOverrideMonthlyRent(0);
-      setBldOverrideDepositAmount(0);
-    }
-    setIsBuildingModalOpen(true);
-  };
-
-  const handleSaveBuilding = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!buildingName.trim()) {
-      setErrorText('กรุณากรอกชื่ออาคาร');
-      return;
-    }
-
-    try {
-      if (editingBuilding && DataProvider.properties) {
-        const identityChanges = {
-          name: buildingName.trim(),
-          code: buildingCode.trim() || undefined,
-          floorCount: buildingFloorsCount,
-          description: buildingDescription
-        };
-        const currentVer = editingBuilding.version || 1;
-        const res = await DataProvider.properties.updateBuildingIdentity(editingBuilding.id, identityChanges, currentVer);
-
-        if (!res.success) {
-          if (res.error?.code === 'CONFLICT' || (res.error as any)?.statusCode === 409) {
-            setVersionConflictState({
-              isOpen: true,
-              entityName: `อาคาร ${buildingName}`,
-              currentVersion: (res.error?.details as any)?.currentVersion || currentVer + 1,
-              onRetry: () => handleSaveBuilding(e)
-            });
-            return;
-          }
-          throw new Error(res.error?.message || 'Failed to update building identity');
-        }
-        onAddLog('แก้ไขอาคาร', `แก้ไขอาคาร ${buildingName}`, 'Building', editingBuilding.id);
-      } else {
-        const res = await DataProvider.dormitories.addBuilding({
-          name: buildingName,
-          floorsCount: buildingFloorsCount,
-          description: buildingDescription,
-          status: 'active'
-        } as any);
-        if (!res.success) throw new Error(res.error?.message || 'Failed to create building');
-        onAddLog('เพิ่มอาคาร', `เพิ่มอาคาร ${buildingName}`, 'Building', res.data?.id || 'unknown');
-      }
-
-      await fetchAuthoritativeData();
-      setIsBuildingModalOpen(false);
-      setToastMessage(`บันทึกอาคาร "${buildingName}" เรียบร้อยแล้ว`);
-    } catch (err: any) {
-      setErrorText(err.message || 'เกิดข้อผิดพลาดในการบันทึกอาคาร');
-    }
-  };
-
-  const executeDeleteBuilding = async () => {
-    if (!deleteBuildingConfirmData) return;
-    try {
-      const currentVer = deleteBuildingConfirmData.version || 1;
-      let res: any;
-      if (DataProvider.properties) {
-        res = await DataProvider.properties.archiveBuilding(deleteBuildingConfirmData.id, currentVer);
-      } else {
-        res = await DataProvider.dormitories.deleteBuilding(deleteBuildingConfirmData.id);
-      }
-      if (!res.success) {
-        if (res.error?.code === 'CONFLICT' || (res.error as any)?.statusCode === 409) {
-          setVersionConflictState({
-            isOpen: true,
-            entityName: `อาคาร ${deleteBuildingConfirmData.name}`,
-            currentVersion: (res.error?.details as any)?.currentVersion || currentVer + 1
-          });
-          setDeleteBuildingConfirmData(null);
-          return;
-        }
-        throw new Error(res.error?.message || 'Failed to delete building');
-      }
-      onAddLog('ลบอาคาร', `ลบอาคาร ${deleteBuildingConfirmData.name}`, 'Building', deleteBuildingConfirmData.id);
-
-      await fetchAuthoritativeData();
-      setDeleteBuildingConfirmData(null);
-      setToastMessage(`ลบอาคาร "${deleteBuildingConfirmData.name}" เรียบร้อยแล้ว`);
-    } catch (err: any) {
-      setDeleteBuildingConfirmData(null);
-      alert(err.message || 'เกิดข้อผิดพลาดในการลบอาคาร');
-    }
-  };
-
-  const handleSaveBuildingOverride = async (buildingId: string, overrideChanges: Record<string, any>) => {
-    if (!DataProvider.properties) return;
-    const bld = buildings.find(b => b.id === buildingId);
-    const currentVer = bld?.version || 1;
-    try {
-      const res = await DataProvider.properties.setBuildingDefaults(buildingId, overrideChanges, currentVer);
-      if (!res.success) {
-        if (res.error?.code === 'CONFLICT' || (res.error as any)?.statusCode === 409) {
-          setVersionConflictState({
-            isOpen: true,
-            entityName: `อาคาร ${bld?.name || ''}`,
-            currentVersion: (res.error?.details as any)?.currentVersion || currentVer + 1,
-            onRetry: () => handleSaveBuildingOverride(buildingId, overrideChanges)
-          });
-          return;
-        }
-        throw new Error(res.error?.message || 'Failed to update building overrides');
-      }
-      onAddLog('แก้ไขค่าเริ่มต้นอาคาร', `แก้ไขค่าเริ่มต้นอาคาร ${bld?.name || ''}`, 'Building', buildingId);
-      await fetchAuthoritativeData();
-      setToastMessage(`บันทึกค่าเริ่มต้นอาคารเรียบร้อยแล้ว`);
-    } catch (err: any) {
-      alert(err.message || 'เกิดข้อผิดพลาดในการตั้งค่าเริ่มต้นอาคาร');
-    }
-  };
-
-  const handleClearBuildingOverride = async (buildingId: string, field: string) => {
-    if (!DataProvider.properties) return;
-    const bld = buildings.find(b => b.id === buildingId);
-    const currentVer = bld?.version || 1;
-    try {
-      const res = await DataProvider.properties.clearBuildingOverride(buildingId, field, currentVer);
-      if (!res.success) {
-        if (res.error?.code === 'CONFLICT' || (res.error as any)?.statusCode === 409) {
-          setVersionConflictState({
-            isOpen: true,
-            entityName: `อาคาร ${bld?.name || ''}`,
-            currentVersion: (res.error?.details as any)?.currentVersion || currentVer + 1,
-            onRetry: () => handleClearBuildingOverride(buildingId, field)
-          });
-          return;
-        }
-        throw new Error(res.error?.message || 'Failed to clear building override');
-      }
-      onAddLog('ล้างค่า Override อาคาร', `ล้างค่า ${field} ของอาคาร ${bld?.name || ''}`, 'Building', buildingId);
-      await fetchAuthoritativeData();
-      setToastMessage(`ล้างค่า Override อาคารเรียบร้อยแล้ว`);
-    } catch (err: any) {
-      alert(err.message || 'เกิดข้อผิดพลาดในการล้างค่า Override อาคาร');
-    }
-  };
-
   useEffect(() => {
     if (toastMessage) {
       setIsToastFading(false);
-      const fadeTimer = setTimeout(() => setIsToastFading(true), 2900);
+      const fadeTimer = setTimeout(() => {
+        setIsToastFading(true);
+      }, 2900);
       const removeTimer = setTimeout(() => {
         setToastMessage(null);
         setIsToastFading(false);
       }, 3500);
+
       return () => {
         clearTimeout(fadeTimer);
         clearTimeout(removeTimer);
@@ -352,25 +173,27 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
     }
   }, [toastMessage]);
 
+  // Handle open modal
   const handleOpenModal = (room: Room | null = null) => {
     setErrorText(null);
     if (room) {
       setEditingRoom(room);
       setRoomNumber(room.roomNumber);
       setBuildingId(room.buildingId || '');
-      setFloor(room.derivedFloor || 1);
-      const eff = (room as any).currentEffectiveValues || {};
-      setMonthlyRent(eff.monthlyRent ?? room.monthlyRent ?? 4500);
-      setTermRent(room.termRent || ((eff.monthlyRent ?? room.monthlyRent ?? 4500) * 4));
+      setFloor(room.floor);
+      setMonthlyRent(room.monthlyRent || 0);
+      setTermRent(room.termRent || (room.monthlyRent ? room.monthlyRent * 4 : 18000));
       setDailyRent(room.dailyRent || 500);
       setRentCycle(room.rentCycle || 'monthly');
-      setDepositAmount(eff.depositAmount ?? room.depositAmount ?? 9000);
-      setDepositStatus(room.depositStatus || (room.status === 'occupied' ? 'paid' : 'unpaid'));
+      const depositVal = room.monthlyDeposit !== undefined ? room.monthlyDeposit : (room.depositAmount || 0);
+      setDepositAmount(depositVal);
+      setMonthlyDeposit(depositVal);
+      setTermDeposit(room.termDeposit !== undefined ? room.termDeposit : (room.depositAmount || 10000));
+      setDailyDeposit(room.dailyDeposit !== undefined ? room.dailyDeposit : (room.dailyRent || 500));
       setMaxOccupants(room.maxOccupants || 2);
       setRoomStatus(room.status || 'vacant');
       setInitialWaterMeter(room.initialWaterMeter || 100);
       setInitialElectricMeter(room.initialElectricMeter || 1200);
-      setNotes(room.notes || '');
     } else {
       setEditingRoom(null);
       setRoomNumber('');
@@ -381,12 +204,13 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
       setDailyRent(500);
       setRentCycle('monthly');
       setDepositAmount(9000);
-      setDepositStatus('unpaid');
+      setMonthlyDeposit(9000);
+      setTermDeposit(10000);
+      setDailyDeposit(500);
       setMaxOccupants(2);
       setRoomStatus('vacant');
       setInitialWaterMeter(100);
       setInitialElectricMeter(1200);
-      setNotes('');
     }
     setIsModalOpen(true);
   };
@@ -394,159 +218,176 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
   useEffect(() => {
     if (initialRoomId) {
       const room = rooms.find(r => r.id === initialRoomId);
-      if (room) handleOpenModal(room);
+      if (room) {
+        handleOpenModal(room);
+      }
       onClearInitialRoomId?.();
     }
   }, [initialRoomId, rooms]);
 
-  const handleSave = async (e: React.FormEvent) => {
+  const isFormModified = React.useMemo(() => {
+    if (!editingRoom) {
+      return roomNumber.trim().length > 0;
+    }
+    const origMonthlyRent = editingRoom.monthlyRent || 0;
+    const origTermRent = editingRoom.termRent || (editingRoom.monthlyRent ? editingRoom.monthlyRent * 4 : 18000);
+    const origDailyRent = editingRoom.dailyRent || 500;
+    const origMonthlyDeposit = editingRoom.monthlyDeposit !== undefined ? editingRoom.monthlyDeposit : (editingRoom.depositAmount || 0);
+    const origTermDeposit = editingRoom.termDeposit !== undefined ? editingRoom.termDeposit : (editingRoom.depositAmount || 10000);
+    const origDailyDeposit = editingRoom.dailyDeposit !== undefined ? editingRoom.dailyDeposit : (editingRoom.dailyRent || 500);
+    const origMaxOccupants = editingRoom.maxOccupants || 2;
+    const origStatus = editingRoom.status || 'vacant';
+
+    const curMonthly = monthlyRent === '' ? 0 : Number(monthlyRent);
+    const curTerm = termRent === '' ? (curMonthly * 4) : Number(termRent);
+    const curDaily = dailyRent === '' ? 500 : Number(dailyRent);
+    const curMonthlyDeposit = monthlyDeposit === '' ? 0 : Number(monthlyDeposit);
+    const curTermDeposit = termDeposit === '' ? 10000 : Number(termDeposit);
+    const curDailyDeposit = dailyDeposit === '' ? 500 : Number(dailyDeposit);
+
+    const hasChanged =
+      curMonthly !== origMonthlyRent ||
+      curTerm !== origTermRent ||
+      curDaily !== origDailyRent ||
+      curMonthlyDeposit !== origMonthlyDeposit ||
+      curTermDeposit !== origTermDeposit ||
+      curDailyDeposit !== origDailyDeposit ||
+      Number(maxOccupants) !== origMaxOccupants ||
+      roomStatus !== origStatus;
+
+    return hasChanged;
+  }, [
+    editingRoom,
+    roomNumber,
+    monthlyRent,
+    termRent,
+    dailyRent,
+    monthlyDeposit,
+    termDeposit,
+    dailyDeposit,
+    maxOccupants,
+    roomStatus
+  ]);
+
+  const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
     setErrorText(null);
 
     if (!roomNumber.trim()) {
-      setErrorText('กรุณากรอกเลขห้องพัก');
+      const err = 'กรุณากรอกเลขห้องพัก';
+      setErrorText(err);
+      const formEl = document.getElementById('room-edit-form');
+      if (formEl) formEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
       return;
     }
 
+    // Check duplicate room number
     const isDuplicate = rooms.some(r => (r?.roomNumber || '').toLowerCase() === roomNumber.trim().toLowerCase() && r.id !== editingRoom?.id);
     if (isDuplicate) {
-      setErrorText(`เลขห้อง "${roomNumber}" นี้ได้รับการบันทึกในระบบแล้ว`);
+      const err = `เลขห้อง "${roomNumber}" นี้ได้รับการบันทึกในระบบแล้ว`;
+      setErrorText(err);
+      const formEl = document.getElementById('room-edit-form');
+      if (formEl) formEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
       return;
     }
 
     if (monthlyRent <= 0) {
-      setErrorText('กรุณากรอกค่าเช่ารายเดือนให้ถูกต้อง');
+      const err = 'กรุณากรอกค่าเช่ารายเดือนให้ถูกต้อง';
+      setErrorText(err);
+      const formEl = document.getElementById('room-edit-form');
+      if (formEl) formEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
       return;
     }
 
+    // Validation: ปิดปรับปรุง ต้องไม่มีผู้เช่า/ว่าง เท่านั้นถึงจะบันทึกข้อมูลได้
+    if (roomStatus === 'maintenance' && editingRoom?.currentTenantId) {
+      const tenant = tenants.find(t => t.id === editingRoom.currentTenantId);
+      const err = `ไม่สามารถเปลี่ยนสถานะเป็น "ปิดปรับปรุง" ได้ เนื่องจากห้องพักนี้มีผู้เช่าอยู่ (${tenant ? tenant.name : 'มีผู้เช่าผูกอยู่'}) ต้องเป็นห้องว่างเท่านั้น`;
+      setErrorText(err);
+      const formEl = document.getElementById('room-edit-form');
+      if (formEl) formEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      return;
+    }
+
+    const digitsOnly = roomNumber.replace(/\D/g, '');
+    const calculatedFloor = Number(floor) || (digitsOnly ? (parseInt(digitsOnly.charAt(0)) || 1) : 1);
+
+    // Calculate effective status based on operational vs maintenance
+    let effectiveStatus: RoomStatus = roomStatus;
+    if (roomStatus === 'maintenance') {
+      effectiveStatus = 'maintenance';
+    } else if (editingRoom?.currentTenantId) {
+      effectiveStatus = 'occupied';
+    } else {
+      effectiveStatus = 'vacant';
+    }
+
+    const numMonthlyDeposit = monthlyDeposit === '' ? (depositAmount === '' ? 0 : Number(depositAmount)) : Number(monthlyDeposit);
+    const numTermDeposit = termDeposit === '' ? undefined : Number(termDeposit);
+    const numDailyDeposit = dailyDeposit === '' ? undefined : Number(dailyDeposit);
+
+    let updatedRooms = [...rooms];
     if (editingRoom) {
-      if (editingRoom.currentTenantId && roomStatus !== 'occupied') {
-        const tenant = tenants.find(t => t.id === editingRoom.currentTenantId);
-        setErrorText(`ห้องนี้มีผู้เช่า (${tenant ? tenant.name : 'ผูกผู้เช่าอยู่'}) กรุณาทำเรื่องเลิกเช่าผ่านระบบผู้เช่า/สัญญาเช่า`);
-        return;
-      }
-      if (!editingRoom.currentTenantId && roomStatus === 'occupied') {
-        setErrorText('ไม่สามารถเปลี่ยนสถานะเป็น "มีผู้เช่า" โดยตรงได้ กรุณาจัดสรรผู้เช่าผ่านระบบผู้เช่าหรือทำสัญญาเช่า');
-        return;
-      }
+      // Update
+      const preservedDepositStatus = editingRoom.depositStatus || (editingRoom.currentTenantId ? 'paid' : 'unpaid');
+      updatedRooms = rooms.map(r => r.id === editingRoom.id ? {
+        ...r,
+        roomNumber: roomNumber.trim(),
+        buildingId: buildingId || r.buildingId,
+        floor: calculatedFloor,
+        monthlyRent: Number(monthlyRent),
+        termRent: Number(termRent) || undefined,
+        dailyRent: Number(dailyRent) || undefined,
+        rentCycle,
+        depositAmount: numMonthlyDeposit,
+        monthlyDeposit: numMonthlyDeposit,
+        termDeposit: numTermDeposit,
+        dailyDeposit: numDailyDeposit,
+        depositStatus: preservedDepositStatus,
+        maxOccupants: Number(maxOccupants),
+        status: effectiveStatus,
+        initialWaterMeter: Number(initialWaterMeter) || r.initialWaterMeter || 0,
+        initialElectricMeter: Number(initialElectricMeter) || r.initialElectricMeter || 0,
+        updatedAt: new Date().toISOString()
+      } : r);
+
+      onAddLog('แก้ไขห้องพัก', `แก้ไขรายละเอียดห้อง ${roomNumber}`, 'Room', editingRoom.id);
+    } else {
+      // Create
+      const newId = `room-${Date.now()}`;
+      const newRoom: Room = {
+        id: newId,
+        roomNumber: roomNumber.trim(),
+        buildingId: buildingId || undefined,
+        floor: calculatedFloor,
+        monthlyRent: Number(monthlyRent),
+        termRent: Number(termRent) || undefined,
+        dailyRent: Number(dailyRent) || undefined,
+        rentCycle,
+        depositAmount: numMonthlyDeposit,
+        monthlyDeposit: numMonthlyDeposit,
+        termDeposit: numTermDeposit,
+        dailyDeposit: numDailyDeposit,
+        depositStatus: 'unpaid',
+        maxOccupants: Number(maxOccupants),
+        initialWaterMeter: Number(initialWaterMeter) || 0,
+        initialElectricMeter: Number(initialElectricMeter) || 0,
+        status: effectiveStatus,
+        images: ['https://images.unsplash.com/photo-1522771739844-6a9f6d5f14af?w=400'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+      updatedRooms.push(newRoom);
+      onAddLog('เพิ่มห้องพักใหม่', `สร้างเลขห้อง ${roomNumber} ใหม่ในระบบ`, 'Room', newId);
     }
 
-    let errorMessage = 'เกิดข้อผิดพลาดในการบันทึกห้อง';
-    try {
-      if (editingRoom && DataProvider.properties) {
-        let currentVer = (editingRoom as any).version || 1;
-        const identityChanges = {
-          roomNumber: roomNumber.trim(),
-          buildingId: buildingId || undefined,
-          floor: Number(floor) || 1,
-          roomType: (editingRoom as any).roomType || 'standard',
-          rentCycle,
-          status: roomStatus,
-          maximumOccupants: Number(maxOccupants),
-          notes
-        };
-
-        const overrideChanges = {
-          monthlyRent: Number(monthlyRent),
-          depositAmount: Number(depositAmount)
-        };
-
-        // 1. Update identity fields via updateRoomIdentity
-        const identityRes = await DataProvider.properties.updateRoomIdentity(editingRoom.id, identityChanges, currentVer);
-        if (!identityRes.success) {
-          if (identityRes.error?.code === 'CONFLICT' || (identityRes.error as any)?.statusCode === 409) {
-            setVersionConflictState({
-              isOpen: true,
-              entityName: `ห้อง ${roomNumber}`,
-              currentVersion: (identityRes.error?.details as any)?.currentVersion || currentVer + 1,
-              onRetry: () => handleSave(e)
-            });
-            return;
-          }
-          if (identityRes.error?.code === 'ROOM_LIMIT_EXCEEDED') throw new Error(identityRes.error.message || 'จำนวนห้องพักเกินโควต้าแพ็กเกจ');
-          throw new Error(identityRes.error?.message || errorMessage);
-        }
-
-        if ((identityRes.data as any)?.version) {
-          currentVer = (identityRes.data as any).version;
-        } else {
-          currentVer += 1;
-        }
-
-        // 2. Update default overrides via setRoomDefaults
-        const overrideRes = await DataProvider.properties.setRoomDefaults(editingRoom.id, overrideChanges, currentVer);
-        if (!overrideRes.success) {
-          if (overrideRes.error?.code === 'CONFLICT' || (overrideRes.error as any)?.statusCode === 409) {
-            setVersionConflictState({
-              isOpen: true,
-              entityName: `ห้อง ${roomNumber}`,
-              currentVersion: (overrideRes.error?.details as any)?.currentVersion || currentVer + 1,
-              onRetry: () => handleSave(e)
-            });
-            return;
-          }
-          throw new Error(overrideRes.error?.message || errorMessage);
-        }
-
-        onAddLog('แก้ไขห้องพัก', `แก้ไขรายละเอียดห้อง ${roomNumber}`, 'Room', editingRoom.id);
-      } else {
-        const payload = {
-          roomNumber: roomNumber.trim(),
-          buildingId: buildingId || undefined,
-          floor: Number(floor) || 1,
-          monthlyRent: String(monthlyRent),
-          termRent: termRent ? String(termRent) : undefined,
-          dailyRent: dailyRent ? String(dailyRent) : undefined,
-          rentCycle,
-          depositAmount: String(depositAmount),
-          depositStatus,
-          maximumOccupants: Number(maxOccupants),
-          status: roomStatus,
-          initialWaterReading: String(initialWaterMeter || 0),
-          initialElectricityReading: String(initialElectricMeter || 0),
-          notes
-        };
-        const res = await DataProvider.rooms.addRoom(payload as any);
-        if (!res.success) {
-          if (res.error?.code === 'ROOM_LIMIT_EXCEEDED') throw new Error(res.error.message || 'จำนวนห้องพักเกินโควต้าแพ็กเกจ');
-          throw new Error(res.error?.message || errorMessage);
-        }
-        onAddLog('เพิ่มห้องพักใหม่', `สร้างเลขห้อง ${roomNumber} ใหม่ในระบบ`, 'Room', res.data?.id || 'unknown');
-      }
-
-      await fetchAuthoritativeData();
-
-      const savedRoomNumber = roomNumber.trim();
-      setIsModalOpen(false);
-      setToastMessage(`เลขห้อง "${savedRoomNumber}" นี้ได้รับการบันทึกในระบบแล้ว`);
-    } catch (err: any) {
-      setErrorText(err.message || errorMessage);
-    }
-  };
-
-  const handleClearRoomOverride = async (field: string) => {
-    if (!editingRoom || !DataProvider.properties) return;
-    try {
-      const currentVer = editingRoom.version || 1;
-      const res = await DataProvider.properties.clearRoomOverride(editingRoom.id, field, currentVer);
-      if (!res.success) {
-        if (res.error?.code === 'CONFLICT' || (res.error as any)?.statusCode === 409) {
-          setVersionConflictState({
-            isOpen: true,
-            entityName: `ห้อง ${editingRoom.roomNumber}`,
-            currentVersion: (res.error?.details as any)?.currentVersion || currentVer + 1
-          });
-          return;
-        }
-        throw new Error(res.error?.message || 'Failed to clear override');
-      }
-      onAddLog('ล้างค่าเฉพาะห้อง', `ล้างค่า override สนาม ${field} ของห้อง ${editingRoom.roomNumber}`, 'Room', editingRoom.id);
-      await fetchAuthoritativeData();
-      setIsModalOpen(false);
-      setToastMessage(`ล้างค่า override สนาม "${field}" เรียบร้อยแล้ว`);
-    } catch (err: any) {
-      setErrorText(err.message || 'เกิดข้อผิดพลาดในการล้างค่า');
-    }
+    const savedRoomNumber = roomNumber.trim();
+    onSaveRooms(updatedRooms);
+    setIsModalOpen(false);
+    setToastMessage(`เลขห้อง "${savedRoomNumber}" นี้ได้รับการบันทึกในระบบแล้ว`);
+    setTimeout(() => {
+      setToastMessage(null);
+    }, 3500);
   };
 
   const handleDeleteFromModal = (roomId: string, roomNum: string) => {
@@ -554,19 +395,25 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
     if (!targetRoom) return;
 
     const infoList: string[] = [];
+
+    // Check 1: Tenant assigned
     if (targetRoom.currentTenantId) {
       const tenant = tenants.find(t => t.id === targetRoom.currentTenantId);
       infoList.push(`ผู้เช่าปัจจุบัน: ${tenant ? tenant.name : targetRoom.currentTenantId}`);
     }
+
+    // Check 2: Active or blocking contracts
     if (contracts && contracts.length > 0) {
       const activeContracts = contracts.filter(
         c => (c.roomId === targetRoom.id || c.roomId === targetRoom.roomNumber) &&
-             BLOCKING_CONTRACT_STATUSES.includes(c.status)
+          BLOCKING_CONTRACT_STATUSES.includes(c.status)
       );
       if (activeContracts.length > 0) {
         infoList.push(`มีสัญญาเช่าในระบบ ${activeContracts.length} ฉบับ`);
       }
     }
+
+    // Check 3: Associated bills
     if (bills && bills.length > 0) {
       const roomBills = bills.filter(b => b.roomId === targetRoom.id || b.roomNumber === targetRoom.roomNumber);
       if (roomBills.length > 0) {
@@ -586,197 +433,206 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
     });
   };
 
-  const executeDeleteRoom = async () => {
+  const executeDeleteRoom = () => {
     if (!deleteConfirmData) return;
     const { roomId, roomNum } = deleteConfirmData;
-    try {
-      const targetRoom = rooms.find(r => r.id === roomId);
-      const currentVer = targetRoom?.version || 1;
-      let res: any;
-      if (DataProvider.properties) {
-        res = await DataProvider.properties.archiveRoom(roomId, currentVer);
-      } else {
-        res = await DataProvider.rooms.deleteRoom(roomId);
-      }
-      if (!res.success) {
-        if (res.error?.code === 'CONFLICT' || (res.error as any)?.statusCode === 409) {
-          setVersionConflictState({
-            isOpen: true,
-            entityName: `ห้อง ${roomNum}`,
-            currentVersion: (res.error?.details as any)?.currentVersion || currentVer + 1
-          });
-          setDeleteConfirmData(null);
-          return;
-        }
-        throw new Error(res.error?.message || 'Failed to delete room');
-      }
-
-      onAddLog('ลบห้องพัก', `ลบห้องเลขที่ ${roomNum} ออกจากระบบถาวร`, 'Room', roomId);
-
-      await fetchAuthoritativeData();
-
-      setIsModalOpen(false);
-      setEditingRoom(null);
-      setDeleteConfirmData(null);
-      setToastMessage(`ลบห้องพัก "${roomNum}" ออกจากระบบเรียบร้อยแล้ว`);
-    } catch (err: any) {
-      alert(err.message || 'เกิดข้อผิดพลาดในการลบห้อง');
-    }
+    const updated = rooms.filter(r => r.id !== roomId && r.roomNumber !== roomNum);
+    onSaveRooms(updated);
+    onAddLog('ลบห้องพัก', `ลบห้องเลขที่ ${roomNum} ออกจากระบบถาวร`, 'Room', roomId);
+    setIsModalOpen(false);
+    setEditingRoom(null);
+    setDeleteConfirmData(null);
+    setToastMessage(`ลบห้องพัก "${roomNum}" ออกจากระบบเรียบร้อยแล้ว`);
+    setTimeout(() => {
+      setToastMessage(null);
+    }, 3500);
   };
 
-  // Availability Search Handler (Requirement 7)
-  const handleQueryAvailability = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    setAvailError(null);
-    setAvailResult(null);
+  const handleToggleRoomStatus = (roomId: string, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    const targetRoom = rooms.find(r => r.id === roomId);
+    if (!targetRoom) return;
 
-    if (!availStartDate || !availEndDate) {
-      setAvailError('กรุณาเลือกวันเริ่มและวันสิ้นสุดให้ถูกต้อง');
-      return;
-    }
-    if (availStartDate > availEndDate) {
-      setAvailError('วันเริ่มต้นต้องไม่เกินวันสิ้นสุด');
+    // Rule: ถ้ามีผู้เช่าอยู่ให้เปิดค้างไว้
+    if (targetRoom.currentTenantId) {
+      const tenant = tenants.find(t => t.id === targetRoom.currentTenantId);
+      setToastMessage(`ห้อง ${targetRoom.roomNumber} มีผู้เช่าพักอยู่ (${tenant ? tenant.name : 'มีผู้เช่า'}) - ระบบเปิดใช้งานค้างไว้`);
       return;
     }
 
-    setAvailSearching(true);
-    try {
-      if (DataProvider.properties) {
-        const res = await DataProvider.properties.queryAvailability({
-          startDate: availStartDate,
-          endDate: availEndDate,
-          buildingId: availBuildingId === 'all' ? undefined : availBuildingId
-        });
-        if (res.success && res.data) {
-          const availRooms = Array.isArray(res.data) ? res.data : [];
-          setAvailResult({
-            available: availRooms,
-            total: rooms.length
-          });
-        } else {
-          setAvailError(res.error?.message || 'ไม่สามารถค้นหาห้องว่างได้');
-        }
-      }
-    } catch (err: any) {
-      setAvailError(err.message || 'เกิดข้อผิดพลาดในการค้นหาห้องว่าง');
-    } finally {
-      setAvailSearching(false);
+    // Rule: ถ้าห้องนั้น ว่างให้ปิดได้ = ปิดปรับปรุง / เปิดใช้งาน
+    const nextStatus: RoomStatus = targetRoom.status === 'maintenance' ? 'vacant' : 'maintenance';
+    const updated = rooms.map(r => r.id === roomId ? {
+      ...r,
+      status: nextStatus,
+      updatedAt: new Date().toISOString()
+    } : r);
+
+    onSaveRooms(updated);
+    onAddLog(
+      'เปลี่ยนสถานะห้องพัก',
+      `เปลี่ยนสถานะห้อง ${targetRoom.roomNumber} เป็น "${nextStatus === 'maintenance' ? 'ปิดปรับปรุง' : 'เปิดใช้งาน'}"`,
+      'Room',
+      roomId
+    );
+    setToastMessage(`ห้อง ${targetRoom.roomNumber}: เปลี่ยนเป็น "${nextStatus === 'maintenance' ? 'ปิดปรับปรุง' : 'เปิดใช้งาน'}" เรียบร้อยแล้ว`);
+  };
+
+  // Open Quick Add Tenant modal or Navigate to Tenant Profile
+  const handleTenantAction = (room: Room, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    if (room.currentTenantId) {
+      // Room has tenant -> Navigate to tenant detail in tenants tab
+      onNavigate('tenants', room.currentTenantId);
+    } else {
+      // Room is vacant or maintenance -> Open quick add tenant modal
+      setSelectedRoomForTenant(room);
+      setNewTenantName('');
+      setNewTenantPhone('');
+      setNewTenantIdCard('');
+      setNewTenantStartDate(new Date().toISOString().split('T')[0]);
+      setNewTenantDuration(6);
+      setNewTenantRent(room.monthlyRent || 4500);
+      setNewTenantDeposit(room.depositAmount || 9000);
+      setNewTenantDepositStatus('paid');
+      setNewTenantNotes('');
+      setAddTenantError(null);
+      setIsAddTenantModalOpen(true);
     }
   };
 
-  // Filter Logic
-  const safeBuildings = Array.isArray(buildings) ? buildings : [];
-  const safeRooms = Array.isArray(rooms) ? rooms : [];
-  const safeTenants = Array.isArray(tenants) ? tenants : [];
-  const filteredRooms = safeRooms.filter(r => {
+  const handleSaveNewTenant = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedRoomForTenant) return;
+    setAddTenantError(null);
+
+    if (!newTenantName.trim()) {
+      setAddTenantError('กรุณากรอกชื่อ-นามสกุลของผู้เช่า');
+      return;
+    }
+
+    if (!newTenantPhone.trim()) {
+      setAddTenantError('กรุณากรอกเบอร์โทรศัพท์ของผู้เช่า');
+      return;
+    }
+
+    const timestamp = Date.now();
+    const newTenantId = `tenant-${timestamp}`;
+    const newContractId = `contract-${timestamp}`;
+
+    // Calculate contract end date
+    const start = new Date(newTenantStartDate);
+    const end = new Date(start);
+    end.setMonth(end.getMonth() + Number(newTenantDuration));
+    const calculatedEndDate = end.toISOString().split('T')[0];
+
+    const newTenant: Tenant = {
+      id: newTenantId,
+      name: newTenantName.trim(),
+      phone: newTenantPhone.trim(),
+      email: '',
+      citizenId: newTenantIdCard.trim() || '',
+      coOccupants: [],
+      emergencyContact: {
+        name: '',
+        relationship: '',
+        phone: ''
+      },
+      vehicle: {
+        type: 'none',
+        licensePlate: ''
+      },
+      pet: {
+        hasPet: false
+      },
+      rentalHistory: [selectedRoomForTenant.id],
+      status: 'active',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+
+    const newContract: Contract = {
+      id: newContractId,
+      contractNumber: `CTR-${Date.now().toString().slice(-6)}`,
+      tenantId: newTenantId,
+      roomId: selectedRoomForTenant.id,
+      startDate: newTenantStartDate,
+      endDate: calculatedEndDate,
+      stayDate: newTenantStartDate,
+      durationMonths: Number(newTenantDuration),
+      rentAmount: Number(newTenantRent),
+      depositAmount: Number(newTenantDeposit),
+      depositStatus: newTenantDepositStatus,
+      depositType: 'refundable',
+      advancePaymentAmount: 0,
+      status: 'active',
+      terms: 'สัญญาเช่าห้องพักมาตรฐาน',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+
+    // 1. Update room status to occupied
+    const updatedRooms = rooms.map(r => r.id === selectedRoomForTenant.id ? {
+      ...r,
+      status: 'occupied' as RoomStatus,
+      currentTenantId: newTenantId,
+      depositStatus: newTenantDepositStatus,
+      updatedAt: new Date().toISOString()
+    } : r);
+    onSaveRooms(updatedRooms);
+
+    // 2. Save tenant
+    if (onSaveTenants) {
+      onSaveTenants([...tenants, newTenant]);
+    }
+
+    // 3. Save contract
+    if (onSaveContracts) {
+      onSaveContracts([...contracts, newContract]);
+    }
+
+    onAddLog(
+      'เพิ่มผู้เช่าใหม่',
+      `เพิ่มผู้เช่า ${newTenant.name} เข้าห้องพัก ${selectedRoomForTenant.roomNumber} (สัญญา ${newTenantDuration} เดือน)`,
+      'Tenant',
+      newTenantId
+    );
+
+    setIsAddTenantModalOpen(false);
+    setSelectedRoomForTenant(null);
+    setToastMessage(`เพิ่มผู้เช่า "${newTenant.name}" เข้าห้องพัก ${selectedRoomForTenant.roomNumber} เรียบร้อยแล้ว`);
+  };
+
+  // Filter Logic (Search by Room Number, Tenant Name, and Phone)
+  const filteredRooms = rooms.filter(r => {
     const matchBuilding = selectedBuilding === 'all' || r.buildingId === selectedBuilding;
     const matchStatus = selectedStatus === 'all' || r.status === selectedStatus;
-    const matchSearch = (r?.roomNumber || '').toLowerCase().includes((searchQuery || '').toLowerCase());
+    const query = (searchQuery || '').toLowerCase().trim();
+    if (!query) {
+      return matchBuilding && matchStatus;
+    }
+    const currentTenant = r.currentTenantId ? tenants.find(t => t.id === r.currentTenantId) : null;
+    const matchRoomNumber = (r?.roomNumber || '').toLowerCase().includes(query);
+    const matchTenantName = currentTenant ? (currentTenant.name || '').toLowerCase().includes(query) : false;
+    const matchTenantPhone = currentTenant ? (currentTenant.phone || '').includes(query) : false;
+    const matchSearch = matchRoomNumber || matchTenantName || matchTenantPhone;
     return matchBuilding && matchStatus && matchSearch;
   });
 
   return (
     <div className="space-y-6 relative">
-      {/* Toast Notification */}
+      {/* Toast Notification (Mobile: Centered above bottom nav, White bg, Smooth Fade) */}
       {toastMessage && (
         <div
-          className={`fixed bottom-20 left-1/2 -translate-x-1/2 sm:bottom-8 sm:right-8 sm:left-auto sm:translate-x-0 z-[9999] bg-white text-slate-800 px-4.5 py-3 rounded-2xl shadow-2xl border border-slate-200/90 flex items-center gap-2.5 text-xs font-bold transition-all duration-500 ease-in-out ${
-            isToastFading
+          className={`fixed bottom-20 left-1/2 -translate-x-1/2 sm:bottom-8 sm:right-8 sm:left-auto sm:translate-x-0 z-[9999] bg-white text-slate-800 px-4.5 py-3 rounded-2xl shadow-2xl border border-slate-200/90 flex items-center gap-2.5 text-xs font-bold transition-all duration-500 ease-in-out ${isToastFading
               ? 'opacity-0 translate-y-3 pointer-events-none'
               : 'opacity-100 translate-y-0 animate-in fade-in slide-in-from-bottom-3 duration-300'
-          }`}
+            }`}
         >
           <CheckCircle2 className="w-4.5 h-4.5 text-emerald-500 shrink-0" />
           <span>{toastMessage}</span>
         </div>
       )}
-
-      {/* Requirement 7: Date-Based Room Availability Search UI */}
-      <div className="bg-gradient-to-r from-indigo-900 via-indigo-800 to-slate-900 p-5 rounded-3xl text-white shadow-lg space-y-3">
-        <div className="flex items-center justify-between">
-          <h3 className="text-xs font-black uppercase tracking-wider text-indigo-200 flex items-center gap-2">
-            <Calendar className="w-4 h-4 text-emerald-400" />
-            ค้นหาห้องว่างตามช่วงเวลาสัญญา (Availability Search)
-          </h3>
-        </div>
-        <form onSubmit={handleQueryAvailability} className="grid grid-cols-1 sm:grid-cols-4 gap-3 items-end">
-          <div>
-            <label className="block text-[11px] font-bold text-indigo-200 mb-1">เลือกอาคาร</label>
-            <select
-              aria-label="เลือกอาคารสำหรับค้นหาห้องว่าง"
-              value={availBuildingId}
-              onChange={(e) => setAvailBuildingId(e.target.value)}
-              className="w-full px-3 py-2 text-xs border border-indigo-700 bg-indigo-950/80 rounded-xl text-white font-bold focus:outline-none"
-            >
-              <option value="all">อาคารทั้งหมด</option>
-              {(Array.isArray(buildings) ? buildings : []).map(b => (
-                <option key={b.id} value={b.id}>{b.name}</option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="block text-[11px] font-bold text-indigo-200 mb-1">วันเริ่มต้นสัญญา *</label>
-            <OwnerDateInput
-              data-testid="input-avail-start-date"
-              value={availStartDate}
-              onChange={(iso) => setAvailStartDate(iso)}
-              className="border-indigo-700 bg-indigo-950/80 text-white"
-            />
-          </div>
-          <div>
-            <label className="block text-[11px] font-bold text-indigo-200 mb-1">วันสิ้นสุดสัญญา *</label>
-            <OwnerDateInput
-              data-testid="input-avail-end-date"
-              value={availEndDate}
-              onChange={(iso) => setAvailEndDate(iso)}
-              className="border-indigo-700 bg-indigo-950/80 text-white"
-            />
-          </div>
-          <div>
-            <button
-              type="submit"
-              data-testid="btn-search-availability"
-              disabled={availSearching}
-              className="w-full py-2 bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-black text-xs rounded-xl transition-all shadow-md flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
-            >
-              <Search className="w-4 h-4" />
-              <span>{availSearching ? 'กำลังค้นหา...' : 'ค้นหาห้องว่าง'}</span>
-            </button>
-          </div>
-        </form>
-
-        {availError && (
-          <div className="p-2.5 bg-rose-500/20 border border-rose-500/40 text-rose-200 text-xs rounded-xl flex items-center gap-2">
-            <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
-            <span>{availError}</span>
-          </div>
-        )}
-
-        {availResult && (
-          <div className="p-3 bg-indigo-950/90 border border-indigo-700/60 rounded-2xl space-y-2 text-xs">
-            <div className="flex justify-between items-center font-bold">
-              <span className="text-emerald-400">
-                พบห้องว่าง {availResult.available.length} ห้อง (จากทั้งหมด {availResult.total} ห้อง) ช่วง {availStartDate} ถึง {availEndDate}
-              </span>
-              {availResult.available.length > 0 && (
-                <button
-                  onClick={() => setAvailResult(null)}
-                  className="text-[10px] text-indigo-300 hover:text-white underline cursor-pointer"
-                >
-                  ล้างผลการค้นหา
-                </button>
-              )}
-            </div>
-            <div className="flex flex-wrap gap-2 pt-1">
-              {availResult.available.map(r => (
-                <span key={r.id} className="px-2.5 py-1 bg-emerald-900/60 border border-emerald-500/40 text-emerald-200 rounded-lg text-xs font-black">
-                  ห้อง {r.roomNumber} (฿{formatBaht(r.currentEffectiveValues?.monthlyRent ?? r.monthlyRent)})
-                </span>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
 
       {/* Search and Filters Header */}
       <div className="bg-white p-5 rounded-3xl border border-gray-100 shadow-xs flex flex-col md:flex-row gap-4 justify-between items-stretch md:items-center">
@@ -785,7 +641,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
           <Search className="absolute left-3 top-2.5 h-4 text-gray-400" />
           <input
             type="text"
-            placeholder="ค้นหาเลขห้องพัก..."
+            placeholder="ค้นหาเลขห้องพัก หรือชื่อผู้เช่า..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="w-full pl-9 pr-4 py-2 text-xs border border-gray-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-slate-50 text-slate-800 font-medium"
@@ -794,25 +650,26 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
 
         {/* Filters and View Toggles */}
         <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-3 w-full sm:w-auto">
+          {/* Building & Status Filters */}
           <div className="grid grid-cols-2 sm:flex sm:items-center gap-2.5 w-full sm:w-auto">
+            {/* Building Filter */}
             <div className="flex items-center gap-1.5 px-2.5 py-1.5 border border-gray-200 bg-white rounded-lg text-xs font-semibold text-slate-700 min-w-0">
               <Filter className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
               <select
-                aria-label="กรองตามอาคาร"
                 value={selectedBuilding}
                 onChange={(e) => setSelectedBuilding(e.target.value)}
                 className="bg-transparent focus:outline-none w-full cursor-pointer text-slate-700 font-semibold"
               >
                 <option value="all">อาคารทั้งหมด</option>
-                {(Array.isArray(buildings) ? buildings : []).map(b => (
+                {buildings.map(b => (
                   <option key={b.id} value={b.id}>{b.name}</option>
                 ))}
                 <option value="unspecified">ไม่ระบุอาคาร</option>
               </select>
             </div>
 
+            {/* Status Filter */}
             <select
-              aria-label="กรองตามสถานะห้องพัก"
               value={selectedStatus}
               onChange={(e) => setSelectedStatus(e.target.value)}
               className="px-2.5 py-1.5 text-xs border border-gray-200 bg-white rounded-lg focus:outline-none font-semibold text-slate-700 cursor-pointer min-w-0"
@@ -824,8 +681,17 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
             </select>
           </div>
 
+          {/* View Switchers & Add Room Button (Order: floor -> grid -> list) */}
           <div className="flex items-center justify-between sm:justify-start gap-3 w-full sm:w-auto">
+            {/* View Switchers */}
             <div className="flex rounded-lg border border-gray-200 bg-gray-50 p-0.5 shrink-0">
+              <button
+                onClick={() => setViewMode('floor')}
+                className={`p-1.5 rounded-md transition-all cursor-pointer ${viewMode === 'floor' ? 'bg-white shadow-xs text-indigo-600' : 'text-gray-400 hover:text-slate-600'}`}
+                title="แผนผังแยกชั้น (Floor Map)"
+              >
+                <Layers className="w-4 h-4" />
+              </button>
               <button
                 onClick={() => setViewMode('grid')}
                 className={`p-1.5 rounded-md transition-all cursor-pointer ${viewMode === 'grid' ? 'bg-white shadow-xs text-indigo-600' : 'text-gray-400 hover:text-slate-600'}`}
@@ -840,28 +706,9 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
               >
                 <List className="w-4 h-4" />
               </button>
-              <button
-                onClick={() => setViewMode('floor')}
-                className={`p-1.5 rounded-md transition-all cursor-pointer ${viewMode === 'floor' ? 'bg-white shadow-xs text-indigo-600' : 'text-gray-400 hover:text-slate-600'}`}
-                title="แผนผังแยกชั้น (Floor Map)"
-              >
-                <Layers className="w-4 h-4" />
-              </button>
             </div>
 
-            <button
-              data-testid="btn-edit-building"
-              onClick={() => {
-                const safeBldList = Array.isArray(buildings) ? buildings : [];
-                const targetBld = selectedBuilding !== 'all' ? safeBldList.find(b => b.id === selectedBuilding) || safeBldList[0] : safeBldList[0];
-                handleOpenBuildingModal(targetBld || null);
-              }}
-              className="flex-1 sm:flex-none px-3.5 py-2 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-semibold text-xs rounded-xl flex items-center justify-center gap-1.5 shadow-2xs transition-colors cursor-pointer"
-            >
-              <Edit2 className="w-3.5 h-3.5 text-indigo-600" />
-              <span>ตั้งค่าอาคาร (Building)</span>
-            </button>
-
+            {/* Add New Room */}
             <button
               onClick={() => handleOpenModal()}
               className="flex-1 sm:flex-none px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs rounded-xl flex items-center justify-center gap-1.5 shadow-xs transition-colors cursor-pointer"
@@ -877,42 +724,40 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
       {viewMode === 'grid' && (
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
           {filteredRooms.map((room) => {
-            const bldName = safeBuildings.find(b => b.id === room.buildingId)?.name || 'ไม่ระบุอาคาร';
-            const currentTenant = safeTenants.find(t => t.id === room.currentTenantId);
+            const bldName = buildings.find(b => b.id === room.buildingId)?.name || 'ไม่ระบุอาคาร';
+            const currentTenant = tenants.find(t => t.id === room.currentTenantId);
             const statusCfg = ROOM_STATUS_CONFIG[room.status] || ROOM_STATUS_CONFIG.vacant;
-
-            const eff = room.currentEffectiveValues || {};
-            const rentVal = eff.monthlyRent ?? room.monthlyRent;
-            const depositVal = eff.depositAmount ?? room.depositAmount;
-            const rentSource = room.currentFieldSources?.monthlyRent;
 
             return (
               <div
                 key={room.id}
-                data-testid="room-card"
                 className={`rounded-3xl border shadow-2xs hover:shadow-md transition-all duration-300 overflow-hidden flex flex-col justify-between ${statusCfg.bg} ${statusCfg.border}`}
               >
                 <div className="p-5 space-y-3.5">
-                  <div className="flex justify-between items-start">
+                  {/* Top Row: Room number & Status badge */}
+                  <div className="flex justify-between items-start gap-2">
                     <div>
                       <h4 className="text-xl font-black text-slate-900 tracking-tight">{room.roomNumber}</h4>
-                      <p className="text-[11px] text-gray-500 font-semibold mt-0.5">
-                        {bldName} &bull; {room.derivedFloor ? `ชั้น ${room.derivedFloor}` : <span className="text-red-500">[Error]</span>}
-                      </p>
+                      <p className="text-[11px] text-gray-500 font-semibold mt-0.5">{bldName} &bull; ชั้น {room.floor}</p>
                     </div>
-                    <div className="flex flex-col items-end gap-1">
-                      <span className={`px-2.5 py-1 rounded-full text-xs font-black border shadow-2xs ${statusCfg.badgeBg} ${statusCfg.badgeText} ${statusCfg.border}`}>
-                        {statusCfg.label}
-                      </span>
 
-                      {room.snapshotLocked && (
-                        <SourceBadge isLocked={true} />
-                      )}
-                      <SourceBadge source={rentSource} />
+                    {/* Status Badge (View-only) */}
+                    <div
+                      className={`px-2.5 py-1 rounded-full text-xs font-black border shadow-2xs select-none cursor-default ${room.status === 'occupied'
+                          ? 'bg-indigo-100 text-indigo-800 border-indigo-200'
+                          : room.status === 'vacant'
+                            ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                            : 'bg-rose-100 text-rose-800 border-rose-200'
+                        }`}
+                      title={`สถานะห้อง: ${statusCfg.label}`}
+                    >
+                      {statusCfg.label}
                     </div>
                   </div>
 
+                  {/* Combined Tenant & Rates Container */}
                   <div className="bg-white/90 backdrop-blur-xs p-3.5 rounded-2xl border border-gray-100 shadow-2xs space-y-3 text-xs">
+                    {/* Tenant Info */}
                     <div className="flex items-center gap-2.5 pb-2.5 border-b border-gray-100">
                       <div className="w-7 h-7 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center shrink-0">
                         <UserIcon className="w-4 h-4" />
@@ -927,11 +772,12 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                       </div>
                     </div>
 
+                    {/* Rates Breakdown */}
                     <div className="space-y-1.5">
-                      <p className="text-[10px] font-black uppercase text-indigo-700 tracking-wider">อัตราค่าเช่าพัก (Effective)</p>
+                      <p className="text-[10px] font-black uppercase text-indigo-700 tracking-wider">อัตราค่าเช่าพัก</p>
                       <div className="flex justify-between items-center text-slate-700">
                         <span className="text-gray-500 font-medium">รายเดือน:</span>
-                        <span className="font-extrabold text-slate-900">{formatBaht(rentVal)} / เดือน</span>
+                        <span className="font-extrabold text-slate-900">{formatBaht(room.monthlyRent)} / เดือน</span>
                       </div>
                       {room.termRent && (
                         <div className="flex justify-between items-center text-slate-700">
@@ -948,31 +794,59 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                     </div>
                   </div>
 
+                  {/* Deposit Amount & Status */}
                   <div className="flex items-center justify-between text-xs px-1 pt-0.5">
                     <span className="text-gray-600 font-bold">ค่าประกัน:</span>
-                    <div className="flex items-center gap-1.5">
-                      <span className="font-extrabold text-slate-900">{formatBaht(depositVal)}</span>
-                      {room.depositStatus === 'paid' ? (
-                        <span className="px-1.5 py-0.5 bg-emerald-100 text-emerald-800 text-[10px] font-black rounded-md border border-emerald-200">
-                          จ่ายแล้ว
-                        </span>
-                      ) : (
-                        <span className="px-1.5 py-0.5 bg-rose-100 text-rose-800 text-[10px] font-black rounded-md border border-rose-200">
-                          ยังไม่จ่าย
-                        </span>
-                      )}
-                    </div>
+                    {room.status === 'vacant' || !room.currentTenantId ? (
+                      <span className="text-gray-400 font-medium italic">ไม่มีผู้เช่าลงทะเบียน</span>
+                    ) : (
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-extrabold text-slate-900">{formatBaht(room.depositAmount)}</span>
+                        {room.depositStatus === 'paid' ? (
+                          <span className="px-1.5 py-0.5 bg-emerald-100 text-emerald-800 text-[10px] font-black rounded-md border border-emerald-200">
+                            จ่ายแล้ว
+                          </span>
+                        ) : (
+                          <span className="px-1.5 py-0.5 bg-rose-100 text-rose-800 text-[10px] font-black rounded-md border border-rose-200">
+                            ยังไม่จ่าย
+                          </span>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
 
-                <div className="bg-white/90 px-5 py-3 border-t border-gray-100/80 flex justify-end shrink-0">
+                {/* Card Footer Actions: Edit and Add Tenant side-by-side */}
+                <div className="bg-white/95 px-4 py-2.5 border-t border-gray-100 flex items-center gap-2 shrink-0">
                   <button
+                    type="button"
                     onClick={() => handleOpenModal(room)}
-                    className="w-full py-1.5 text-xs font-bold text-indigo-600 hover:bg-indigo-50 border border-indigo-200 rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+                    className="flex-1 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-100 border border-gray-200 rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer"
                     title="แก้ไขรายละเอียดห้องพัก"
                   >
-                    <Edit2 className="w-3.5 h-3.5" />
+                    <Edit2 className="w-3.5 h-3.5 text-slate-500" />
                     <span>แก้ไข</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={(e) => handleTenantAction(room, e)}
+                    className={`flex-1 py-1.5 text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-2xs ${room.currentTenantId
+                        ? 'bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200'
+                        : 'bg-indigo-600 hover:bg-indigo-700 text-white border border-indigo-600'
+                      }`}
+                    title={room.currentTenantId ? 'ดูข้อมูลผู้เช่าในหน้ารายชื่อ' : 'เพิ่มผู้เช่าเข้าห้องพักนี้'}
+                  >
+                    {room.currentTenantId ? (
+                      <>
+                        <UserIcon className="w-3.5 h-3.5" />
+                        <span>ข้อมูลผู้เช่า</span>
+                      </>
+                    ) : (
+                      <>
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>เพิ่มผู้เช่า</span>
+                      </>
+                    )}
                   </button>
                 </div>
               </div>
@@ -991,34 +865,31 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
       {viewMode === 'list' && (
         <div className="bg-white border border-gray-100 shadow-2xs rounded-3xl overflow-hidden">
           <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse text-xs">
+            <table className="w-full min-w-[820px] text-left border-collapse text-xs whitespace-nowrap">
               <thead className="bg-slate-50 text-slate-500 font-extrabold uppercase tracking-wider border-b border-gray-100">
                 <tr>
-                  <th className="p-4">เลขห้อง</th>
-                  <th className="p-4">อาคาร/ชั้น</th>
-                  <th className="p-4">ผู้เช่าปัจจุบัน</th>
-                  <th className="p-4">อัตราค่าเช่า</th>
-                  <th className="p-4">เงินมัดจำ</th>
-                  <th className="p-4">สถานะห้อง</th>
-                  <th className="p-4 text-right">แก้ไข</th>
+                  <th className="p-4 whitespace-nowrap">เลขห้อง</th>
+                  <th className="p-4 whitespace-nowrap">อาคาร/ชั้น</th>
+                  <th className="p-4 whitespace-nowrap">ผู้เช่าปัจจุบัน</th>
+                  <th className="p-4 whitespace-nowrap">อัตราค่าเช่า</th>
+                  <th className="p-4 whitespace-nowrap">ค่าประกัน</th>
+                  <th className="p-4 whitespace-nowrap">สถานะห้อง</th>
+                  <th className="p-4 whitespace-nowrap text-right">การจัดการ</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {filteredRooms.map((room) => {
-                  const bldName = safeBuildings.find(b => b.id === room.buildingId)?.name || 'ไม่ระบุ';
-                  const currentTenant = safeTenants.find(t => t.id === room.currentTenantId);
+                  const bldName = buildings.find(b => b.id === room.buildingId)?.name || 'ไม่ระบุ';
+                  const currentTenant = tenants.find(t => t.id === room.currentTenantId);
                   const statusCfg = ROOM_STATUS_CONFIG[room.status] || ROOM_STATUS_CONFIG.vacant;
-                  const eff = room.currentEffectiveValues || {};
 
                   return (
                     <tr key={room.id} className="hover:bg-slate-50/60 transition-colors">
-                      <td className="p-4 font-black text-slate-900 text-sm">{room.roomNumber}</td>
-                      <td className="p-4 text-gray-600 font-semibold">
-                        {bldName} {room.derivedFloor ? `(ชั้น ${room.derivedFloor})` : <span className="text-red-500">([Error])</span>}
-                      </td>
-                      <td className="p-4 font-bold text-slate-800">
+                      <td className="p-4 font-black text-slate-900 text-sm whitespace-nowrap">{room.roomNumber}</td>
+                      <td className="p-4 text-gray-600 font-semibold whitespace-nowrap">{bldName} (ชั้น {room.floor})</td>
+                      <td className="p-4 font-bold text-slate-800 whitespace-nowrap">
                         {currentTenant ? (
-                          <div className="flex items-center gap-1.5 text-indigo-700">
+                          <div className="flex items-center gap-1.5 text-indigo-700 whitespace-nowrap">
                             <UserIcon className="w-3.5 h-3.5 shrink-0" />
                             <span>{currentTenant.name}</span>
                           </div>
@@ -1026,25 +897,80 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                           <span className="text-gray-400 font-normal italic">-</span>
                         )}
                       </td>
-                      <td className="p-4 space-y-0.5">
-                        <div className="font-extrabold text-slate-900">{formatBaht(eff.monthlyRent ?? room.monthlyRent)} / เดือน</div>
+                      <td className="p-4 space-y-0.5 whitespace-nowrap">
+                        <div className="font-extrabold text-slate-900 whitespace-nowrap">{formatBaht(room.monthlyRent)} / เดือน</div>
+                        {room.termRent && <div className="text-[10px] text-gray-500 whitespace-nowrap">{formatBaht(room.termRent)} / เทอม</div>}
+                        {room.dailyRent && <div className="text-[10px] text-gray-500 whitespace-nowrap">{formatBaht(room.dailyRent)} / วัน</div>}
                       </td>
-                      <td className="p-4">
-                        <div className="font-bold text-slate-800">{formatBaht(eff.depositAmount ?? room.depositAmount)}</div>
+                      <td className="p-4 whitespace-nowrap">
+                        {room.status === 'vacant' || !room.currentTenantId ? (
+                          <span className="text-gray-400 font-medium italic">ไม่มีผู้เช่าลงทะเบียน</span>
+                        ) : (
+                          <>
+                            <div className="font-bold text-slate-800 whitespace-nowrap">{formatBaht(room.depositAmount)}</div>
+                            {room.depositStatus === 'paid' ? (
+                              <span className="text-[10px] font-black text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200 inline-block mt-0.5 whitespace-nowrap">จ่ายแล้ว</span>
+                            ) : (
+                              <span className="text-[10px] font-black text-rose-700 bg-rose-50 px-1.5 py-0.5 rounded border border-rose-200 inline-block mt-0.5 whitespace-nowrap">ยังไม่จ่าย</span>
+                            )}
+                          </>
+                        )}
                       </td>
-                      <td className="p-4">
-                        <span className={`px-2.5 py-1 text-xs font-black rounded-xl border ${statusCfg.badgeBg} ${statusCfg.badgeText} ${statusCfg.border}`}>
-                          {statusCfg.label}
-                        </span>
-                      </td>
-                      <td className="p-4 text-right">
-                        <button
-                          onClick={() => handleOpenModal(room)}
-                          className="px-2.5 py-1.5 text-xs font-bold text-indigo-600 hover:bg-indigo-50 border border-indigo-200 rounded-xl inline-flex items-center gap-1 transition-all cursor-pointer"
+                      <td className="p-4 whitespace-nowrap">
+                        {/* Status minimal badge (View-only) */}
+                        <div
+                          className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold select-none border shadow-2xs cursor-default whitespace-nowrap ${room.status === 'occupied'
+                              ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                              : room.status === 'vacant'
+                                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                : 'bg-rose-50 text-rose-700 border-rose-200'
+                            }`}
+                          title={`สถานะห้อง: ${statusCfg.label}`}
                         >
-                          <Edit2 className="w-3.5 h-3.5" />
-                          <span>แก้ไข</span>
-                        </button>
+                          <span
+                            className={`w-1.5 h-1.5 rounded-full shrink-0 ${room.status === 'occupied'
+                                ? 'bg-indigo-500'
+                                : room.status === 'vacant'
+                                  ? 'bg-emerald-500'
+                                  : 'bg-rose-500'
+                              }`}
+                          />
+                          <span>{statusCfg.label}</span>
+                        </div>
+                      </td>
+                      <td className="p-4 text-right whitespace-nowrap">
+                        <div className="flex items-center justify-end gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => handleOpenModal(room)}
+                            className="px-2.5 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-100 border border-gray-200 rounded-xl inline-flex items-center gap-1 transition-all cursor-pointer"
+                            title="แก้ไขรายละเอียดห้องพัก"
+                          >
+                            <Edit2 className="w-3.5 h-3.5 text-slate-500" />
+                            <span>แก้ไข</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => handleTenantAction(room, e)}
+                            className={`px-2.5 py-1.5 text-xs font-bold rounded-xl inline-flex items-center gap-1 transition-all cursor-pointer shadow-2xs ${room.currentTenantId
+                                ? 'bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200'
+                                : 'bg-indigo-600 hover:bg-indigo-700 text-white border border-indigo-600'
+                              }`}
+                            title={room.currentTenantId ? 'ดูข้อมูลผู้เช่า' : 'เพิ่มผู้เช่าเข้าห้องพัก'}
+                          >
+                            {room.currentTenantId ? (
+                              <>
+                                <UserIcon className="w-3.5 h-3.5" />
+                                <span>ผู้เช่า</span>
+                              </>
+                            ) : (
+                              <>
+                                <Plus className="w-3.5 h-3.5" />
+                                <span>เพิ่มผู้เช่า</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -1055,50 +981,130 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
         </div>
       )}
 
-      {/* Floor Map Mode */}
+      {/* Floor Map Mode (Requirement 8) */}
       {viewMode === 'floor' && (
         <div className="space-y-6">
-          {safeBuildings.map((bld) => {
-            const floors = Array.from(new Set(rooms.filter(r => r.buildingId === bld.id).map(r => r.derivedFloor))).sort((a, b) => (b === null ? -1 : a === null ? 1 : Number(b) - Number(a)));
+          {buildings.map((bld) => {
+            const floors = Array.from({ length: bld.floorsCount }, (_, i) => bld.floorsCount - i);
             return (
-              <div key={bld.id} className="bg-white p-6 rounded-3xl border border-gray-100 shadow-xs space-y-4">
+              <div key={bld.id} className="bg-white p-4 sm:p-6 rounded-3xl border border-gray-100 shadow-xs space-y-4">
                 <div className="flex items-center justify-between border-b border-gray-100 pb-3">
                   <h3 className="text-base font-black text-slate-900">{bld.name}</h3>
                 </div>
 
                 <div className="space-y-4">
                   {floors.map((fl) => {
-                    const floorRooms = rooms.filter(r => r.buildingId === bld.id && r.derivedFloor === fl);
-                    if (floorRooms.length === 0) return null;
+                    const floorRooms = filteredRooms.filter(r => r.buildingId === bld.id && r.floor === fl);
+                    if (floorRooms.length === 0) return null; // Skip floors that have no rooms
 
                     return (
-                      <div key={fl} className="flex flex-col sm:flex-row gap-4 items-start sm:items-center py-3 border-b border-dashed border-gray-100">
-                        <div className="w-16 shrink-0 text-xs font-black text-indigo-600 bg-indigo-50 border border-indigo-100 py-2 px-3 rounded-xl text-center">
-                          {fl ? `ชั้น ${fl}` : <span className="text-red-500 font-semibold text-[10px]">Error</span>}
+                      <div key={fl} className="flex flex-col sm:flex-row gap-2.5 sm:gap-4 items-start sm:items-center py-3 border-b border-dashed border-gray-100 last:border-b-0">
+                        <div className="w-fit sm:w-16 shrink-0 text-xs font-black text-indigo-600 bg-indigo-50 border border-indigo-100 py-1.5 sm:py-2 px-3 rounded-xl text-center shadow-3xs">
+                          ชั้น {fl}
                         </div>
 
-                        <div className="flex flex-wrap gap-2.5 flex-1">
+                        <div className="grid grid-cols-2 sm:flex sm:flex-wrap gap-2 sm:gap-2.5 flex-1 w-full">
                           {floorRooms.map((room) => {
                             const statusCfg = ROOM_STATUS_CONFIG[room.status] || ROOM_STATUS_CONFIG.vacant;
                             const currentTenant = tenants.find(t => t.id === room.currentTenantId);
 
+                            if (room.status === 'occupied') {
+                              return (
+                                <div
+                                  key={room.id}
+                                  onClick={() => {
+                                    if (room.currentTenantId) {
+                                      onNavigate('tenants', room.currentTenantId);
+                                    }
+                                  }}
+                                  title={currentTenant ? `คลิกเพื่อดูข้อมูลผู้เช่าคุณ ${currentTenant.name}` : `ดูข้อมูลห้อง ${room.roomNumber}`}
+                                  className={`p-2.5 sm:p-3 w-full sm:w-auto sm:min-w-[150px] rounded-2xl border text-center cursor-pointer transition-all hover:scale-105 select-none flex flex-col justify-between items-center shadow-2xs group ${statusCfg.bg} ${statusCfg.border} ${statusCfg.text}`}
+                                >
+                                  <div className="flex items-center justify-between w-full gap-1 mb-1">
+                                    <span className="font-black text-xs sm:text-sm tracking-tight">{room.roomNumber}</span>
+                                    <span className={`text-[8px] sm:text-[9px] font-black px-1.5 py-0.5 rounded-md shrink-0 ${statusCfg.badgeBg} ${statusCfg.badgeText}`}>
+                                      {statusCfg.label}
+                                    </span>
+                                  </div>
+                                  <div className="text-[10px] sm:text-[11px] font-extrabold opacity-90 my-0.5 truncate">
+                                    {formatBaht(room.monthlyRent)}/ด.
+                                  </div>
+                                  {currentTenant && (
+                                    <div className="text-[9px] sm:text-[10px] font-bold truncate max-w-full sm:max-w-[135px] opacity-90 flex items-center gap-1 mt-1 bg-white/70 group-hover:bg-white px-1.5 sm:px-2 py-0.5 rounded-lg w-full justify-center text-indigo-900 border border-indigo-100/60 shadow-3xs transition-colors">
+                                      <UserIcon className="w-3 h-3 shrink-0 text-indigo-600" />
+                                      <span className="truncate">{currentTenant.name}</span>
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            }
+
+                            if (room.status === 'maintenance') {
+                              return (
+                                <div
+                                  key={room.id}
+                                  onClick={() => handleOpenModal(room)}
+                                  title={`คลิกเพื่อแก้ไขห้องพัก ${room.roomNumber}`}
+                                  className={`p-2.5 sm:p-3 w-full sm:w-auto sm:min-w-[150px] rounded-2xl border text-center cursor-pointer transition-all hover:scale-105 select-none flex flex-col justify-between items-center shadow-2xs group ${statusCfg.bg} ${statusCfg.border} ${statusCfg.text}`}
+                                >
+                                  <div className="flex items-center justify-between w-full gap-1 mb-1">
+                                    <span className="font-black text-xs sm:text-sm tracking-tight">{room.roomNumber}</span>
+                                    <span className={`text-[8px] sm:text-[9px] font-black px-1.5 py-0.5 rounded-md shrink-0 ${statusCfg.badgeBg} ${statusCfg.badgeText}`}>
+                                      {statusCfg.label}
+                                    </span>
+                                  </div>
+                                  <div className="text-[10px] sm:text-[11px] font-extrabold opacity-90 my-0.5 truncate">
+                                    {formatBaht(room.monthlyRent)}/ด.
+                                  </div>
+                                  <div className="text-[9px] sm:text-[10px] font-bold truncate max-w-full sm:max-w-[135px] opacity-90 flex items-center gap-1 mt-1 bg-white/70 group-hover:bg-white px-1.5 sm:px-2 py-0.5 rounded-lg w-full justify-center text-rose-800 border border-rose-100/60 shadow-3xs transition-colors">
+                                    <Edit2 className="w-3 h-3 shrink-0 text-rose-600" />
+                                    <span>แก้ไข</span>
+                                  </div>
+                                </div>
+                              );
+                            }
+
+                            // Vacant room
                             return (
                               <div
                                 key={room.id}
-                                onClick={() => handleOpenModal(room)}
-                                className={`p-3 min-w-[135px] rounded-2xl border text-center cursor-pointer transition-all hover:scale-105 select-none flex flex-col justify-between items-center shadow-2xs ${statusCfg.bg} ${statusCfg.border} ${statusCfg.text}`}
+                                className={`p-2.5 sm:p-3 w-full sm:w-auto sm:min-w-[150px] rounded-2xl border text-center select-none flex flex-col justify-between items-center shadow-2xs ${statusCfg.bg} ${statusCfg.border} ${statusCfg.text}`}
                               >
                                 <div className="flex items-center justify-between w-full gap-1 mb-1">
-                                  <span className="font-black text-sm tracking-tight">{room.roomNumber}</span>
-                                  <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-md ${statusCfg.badgeBg} ${statusCfg.badgeText}`}>
+                                  <span className="font-black text-xs sm:text-sm tracking-tight">{room.roomNumber}</span>
+                                  <span className={`text-[8px] sm:text-[9px] font-black px-1.5 py-0.5 rounded-md shrink-0 ${statusCfg.badgeBg} ${statusCfg.badgeText}`}>
                                     {statusCfg.label}
                                   </span>
                                 </div>
-                                {currentTenant && (
-                                  <div className="text-[11px] font-extrabold opacity-90 my-0.5">
-                                    {formatBaht(room.currentEffectiveValues?.monthlyRent ?? room.monthlyRent)}/ด.
-                                  </div>
-                                )}
+                                <div className="text-[10px] sm:text-[11px] font-extrabold opacity-90 my-0.5 text-emerald-800 truncate">
+                                  {formatBaht(room.monthlyRent)}/ด.
+                                </div>
+                                <div className="flex items-center gap-1 w-full mt-1.5 pt-1.5 border-t border-emerald-200/60">
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleOpenModal(room);
+                                    }}
+                                    title={`แก้ไขห้องพัก ${room.roomNumber}`}
+                                    className="flex-1 py-1 px-1 bg-white/90 hover:bg-white text-slate-700 hover:text-indigo-700 text-[9px] sm:text-[10px] font-black rounded-lg border border-emerald-200/80 shadow-3xs flex items-center justify-center gap-1 transition-all cursor-pointer active:scale-95"
+                                  >
+                                    <Edit2 className="w-2.5 h-2.5 sm:w-3 sm:h-3 text-slate-600" />
+                                    <span>แก้ไข</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleTenantAction(room, e);
+                                    }}
+                                    title={`เพิ่มผู้เช่าเข้าห้อง ${room.roomNumber}`}
+                                    className="flex-1 py-1 px-1 bg-emerald-600 hover:bg-emerald-700 text-white text-[9px] sm:text-[10px] font-black rounded-lg shadow-3xs flex items-center justify-center gap-1 transition-all cursor-pointer active:scale-95"
+                                  >
+                                    <UserPlus className="w-2.5 h-2.5 sm:w-3 sm:h-3" />
+                                    <span>เพิ่ม</span>
+                                  </button>
+                                </div>
                               </div>
                             );
                           })}
@@ -1114,355 +1120,227 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
       )}
 
       {/* Add / Edit Room Modal */}
-      <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={editingRoom ? `แก้ไขห้องพัก ${roomNumber}` : 'เพิ่มห้องพักใหม่'}>
-        <form onSubmit={handleSave} className="space-y-4">
-          <div className="max-h-[60vh] overflow-y-auto px-1.5 pb-4 space-y-4">
+      <Modal
+        isOpen={isModalOpen}
+        onClose={() => setIsModalOpen(false)}
+        title={
+          <div className="flex items-center gap-2.5">
+            <div className="p-1.5 bg-indigo-50 text-indigo-600 rounded-xl border border-indigo-100/80 shadow-3xs">
+              <DoorOpen className="w-5 h-5" />
+            </div>
+            <span className="font-extrabold text-slate-900">
+              {editingRoom ? `แก้ไขห้องพัก ${roomNumber}` : 'เพิ่มห้องพักใหม่'}
+            </span>
+          </div>
+        }
+        footer={
+          <div className="w-full space-y-2.5">
             {errorText && (
-              <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-xl flex items-center gap-2">
+              <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-xl flex items-center gap-2 animate-in fade-in slide-in-from-bottom-2 shadow-xs">
                 <AlertCircle className="w-4 h-4 shrink-0 text-rose-500" />
-                <span className="font-medium">{errorText}</span>
+                <span className="font-bold leading-tight">{errorText}</span>
               </div>
             )}
-
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-1">
-                <label className="block text-xs font-bold text-slate-700">เลขที่ห้องพัก *</label>
-                <input
-                  type="text"
-                  name="roomNumber"
-                  required
-                  value={roomNumber}
-                  onChange={(e) => setRoomNumber(e.target.value)}
-                  placeholder="เช่น A101"
-                  className="w-full px-3 py-2 text-xs border border-gray-200 rounded-xl focus:border-indigo-600 bg-white font-bold"
-                />
-              </div>
-
-              <div className="space-y-1">
-                <label className="block text-xs font-bold text-slate-700">จำนวนผู้เข้าพักสูงสุด</label>
-                <input
-                  type="number"
-                  min={1}
-                  value={maxOccupants}
-                  onChange={(e) => setMaxOccupants(Number(e.target.value))}
-                  className="w-full px-3 py-2 text-xs border border-gray-200 rounded-xl bg-white text-slate-800 font-bold"
-                />
-              </div>
+            <div className="flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setIsModalOpen(false)}
+                className="px-4 py-2 border border-gray-200 bg-white hover:bg-slate-50 text-slate-600 rounded-xl text-xs font-bold cursor-pointer transition-colors"
+              >
+                ยกเลิก
+              </button>
+              <button
+                type="submit"
+                form="room-edit-form"
+                disabled={!isFormModified}
+                className={`px-5 py-2 font-extrabold text-xs rounded-xl shadow-xs transition-all flex items-center gap-1.5 ${isFormModified
+                    ? 'bg-indigo-600 hover:bg-indigo-700 text-white cursor-pointer active:scale-95'
+                    : 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-none'
+                  }`}
+                title={!isFormModified && editingRoom ? 'ไม่มีการเปลี่ยนแปลงข้อมูล' : undefined}
+              >
+                <Check className="w-4 h-4" />
+                <span>บันทึกข้อมูล</span>
+              </button>
+            </div>
+          </div>
+        }
+      >
+        <form id="room-edit-form" onSubmit={handleSave} className="space-y-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-1">
+              <label className="block text-xs font-bold text-slate-700">เลขที่ห้องพัก *</label>
+              <input
+                type="text"
+                required
+                value={roomNumber}
+                onChange={(e) => {
+                  setErrorText(null);
+                  setRoomNumber(e.target.value);
+                }}
+                disabled={!!editingRoom}
+                placeholder="เช่น A101"
+                className={`w-full px-3 py-2 text-xs border rounded-xl font-bold transition-colors ${errorText && (errorText.includes('เลขห้อง') || errorText.includes('เลขที่ห้อง'))
+                    ? 'border-rose-500 bg-rose-50/40 text-rose-900 focus:border-rose-600 ring-2 ring-rose-100'
+                    : editingRoom
+                      ? 'bg-slate-100 text-slate-500 border-gray-200 cursor-not-allowed select-none'
+                      : 'bg-white text-slate-800 border-gray-200 focus:border-indigo-600'
+                  }`}
+                title={editingRoom ? 'ไม่สามารถแก้ไขเลขที่ห้องพักได้' : undefined}
+              />
             </div>
 
             <div className="space-y-1">
-              <label className="block text-xs font-bold text-slate-700">สถานะห้องพัก *</label>
-              <div className="grid grid-cols-3 gap-1.5 pt-0.5">
-                {(['vacant', 'occupied', 'maintenance'] as RoomStatus[]).map((st) => {
-                  const cfg = ROOM_STATUS_CONFIG[st];
-                  const isActive = roomStatus === st;
-                  return (
-                    <button
-                      key={st}
-                      type="button"
-                      onClick={() => setRoomStatus(st)}
-                      className={`py-2 px-1.5 text-xs font-extrabold rounded-xl border transition-all cursor-pointer text-center truncate ${
-                        isActive ? cfg.activeBtnBg : 'bg-white hover:bg-slate-50 text-slate-700 border-gray-200'
-                      }`}
-                    >
-                      {cfg.label}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div className="space-y-3 pt-2 border-t border-gray-100 bg-slate-50/80 p-3.5 rounded-2xl border">
-              <div className="flex items-center justify-between">
-                <label className="block text-xs font-black text-indigo-900">อัตราค่าเช่าพัก (Room Overrides)</label>
-                {editingRoom && editingRoom.rawOverrides?.monthlyRent !== undefined && (
-                  <button
-                    type="button"
-                    onClick={() => handleClearRoomOverride('monthlyRent')}
-                    className="text-[10px] font-bold text-rose-600 hover:underline cursor-pointer"
-                  >
-                    ล้าง Override ค่าเช่า
-                  </button>
-                )}
-              </div>
-              <div className="grid grid-cols-3 gap-3">
-                <div className="space-y-1">
-                  <label className="block text-[11px] font-bold text-slate-700">รายเดือน (บาท/เดือน)</label>
-                  <input
-                    type="number"
-                    required
-                    min={0}
-                    value={monthlyRent}
-                    onChange={(e) => setMonthlyRent(e.target.value === '' ? 0 : Number(e.target.value))}
-                    placeholder="เช่น 4500"
-                    className="w-full px-3 py-2 text-xs border border-gray-200 rounded-xl bg-white font-bold"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="block text-[11px] font-bold text-slate-700">รายเทอม (บาท/เทอม)</label>
-                  <input
-                    type="number"
-                    min={0}
-                    value={termRent}
-                    onChange={(e) => setTermRent(e.target.value === '' ? 0 : Number(e.target.value))}
-                    placeholder="เช่น 18000"
-                    className="w-full px-3 py-2 text-xs border border-gray-200 rounded-xl bg-white font-bold"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="block text-[11px] font-bold text-slate-700">รายวัน (บาท/วัน)</label>
-                  <input
-                    type="number"
-                    min={0}
-                    value={dailyRent}
-                    onChange={(e) => setDailyRent(e.target.value === '' ? 0 : Number(e.target.value))}
-                    placeholder="เช่น 500"
-                    className="w-full px-3 py-2 text-xs border border-gray-200 rounded-xl bg-white font-bold"
-                  />
-                </div>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4 pt-1">
-              <div className="space-y-1">
-                <div className="flex items-center justify-between">
-                  <label className="block text-xs font-bold text-slate-700">เงินประกัน / มัดจำ (บาท) *</label>
-                  {editingRoom && editingRoom.rawOverrides?.depositAmount !== undefined && (
-                    <button
-                      type="button"
-                      onClick={() => handleClearRoomOverride('depositAmount')}
-                      className="text-[10px] font-bold text-rose-600 hover:underline cursor-pointer"
-                    >
-                      ล้าง Override
-                    </button>
-                  )}
-                </div>
-                <input
-                  type="number"
-                  required
-                  min={0}
-                  value={depositAmount}
-                  onChange={(e) => setDepositAmount(e.target.value === '' ? 0 : Number(e.target.value))}
-                  placeholder="เช่น 5000"
-                  className="w-full px-3 py-2 text-xs border border-gray-200 rounded-xl bg-white font-bold"
-                />
-              </div>
-
-              <div className="space-y-1">
-                <label className="block text-xs font-bold text-slate-700">สถานะค่าประกัน *</label>
-                <div className="grid grid-cols-2 gap-1.5 pt-0.5">
-                  <button
-                    type="button"
-                    onClick={() => setDepositStatus('paid')}
-                    className={`py-1.5 px-2 text-xs font-extrabold rounded-xl border transition-all cursor-pointer text-center ${
-                      depositStatus === 'paid'
-                        ? 'bg-emerald-600 text-white border-emerald-600 shadow-2xs'
-                        : 'bg-white hover:bg-slate-50 text-slate-600 border-gray-200'
-                    }`}
-                  >
-                    ✓ จ่ายแล้ว
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setDepositStatus('unpaid')}
-                    className={`py-1.5 px-2 text-xs font-extrabold rounded-xl border transition-all cursor-pointer text-center ${
-                      depositStatus === 'unpaid'
-                        ? 'bg-rose-600 text-white border-rose-600 shadow-2xs'
-                        : 'bg-white hover:bg-slate-50 text-slate-600 border-gray-200'
-                    }`}
-                  >
-                    ยังไม่จ่าย
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            <div className="space-y-1 pt-1">
-              <label className="block text-xs font-bold text-slate-700">หมายเหตุภายใน</label>
-              <textarea
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-                placeholder="หมายเหตุเพิ่มเติมสำหรับผู้ดูแล..."
-                className="w-full px-3 py-2 text-xs border border-gray-200 rounded-xl bg-white h-16 resize-none"
+              <label className="block text-xs font-bold text-slate-700">จำนวนผู้เข้าพักสูงสุด</label>
+              <input
+                type="number"
+                min={1}
+                value={maxOccupants}
+                onChange={(e) => setMaxOccupants(Number(e.target.value))}
+                className="w-full px-3 py-2 text-xs border border-gray-200 rounded-xl bg-white text-slate-800 font-bold"
               />
             </div>
           </div>
 
-          <div className="sticky bottom-0 -mx-6 -mb-6 p-4 bg-white border-t border-gray-100 flex items-center justify-between z-20 rounded-b-3xl shadow-[0_-4px_12px_rgba(0,0,0,0.04)]">
-            <div>
-              {editingRoom && (
-                <button
-                  type="button"
-                  onClick={() => handleDeleteFromModal(editingRoom.id, editingRoom.roomNumber)}
-                  className="px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 rounded-xl text-xs font-bold cursor-pointer transition-all flex items-center gap-1.5"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                  <span>ลบห้องพัก</span>
-                </button>
-              )}
-            </div>
+          {/* Rental Rates Breakdown (รายเทอม -> รายเดือน -> รายวัน) */}
+          <div className="space-y-3 pt-2 border-t border-gray-100 bg-slate-50/80 p-3.5 rounded-2xl border">
             <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setIsModalOpen(false)}
-                className="px-4 py-2 border border-gray-200 bg-white hover:bg-slate-50 text-slate-600 rounded-xl text-xs font-bold cursor-pointer"
-              >
-                ยกเลิก
-              </button>
-              <button
-                type="submit"
-                className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs rounded-xl shadow-xs transition-all cursor-pointer"
-              >
-                บันทึกข้อมูล
-              </button>
+              <div className="p-1 bg-indigo-100 text-indigo-700 rounded-lg">
+                <Coins className="w-3.5 h-3.5" />
+              </div>
+              <label className="block text-xs font-black text-indigo-950">อัตราค่าเช่าพักตามรูปแบบต่างๆ</label>
             </div>
-          </div>
-        </form>
-      </Modal>
-
-      {/* Building Editor & Defaults Override Modal */}
-      <Modal isOpen={isBuildingModalOpen} onClose={() => setIsBuildingModalOpen(false)} title={editingBuilding ? `แก้ไขอาคาร ${buildingName}` : 'เพิ่มอาคารใหม่'}>
-        <form onSubmit={handleSaveBuilding} className="space-y-4">
-          <div className="max-h-[60vh] overflow-y-auto px-1.5 pb-4 space-y-4">
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-3 gap-3">
               <div className="space-y-1">
-                <label className="block text-xs font-bold text-slate-700">ชื่ออาคาร *</label>
+                <label className="block text-[11px] font-bold text-slate-700">รายเทอม</label>
                 <input
-                  type="text"
-                  name="buildingName"
+                  type="number"
+                  min={0}
+                  value={termRent}
+                  onChange={(e) => setTermRent(e.target.value === '' ? '' : Number(e.target.value))}
+                  placeholder="เช่น 18000"
+                  className="w-full px-3 py-2 text-xs border border-gray-200 rounded-xl bg-white font-bold"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="block text-[11px] font-bold text-slate-700">รายเดือน *</label>
+                <input
+                  type="number"
                   required
-                  value={buildingName}
-                  onChange={(e) => setBuildingName(e.target.value)}
+                  min={0}
+                  value={monthlyRent}
+                  onChange={(e) => setMonthlyRent(e.target.value === '' ? '' : Number(e.target.value))}
+                  placeholder="เช่น 4500"
                   className="w-full px-3 py-2 text-xs border border-gray-200 rounded-xl bg-white font-bold"
-                  data-testid="input-building-name"
                 />
               </div>
               <div className="space-y-1">
-                <label className="block text-xs font-bold text-slate-700">รหัสอาคาร (Code)</label>
+                <label className="block text-[11px] font-bold text-slate-700">รายวัน</label>
                 <input
-                  type="text"
-                  name="buildingCode"
-                  value={buildingCode}
-                  onChange={(e) => setBuildingCode(e.target.value)}
+                  type="number"
+                  min={0}
+                  value={dailyRent}
+                  onChange={(e) => setDailyRent(e.target.value === '' ? '' : Number(e.target.value))}
+                  placeholder="เช่น 500"
                   className="w-full px-3 py-2 text-xs border border-gray-200 rounded-xl bg-white font-bold"
-                  data-testid="input-building-code"
                 />
               </div>
             </div>
-
-            {editingBuilding && (
-              <div className="space-y-3 pt-3 border-t border-gray-100 bg-slate-50 p-3.5 rounded-2xl border">
-                <div className="flex items-center justify-between">
-                  <label className="block text-xs font-black text-indigo-900">ค่าเริ่มต้นเฉพาะอาคาร (Building Overrides)</label>
-                </div>
-                <div className="grid grid-cols-2 gap-3 text-xs">
-                  <div className="space-y-1">
-                    <div className="flex justify-between items-center">
-                      <label className="block text-[11px] font-bold text-slate-700">ค่าเช่าเริ่มต้น (บาท)</label>
-                      <button
-                        type="button"
-                        data-testid="btn-clear-building-override"
-                        onClick={() => handleClearBuildingOverride(editingBuilding.id, 'monthlyRent')}
-                        className="text-[10px] font-bold text-rose-600 hover:underline cursor-pointer"
-                      >
-                        ล้าง
-                      </button>
-                    </div>
-                    <input
-                      type="number"
-                      value={bldOverrideMonthlyRent}
-                      onChange={(e) => setBldOverrideMonthlyRent(Number(e.target.value))}
-                      className="w-full px-3 py-2 text-xs border border-gray-200 rounded-xl bg-white font-bold"
-                      data-testid="input-building-override-monthly-rent"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <div className="flex justify-between items-center">
-                      <label className="block text-[11px] font-bold text-slate-700">เงินประกัน (บาท)</label>
-                      <button
-                        type="button"
-                        data-testid="btn-clear-building-override-deposit"
-                        onClick={() => handleClearBuildingOverride(editingBuilding.id, 'depositAmount')}
-                        className="text-[10px] font-bold text-rose-600 hover:underline cursor-pointer"
-                      >
-                        ล้าง
-                      </button>
-                    </div>
-                    <input
-                      type="number"
-                      value={bldOverrideDepositAmount}
-                      onChange={(e) => setBldOverrideDepositAmount(Number(e.target.value))}
-                      className="w-full px-3 py-2 text-xs border border-gray-200 rounded-xl bg-white font-bold"
-                      data-testid="input-building-override-deposit"
-                    />
-                  </div>
-                </div>
-                <div className="flex justify-end pt-1">
-                  <button
-                    type="button"
-                    data-testid="btn-save-building-override"
-                    onClick={() => handleSaveBuildingOverride(editingBuilding.id, {
-                      monthlyRent: Number(bldOverrideMonthlyRent),
-                      depositAmount: Number(bldOverrideDepositAmount)
-                    })}
-                    className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs rounded-xl shadow-xs cursor-pointer"
-                  >
-                    บันทึก Override อาคาร
-                  </button>
-                </div>
-              </div>
-            )}
           </div>
 
-          <div className="p-4 bg-white border-t border-gray-100 flex items-center justify-between">
-            {editingBuilding && (
-              <button
-                type="button"
-                data-testid="btn-delete-building"
-                onClick={() => {
-                  setDeleteBuildingConfirmData(editingBuilding);
-                  setIsBuildingModalOpen(false);
-                }}
-                className="px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 rounded-xl text-xs font-bold cursor-pointer"
-              >
-                ลบอาคาร
-              </button>
-            )}
+          {/* Deposit Rates Breakdown (รายเทอม -> รายเดือน -> รายวัน) */}
+          <div className="space-y-3 bg-slate-50/80 p-3.5 rounded-2xl border border-gray-100">
             <div className="flex items-center gap-2">
+              <div className="p-1 bg-emerald-100 text-emerald-700 rounded-lg">
+                <ShieldCheck className="w-3.5 h-3.5" />
+              </div>
+              <label className="block text-xs font-black text-slate-900">อัตราค่าประกันตามรูปแบบต่างๆ</label>
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              <div className="space-y-1">
+                <label className="block text-[11px] font-bold text-slate-700">รายเทอม</label>
+                <input
+                  type="number"
+                  min={0}
+                  value={termDeposit}
+                  onChange={(e) => setTermDeposit(e.target.value === '' ? '' : Number(e.target.value))}
+                  placeholder="เช่น 10000"
+                  className="w-full px-3 py-2 text-xs border border-gray-200 rounded-xl bg-white font-bold"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="block text-[11px] font-bold text-slate-700">รายเดือน</label>
+                <input
+                  type="number"
+                  min={0}
+                  value={monthlyDeposit}
+                  onChange={(e) => setMonthlyDeposit(e.target.value === '' ? '' : Number(e.target.value))}
+                  placeholder="เช่น 9000"
+                  className="w-full px-3 py-2 text-xs border border-gray-200 rounded-xl bg-white font-bold"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="block text-[11px] font-bold text-slate-700">รายวัน</label>
+                <input
+                  type="number"
+                  min={0}
+                  value={dailyDeposit}
+                  onChange={(e) => setDailyDeposit(e.target.value === '' ? '' : Number(e.target.value))}
+                  placeholder="เช่น 500"
+                  className="w-full px-3 py-2 text-xs border border-gray-200 rounded-xl bg-white font-bold"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Room Status Selector - อยู่ด้านล่าง อัตราค่าประกัน */}
+          <div className="space-y-1 pt-1">
+            <label className="block text-xs font-bold text-slate-700">สถานะห้องพัก *</label>
+            <div className="grid grid-cols-2 gap-2 pt-0.5">
               <button
                 type="button"
-                onClick={() => setIsBuildingModalOpen(false)}
-                className="px-4 py-2 border border-gray-200 bg-white text-slate-600 rounded-xl text-xs font-bold"
+                onClick={() => {
+                  setErrorText(null);
+                  setRoomStatus(editingRoom?.currentTenantId ? 'occupied' : 'vacant');
+                }}
+                className={`py-2 px-3 text-xs font-extrabold rounded-xl border transition-all cursor-pointer text-center truncate ${roomStatus !== 'maintenance'
+                    ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
+                    : 'bg-white hover:bg-slate-50 text-slate-700 border-gray-200'
+                  }`}
               >
-                ยกเลิก
+                เปิดใช้งาน
               </button>
               <button
-                type="submit"
-                data-testid="btn-save-building"
-                className="px-5 py-2 bg-indigo-600 text-white font-extrabold text-xs rounded-xl"
+                type="button"
+                onClick={() => {
+                  if (editingRoom?.currentTenantId) {
+                    const tenant = tenants.find(t => t.id === editingRoom.currentTenantId);
+                    const err = `ไม่สามารถเลือก "ปิดปรับปรุง" ได้ เนื่องจากห้องนี้มีผู้เช่าพักอยู่ (${tenant ? tenant.name : 'มีผู้เช่า'}) ต้องเป็นห้องว่างเท่านั้น`;
+                    setErrorText(err);
+                    return;
+                  }
+                  setErrorText(null);
+                  setRoomStatus('maintenance');
+                }}
+                className={`py-2 px-3 text-xs font-extrabold rounded-xl border transition-all cursor-pointer text-center truncate ${roomStatus === 'maintenance'
+                    ? 'bg-rose-600 text-white border-rose-600 shadow-xs'
+                    : editingRoom?.currentTenantId
+                      ? 'bg-slate-50 text-slate-400 border-slate-200 cursor-not-allowed opacity-75'
+                      : 'bg-white hover:bg-slate-50 text-slate-700 border-gray-200'
+                  }`}
+                title={editingRoom?.currentTenantId ? 'ห้องนี้มีผู้เช่าอยู่ ต้องเป็นห้องว่างเท่านั้นถึงจะปิดปรับปรุงได้' : undefined}
               >
-                บันทึกอาคาร
+                ปิดปรับปรุง
               </button>
             </div>
+            {editingRoom?.currentTenantId && (
+              <p className="text-[11px] text-amber-600 font-semibold mt-1">
+                ⚠️ ห้องนี้มีผู้เช่าพักอยู่
+              </p>
+            )}
           </div>
         </form>
       </Modal>
-
-      {/* Requirement 4: VersionConflictModal Integration */}
-      {versionConflictState && (
-        <VersionConflictModal
-          isOpen={versionConflictState.isOpen}
-          entityName={versionConflictState.entityName}
-          staleVersion={versionConflictState.currentVersion - 1}
-          latestVersion={versionConflictState.currentVersion}
-          onReload={async () => {
-            await fetchAuthoritativeData();
-            setVersionConflictState(null);
-          }}
-          onCancel={() => setVersionConflictState(null)}
-          onRetry={versionConflictState.onRetry}
-        />
-      )}
 
       <ConfirmDialog
         isOpen={!!deleteConfirmData}
@@ -1474,6 +1352,29 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
         cancelText="ยกเลิก"
         type="danger"
       />
+
+      {/* Quick Add Tenant Modal (Blank / Reserved for Main Project Integration) */}
+      <Modal
+        isOpen={isAddTenantModalOpen}
+        onClose={() => setIsAddTenantModalOpen(false)}
+        title={`เพิ่มผู้เช่าเข้าห้องพัก ${selectedRoomForTenant?.roomNumber || ''}`}
+        footer={
+          <div className="flex items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setIsAddTenantModalOpen(false)}
+              className="px-5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition-all cursor-pointer"
+            >
+              ปิด
+            </button>
+          </div>
+        }
+      >
+        <div className="py-12 px-4 text-center">
+          {/* Reserved empty space for main project integration */}
+        </div>
+      </Modal>
+
     </div>
   );
 };
