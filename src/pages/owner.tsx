@@ -40,6 +40,7 @@ import {
 import { User, Room, Tenant, Bill, Contract, MaintenanceRequest, Announcement, AuditLog, Building } from '../types';
 import { useQuery, useQueries, useQueryClient, QueryClient } from '@tanstack/react-query';
 import { queryKeys, STALE_TIMES, clearDormitoryQueryCache } from '../lib/queryClient';
+import { invalidateRoomMutationCaches, RoomMutationImpact } from '../lib/roomMutationCache';
 import { meterDraftStore, clearMeterDraftStore } from '../lib/meterDraftStore';
 import { getDataProvider } from '../data/dataProvider';
 import { httpRequest } from '../data/httpClient';
@@ -858,11 +859,8 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
   const handleAddLog = (_action: string, _details: string, _type: string, _id: string) => {};
 
   // State saving handlers with targeted query invalidation
-  const handleSaveRooms = (_newRooms: Room[]) => {
-    queryClient.invalidateQueries({ queryKey: queryKeys.rooms(activeDormitoryId) });
-    if (selectedBillingCycleId) {
-      queryClient.invalidateQueries({ queryKey: queryKeys.meterPreviewContext(activeDormitoryId, selectedBillingCycleId) });
-    }
+  const handleSaveRooms = (_newRooms: Room[], impact: RoomMutationImpact = { kind: 'refresh' }) => {
+    invalidateRoomMutationCaches(queryClient, activeDormitoryId, impact);
   };
 
   const handleSaveBuildings = (_newBuildings: Building[]) => {

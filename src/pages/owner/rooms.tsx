@@ -41,6 +41,7 @@ import {
 import { VersionConflictModal } from '../../components/VersionConflictModal';
 import { getDataProvider } from '../../data/dataProvider';
 import { CreateRoomPayload, UpdateRoomChanges } from '../../data/contracts';
+import { RoomMutationImpact } from '../../lib/roomMutationCache';
 import { Room, Building, RoomStatus, Tenant, Contract, Bill, BLOCKING_CONTRACT_STATUSES } from '../../types';
 
 interface OwnerRoomsProps {
@@ -49,7 +50,7 @@ interface OwnerRoomsProps {
   contracts?: Contract[];
   bills?: Bill[];
   buildings: Building[];
-  onSaveRooms: (rooms: Room[]) => void;
+  onSaveRooms: (rooms: Room[], impact?: RoomMutationImpact) => void;
   onSaveTenants?: (tenants: Tenant[]) => void;
   onSaveContracts?: (contracts: Contract[]) => void;
   onAddLog: (action: string, details: string, type: string, id: string) => void;
@@ -242,6 +243,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
     const curDeposit = depositAmount === '' ? 0 : Number(depositAmount);
 
     const hasChanged =
+      roomNumber.trim() !== editingRoom.roomNumber ||
       curMonthly !== origMonthlyRent ||
       curTerm !== origTermRent ||
       curDaily !== origDailyRent ||
@@ -343,6 +345,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
           initialElectricityReading: String(initialElectricMeter || 0),
         };
 
+        const roomNumberChanged = roomNumber.trim() !== editingRoom.roomNumber;
         const res = await propertyApi.updateRoom(editingRoom.id, changes, expectedVersion);
 
         if (!res.success) {
@@ -362,7 +365,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
         }
 
         onAddLog('แก้ไขห้องพัก', `แก้ไขรายละเอียดห้อง ${roomNumber}`, 'Room', editingRoom.id);
-        onSaveRooms(rooms);
+        onSaveRooms(rooms, { kind: 'update', roomNumberChanged });
         setIsModalOpen(false);
         setToastMessage(`เลขห้อง "${roomNumber.trim()}" นี้ได้รับการบันทึกในระบบแล้ว`);
         setTimeout(() => setToastMessage(null), 3500);
@@ -394,7 +397,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
 
         const createdRoom = res.data;
         onAddLog('เพิ่มห้องพักใหม่', `สร้างเลขห้อง ${roomNumber} ใหม่ในระบบ`, 'Room', createdRoom?.id || '');
-        onSaveRooms(rooms);
+        onSaveRooms(rooms, { kind: 'create' });
         setIsModalOpen(false);
         setToastMessage(`เลขห้อง "${roomNumber.trim()}" นี้ได้รับการบันทึกในระบบแล้ว`);
         setTimeout(() => setToastMessage(null), 3500);
@@ -486,7 +489,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
         return;
       }
 
-      onSaveRooms(rooms);
+      onSaveRooms(rooms, { kind: 'archive' });
       onAddLog('จัดเก็บห้องพัก', `จัดเก็บห้องเลขที่ ${roomNum} (Archive)`, 'Room', roomId);
       setIsModalOpen(false);
       setEditingRoom(null);
@@ -544,7 +547,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
         return;
       }
 
-      onSaveRooms(rooms);
+      onSaveRooms(rooms, { kind: 'status' });
       onAddLog(
         'เปลี่ยนสถานะห้องพัก',
         `เปลี่ยนสถานะห้อง ${targetRoom.roomNumber} เป็น "${nextStatus === 'maintenance' ? 'ปิดปรับปรุง' : 'เปิดใช้งาน'}"`,
@@ -656,7 +659,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
       depositStatus: newTenantDepositStatus,
       updatedAt: new Date().toISOString()
     } : r);
-    onSaveRooms(updatedRooms);
+    onSaveRooms(updatedRooms, { kind: 'refresh' });
 
     // 2. Save tenant
     if (onSaveTenants) {
@@ -1455,7 +1458,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
           currentVersion={versionConflictState.currentVersion}
           latestVersion={versionConflictState.currentVersion}
           onReload={() => {
-            onSaveRooms(rooms);
+            onSaveRooms(rooms, { kind: 'refresh' });
             setVersionConflictState(null);
             setIsModalOpen(false);
             setEditingRoom(null);
