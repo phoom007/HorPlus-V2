@@ -406,6 +406,7 @@ export async function ensureGoldenDormData() {
   const createdRooms = {};
   for (const rd of roomDefinitions) {
     const norm = rd.roomNumber.toLowerCase().trim();
+    const dep = rd.deposit !== undefined ? rd.deposit : rd.rent;
     const room = await prisma.room.upsert({
       where: {
         dormitoryId_normalizedRoomNumber: {
@@ -416,7 +417,10 @@ export async function ensureGoldenDormData() {
       update: {
         status: rd.status,
         monthlyRent: rd.rent,
-        depositAmount: rd.rent,
+        depositAmount: dep,
+        termDeposit: dep,
+        monthlyDeposit: dep,
+        dailyDeposit: dep,
         termRent: rd.termRent,
         dailyRent: rd.dailyRent,
       },
@@ -428,7 +432,10 @@ export async function ensureGoldenDormData() {
         floor: rd.floor,
         roomType: 'standard',
         monthlyRent: rd.rent,
-        depositAmount: rd.rent,
+        depositAmount: dep,
+        termDeposit: dep,
+        monthlyDeposit: dep,
+        dailyDeposit: dep,
         termRent: rd.termRent,
         dailyRent: rd.dailyRent,
         status: rd.status,

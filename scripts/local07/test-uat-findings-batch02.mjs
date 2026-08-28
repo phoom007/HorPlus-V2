@@ -425,6 +425,10 @@ async function runBatch02Verification() {
         floor: 2,
         status: 'occupied',
         monthlyRent: 4500,
+        depositAmount: 4500,
+        termDeposit: 4500,
+        monthlyDeposit: 4500,
+        dailyDeposit: 4500,
       },
     });
 
@@ -1448,6 +1452,10 @@ async function runBatch02Verification() {
         floor: 1,
         status: 'occupied',
         monthlyRent: 4000,
+        depositAmount: 4000,
+        termDeposit: 4000,
+        monthlyDeposit: 4000,
+        dailyDeposit: 4000,
       },
     });
     await prisma.bill.create({

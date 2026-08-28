@@ -508,6 +508,7 @@ export async function seedLocal07Data() {
 
   const createdRooms = {};
   for (const r of roomData) {
+    const deposit = r.deposit !== undefined ? r.deposit : r.rent;
     const room = await prisma.room.create({
       data: {
         dormitoryId: compDorm.id,
@@ -517,7 +518,10 @@ export async function seedLocal07Data() {
         floor: r.floor,
         roomType: 'standard',
         monthlyRent: r.rent,
-        depositAmount: r.rent,
+        depositAmount: deposit,
+        termDeposit: deposit,
+        monthlyDeposit: deposit,
+        dailyDeposit: deposit,
         termRent: r.termRent,
         dailyRent: r.dailyRent,
         status: r.status,
