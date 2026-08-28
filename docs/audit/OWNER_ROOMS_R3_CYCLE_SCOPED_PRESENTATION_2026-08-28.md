@@ -207,6 +207,54 @@ File: `src/tests/owner-rooms-r2-cycle-deposits.test.tsx`
 
 ---
 
-## 10. Final Status
 
-**READY FOR PRODUCT OWNER R3 MANUAL UAT**
+---
+
+## 11. R3.2 — Cycle Filter/Search & Effective Room Operational Status History
+
+### 1. Product Owner Decisions
+- **Decision A (A1)**: Filter and search controls operate strictly against the SELECTED billing cycle authority.
+- **Decision B (B1)**: Selected-cycle agreement state is primary. Current operational state (e.g. `maintenance`) is displayed only as secondary context (`ปิดปรับปรุงปัจจุบัน`).
+- **Decision C (C1)**: Editing a room while viewing an old selected cycle NEVER changes history starting from that old cycle. Status changes are effective from the canonical `operationalBillingCycleId` forward.
+
+### 2. Phase 0 Audit & Data Model Authority
+- **Audit Findings**:
+  - Inspected `server/prisma/schema.prisma`, `RoomBillingCycleSnapshot` (meter/accounting snapshot only), `Occupancy` (tenant lease lifecycle only), and historical tables.
+  - Confirmed no suitable persisted mechanism previously existed for Room operational status effective across billing cycles.
+- **Chosen Data Model**:
+  - Implemented minimal canonical model `RoomOperationalStatusChange` (`room_operational_status_changes`):
+    - `dormitoryId`, `roomId`, `effectiveBillingCycleId`, `status`, `updatedByUserId`, `version`, timestamps.
+    - `@@unique([dormitoryId, roomId, effectiveBillingCycleId])` guarantees deterministic single-row authority per cycle without ambiguous duplicates.
+  - Migration: `20260828170000_owner_rooms_r32_operational_status_history`.
+  - **No Fabricated Historical Status**: Baseline begins from the earliest recorded operational cycle. Any historical cycle preceding the baseline returns `UNKNOWN`.
+
+### 3. Effective Status Resolver & Future Inheritance
+- **Resolver**: `resolveRoomOperationalStatusForCycle(dormitoryId, roomId, targetBillingCycleId)` finds the latest status change with `effectiveBillingCycle.periodStart <= targetCycle.periodStart`.
+- **Inheritance**: A status set in cycle 2026-08 automatically inherits into 2026-09 and beyond without manual row copying or future cycle pre-generation.
+
+### 4. Agreement Precedence & UI Presentation
+- **ACTIVE_AGREEMENT** (`มีผู้เช่า`): Always takes precedence over operational maintenance. If current operational status is maintenance, a secondary badge `ปิดปรับปรุงปัจจุบัน` is displayed.
+- **MAINTENANCE_IN_CYCLE** (`ปิดปรับปรุงในงวดนี้`): Applies when `NO_AGREEMENT_IN_CYCLE` and effective operational status is `maintenance`.
+- **NO_AGREEMENT_IN_CYCLE** (`ว่างในงวดนี้`): Applies when vacant in cycle; displays current catalog rates labeled `อัตราปัจจุบัน` (**Decision B1**).
+- **RESERVED_IN_CYCLE** (`จองแล้ว`): Displays reservation applicant identity.
+- **DAILY_FINANCIAL_TAIL** (`ค้างชำระ`): Displays daily tenant name and daily rent.
+- **UNAVAILABLE** (`ข้อมูลไม่พร้อม`): Displays neutral `ไม่พบข้อมูลของงวดนี้` without B1 catalog fallback.
+
+### 5. Filter and Search Cycle Authority (A1)
+- Precomputed `roomCyclePresentationsById` map is used as the single authority across Grid, List, Floor, Filter, and Search.
+- Filter options: `all`, `occupied` (`มีผู้เช่าในงวด`), `vacant` (`ว่างในงวด`), `maintenance` (`ปิดปรับปรุงในงวด`), `reserved` (`จองแล้ว`), `daily_tail` (`ค้างชำระ`), `unavailable` (`ข้อมูลไม่พร้อม`).
+- Search matches selected-cycle tenant name (`presentation.occupancy.tenantName`) without leaking current tenant identity (`room.currentTenantId`).
+
+### 6. Focused Verification Matrix
+- **Frontend Vitest Suite** (`src/tests/owner-rooms-r2-cycle-deposits.test.tsx`): **48 / 48 passed (100%)**.
+- **Backend Effective Status Unit Suite** (`server/src/__tests__/unit/owner-rooms-r32-effective-status.test.ts`): **4 / 4 passed (100%)**.
+- **Backend Preview Context Unit Suite** (`server/src/__tests__/unit/owner-rooms-r3-meter-preview-context.test.ts`): **6 / 6 passed (100%)**.
+- **Prisma Schema Validation**: `npm --prefix server run prisma:validate` -> **0 errors (Valid)**.
+- **TypeScript Typecheck & Server Build**: `npm run lint` & `npm --prefix server run build` -> **0 errors**.
+- **Git Diff Hygiene**: `git diff --check` -> **0 warnings**.
+
+---
+
+## 12. Final Status
+
+**READY FOR INDEPENDENT R3.2 REVIEW**

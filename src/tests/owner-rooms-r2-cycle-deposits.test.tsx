@@ -851,5 +851,193 @@ describe('OWNER ROOMS R2 & R2.1 — Rent-Cycle Deposit Model & Hardened Specific
       });
     });
   });
+  describe('9. OWNER ROOMS R3.2 — Cycle Filter/Search + Effective Room Operational Status History', () => {
+    const mockRoom: any = {
+      id: 'room-101',
+      dormitoryId: 'dorm-001',
+      roomNumber: '101',
+      status: 'maintenance', // Current latest operational status
+      currentTenantId: 'tenant-current-B',
+      monthlyRent: 6000,
+      termRent: 24000,
+      dailyRent: 700,
+      monthlyDeposit: 6000,
+      termDeposit: 12000,
+      dailyDeposit: 1500,
+    };
+
+    describe('Agreement Precedence vs Maintenance (Part F)', () => {
+      it('1. ACTIVE_AGREEMENT takes precedence over operational maintenance (primary is มีผู้เช่า, secondary is ปิดปรับปรุงปัจจุบัน)', () => {
+        const previewHistoricalOccupied = {
+          roomId: 'room-101',
+          cyclePresentationState: 'ACTIVE_AGREEMENT',
+          agreementType: 'MONTHLY',
+          rentAmount: '4500.00',
+          agreementDepositAmount: '4500.00',
+          tenantId: 'tenant-hist-A',
+          tenantName: 'นาย สมชาย ประวัติ',
+          effectiveRoomOperationalStatus: 'maintenance',
+        };
+
+        const res = resolveRoomCyclePresentation(mockRoom, previewHistoricalOccupied, 'cycle-2026-06');
+        expect(res.state).toBe('ACTIVE_AGREEMENT');
+        expect(res.occupancy?.tenantName).toBe('นาย สมชาย ประวัติ');
+        expect(res.occupancy?.rentAmount).toBe(4500);
+        expect(res.isCurrentMaintenance).toBe(true); // Exposes current maintenance for secondary badge
+      });
+    });
+
+    describe('NO_AGREEMENT + Operational Status (Part G)', () => {
+      it('2. NO_AGREEMENT_IN_CYCLE + effective status MAINTENANCE resolves to MAINTENANCE_IN_CYCLE', () => {
+        const previewMaintenance = {
+          roomId: 'room-101',
+          cyclePresentationState: 'NO_AGREEMENT_IN_CYCLE',
+          tenantId: null,
+          tenantName: null,
+          effectiveRoomOperationalStatus: 'maintenance',
+        };
+
+        const res = resolveRoomCyclePresentation(mockRoom, previewMaintenance, 'cycle-2026-08');
+        expect(res.state).toBe('MAINTENANCE_IN_CYCLE');
+        expect(res.occupancy).toBeNull();
+        expect(res.effectiveOperationalStatus).toBe('maintenance');
+      });
+
+      it('3. NO_AGREEMENT_IN_CYCLE + effective status VACANT resolves to NO_AGREEMENT_IN_CYCLE with B1 current catalog', () => {
+        const vacantRoom = { ...mockRoom, status: 'vacant' };
+        const previewVacant = {
+          roomId: 'room-101',
+          cyclePresentationState: 'NO_AGREEMENT_IN_CYCLE',
+          tenantId: null,
+          tenantName: null,
+          effectiveRoomOperationalStatus: 'vacant',
+        };
+
+        const res = resolveRoomCyclePresentation(vacantRoom, previewVacant, 'cycle-2026-08');
+        expect(res.state).toBe('NO_AGREEMENT_IN_CYCLE');
+        expect(res.occupancy).toBeNull();
+        expect(res.currentCatalogRates[0].amount).toBe(6000);
+      });
+    });
+
+    describe('Strict UNAVAILABLE & Daily Tail (Part L & N)', () => {
+      it('4. UNAVAILABLE state returns occupancy null and does not mask missing data', () => {
+        const res = resolveRoomCyclePresentation(mockRoom, undefined, 'cycle-2026-06');
+        expect(res.state).toBe('UNAVAILABLE');
+        expect(res.occupancy).toBeNull();
+      });
+
+      it('5. DAILY_FINANCIAL_TAIL validates finite rentAmount and agreementType === DAILY', () => {
+        const validDailyTail = {
+          roomId: 'room-101',
+          cyclePresentationState: 'DAILY_FINANCIAL_TAIL',
+          agreementType: 'DAILY',
+          rentAmount: '800.00',
+          agreementDepositAmount: '500.00',
+          tenantId: 'tenant-tail',
+          tenantName: 'คุณ สายัณห์',
+        };
+        const res1 = resolveRoomCyclePresentation(mockRoom, validDailyTail, 'cycle-2026-08');
+        expect(res1.state).toBe('DAILY_FINANCIAL_TAIL');
+        expect(res1.occupancy?.agreementType).toBe('DAILY');
+        expect(res1.occupancy?.rentAmount).toBe(800);
+
+        // Malformed agreementType -> fails closed to UNAVAILABLE
+        const invalidDailyTail = {
+          ...validDailyTail,
+          agreementType: 'MONTHLY', // Mismatched
+        };
+        const res2 = resolveRoomCyclePresentation(mockRoom, invalidDailyTail, 'cycle-2026-08');
+        expect(res2.state).toBe('UNAVAILABLE');
+      });
+    });
+
+    describe('Cycle Filter & Search Authority (Decision A1, Part J & K)', () => {
+      const roomCatalogList: any[] = [
+        {
+          id: 'room-101',
+          roomNumber: '101',
+          buildingId: 'bld-A',
+          status: 'vacant', // Today's status
+          currentTenantId: 'tenant-today-B', // Today's occupant
+        },
+        {
+          id: 'room-102',
+          roomNumber: '102',
+          buildingId: 'bld-A',
+          status: 'occupied',
+          currentTenantId: 'tenant-today-C',
+        },
+        {
+          id: 'room-103',
+          roomNumber: '103',
+          buildingId: 'bld-B',
+          status: 'vacant',
+          currentTenantId: null,
+        }
+      ];
+
+      const previewContextCycle202606 = new Map<string, any>([
+        ['room-101', {
+          roomId: 'room-101',
+          cyclePresentationState: 'ACTIVE_AGREEMENT',
+          agreementType: 'MONTHLY',
+          rentAmount: '4500.00',
+          tenantId: 'tenant-hist-A',
+          tenantName: 'นาย สมชาย ประวัติ',
+        }],
+        ['room-102', {
+          roomId: 'room-102',
+          cyclePresentationState: 'NO_AGREEMENT_IN_CYCLE',
+          effectiveRoomOperationalStatus: 'maintenance',
+          tenantId: null,
+          tenantName: null,
+        }],
+        ['room-103', {
+          roomId: 'room-103',
+          cyclePresentationState: 'NO_AGREEMENT_IN_CYCLE',
+          tenantId: null,
+          tenantName: null,
+        }]
+      ]);
+
+      it('6. Filter by occupied strictly filters by selected-cycle ACTIVE_AGREEMENT (Room 101 matches, not today vacant status)', () => {
+        const presentations = roomCatalogList.map(r => resolveRoomCyclePresentation(r, previewContextCycle202606.get(r.id), 'cycle-2026-06'));
+
+        const occupiedRooms = roomCatalogList.filter((r, idx) => presentations[idx].state === 'ACTIVE_AGREEMENT');
+        expect(occupiedRooms).toHaveLength(1);
+        expect(occupiedRooms[0].roomNumber).toBe('101');
+      });
+
+      it('7. Filter by maintenance strictly filters by selected-cycle MAINTENANCE_IN_CYCLE (Room 102 matches)', () => {
+        const presentations = roomCatalogList.map(r => resolveRoomCyclePresentation(r, previewContextCycle202606.get(r.id), 'cycle-2026-06'));
+
+        const maintenanceRooms = roomCatalogList.filter((r, idx) => presentations[idx].state === 'MAINTENANCE_IN_CYCLE');
+        expect(maintenanceRooms).toHaveLength(1);
+        expect(maintenanceRooms[0].roomNumber).toBe('102');
+      });
+
+      it('8. Search matches selected-cycle historical tenant (สมชาย) and NOT current tenant (tenant-today-B)', () => {
+        const presentations = roomCatalogList.map(r => resolveRoomCyclePresentation(r, previewContextCycle202606.get(r.id), 'cycle-2026-06'));
+
+        // Search for historical tenant "สมชาย"
+        const queryHist = 'สมชาย';
+        const matchHist = roomCatalogList.filter((r, idx) => {
+          const p = presentations[idx];
+          return (r.roomNumber.includes(queryHist) || (p.occupancy?.tenantName && p.occupancy.tenantName.includes(queryHist)));
+        });
+        expect(matchHist).toHaveLength(1);
+        expect(matchHist[0].roomNumber).toBe('101');
+
+        // Search for today's tenant "tenant-today-B" -> must NOT match for 2026-06 cycle
+        const queryToday = 'tenant-today-B';
+        const matchToday = roomCatalogList.filter((r, idx) => {
+          const p = presentations[idx];
+          return (r.roomNumber.includes(queryToday) || (p.occupancy?.tenantName && p.occupancy.tenantName.includes(queryToday)));
+        });
+        expect(matchToday).toHaveLength(0); // Zero leakage of current tenant
+      });
+    });
+  });
 
 });

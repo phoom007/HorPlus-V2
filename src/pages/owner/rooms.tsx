@@ -695,21 +695,53 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
     }
   };
 
-  // Filter Logic (Search by Room Number, Tenant Name, and Phone)
-  const filteredRooms = rooms.filter(r => {
-    const matchBuilding = selectedBuilding === 'all' || r.buildingId === selectedBuilding;
-    const matchStatus = selectedStatus === 'all' || r.status === selectedStatus;
-    const query = (searchQuery || '').toLowerCase().trim();
-    if (!query) {
-      return matchBuilding && matchStatus;
+  // Canonical Cycle Presentations map for all loaded rooms
+  const roomCyclePresentationsById = React.useMemo(() => {
+    const map = new Map<string, ReturnType<typeof resolveRoomCyclePresentation>>();
+    for (const r of rooms) {
+      const previewRoom = previewRoomMap.get(r.id);
+      map.set(r.id, resolveRoomCyclePresentation(r, previewRoom, selectedBillingCycleId));
     }
-    const currentTenant = r.currentTenantId ? tenants.find(t => t.id === r.currentTenantId) : null;
-    const matchRoomNumber = (r?.roomNumber || '').toLowerCase().includes(query);
-    const matchTenantName = currentTenant ? (currentTenant.name || '').toLowerCase().includes(query) : false;
-    const matchTenantPhone = currentTenant ? (currentTenant.phone || '').includes(query) : false;
-    const matchSearch = matchRoomNumber || matchTenantName || matchTenantPhone;
-    return matchBuilding && matchStatus && matchSearch;
-  });
+    return map;
+  }, [rooms, previewRoomMap, selectedBillingCycleId]);
+
+  // Filter Logic (Decision A1: Filter & Search against selected-cycle presentation authority)
+  const filteredRooms = React.useMemo(() => {
+    return rooms.filter(r => {
+      const matchBuilding = selectedBuilding === 'all' || r.buildingId === selectedBuilding;
+      const presentation = roomCyclePresentationsById.get(r.id) || resolveRoomCyclePresentation(r, undefined, selectedBillingCycleId);
+
+      let matchStatus = true;
+      if (selectedStatus === 'occupied') {
+        matchStatus = presentation.state === 'ACTIVE_AGREEMENT';
+      } else if (selectedStatus === 'vacant') {
+        matchStatus = presentation.state === 'NO_AGREEMENT_IN_CYCLE';
+      } else if (selectedStatus === 'maintenance') {
+        matchStatus = presentation.state === 'MAINTENANCE_IN_CYCLE';
+      } else if (selectedStatus === 'reserved') {
+        matchStatus = presentation.state === 'RESERVED_IN_CYCLE';
+      } else if (selectedStatus === 'daily_tail') {
+        matchStatus = presentation.state === 'DAILY_FINANCIAL_TAIL';
+      } else if (selectedStatus === 'unavailable') {
+        matchStatus = presentation.state === 'UNAVAILABLE';
+      }
+
+      const query = (searchQuery || '').toLowerCase().trim();
+      if (!query) {
+        return matchBuilding && matchStatus;
+      }
+
+      const matchRoomNumber = (r?.roomNumber || '').toLowerCase().includes(query);
+      const building = buildings.find(b => b.id === r.buildingId);
+      const matchBuildingName = building ? building.name.toLowerCase().includes(query) : false;
+      const matchTenantName = presentation.occupancy?.tenantName
+        ? presentation.occupancy.tenantName.toLowerCase().includes(query)
+        : false;
+      const matchSearch = matchRoomNumber || matchBuildingName || matchTenantName;
+
+      return matchBuilding && matchStatus && matchSearch;
+    });
+  }, [rooms, selectedBuilding, selectedStatus, searchQuery, roomCyclePresentationsById, buildings, selectedBillingCycleId]);
 
   return (
     <div className="space-y-6 relative">
@@ -767,9 +799,12 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
               className="px-2.5 py-1.5 text-xs border border-gray-200 bg-white rounded-lg focus:outline-none font-semibold text-slate-700 cursor-pointer min-w-0"
             >
               <option value="all">ทุกสถานะห้องพัก</option>
-              <option value="vacant">ว่าง</option>
-              <option value="occupied">มีผู้เช่า</option>
-              <option value="maintenance">ปิดปรับปรุง</option>
+              <option value="occupied">มีผู้เช่าในงวด</option>
+              <option value="vacant">ว่างในงวด</option>
+              <option value="maintenance">ปิดปรับปรุงในงวด</option>
+              <option value="reserved">จองแล้ว</option>
+              <option value="daily_tail">ค้างชำระ</option>
+              <option value="unavailable">ข้อมูลไม่พร้อม</option>
             </select>
           </div>
 
@@ -822,12 +857,16 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
             const isCycleOccupied = cyclePresentation.state === 'ACTIVE_AGREEMENT';
             const isCycleReserved = cyclePresentation.state === 'RESERVED_IN_CYCLE';
             const isDailyTail = cyclePresentation.state === 'DAILY_FINANCIAL_TAIL';
+            const isMaintenanceInCycle = cyclePresentation.state === 'MAINTENANCE_IN_CYCLE';
+            const isUnavailable = cyclePresentation.state === 'UNAVAILABLE';
             const locationStr = formatRoomLocation(bldName, room.floor);
 
             const displayTenantName = cyclePresentation.occupancy?.tenantName;
             const statusCfg = isCycleOccupied
               ? ROOM_STATUS_CONFIG.occupied
-              : (room.status === 'maintenance' ? ROOM_STATUS_CONFIG.maintenance : ROOM_STATUS_CONFIG.vacant);
+              : (isMaintenanceInCycle
+                ? ROOM_STATUS_CONFIG.maintenance
+                : (isCycleReserved || isDailyTail ? ROOM_STATUS_CONFIG.occupied : ROOM_STATUS_CONFIG.vacant));
 
             return (
               <div
@@ -835,10 +874,18 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                 className={`rounded-3xl border shadow-2xs hover:shadow-md transition-all duration-300 overflow-hidden flex flex-col justify-between ${statusCfg.bg} ${statusCfg.border}`}
               >
                 <div className="p-5 space-y-3.5">
-                  {/* Top Row: Room number & Status badge */}
+                  {/* Top Row: Room number, Secondary Badge & Status badge */}
                   <div className="flex justify-between items-start gap-2">
                     <div>
-                      <h4 className="text-xl font-black text-slate-900 tracking-tight">{room.roomNumber}</h4>
+                      <div className="flex items-center gap-2">
+                        <h4 className="text-xl font-black text-slate-900 tracking-tight">{room.roomNumber}</h4>
+                        {/* Part H: Secondary badge for current maintenance when viewing past cycle */}
+                        {cyclePresentation.isCurrentMaintenance && !isMaintenanceInCycle && (
+                          <span className="px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-rose-100 text-rose-800 border border-rose-200" title="สถานะห้องพักปัจจุบันคือปิดปรับปรุง">
+                            ปิดปรับปรุงปัจจุบัน
+                          </span>
+                        )}
+                      </div>
                       <p className="text-[11px] text-gray-500 font-semibold mt-0.5">{locationStr}</p>
                     </div>
 
@@ -848,13 +895,15 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                           ? 'bg-indigo-100 text-indigo-800 border-indigo-200'
                           : (isCycleReserved || isDailyTail)
                             ? 'bg-amber-100 text-amber-800 border-amber-200'
-                            : (room.status === 'maintenance'
+                            : (isMaintenanceInCycle
                               ? 'bg-rose-100 text-rose-800 border-rose-200'
-                              : 'bg-emerald-100 text-emerald-800 border-emerald-200')
+                              : (isUnavailable
+                                ? 'bg-slate-200 text-slate-700 border-slate-300'
+                                : 'bg-emerald-100 text-emerald-800 border-emerald-200'))
                         }`}
-                      title={`สถานะห้องในงวด: ${isCycleOccupied ? 'มีผู้เช่า' : (isCycleReserved ? 'จองแล้ว' : (isDailyTail ? 'ค้างชำระ (รายวัน)' : (room.status === 'maintenance' ? 'ปิดปรับปรุง' : 'ว่าง')))}`}
+                      title={`สถานะห้องในงวด: ${isCycleOccupied ? 'มีผู้เช่า' : (isCycleReserved ? 'จองแล้ว' : (isDailyTail ? 'ค้างชำระ (รายวัน)' : (isMaintenanceInCycle ? 'ปิดปรับปรุง' : (isUnavailable ? 'ข้อมูลไม่พร้อม' : 'ว่าง'))))}`}
                     >
-                      {isCycleOccupied ? 'มีผู้เช่า' : (isCycleReserved ? 'จองแล้ว' : (isDailyTail ? 'ค้างชำระ' : (room.status === 'maintenance' ? 'ปิดปรับปรุง' : 'ว่าง')))}
+                      {isCycleOccupied ? 'มีผู้เช่า' : (isCycleReserved ? 'จองแล้ว' : (isDailyTail ? 'ค้างชำระ' : (isMaintenanceInCycle ? 'ปิดปรับปรุง' : (isUnavailable ? 'ข้อมูลไม่พร้อม' : 'ว่าง'))))}
                     </div>
                   </div>
 
@@ -870,13 +919,23 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                         {displayTenantName ? (
                           <p className="font-extrabold text-slate-900 truncate mt-0.5">{displayTenantName}</p>
                         ) : (
-                          <p className="text-gray-400 font-medium italic mt-0.5">ไม่มีผู้เช่าในงวดนี้</p>
+                          <p className="text-gray-400 font-medium italic mt-0.5">
+                            {isUnavailable ? 'ไม่พบข้อมูลของงวดนี้' : (isMaintenanceInCycle ? 'ปิดปรับปรุงในงวดนี้' : 'ไม่มีผู้เช่าในงวดนี้')}
+                          </p>
                         )}
                       </div>
                     </div>
 
                     {/* Rates Breakdown */}
                     {(() => {
+                      if (isUnavailable) {
+                        return (
+                          <div className="py-2 text-center text-slate-400 italic text-[11px]">
+                            ไม่พบข้อมูลของงวดนี้
+                          </div>
+                        );
+                      }
+
                       if (isCycleOccupied && cyclePresentation.occupancy) {
                         const agrType = cyclePresentation.occupancy.agreementType;
                         const cycleLabel = agrType === 'TERM' ? 'รายเทอม' : (agrType === 'DAILY' ? 'รายวัน' : 'รายเดือน');
@@ -896,11 +955,35 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                         );
                       }
 
+                      if (isDailyTail && cyclePresentation.occupancy) {
+                        return (
+                          <div className="space-y-1.5">
+                            <p className="text-[10px] font-black uppercase text-amber-700 tracking-wider">
+                              รายการค้างชำระรายวัน
+                            </p>
+                            <div className="flex justify-between items-center text-slate-700">
+                              <span className="text-gray-500 font-medium">ค่าเช่ารายวัน:</span>
+                              <span className="font-extrabold text-slate-900">
+                                {formatBaht(cyclePresentation.occupancy.rentAmount)} / วัน
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      }
+
+                      if (isCycleReserved) {
+                        return (
+                          <div className="py-2 text-center text-amber-700 font-bold text-[11px]">
+                            จองห้องพักล่วงหน้าในงวดนี้
+                          </div>
+                        );
+                      }
+
                       // Product Owner Decision B1: Fallback to current room catalog rates labeled 'อัตราปัจจุบัน'
                       return (
                         <div className="space-y-1.5">
                           <p className="text-[10px] font-black uppercase text-slate-600 tracking-wider">
-                            อัตราปัจจุบัน
+                            {isMaintenanceInCycle ? 'ปิดปรับปรุง (อัตราปัจจุบัน)' : 'อัตราปัจจุบัน'}
                           </p>
                           {cyclePresentation.currentCatalogRates.map((rate) => (
                             <div key={rate.cycle} className="flex justify-between items-center text-slate-700">
@@ -919,6 +1002,9 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                   <div className="flex items-center justify-between text-xs px-1 pt-0.5">
                     <span className="text-gray-600 font-bold">ค่าประกัน:</span>
                     {(() => {
+                      if (isUnavailable) {
+                        return <span className="text-gray-400 font-medium italic">-</span>;
+                      }
                       if (isCycleOccupied && cyclePresentation.occupancy) {
                         const dep = cyclePresentation.occupancy.depositAmount;
                         if (dep !== null && dep !== undefined && Number.isFinite(dep)) {
@@ -929,6 +1015,13 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                           );
                         }
                         return <span className="text-gray-400 font-medium italic">ไม่พบข้อมูลค่าประกันตามงวด</span>;
+                      }
+                      if (isDailyTail && cyclePresentation.occupancy?.depositAmount != null) {
+                        return (
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-extrabold text-slate-900">{formatBaht(cyclePresentation.occupancy.depositAmount)}</span>
+                          </div>
+                        );
                       }
                       return <span className="text-gray-400 font-medium italic">ไม่มีผู้เช่าลงทะเบียน</span>;
                     })()}
@@ -1004,12 +1097,16 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                   const isCycleOccupied = cyclePresentation.state === 'ACTIVE_AGREEMENT';
                   const isCycleReserved = cyclePresentation.state === 'RESERVED_IN_CYCLE';
                   const isDailyTail = cyclePresentation.state === 'DAILY_FINANCIAL_TAIL';
+                  const isMaintenanceInCycle = cyclePresentation.state === 'MAINTENANCE_IN_CYCLE';
+                  const isUnavailable = cyclePresentation.state === 'UNAVAILABLE';
                   const locationStr = formatRoomLocation(bldName, room.floor);
 
                   const displayTenantName = cyclePresentation.occupancy?.tenantName;
                   const statusCfg = isCycleOccupied
                     ? ROOM_STATUS_CONFIG.occupied
-                    : (room.status === 'maintenance' ? ROOM_STATUS_CONFIG.maintenance : ROOM_STATUS_CONFIG.vacant);
+                    : (isMaintenanceInCycle
+                      ? ROOM_STATUS_CONFIG.maintenance
+                      : (isCycleReserved || isDailyTail ? ROOM_STATUS_CONFIG.occupied : ROOM_STATUS_CONFIG.vacant));
 
                   return (
                     <tr key={room.id} className="hover:bg-slate-50/60 transition-colors">

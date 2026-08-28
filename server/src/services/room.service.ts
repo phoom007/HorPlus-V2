@@ -225,6 +225,27 @@ export class RoomService {
         },
       });
 
+      const operationalCycle = await tx.billingCycle.findFirst({
+        where: { dormitoryId, status: 'OPEN' },
+        orderBy: { periodStart: 'desc' },
+      }) || await tx.billingCycle.findFirst({
+        where: { dormitoryId },
+        orderBy: { periodStart: 'desc' },
+      });
+
+      if (operationalCycle) {
+        await tx.roomOperationalStatusChange.create({
+          data: {
+            dormitoryId,
+            roomId: created.id,
+            effectiveBillingCycleId: operationalCycle.id,
+            status: created.status || 'vacant',
+            updatedByUserId: userId || null,
+            version: 1,
+          },
+        });
+      }
+
       await tx.auditLog.create({
         data: {
           dormitoryId,
@@ -348,6 +369,41 @@ export class RoomService {
         const err: any = new AppError('ข้อมูลห้องพักถูกแก้ไขโดยผู้อื่น กรุณาโหลดข้อมูลใหม่', 409, 'VERSION_CONFLICT');
         err.currentVersion = safeCurrent?.version || 1;
         throw err;
+      }
+
+      if (changes.status && changes.status !== existing.status) {
+        const operationalCycle = await tx.billingCycle.findFirst({
+          where: { dormitoryId: targetDormId, status: 'OPEN' },
+          orderBy: { periodStart: 'desc' },
+        }) || await tx.billingCycle.findFirst({
+          where: { dormitoryId: targetDormId },
+          orderBy: { periodStart: 'desc' },
+        });
+
+        if (operationalCycle) {
+          await tx.roomOperationalStatusChange.upsert({
+            where: {
+              dormitory_room_effective_cycle_unique: {
+                dormitoryId: targetDormId,
+                roomId: id,
+                effectiveBillingCycleId: operationalCycle.id,
+              },
+            },
+            create: {
+              dormitoryId: targetDormId,
+              roomId: id,
+              effectiveBillingCycleId: operationalCycle.id,
+              status: changes.status,
+              updatedByUserId: userId || null,
+              version: 1,
+            },
+            update: {
+              status: changes.status,
+              updatedByUserId: userId || null,
+              version: { increment: 1 },
+            },
+          });
+        }
       }
 
       const updated = await tx.room.findUnique({ where: { id } });

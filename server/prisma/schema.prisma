@@ -124,6 +124,7 @@ model Dormitory {
   outboxEvents               LocalNotificationOutbox[]
   staffNotices               StaffNotification[]
   roomBillingCycleSnapshots  RoomBillingCycleSnapshot[]
+  roomOperationalStatusChanges RoomOperationalStatusChange[]
   roomNextCycleCorrections   RoomNextCycleCorrection[]
   provisionalRentalTerms     ProvisionalRentalTerm[]
   dailyStays                 DailyStay[]
@@ -465,6 +466,7 @@ model Room {
   renewalRequests           TenantRenewalRequest[]
   settlements               ContractSettlement[]
   roomBillingCycleSnapshots RoomBillingCycleSnapshot[]
+  operationalStatusChanges  RoomOperationalStatusChange[]
   roomNextCycleCorrections  RoomNextCycleCorrection[]
   provisionalRentalTerms    ProvisionalRentalTerm[]
   dailyStays                DailyStay[]
@@ -736,6 +738,7 @@ model BillingCycle {
   meterReadings             MeterReading[]
   bills                     Bill[]
   roomBillingCycleSnapshots RoomBillingCycleSnapshot[]
+  roomOperationalStatusChanges RoomOperationalStatusChange[]
 
   @@unique([dormitoryId, cycleCode], name: "dormitory_cycle_code_unique")
   @@map("billing_cycles")
@@ -1993,4 +1996,26 @@ model DailyStayInvoiceItem {
 
   @@index([invoiceId])
   @@map("daily_stay_invoice_items")
+}
+
+
+model RoomOperationalStatusChange {
+  id                      String       @id @default(uuid()) @db.Uuid
+  dormitoryId             String       @map("dormitory_id") @db.Uuid
+  roomId                  String       @map("room_id") @db.Uuid
+  effectiveBillingCycleId String       @map("effective_billing_cycle_id") @db.Uuid
+  status                  String       @map("status") @db.VarChar(50) // vacant, occupied, maintenance
+  updatedByUserId         String?      @map("updated_by_user_id") @db.Uuid
+  version                 Int          @default(1)
+  createdAt               DateTime     @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt               DateTime     @updatedAt @map("updated_at") @db.Timestamptz()
+
+  dormitory             Dormitory    @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
+  room                  Room         @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  effectiveBillingCycle BillingCycle @relation(fields: [effectiveBillingCycleId], references: [id], onDelete: Cascade)
+
+  @@unique([dormitoryId, roomId, effectiveBillingCycleId], name: "dormitory_room_effective_cycle_unique")
+  @@index([dormitoryId, roomId])
+  @@index([effectiveBillingCycleId])
+  @@map("room_operational_status_changes")
 }

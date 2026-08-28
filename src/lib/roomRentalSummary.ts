@@ -223,7 +223,9 @@ export interface RoomCycleOccupancy {
 export interface RoomCyclePresentation {
   roomId: string;
   billingCycleId?: string;
-  state: 'ACTIVE_AGREEMENT' | 'RESERVED_IN_CYCLE' | 'DAILY_FINANCIAL_TAIL' | 'NO_AGREEMENT_IN_CYCLE' | 'UNAVAILABLE';
+  state: 'ACTIVE_AGREEMENT' | 'RESERVED_IN_CYCLE' | 'DAILY_FINANCIAL_TAIL' | 'NO_AGREEMENT_IN_CYCLE' | 'MAINTENANCE_IN_CYCLE' | 'UNAVAILABLE';
+  effectiveOperationalStatus: 'vacant' | 'occupied' | 'maintenance' | 'UNKNOWN' | null;
+  isCurrentMaintenance: boolean;
   occupancy: RoomCycleOccupancy | null;
   currentCatalogRates: RateItem[];
 }
@@ -238,15 +240,18 @@ export function resolveRoomCyclePresentation(
   billingCycleId?: string
 ): RoomCyclePresentation {
   const currentCatalogRates = getCatalogRates(room);
+  const isCurrentMaintenance = room.status === 'maintenance';
 
   // If no preview room context available:
   // If a billingCycleId was explicitly requested, this is an incomplete/failed response -> UNAVAILABLE.
-  // If no billingCycleId was provided (unselected), default cleanly to NO_AGREEMENT_IN_CYCLE.
+  // If no billingCycleId was provided (unselected), default cleanly to NO_AGREEMENT_IN_CYCLE (or MAINTENANCE_IN_CYCLE if current is maintenance).
   if (!meterPreviewRoom) {
     return {
       roomId: room.id,
       billingCycleId,
-      state: billingCycleId ? 'UNAVAILABLE' : 'NO_AGREEMENT_IN_CYCLE',
+      state: billingCycleId ? 'UNAVAILABLE' : (isCurrentMaintenance ? 'MAINTENANCE_IN_CYCLE' : 'NO_AGREEMENT_IN_CYCLE'),
+      effectiveOperationalStatus: isCurrentMaintenance ? 'maintenance' : 'vacant',
+      isCurrentMaintenance,
       occupancy: null,
       currentCatalogRates,
     };
@@ -254,6 +259,7 @@ export function resolveRoomCyclePresentation(
 
   const rawState = meterPreviewRoom.cyclePresentationState;
   const validStates = ['ACTIVE_AGREEMENT', 'RESERVED_IN_CYCLE', 'DAILY_FINANCIAL_TAIL', 'NO_AGREEMENT_IN_CYCLE'];
+  const effectiveOperationalStatus = meterPreviewRoom.effectiveRoomOperationalStatus ?? (isCurrentMaintenance ? 'maintenance' : 'UNKNOWN');
 
   // Strict Fail-Closed: If cyclePresentationState is missing or not a canonical state, FAIL CLOSED
   if (!rawState || !validStates.includes(rawState)) {
@@ -261,6 +267,8 @@ export function resolveRoomCyclePresentation(
       roomId: room.id,
       billingCycleId,
       state: 'UNAVAILABLE',
+      effectiveOperationalStatus,
+      isCurrentMaintenance,
       occupancy: null,
       currentCatalogRates,
     };
@@ -274,6 +282,8 @@ export function resolveRoomCyclePresentation(
         roomId: room.id,
         billingCycleId,
         state: 'UNAVAILABLE',
+        effectiveOperationalStatus,
+        isCurrentMaintenance,
         occupancy: null,
         currentCatalogRates,
       };
@@ -285,6 +295,8 @@ export function resolveRoomCyclePresentation(
         roomId: room.id,
         billingCycleId,
         state: 'UNAVAILABLE',
+        effectiveOperationalStatus,
+        isCurrentMaintenance,
         occupancy: null,
         currentCatalogRates,
       };
@@ -301,6 +313,8 @@ export function resolveRoomCyclePresentation(
       roomId: room.id,
       billingCycleId,
       state: 'ACTIVE_AGREEMENT',
+      effectiveOperationalStatus,
+      isCurrentMaintenance,
       occupancy: {
         tenantId: meterPreviewRoom.tenantId ?? null,
         tenantName: meterPreviewRoom.tenantName ?? null,
@@ -318,6 +332,8 @@ export function resolveRoomCyclePresentation(
       roomId: room.id,
       billingCycleId,
       state: 'RESERVED_IN_CYCLE',
+      effectiveOperationalStatus,
+      isCurrentMaintenance,
       occupancy: {
         tenantId: meterPreviewRoom.tenantId ?? null,
         tenantName: meterPreviewRoom.tenantName ?? null,
@@ -331,6 +347,32 @@ export function resolveRoomCyclePresentation(
   }
 
   if (rawState === 'DAILY_FINANCIAL_TAIL') {
+    const agreementType = meterPreviewRoom.agreementType;
+    if (agreementType !== 'DAILY') {
+      return {
+        roomId: room.id,
+        billingCycleId,
+        state: 'UNAVAILABLE',
+        effectiveOperationalStatus,
+        isCurrentMaintenance,
+        occupancy: null,
+        currentCatalogRates,
+      };
+    }
+
+    const rentAmount = Number(meterPreviewRoom.rentAmount);
+    if (!Number.isFinite(rentAmount)) {
+      return {
+        roomId: room.id,
+        billingCycleId,
+        state: 'UNAVAILABLE',
+        effectiveOperationalStatus,
+        isCurrentMaintenance,
+        occupancy: null,
+        currentCatalogRates,
+      };
+    }
+
     const rawDep = meterPreviewRoom.agreementDepositAmount;
     const depositAmount = rawDep !== null && rawDep !== undefined && rawDep !== '' && Number.isFinite(Number(rawDep))
       ? Number(rawDep)
@@ -340,11 +382,13 @@ export function resolveRoomCyclePresentation(
       roomId: room.id,
       billingCycleId,
       state: 'DAILY_FINANCIAL_TAIL',
+      effectiveOperationalStatus,
+      isCurrentMaintenance,
       occupancy: {
         tenantId: meterPreviewRoom.tenantId ?? null,
         tenantName: meterPreviewRoom.tenantName ?? null,
         agreementType: 'DAILY',
-        rentAmount: Number(meterPreviewRoom.rentAmount) || 0,
+        rentAmount,
         depositAmount,
         source: 'DAILY_STAY',
       },
@@ -352,11 +396,25 @@ export function resolveRoomCyclePresentation(
     };
   }
 
-  // NO_AGREEMENT_IN_CYCLE: Product Owner Decision B1
+  // NO_AGREEMENT_IN_CYCLE: Consult effective operational status
+  if (meterPreviewRoom.effectiveRoomOperationalStatus === 'maintenance') {
+    return {
+      roomId: room.id,
+      billingCycleId,
+      state: 'MAINTENANCE_IN_CYCLE',
+      effectiveOperationalStatus: 'maintenance',
+      isCurrentMaintenance,
+      occupancy: null,
+      currentCatalogRates,
+    };
+  }
+
   return {
     roomId: room.id,
     billingCycleId,
     state: 'NO_AGREEMENT_IN_CYCLE',
+    effectiveOperationalStatus,
+    isCurrentMaintenance,
     occupancy: null,
     currentCatalogRates,
   };

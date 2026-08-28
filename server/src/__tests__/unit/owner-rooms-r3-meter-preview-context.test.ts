@@ -15,6 +15,7 @@ vi.mock('../../db/prisma.js', () => {
     meterReading: { findMany: vi.fn() },
     roomBillingCycleSnapshot: { findMany: vi.fn() },
     meterWorkspaceRoomSnapshot: { findMany: vi.fn() },
+    roomOperationalStatusChange: { findMany: vi.fn().mockResolvedValue([]) },
   };
   return {
     getPrismaClient: () => mockPrisma,
@@ -67,6 +68,7 @@ describe('OWNER ROOMS R3 — Meter Service Preview Context DTO & State Authority
     mockPrisma.bill.findMany.mockResolvedValue([]);
     mockPrisma.meterReading.findMany.mockResolvedValue([]);
     mockPrisma.roomBillingCycleSnapshot.findMany.mockResolvedValue([]);
+    mockPrisma.roomOperationalStatusChange.findMany.mockResolvedValue([]);
     mockPrisma.meterWorkspaceRoomSnapshot.findMany.mockResolvedValue([]);
 
     meterService = new MeterService(mockMeterRepo, mockCycleRepo, mockRoomRepo);

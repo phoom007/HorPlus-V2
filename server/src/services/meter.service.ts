@@ -1678,6 +1678,8 @@ export class MeterService {
       agreementType: 'MONTHLY' | 'TERM' | 'DAILY' | null;
       agreementDepositAmount: string | null;
       cyclePresentationState: 'ACTIVE_AGREEMENT' | 'RESERVED_IN_CYCLE' | 'DAILY_FINANCIAL_TAIL' | 'NO_AGREEMENT_IN_CYCLE';
+      effectiveRoomOperationalStatus: 'vacant' | 'occupied' | 'maintenance' | 'UNKNOWN';
+      effectiveRoomStatusSourceCycleId: string | null;
       rentAmount: string;
       rentDescription: string;
       isLineLinked: boolean;
@@ -1918,6 +1920,29 @@ export class MeterService {
       const list = billsByRoomMap.get(b.roomId) || [];
       list.push(b);
       billsByRoomMap.set(b.roomId, list);
+    }
+
+    // Load effective room operational status changes up to this cycle
+    const allStatusChanges = await prisma.roomOperationalStatusChange.findMany({
+      where: {
+        dormitoryId,
+        effectiveBillingCycle: {
+          periodStart: { lte: cycle.periodStart },
+        },
+      },
+      include: {
+        effectiveBillingCycle: { select: { id: true, periodStart: true } },
+      },
+      orderBy: [
+        { effectiveBillingCycle: { periodStart: 'desc' } },
+        { createdAt: 'desc' },
+      ],
+    });
+    const statusByRoomMap = new Map<string, { status: string; cycleId: string }>();
+    for (const sc of allStatusChanges) {
+      if (!statusByRoomMap.has(sc.roomId)) {
+        statusByRoomMap.set(sc.roomId, { status: sc.status, cycleId: sc.effectiveBillingCycleId });
+      }
     }
 
     // Load meter readings for this cycle
@@ -2506,6 +2531,8 @@ export class MeterService {
         agreementType,
         agreementDepositAmount,
         cyclePresentationState,
+        effectiveRoomOperationalStatus: (statusByRoomMap.get(room.id)?.status as any) || 'UNKNOWN',
+        effectiveRoomStatusSourceCycleId: statusByRoomMap.get(room.id)?.cycleId || null,
         rentAmount,
         rentDescription,
         isLineLinked,
@@ -2674,3 +2701,51 @@ export interface SaveMeterWorkspaceRowDto {
 }
 
 export const meterService = new MeterService();
+
+
+export async function resolveRoomOperationalStatusForCycle(
+  dormitoryId: string,
+  roomId: string,
+  targetBillingCycleId: string,
+  prismaClient?: any
+): Promise<{
+  status: 'vacant' | 'occupied' | 'maintenance' | 'UNKNOWN';
+  sourceCycleId: string | null;
+}> {
+  const prisma = prismaClient || getPrismaClient();
+
+  const targetCycle = await prisma.billingCycle.findFirst({
+    where: { id: targetBillingCycleId, dormitoryId },
+    select: { id: true, periodStart: true },
+  });
+
+  if (!targetCycle) {
+    return { status: 'UNKNOWN', sourceCycleId: null };
+  }
+
+  const latestChange = await prisma.roomOperationalStatusChange.findFirst({
+    where: {
+      dormitoryId,
+      roomId,
+      effectiveBillingCycle: {
+        periodStart: { lte: targetCycle.periodStart },
+      },
+    },
+    include: {
+      effectiveBillingCycle: { select: { id: true, periodStart: true } },
+    },
+    orderBy: [
+      { effectiveBillingCycle: { periodStart: 'desc' } },
+      { createdAt: 'desc' },
+    ],
+  });
+
+  if (!latestChange) {
+    return { status: 'UNKNOWN', sourceCycleId: null };
+  }
+
+  return {
+    status: latestChange.status as any,
+    sourceCycleId: latestChange.effectiveBillingCycleId,
+  };
+}
