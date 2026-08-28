@@ -10,11 +10,17 @@ export function getOwnerRoomMutationErrorMessage(error: any): string {
     return 'ระบบขัดข้องชั่วคราว กรุณาลองใหม่';
   }
 
-  // Extract error code from various response structures (AppError, axios, fetch response, DataResult)
+  // Extract error code from various response structures (AppError, axios, fetch response, DataResult, details)
   const code = error?.code ||
     error?.response?.data?.error?.code ||
     error?.error?.code ||
+    error?.details?.code ||
+    error?.details?.error?.code ||
+    error?.error?.details?.code ||
     (typeof error?.message === 'string' && error.message.includes('ROOM_NUMBER_ALREADY_EXISTS') ? 'ROOM_NUMBER_ALREADY_EXISTS' : undefined) ||
+    (typeof error?.message === 'string' && error.message.includes('BUILDING_NOT_FOUND') ? 'BUILDING_NOT_FOUND' : undefined) ||
+    (typeof error?.message === 'string' && error.message.includes('ROOM_LIMIT_REACHED') ? 'ROOM_LIMIT_REACHED' : undefined) ||
+    (typeof error?.message === 'string' && error.message.includes('FORBIDDEN') ? 'FORBIDDEN' : undefined) ||
     '';
 
   switch (code) {
@@ -36,8 +42,8 @@ export function getOwnerRoomMutationErrorMessage(error: any): string {
     case 'DEPENDENCY_UNAVAILABLE':
       return 'เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ กรุณาลองใหม่';
     default:
-      // If error.message is already a clean Thai message, we can pass it if it does not contain raw trace/SQL
-      if (typeof error?.message === 'string' && /[\u0E00-\u0E7F]/.test(error.message) && !error.message.includes('Error:') && !error.message.includes('Prisma')) {
+      // If error.message is already a clean Thai message without stack/SQL, allow it
+      if (typeof error?.message === 'string' && /[\u0E00-\u0E7F]/.test(error.message) && !error.message.includes('Error:') && !error.message.includes('Prisma') && !error.message.includes('at ')) {
         return error.message;
       }
       return 'ระบบขัดข้องชั่วคราว กรุณาลองใหม่';

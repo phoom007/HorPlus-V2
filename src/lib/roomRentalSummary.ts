@@ -76,10 +76,11 @@ export function getCatalogRates(room: Room): RateItem[] {
 
 /**
  * Resolves rent rates for Grid Mode:
- * - Occupied: Show ONLY the active tenant agreement rate.
+ * - Occupied + active agreement: Show ONLY the active agreement rate.
+ * - Occupied + missing agreement: FAIL CLOSED (no guessed catalog price).
  * - Vacant: Show all configured catalog rates.
  */
-export function getGridRentRates(room: Room): { isOccupied: boolean; rates: RateItem[] } {
+export function getGridRentRates(room: Room): { isOccupied: boolean; rates: RateItem[]; unavailableText?: string } {
   const isOccupied = room.status === 'occupied' || !!room.currentTenantId;
 
   if (isOccupied && room.activeRentalSummary) {
@@ -101,21 +102,10 @@ export function getGridRentRates(room: Room): { isOccupied: boolean; rates: Rate
   }
 
   if (isOccupied) {
-    // If occupied but no activeRentalSummary was found, fall back to room.rentCycle primary rate only
-    const primaryCycle = (room.rentCycle || 'monthly') as 'monthly' | 'term' | 'daily';
-    const amount = primaryCycle === 'term' ? (room.termRent ?? room.monthlyRent) : (primaryCycle === 'daily' ? (room.dailyRent ?? room.monthlyRent) : room.monthlyRent);
-    const label = primaryCycle === 'term' ? 'รายเทอม' : (primaryCycle === 'daily' ? 'รายวัน' : 'รายเดือน');
     return {
       isOccupied: true,
-      rates: [
-        {
-          cycle: primaryCycle,
-          label,
-          amount: Number(amount || 0),
-          isPrimary: true,
-          isAgreementRate: false,
-        },
-      ],
+      rates: [],
+      unavailableText: 'ไม่พบข้อมูลอัตราค่าเช่าปัจจุบัน',
     };
   }
 
@@ -128,10 +118,11 @@ export function getGridRentRates(room: Room): { isOccupied: boolean; rates: Rate
 
 /**
  * Resolves rent rates for List Mode:
- * - Primary/Active rate is rendered first + bold.
- * - Remaining catalog rates follow below.
+ * - Occupied + active agreement: Active agreement rate is rendered first + bold.
+ * - Occupied + missing agreement: Neutral unavailable state + secondary catalog rates.
+ * - Vacant: Primary catalog rate first + bold.
  */
-export function getListRentRates(room: Room): { primaryRate: RateItem; secondaryRates: RateItem[] } {
+export function getListRentRates(room: Room): { primaryRate?: RateItem; secondaryRates: RateItem[]; unavailableText?: string } {
   const catalog = getCatalogRates(room);
   const isOccupied = room.status === 'occupied' || !!room.currentTenantId;
 
@@ -147,11 +138,17 @@ export function getListRentRates(room: Room): { primaryRate: RateItem; secondary
       isAgreementRate: true,
     };
 
-    // Filter out same cycle from catalog for secondary rates
     const secondary = catalog.filter((r) => r.cycle !== cycle);
     return {
       primaryRate: activeRate,
       secondaryRates: secondary,
+    };
+  }
+
+  if (isOccupied) {
+    return {
+      secondaryRates: catalog,
+      unavailableText: 'ไม่พบข้อมูลอัตราค่าเช่าปัจจุบัน',
     };
   }
 

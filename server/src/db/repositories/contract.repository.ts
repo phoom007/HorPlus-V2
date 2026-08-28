@@ -67,7 +67,7 @@ export interface CreateContractData {
   durationMonths?: number;
   rentBillingType?: string;
   rentAmount: string;
-  depositAmount?: string;
+  depositAmount?: string | number | null;
   advancePaymentAmount?: string;
   terms?: string | null;
   createdByUserId?: string | null;
@@ -260,7 +260,7 @@ export class InMemoryContractRepository implements IContractRepository {
       durationMonths: data.durationMonths || 1,
       rentBillingType: data.rentBillingType || 'monthly',
       rentAmount: data.rentAmount,
-      depositAmount: data.depositAmount || '0.00',
+      depositAmount: data.depositAmount !== undefined && data.depositAmount !== null ? String(data.depositAmount) : '0.00',
       advancePaymentAmount: data.advancePaymentAmount || '0.00',
       terms: data.terms || null,
       tenantSignature: null,

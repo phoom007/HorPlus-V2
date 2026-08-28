@@ -57,6 +57,26 @@ export class ContractService {
       throw err;
     }
 
+    // Determine default agreement deposit by rentBillingType before branching (Single Authority)
+    const rentBillingType = data.rentBillingType || 'monthly';
+    let contractDeposit: string;
+    if (data.depositAmount !== null && data.depositAmount !== undefined && String(data.depositAmount).trim() !== '') {
+      contractDeposit = String(data.depositAmount);
+    } else {
+      const r = room as any;
+      if (rentBillingType === 'term' && r.termDeposit !== null && r.termDeposit !== undefined) {
+        contractDeposit = String(r.termDeposit);
+      } else if (rentBillingType === 'daily' && r.dailyDeposit !== null && r.dailyDeposit !== undefined) {
+        contractDeposit = String(r.dailyDeposit);
+      } else if (r.monthlyDeposit !== null && r.monthlyDeposit !== undefined) {
+        contractDeposit = String(r.monthlyDeposit);
+      } else if (r.depositAmount !== null && r.depositAmount !== undefined) {
+        contractDeposit = String(r.depositAmount);
+      } else {
+        contractDeposit = '0.00';
+      }
+    }
+
     // Idempotency: exact duplicate check using Prisma transaction and row-level lock
     const prisma = getPrismaClient();
 
@@ -111,23 +131,7 @@ export class ContractService {
           throw err;
         }
 
-        // Create the contract using the transaction client
-        // Determine default deposit by rentBillingType if not provided
-        const rentBillingType = data.rentBillingType || 'monthly';
-        let contractDeposit = data.depositAmount;
-        if (contractDeposit === undefined || contractDeposit === null) {
-          if (rentBillingType === 'term' && (room as any).termDeposit) {
-            contractDeposit = String((room as any).termDeposit);
-          } else if (rentBillingType === 'daily' && (room as any).dailyDeposit) {
-            contractDeposit = String((room as any).dailyDeposit);
-          } else if ((room as any).monthlyDeposit) {
-            contractDeposit = String((room as any).monthlyDeposit);
-          } else if (room.depositAmount) {
-            contractDeposit = String(room.depositAmount);
-          } else {
-            contractDeposit = '0.00';
-          }
-        }
+        // Create the contract using the transaction client (using pre-resolved single authority contractDeposit)
 
         const contractNumber = data.contractNumber || `CTR${Date.now().toString().slice(-6)}`;
 

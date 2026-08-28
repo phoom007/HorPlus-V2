@@ -355,6 +355,8 @@ export class DailyStayService {
     let deposit = '0.00';
     if (data.depositAmount !== undefined && data.depositAmount !== null) {
       deposit = formatDecimal(toDecimal(String(data.depositAmount)));
+    } else if (effective.dailyDeposit?.value !== null && effective.dailyDeposit?.value !== undefined) {
+      deposit = formatDecimal(toDecimal(String(effective.dailyDeposit.value)));
     } else if (effective.depositAmount?.value !== null && effective.depositAmount?.value !== undefined) {
       deposit = formatDecimal(toDecimal(String(effective.depositAmount.value)));
     }

@@ -418,6 +418,7 @@ export class DefaultsService {
         const oldVal = beforeResult.value;
         const sourceBefore = beforeResult.source;
 
+        const isCycleDeposit = fieldName === 'depositAmount' || fieldName === 'defaultDeposit' || fieldName === 'termDeposit' || fieldName === 'monthlyDeposit' || fieldName === 'dailyDeposit';
         const isFieldOverriddenAtRoom = (room as any)[fieldName] !== undefined && (room as any)[fieldName] !== null;
 
         let eligible = true;
@@ -429,6 +430,9 @@ export class DefaultsService {
         } else if (hasProtectedContract) {
           eligible = false;
           skipReason = 'PROTECTED_CONTRACT';
+        } else if (isCycleDeposit) {
+          eligible = false;
+          skipReason = 'ROOM_OWNED_CYCLE_DEPOSIT';
         } else if (isFieldOverriddenAtRoom) {
           eligible = false;
           skipReason = 'EXPLICIT_ROOM_OVERRIDE';
@@ -1083,8 +1087,11 @@ export class DefaultsService {
       prisma
     );
 
-    const [activeContract, activeProvisional, activeDailyStay] = await Promise.all([
-      prisma.contract.findFirst({
+    const now = new Date();
+    const todayIso = now.toISOString().slice(0, 10);
+
+    const [allContracts, allProvisionals, allDailyStays] = await Promise.all([
+      prisma.contract.findMany({
         where: {
           roomId: room.id,
           dormitoryId,
@@ -1093,7 +1100,7 @@ export class DefaultsService {
         },
         include: { snapshot: true },
       }),
-      prisma.provisionalRentalTerm.findFirst({
+      prisma.provisionalRentalTerm.findMany({
         where: {
           roomId: room.id,
           dormitoryId,
@@ -1101,62 +1108,73 @@ export class DefaultsService {
           deletedAt: null,
         },
       }),
-      prisma.dailyStay.findFirst({
+      prisma.dailyStay.findMany({
         where: {
           roomId: room.id,
           dormitoryId,
-          status: { in: ['ACTIVE', 'RESERVED'] },
+          status: { in: ['ACTIVE', 'CHECKED_IN'] },
           deletedAt: null,
         },
       }),
     ]);
 
-    let activeCount = 0;
-    let activeRentalSummary: ActiveRentalSummary | null = null;
+    const activeContracts = allContracts.filter((c: any) => {
+      const s = new Date(c.startDate);
+      const e = c.endDate ? new Date(c.endDate) : null;
+      return s <= now && (!e || e > now);
+    });
 
-    if (activeContract) {
-      activeCount++;
-      const billingType = activeContract.snapshot?.rentBillingType || activeContract.rentBillingType || 'monthly';
+    const activeProvisionals = allProvisionals.filter((p: any) => {
+      const s = new Date(p.startDate);
+      const e = p.endDate ? new Date(p.endDate) : null;
+      return s <= now && (!e || e >= now);
+    });
+
+    const activeDailyStays = allDailyStays.filter((d: any) => {
+      return d.startDate <= todayIso && d.endDate >= todayIso;
+    });
+
+    const totalActive = activeContracts.length + activeProvisionals.length + activeDailyStays.length;
+    let activeRentalSummary: ActiveRentalSummary | null = null;
+    const activeContract = activeContracts.length === 1 ? activeContracts[0] : null;
+
+    if (totalActive > 1) {
+      console.warn(`[SECURITY_DATA_CONFLICT] Multiple active agreements (${totalActive}) detected for room ${room.id}`);
+      activeRentalSummary = null;
+    } else if (activeContracts.length === 1) {
+      const c = activeContracts[0];
+      const billingType = c.snapshot?.rentBillingType || c.rentBillingType || 'monthly';
       const type: 'TERM' | 'MONTHLY' | 'DAILY' = billingType === 'term' ? 'TERM' : (billingType === 'daily' ? 'DAILY' : 'MONTHLY');
-      const rentAmount = Number(activeContract.snapshot?.resolvedRent ?? activeContract.rentAmount ?? 0);
-      const depositAmount = activeContract.snapshot?.resolvedDeposit !== undefined && activeContract.snapshot?.resolvedDeposit !== null
-        ? Number(activeContract.snapshot.resolvedDeposit)
-        : (activeContract.depositAmount ? Number(activeContract.depositAmount) : null);
+      const rentAmount = Number(c.snapshot?.resolvedRent ?? c.rentAmount ?? 0);
+      const depositAmount = c.snapshot?.resolvedDeposit !== undefined && c.snapshot?.resolvedDeposit !== null
+        ? Number(c.snapshot.resolvedDeposit)
+        : (c.depositAmount ? Number(c.depositAmount) : null);
       activeRentalSummary = {
         type,
         rentAmount,
         depositAmount,
-        source: activeContract.snapshot ? 'CONTRACT_SNAPSHOT' : 'CONTRACT',
+        source: c.snapshot ? 'CONTRACT_SNAPSHOT' : 'CONTRACT',
       };
-    }
-
-    if (activeProvisional) {
-      activeCount++;
-      const type: 'TERM' | 'MONTHLY' = activeProvisional.rentalType === 'TERM' ? 'TERM' : 'MONTHLY';
-      const rentAmount = Number(type === 'TERM' ? (activeProvisional.totalRentAmount || activeProvisional.unitRentAmount) : activeProvisional.unitRentAmount);
-      const depositAmount = activeProvisional.depositAmount ? Number(activeProvisional.depositAmount) : null;
+    } else if (activeProvisionals.length === 1) {
+      const p = activeProvisionals[0];
+      const type: 'TERM' | 'MONTHLY' = p.rentalType === 'TERM' ? 'TERM' : 'MONTHLY';
+      const rentAmount = Number(type === 'TERM' ? (p.totalRentAmount || p.unitRentAmount) : p.unitRentAmount);
+      const depositAmount = p.depositAmount ? Number(p.depositAmount) : null;
       activeRentalSummary = {
         type,
         rentAmount,
         depositAmount,
         source: 'PROVISIONAL_TERM',
-        termInstallmentCount: activeProvisional.termInstallmentCount || null,
+        termInstallmentCount: p.termInstallmentCount || null,
       };
-    }
-
-    if (activeDailyStay) {
-      activeCount++;
+    } else if (activeDailyStays.length === 1) {
+      const d = activeDailyStays[0];
       activeRentalSummary = {
         type: 'DAILY',
-        rentAmount: Number(activeDailyStay.dailyRateAmount),
-        depositAmount: activeDailyStay.depositAmount ? Number(activeDailyStay.depositAmount) : null,
+        rentAmount: Number(d.dailyRateAmount),
+        depositAmount: d.depositAmount ? Number(d.depositAmount) : null,
         source: 'DAILY_STAY',
       };
-    }
-
-    if (activeCount > 1) {
-      console.warn(`[SECURITY_DATA_CONFLICT] Multiple active agreement sources found for room ${room.id} in dorm ${dormitoryId}`);
-      activeRentalSummary = null;
     }
 
     const snapshotLocked = !!(activeContract && activeContract.snapshot);
@@ -1450,16 +1468,39 @@ export class DefaultsService {
     const activeRentalMap = new Map<string, ActiveRentalSummary | null>();
     const activeContractMap = new Map<string, any>();
 
+    const now = new Date();
+    const todayIso = now.toISOString().slice(0, 10);
+
     for (const roomId of roomIds) {
-      const roomContracts = activeContracts.filter((c: any) => c.roomId === roomId);
-      const roomProvisionals = activeProvisionals.filter((p: any) => p.roomId === roomId);
-      const roomDailyStays = activeDailyStays.filter((d: any) => d.roomId === roomId);
+      // 1. Physically active Contracts (startDate <= now and (!endDate || endDate > now))
+      const roomContracts = activeContracts.filter((c: any) => {
+        if (c.roomId !== roomId) return false;
+        const s = new Date(c.startDate);
+        const e = c.endDate ? new Date(c.endDate) : null;
+        return s <= now && (!e || e > now);
+      });
 
-      let activeCount = 0;
-      let summary: ActiveRentalSummary | null = null;
+      // 2. Physically active Provisional terms (ACTIVE only, startDate <= now and (!endDate || endDate >= now))
+      const roomProvisionals = activeProvisionals.filter((p: any) => {
+        if (p.roomId !== roomId || p.status !== 'ACTIVE') return false;
+        const s = new Date(p.startDate);
+        const e = p.endDate ? new Date(p.endDate) : null;
+        return s <= now && (!e || e >= now);
+      });
 
-      if (roomContracts.length > 0) {
-        activeCount++;
+      // 3. Physically active Daily stays (ACTIVE/CHECKED_IN only, startDate <= todayIso and endDate >= todayIso)
+      const roomDailyStays = activeDailyStays.filter((d: any) => {
+        if (d.roomId !== roomId || (d.status !== 'ACTIVE' && d.status !== 'CHECKED_IN')) return false;
+        return d.startDate <= todayIso && d.endDate >= todayIso;
+      });
+
+      const totalActiveAgreements = roomContracts.length + roomProvisionals.length + roomDailyStays.length;
+
+      // Fail-closed on duplicate active records (same-source or cross-source conflict)
+      if (totalActiveAgreements > 1) {
+        console.warn(`[SECURITY_DATA_CONFLICT] Multiple active agreements (${totalActiveAgreements}) detected for room ${roomId}`);
+        activeRentalMap.set(roomId, null);
+      } else if (roomContracts.length === 1) {
         const contract = roomContracts[0];
         activeContractMap.set(roomId, contract);
         const billingType = contract.snapshot?.rentBillingType || contract.rentBillingType || 'monthly';
@@ -1468,45 +1509,34 @@ export class DefaultsService {
         const depositAmount = contract.snapshot?.resolvedDeposit !== undefined && contract.snapshot?.resolvedDeposit !== null
           ? Number(contract.snapshot.resolvedDeposit)
           : (contract.depositAmount ? Number(contract.depositAmount) : null);
-        summary = {
+        activeRentalMap.set(roomId, {
           type,
           rentAmount,
           depositAmount,
           source: contract.snapshot ? 'CONTRACT_SNAPSHOT' : 'CONTRACT',
-        };
-      }
-
-      if (roomProvisionals.length > 0) {
-        activeCount++;
+        });
+      } else if (roomProvisionals.length === 1) {
         const prov = roomProvisionals[0];
         const type: 'TERM' | 'MONTHLY' = prov.rentalType === 'TERM' ? 'TERM' : 'MONTHLY';
         const rentAmount = Number(type === 'TERM' ? (prov.totalRentAmount || prov.unitRentAmount) : prov.unitRentAmount);
         const depositAmount = prov.depositAmount ? Number(prov.depositAmount) : null;
-        summary = {
+        activeRentalMap.set(roomId, {
           type,
           rentAmount,
           depositAmount,
           source: 'PROVISIONAL_TERM',
           termInstallmentCount: prov.termInstallmentCount || null,
-        };
-      }
-
-      if (roomDailyStays.length > 0) {
-        activeCount++;
+        });
+      } else if (roomDailyStays.length === 1) {
         const daily = roomDailyStays[0];
-        summary = {
+        activeRentalMap.set(roomId, {
           type: 'DAILY',
           rentAmount: Number(daily.dailyRateAmount),
           depositAmount: daily.depositAmount ? Number(daily.depositAmount) : null,
           source: 'DAILY_STAY',
-        };
-      }
-
-      if (activeCount > 1) {
-        console.warn(`[SECURITY_DATA_CONFLICT] Multiple active agreement sources found for room ${roomId} in dorm ${dormitoryId}`);
-        activeRentalMap.set(roomId, null);
+        });
       } else {
-        activeRentalMap.set(roomId, summary);
+        activeRentalMap.set(roomId, null);
       }
     }
 

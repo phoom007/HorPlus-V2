@@ -41,7 +41,10 @@ import {
 import { VersionConflictModal } from '../../components/VersionConflictModal';
 import { getDataProvider } from '../../data/dataProvider';
 import { CreateRoomPayload, UpdateRoomChanges } from '../../data/contracts';
+import { httpRequest } from '../../data/httpClient';
 import { getOwnerRoomMutationErrorMessage } from '../../lib/roomErrorMapper';
+import { QuickAddTenantModal } from '../../components/QuickAddTenantModal';
+import { QuickAddRoomContext } from '../../types';
 import { getGridRentRates, getListRentRates, getDepositForCycle } from '../../lib/roomRentalSummary';
 import { RoomMutationImpact } from '../../lib/roomMutationCache';
 import { Room, Building, RoomStatus, Tenant, Contract, Bill, BLOCKING_CONTRACT_STATUSES } from '../../types';
@@ -125,6 +128,32 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
   // Create / Edit modal state
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingRoom, setEditingRoom] = useState<Room | null>(null);
+  const [dormDefaults, setDormDefaults] = useState<{ defaultDeposit?: number; defaultMonthlyRent?: number } | null>(null);
+  const [quickAddModalOpen, setQuickAddModalOpen] = useState(false);
+  const [selectedQuickAddContext, setSelectedQuickAddContext] = useState<QuickAddRoomContext | null>(null);
+  const [quickAddLoadingRoomId, setQuickAddLoadingRoomId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const fetchDormDefaults = async () => {
+      try {
+        const dId = buildings[0]?.dormitoryId || (typeof window !== 'undefined' ? (localStorage.getItem('selected_dormitory_id') || localStorage.getItem('horplus_current_dormitory_id')) : '') || '';
+        if (!dId) return;
+        const res = await httpRequest<{ data: { property?: { defaultDeposit?: number; defaultMonthlyRent?: number } } }>(
+          'GET',
+          '/api/v1/properties/dormitory/defaults',
+          undefined,
+          { headers: { 'x-dormitory-id': dId } }
+        );
+        if (res.data?.property) {
+          setDormDefaults({
+            defaultDeposit: res.data.property.defaultDeposit ? Number(res.data.property.defaultDeposit) : undefined,
+            defaultMonthlyRent: res.data.property.defaultMonthlyRent ? Number(res.data.property.defaultMonthlyRent) : undefined,
+          });
+        }
+      } catch {}
+    };
+    fetchDormDefaults();
+  }, [buildings]);
   const [deleteConfirmData, setDeleteConfirmData] = useState<{ roomId: string; roomNum: string; message: string } | null>(null);
 
 
@@ -205,17 +234,19 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
       setInitialWaterMeter(room.initialWaterMeter || 100);
       setInitialElectricMeter(room.initialElectricMeter || 1200);
     } else {
+      const initialDeposit = dormDefaults?.defaultDeposit !== undefined ? Number(dormDefaults.defaultDeposit) : 4500;
+      const initialRent = dormDefaults?.defaultMonthlyRent !== undefined ? Number(dormDefaults.defaultMonthlyRent) : 4500;
       setEditingRoom(null);
       setRoomNumber('');
       setBuildingId(buildings[0]?.id || '');
       setFloor(1);
-      setMonthlyRent(4500);
-      setTermRent(18000);
+      setMonthlyRent(initialRent);
+      setTermRent(initialRent * 4);
       setDailyRent(500);
       setRentCycle('monthly');
-      setTermDeposit(9000);
-      setMonthlyDeposit(9000);
-      setDailyDeposit(1000);
+      setTermDeposit(initialDeposit);
+      setMonthlyDeposit(initialDeposit);
+      setDailyDeposit(initialDeposit);
       setMaxOccupants(2);
       setRoomStatus('vacant');
       setInitialWaterMeter(100);
@@ -358,7 +389,6 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
           termDeposit: termDeposit === '' ? null : String(termDeposit),
           monthlyDeposit: monthlyDeposit === '' ? null : String(monthlyDeposit),
           dailyDeposit: dailyDeposit === '' ? null : String(dailyDeposit),
-          depositAmount: monthlyDeposit === '' ? null : String(monthlyDeposit),
           maximumOccupants: Number(maxOccupants) || 2,
           initialWaterReading: String(initialWaterMeter || 0),
           initialElectricityReading: String(initialElectricMeter || 0),
@@ -377,7 +407,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
               currentVersion: serverVersion,
             });
           } else {
-            setErrorText(res.error?.message || 'เกิดข้อผิดพลาดในการบันทึกข้อมูลห้องพัก');
+            setErrorText(getOwnerRoomMutationErrorMessage(res.error || res));
           }
           setIsSubmitting(false);
           return;
@@ -410,7 +440,6 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
           termDeposit: termDeposit === '' ? null : String(termDeposit),
           monthlyDeposit: monthlyDeposit === '' ? null : String(monthlyDeposit),
           dailyDeposit: dailyDeposit === '' ? null : String(dailyDeposit),
-          depositAmount: monthlyDeposit === '' ? null : String(monthlyDeposit),
           maximumOccupants: Number(maxOccupants) || 2,
           initialWaterReading: String(initialWaterMeter || 0),
           initialElectricityReading: String(initialElectricMeter || 0),
@@ -419,7 +448,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
         const res = await propertyApi.createRoom(payload);
 
         if (!res.success) {
-          setErrorText(res.error?.message || 'เกิดข้อผิดพลาดในการสร้างห้องพัก');
+          setErrorText(getOwnerRoomMutationErrorMessage(res.error || res));
           setIsSubmitting(false);
           return;
         }
@@ -432,7 +461,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
         setTimeout(() => setToastMessage(null), 3500);
       }
     } catch (err: unknown) {
-      setErrorText((err as Error)?.message || 'เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์');
+      setErrorText(getOwnerRoomMutationErrorMessage(err));
     } finally {
       setIsSubmitting(false);
     }
@@ -512,7 +541,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
         } else if ((res.error?.details as { code?: string } | undefined)?.code === 'ROOM_HAS_ACTIVE_TENANT' || res.error?.message?.includes('ผู้เช่า')) {
           setToastMessage(res.error?.message || 'ไม่สามารถยกเลิกห้องที่มีผู้เช่าอยู่ได้');
         } else {
-          setToastMessage(res.error?.message || 'เกิดข้อผิดพลาดในการจัดเก็บห้องพัก');
+          setToastMessage(getOwnerRoomMutationErrorMessage(res.error || res));
         }
         setIsSubmitting(false);
         return;
@@ -528,7 +557,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
         setToastMessage(null);
       }, 3500);
     } catch (err: unknown) {
-      setToastMessage((err as Error)?.message || 'เกิดข้อผิดพลาดในการจัดเก็บห้องพัก');
+      setToastMessage(getOwnerRoomMutationErrorMessage(err));
     } finally {
       setIsSubmitting(false);
     }
@@ -571,7 +600,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
             currentVersion: serverVersion,
           });
         } else {
-          setToastMessage(res.error?.message || 'เกิดข้อผิดพลาดในการเปลี่ยนสถานะห้อง');
+          setToastMessage(getOwnerRoomMutationErrorMessage(res.error || res));
         }
         return;
       }
@@ -585,30 +614,38 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
       );
       setToastMessage(`ห้อง ${targetRoom.roomNumber}: เปลี่ยนเป็น "${nextStatus === 'maintenance' ? 'ปิดปรับปรุง' : 'เปิดใช้งาน'}" เรียบร้อยแล้ว`);
     } catch (err: unknown) {
-      setToastMessage((err as Error)?.message || 'เกิดข้อผิดพลาดในการเปลี่ยนสถานะห้อง');
+      setToastMessage(getOwnerRoomMutationErrorMessage(err));
     }
   };
 
-  // Open Quick Add Tenant modal or Navigate to Tenant Profile
-  const handleTenantAction = (room: Room, e?: React.MouseEvent) => {
+  // Open canonical Quick Add Tenant modal or Navigate to Tenant Profile
+  const handleTenantAction = async (room: Room, e?: React.MouseEvent) => {
     e?.stopPropagation();
     if (room.currentTenantId) {
       // Room has tenant -> Navigate to tenant detail in tenants tab
       onNavigate('tenants', room.currentTenantId);
     } else {
-      // Room is vacant or maintenance -> Open quick add tenant modal
-      setSelectedRoomForTenant(room);
-      setNewTenantName('');
-      setNewTenantPhone('');
-      setNewTenantIdCard('');
-      setNewTenantStartDate(new Date().toISOString().split('T')[0]);
-      setNewTenantDuration(6);
-      setNewTenantRent(room.monthlyRent || 4500);
-      setNewTenantDeposit(room.depositAmount || 9000);
-      setNewTenantDepositStatus('paid');
-      setNewTenantNotes('');
-      setAddTenantError(null);
-      setIsAddTenantModalOpen(true);
+      try {
+        setQuickAddLoadingRoomId(room.id);
+        const dId = buildings[0]?.dormitoryId || (typeof window !== 'undefined' ? (localStorage.getItem('selected_dormitory_id') || localStorage.getItem('horplus_current_dormitory_id')) : '') || '';
+        const res = await httpRequest<{ data: QuickAddRoomContext }>(
+          'GET',
+          `/api/v1/properties/rooms/${room.id}/quick-add-context`,
+          undefined,
+          { headers: dId ? { 'x-dormitory-id': dId } : {} }
+        );
+
+        if (!res.data || !res.data.effective) {
+          throw new Error('ไม่สามารถโหลดข้อมูลสิทธิ์และค่าเช่าห้องพักได้');
+        }
+
+        setSelectedQuickAddContext(res.data);
+        setQuickAddModalOpen(true);
+      } catch (err: any) {
+        setToastMessage(getOwnerRoomMutationErrorMessage(err));
+      } finally {
+        setQuickAddLoadingRoomId(null);
+      }
     }
   };
 
@@ -884,6 +921,18 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                     {/* Rates Breakdown */}
                     {(() => {
                       const gridRates = getGridRentRates(room);
+                      if (gridRates.isOccupied && (!gridRates.rates || gridRates.rates.length === 0)) {
+                        return (
+                          <div className="space-y-1.5">
+                            <p className="text-[10px] font-black uppercase text-indigo-700 tracking-wider">
+                              อัตราค่าเช่าตามสัญญา
+                            </p>
+                            <p className="text-xs text-gray-400 font-medium italic">
+                              {gridRates.unavailableText || 'ไม่พบข้อมูลอัตราค่าเช่าปัจจุบัน'}
+                            </p>
+                          </div>
+                        );
+                      }
                       return (
                         <div className="space-y-1.5">
                           <p className="text-[10px] font-black uppercase text-indigo-700 tracking-wider">
@@ -1008,13 +1057,29 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                       </td>
                       <td className="p-4 space-y-0.5 whitespace-nowrap">
                         {(() => {
-                          const { primaryRate, secondaryRates } = getListRentRates(room);
-                          const unitSuffix = primaryRate.cycle === 'term' ? 'เทอม' : (primaryRate.cycle === 'daily' ? 'วัน' : 'เดือน');
+                          const { primaryRate, secondaryRates, unavailableText } = getListRentRates(room);
+                          if (room.status === 'occupied' && !primaryRate) {
+                            return (
+                              <>
+                                <div className="text-xs text-gray-400 font-medium italic">
+                                  {unavailableText || 'ไม่พบข้อมูลอัตราค่าเช่าปัจจุบัน'}
+                                </div>
+                                {secondaryRates.map((sec) => (
+                                  <div key={sec.cycle} className="text-[10px] text-gray-400 whitespace-nowrap">
+                                    {sec.label}: {formatBaht(sec.amount)} / {sec.cycle === 'term' ? 'เทอม' : (sec.cycle === 'daily' ? 'วัน' : 'เดือน')}
+                                  </div>
+                                ))}
+                              </>
+                            );
+                          }
+                          const unitSuffix = primaryRate?.cycle === 'term' ? 'เทอม' : (primaryRate?.cycle === 'daily' ? 'วัน' : 'เดือน');
                           return (
                             <>
-                              <div className="font-extrabold text-slate-900 whitespace-nowrap">
-                                {formatBaht(primaryRate.amount)} / {unitSuffix}
-                              </div>
+                              {primaryRate && (
+                                <div className="font-extrabold text-slate-900 whitespace-nowrap">
+                                  {formatBaht(primaryRate.amount)} / {unitSuffix}
+                                </div>
+                              )}
                               {secondaryRates.map((sec) => (
                                 <div key={sec.cycle} className="text-[10px] text-gray-500 whitespace-nowrap">
                                   {formatBaht(sec.amount)} / {sec.cycle === 'term' ? 'เทอม' : (sec.cycle === 'daily' ? 'วัน' : 'เดือน')}

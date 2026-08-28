@@ -40,6 +40,9 @@ export const CreateRoomSchema = z.object({
 });
 
 export const UpdateRoomSchema = CreateRoomSchema.partial().extend({
+  termDeposit: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
+  monthlyDeposit: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
+  dailyDeposit: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
   expectedVersion: z.number().int().min(1, 'ต้องระบุ expectedVersion ที่ถูกต้อง'),
 }).strict();
 
@@ -116,7 +119,7 @@ export const CreateContractSchema = z.object({
   durationMonths: z.number().int().min(1).default(1),
   rentBillingType: z.string().default('monthly'),
   rentAmount: z.string().regex(/^\d+(\.\d{1,2})?$/, 'จำนวนเงินไม่ถูกต้อง'),
-  depositAmount: z.string().regex(/^\d+(\.\d{1,2})?$/).default('0.00'),
+  depositAmount: z.union([z.string().regex(/^\d+(\.\d{1,2})?$/), z.number().min(0)]).optional().nullable(),
   advancePaymentAmount: z.string().regex(/^\d+(\.\d{1,2})?$/).default('0.00'),
   terms: z.string().optional().nullable(),
 });

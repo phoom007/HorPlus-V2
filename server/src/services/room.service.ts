@@ -184,9 +184,11 @@ export class RoomService {
       }
 
       // Seed cycle deposits from DormitoryPropertyDefaults.defaultDeposit if omitted
-      const dormPropertyDefaults = await tx.dormitoryPropertyDefaults.findUnique({
-        where: { dormitoryId },
-      });
+      const dormPropertyDefaults = tx.dormitoryPropertyDefaults
+        ? await tx.dormitoryPropertyDefaults.findUnique({
+            where: { dormitoryId },
+          })
+        : null;
       const defaultDepositStr = dormPropertyDefaults?.defaultDeposit ? String(dormPropertyDefaults.defaultDeposit) : '0.00';
 
       const termDeposit = data.termDeposit !== undefined && data.termDeposit !== null ? data.termDeposit : (data.depositAmount || defaultDepositStr);

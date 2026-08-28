@@ -287,7 +287,19 @@ export class ProvisionalRentalTermService {
           durationMonths,
           unitRentAmount: unitRent,
           totalRentAmount: totalRent,
-          depositAmount: data.depositAmount ? new Prisma.Decimal(data.depositAmount) : null,
+          depositAmount: (() => {
+            if (data.depositAmount !== null && data.depositAmount !== undefined && String(data.depositAmount).trim() !== '') {
+              return new Prisma.Decimal(data.depositAmount);
+            }
+            if (data.rentalType === 'TERM') {
+              return (room as any).termDeposit !== null && (room as any).termDeposit !== undefined
+                ? new Prisma.Decimal((room as any).termDeposit)
+                : new Prisma.Decimal(room.depositAmount || 0);
+            }
+            return (room as any).monthlyDeposit !== null && (room as any).monthlyDeposit !== undefined
+              ? new Prisma.Decimal((room as any).monthlyDeposit)
+              : new Prisma.Decimal(room.depositAmount || 0);
+          })(),
           termMonthsSnapshot,
           termInstallmentCount,
           status: termStatus,

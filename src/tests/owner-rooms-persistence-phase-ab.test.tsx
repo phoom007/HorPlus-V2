@@ -126,7 +126,7 @@ describe('Owner Rooms — Phase AB.1 Correctness & Persistence Suite', () => {
       expect(calledPayload.roomNumber).toBe('901');
       expect(calledPayload.buildingId).toBe('bld-1');
       expect(calledPayload.status).toBe('maintenance');
-      expect(calledPayload.depositAmount).toBe('10000');
+      expect(calledPayload.monthlyDeposit).toBe('10000');
       expect(onSaveRooms).toHaveBeenCalledTimes(1);
     });
   });
@@ -182,7 +182,7 @@ describe('Owner Rooms — Phase AB.1 Correctness & Persistence Suite', () => {
         'rm-101',
         expect.objectContaining({
           roomNumber: '101',
-          depositAmount: '12000',
+          monthlyDeposit: '12000',
         }),
         1
       );
