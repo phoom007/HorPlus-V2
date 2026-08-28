@@ -250,6 +250,7 @@ export async function runVerification() {
   const cycleJulyDb = compDormDb?.billingCycles.find(c => c.cycleCode === '2026-07');
   const cycleAugDb = compDormDb?.billingCycles.find(c => c.cycleCode === '2026-08');
   const cycleSeptDb = compDormDb?.billingCycles.find(c => c.cycleCode === '2026-09');
+  const cycleOctDb = compDormDb?.billingCycles.find(c => c.cycleCode === '2026-10');
 
   const room204Db = allRooms.find(r => r.roomNumber === '204');
   const room105Db = allRooms.find(r => r.roomNumber === '105');
@@ -363,9 +364,9 @@ export async function runVerification() {
     assert(r101Aug?.chargeComponents?.length === 1, 'Room 101 has 1 charge component in August 2026', r101Aug?.chargeComponents?.length);
     assert(Number(r101Aug?.amountDue) === 1268, 'Room 101 amountDue is 1268.00 in August 2026');
 
-    // 3 Components (RENT + DEPOSIT + INVALID utility): Room 201
+    // 2 Components (RENT + INVALID utility): Room 201
     const r201Aug = augPreview.rooms.find(r => r.roomId === room201Db.id);
-    assert(r201Aug?.chargeComponents?.length === 3, 'Room 201 has 3 charge components in August 2026', r201Aug?.chargeComponents?.length);
+    assert(r201Aug?.chargeComponents?.length === 2, 'Room 201 has 2 charge components in August 2026 (RENT + utility)', r201Aug?.chargeComponents?.length);
     assert(Number(r201Aug?.amountDue) === 4800, 'Room 201 amountDue is 4800.00 in August 2026 (unpaid rent only)');
 
     // 3 Components: Room 202 (RENT + DEPOSIT + MONTHLY_UTILITY)
@@ -563,6 +564,127 @@ export async function runVerification() {
       }
     }
     assert(threwClosed === true, 'Clearing current meter reading on issued unpaid bill fails closed with CANNOT_CLEAR_METER_READING_FOR_ISSUED_BILL');
+  }
+
+  // 13. Executable 5-State Owner Rooms Financial Oracle Matrix (Production MeterService Authority)
+  console.log('\n--- 13. Executable 5-State Owner Rooms Financial Oracle Matrix ---');
+  if (cycleJulyDb && cycleAugDb && cycleSeptDb && cycleOctDb) {
+    const julyPreview = await meterService.getMeterBillingPreviewContext(COMP_DORM.id, cycleJulyDb.id);
+    const augPreview = await meterService.getMeterBillingPreviewContext(COMP_DORM.id, cycleAugDb.id);
+    const septPreview = await meterService.getMeterBillingPreviewContext(COMP_DORM.id, cycleSeptDb.id);
+    const octPreview = await meterService.getMeterBillingPreviewContext(COMP_DORM.id, cycleOctDb.id);
+
+    const r101Db = allRooms.find(r => r.roomNumber === '101');
+    const r104Db = allRooms.find(r => r.roomNumber === '104');
+    const r106Db = allRooms.find(r => r.roomNumber === '106');
+    const r201Db = allRooms.find(r => r.roomNumber === '201');
+    const r202Db = allRooms.find(r => r.roomNumber === '202');
+    const r203Db = allRooms.find(r => r.roomNumber === '203');
+    const r205Db = allRooms.find(r => r.roomNumber === '205');
+    const r206Db = allRooms.find(r => r.roomNumber === '206');
+    const r303Db = allRooms.find(r => r.roomNumber === '303');
+
+    // Matrix Scenario A: RENT PAID (July 2026 Room 101)
+    const p101Jul = julyPreview.rooms.find(r => r.roomId === r101Db?.id);
+    assert(
+      p101Jul?.agreementRentPaymentStatus === 'PAID',
+      'Matrix A: RENT PAID -> Room 101 (2026-07) rent status is PAID (จ่ายแล้ว)',
+      p101Jul?.agreementRentPaymentStatus
+    );
+
+    // Matrix Scenario B: RENT UNPAID (August 2026 Room 201)
+    const p201Aug = augPreview.rooms.find(r => r.roomId === r201Db?.id);
+    assert(
+      p201Aug?.agreementRentPaymentStatus === 'UNPAID',
+      'Matrix B: RENT UNPAID -> Room 201 (2026-08) rent status is UNPAID (รอชำระ)',
+      p201Aug?.agreementRentPaymentStatus
+    );
+
+    // Matrix Scenario C: RENT PARTIAL (August 2026 Room 203)
+    const p203Aug = augPreview.rooms.find(r => r.roomId === r203Db?.id);
+    assert(
+      p203Aug?.agreementRentPaymentStatus === 'PARTIAL',
+      'Matrix C: RENT PARTIAL -> Room 203 (2026-08) rent status is PARTIAL (ชำระบางส่วน: 2000/4800)',
+      p203Aug?.agreementRentPaymentStatus
+    );
+
+    // Matrix Scenario D: RENT NOT_ISSUED (August 2026 Room 303)
+    const p303Aug = augPreview.rooms.find(r => r.roomId === r303Db?.id);
+    assert(
+      p303Aug?.agreementRentPaymentStatus === 'NOT_ISSUED',
+      'Matrix D: RENT NOT_ISSUED -> Room 303 (2026-08) active contract with no issued bill evaluates to NOT_ISSUED (ยังไม่ออกบิล)',
+      p303Aug?.agreementRentPaymentStatus
+    );
+
+    // Matrix Scenario E: DEPOSIT PAID (August 2026 Room 202)
+    const p202Aug = augPreview.rooms.find(r => r.roomId === r202Db?.id);
+    assert(
+      p202Aug?.agreementDepositPaymentStatus === 'PAID',
+      'Matrix E: DEPOSIT PAID -> Room 202 (2026-08) deposit status is PAID (จ่ายแล้ว: INV-202608-202-D)',
+      p202Aug?.agreementDepositPaymentStatus
+    );
+
+    // Matrix Scenario F: SAME AGREEMENT in later cycle (September 2026 Room 202)
+    const p202Sept = septPreview.rooms.find(r => r.roomId === r202Db?.id);
+    assert(
+      p202Sept?.agreementDepositPaymentStatus === 'PAID',
+      'Matrix F: SAME AGREEMENT in later cycle -> Room 202 (2026-09) inherits August paid deposit as PAID without new deposit bill',
+      p202Sept?.agreementDepositPaymentStatus
+    );
+
+    // Matrix Scenario F2: DEPOSIT LIFECYCLE (3 Cycles: August, September, October Room 202)
+    const p202Oct = octPreview.rooms.find(r => r.roomId === r202Db?.id);
+    assert(
+      p202Aug?.agreementDepositPaymentStatus === 'PAID' &&
+      p202Sept?.agreementDepositPaymentStatus === 'PAID' &&
+      p202Oct?.agreementDepositPaymentStatus === 'PAID',
+      'Matrix F2: DEPOSIT LIFECYCLE (3 Cycles) -> Room 202 deposit is PAID in August (2026-08), September (2026-09), and October (2026-10)',
+      `Aug: ${p202Aug?.agreementDepositPaymentStatus}, Sept: ${p202Sept?.agreementDepositPaymentStatus}, Oct: ${p202Oct?.agreementDepositPaymentStatus}`
+    );
+
+    // Matrix Scenario G: DEPOSIT NOT_ISSUED (August 2026 Room 303)
+    assert(
+      p303Aug?.agreementDepositPaymentStatus === 'NOT_ISSUED',
+      'Matrix G: DEPOSIT NOT_ISSUED -> Room 303 (2026-08) requires deposit but no deposit bill issued evaluates to NOT_ISSUED (ยังไม่ออกบิล)',
+      p303Aug?.agreementDepositPaymentStatus
+    );
+
+    // Matrix Scenario H: DAILY RENT UNPAID & PAID (August 2026 Room 106 & 206)
+    const p106Aug = augPreview.rooms.find(r => r.roomId === r106Db?.id);
+    const p206Aug = augPreview.rooms.find(r => r.roomId === r206Db?.id);
+    assert(
+      p106Aug?.agreementRentPaymentStatus === 'UNPAID',
+      'Matrix H: DAILY RENT -> Room 106 (2026-08) daily stay rent status is UNPAID (รอชำระ)',
+      p106Aug?.agreementRentPaymentStatus
+    );
+    assert(
+      p206Aug?.agreementRentPaymentStatus === 'PAID',
+      'Matrix H2: DAILY RENT PAID -> Room 206 (2026-08) daily stay rent status is PAID (จ่ายแล้ว)',
+      p206Aug?.agreementRentPaymentStatus
+    );
+
+    // Matrix Scenario I: DAILY DEPOSIT -> Room 106 (2026-08) daily stay deposit status is UNPAID (รอชำระ)
+    assert(
+      p106Aug?.agreementDepositPaymentStatus === 'UNPAID',
+      'Matrix I: DAILY DEPOSIT -> Room 106 (2026-08) daily stay deposit status is UNPAID (รอชำระ)',
+      p106Aug?.agreementDepositPaymentStatus
+    );
+
+    // Matrix Scenario J: RESERVED IN CYCLE (September 2026 Room 205)
+    const p205Sept = septPreview.rooms.find(r => r.roomId === r205Db?.id);
+    assert(
+      p205Sept?.cyclePresentationState === 'RESERVED_IN_CYCLE' && p205Sept?.agreementRentPaymentStatus === 'NOT_ISSUED',
+      'Matrix J: RESERVED IN CYCLE -> Room 205 (2026-09) is RESERVED_IN_CYCLE with rent status NOT_ISSUED (ยังไม่ออกบิล)',
+      `State: ${p205Sept?.cyclePresentationState}, Rent: ${p205Sept?.agreementRentPaymentStatus}`
+    );
+
+    // Matrix Scenario K: Ambiguous LEGACY_COMBINED Partial -> Room 104 (2026-08) combined partial bill resolves rent & deposit to UNKNOWN (ไม่พบข้อมูลการชำระ)
+    const p104Aug = augPreview.rooms.find(r => r.roomId === r104Db?.id);
+    assert(
+      p104Aug?.agreementRentPaymentStatus === 'UNKNOWN' && p104Aug?.agreementDepositPaymentStatus === 'UNKNOWN',
+      'Matrix K: Ambiguous LEGACY_COMBINED Partial -> Room 104 (2026-08) combined partial bill resolves rent & deposit to UNKNOWN (ไม่พบข้อมูลการชำระ)',
+      `Rent: ${p104Aug?.agreementRentPaymentStatus}, Deposit: ${p104Aug?.agreementDepositPaymentStatus}`
+    );
   }
 
   console.log('\n================================================================================');

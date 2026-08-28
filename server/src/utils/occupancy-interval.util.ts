@@ -233,3 +233,138 @@ export function hasBookableGapInCycle(
 
   return true; // Gap exists before, after, or between intervals
 }
+
+export interface RoomMaintenanceEligibility {
+  canSetMaintenance: boolean;
+  maintenanceBlockReason: 'ACTIVE_OCCUPANCY' | 'ACTIVE_RESERVATION' | null;
+  message?: string;
+  blockingRecord?: {
+    kind: 'CONTRACT' | 'PROVISIONAL_TERM' | 'DAILY_STAY';
+    id: string;
+    interval: PhysicalInterval;
+  };
+}
+
+/**
+ * Authoritatively evaluates whether a room can be changed to 'maintenance' status.
+ *
+ * Rules (Product Decision F1):
+ * 1. Physical Occupancy NOW: start <= now < end on valid non-deleted record -> ROOM_HAS_ACTIVE_OCCUPANCY
+ * 2. Committed Future Reservation: start > now on valid non-deleted record -> ROOM_HAS_ACTIVE_RESERVATION
+ * 3. Historical ended records (end <= now) or cancelled / void / rejected / soft-deleted records NEVER block.
+ */
+export function evaluateMaintenanceEligibilityFromRecords(params: {
+  contracts?: any[];
+  provisionals?: any[];
+  dailyStays?: any[];
+  now?: Date;
+}): RoomMaintenanceEligibility {
+  const now = params.now || new Date();
+  const contracts = Array.isArray(params.contracts) ? params.contracts : [];
+  const provisionals = Array.isArray(params.provisionals) ? params.provisionals : [];
+  const dailyStays = Array.isArray(params.dailyStays) ? params.dailyStays : [];
+
+  // --- Step 1: Active Physical Occupancy Check (NOW) ---
+  // 1a. Contract active physical occupancy
+  for (const c of contracts) {
+    if (c.deletedAt) continue;
+    const st = (c.status || '').toLowerCase();
+    if (['cancelled', 'void', 'rejected', 'draft'].includes(st)) continue;
+    const interval = getContractPhysicalInterval(c);
+    if (interval.start <= now && now < interval.end) {
+      return {
+        canSetMaintenance: false,
+        maintenanceBlockReason: 'ACTIVE_OCCUPANCY',
+        message: 'ไม่สามารถปิดปรับปรุงได้ เนื่องจากห้องนี้มีผู้เช่าพักอยู่',
+        blockingRecord: { kind: 'CONTRACT', id: c.id, interval },
+      };
+    }
+  }
+
+  // 1b. Provisional term active physical occupancy
+  for (const p of provisionals) {
+    if (p.deletedAt) continue;
+    const st = (p.status || '').toUpperCase();
+    if (['CANCELLED', 'REJECTED', 'ENDED'].includes(st)) continue;
+    const interval = getProvisionalTermPhysicalInterval(p);
+    if (interval.start <= now && now < interval.end) {
+      return {
+        canSetMaintenance: false,
+        maintenanceBlockReason: 'ACTIVE_OCCUPANCY',
+        message: 'ไม่สามารถปิดปรับปรุงได้ เนื่องจากห้องนี้มีผู้เช่าพักอยู่',
+        blockingRecord: { kind: 'PROVISIONAL_TERM', id: p.id, interval },
+      };
+    }
+  }
+
+  // 1c. Daily stay active physical occupancy
+  for (const d of dailyStays) {
+    if (d.deletedAt) continue;
+    const st = (d.status || '').toUpperCase();
+    if (['CANCELLED', 'REJECTED', 'CHECKED_OUT', 'COMPLETED'].includes(st)) continue;
+    if (d.actualCheckedOutAt && new Date(d.actualCheckedOutAt) <= now) continue;
+    const interval = getDailyStayPhysicalInterval(d);
+    if (interval.start <= now && now < interval.end) {
+      return {
+        canSetMaintenance: false,
+        maintenanceBlockReason: 'ACTIVE_OCCUPANCY',
+        message: 'ไม่สามารถปิดปรับปรุงได้ เนื่องจากห้องนี้มีผู้เช่าพักอยู่',
+        blockingRecord: { kind: 'DAILY_STAY', id: d.id, interval },
+      };
+    }
+  }
+
+  // --- Step 2: Committed Future Reservation Check (start > now) ---
+  // 2a. Future Contract reservation
+  for (const c of contracts) {
+    if (c.deletedAt) continue;
+    const st = (c.status || '').toLowerCase();
+    if (['cancelled', 'void', 'rejected', 'terminated', 'draft'].includes(st)) continue;
+    const interval = getContractPhysicalInterval(c);
+    if (interval.start > now) {
+      return {
+        canSetMaintenance: false,
+        maintenanceBlockReason: 'ACTIVE_RESERVATION',
+        message: 'ไม่สามารถปิดปรับปรุงได้ เนื่องจากห้องนี้มีการจองล่วงหน้า',
+        blockingRecord: { kind: 'CONTRACT', id: c.id, interval },
+      };
+    }
+  }
+
+  // 2b. Future Provisional reservation
+  for (const p of provisionals) {
+    if (p.deletedAt) continue;
+    const st = (p.status || '').toUpperCase();
+    if (['CANCELLED', 'REJECTED', 'ENDED'].includes(st)) continue;
+    const interval = getProvisionalTermPhysicalInterval(p);
+    if (interval.start > now) {
+      return {
+        canSetMaintenance: false,
+        maintenanceBlockReason: 'ACTIVE_RESERVATION',
+        message: 'ไม่สามารถปิดปรับปรุงได้ เนื่องจากห้องนี้มีการจองล่วงหน้า',
+        blockingRecord: { kind: 'PROVISIONAL_TERM', id: p.id, interval },
+      };
+    }
+  }
+
+  // 2c. Future Daily stay reservation
+  for (const d of dailyStays) {
+    if (d.deletedAt) continue;
+    const st = (d.status || '').toUpperCase();
+    if (['CANCELLED', 'REJECTED', 'CHECKED_OUT', 'COMPLETED'].includes(st)) continue;
+    const interval = getDailyStayPhysicalInterval(d);
+    if (interval.start > now) {
+      return {
+        canSetMaintenance: false,
+        maintenanceBlockReason: 'ACTIVE_RESERVATION',
+        message: 'ไม่สามารถปิดปรับปรุงได้ เนื่องจากห้องนี้มีการจองล่วงหน้า',
+        blockingRecord: { kind: 'DAILY_STAY', id: d.id, interval },
+      };
+    }
+  }
+
+  return {
+    canSetMaintenance: true,
+    maintenanceBlockReason: null,
+  };
+}

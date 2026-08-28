@@ -107,6 +107,11 @@ export interface QuickAddRoomContext {
 
 export type RoomStatus = 'vacant' | 'occupied' | 'reserved' | 'maintenance';
 
+export interface CurrentOperationalActions {
+  canSetMaintenance: boolean;
+  maintenanceBlockReason: 'ACTIVE_OCCUPANCY' | 'ACTIVE_RESERVATION' | null;
+}
+
 export interface Room {
   id: string;
   roomNumber: string; // e.g., "101"
@@ -133,6 +138,7 @@ export interface Room {
   images: string[];
   version?: number;
   activeRentalSummary?: ActiveRentalSummary | null;
+  currentOperationalActions?: CurrentOperationalActions | null;
   createdAt: string;
   updatedAt: string;
 }

@@ -4,6 +4,7 @@ import { ISubscriptionRepository } from '../db/repositories/subscription.reposit
 import { IContractRepository } from '../db/repositories/contract.repository.js';
 import { AuditService } from './audit.service.js';
 import { AppError } from '../types/index.js';
+import { evaluateMaintenanceEligibilityFromRecords } from '../utils/occupancy-interval.util.js';
 import { subscriptionEntitlementService } from './subscription-entitlement.service.js';
 import { currentCycleResolverService } from './current-cycle-resolver.js';
 
@@ -344,95 +345,46 @@ export class RoomService {
       if (changes.status !== undefined && changes.status !== existing.status && changes.status === 'maintenance') {
         const now = new Date();
 
-        // 1. Physical Occupant Check
-        if (existing.currentTenantId || existing.status === 'occupied') {
-          throw new AppError('ไม่สามารถปิดปรับปรุงได้ เนื่องจากห้องนี้มีผู้เช่าพักอยู่', 409, 'ROOM_HAS_ACTIVE_OCCUPANCY');
-        }
+        const [contracts, provisionals, dailyStays] = await Promise.all([
+          tx.contract ? tx.contract.findMany({
+            where: {
+              roomId: id,
+              dormitoryId: targetDormId,
+              deletedAt: null,
+              status: { notIn: ['cancelled', 'void', 'rejected', 'terminated'] },
+            },
+          }) : [],
+          tx.provisionalRentalTerm ? tx.provisionalRentalTerm.findMany({
+            where: {
+              roomId: id,
+              dormitoryId: targetDormId,
+              deletedAt: null,
+              status: { notIn: ['CANCELLED', 'cancelled', 'ENDED', 'ended', 'REJECTED', 'rejected'] },
+            },
+          }) : [],
+          tx.dailyStay ? tx.dailyStay.findMany({
+            where: {
+              roomId: id,
+              dormitoryId: targetDormId,
+              deletedAt: null,
+              status: { notIn: ['CANCELLED', 'cancelled', 'REJECTED', 'rejected', 'CHECKED_OUT', 'checked_out', 'COMPLETED', 'completed'] },
+            },
+          }) : [],
+        ]);
 
-        const activeContract = tx.contract ? await tx.contract.findFirst({
-          where: {
-            roomId: id,
-            dormitoryId: targetDormId,
-            status: { in: ['active', 'ACTIVE', 'approved', 'pending_signature', 'waiting_extension', 'checking_out', 'expiring_soon'] },
-            startDate: { lte: now },
-            OR: [
-              { endDate: null },
-              { endDate: { gte: now } },
-            ],
-          },
-        }) : null;
-        if (activeContract) {
-          throw new AppError('ไม่สามารถปิดปรับปรุงได้ เนื่องจากห้องนี้มีผู้เช่าพักอยู่', 409, 'ROOM_HAS_ACTIVE_OCCUPANCY');
-        }
+        const eligibility = evaluateMaintenanceEligibilityFromRecords({
+          contracts,
+          provisionals,
+          dailyStays,
+          now,
+        });
 
-        const activeProv = tx.provisionalRentalTerm ? await tx.provisionalRentalTerm.findFirst({
-          where: {
-            roomId: id,
-            dormitoryId: targetDormId,
-            status: { in: ['ACTIVE', 'active'] },
-            startDate: { lte: now },
-            OR: [
-              { endDate: null },
-              { endDate: { gte: now } },
-            ],
-          },
-        }) : null;
-        if (activeProv) {
-          throw new AppError('ไม่สามารถปิดปรับปรุงได้ เนื่องจากห้องนี้มีผู้เช่าพักอยู่', 409, 'ROOM_HAS_ACTIVE_OCCUPANCY');
-        }
-
-        const activeDaily = tx.dailyStay ? await tx.dailyStay.findFirst({
-          where: {
-            roomId: id,
-            dormitoryId: targetDormId,
-            status: { in: ['ACTIVE', 'active', 'CHECKED_IN', 'OCCUPIED', 'checked_in', 'occupied'] },
-            checkInDate: { lte: now },
-            checkOutDate: { gte: now },
-          },
-        }) : null;
-        if (activeDaily) {
-          throw new AppError('ไม่สามารถปิดปรับปรุงได้ เนื่องจากห้องนี้มีผู้เช่าพักอยู่', 409, 'ROOM_HAS_ACTIVE_OCCUPANCY');
-        }
-
-        // 2. Active Future Reservation / Committed Booking Check
-        const futureContract = tx.contract ? await tx.contract.findFirst({
-          where: {
-            roomId: id,
-            dormitoryId: targetDormId,
-            status: { in: ['active', 'ACTIVE', 'approved', 'pending_signature', 'waiting_extension', 'pending_deposit', 'reserved', 'upcoming'] },
-            startDate: { gt: now },
-          },
-        }) : null;
-        if (futureContract) {
-          throw new AppError('ไม่สามารถปิดปรับปรุงได้ เนื่องจากห้องนี้มีการจองล่วงหน้า', 409, 'ROOM_HAS_ACTIVE_RESERVATION');
-        }
-
-        const futureProv = tx.provisionalRentalTerm ? await tx.provisionalRentalTerm.findFirst({
-          where: {
-            roomId: id,
-            dormitoryId: targetDormId,
-            OR: [
-              { status: { in: ['RESERVED', 'reserved', 'PENDING', 'pending'] } },
-              { status: { in: ['ACTIVE', 'active'] }, startDate: { gt: now } },
-            ],
-          },
-        }) : null;
-        if (futureProv) {
-          throw new AppError('ไม่สามารถปิดปรับปรุงได้ เนื่องจากห้องนี้มีการจองล่วงหน้า', 409, 'ROOM_HAS_ACTIVE_RESERVATION');
-        }
-
-        const futureDaily = tx.dailyStay ? await tx.dailyStay.findFirst({
-          where: {
-            roomId: id,
-            dormitoryId: targetDormId,
-            OR: [
-              { status: { in: ['RESERVED', 'reserved', 'CONFIRMED', 'confirmed'] } },
-              { status: { in: ['ACTIVE', 'active'] }, checkInDate: { gt: now } },
-            ],
-          },
-        }) : null;
-        if (futureDaily) {
-          throw new AppError('ไม่สามารถปิดปรับปรุงได้ เนื่องจากห้องนี้มีการจองล่วงหน้า', 409, 'ROOM_HAS_ACTIVE_RESERVATION');
+        if (!eligibility.canSetMaintenance) {
+          if (eligibility.maintenanceBlockReason === 'ACTIVE_OCCUPANCY') {
+            throw new AppError(eligibility.message || 'ไม่สามารถปิดปรับปรุงได้ เนื่องจากห้องนี้มีผู้เช่าพักอยู่', 409, 'ROOM_HAS_ACTIVE_OCCUPANCY');
+          } else {
+            throw new AppError(eligibility.message || 'ไม่สามารถปิดปรับปรุงได้ เนื่องจากห้องนี้มีการจองล่วงหน้า', 409, 'ROOM_HAS_ACTIVE_RESERVATION');
+          }
         }
       }
 

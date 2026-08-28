@@ -2,7 +2,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import React from 'react';
 import { normalizeAuthoritativeRoom } from '../lib/roomNormalizer';
-import { getGridRentRates, getListRentRates, getDepositForCycle, getCurrentAgreementDepositDisplay, formatBuildingDisplayName, formatRoomLocation, getPaymentStatusBadge, resolveRoomCyclePresentation } from '../lib/roomRentalSummary';
+import { getGridRentRates, getListRentRates, getPresentationOrderedRates, getDepositForCycle, getCurrentAgreementDepositDisplay, formatBuildingDisplayName, formatRoomLocation, getPaymentStatusBadge, resolveRoomCyclePresentation, type RateItem } from '../lib/roomRentalSummary';
 import { getOwnerRoomMutationErrorMessage, getOwnerRoomMutationDomainCode } from '../lib/roomErrorMapper';
 import { resolveRoomTenantAction, OwnerRooms } from '../pages/owner/rooms';
 import { mapRegistrationBuildingForFinalize } from '../pages/owner/register';
@@ -2340,6 +2340,131 @@ describe('OWNER ROOMS R2 & R2.1 — Rent-Cycle Deposit Model & Hardened Specific
       const maintenanceBtn = screen.getByTitle('มีผู้เช่าพักอยู่ ต้องย้ายหรือสิ้นสุดการเช่าก่อน');
       expect(maintenanceBtn).toBeDefined();
       expect(maintenanceBtn.hasAttribute('disabled')).toBe(true);
+    });
+  });
+
+
+  describe('OWNER ROOMS R3.4a — Canonical Maintenance Eligibility & Presentation Order', () => {
+    const localBuilding: any = {
+      id: 'bld-1',
+      name: 'อาคาร A',
+      floors: 2,
+      totalRooms: 4,
+    };
+
+    const renderWithQuery = (ui: React.ReactElement) => {
+      const qc = new QueryClient({
+        defaultOptions: {
+          queries: { retry: false },
+        },
+      });
+      return render(
+        <QueryClientProvider client={qc}>
+          {ui}
+        </QueryClientProvider>
+      );
+    };
+
+    it('T1 — Compact rates presentation order helper orders: TERM -> MONTHLY -> DAILY', () => {
+      const sampleRates: RateItem[] = [
+        { cycle: 'monthly', amount: 4800, label: 'เดือน', isPrimary: true, isAgreementRate: true },
+        { cycle: 'daily', amount: 550, label: 'วัน', isPrimary: false, isAgreementRate: false },
+        { cycle: 'term', amount: 19200, label: 'เทอม', isPrimary: false, isAgreementRate: false },
+      ];
+
+      const ordered = getPresentationOrderedRates(sampleRates);
+      expect(ordered.map(r => r.cycle)).toEqual(['term', 'monthly', 'daily']);
+      expect(ordered[0].amount).toBe(19200);
+      expect(ordered[1].amount).toBe(4800);
+      expect(ordered[2].amount).toBe(550);
+    });
+
+    it('T2 — Current maintenance eligibility DTO drives modal disabling independent of selected cycle', async () => {
+      cleanup();
+      const mockRoomReserved: any = {
+        id: 'room-102',
+        roomNumber: '102',
+        buildingId: 'bld-1',
+        floor: 1,
+        status: 'vacant',
+        monthlyRent: 4500,
+        version: 1,
+        currentOperationalActions: {
+          canSetMaintenance: false,
+          maintenanceBlockReason: 'ACTIVE_RESERVATION',
+        },
+      };
+
+      renderWithQuery(
+        <OwnerRooms
+          dormitoryId="dorm-1"
+          rooms={[mockRoomReserved]}
+          buildings={[localBuilding]}
+          onSaveRooms={vi.fn()}
+          onAddLog={vi.fn()}
+          onNavigate={vi.fn()}
+          restoredState={{ viewMode: 'grid' }}
+          selectedBillingCycleId="cycle-2026-07"
+          selectedCycleCode="2026-07"
+        />
+      );
+
+      const editBtn = await screen.findByTitle('แก้ไขรายละเอียดห้องพัก');
+      fireEvent.click(editBtn);
+
+      const maintenanceBtn = screen.getByTitle('มีการจองล่วงหน้า ต้องจัดการการจองก่อน');
+      expect(maintenanceBtn).toBeDefined();
+      expect(maintenanceBtn.hasAttribute('disabled')).toBe(true);
+    });
+
+    it('T3 — Permitted maintenance room allows setting maintenance status in edit modal', async () => {
+      cleanup();
+      const mockRoomPermitted: any = {
+        id: 'room-vacant-clean-99',
+        roomNumber: '999',
+        buildingId: 'bld-1',
+        floor: 1,
+        status: 'vacant',
+        monthlyRent: 4500,
+        version: 1,
+        currentOperationalActions: {
+          canSetMaintenance: true,
+          maintenanceBlockReason: null,
+        },
+      };
+
+      renderWithQuery(
+        <OwnerRooms
+          dormitoryId="dorm-1"
+          rooms={[mockRoomPermitted]}
+          buildings={[localBuilding]}
+          onSaveRooms={vi.fn()}
+          onAddLog={vi.fn()}
+          onNavigate={vi.fn()}
+          restoredState={{ viewMode: 'grid' }}
+          selectedBillingCycleId="cycle-2026-07"
+          selectedCycleCode="2026-07"
+        />
+      );
+
+      const editBtn = await screen.findByTitle('แก้ไขรายละเอียดห้องพัก');
+      fireEvent.click(editBtn);
+
+      const maintenanceBtn = screen.getByRole('button', { name: 'ปิดปรับปรุง' });
+      expect(maintenanceBtn).toBeDefined();
+      expect(maintenanceBtn.hasAttribute('disabled')).toBe(false);
+    });
+
+    it('T4 — Ambiguous payment badge returns UNKNOWN (ไม่พบข้อมูลการชำระ)', () => {
+      const badge = getPaymentStatusBadge('UNKNOWN');
+      expect(badge.text).toBe('ไม่พบข้อมูลการชำระ');
+      expect(badge.className).toContain('text-slate-600');
+    });
+
+    it('T5 — Partial payment badge returns PARTIAL (ชำระบางส่วน)', () => {
+      const badge = getPaymentStatusBadge('PARTIAL');
+      expect(badge.text).toBe('ชำระบางส่วน');
+      expect(badge.className).toContain('text-amber-700');
     });
   });
 

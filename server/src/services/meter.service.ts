@@ -2571,20 +2571,36 @@ export class MeterService {
 
       if (billingSource === 'DAILY_STAY' || (billingSource === 'NONE' && unpaidDailyStay)) {
         const dStay = primaryDailyStay || unpaidDailyStay;
-        const rentItem = dStay?.invoice?.items?.find((i: any) => i.itemType === 'RENT');
+        const rentItem = dStay?.invoice?.items?.find((i: any) => i.itemType === 'RENT' || i.itemType === 'DAILY_RENT');
         if (rentItem) {
           const itemSt = (rentItem.status || '').toUpperCase();
-          agreementRentPaymentStatus = itemSt === 'PAID' ? 'PAID' : (itemSt === 'UNPAID' ? 'UNPAID' : (itemSt === 'PARTIAL' ? 'PARTIAL' : 'UNKNOWN'));
+          if (itemSt === 'PAID' || itemSt === 'SETTLED') {
+            agreementRentPaymentStatus = 'PAID';
+          } else if (['UNPAID', 'OUTSTANDING', 'ISSUED', 'PENDING'].includes(itemSt)) {
+            agreementRentPaymentStatus = 'UNPAID';
+          } else if (itemSt === 'PARTIAL') {
+            agreementRentPaymentStatus = 'PARTIAL';
+          } else {
+            agreementRentPaymentStatus = 'UNKNOWN';
+          }
         } else if (dStay?.invoice) {
           agreementRentPaymentStatus = isDailyRentPaid ? 'PAID' : (isDailyUnpaid ? 'UNPAID' : 'UNKNOWN');
         } else {
           agreementRentPaymentStatus = 'NOT_ISSUED';
         }
 
-        const depositItem = dStay?.invoice?.items?.find((i: any) => i.itemType === 'DEPOSIT');
+        const depositItem = dStay?.invoice?.items?.find((i: any) => i.itemType === 'DEPOSIT' || i.itemType === 'RENT_DEPOSIT');
         if (depositItem) {
           const depItemSt = (depositItem.status || '').toUpperCase();
-          agreementDepositPaymentStatus = depItemSt === 'PAID' ? 'PAID' : (depItemSt === 'UNPAID' ? 'UNPAID' : (depItemSt === 'PARTIAL' ? 'PARTIAL' : 'UNKNOWN'));
+          if (depItemSt === 'PAID' || depItemSt === 'SETTLED') {
+            agreementDepositPaymentStatus = 'PAID';
+          } else if (['UNPAID', 'OUTSTANDING', 'ISSUED', 'PENDING'].includes(depItemSt)) {
+            agreementDepositPaymentStatus = 'UNPAID';
+          } else if (depItemSt === 'PARTIAL') {
+            agreementDepositPaymentStatus = 'PARTIAL';
+          } else {
+            agreementDepositPaymentStatus = 'UNKNOWN';
+          }
         } else if (Number(dailyDepositAmount) > 0) {
           if (dailyDepositStatus === 'PAID') {
             agreementDepositPaymentStatus = 'PAID';
@@ -2638,13 +2654,27 @@ export class MeterService {
           ? (lifecycleBillsByContractMap.get(repContract.id) || [])
           : (repProv ? (lifecycleBillsByProvisionalMap.get(repProv.id) || []) : []);
 
-        const depBill = relevantLifecycleBills.find((b) =>
+        // Find paid deposit bill first across lifecycle, otherwise any deposit bill
+        const paidDepBill = relevantLifecycleBills.find((b) => {
+          const isDepKind = (b.billKind || '').toString().trim().toUpperCase() === 'DEPOSIT';
+          const hasDepItem = b.items?.some((it: any) => it.type?.toLowerCase() === 'deposit' || it.type?.toLowerCase() === 'rent_deposit');
+          const isPaid = (b.status || '').toLowerCase() === 'paid' || (Number(b.outstandingAmount) === 0 && Number(b.paidAmount) > 0);
+          return (isDepKind || hasDepItem) && isPaid;
+        });
+
+        const depBill = paidDepBill || relevantLifecycleBills.find((b) =>
           (b.billKind || '').toString().trim().toUpperCase() === 'DEPOSIT' ||
-          b.items?.some((it) => it.type?.toLowerCase() === 'deposit' || it.type?.toLowerCase() === 'rent_deposit')
+          b.items?.some((it: any) => it.type?.toLowerCase() === 'deposit' || it.type?.toLowerCase() === 'rent_deposit')
         );
 
         if (depBill) {
-          agreementDepositPaymentStatus = helperDeriveBillPaymentStatus(depBill);
+          const isCombined = (depBill.billKind || '').toString().trim().toUpperCase() === 'LEGACY_COMBINED' || (depBill.items && depBill.items.length > 1);
+          const st = (depBill.status || '').toLowerCase();
+          if (isCombined && (st === 'partial' || (Number(depBill.paidAmount) > 0 && Number(depBill.outstandingAmount) > 0))) {
+            agreementDepositPaymentStatus = 'UNKNOWN';
+          } else {
+            agreementDepositPaymentStatus = helperDeriveBillPaymentStatus(depBill);
+          }
         } else {
           const expectedDepAmount = Number(agreementDepositAmount || repContract?.depositAmount || repProv?.depositAmount || 0);
           if (expectedDepAmount > 0) {

@@ -592,3 +592,73 @@ Independent review of the R3.3aR branch confirmed that Grid/List action wiring, 
 - **Diff & Line Ending Hygiene** (`git -c core.whitespace=cr-at-eol diff --check`): **Passed with 0 warnings**
 - **LOCAL-07 UAT Refresh & Verification** (`npm run uat:refresh`): **0 Failures (100% PASS)**
 - **UAT Expected Results File Hygiene** (`git diff 82e503a51c11bb372d059904ff1deda601869172..HEAD -- docs/uat/local07-expected-results.json`): **EMPTY**
+
+---
+
+## 23. Owner Rooms R3.4a — Canonical Maintenance Availability, Prisma Field Alignment & Executable Financial Oracle
+
+### 1. Canonical Prisma Schema Field Alignment (Parts A & B)
+- Audited authoritative Prisma schema in `server/prisma/schema.prisma`.
+- Confirmed that `DailyStay` has fields: `startDate` (`@db.Date`), `endDate` (`@db.Date`), `checkInAt` (`@db.Timestamptz`), `checkOutAt` (`@db.Timestamptz`), `actualCheckedOutAt` (`@db.Timestamptz`), `status`, `deletedAt`.
+- Completely removed all non-canonical field references (`checkInDate` / `checkOutDate`) from `RoomService`, `occupancy-interval.util.ts`, and unit/integration tests.
+- Reused canonical interval calculations: `getContractPhysicalInterval()`, `getProvisionalTermPhysicalInterval()`, and `getDailyStayPhysicalInterval()`.
+
+### 2. Decision F1 Canonical Maintenance Availability Evaluator (Part C)
+- Centralized maintenance eligibility calculation in `evaluateMaintenanceEligibilityFromRecords({ contracts, provisionals, dailyStays, now })` inside `server/src/utils/occupancy-interval.util.ts`.
+- Categorizes blocks into two strict domain outcomes:
+  1. `ROOM_HAS_ACTIVE_OCCUPANCY` (`start <= now < end`): `canSetMaintenance: false`, `maintenanceBlockReason: 'ACTIVE_OCCUPANCY'`. Tooltip / message: `มีผู้เช่าพักอยู่ ต้องย้ายหรือสิ้นสุดการเช่าก่อน`.
+  2. `ROOM_HAS_ACTIVE_RESERVATION` (`start > now`): `canSetMaintenance: false`, `maintenanceBlockReason: 'ACTIVE_RESERVATION'`. Tooltip / message: `มีการจองล่วงหน้า ต้องจัดการการจองก่อน`.
+- Excludes soft-deleted records (`deletedAt != null`) and terminal/ended records (`cancelled`, `void`, `rejected`, `terminated`, `CHECKED_OUT`, `COMPLETED`, or ended intervals where `end <= now`).
+- Does not allow stale `room.currentTenantId` to block maintenance if authoritative occupancy has ended.
+
+### 3. Current Operational Action DTO Enrichment (Part H)
+- Enriched `defaultsService.buildAuthoritativeRoomsResponseBatch` and `buildAuthoritativeRoomResponse` to attach:
+  ```ts
+  currentOperationalActions: {
+    canSetMaintenance: boolean;
+    maintenanceBlockReason: 'ACTIVE_OCCUPANCY' | 'ACTIVE_RESERVATION' | null;
+  }
+  ```
+- Optimized with pre-fetched batch queries across active/future contracts, provisionals, and daily stays to eliminate N+1 overhead.
+- Edit Room modal and direct status toggle in frontend read `currentOperationalActions` directly, making maintenance disabling strictly dependent on CURRENT operational status rather than the viewed billing cycle.
+
+### 4. Deposit Legacy Ambiguity & Lifecycle Authority (Part I)
+- Updated `meterService.ts` deposit resolution:
+  - If deposit is part of a `LEGACY_COMBINED` partial bill or multi-item partial bill without item allocation, deposit payment status evaluates safely to `UNKNOWN`.
+  - Dedicated `DEPOSIT` bill with partial payment evaluates to `PARTIAL`.
+  - Paid deposit bills (`PAID`) are authoritative across the entire agreement lifecycle (3-cycle persistence verified).
+
+### 5. Executable LOCAL-07 Financial Oracle Matrix (Part J)
+- Added Section 13 to `scripts/local07/verify.mjs` executing production `meterService.getMeterBillingPreviewContext()` across cycles (July, August, September, October 2026):
+  - **Matrix A**: RENT PAID -> Room 101 (`2026-07`) is `PAID`.
+  - **Matrix B**: RENT UNPAID -> Room 201 (`2026-08`) is `UNPAID`.
+  - **Matrix C**: RENT PARTIAL -> Room 203 (`2026-08`) is `PARTIAL` (2000/4800).
+  - **Matrix D**: RENT NOT_ISSUED -> Room 303 (`2026-08`) is `NOT_ISSUED`.
+  - **Matrix E**: DEPOSIT PAID -> Room 202 (`2026-08`) is `PAID`.
+  - **Matrix F**: SAME AGREEMENT in later cycle -> Room 202 (`2026-09`) is `PAID`.
+  - **Matrix F2**: DEPOSIT LIFECYCLE (3 Cycles) -> Room 202 is `PAID` in August, September, and October.
+  - **Matrix G**: DEPOSIT NOT_ISSUED -> Room 303 (`2026-08`) is `NOT_ISSUED`.
+  - **Matrix H**: DAILY RENT UNPAID -> Room 106 (`2026-08`) is `UNPAID`.
+  - **Matrix H2**: DAILY RENT PAID -> Room 206 (`2026-08`) is `PAID`.
+  - **Matrix I**: DAILY DEPOSIT UNPAID -> Room 106 (`2026-08`) is `UNPAID`.
+  - **Matrix J**: RESERVED IN CYCLE -> Room 205 (`2026-09`) is `RESERVED_IN_CYCLE` with `NOT_ISSUED`.
+  - **Matrix K**: Ambiguous `LEGACY_COMBINED` Partial -> Room 104 (`2026-08`) evaluates rent & deposit to `UNKNOWN`.
+
+### 6. List Decision B1 Compact Presentation Order (Part L)
+- Added `getPresentationOrderedRates(rates)` in `src/lib/roomRentalSummary.ts` to guarantee display ordering: `TERM` -> `MONTHLY` -> `DAILY`.
+- Preserved currency formatting: `฿ 5,000.00/ด.` (0 `$` characters).
+
+---
+
+## 24. Final Verification Summary (R3.4a)
+
+| Test / Check Suite | Target Command / Path | Result |
+|---|---|---|
+| Maintenance Guard Unit Tests | `npm --prefix server run test -- src/__tests__/unit/owner-rooms-r34-maintenance-guard.test.ts` | **10 / 10 PASS (100%)** |
+| Prisma Boundary Integration Tests | `npm --prefix server run test -- src/__tests__/integration/owner-rooms-r34a-prisma-maintenance-guard.test.ts` | **7 / 7 PASS (100%)** |
+| Frontend Cycle Deposits & R3.4a UX Suite | `npx vitest run src/tests/owner-rooms-r2-cycle-deposits.test.tsx --environment happy-dom` | **93 / 93 PASS (100%)** |
+| Frontend TypeScript Compilation | `npm run lint` | **0 Errors (PASS)** |
+| Backend TypeScript Compilation | `npm --prefix server run build` | **0 Errors (PASS)** |
+| Line Ending & Whitespace Check | `git -c core.whitespace=cr-at-eol diff --check` | **0 Warnings (PASS)** |
+| Master LOCAL-07 Sandbox Refresh & Oracle | `npm run uat:refresh` | **0 Failures (100% PASS across all 13 sections)** |
+| UAT Expected Results File Baseline | `git diff 4a0f572714a68630037125114b501a83bb47d387..HEAD -- docs/uat/local07-expected-results.json` | **UNMODIFIED (Clean Baseline)** |

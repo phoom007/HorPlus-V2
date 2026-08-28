@@ -858,6 +858,16 @@ export async function seedLocal07Data() {
   }, COMP_DORM.owner.id);
   const cycleSept = cycleSeptRes.cycle;
 
+  const cycleOctRes = await compBillingCycleService.createBillingCycle(compDorm.id, {
+    cycleCode: '2026-10',
+    name: 'รอบบิล ตุลาคม 2569',
+    periodStart: '2026-10-01',
+    periodEnd: '2026-10-31',
+    billingDate: '2026-10-25',
+    dueDate: '2026-11-05',
+  }, COMP_DORM.owner.id);
+  const cycleOct = cycleOctRes.cycle;
+
   // --- Seed Realistic Daily Stays & Future Reservation Scenarios ---
   // 1. Room 106: Active & Unpaid Daily Stay in August 2026
   const tenantDaily106 = await prisma.tenant.create({
@@ -1545,6 +1555,8 @@ export async function seedLocal07Data() {
   });
 
 
+
+
   // 2 Components: Room 201 (RENT unpaid ฿4,800 + DEPOSIT paid ฿4,800)
   const bill201Rent = await prisma.bill.create({
     data: {
@@ -1576,35 +1588,33 @@ export async function seedLocal07Data() {
     },
   });
 
-  const bill201Dep = await prisma.bill.create({
+// Note: Room 201 deposit is paid in July (INV-202607-201-D) and inherited across lifecycle
+
+  // Ambiguous Legacy Combined Partial: Room 104 in August 2026 (RENT 4800 + DEPOSIT 4800 + UTILITY 1000 = 10600, paid 3000, partial without line allocations)
+  const bill104Combined = await prisma.bill.create({
     data: {
       dormitoryId: compDorm.id,
       billingCycleId: cycleAug.id,
-      roomId: createdRooms['201'].id,
-      tenantId: createdTenants['201'].id,
-      contractId: createdContracts['201']?.id || null,
-      billNumber: 'INV-202608-201-D',
-      billKind: 'DEPOSIT',
+      roomId: createdRooms['104'].id,
+      tenantId: createdTenants['104'].id,
+      contractId: createdContracts['104']?.id || null,
+      billNumber: 'INV-202608-104-COMBINED',
+      billKind: 'LEGACY_COMBINED',
       billingDate: new Date('2026-08-25'),
       dueDate: new Date('2026-09-05'),
-      subtotal: 4800.0,
-      totalAmount: 4800.0,
-      paidAmount: 4800.0,
-      outstandingAmount: 0.0,
-      status: 'paid',
-      paidAt: new Date('2026-08-25T10:00:00Z'),
+      subtotal: 10600.0,
+      totalAmount: 10600.0,
+      paidAmount: 3000.0,
+      outstandingAmount: 7600.0,
+      status: 'partial',
     },
   });
-  await prisma.billItem.create({
-    data: {
-      dormitoryId: compDorm.id,
-      billId: bill201Dep.id,
-      type: 'deposit',
-      description: 'เงินประกันสัญญาเช่า 201',
-      quantity: 1,
-      unitPrice: 4800,
-      amount: 4800,
-    },
+  await prisma.billItem.createMany({
+    data: [
+      { dormitoryId: compDorm.id, billId: bill104Combined.id, type: 'rent', description: 'ค่าเช่าห้องพัก 104', quantity: 1, unitPrice: 4800, amount: 4800 },
+      { dormitoryId: compDorm.id, billId: bill104Combined.id, type: 'deposit', description: 'เงินประกันห้องพัก 104', quantity: 1, unitPrice: 4800, amount: 4800 },
+      { dormitoryId: compDorm.id, billId: bill104Combined.id, type: 'electric', description: 'ค่าไฟฟ้าส่วนกลาง 104', quantity: 1, unitPrice: 1000, amount: 1000 },
+    ],
   });
 
   // 3 Components: Room 202 (RENT unpaid ฿4,800 + DEPOSIT paid ฿4,800 + MONTHLY_UTILITY unpaid ฿1,200)

@@ -535,3 +535,12 @@ export function resolveRoomCyclePresentation(
     currentCatalogRates,
   };
 }
+
+/**
+ * Orders rate items for compact B1 presentation: TERM -> MONTHLY -> DAILY.
+ * This is strictly a presentation-ordering helper and preserves all original rate values.
+ */
+export function getPresentationOrderedRates(rates: RateItem[]): RateItem[] {
+  const orderMap: Record<string, number> = { term: 1, monthly: 2, daily: 3 };
+  return [...rates].sort((a, b) => (orderMap[a.cycle] || 99) - (orderMap[b.cycle] || 99));
+}

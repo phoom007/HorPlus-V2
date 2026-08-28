@@ -50,6 +50,7 @@ import { QuickAddRoomContext } from '../../types';
 import {
   getGridRentRates,
   getListRentRates,
+  getPresentationOrderedRates,
   getDepositForCycle,
   getCurrentAgreementDepositDisplay,
   formatBuildingDisplayName,
@@ -733,11 +734,21 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
     const targetRoom = rooms.find(r => r.id === roomId);
     if (!targetRoom) return;
 
-    // Rule: ถ้ามีผู้เช่าอยู่ให้เปิดค้างไว้
-    if (targetRoom.currentTenantId) {
-      const tenant = tenants.find(t => t.id === targetRoom.currentTenantId);
-      setToastMessage(`ห้อง ${targetRoom.roomNumber} มีผู้เช่าพักอยู่ (${tenant ? tenant.name : 'มีผู้เช่า'}) - ระบบเปิดใช้งานค้างไว้`);
-      return;
+    // Current Operational Action Guard: Check maintenance eligibility
+    const opActions = targetRoom.currentOperationalActions;
+    if (targetRoom.status !== 'maintenance') {
+      if (opActions && !opActions.canSetMaintenance) {
+        const msg = opActions.maintenanceBlockReason === 'ACTIVE_RESERVATION'
+          ? `ห้อง ${targetRoom.roomNumber} มีการจองล่วงหน้า ต้องจัดการการจองก่อน - ไม่สามารถปิดปรับปรุงได้`
+          : `ห้อง ${targetRoom.roomNumber} มีผู้เช่าพักอยู่ - ระบบเปิดใช้งานค้างไว้`;
+        setToastMessage(msg);
+        return;
+      }
+      if (targetRoom.currentTenantId) {
+        const tenant = tenants.find(t => t.id === targetRoom.currentTenantId);
+        setToastMessage(`ห้อง ${targetRoom.roomNumber} มีผู้เช่าพักอยู่ (${tenant ? tenant.name : 'มีผู้เช่า'}) - ระบบเปิดใช้งานค้างไว้`);
+        return;
+      }
     }
 
     // Rule: ถ้าห้องนั้น ว่างให้ปิดได้ = ปิดปรับปรุง / เปิดใช้งาน
@@ -1408,7 +1419,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                           // Decision B1: render all configured current catalog rates compactly
                           return (
                             <div className="space-y-0.5">
-                              {cyclePresentation.currentCatalogRates.map((r) => {
+                              {getPresentationOrderedRates(cyclePresentation.currentCatalogRates).map((r) => {
                                 const unitSuffix = r.cycle === 'term' ? 'เทอม' : (r.cycle === 'daily' ? 'วัน' : 'เดือน');
                                 return (
                                   <div key={r.cycle} className="font-bold text-slate-800 text-xs">
@@ -2076,21 +2087,23 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                 เปิดใช้งาน
               </button>
               {(() => {
+                const opActions = editingRoom?.currentOperationalActions;
                 const isEditingRoomOccupied = Boolean(editingRoom && (editingRoom.status === 'occupied' || editingRoom.currentTenantId));
-                const previewInfo = editingRoom ? previewRoomMap.get(editingRoom.id) : null;
-                const isEditingRoomReserved = Boolean(editingRoom && (previewInfo?.isFutureReservation || previewInfo?.cyclePresentationState === 'RESERVED_IN_CYCLE'));
+                const isMaintenanceDisabled = opActions ? !opActions.canSetMaintenance : isEditingRoomOccupied;
+                const blockReason = opActions?.maintenanceBlockReason;
+                const tooltipText = isMaintenanceDisabled
+                  ? (blockReason === 'ACTIVE_RESERVATION'
+                      ? 'มีการจองล่วงหน้า ต้องจัดการการจองก่อน'
+                      : 'มีผู้เช่าพักอยู่ ต้องย้ายหรือสิ้นสุดการเช่าก่อน')
+                  : undefined;
 
                 return (
                   <button
                     type="button"
-                    disabled={isEditingRoomOccupied || isEditingRoomReserved}
+                    disabled={isMaintenanceDisabled}
                     onClick={() => {
-                      if (isEditingRoomOccupied) {
-                        setErrorText('มีผู้เช่าพักอยู่ ต้องย้ายหรือสิ้นสุดการเช่าก่อน');
-                        return;
-                      }
-                      if (isEditingRoomReserved) {
-                        setErrorText('มีการจองล่วงหน้า ต้องจัดการการจองก่อน');
+                      if (isMaintenanceDisabled) {
+                        setErrorText(tooltipText || 'ไม่สามารถปิดปรับปรุงได้');
                         return;
                       }
                       setErrorText(null);
@@ -2098,17 +2111,11 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                     }}
                     className={`py-2 px-3 text-xs font-extrabold rounded-xl border transition-all text-center truncate ${roomStatus === 'maintenance'
                         ? 'bg-rose-600 text-white border-rose-600 shadow-xs'
-                        : isEditingRoomOccupied || isEditingRoomReserved
+                        : isMaintenanceDisabled
                           ? 'bg-slate-50 text-slate-400 border-slate-200 cursor-not-allowed opacity-75'
                           : 'bg-white hover:bg-slate-50 text-slate-700 border-gray-200 cursor-pointer'
                       }`}
-                    title={
-                      isEditingRoomOccupied
-                        ? 'มีผู้เช่าพักอยู่ ต้องย้ายหรือสิ้นสุดการเช่าก่อน'
-                        : isEditingRoomReserved
-                          ? 'มีการจองล่วงหน้า ต้องจัดการการจองก่อน'
-                          : undefined
-                    }
+                    title={tooltipText}
                   >
                     ปิดปรับปรุง
                   </button>
