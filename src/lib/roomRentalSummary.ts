@@ -396,7 +396,20 @@ export function resolveRoomCyclePresentation(
       ? Number(rawDep)
       : null;
 
-    const source = (meterPreviewRoom.billingSource as any) || 'CONTRACT';
+    const validBillingSources = ['CONTRACT', 'PROVISIONAL_MONTHLY', 'PROVISIONAL_TERM', 'DAILY_STAY'];
+    const rawSource = meterPreviewRoom.billingSource;
+    if (!rawSource || !validBillingSources.includes(rawSource)) {
+      return {
+        roomId: room.id,
+        billingCycleId,
+        state: 'UNAVAILABLE',
+        effectiveOperationalStatus,
+        isCurrentMaintenance,
+        occupancy: null,
+        currentCatalogRates,
+      };
+    }
+    const source = rawSource;
 
     return {
       roomId: room.id,
@@ -420,6 +433,23 @@ export function resolveRoomCyclePresentation(
   }
 
   if (rawState === 'RESERVED_IN_CYCLE') {
+    let rentAmount = 0;
+    if (meterPreviewRoom.rentAmount !== undefined && meterPreviewRoom.rentAmount !== null && meterPreviewRoom.rentAmount !== '') {
+      const parsed = Number(meterPreviewRoom.rentAmount);
+      if (!Number.isFinite(parsed)) {
+        return {
+          roomId: room.id,
+          billingCycleId,
+          state: 'UNAVAILABLE',
+          effectiveOperationalStatus,
+          isCurrentMaintenance,
+          occupancy: null,
+          currentCatalogRates,
+        };
+      }
+      rentAmount = parsed;
+    }
+
     return {
       roomId: room.id,
       billingCycleId,
@@ -430,7 +460,7 @@ export function resolveRoomCyclePresentation(
         tenantId: meterPreviewRoom.tenantId ?? null,
         tenantName: meterPreviewRoom.tenantName ?? null,
         agreementType: meterPreviewRoom.agreementType || null,
-        rentAmount: Number(meterPreviewRoom.rentAmount) || 0,
+        rentAmount,
         depositAmount: null,
         source: 'NONE',
       },
@@ -443,7 +473,8 @@ export function resolveRoomCyclePresentation(
 
   if (rawState === 'DAILY_FINANCIAL_TAIL') {
     const agreementType = meterPreviewRoom.agreementType;
-    if (agreementType !== 'DAILY') {
+    const billingSource = meterPreviewRoom.billingSource;
+    if (agreementType !== 'DAILY' || (billingSource !== 'DAILY_STAY' && billingSource !== 'NONE')) {
       return {
         roomId: room.id,
         billingCycleId,

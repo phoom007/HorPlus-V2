@@ -15,6 +15,7 @@ import {
   toBangkokDateString,
 } from './calendar-date.util.js';
 import { resolveDailyTimestampsAndPricing } from '../services/daily-stay.service.js';
+import { getPrismaClient } from '../db/prisma.js';
 
 /**
  * Returns UTC Date for the start of the given Bangkok date (00:00:00.000 Asia/Bangkok).
@@ -367,4 +368,137 @@ export function evaluateMaintenanceEligibilityFromRecords(params: {
     canSetMaintenance: true,
     maintenanceBlockReason: null,
   };
+}
+
+export interface CurrentOperationalActions {
+  canSetMaintenance: boolean;
+  maintenanceBlockReason: 'ACTIVE_OCCUPANCY' | 'ACTIVE_RESERVATION' | null;
+}
+
+/**
+ * Acquires a transactional advisory lock for a specific room within a dormitory.
+ * Serializes room availability mutations (Contract, Provisional, DailyStay, Maintenance toggle).
+ */
+export async function acquireRoomAvailabilityLock(
+  tx: any,
+  dormitoryId: string,
+  roomId: string
+): Promise<void> {
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${dormitoryId + ':' + roomId}))`;
+}
+
+/**
+ * Canonical server-side batch resolver for Room Current Operational Maintenance Eligibility (Decision F1).
+ * Batch-loads non-deleted/non-ended contracts, provisional terms, and daily stays for the given roomIds,
+ * evaluating canonical physical intervals without N+1 query overhead.
+ */
+export async function resolveCurrentMaintenanceEligibilityByRoom(
+  dormitoryId: string,
+  roomIds: string[],
+  dbClient?: any,
+  now: Date = new Date()
+): Promise<Map<string, CurrentOperationalActions>> {
+  const db = dbClient || getPrismaClient();
+  const resultMap = new Map<string, CurrentOperationalActions>();
+
+  if (!roomIds || roomIds.length === 0) {
+    return resultMap;
+  }
+
+  // 1. Batch load contracts
+  const contracts = await db.contract.findMany({
+    where: {
+      dormitoryId,
+      roomId: { in: roomIds },
+      deletedAt: null,
+      status: { notIn: ['cancelled', 'void', 'rejected', 'terminated'] },
+    },
+    select: {
+      id: true,
+      roomId: true,
+      status: true,
+      startDate: true,
+      endDate: true,
+      terminatedAt: true,
+      terminationEffectiveDate: true,
+      deletedAt: true,
+    },
+  });
+
+  // 2. Batch load provisional terms
+  const provisionals = await db.provisionalRentalTerm.findMany({
+    where: {
+      dormitoryId,
+      roomId: { in: roomIds },
+      deletedAt: null,
+      status: { notIn: ['CANCELLED', 'REJECTED', 'ENDED'] },
+    },
+    select: {
+      id: true,
+      roomId: true,
+      status: true,
+      startDate: true,
+      endDate: true,
+      deletedAt: true,
+    },
+  });
+
+  // 3. Batch load daily stays
+  const dailyStays = await db.dailyStay.findMany({
+    where: {
+      dormitoryId,
+      roomId: { in: roomIds },
+      deletedAt: null,
+      status: { notIn: ['CANCELLED', 'REJECTED', 'CHECKED_OUT', 'COMPLETED'] },
+    },
+    select: {
+      id: true,
+      roomId: true,
+      status: true,
+      startDate: true,
+      endDate: true,
+      checkInAt: true,
+      checkOutAt: true,
+      actualCheckedOutAt: true,
+      deletedAt: true,
+    },
+  });
+
+  // Group by roomId
+  const contractsByRoom = new Map<string, any[]>();
+  const provisionalsByRoom = new Map<string, any[]>();
+  const dailyStaysByRoom = new Map<string, any[]>();
+
+  for (const c of contracts) {
+    if (!contractsByRoom.has(c.roomId)) contractsByRoom.set(c.roomId, []);
+    contractsByRoom.get(c.roomId)!.push(c);
+  }
+  for (const p of provisionals) {
+    if (!provisionalsByRoom.has(p.roomId)) provisionalsByRoom.set(p.roomId, []);
+    provisionalsByRoom.get(p.roomId)!.push(p);
+  }
+  for (const d of dailyStays) {
+    if (!dailyStaysByRoom.has(d.roomId)) dailyStaysByRoom.set(d.roomId, []);
+    dailyStaysByRoom.get(d.roomId)!.push(d);
+  }
+
+  for (const roomId of roomIds) {
+    const roomContracts = contractsByRoom.get(roomId) || [];
+    const roomProvisionals = provisionalsByRoom.get(roomId) || [];
+    const roomDailyStays = dailyStaysByRoom.get(roomId) || [];
+
+    const evalResult = evaluateMaintenanceEligibilityFromRecords({
+      contracts: roomContracts,
+      provisionals: roomProvisionals,
+      dailyStays: roomDailyStays,
+      now,
+    });
+
+    resultMap.set(roomId, {
+      canSetMaintenance: evalResult.canSetMaintenance,
+      maintenanceBlockReason: evalResult.maintenanceBlockReason,
+    });
+  }
+
+  return resultMap;
 }

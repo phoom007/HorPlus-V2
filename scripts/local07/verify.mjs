@@ -568,21 +568,35 @@ export async function runVerification() {
 
   // 13. Executable 5-State Owner Rooms Financial Oracle Matrix (Production MeterService Authority)
   console.log('\n--- 13. Executable 5-State Owner Rooms Financial Oracle Matrix ---');
-  if (cycleJulyDb && cycleAugDb && cycleSeptDb && cycleOctDb) {
-    const julyPreview = await meterService.getMeterBillingPreviewContext(COMP_DORM.id, cycleJulyDb.id);
-    const augPreview = await meterService.getMeterBillingPreviewContext(COMP_DORM.id, cycleAugDb.id);
-    const septPreview = await meterService.getMeterBillingPreviewContext(COMP_DORM.id, cycleSeptDb.id);
-    const octPreview = await meterService.getMeterBillingPreviewContext(COMP_DORM.id, cycleOctDb.id);
+  assert(Boolean(cycleJulyDb), 'Oracle Fixture Precondition: cycle 2026-07 exists in DB');
+  assert(Boolean(cycleAugDb), 'Oracle Fixture Precondition: cycle 2026-08 exists in DB');
+  assert(Boolean(cycleSeptDb), 'Oracle Fixture Precondition: cycle 2026-09 exists in DB');
+  assert(Boolean(cycleOctDb), 'Oracle Fixture Precondition: cycle 2026-10 exists in DB');
 
-    const r101Db = allRooms.find(r => r.roomNumber === '101');
-    const r104Db = allRooms.find(r => r.roomNumber === '104');
-    const r106Db = allRooms.find(r => r.roomNumber === '106');
-    const r201Db = allRooms.find(r => r.roomNumber === '201');
-    const r202Db = allRooms.find(r => r.roomNumber === '202');
-    const r203Db = allRooms.find(r => r.roomNumber === '203');
-    const r205Db = allRooms.find(r => r.roomNumber === '205');
-    const r206Db = allRooms.find(r => r.roomNumber === '206');
-    const r303Db = allRooms.find(r => r.roomNumber === '303');
+  const r101Db = allRooms.find(r => r.roomNumber === '101');
+  const r104Db = allRooms.find(r => r.roomNumber === '104');
+  const r106Db = allRooms.find(r => r.roomNumber === '106');
+  const r201Db = allRooms.find(r => r.roomNumber === '201');
+  const r202Db = allRooms.find(r => r.roomNumber === '202');
+  const r203Db = allRooms.find(r => r.roomNumber === '203');
+  const r205Db = allRooms.find(r => r.roomNumber === '205');
+  const r206Db = allRooms.find(r => r.roomNumber === '206');
+  const r303Db = allRooms.find(r => r.roomNumber === '303');
+
+  assert(Boolean(r101Db), 'Oracle Fixture Precondition: Room 101 exists in DB');
+  assert(Boolean(r104Db), 'Oracle Fixture Precondition: Room 104 exists in DB');
+  assert(Boolean(r106Db), 'Oracle Fixture Precondition: Room 106 exists in DB');
+  assert(Boolean(r201Db), 'Oracle Fixture Precondition: Room 201 exists in DB');
+  assert(Boolean(r202Db), 'Oracle Fixture Precondition: Room 202 exists in DB');
+  assert(Boolean(r203Db), 'Oracle Fixture Precondition: Room 203 exists in DB');
+  assert(Boolean(r205Db), 'Oracle Fixture Precondition: Room 205 exists in DB');
+  assert(Boolean(r206Db), 'Oracle Fixture Precondition: Room 206 exists in DB');
+  assert(Boolean(r303Db), 'Oracle Fixture Precondition: Room 303 exists in DB');
+
+  const julyPreview = await meterService.getMeterBillingPreviewContext(COMP_DORM.id, cycleJulyDb.id);
+  const augPreview = await meterService.getMeterBillingPreviewContext(COMP_DORM.id, cycleAugDb.id);
+  const septPreview = await meterService.getMeterBillingPreviewContext(COMP_DORM.id, cycleSeptDb.id);
+  const octPreview = await meterService.getMeterBillingPreviewContext(COMP_DORM.id, cycleOctDb.id);
 
     // Matrix Scenario A: RENT PAID (July 2026 Room 101)
     const p101Jul = julyPreview.rooms.find(r => r.roomId === r101Db?.id);
@@ -685,7 +699,6 @@ export async function runVerification() {
       'Matrix K: Ambiguous LEGACY_COMBINED Partial -> Room 104 (2026-08) combined partial bill resolves rent & deposit to UNKNOWN (ไม่พบข้อมูลการชำระ)',
       `Rent: ${p104Aug?.agreementRentPaymentStatus}, Deposit: ${p104Aug?.agreementDepositPaymentStatus}`
     );
-  }
 
   console.log('\n================================================================================');
   if (failures === 0) {

@@ -55,6 +55,7 @@ vi.mock('../data/httpClient', async (importOriginal) => {
                 roomNumber: '103',
                 tenantId: 'tenant-DAILY-D',
                 tenantName: 'ผู้พัก ดนัย',
+                billingSource: 'DAILY_STAY',
                 agreementType: 'DAILY',
                 rentAmount: '3850.00',
                 agreementDepositAmount: '500.00',
@@ -790,6 +791,7 @@ describe('OWNER ROOMS R2 & R2.1 — Rent-Cycle Deposit Model & Hardened Specific
         const previewRoomZeroDep = {
           roomId: 'room-101',
           cyclePresentationState: 'ACTIVE_AGREEMENT',
+          billingSource: 'CONTRACT',
           agreementType: 'MONTHLY',
           rentAmount: '4500.00',
           agreementDepositAmount: '0.00',
@@ -842,6 +844,7 @@ describe('OWNER ROOMS R2 & R2.1 — Rent-Cycle Deposit Model & Hardened Specific
         const previewHistoricalOccupied = {
           roomId: 'room-101',
           cyclePresentationState: 'ACTIVE_AGREEMENT',
+          billingSource: 'CONTRACT',
           agreementType: 'MONTHLY',
           rentAmount: '4500.00',
           tenantId: 'tenant-A',
@@ -911,6 +914,7 @@ describe('OWNER ROOMS R2 & R2.1 — Rent-Cycle Deposit Model & Hardened Specific
         const previewDailyTail = {
           roomId: 'room-104',
           cyclePresentationState: 'DAILY_FINANCIAL_TAIL',
+          billingSource: 'DAILY_STAY',
           agreementType: 'DAILY',
           rentAmount: '800.00',
           agreementDepositAmount: '500.00',
@@ -938,6 +942,7 @@ describe('OWNER ROOMS R2 & R2.1 — Rent-Cycle Deposit Model & Hardened Specific
         const preview = {
           roomId: 'room-105',
           cyclePresentationState: 'ACTIVE_AGREEMENT',
+          billingSource: 'CONTRACT',
           agreementType: 'MONTHLY',
           rentAmount: '4200.00',
           agreementDepositAmount: '4200.00',
@@ -973,6 +978,7 @@ describe('OWNER ROOMS R2 & R2.1 — Rent-Cycle Deposit Model & Hardened Specific
         const previewHistoricalOccupied = {
           roomId: 'room-101',
           cyclePresentationState: 'ACTIVE_AGREEMENT',
+          billingSource: 'CONTRACT',
           agreementType: 'MONTHLY',
           rentAmount: '4500.00',
           agreementDepositAmount: '4500.00',
@@ -1033,6 +1039,7 @@ describe('OWNER ROOMS R2 & R2.1 — Rent-Cycle Deposit Model & Hardened Specific
         const validDailyTail = {
           roomId: 'room-101',
           cyclePresentationState: 'DAILY_FINANCIAL_TAIL',
+          billingSource: 'DAILY_STAY',
           agreementType: 'DAILY',
           rentAmount: '800.00',
           agreementDepositAmount: '500.00',
@@ -1083,6 +1090,7 @@ describe('OWNER ROOMS R2 & R2.1 — Rent-Cycle Deposit Model & Hardened Specific
         ['room-101', {
           roomId: 'room-101',
           cyclePresentationState: 'ACTIVE_AGREEMENT',
+          billingSource: 'CONTRACT',
           agreementType: 'MONTHLY',
           rentAmount: '4500.00',
           tenantId: 'tenant-hist-A',
@@ -2308,6 +2316,7 @@ describe('OWNER ROOMS R2 & R2.1 — Rent-Cycle Deposit Model & Hardened Specific
     });
 
     it('T1 — EDIT ROOM MODAL: disables maintenance button when room is currently occupied', async () => {
+      cleanup();
       const mockRoom: any = {
         id: 'room-101',
         roomNumber: '101',
@@ -2317,6 +2326,10 @@ describe('OWNER ROOMS R2 & R2.1 — Rent-Cycle Deposit Model & Hardened Specific
         currentTenantId: 'tenant-HISTORICAL-A',
         monthlyRent: 4500,
         version: 1,
+        currentOperationalActions: {
+          canSetMaintenance: false,
+          maintenanceBlockReason: 'ACTIVE_OCCUPANCY',
+        },
       };
 
       renderWithQuery(
@@ -2337,7 +2350,7 @@ describe('OWNER ROOMS R2 & R2.1 — Rent-Cycle Deposit Model & Hardened Specific
       fireEvent.click(editBtn);
 
       // In modal, 'ปิดปรับปรุง' button should be disabled with tooltip
-      const maintenanceBtn = screen.getByTitle('มีผู้เช่าพักอยู่ ต้องย้ายหรือสิ้นสุดการเช่าก่อน');
+      const maintenanceBtn = await screen.findByTitle('มีผู้เช่าพักอยู่ ต้องย้ายหรือสิ้นสุดการเช่าก่อน');
       expect(maintenanceBtn).toBeDefined();
       expect(maintenanceBtn.hasAttribute('disabled')).toBe(true);
     });
@@ -2412,7 +2425,7 @@ describe('OWNER ROOMS R2 & R2.1 — Rent-Cycle Deposit Model & Hardened Specific
       const editBtn = await screen.findByTitle('แก้ไขรายละเอียดห้องพัก');
       fireEvent.click(editBtn);
 
-      const maintenanceBtn = screen.getByTitle('มีการจองล่วงหน้า ต้องจัดการการจองก่อน');
+      const maintenanceBtn = await screen.findByTitle('มีการจองล่วงหน้า ต้องจัดการการจองก่อน');
       expect(maintenanceBtn).toBeDefined();
       expect(maintenanceBtn.hasAttribute('disabled')).toBe(true);
     });
@@ -2465,6 +2478,168 @@ describe('OWNER ROOMS R2 & R2.1 — Rent-Cycle Deposit Model & Hardened Specific
       const badge = getPaymentStatusBadge('PARTIAL');
       expect(badge.text).toBe('ชำระบางส่วน');
       expect(badge.className).toContain('text-amber-700');
+    });
+    it('T6 — Full transport chain: backend DTO -> normalizeAuthoritativeRoom -> OwnerRooms preserves currentOperationalActions (July view, Sept reservation)', async () => {
+      cleanup();
+      // Raw backend AuthoritativeRoomDto with currentOperationalActions attached from defaultsService
+      const backendDto = {
+        id: 'room-real-chain-102',
+        dormitoryId: 'dorm-1',
+        buildingId: 'bld-1',
+        roomNumber: '102',
+        normalizedRoomNumber: '102',
+        status: 'vacant' as const,
+        floor: 1,
+        rentCycle: 'monthly' as const,
+        version: 1,
+        monthlyRent: 4500,
+        monthlyDeposit: 5000,
+        depositAmount: 5000,
+        maxOccupants: 2,
+        currentOperationalActions: {
+          canSetMaintenance: false,
+          maintenanceBlockReason: 'ACTIVE_RESERVATION' as const,
+        },
+      };
+
+      // Real transport pass through normalizer (DO NOT manually inject after normalization)
+      const normalizedRoom = normalizeAuthoritativeRoom(backendDto);
+      expect(normalizedRoom.currentOperationalActions).toBeDefined();
+      expect(normalizedRoom.currentOperationalActions?.canSetMaintenance).toBe(false);
+      expect(normalizedRoom.currentOperationalActions?.maintenanceBlockReason).toBe('ACTIVE_RESERVATION');
+
+      renderWithQuery(
+        <OwnerRooms
+          dormitoryId="dorm-1"
+          rooms={[normalizedRoom]}
+          buildings={[localBuilding]}
+          onSaveRooms={vi.fn()}
+          onAddLog={vi.fn()}
+          onNavigate={vi.fn()}
+          restoredState={{ viewMode: 'grid' }}
+          selectedBillingCycleId="cycle-2026-07"
+          selectedCycleCode="2026-07"
+        />
+      );
+
+      const editBtn = await screen.findByTitle('แก้ไขรายละเอียดห้องพัก');
+      fireEvent.click(editBtn);
+
+      const maintenanceBtn = screen.getByTitle('มีการจองล่วงหน้า ต้องจัดการการจองก่อน');
+      expect(maintenanceBtn).toBeDefined();
+      expect(maintenanceBtn.hasAttribute('disabled')).toBe(true);
+    });
+
+    it('T7 — Fail-closed UI: Missing currentOperationalActions metadata disables maintenance button with neutral message', async () => {
+      cleanup();
+      // Raw backend AuthoritativeRoomDto missing currentOperationalActions
+      const backendDtoMissingMeta = {
+        id: 'room-missing-meta-105',
+        dormitoryId: 'dorm-1',
+        buildingId: 'bld-1',
+        roomNumber: '105',
+        normalizedRoomNumber: '105',
+        status: 'vacant' as const,
+        floor: 1,
+        rentCycle: 'monthly' as const,
+        version: 1,
+        monthlyRent: 4500,
+        monthlyDeposit: 5000,
+        depositAmount: 5000,
+        maxOccupants: 2,
+      };
+
+      const normalizedRoom = normalizeAuthoritativeRoom(backendDtoMissingMeta);
+      expect(normalizedRoom.currentOperationalActions).toBeNull();
+
+      renderWithQuery(
+        <OwnerRooms
+          dormitoryId="dorm-1"
+          rooms={[normalizedRoom]}
+          buildings={[localBuilding]}
+          onSaveRooms={vi.fn()}
+          onAddLog={vi.fn()}
+          onNavigate={vi.fn()}
+          restoredState={{ viewMode: 'grid' }}
+          selectedBillingCycleId="cycle-2026-07"
+          selectedCycleCode="2026-07"
+        />
+      );
+
+      const editBtn = await screen.findByTitle('แก้ไขรายละเอียดห้องพัก');
+      fireEvent.click(editBtn);
+
+      const maintenanceBtn = await screen.findByTitle('ไม่สามารถตรวจสอบสถานะการเปิดปิดห้องได้ กรุณาโหลดข้อมูลใหม่');
+      expect(maintenanceBtn).toBeDefined();
+      expect(maintenanceBtn.hasAttribute('disabled')).toBe(true);
+    });
+
+    it('T8 — Strict DTO: ACTIVE_AGREEMENT missing or invalid billingSource evaluates to UNAVAILABLE', () => {
+      const room: any = {
+        id: 'room-strict-1',
+        buildingId: 'bld-1',
+        roomNumber: '101',
+        floor: 1,
+        status: 'occupied',
+        monthlyRent: 4500,
+      };
+
+      const invalidActivePreview: any = {
+        roomId: 'room-strict-1',
+        cyclePresentationState: 'ACTIVE_AGREEMENT',
+        effectiveRoomOperationalStatus: 'occupied',
+        agreementType: 'MONTHLY',
+        rentAmount: '4500.00',
+        billingSource: undefined, // Missing billingSource
+      };
+
+      const res = resolveRoomCyclePresentation(room, invalidActivePreview, 'cycle-2026-07');
+      expect(res.state).toBe('UNAVAILABLE');
+    });
+
+    it('T9 — Strict DTO: RESERVED_IN_CYCLE with malformed non-finite rentAmount evaluates to UNAVAILABLE', () => {
+      const room: any = {
+        id: 'room-strict-2',
+        buildingId: 'bld-1',
+        roomNumber: '102',
+        floor: 1,
+        status: 'vacant',
+        monthlyRent: 4500,
+      };
+
+      const invalidReservedPreview: any = {
+        roomId: 'room-strict-2',
+        cyclePresentationState: 'RESERVED_IN_CYCLE',
+        effectiveRoomOperationalStatus: 'vacant',
+        agreementType: 'MONTHLY',
+        rentAmount: 'not_a_valid_number', // Malformed
+      };
+
+      const res = resolveRoomCyclePresentation(room, invalidReservedPreview, 'cycle-2026-07');
+      expect(res.state).toBe('UNAVAILABLE');
+    });
+
+    it('T10 — Strict DTO: DAILY_FINANCIAL_TAIL with invalid billingSource evaluates to UNAVAILABLE', () => {
+      const room: any = {
+        id: 'room-strict-3',
+        buildingId: 'bld-1',
+        roomNumber: '103',
+        floor: 1,
+        status: 'vacant',
+        monthlyRent: 4500,
+      };
+
+      const invalidDailyTailPreview: any = {
+        roomId: 'room-strict-3',
+        cyclePresentationState: 'DAILY_FINANCIAL_TAIL',
+        effectiveRoomOperationalStatus: 'vacant',
+        agreementType: 'DAILY',
+        rentAmount: '600.00',
+        billingSource: 'FABRICATED_SOURCE', // Invalid source
+      };
+
+      const res = resolveRoomCyclePresentation(room, invalidDailyTailPreview, 'cycle-2026-07');
+      expect(res.state).toBe('UNAVAILABLE');
     });
   });
 

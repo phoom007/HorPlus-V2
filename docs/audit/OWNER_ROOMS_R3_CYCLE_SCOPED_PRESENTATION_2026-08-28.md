@@ -662,3 +662,80 @@ Independent review of the R3.3aR branch confirmed that Grid/List action wiring, 
 | Line Ending & Whitespace Check | `git -c core.whitespace=cr-at-eol diff --check` | **0 Warnings (PASS)** |
 | Master LOCAL-07 Sandbox Refresh & Oracle | `npm run uat:refresh` | **0 Failures (100% PASS across all 13 sections)** |
 | UAT Expected Results File Baseline | `git diff 4a0f572714a68630037125114b501a83bb47d387..HEAD -- docs/uat/local07-expected-results.json` | **UNMODIFIED (Clean Baseline)** |
+
+---
+
+## 25. OWNER ROOMS R3.4b — Production Boundaries, Transport & Concurrency Hardening (2026-08-28)
+
+### Context & Independent Review Corrections
+An independent technical audit of R3.4a identified critical gaps between documented specifications and actual runtime implementations:
+1. **Missing Production DTO Transport**: `currentOperationalActions` was omitted in the backend `defaultsService` production response builders and `src/lib/roomNormalizer.ts`. Frontend tests were manually injecting the property into mock Room objects.
+2. **Integration Test Boundary**: The previous `owner-rooms-r34a-prisma-maintenance-guard.test.ts` was executing mock in-memory objects rather than live PostgreSQL/Prisma instances.
+3. **Concurrency Serialization**: Concurrent room availability mutations (e.g., simultaneous maintenance toggle and daily reservation creation) lacked a single shared transactional advisory lock.
+4. **Strict DTO Fallback Leakage**: Fallbacks such as `billingSource || 'CONTRACT'` in `roomRentalSummary.ts` could mask malformed payloads instead of failing closed to `UNAVAILABLE`.
+
+### Surgical Implementations & Hardening in R3.4b
+
+#### Part A: Canonical Current Maintenance Eligibility Authority
+- Implemented `resolveCurrentMaintenanceEligibilityByRoom(dormitoryId, roomIds, dbClient?, now?)` in `server/src/utils/occupancy-interval.util.ts` as the sole server-side batch resolver.
+- Reuses canonical `evaluateMaintenanceEligibilityFromRecords` with zero N+1 database queries.
+- Shared transactional PostgreSQL advisory lock helper:
+  ```ts
+  export async function acquireRoomAvailabilityLock(tx: any, dormitoryId: string, roomId: string): Promise<void> {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${dormitoryId + ':' + roomId}))`;
+  }
+  ```
+- Integrated advisory lock directly into `RoomService.updateRoom` prior to maintenance eligibility evaluation.
+
+#### Part B & C: Production DTO Transport & Normalizer
+- Enriched `defaultsService.buildAuthoritativeRoomResponse` and `buildAuthoritativeRoomsResponseBatch` with server-authoritative `currentOperationalActions`:
+  ```ts
+  currentOperationalActions: {
+    canSetMaintenance: boolean;
+    maintenanceBlockReason: 'ACTIVE_OCCUPANCY' | 'ACTIVE_RESERVATION' | null;
+  }
+  ```
+- Updated `AuthoritativeRoomDto` in `src/lib/roomNormalizer.ts` and updated `normalizeAuthoritativeRoom()` to preserve `currentOperationalActions` verbatim without guessing or inferring.
+- Added fail-closed frontend behavior in `src/pages/owner/rooms.tsx`: if `currentOperationalActions` is missing or malformed, maintenance status change is disabled with tooltip: `ไม่สามารถตรวจสอบสถานะการเปิดปิดห้องได้ กรุณาโหลดข้อมูลใหม่`.
+
+#### Part D: Real Transport Integration Test
+- Added end-to-end frontend transport proof in `src/tests/owner-rooms-r2-cycle-deposits.test.tsx` (Test T6):
+  - Backend DTO -> `normalizeAuthoritativeRoom()` -> `OwnerRooms` component.
+  - Selected cycle = July, current operational future reservation = September.
+  - Verifies "ปิดปรับปรุง" button is disabled with title `มีการจองล่วงหน้า ต้องจัดการการจองก่อน` without manual injection post-normalization.
+
+#### Part E & F: Live Prisma / PostgreSQL Database Suite & Concurrency Invariant
+- Replaced previous mock integration file with `server/src/__tests__/integration/owner-rooms-r34b-prisma-maintenance-guard.test.ts` against live PostgreSQL:
+  1. Real DailyStay ACTIVE -> blocks maintenance with `ROOM_HAS_ACTIVE_OCCUPANCY` (PASS).
+  2. Real DailyStay RESERVED future -> blocks maintenance with `ROOM_HAS_ACTIVE_RESERVATION` (PASS).
+  3. Real DailyStay CHECKED_OUT historical -> allows maintenance (PASS).
+  4. Real DailyStay soft-deleted -> allows maintenance (PASS).
+  5. Real active Contract -> blocks maintenance with `ROOM_HAS_ACTIVE_OCCUPANCY` (PASS).
+  6. Real future committed Contract -> blocks maintenance with `ROOM_HAS_ACTIVE_RESERVATION` (PASS).
+  7. Real ended/deleted Contract -> allows maintenance (PASS).
+  8. Real active ProvisionalRentalTerm -> blocks maintenance with `ROOM_HAS_ACTIVE_OCCUPANCY` (PASS).
+  9. Real future RESERVED ProvisionalRentalTerm -> blocks maintenance with `ROOM_HAS_ACTIVE_RESERVATION` (PASS).
+  10. Real ended/deleted ProvisionalRentalTerm -> allows maintenance (PASS).
+  11. **Concurrency Invariant**: Simultaneous maintenance toggle and daily reservation creation serialize cleanly via transactional advisory locks; dual-commit is physically impossible (PASS).
+  12. **Authoritative Room DTO**: Single and batch response builders attach canonical `currentOperationalActions` (PASS).
+
+#### Part G: Strict DTO Projection Hardening
+- `src/lib/roomRentalSummary.ts`:
+  - `ACTIVE_AGREEMENT`: Requires valid canonical `billingSource` (`CONTRACT`, `PROVISIONAL_MONTHLY`, `PROVISIONAL_TERM`, `DAILY_STAY`). Missing or invalid source fails closed to `UNAVAILABLE`.
+  - `RESERVED_IN_CYCLE`: Explicitly validates finite `rentAmount` without loose coercion; malformed values fail closed to `UNAVAILABLE`.
+  - `DAILY_FINANCIAL_TAIL`: Requires `agreementType === 'DAILY'` and `billingSource === 'DAILY_STAY'` (or `NONE`); invalid values fail closed to `UNAVAILABLE`.
+
+#### Part H: LOCAL-07 Oracle Precondition Verification
+- Hardened Section 13 of `scripts/local07/verify.mjs` to assert that all 4 cycles (`2026-07`, `2026-08`, `2026-09`, `2026-10`) and all 9 test rooms exist in the database before running matrix assertions.
+
+### Verification Matrix (R3.4b)
+
+| Test / Check Suite | Target Command / Path | Result |
+|---|---|---|
+| Real Prisma Integration & Concurrency Suite | `npm --prefix server run test -- src/__tests__/integration/owner-rooms-r34b-prisma-maintenance-guard.test.ts` | **12 / 12 PASS (100%)** |
+| Backend Unit & Service Suites | `npm --prefix server run test -- src/__tests__/unit/` | **59 / 59 PASS (100%)** |
+| Frontend Vitest Test Suite | `npx vitest run src/tests/owner-rooms-r2-cycle-deposits.test.tsx --environment happy-dom` | **98 / 98 PASS (100%)** |
+| Frontend TypeScript Check | `npm run lint` | **0 Errors (PASS)** |
+| Backend TypeScript Build | `npm --prefix server run build` | **0 Errors (PASS)** |
+| LOCAL-07 Oracle Sandbox Verification | `npm run uat:refresh` | **100% PASS (All 13 Sections)** |
+| Whitespace & Line Ending Hygiene | `git -c core.whitespace=cr-at-eol diff --check` | **0 Warnings / Clean** |

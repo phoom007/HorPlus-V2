@@ -4,7 +4,7 @@ import { ISubscriptionRepository } from '../db/repositories/subscription.reposit
 import { IContractRepository } from '../db/repositories/contract.repository.js';
 import { AuditService } from './audit.service.js';
 import { AppError } from '../types/index.js';
-import { evaluateMaintenanceEligibilityFromRecords } from '../utils/occupancy-interval.util.js';
+import { evaluateMaintenanceEligibilityFromRecords, acquireRoomAvailabilityLock } from '../utils/occupancy-interval.util.js';
 import { subscriptionEntitlementService } from './subscription-entitlement.service.js';
 import { currentCycleResolverService } from './current-cycle-resolver.js';
 

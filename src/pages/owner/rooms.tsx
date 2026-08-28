@@ -2088,13 +2088,16 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
               </button>
               {(() => {
                 const opActions = editingRoom?.currentOperationalActions;
-                const isEditingRoomOccupied = Boolean(editingRoom && (editingRoom.status === 'occupied' || editingRoom.currentTenantId));
-                const isMaintenanceDisabled = opActions ? !opActions.canSetMaintenance : isEditingRoomOccupied;
+                const isMaintenanceDisabled = editingRoom
+                  ? (opActions ? !opActions.canSetMaintenance : true)
+                  : false;
                 const blockReason = opActions?.maintenanceBlockReason;
                 const tooltipText = isMaintenanceDisabled
                   ? (blockReason === 'ACTIVE_RESERVATION'
                       ? 'มีการจองล่วงหน้า ต้องจัดการการจองก่อน'
-                      : 'มีผู้เช่าพักอยู่ ต้องย้ายหรือสิ้นสุดการเช่าก่อน')
+                      : blockReason === 'ACTIVE_OCCUPANCY'
+                        ? 'มีผู้เช่าพักอยู่ ต้องย้ายหรือสิ้นสุดการเช่าก่อน'
+                        : 'ไม่สามารถตรวจสอบสถานะการเปิดปิดห้องได้ กรุณาโหลดข้อมูลใหม่')
                   : undefined;
 
                 return (

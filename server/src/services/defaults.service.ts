@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import { getPrismaClient } from '../db/prisma.js';
+import { resolveCurrentMaintenanceEligibilityByRoom } from '../utils/occupancy-interval.util.js';
 import { AppError } from '../types/index.js';
 import { BLOCKING_CONTRACT_STATUSES } from './blocking-contract-policy.js';
 import { normalizeUtilityBillingMode } from '../utils/billing-mode-normalizer.util.js';
@@ -1225,6 +1226,9 @@ export class DefaultsService {
       now
     );
 
+    const opActionsMap = await resolveCurrentMaintenanceEligibilityByRoom(dormitoryId, [room.id], prisma, now);
+    const currentOperationalActions = opActionsMap.get(room.id) || { canSetMaintenance: false, maintenanceBlockReason: null };
+
     const snapshotLocked = !!(activeContract && activeContract.snapshot);
     const activeContractSnapshotId = activeContract?.snapshot?.id || null;
 
@@ -1344,6 +1348,7 @@ export class DefaultsService {
       currentTenantId: room.currentTenantId || activeContract?.tenantId || null,
       currentContractId: room.currentContractId || activeContract?.id || null,
       activeRentalSummary,
+      currentOperationalActions,
       createdAt: room.createdAt,
     };
   }
@@ -1517,6 +1522,7 @@ export class DefaultsService {
     const activeContractMap = new Map<string, any>();
 
         const now = new Date();
+    const batchOpActionsMap = await resolveCurrentMaintenanceEligibilityByRoom(dormitoryId, roomIds, prisma, now);
     for (const roomId of roomIds) {
       const { activeRentalSummary, activeContract } = resolveCurrentActiveRentalSummary(
         roomId,
@@ -1709,6 +1715,7 @@ export class DefaultsService {
         currentTenantId: room.currentTenantId || activeContract?.tenantId || null,
         currentContractId: room.currentContractId || activeContract?.id || null,
         activeRentalSummary,
+        currentOperationalActions: batchOpActionsMap.get(room.id) || { canSetMaintenance: false, maintenanceBlockReason: null },
         createdAt: room.createdAt,
       };
     });

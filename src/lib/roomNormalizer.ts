@@ -82,6 +82,11 @@ export interface AuthoritativeRoomDto {
 
   depositStatus?: 'paid' | 'unpaid' | null;
 
+  currentOperationalActions?: {
+    canSetMaintenance: boolean;
+    maintenanceBlockReason: 'ACTIVE_OCCUPANCY' | 'ACTIVE_RESERVATION' | null;
+  } | null;
+
   images?: string[] | null;
   amenities?: string[] | null;
   notes?: string | null;
@@ -222,6 +227,17 @@ export function normalizeAuthoritativeRoom(dto: AuthoritativeRoomDto | any): Roo
   const floorNum = typeof dto.floor === 'number' ? dto.floor : (dto.floor ? Number(dto.floor) : 1);
   const floor = Number.isFinite(floorNum) ? floorNum : 1;
 
+  let currentOperationalActions: {
+    canSetMaintenance: boolean;
+    maintenanceBlockReason: 'ACTIVE_OCCUPANCY' | 'ACTIVE_RESERVATION' | null;
+  } | null = null;
+  if (dto.currentOperationalActions && typeof dto.currentOperationalActions === 'object') {
+    currentOperationalActions = {
+      canSetMaintenance: Boolean(dto.currentOperationalActions.canSetMaintenance),
+      maintenanceBlockReason: dto.currentOperationalActions.maintenanceBlockReason || null,
+    };
+  }
+
   return {
     id: String(dto.id || ''),
     buildingId: String(dto.buildingId || ''),
@@ -245,6 +261,7 @@ export function normalizeAuthoritativeRoom(dto: AuthoritativeRoomDto | any): Roo
     amenities,
     version: typeof dto.version === 'number' ? dto.version : 1,
     activeRentalSummary,
+    currentOperationalActions,
     createdAt: dto.createdAt ? String(dto.createdAt) : undefined,
     updatedAt: dto.updatedAt ? String(dto.updatedAt) : undefined,
   };
