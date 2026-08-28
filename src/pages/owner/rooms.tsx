@@ -371,8 +371,15 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
         setTimeout(() => setToastMessage(null), 3500);
       } else {
         // Create Room via authoritative backend API
+        const effectiveBuildingId = buildingId || (buildings && buildings[0]?.id ? buildings[0].id : '');
+        if (!effectiveBuildingId) {
+          setErrorText('ไม่พบข้อมูลอาคารในหอพักนี้ กรุณาสร้างอาคารก่อนเพิ่มห้องพัก');
+          setIsSubmitting(false);
+          return;
+        }
+
         const payload: CreateRoomPayload = {
-          buildingId: buildingId || (buildings[0]?.id || ''),
+          buildingId: effectiveBuildingId,
           roomNumber: roomNumber.trim(),
           floor: calculatedFloor,
           roomType: 'standard',

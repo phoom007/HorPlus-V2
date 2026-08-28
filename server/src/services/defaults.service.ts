@@ -1167,8 +1167,8 @@ export class DefaultsService {
       amenities: room.amenities,
       images: room.images,
       notes: room.notes,
-      currentTenantId: room.currentTenantId,
-      currentContractId: room.currentContractId,
+      currentTenantId: room.currentTenantId || activeContract?.tenantId || null,
+      currentContractId: room.currentContractId || activeContract?.id || null,
       createdAt: room.createdAt,
     };
   }

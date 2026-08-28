@@ -27,6 +27,7 @@ import {
 } from '../../contracts';
 
 import { httpRequest, HttpClientError } from '../../httpClient';
+import { normalizeAuthoritativeRoom, normalizeAuthoritativeRooms } from '../../../lib/roomNormalizer';
 import {
   serializeMeterWorkspaceDirtyRow,
   serializeMeterWorkspaceDirtyRows,
@@ -1192,8 +1193,11 @@ export class ApiPropertyAdapter implements PropertyDataSource {
   async getAuthoritativeRooms(params?: Record<string, any>): Promise<DataResult<{ items: Room[]; pagination: any }>> {
     try {
       const queryStr = params ? '?' + new URLSearchParams(params).toString() : '';
-      const data = await httpRequest<any>('GET', `/properties/rooms${queryStr}`);
-      return { success: true, data };
+      const raw = await httpRequest<any>('GET', `/properties/rooms${queryStr}`);
+      const rawItems = Array.isArray(raw?.data) ? raw.data : (Array.isArray(raw?.items) ? raw.items : (Array.isArray(raw) ? raw : []));
+      const items = normalizeAuthoritativeRooms(rawItems);
+      const pagination = raw?.pagination || { total: items.length, page: 1, pageSize: items.length };
+      return { success: true, data: { items, pagination } };
     } catch (err: any) {
       return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
     }
@@ -1201,8 +1205,9 @@ export class ApiPropertyAdapter implements PropertyDataSource {
 
   async getAuthoritativeRoom(id: string): Promise<DataResult<Room>> {
     try {
-      const data = await httpRequest<Room>('GET', `/properties/rooms/${id}`);
-      return { success: true, data };
+      const data = await httpRequest<any>('GET', `/properties/rooms/${id}`);
+      const raw = data?.data || data;
+      return { success: true, data: normalizeAuthoritativeRoom(raw) };
     } catch (err: any) {
       return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
     }
@@ -1219,8 +1224,9 @@ export class ApiPropertyAdapter implements PropertyDataSource {
         initialWaterReading: payload.initialWaterReading != null && payload.initialWaterReading !== '' ? String(payload.initialWaterReading) : undefined,
         initialElectricityReading: payload.initialElectricityReading != null && payload.initialElectricityReading !== '' ? String(payload.initialElectricityReading) : undefined,
       };
-      const response = await httpRequest<{ data: Room } | Room>('POST', '/properties/rooms', body);
-      const room = ('data' in response && response.data) ? response.data : (response as Room);
+      const response = await httpRequest<{ data: any } | any>('POST', '/properties/rooms', body);
+      const raw = ('data' in response && response.data) ? response.data : response;
+      const room = normalizeAuthoritativeRoom(raw);
       return { success: true, data: room };
     } catch (err: unknown) {
       return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: (err as Error)?.message || 'Internal error' } };
@@ -1251,8 +1257,9 @@ export class ApiPropertyAdapter implements PropertyDataSource {
       if ('initialElectricityReading' in changes) {
         body.initialElectricityReading = changes.initialElectricityReading != null && changes.initialElectricityReading !== '' ? String(changes.initialElectricityReading) : '0.00';
       }
-      const response = await httpRequest<{ data: Room } | Room>('PUT', `/properties/rooms/${roomId}`, body);
-      const room = ('data' in response && response.data) ? response.data : (response as Room);
+      const response = await httpRequest<{ data: any } | any>('PUT', `/properties/rooms/${roomId}`, body);
+      const raw = ('data' in response && response.data) ? response.data : response;
+      const room = normalizeAuthoritativeRoom(raw);
       return { success: true, data: room };
     } catch (err: unknown) {
       return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: (err as Error)?.message || 'Internal error' } };

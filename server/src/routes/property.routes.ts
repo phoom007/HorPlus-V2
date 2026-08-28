@@ -393,7 +393,9 @@ export function createPropertyRouter(
         });
       }
       const room = await roomService.createRoom(dormId, parsed.data as any, req.auth?.userId);
-      res.status(201).json({ data: room });
+      const { defaultsService } = await import('../services/defaults.service.js');
+      const enriched = await defaultsService.buildAuthoritativeRoomResponse(dormId, room);
+      res.status(201).json({ data: enriched });
     } catch (err) {
       handleServiceError(res, err, req);
     }
@@ -426,7 +428,9 @@ export function createPropertyRouter(
         actorUserId: req.auth?.userId,
         requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
       });
-      res.json({ data: room });
+      const { defaultsService } = await import('../services/defaults.service.js');
+      const enriched = await defaultsService.buildAuthoritativeRoomResponse(dormId, room);
+      res.json({ data: enriched });
     } catch (err) {
       handleServiceError(res, err, req);
     }
