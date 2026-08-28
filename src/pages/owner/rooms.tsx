@@ -45,7 +45,7 @@ import { httpRequest } from '../../data/httpClient';
 import { getOwnerRoomMutationErrorMessage } from '../../lib/roomErrorMapper';
 import { QuickAddTenantModal } from '../../components/QuickAddTenantModal';
 import { QuickAddRoomContext } from '../../types';
-import { getGridRentRates, getListRentRates, getDepositForCycle } from '../../lib/roomRentalSummary';
+import { getGridRentRates, getListRentRates, getDepositForCycle, getCurrentAgreementDepositDisplay } from '../../lib/roomRentalSummary';
 import { RoomMutationImpact } from '../../lib/roomMutationCache';
 import { Room, Building, RoomStatus, Tenant, Contract, Bill, BLOCKING_CONTRACT_STATUSES } from '../../types';
 
@@ -866,23 +866,30 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                   {/* Deposit Amount & Status */}
                   <div className="flex items-center justify-between text-xs px-1 pt-0.5">
                     <span className="text-gray-600 font-bold">ค่าประกัน:</span>
-                    {room.status === 'vacant' || !room.currentTenantId ? (
-                      <span className="text-gray-400 font-medium italic">ไม่มีผู้เช่าลงทะเบียน</span>
-                    ) : (
-                      <div className="flex items-center gap-1.5">
-                        <span className="font-extrabold text-slate-900">{formatBaht(room.depositAmount)}</span>
-                        {room.depositStatus === 'paid' && (
-                          <span className="px-1.5 py-0.5 bg-emerald-100 text-emerald-800 text-[10px] font-black rounded-md border border-emerald-200">
-                            จ่ายแล้ว
-                          </span>
-                        )}
-                        {room.depositStatus === 'unpaid' && (
-                          <span className="px-1.5 py-0.5 bg-rose-100 text-rose-800 text-[10px] font-black rounded-md border border-rose-200">
-                            ยังไม่จ่าย
-                          </span>
-                        )}
-                      </div>
-                    )}
+                    {(() => {
+                      const depDisplay = getCurrentAgreementDepositDisplay(room);
+                      if (!depDisplay.isOccupied) {
+                        return <span className="text-gray-400 font-medium italic">ไม่มีผู้เช่าลงทะเบียน</span>;
+                      }
+                      if (depDisplay.amount !== undefined) {
+                        return (
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-extrabold text-slate-900">{formatBaht(depDisplay.amount)}</span>
+                            {room.depositStatus === 'paid' && (
+                              <span className="px-1.5 py-0.5 bg-emerald-100 text-emerald-800 text-[10px] font-black rounded-md border border-emerald-200">
+                                จ่ายแล้ว
+                              </span>
+                            )}
+                            {room.depositStatus === 'unpaid' && (
+                              <span className="px-1.5 py-0.5 bg-rose-100 text-rose-800 text-[10px] font-black rounded-md border border-rose-200">
+                                ยังไม่จ่าย
+                              </span>
+                            )}
+                          </div>
+                        );
+                      }
+                      return <span className="text-gray-400 font-medium italic">{depDisplay.unavailableText}</span>;
+                    })()}
                   </div>
                 </div>
 
@@ -1002,19 +1009,26 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                         })()}
                       </td>
                       <td className="p-4 whitespace-nowrap">
-                        {room.status === 'vacant' || !room.currentTenantId ? (
-                          <span className="text-gray-400 font-medium italic">ไม่มีผู้เช่าลงทะเบียน</span>
-                        ) : (
-                          <>
-                            <div className="font-bold text-slate-800 whitespace-nowrap">{formatBaht(room.depositAmount)}</div>
-                            {room.depositStatus === 'paid' && (
-                              <span className="text-[10px] font-black text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200 inline-block mt-0.5 whitespace-nowrap">จ่ายแล้ว</span>
-                            )}
-                            {room.depositStatus === 'unpaid' && (
-                              <span className="text-[10px] font-black text-rose-700 bg-rose-50 px-1.5 py-0.5 rounded border border-rose-200 inline-block mt-0.5 whitespace-nowrap">ยังไม่จ่าย</span>
-                            )}
-                          </>
-                        )}
+                        {(() => {
+                          const depDisplay = getCurrentAgreementDepositDisplay(room);
+                          if (!depDisplay.isOccupied) {
+                            return <span className="text-gray-400 font-medium italic">ไม่มีผู้เช่าลงทะเบียน</span>;
+                          }
+                          if (depDisplay.amount !== undefined) {
+                            return (
+                              <>
+                                <div className="font-bold text-slate-800 whitespace-nowrap">{formatBaht(depDisplay.amount)}</div>
+                                {room.depositStatus === 'paid' && (
+                                  <span className="text-[10px] font-black text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200 inline-block mt-0.5 whitespace-nowrap">จ่ายแล้ว</span>
+                                )}
+                                {room.depositStatus === 'unpaid' && (
+                                  <span className="text-[10px] font-black text-rose-700 bg-rose-50 px-1.5 py-0.5 rounded border border-rose-200 inline-block mt-0.5 whitespace-nowrap">ยังไม่จ่าย</span>
+                                )}
+                              </>
+                            );
+                          }
+                          return <span className="text-gray-400 font-medium italic">{depDisplay.unavailableText}</span>;
+                        })()}
                       </td>
                       <td className="p-4 whitespace-nowrap">
                         {/* Status minimal badge (View-only) */}

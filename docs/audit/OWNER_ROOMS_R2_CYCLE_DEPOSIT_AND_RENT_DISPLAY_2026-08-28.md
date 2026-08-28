@@ -147,10 +147,30 @@ Independent review of R2.1 identified surgical gaps that required correction bef
    - *Prior Gap*: Unreachable fake local modal state and handler generating fake tenant and contract IDs remained in `rooms.tsx`.
    - *R2.1a Correction*: Completely purged dead fake handler and state variables. Canonical `QuickAddTenantModal` is the sole authority.
 
+
+### 3.2. R2.1b — Agreement Deposit Display Authority
+
+Independent review of R2.1a identified a defect in occupied Room deposit presentation in Grid and List modes:
+
+1. **Defect Identified**:
+   - Both Grid and List modes rendered occupied Room deposit from `room.depositAmount` (a legacy catalog alias).
+   - In R2, `room.depositAmount` is only a legacy catalog compatibility alias and does not reflect the current tenant's agreement deposit.
+   - Example: A Room with catalog `termDeposit = 9000`, `monthlyDeposit = 4500`, and `depositAmount = 4500` having an active TERM agreement with `depositAmount = 8000` incorrectly displayed `4500` instead of `8000`.
+
+2. **R2.1b Product Authority & Single Helper**:
+   - Created pure production helper `getCurrentAgreementDepositDisplay(room)` in `src/lib/roomRentalSummary.ts`.
+   - **Occupied Room Authority**:
+     - Current rent authority: `room.activeRentalSummary.rentAmount`
+     - Current deposit authority: `room.activeRentalSummary.depositAmount`
+   - **Room Catalog Cycle Deposits**: defaults for future agreements only.
+   - **Explicit 0 Deposit**: preserved and displayed as `฿ 0.00`.
+   - **Fail-Closed on Missing Agreement Deposit**: if an occupied room lacks `activeRentalSummary` or its `depositAmount` is null/undefined/non-finite, displays neutral text `ไม่พบข้อมูลค่าประกันปัจจุบัน` without guessing or falling back to Room catalog deposits.
+   - **Grid & List Synchronization**: Both Grid and List views call `getCurrentAgreementDepositDisplay(room)`, eliminating duplicate JSX logic and legacy `formatBaht(room.depositAmount)` usage for occupied rooms.
+
 ## 4. Verification & Quality Gates
 
 ### Automated Impact Tests
-1. `src/tests/owner-rooms-r2-cycle-deposits.test.tsx` (20 tests): **PASSED**
+1. `src/tests/owner-rooms-r2-cycle-deposits.test.tsx` (25 tests): **PASSED**
    - 3 cycle deposits and activeRentalSummary normalization.
    - Fail-closed transport validation on malformed numbers.
    - Error mapper exact Thai mappings and nested shapes.
@@ -160,22 +180,21 @@ Independent review of R2.1 identified surgical gaps that required correction bef
    - Schema defaulting: `CreateContractSchema.depositAmount` optional; `UpdateRoomSchema` rejects `null` cycle deposits.
    - Tenant registration approval defaulting strictly to `room.monthlyRent` / `room.monthlyDeposit` with 0 preserved and fail-closed validation.
    - Dormitory `defaultDeposit` seeding (7000 -> 7000/7000/7000, 0 -> 0/0/0) and absence of legacy `depositAmount` in create payload.
+   - **R2.1b Agreement Deposit Display Authority**:
+     - Occupied TERM agreement displays `8000` (not catalog 9000 or 4500).
+     - Occupied DAILY agreement displays `500` (not catalog 1000).
+     - Explicit agreement deposit `0` preserved and rendered.
+     - Occupied room with missing/null summary deposit fails closed with neutral `ไม่พบข้อมูลค่าประกันปัจจุบัน` (no catalog fallback).
+     - Vacant room indicates no current agreement deposit.
 
 2. `server/src/__tests__/unit/owner-rooms-r21a-services.test.ts` (12 tests): **PASSED**
-   - `ContractService.createContract` on non-Prisma repository (MONTHLY -> monthlyDeposit, TERM -> termDeposit, explicit 0 preserved).
-   - `DailyStayService.ownerQuickAddDailyStay` (omitted -> dailyDeposit, explicit 0 preserved, legacy depositAmount unused).
-   - `DefaultsService` and canonical Bangkok physical intervals:
-     - 1. Contract on its inclusive final Bangkok date -> CURRENT
-     - 2. Contract starting tomorrow -> NOT CURRENT
-     - 3. Active provisional within physical interval -> CURRENT
-     - 4. Daily stay before check-in -> NOT CURRENT
-     - 5. Daily stay during stay interval -> CURRENT
-     - 6. RESERVED future daily stay -> NOT CURRENT
-     - 7. Two current sources -> conflict fail-closed (`null`)
+   - `ContractService.createContract` on non-Prisma repository.
+   - `DailyStayService.ownerQuickAddDailyStay` defaulting.
+   - `DefaultsService` and canonical Bangkok physical intervals.
 
 3. `src/tests/owner-rooms-persistence-phase-ab.test.tsx` (8 tests): **PASSED**
 
-**Total Test Count:** 40 passed, 0 failed.
+**Total Test Count:** 45 passed, 0 failed.
 
 ### Static Code & Type Checking
 - `npm run lint` (`tsc --noEmit`): **PASSED (0 errors)**

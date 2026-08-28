@@ -166,3 +166,37 @@ export function getListRentRates(room: Room): { primaryRate?: RateItem; secondar
   const [primaryRate, ...secondaryRates] = catalog;
   return { primaryRate, secondaryRates };
 }
+
+export interface AgreementDepositDisplay {
+  isOccupied: boolean;
+  amount?: number;
+  unavailableText?: string;
+}
+
+/**
+ * Resolves current tenant agreement deposit display for Grid and List modes:
+ * - Vacant: isOccupied: false, no current agreement amount.
+ * - Occupied + valid summary deposit: amount = activeRentalSummary.depositAmount (including 0).
+ * - Occupied + missing summary/deposit: unavailableText = 'ไม่พบข้อมูลค่าประกันปัจจุบัน' (no guessed deposit).
+ */
+export function getCurrentAgreementDepositDisplay(room: Room): AgreementDepositDisplay {
+  const isOccupied = room.status === 'occupied' || !!room.currentTenantId;
+  if (!isOccupied) {
+    return {
+      isOccupied: false,
+    };
+  }
+
+  const deposit = room.activeRentalSummary?.depositAmount;
+  if (deposit !== null && deposit !== undefined && Number.isFinite(Number(deposit))) {
+    return {
+      isOccupied: true,
+      amount: Number(deposit),
+    };
+  }
+
+  return {
+    isOccupied: true,
+    unavailableText: 'ไม่พบข้อมูลค่าประกันปัจจุบัน',
+  };
+}

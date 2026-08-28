@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { normalizeAuthoritativeRoom } from '../lib/roomNormalizer';
 import { getOwnerRoomMutationErrorMessage } from '../lib/roomErrorMapper';
-import { getGridRentRates, getListRentRates, getDepositForCycle } from '../lib/roomRentalSummary';
+import { getGridRentRates, getListRentRates, getDepositForCycle, getCurrentAgreementDepositDisplay } from '../lib/roomRentalSummary';
 import { Room } from '../types';
 import { CreateContractSchema, UpdateRoomSchema } from '../../server/src/schemas/property-tenant-contract.schemas';
 
@@ -375,6 +375,137 @@ describe('OWNER ROOMS R2 & R2.1 — Rent-Cycle Deposit Model & Hardened Specific
       expect(createPayload).toHaveProperty('monthlyDeposit');
       expect(createPayload).toHaveProperty('dailyDeposit');
       expect(createPayload).not.toHaveProperty('depositAmount');
+    });
+  });
+  describe('7. Agreement Deposit Display Authority (R2.1b)', () => {
+    it('1. Occupied TERM: shows activeRentalSummary.depositAmount (8000) and NOT catalog term/monthly deposit (9000/4500)', () => {
+      const room: any = {
+        id: 'room-term-occupied',
+        roomNumber: '101',
+        status: 'occupied',
+        currentTenantId: 'tenant-1',
+        termDeposit: 9000,
+        monthlyDeposit: 4500,
+        dailyDeposit: 1000,
+        depositAmount: 4500, // Legacy alias
+        activeRentalSummary: {
+          type: 'TERM',
+          rentAmount: 18000,
+          depositAmount: 8000,
+          source: 'CONTRACT',
+        },
+      };
+
+      const result = getCurrentAgreementDepositDisplay(room);
+      expect(result.isOccupied).toBe(true);
+      expect(result.amount).toBe(8000);
+      expect(result.amount).not.toBe(9000);
+      expect(result.amount).not.toBe(4500);
+      expect(result.unavailableText).toBeUndefined();
+    });
+
+    it('2. Occupied DAILY: shows activeRentalSummary.depositAmount (500) and NOT catalog daily deposit (1000)', () => {
+      const room: any = {
+        id: 'room-daily-occupied',
+        roomNumber: '102',
+        status: 'occupied',
+        currentTenantId: 'tenant-2',
+        termDeposit: 9000,
+        monthlyDeposit: 4500,
+        dailyDeposit: 1000,
+        depositAmount: 4500,
+        activeRentalSummary: {
+          type: 'DAILY',
+          rentAmount: 600,
+          depositAmount: 500,
+          source: 'DAILY_STAY',
+        },
+      };
+
+      const result = getCurrentAgreementDepositDisplay(room);
+      expect(result.isOccupied).toBe(true);
+      expect(result.amount).toBe(500);
+      expect(result.amount).not.toBe(1000);
+      expect(result.unavailableText).toBeUndefined();
+    });
+
+    it('3. Explicit agreement deposit 0: renders 0 and does NOT treat 0 as missing', () => {
+      const room: any = {
+        id: 'room-zero-deposit',
+        roomNumber: '103',
+        status: 'occupied',
+        currentTenantId: 'tenant-3',
+        termDeposit: 9000,
+        monthlyDeposit: 4500,
+        dailyDeposit: 1000,
+        activeRentalSummary: {
+          type: 'MONTHLY',
+          rentAmount: 4500,
+          depositAmount: 0,
+          source: 'CONTRACT',
+        },
+      };
+
+      const result = getCurrentAgreementDepositDisplay(room);
+      expect(result.isOccupied).toBe(true);
+      expect(result.amount).toBe(0);
+      expect(result.unavailableText).toBeUndefined();
+    });
+
+    it('4. Occupied + missing/null activeRentalSummary deposit: fails closed with neutral text without catalog fallback', () => {
+      const roomMissingSummary: any = {
+        id: 'room-no-summary',
+        roomNumber: '104',
+        status: 'occupied',
+        currentTenantId: 'tenant-4',
+        termDeposit: 9000,
+        monthlyDeposit: 4500,
+        dailyDeposit: 1000,
+        depositAmount: 4500,
+        activeRentalSummary: null,
+      };
+
+      const roomNullDeposit: any = {
+        id: 'room-null-deposit',
+        roomNumber: '105',
+        status: 'occupied',
+        currentTenantId: 'tenant-5',
+        termDeposit: 9000,
+        monthlyDeposit: 4500,
+        dailyDeposit: 1000,
+        depositAmount: 4500,
+        activeRentalSummary: {
+          type: 'MONTHLY',
+          rentAmount: 4500,
+          depositAmount: null,
+        },
+      };
+
+      const res1 = getCurrentAgreementDepositDisplay(roomMissingSummary);
+      expect(res1.isOccupied).toBe(true);
+      expect(res1.amount).toBeUndefined();
+      expect(res1.unavailableText).toBe('ไม่พบข้อมูลค่าประกันปัจจุบัน');
+
+      const res2 = getCurrentAgreementDepositDisplay(roomNullDeposit);
+      expect(res2.isOccupied).toBe(true);
+      expect(res2.amount).toBeUndefined();
+      expect(res2.unavailableText).toBe('ไม่พบข้อมูลค่าประกันปัจจุบัน');
+    });
+
+    it('5. Vacant room: indicates room is not occupied (no current agreement deposit)', () => {
+      const room: any = {
+        id: 'room-vacant',
+        roomNumber: '106',
+        status: 'vacant',
+        currentTenantId: null,
+        termDeposit: 9000,
+        monthlyDeposit: 4500,
+        dailyDeposit: 1000,
+      };
+
+      const result = getCurrentAgreementDepositDisplay(room);
+      expect(result.isOccupied).toBe(false);
+      expect(result.amount).toBeUndefined();
     });
   });
 });
