@@ -1,20 +1,56 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { createDepositBillForAgreementInTx } from '../../utils/deposit-billing.util.js';
+import { createDepositBillForAgreementInTx, generateNextBillNumberInTx } from '../../utils/deposit-billing.util.js';
 import { Decimal } from '@prisma/client/runtime/library.js';
 
-describe('OWNER ROOMS R3.5 — Canonical Deposit Billing & Lifecycle Suite', () => {
+describe('OWNER ROOMS R3.5a — Canonical Deposit Billing & Lifecycle Suite', () => {
   let mockTx: any;
+  let mockBillDb: any;
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockBillDb = {
+      id: 'bill-deposit-001',
+      dormitoryId: 'dorm-1',
+      billingCycleId: 'cycle-2026-08',
+      roomId: 'room-2',
+      tenantId: 'tenant-2',
+      provisionalRentalTermId: 'agr-term-202',
+      billKind: 'DEPOSIT',
+      billNumber: 'INV-2026-08-0001',
+      status: 'unpaid',
+      subtotal: new Decimal(9000),
+      totalAmount: new Decimal(9000),
+      paidAmount: new Decimal(0),
+      outstandingAmount: new Decimal(9000),
+      items: [{ id: 'bi-1', amount: new Decimal(9000), type: 'deposit' }],
+      dormitory: { name: 'หอพัก A', taxId: null, address: null, phone: null },
+      tenant: { name: 'สมศักดิ์' },
+      room: { roomNumber: '101' },
+    };
+
     mockTx = {
+      $executeRaw: vi.fn().mockResolvedValue(1),
       bill: {
-        findFirst: vi.fn(),
+        findFirst: vi.fn().mockResolvedValue(null),
+        findUnique: vi.fn().mockImplementation(async ({ where }: any) => {
+          return mockBillDb;
+        }),
         count: vi.fn().mockResolvedValue(0),
-        create: vi.fn().mockImplementation(async ({ data }: any) => ({
-          id: 'bill-deposit-001',
-          ...data,
-        })),
+        create: vi.fn().mockImplementation(async ({ data }: any) => {
+          mockBillDb = {
+            id: 'bill-deposit-001',
+            ...data,
+            items: data.items?.create || [{ id: 'bi-1', amount: data.totalAmount, type: 'deposit' }],
+            dormitory: { name: 'หอพัก A' },
+            tenant: { name: 'สมศักดิ์' },
+            room: { roomNumber: '101' },
+          };
+          return mockBillDb;
+        }),
+        update: vi.fn().mockImplementation(async ({ where, data }: any) => {
+          mockBillDb = { ...mockBillDb, ...data };
+          return mockBillDb;
+        }),
       },
       billingCycle: {
         findFirst: vi.fn(),
@@ -23,6 +59,27 @@ describe('OWNER ROOMS R3.5 — Canonical Deposit Billing & Lifecycle Suite', () 
       payment: {
         create: vi.fn().mockImplementation(async ({ data }: any) => ({
           id: 'payment-deposit-001',
+          ...data,
+        })),
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'payment-deposit-001',
+          method: 'CASH',
+          paymentDate: new Date(),
+          reviewedAt: new Date(),
+        }),
+      },
+      paymentStatusHistory: {
+        create: vi.fn().mockResolvedValue({ id: 'psh-1' }),
+      },
+      billStatusHistory: {
+        create: vi.fn().mockResolvedValue({ id: 'bsh-1' }),
+      },
+      receiptSequence: {
+        upsert: vi.fn().mockResolvedValue({ lastValue: 1 }),
+      },
+      receipt: {
+        create: vi.fn().mockImplementation(async ({ data }: any) => ({
+          id: 'receipt-001',
           ...data,
         })),
       },
@@ -56,6 +113,34 @@ describe('OWNER ROOMS R3.5 — Canonical Deposit Billing & Lifecycle Suite', () 
 
       expect(resultNeg).toBeNull();
       expect(mockTx.bill.create).not.toHaveBeenCalled();
+    });
+
+    it('throws error when agreement identity invariant (contractId XOR provisionalRentalTermId) is violated', async () => {
+      // Both missing
+      await expect(
+        createDepositBillForAgreementInTx(mockTx, {
+          dormitoryId: 'dorm-1',
+          roomId: 'room-1',
+          agreementType: 'MONTHLY',
+          startDate: new Date('2026-08-01T00:00:00.000Z'),
+          depositAmount: 5000,
+          depositDeclaredStatus: 'UNPAID',
+        })
+      ).rejects.toThrow('createDepositBillForAgreementInTx requires exactly one agreement identity');
+
+      // Both present
+      await expect(
+        createDepositBillForAgreementInTx(mockTx, {
+          dormitoryId: 'dorm-1',
+          roomId: 'room-1',
+          agreementType: 'MONTHLY',
+          contractId: 'ctr-1',
+          provisionalRentalTermId: 'prt-1',
+          startDate: new Date('2026-08-01T00:00:00.000Z'),
+          depositAmount: 5000,
+          depositDeclaredStatus: 'UNPAID',
+        })
+      ).rejects.toThrow('createDepositBillForAgreementInTx requires exactly one agreement identity');
     });
 
     it('creates UNPAID deposit bill with 0 paidAmount and full outstandingAmount when depositDeclaredStatus is UNPAID', async () => {
@@ -99,7 +184,7 @@ describe('OWNER ROOMS R3.5 — Canonical Deposit Billing & Lifecycle Suite', () 
       expect(mockTx.payment.create).not.toHaveBeenCalled();
     });
 
-    it('creates PAID deposit bill with paidAmount=deposit, outstandingAmount=0, and CASH Payment record when depositDeclaredStatus is PAID', async () => {
+    it('settles through canonical recordCashPaymentInTx with Payment, Histories, and Receipt when depositDeclaredStatus is PAID', async () => {
       mockTx.billingCycle.findFirst.mockResolvedValue({
         id: 'cycle-2026-08',
         cycleCode: '2026-08',
@@ -121,20 +206,16 @@ describe('OWNER ROOMS R3.5 — Canonical Deposit Billing & Lifecycle Suite', () 
 
       expect(result).toBeDefined();
       expect(mockTx.bill.create).toHaveBeenCalledTimes(1);
+      expect(mockTx.bill.update).toHaveBeenCalledTimes(1);
 
-      const billCreateArg = mockTx.bill.create.mock.calls[0][0].data;
-      expect(billCreateArg.billKind).toBe('DEPOSIT');
-      expect(billCreateArg.status).toBe('paid');
-      expect(billCreateArg.paidAmount).toEqual(new Decimal(9000));
-      expect(billCreateArg.outstandingAmount).toEqual(new Decimal(0));
-      expect(billCreateArg.paidAt).toBeInstanceOf(Date);
-      expect(billCreateArg.provisionalRentalTermId).toBe('agr-term-202');
+      // Settle update on Bill
+      const billUpdateArg = mockTx.bill.update.mock.calls[0][0].data;
+      expect(billUpdateArg.status).toBe('PAID');
+      expect(billUpdateArg.paidAmount).toEqual(new Decimal(9000));
+      expect(billUpdateArg.outstandingAmount).toEqual(new Decimal(0));
+      expect(billUpdateArg.paidAt).toBeInstanceOf(Date);
 
-      // Bill Item
-      expect(billCreateArg.items.create[0].type).toBe('deposit');
-      expect(billCreateArg.items.create[0].amount).toEqual(new Decimal(9000));
-
-      // CASH Payment Evidence
+      // Canonical CASH Payment
       expect(mockTx.payment.create).toHaveBeenCalledTimes(1);
       const paymentArg = mockTx.payment.create.mock.calls[0][0].data;
       expect(paymentArg.billId).toBe('bill-deposit-001');
@@ -142,10 +223,27 @@ describe('OWNER ROOMS R3.5 — Canonical Deposit Billing & Lifecycle Suite', () 
       expect(paymentArg.status).toBe('APPROVED');
       expect(paymentArg.amount).toEqual(new Decimal(9000));
       expect(paymentArg.reviewedByUserId).toBe('00000000-0000-0000-0000-000000000001');
+
+      // Canonical PaymentStatusHistory
+      expect(mockTx.paymentStatusHistory.create).toHaveBeenCalledTimes(1);
+      const pshArg = mockTx.paymentStatusHistory.create.mock.calls[0][0].data;
+      expect(pshArg.toStatus).toBe('APPROVED');
+
+      // Canonical BillStatusHistory
+      expect(mockTx.billStatusHistory.create).toHaveBeenCalledTimes(1);
+      const bshArg = mockTx.billStatusHistory.create.mock.calls[0][0].data;
+      expect(bshArg.toStatus).toBe('PAID');
+
+      // Canonical Receipt
+      expect(mockTx.receipt.create).toHaveBeenCalledTimes(1);
+      const receiptArg = mockTx.receipt.create.mock.calls[0][0].data;
+      expect(receiptArg.snapshotData.total).toBe('9000.00');
+      expect(receiptArg.snapshotData.discount).toBe('0.00');
+      expect(receiptArg.receiptNumber).toMatch(/^RC-/);
     });
   });
 
-  describe('2. Idempotency & Lifecycle Invariants', () => {
+  describe('2. Idempotency, Start-Cycle Resolution & Bill Number Allocator', () => {
     it('returns existing deposit bill and does NOT create a duplicate bill on retry', async () => {
       const existingBill = {
         id: 'bill-existing-dep',
@@ -171,28 +269,26 @@ describe('OWNER ROOMS R3.5 — Canonical Deposit Billing & Lifecycle Suite', () 
       expect(mockTx.payment.create).not.toHaveBeenCalled();
     });
 
-    it('resolves deposit billing cycle from agreement start date (future reservation belongs to future cycle)', async () => {
-      // Agreement starting in September 2026
-      const septStart = new Date('2026-09-01T00:00:00.000Z');
-      mockTx.billingCycle.findFirst.mockResolvedValue({
-        id: 'cycle-2026-09',
-        cycleCode: '2026-09',
-        periodStart: septStart,
-        periodEnd: new Date('2026-09-30T23:59:59.999Z'),
+    it('throws DEPOSIT_BILLING_CYCLE_NOT_FOUND when exact start-date billing cycle does not exist (no fallback)', async () => {
+      // Missing start-cycle in September 2026
+      mockTx.billingCycle.findFirst.mockResolvedValue(null);
+
+      await expect(
+        createDepositBillForAgreementInTx(mockTx, {
+          dormitoryId: 'dorm-1',
+          roomId: 'room-1',
+          agreementType: 'MONTHLY',
+          contractId: 'agr-future-sept',
+          startDate: new Date('2026-09-01T00:00:00.000Z'),
+          depositAmount: 4800,
+          depositDeclaredStatus: 'UNPAID',
+        })
+      ).rejects.toMatchObject({
+        code: 'DEPOSIT_BILLING_CYCLE_NOT_FOUND',
+        statusCode: 409,
       });
 
-      await createDepositBillForAgreementInTx(mockTx, {
-        dormitoryId: 'dorm-1',
-        roomId: 'room-1',
-        agreementType: 'MONTHLY',
-        contractId: 'agr-future-sept',
-        startDate: septStart,
-        depositAmount: 4800,
-        depositDeclaredStatus: 'UNPAID',
-      });
-
-      const billCreateArg = mockTx.bill.create.mock.calls[0][0].data;
-      expect(billCreateArg.billingCycleId).toBe('cycle-2026-09');
+      expect(mockTx.bill.create).not.toHaveBeenCalled();
     });
 
     it('creates only ONE deposit bill for TERM agreement regardless of installments count', async () => {
@@ -211,7 +307,7 @@ describe('OWNER ROOMS R3.5 — Canonical Deposit Billing & Lifecycle Suite', () 
         provisionalRentalTermId: 'term-agr-555',
         startDate: new Date('2026-08-01T00:00:00.000Z'),
         depositAmount: 10000,
-        depositDeclaredStatus: 'PAID',
+        depositDeclaredStatus: 'UNPAID',
       });
 
       expect(result).toBeDefined();
@@ -219,6 +315,14 @@ describe('OWNER ROOMS R3.5 — Canonical Deposit Billing & Lifecycle Suite', () 
       const billData = mockTx.bill.create.mock.calls[0][0].data;
       expect(billData.items.create.length).toBe(1);
       expect(billData.items.create[0].amount).toEqual(new Decimal(10000));
+    });
+
+    it('generates sequential bill numbers and locks on dormitory/cycle scope', async () => {
+      mockTx.bill.findFirst.mockResolvedValueOnce({ billNumber: 'INV-2026-08-0042' });
+
+      const num = await generateNextBillNumberInTx(mockTx, 'dorm-1', '2026-08');
+      expect(num).toBe('INV-2026-08-0043');
+      expect(mockTx.$executeRaw).toHaveBeenCalled();
     });
   });
 });

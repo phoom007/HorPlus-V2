@@ -963,8 +963,9 @@ During Product Owner Manual UAT for Owner Rooms & Quick Add:
 #### Part H, I, J, K: Service Integration & Lifecycle Invariants
 - Integrated `createDepositBillForAgreementInTx` atomically within transactions:
   - `ProvisionalRentalTermService.createProvisionalTenantAndTerm`
-  - `ContractService.createContract` (active status)
-  - `ContractService.activateContract`
+  - `ContractService.activateContract` (committed boundary)
+  - `TenantRegistrationService.approveRegistration` (committed boundary)
+  - *Note*: Draft contracts (`createContract` with status 'draft') do NOT emit deposit bills until activation commitment.
 - Ensured tenant creation in `PENDING_APPROVAL` does not emit bills until approval commit.
 - Ensured subsequent cycle bill generations do not duplicate deposit items.
 
@@ -990,3 +991,60 @@ During Product Owner Manual UAT for Owner Rooms & Quick Add:
 | Backend Production Build | `npm --prefix server run build` | **0 Errors (PASS)** |
 | Line Ending & Whitespace Hygiene | `git -c core.whitespace=cr-at-eol diff --check` | **0 Warnings / Clean** |
 | Active Branch | `fix/owner-rooms-r35-deposit-first-cycle-billing-20260829` | **Ready for PO UAT** |
+
+---
+
+## 30. OWNER ROOMS R3.5a — Real Contract Deposit Commit, Canonical Cash Payment, Strict Start-Cycle Authority & Concurrency Verification (2026-08-29)
+
+### Context & Independent Review Findings
+During independent verification of R3.5:
+1. **Contract Deposit Commit Boundary**: Draft contracts must not generate bills; contract deposit obligations are authoritatively committed upon activation (`ContractService.activateContract`) and registration approval (`TenantRegistrationService.approveRegistration`).
+2. **Single Payment Authority Integration**: Settling a deposit bill as `PAID` must execute the exact canonical cash payment pipeline (`Payment`, `PaymentStatusHistory`, `BillStatusHistory`, `Bill` update, sequential `Receipt`) rather than ad-hoc status mutation.
+3. **Strict Start-Cycle Authority**: Removed all earliest-cycle fallbacks. A deposit bill may ONLY belong to the exact billing cycle containing the agreement's `startDate`. If no matching cycle exists, the system rejects with `DEPOSIT_BILLING_CYCLE_NOT_FOUND` (409) and atomically rolls back the entire agreement transaction.
+4. **Agreement Identity Strictness**: `createDepositBillForAgreementInTx` enforces `contractId XOR provisionalRentalTermId`.
+5. **Bill Number Concurrency Protection**: Serialized bill sequence allocation per dormitory/cycle namespace via transactional advisory lock (`generateNextBillNumberInTx`).
+6. **Diff Hygiene**: Restored native line endings across all files to eliminate whole-file churn.
+
+---
+
+### Surgical Implementations & Architectural Guarantees (R3.5a)
+
+#### Part A: Single Payment Authority Helper (`server/src/utils/payment-transaction.util.ts`)
+- Extracted canonical in-transaction payment logic:
+  - `recordCashPaymentInTx(tx, { dormitoryId, billId, amount, userId, idempotencyKey?, paymentDate? })`:
+    - Revalidates bill existence, dormitory ownership, and status.
+    - Creates `Payment` (`method: 'CASH', status: 'APPROVED'`).
+    - Creates `PaymentStatusHistory` (`toStatus: 'APPROVED'`).
+    - Creates `BillStatusHistory` (`toStatus: 'PAID'`).
+    - Updates `Bill` (`status: 'PAID', paidAmount: submitAmount, outstandingAmount: 0`).
+    - Generates locked sequential `Receipt` (`RC-{YYYYMM}-{NORMALIZED_ROOM_NO}-{SEQUENCE}`).
+- Delegated `PaymentService.recordCash` and `PaymentService.generateReceiptTx` to use these shared transactional helpers.
+
+#### Part B: Authoritative Contract Commit Boundary (`server/src/services/contract.service.ts` & `tenant-registration.service.ts`)
+- Extended `ActivateContractSchema` with `depositDeclaredStatus: z.enum(['PAID', 'UNPAID']).optional().nullable()`.
+- In `ContractService.activateContract`:
+  - After room availability lock and occupancy synchronization, executes `createDepositBillForAgreementInTx` inside the transaction when `depositAmount > 0`.
+- In `TenantRegistrationService.approveRegistration`:
+  - Executes `createDepositBillForAgreementInTx` atomically upon registration approval.
+- `ContractService.createContract` creates draft contracts without financial obligations (0 deposit bills).
+
+#### Part C: Canonical Deposit Billing Utility (`server/src/utils/deposit-billing.util.ts`)
+- **Strict Identity Invariant**: Requires exactly one agreement identity (`contractId XOR provisionalRentalTermId`).
+- **Strict Start-Cycle Authority**: Resolves cycle by `startDate` range or cycle code. Fails with `DEPOSIT_BILLING_CYCLE_NOT_FOUND` (409) if missing; zero silent fallbacks.
+- **Advisory-Locked Bill Number Allocator**: Serialized via `pg_advisory_xact_lock(hashtext('bill_number:' + dormitoryId + ':' + cycleCode))`.
+- **Single Payment Authority Settlement**: Issues UNPAID bill first, then invokes `recordCashPaymentInTx` if declared `PAID`.
+
+---
+
+### Verification Matrix (R3.5a)
+
+| Test / Check Suite | Target Command / Path | Result |
+|---|---|---|
+| Real PostgreSQL Deposit Integration Suite (8 Scenarios) | `npm --prefix server test -- src/__tests__/integration/owner-rooms-r35a-deposit-integration.test.ts` | **8 / 8 PASS (100%)** |
+| Unit Test Suite (Deposit Billing & Lifecycle) | `npm --prefix server test -- src/__tests__/unit/owner-rooms-r35-deposit-billing.test.ts` | **8 / 8 PASS (100%)** |
+| Frontend Deposit & Agreement Lifecycle Suite | `npx vitest run src/tests/owner-rooms-r2-cycle-deposits.test.tsx --environment happy-dom` | **118 / 118 PASS (100%)** |
+| Frontend API Contract & Normalizer Suite | `npx vitest run src/tests/owner-rooms-api-contract-uat-r1.test.tsx --environment happy-dom` | **9 / 9 PASS (100%)** |
+| Backend TypeScript Build | `npm --prefix server run build` | **0 Errors (PASS)** |
+| Frontend Vite Production Build | `npm run build` | **0 Errors (PASS)** |
+| Frontend TypeScript Check | `npm run lint` | **0 Errors (PASS)** |
+| Line Ending & Whitespace Hygiene | `git -c core.whitespace=cr-at-eol diff --check` | **0 Warnings / Clean** |

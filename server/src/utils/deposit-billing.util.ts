@@ -1,122 +1,174 @@
 import { Prisma } from '@prisma/client';
-import { toBangkokDateString } from './calendar-date.util.js';
-import { toDecimal, isZeroDecimal, formatDecimal } from './decimal-math.util.js';
+import { recordCashPaymentInTx } from './payment-transaction.util.js';
 
 export interface CreateDepositBillInput {
   dormitoryId: string;
   roomId: string;
-  tenantId: string;
-  startDate: Date | string;
-  depositAmount: Prisma.Decimal | number | string;
-  depositDeclaredStatus?: 'PAID' | 'UNPAID' | string | null;
+  tenantId?: string | null;
   contractId?: string | null;
   provisionalRentalTermId?: string | null;
+  agreementType: 'MONTHLY' | 'TERM' | 'DAILY';
+  startDate: Date | string;
+  depositAmount: number | string | Prisma.Decimal;
+  depositDeclaredStatus?: 'PAID' | 'UNPAID' | null;
   actorUserId?: string | null;
 }
 
 /**
- * Creates exactly ONE deposit bill for an agreement (Contract or ProvisionalRentalTerm)
- * in the same transaction as agreement commitment.
- *
- * Rules:
- * 1. If depositAmount <= 0, no bill is created.
- * 2. Idempotent: checks if a deposit bill already exists for the agreement before creating.
- * 3. Deposit billingCycleId is resolved from agreement startDate (canonical period range or YYYY-MM code).
- * 4. UNPAID declaration creates an issued unpaid bill (status = 'unpaid', paidAmount = 0, outstanding = depositAmount).
- * 5. PAID declaration creates a settled bill (status = 'paid', paidAmount = depositAmount, outstanding = 0)
- *    and records canonical CASH payment evidence.
+ * Format Date to YYYY-MM-DD in Asia/Bangkok timezone
+ */
+export function toBangkokDateString(date: Date): string {
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Bangkok',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+  return formatter.format(date);
+}
+
+function formatDecimal(val: number | string | Prisma.Decimal): string {
+  const num = typeof val === 'object' && 'toNumber' in val ? (val as Prisma.Decimal).toNumber() : Number(val);
+  return (isNaN(num) ? 0 : num).toFixed(2);
+}
+
+/**
+ * Transaction-safe bill number allocator serialized per dormitory & cycle
+ * Format: INV-{cycleCode}-{seq} (e.g. INV-2026-08-0001)
+ */
+export async function generateNextBillNumberInTx(
+  tx: any,
+  dormitoryId: string,
+  cycleCode: string
+): Promise<string> {
+  const prefix = `INV-${cycleCode}-`;
+
+  // Transaction-safe dormitory & cycle namespace advisory lock
+  if (tx.$executeRaw) {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${'bill_number:' + dormitoryId + ':' + cycleCode}))`;
+  }
+
+  const lastBill = await tx.bill.findFirst({
+    where: {
+      dormitoryId,
+      billNumber: { startsWith: prefix },
+    },
+    orderBy: { billNumber: 'desc' },
+    select: { billNumber: true },
+  });
+
+  let nextSeq = 1;
+  if (lastBill?.billNumber) {
+    const match = lastBill.billNumber.slice(prefix.length).match(/^(\d+)/);
+    if (match) {
+      nextSeq = parseInt(match[1], 10) + 1;
+    }
+  } else {
+    const count = await tx.bill.count({
+      where: { dormitoryId, billNumber: { startsWith: prefix } },
+    });
+    nextSeq = count + 1;
+  }
+
+  return `${prefix}${String(nextSeq).padStart(4, '0')}`;
+}
+
+/**
+ * Creates exactly ONE agreement-linked Deposit Bill in the agreement start cycle.
+ * Guarantees:
+ * 1. depositAmount <= 0 => returns null
+ * 2. Identity strictness: requires contractId XOR provisionalRentalTermId
+ * 3. Idempotency: returns existing bill if already generated
+ * 4. Strict Start-Cycle Authority: fails with DEPOSIT_BILLING_CYCLE_NOT_FOUND if exact cycle does not exist
+ * 5. Single Payment Authority: settles through canonical recordCashPaymentInTx when declared PAID
  */
 export async function createDepositBillForAgreementInTx(
-  tx: Prisma.TransactionClient,
+  tx: any,
   input: CreateDepositBillInput
-) {
-  const depAmtDec = toDecimal(String(input.depositAmount || '0.00'));
-  if (isZeroDecimal(depAmtDec) || depAmtDec.lessThan(0)) {
+): Promise<any | null> {
+  const depAmtDec = new Prisma.Decimal(formatDecimal(input.depositAmount || 0));
+  if (depAmtDec.isZero() || depAmtDec.isNegative()) {
     return null;
   }
 
-  // 1. Idempotency check: Do not create a second deposit bill for the same agreement
+  // 1. Agreement Identity Strictness (contractId XOR provisionalRentalTermId)
+  const hasContract = Boolean(input.contractId);
+  const hasProvisional = Boolean(input.provisionalRentalTermId);
+  if ((hasContract && hasProvisional) || (!hasContract && !hasProvisional)) {
+    throw new Error('createDepositBillForAgreementInTx requires exactly one agreement identity (contractId XOR provisionalRentalTermId)');
+  }
+
+  // 2. Idempotency Check: search existing DEPOSIT bill on this agreement
   const existingBill = await tx.bill.findFirst({
     where: {
       dormitoryId: input.dormitoryId,
       billKind: 'DEPOSIT',
-      status: { notIn: ['cancelled', 'void'] },
-      ...(input.contractId ? { contractId: input.contractId } : {}),
-      ...(input.provisionalRentalTermId ? { provisionalRentalTermId: input.provisionalRentalTermId } : {}),
+      ...(input.contractId ? { contractId: input.contractId } : { provisionalRentalTermId: input.provisionalRentalTermId }),
     },
+    include: { items: true },
   });
 
   if (existingBill) {
     return existingBill;
   }
 
-  // 2. Resolve agreement start billing cycle (Deposit Origin Cycle)
-  const startD = typeof input.startDate === 'string' ? new Date(input.startDate) : input.startDate;
+  // 3. Strict Start-Cycle Authority
+  const startD = new Date(input.startDate);
+  const cycleCode = toBangkokDateString(startD).slice(0, 7);
 
-  // Match cycle by period range
   let cycle = await tx.billingCycle.findFirst({
     where: {
       dormitoryId: input.dormitoryId,
       periodStart: { lte: startD },
       periodEnd: { gte: startD },
     },
-    orderBy: { periodStart: 'desc' },
   });
 
-  // Match cycle by cycleCode YYYY-MM in Bangkok timezone
-  if (!cycle) {
-    const cycleCode = toBangkokDateString(startD).slice(0, 7);
-    cycle = await tx.billingCycle.findFirst({
-      where: { dormitoryId: input.dormitoryId, cycleCode },
-    });
-  }
-
-  // Fallback to earliest / active cycle if no exact cycle matched
   if (!cycle) {
     cycle = await tx.billingCycle.findFirst({
-      where: { dormitoryId: input.dormitoryId },
-      orderBy: { periodStart: 'asc' },
+      where: {
+        dormitoryId: input.dormitoryId,
+        cycleCode,
+      },
     });
   }
 
   if (!cycle) {
-    return null;
+    const err = new Error('ไม่พบรอบบิลที่ตรงกับวันเริ่มสัญญา กรุณาสร้างรอบบิลก่อนยืนยันการเช่า');
+    (err as any).code = 'DEPOSIT_BILLING_CYCLE_NOT_FOUND';
+    (err as any).statusCode = 409;
+    throw err;
   }
 
-  // 3. Generate Bill Number
-  const cycleCode = cycle.cycleCode || toBangkokDateString(startD).slice(0, 7);
-  const count = await tx.bill.count({
-    where: { dormitoryId: input.dormitoryId, billingCycleId: cycle.id },
-  });
-  const billSeq = (count + 1).toString().padStart(4, '0');
-  const billNumber = `INV-${cycleCode}-${billSeq}`;
+  // 4. Generate transaction-safe Bill Number
+  const billNumber = await generateNextBillNumberInTx(tx, input.dormitoryId, cycle.cycleCode || cycleCode);
 
-  // 4. Status and settlement
+  // 5. Status and settlement dates
   const isPaid = (input.depositDeclaredStatus || '').toUpperCase() === 'PAID';
   const billingDate = cycle.billingDate ? new Date(cycle.billingDate) : startD;
   const dueDate = cycle.dueDate ? new Date(cycle.dueDate) : startD;
   const safeActorId = input.actorUserId && /^[0-9a-fA-F-]{36}$/.test(input.actorUserId) ? input.actorUserId : null;
   const now = new Date();
 
-  // 5. Create Deposit Bill + BillItem
+  // 6. Create issued Deposit Bill in UNPAID status
   const bill = await tx.bill.create({
     data: {
       dormitoryId: input.dormitoryId,
       billingCycleId: cycle.id,
       roomId: input.roomId,
-      tenantId: input.tenantId,
+      tenantId: input.tenantId || null,
       contractId: input.contractId || null,
       provisionalRentalTermId: input.provisionalRentalTermId || null,
       billKind: 'DEPOSIT',
       billNumber,
-      status: isPaid ? 'paid' : 'unpaid',
+      status: 'unpaid',
       billingDate,
       dueDate,
       subtotal: new Prisma.Decimal(formatDecimal(depAmtDec)),
       totalAmount: new Prisma.Decimal(formatDecimal(depAmtDec)),
-      paidAmount: isPaid ? new Prisma.Decimal(formatDecimal(depAmtDec)) : new Prisma.Decimal('0.00'),
-      outstandingAmount: isPaid ? new Prisma.Decimal('0.00') : new Prisma.Decimal(formatDecimal(depAmtDec)),
-      paidAt: isPaid ? now : null,
+      paidAmount: new Prisma.Decimal('0.00'),
+      outstandingAmount: new Prisma.Decimal(formatDecimal(depAmtDec)),
+      paidAt: null,
       generatedByUserId: safeActorId,
       generatedAt: now,
       items: {
@@ -135,20 +187,19 @@ export async function createDepositBillForAgreementInTx(
     include: { items: true },
   });
 
-  // 6. Record canonical payment evidence if declared PAID
+  // 7. Settle through canonical in-transaction payment helper if declared PAID
   if (isPaid) {
-    await tx.payment.create({
-      data: {
-        dormitoryId: input.dormitoryId,
-        billId: bill.id,
-        tenantId: input.tenantId,
-        amount: new Prisma.Decimal(formatDecimal(depAmtDec)),
-        method: 'CASH',
-        status: 'APPROVED',
-        paymentDate: now,
-        reviewedAt: now,
-        reviewedByUserId: safeActorId,
-      },
+    await recordCashPaymentInTx(tx, {
+      dormitoryId: input.dormitoryId,
+      billId: bill.id,
+      amount: formatDecimal(depAmtDec),
+      userId: safeActorId,
+      paymentDate: now,
+    });
+
+    return await tx.bill.findUnique({
+      where: { id: bill.id },
+      include: { items: true },
     });
   }
 

@@ -245,7 +245,7 @@ export class ContractService {
   public async activateContract(
     id: string,
     dormitoryId: string,
-    payload: { ownerSignature?: string | null; tenantSignature?: string | null; selectedInstallments?: number | null },
+    payload: { ownerSignature?: string | null; tenantSignature?: string | null; selectedInstallments?: number | null; depositDeclaredStatus?: 'PAID' | 'UNPAID' | null },
     actorUserId?: string
   ) {
     const contract = await this.getContractById(id, dormitoryId);
@@ -475,6 +475,26 @@ export class ContractService {
               startedAt: contract.startDate || now,
               status: 'ACTIVE',
             },
+          });
+        }
+
+        // 8.6. Create one-time Deposit Bill for committed Contract
+        const depAmt = contract.depositAmount !== null && contract.depositAmount !== undefined
+          ? Number(contract.depositAmount)
+          : Number(snapshot.resolvedDeposit || 0);
+
+        if (depAmt > 0) {
+          const declaredStatus = payload.depositDeclaredStatus || 'UNPAID';
+          await createDepositBillForAgreementInTx(tx, {
+            dormitoryId,
+            roomId: contract.roomId,
+            tenantId: contract.tenantId,
+            contractId: id,
+            agreementType: isTermRent ? 'TERM' : 'MONTHLY',
+            startDate: contract.startDate || now,
+            depositAmount: depAmt,
+            depositDeclaredStatus: declaredStatus,
+            actorUserId: safeActorUserId,
           });
         }
 

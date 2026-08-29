@@ -226,7 +226,7 @@ export const DailyStayApprovalModal: React.FC<DailyStayApprovalModalProps> = ({
                           : 'bg-white border-slate-200 text-slate-500'
                       }`}
                     >
-                      จ่ายแล้ว
+                      ชำระแล้ว
                     </button>
                     <button
                       type="button"
@@ -237,7 +237,7 @@ export const DailyStayApprovalModal: React.FC<DailyStayApprovalModalProps> = ({
                           : 'bg-white border-slate-200 text-slate-500'
                       }`}
                     >
-                      ยังไม่จ่าย
+                      รอชำระ
                     </button>
                   </div>
                 </div>

@@ -322,9 +322,10 @@ export class ProvisionalRentalTermService {
         dormitoryId,
         roomId: data.roomId,
         tenantId: tenant.id,
+        agreementType: data.rentalType,
         startDate: data.startDate,
         depositAmount: provisionalTerm.depositAmount || '0.00',
-        depositDeclaredStatus: data.depositDeclaredStatus,
+        depositDeclaredStatus: (data.depositDeclaredStatus as any) === 'PAID' ? 'PAID' : 'UNPAID',
         provisionalRentalTermId: provisionalTerm.id,
         actorUserId: userId,
       });

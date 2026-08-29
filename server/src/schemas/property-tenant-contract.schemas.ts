@@ -131,6 +131,7 @@ export const UpdateContractSchema = CreateContractSchema.partial().extend({
 export const ActivateContractSchema = z.object({
   ownerSignature: z.string().optional().nullable(),
   tenantSignature: z.string().optional().nullable(),
+  depositDeclaredStatus: z.enum(['PAID', 'UNPAID']).optional().nullable(),
 });
 
 export const ExtendContractSchema = z.object({

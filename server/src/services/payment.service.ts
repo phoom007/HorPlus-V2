@@ -1,3 +1,4 @@
+import { recordCashPaymentInTx, generateReceiptInTx } from '../utils/payment-transaction.util.js';
 import { PrismaClient, Payment, Bill, Receipt } from '@prisma/client';
 import { Decimal } from 'decimal.js';
 import { idempotencyService } from './idempotency.service.js';
@@ -149,73 +150,13 @@ export class PaymentService {
       payload: { billId: input.billId, amount: input.amount },
       fn: async () => {
         return await this.client.$transaction(async (tx) => {
-          const bill = await tx.bill.findUnique({
-            where: { id: input.billId },
-            include: { items: true }
+          return await recordCashPaymentInTx(tx, {
+            dormitoryId: input.dormitoryId,
+            billId: input.billId,
+            amount: input.amount,
+            userId: input.userId,
+            idempotencyKey: input.idempotencyKey,
           });
-          if (!bill) throw new Error('NOT_FOUND');
-          if (bill.dormitoryId !== input.dormitoryId) throw new Error('FORBIDDEN');
-          if (bill.status === 'PAID') throw new Error('ALREADY_PAID');
-
-          Decimal.set({ rounding: Decimal.ROUND_HALF_UP });
-          const totalAmount = bill.totalAmount !== undefined && bill.totalAmount !== null
-            ? new Decimal(bill.totalAmount)
-            : bill.items.reduce((sum, item) => sum.plus(new Decimal(item.amount)), new Decimal(0));
-          const submitAmount = new Decimal(input.amount);
-          if (!totalAmount.equals(submitAmount)) throw new Error('UNSUPPORTED_AMOUNT');
-
-          const now = new Date();
-
-          const payment = await tx.payment.create({
-            data: {
-              dormitoryId: input.dormitoryId,
-              billId: bill.id,
-              tenantId: bill.tenantId,
-              method: 'CASH',
-              amount: submitAmount,
-              status: 'APPROVED',
-              paymentDate: now,
-              reviewedByUserId: input.userId,
-              reviewedAt: now,
-              idempotencyKey: input.idempotencyKey
-            }
-          });
-
-          await tx.paymentStatusHistory.create({
-            data: {
-              dormitoryId: input.dormitoryId,
-              paymentId: payment.id,
-              fromStatus: null,
-              toStatus: 'APPROVED',
-              changedByUserId: input.userId
-            }
-          });
-
-          const prePaymentStatus = bill.status;
-          await tx.billStatusHistory.create({
-            data: {
-              dormitoryId: input.dormitoryId,
-              billId: bill.id,
-              fromStatus: prePaymentStatus,
-              toStatus: 'PAID',
-              changedByUserId: input.userId
-            }
-          });
-
-          await tx.bill.update({
-            where: { id: bill.id },
-            data: {
-              status: 'PAID',
-              previousStatus: prePaymentStatus,
-              paidAt: now,
-              paidAmount: submitAmount,
-              outstandingAmount: new Decimal(0)
-            }
-          });
-
-          await this.generateReceiptTx(tx, payment.id, input.dormitoryId, bill.id, input.userId);
-
-          return payment;
         });
       }
     });

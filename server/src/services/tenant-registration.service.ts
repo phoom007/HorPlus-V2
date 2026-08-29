@@ -1,3 +1,4 @@
+import { createDepositBillForAgreementInTx } from '../utils/deposit-billing.util.js';
 import { getPrismaClient } from '../db/prisma.js';
 import { logger } from '../config/logger.js';
 import { AppError } from '../types/index.js';
@@ -730,6 +731,21 @@ export class TenantRegistrationService {
           currentContractId: contractId,
         },
       });
+
+      // 5.5. Create one-time Deposit Bill for approved registration contract
+      if (Number(payload.depositAmount) > 0) {
+        await createDepositBillForAgreementInTx(tx, {
+          dormitoryId,
+          roomId: req.requestedRoomId,
+          tenantId: tenant.id,
+          contractId: contractId,
+          agreementType: 'MONTHLY',
+          startDate: new Date(payload.startDate),
+          depositAmount: payload.depositAmount,
+          depositDeclaredStatus: (payload as any).depositDeclaredStatus || 'UNPAID',
+          actorUserId: safeActorId,
+        });
+      }
 
       // 6. Update Registration Request status to approved
       const updatedReq = await tx.tenantRegistrationRequest.update({
