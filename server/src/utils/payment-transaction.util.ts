@@ -19,6 +19,12 @@ export async function recordCashPaymentInTx(
   tx: any,
   input: RecordCashPaymentInTxInput
 ) {
+  // 1. Acquire transaction-scoped row lock on Bill
+  if (typeof tx.$executeRaw === 'function') {
+    await tx.$executeRaw`SELECT "id" FROM "bills" WHERE "id" = ${input.billId}::uuid FOR UPDATE`;
+  }
+
+  // 2. Re-read locked Bill with active payments and line items
   const bill = await tx.bill.findUnique({
     where: { id: input.billId },
     include: {
@@ -31,6 +37,12 @@ export async function recordCashPaymentInTx(
   if (!bill) throw new Error('NOT_FOUND');
   if (bill.dormitoryId !== input.dormitoryId) throw new Error('FORBIDDEN');
   if (bill.status === 'PAID' || bill.status === 'paid') throw new Error('ALREADY_PAID');
+
+  // Active Payment Guard: check APPROVED, PENDING, UNDER_REVIEW
+  const hasApprovedPayment = bill.Payment?.some((p: any) => p.status === 'APPROVED');
+  if (hasApprovedPayment) {
+    throw new Error('ALREADY_PAID');
+  }
 
   const hasActivePendingPayment = bill.Payment?.some(
     (p: any) => p.status === 'PENDING' || p.status === 'UNDER_REVIEW'

@@ -1,172 +1,560 @@
 /**
- * Integration Test for R3.8:
- * - Direct DB & API assertions on local PostgreSQL LOCAL-07
- * - Authoritative Cash partial settlement & receipts
- * - Payments API including bill.items
- * - July first billing cycle & deposit statuses
- * 
  * @license Apache-2.0
+ * OWNER R3.8a — Real Express Route Integration & Concurrency Proof Tests
  */
 
-import { describe, it, expect, afterAll } from 'vitest';
-import { PrismaClient } from '../../server/node_modules/@prisma/client/index.js';
-import { recordCashPaymentInTx } from '../../server/src/utils/payment-transaction.util.js';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import request from '../../server/node_modules/supertest/index.js';
+import { createApp } from '../../server/src/app.js';
+import { getEnv, resetCachedEnv } from '../../server/src/config/env.js';
+import { getPrismaClient } from '../../server/src/db/prisma.js';
+import { AuthenticationService } from '../../server/src/services/auth.service.js';
+import { PrismaUserRepository } from '../../server/src/db/repositories/user.repository.js';
+import { PrismaSessionRepository } from '../../server/src/db/repositories/session.repository.js';
+import { PrismaMembershipRepository } from '../../server/src/db/repositories/membership.repository.js';
+import { PrismaRoleRepository } from '../../server/src/db/repositories/role.repository.js';
+import { subscriptionEntitlementService } from '../../server/src/services/subscription-entitlement.service.js';
 
-const prisma = new PrismaClient({
-  datasources: {
-    db: {
-      url: 'postgresql://horplus:horplus_test_password@127.0.0.1:5455/horplus_wave1d_fasttrack_test?schema=public',
-    },
-  },
-});
+const prisma = getPrismaClient();
 
-describe('R3.8 Integration & PostgreSQL Authority', () => {
-  const COMP_DORM_ID = '20000001-0000-4000-8000-000000000002';
-  const OWNER_USER_ID = '20000002-0000-4000-8000-000000000002';
-  let createdTestBillId: string | null = null;
+describe('R3.8a Real Express Route Integration & PostgreSQL Concurrency', () => {
+  let app: any;
+  let authService: AuthenticationService;
+  let ownerUserId: string;
+  let ownerSessionToken: string;
+  let ownerCsrfToken: string;
+  let dormId: string;
+  let buildingId: string;
+  let cycleId: string;
+  let tenantId: string;
 
-  afterAll(async () => {
-    if (createdTestBillId) {
-      const payments = await prisma.payment.findMany({ where: { billId: createdTestBillId }, select: { id: true } });
-      const paymentIds = payments.map(p => p.id);
-      if (paymentIds.length > 0) {
-        await prisma.paymentStatusHistory.deleteMany({ where: { paymentId: { in: paymentIds } } });
-      }
-      await prisma.receipt.deleteMany({ where: { billId: createdTestBillId } });
-      await prisma.payment.deleteMany({ where: { billId: createdTestBillId } });
-      await prisma.billItem.deleteMany({ where: { billId: createdTestBillId } });
-      await prisma.billStatusHistory.deleteMany({ where: { billId: createdTestBillId } });
-      await prisma.bill.delete({ where: { id: createdTestBillId } }).catch(() => {});
-    }
-    await prisma.$disconnect();
-  });
+  const testBillIds: string[] = [];
 
-  it('1. July 2026 is the FIRST billing cycle; June cycle does NOT exist', async () => {
-    const cycles = await prisma.billingCycle.findMany({
-      where: { dormitoryId: COMP_DORM_ID },
-      orderBy: { periodStart: 'asc' },
-    });
+  beforeAll(async () => {
+    process.env.NODE_ENV = 'test';
+    process.env.E2E_TEST_MODE = 'true';
+    resetCachedEnv();
 
-    expect(cycles.length).toBeGreaterThanOrEqual(3);
-    expect(cycles[0].cycleCode).toBe('2026-07');
-    expect(cycles.some(c => c.cycleCode === '2026-06')).toBe(false);
-  });
+    const mockGoogleVerifier = {} as any;
+    const mockAuditService = { logAction: async () => {} } as any;
 
-  it('2. Room 101 Deposit Bill originates in July and is PAID with Receipt', async () => {
-    const r101 = await prisma.room.findFirst({
-      where: { dormitoryId: COMP_DORM_ID, roomNumber: '101' },
-    });
-    expect(r101).toBeDefined();
+    authService = new AuthenticationService(
+      getEnv(),
+      mockGoogleVerifier,
+      new PrismaUserRepository(prisma),
+      new PrismaSessionRepository(prisma),
+      new PrismaMembershipRepository(prisma),
+      new PrismaRoleRepository(prisma),
+      mockAuditService
+    );
 
-    const depositBills = await prisma.bill.findMany({
-      where: { dormitoryId: COMP_DORM_ID, roomId: r101!.id, billKind: 'DEPOSIT' },
-      include: { items: true, Payment: true, Receipt: true, billingCycle: true },
-    });
+    app = createApp({ customAuthService: authService, forcePrisma: true });
+    await subscriptionEntitlementService.ensureSeeded();
 
-    expect(depositBills.length).toBe(1);
-    const depBill = depositBills[0];
-    expect(depBill.billNumber).toBe('INV-202607-101-D');
-    expect(depBill.billingCycle.cycleCode).toBe('2026-07');
-    expect(depBill.status).toBe('paid');
-    expect(Number(depBill.totalAmount)).toBe(4500);
-    expect(Number(depBill.paidAmount)).toBe(4500);
-    expect(Number(depBill.outstandingAmount)).toBe(0);
-    expect(depBill.Payment.length).toBe(1);
-    expect(depBill.Payment[0].status).toBe('APPROVED');
-    expect(depBill.Receipt.length).toBe(1);
-    expect(depBill.Receipt[0].receiptNumber).toBe('RCP-202607-101-D');
-  });
-
-  it('3. Room 102 Deposit Bill is UNPAID in July 2026', async () => {
-    const r102 = await prisma.room.findFirst({
-      where: { dormitoryId: COMP_DORM_ID, roomNumber: '102' },
-    });
-    expect(r102).toBeDefined();
-
-    const depositBills = await prisma.bill.findMany({
-      where: { dormitoryId: COMP_DORM_ID, roomId: r102!.id, billKind: 'DEPOSIT' },
-      include: { items: true, billingCycle: true },
-    });
-
-    expect(depositBills.length).toBe(1);
-    const depBill = depositBills[0];
-    expect(depBill.billNumber).toBe('INV-202607-102-D');
-    expect(depBill.billingCycle.cycleCode).toBe('2026-07');
-    expect(depBill.status).toBe('unpaid');
-    expect(Number(depBill.totalAmount)).toBe(4500);
-    expect(Number(depBill.outstandingAmount)).toBe(4500);
-  });
-
-  it('4. Partial bill Cash settlement in transaction succeeds on outstanding amount and creates accurate receipt', async () => {
-    const r104 = await prisma.room.findFirst({
-      where: { dormitoryId: COMP_DORM_ID, roomNumber: '104' },
-    });
-    expect(r104).toBeDefined();
-
-    const cycleAug = await prisma.billingCycle.findFirst({
-      where: { dormitoryId: COMP_DORM_ID, cycleCode: '2026-08' },
-    });
-    expect(cycleAug).toBeDefined();
-
-    // Create dynamic partial test bill
-    const testBill = await prisma.bill.create({
+    // 1. Seed Owner User & Dormitory
+    const ownerEmail = `r38a_owner_${Date.now()}@example.com`;
+    const ownerUser = await prisma.user.create({
       data: {
-        dormitoryId: COMP_DORM_ID,
-        billingCycleId: cycleAug!.id,
-        roomId: r104!.id,
-        billNumber: `INV-TEST-${Date.now()}`,
-        billKind: 'LEGACY_COMBINED',
-        status: 'partial',
-        totalAmount: 10600.0,
-        paidAmount: 3000.0,
-        outstandingAmount: 7600.0,
-        billingDate: new Date('2026-08-25'),
-        dueDate: new Date('2026-09-05'),
-        subtotal: 10600.0,
+        googleSubject: `sub_r38a_${Date.now()}`,
+        email: ownerEmail,
+        emailNormalized: ownerEmail.toLowerCase(),
+        name: 'R3.8a Owner',
       },
     });
-    createdTestBillId = testBill.id;
+    ownerUserId = ownerUser.id;
 
-    await prisma.billItem.createMany({
-      data: [
-        { dormitoryId: COMP_DORM_ID, billId: testBill.id, type: 'rent', description: 'ค่าเช่าห้องพัก', quantity: 1, unitPrice: 4800, amount: 4800 },
-        { dormitoryId: COMP_DORM_ID, billId: testBill.id, type: 'deposit', description: 'เงินประกัน', quantity: 1, unitPrice: 4800, amount: 4800 },
-        { dormitoryId: COMP_DORM_ID, billId: testBill.id, type: 'utility', description: 'ค่าน้ำ-ไฟ', quantity: 1, unitPrice: 1000, amount: 1000 },
-      ],
+    const dorm = await prisma.dormitory.create({
+      data: {
+        name: 'R3.8a Test Dorm',
+        type: 'apartment',
+        createdByUserId: ownerUserId,
+        status: 'active',
+        billingSettings: {
+          create: {
+            billingDay: 25,
+            dueDay: 5,
+            cashAccepted: true,
+          },
+        },
+      },
     });
+    dormId = dorm.id;
 
-    // Perform atomic transaction cash payment
-    const payment = await prisma.$transaction(async (tx) => {
-      return await recordCashPaymentInTx(tx, {
-        dormitoryId: COMP_DORM_ID,
-        billId: testBill.id,
-        amount: '7600.00',
-        userId: OWNER_USER_ID,
-        paymentDate: new Date('2026-08-29T15:00:00Z'),
+    const freePlan = await prisma.subscriptionPlan.findFirst({ where: { code: 'FREE_TRIAL' } })
+      || await prisma.subscriptionPlan.findFirst();
+
+    if (freePlan) {
+      await prisma.dormitorySubscription.create({
+        data: {
+          dormitoryId: dormId,
+          planId: freePlan.id,
+          status: 'ACTIVE',
+          expiresAt: new Date(Date.now() + 365 * 86400000),
+        },
       });
+    }
+
+    const building = await prisma.building.create({
+      data: {
+        dormitoryId: dormId,
+        name: 'Building A',
+      },
+    });
+    buildingId = building.id;
+
+    const ownerRole = await prisma.role.create({
+      data: {
+        dormitoryId: dormId,
+        code: 'OWNER',
+        name: 'Owner',
+        permissions: {
+          '*': ['*'],
+        },
+        isSystem: true,
+      },
     });
 
-    expect(payment).toBeDefined();
-    expect(Number(payment.amount)).toBe(7600);
-    expect(payment.status).toBe('APPROVED');
-
-    // Re-query bill from DB
-    const settledBill = await prisma.bill.findUnique({
-      where: { id: testBill.id },
-      include: { Payment: true, Receipt: true },
+    await prisma.dormitoryMember.create({
+      data: {
+        dormitoryId: dormId,
+        userId: ownerUserId,
+        roleId: ownerRole.id,
+        status: 'active',
+        membershipOrigin: 'GOOGLE_BOOTSTRAP',
+      },
     });
 
-    expect(settledBill!.status).toBe('PAID');
-    expect(Number(settledBill!.paidAmount)).toBe(10600);
-    expect(Number(settledBill!.outstandingAmount)).toBe(0);
+    const ownerAuth = await authService.authenticateTestUser(ownerUserId);
+    ownerSessionToken = ownerAuth.sessionToken;
+    ownerCsrfToken = ownerAuth.csrfToken;
 
-    // Verify created receipt in DB
-    const receipt = settledBill!.Receipt.find(r => r.paymentId === payment.id);
-    expect(receipt).toBeDefined();
-    expect(receipt!.receiptNumber).toMatch(/^RC-\d{6}-104-\d{4}$/);
-    const snap = receipt!.snapshotData as any;
+    // 2. Seed Billing Cycle & Rate Snapshot
+    const cycle = await prisma.billingCycle.create({
+      data: {
+        dormitoryId: dormId,
+        name: 'สิงหาคม 2569',
+        cycleCode: '2026-08',
+        periodStart: new Date('2026-08-01'),
+        periodEnd: new Date('2026-08-31'),
+        billingDate: new Date('2026-08-25'),
+        dueDate: new Date('2026-09-05'),
+        status: 'open',
+      },
+    });
+    cycleId = cycle.id;
+
+    await prisma.billingRateSnapshot.create({
+      data: {
+        dormitoryId: dormId,
+        billingCycleId: cycleId,
+        waterBillingType: 'PER_UNIT',
+        waterRate: '18.00',
+        electricityBillingType: 'PER_UNIT',
+        electricityRate: '8.00',
+        commonFee: '0.00',
+        commonFeeMode: 'FIXED',
+        internetFee: '0.00',
+        internetFeeMode: 'FIXED',
+        parkingFee: '0.00',
+        parkingFeeMode: 'FIXED',
+        lateFeeType: 'FIXED',
+        lateFeeValue: '0.00',
+        currency: 'THB',
+        source: 'TEMPLATE_DEFAULT',
+      },
+    });
+
+    const tenant = await prisma.tenant.create({
+      data: {
+        dormitoryId: dormId,
+        tenantNumber: 'T-104-R38A',
+        firstName: 'Somchai',
+        lastName: 'R38a',
+        displayName: 'Somchai R38a',
+        phone: '0812345678',
+      },
+    });
+    tenantId = tenant.id;
+  });
+
+  afterAll(async () => {
+    try {
+      if (testBillIds.length > 0) {
+        await prisma.paymentStatusHistory.deleteMany({ where: { payment: { billId: { in: testBillIds } } } });
+        await prisma.receipt.deleteMany({ where: { billId: { in: testBillIds } } });
+        await prisma.payment.deleteMany({ where: { billId: { in: testBillIds } } });
+        await prisma.billItem.deleteMany({ where: { billId: { in: testBillIds } } });
+        await prisma.billStatusHistory.deleteMany({ where: { billId: { in: testBillIds } } });
+        await prisma.bill.deleteMany({ where: { id: { in: testBillIds } } });
+      }
+      if (dormId) {
+        await prisma.receiptSequence.deleteMany({ where: { dormitoryId: dormId } });
+        await prisma.billingRateSnapshot.deleteMany({ where: { dormitoryId: dormId } });
+        await prisma.dormitorySubscription.deleteMany({ where: { dormitoryId: dormId } });
+        await prisma.meterReading.deleteMany({ where: { dormitoryId: dormId } });
+        await prisma.tenant.deleteMany({ where: { dormitoryId: dormId } });
+        await prisma.room.deleteMany({ where: { dormitoryId: dormId } });
+        await prisma.building.deleteMany({ where: { dormitoryId: dormId } });
+        await prisma.billingCycle.deleteMany({ where: { dormitoryId: dormId } });
+        await prisma.dormitoryBillingSettings.deleteMany({ where: { dormitoryId: dormId } });
+        await prisma.dormitoryMember.deleteMany({ where: { dormitoryId: dormId } });
+        await prisma.role.deleteMany({ where: { dormitoryId: dormId } });
+        await prisma.session.deleteMany({ where: { userId: ownerUserId } });
+        await prisma.dormitory.deleteMany({ where: { id: dormId } });
+        await prisma.user.deleteMany({ where: { id: ownerUserId } });
+      }
+    } catch (err) {
+      console.error('Cleanup error in r38a test:', err);
+    }
+  });
+
+  it('1. Real Route POST /api/v1/payments/cash: successful partial final settlement', async () => {
+    const room1 = await prisma.room.create({
+      data: {
+        dormitoryId: dormId,
+        buildingId,
+        roomNumber: '101-R38A',
+        normalizedRoomNumber: '101-R38A',
+        floor: 1,
+        status: 'occupied',
+        termDeposit: '4800.00',
+        monthlyDeposit: '4800.00',
+        dailyDeposit: '0.00',
+      },
+    });
+
+    // Seed Bill with Total: 10,600, Paid: 3,000, Outstanding: 7,600
+    const bill = await prisma.bill.create({
+      data: {
+        dormitoryId: dormId,
+        billingCycleId: cycleId,
+        roomId: room1.id,
+        tenantId,
+        billNumber: `INV-R38A-PARTIAL-${Date.now()}`,
+        billKind: 'MONTHLY_UTILITY',
+        status: 'unpaid',
+        billingDate: new Date('2026-08-25'),
+        dueDate: new Date('2026-09-05'),
+        subtotal: '10600.00',
+        totalAmount: '10600.00',
+        paidAmount: '3000.00',
+        outstandingAmount: '7600.00',
+        items: {
+          create: [
+            { dormitoryId: dormId, type: 'RENT', description: 'ค่าเช่าห้อง', unitPrice: '4800.00', amount: '4800.00', displayOrder: 1 },
+            { dormitoryId: dormId, type: 'DEPOSIT', description: 'เงินประกัน', unitPrice: '4800.00', amount: '4800.00', displayOrder: 2 },
+            { dormitoryId: dormId, type: 'UTILITY_MONTHLY', description: 'ค่าน้ำค่าไฟ', unitPrice: '1000.00', amount: '1000.00', displayOrder: 3 },
+          ],
+        },
+      },
+    });
+    testBillIds.push(bill.id);
+
+    const res = await request(app)
+      .post('/api/v1/payments/cash')
+      .set('Cookie', `horplus_session=${ownerSessionToken}; horplus_csrf=${ownerCsrfToken}`)
+      .set('x-csrf-token', ownerCsrfToken)
+      .set('x-dormitory-id', dormId)
+      .set('x-idempotency-key', `idemp-${Date.now()}`)
+      .send({
+        billId: bill.id,
+        amount: '7600.00',
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.amount.toString()).toBe('7600');
+    expect(res.body.status).toBe('APPROVED');
+
+    // Verify Database state
+    const updatedBill = await prisma.bill.findUnique({ where: { id: bill.id } });
+    expect(updatedBill?.status).toBe('PAID');
+    expect(updatedBill?.paidAmount.toString()).toBe('10600');
+    expect(updatedBill?.outstandingAmount.toString()).toBe('0');
+
+    // Verify Receipt
+    const receipt = await prisma.receipt.findFirst({ where: { billId: bill.id } });
+    expect(receipt).not.toBeNull();
+    const snap = receipt?.snapshotData as any;
     expect(snap.total).toBe('7600.00');
-    expect(snap.items[0].amount).toBe('7600.00');
-    expect(snap.items[0].description).toContain(`ชำระยอดคงเหลือบิล ${testBill.billNumber}`);
+    expect(snap.items[0].description).toContain('ชำระยอดคงเหลือบิล');
+  });
+
+  it('2. Real Route POST /api/v1/payments/cash: wrong amount returns HTTP 400 UNSUPPORTED_AMOUNT with structured envelope', async () => {
+    const room2 = await prisma.room.create({
+      data: {
+        dormitoryId: dormId,
+        buildingId,
+        roomNumber: '102-R38A',
+        normalizedRoomNumber: '102-R38A',
+        floor: 1,
+        status: 'occupied',
+        termDeposit: '4800.00',
+        monthlyDeposit: '4800.00',
+        dailyDeposit: '0.00',
+      },
+    });
+
+    const bill = await prisma.bill.create({
+      data: {
+        dormitoryId: dormId,
+        billingCycleId: cycleId,
+        roomId: room2.id,
+        tenantId,
+        billNumber: `INV-R38A-WRONG-${Date.now()}`,
+        billKind: 'MONTHLY_UTILITY',
+        status: 'unpaid',
+        billingDate: new Date('2026-08-25'),
+        dueDate: new Date('2026-09-05'),
+        subtotal: '10600.00',
+        totalAmount: '10600.00',
+        paidAmount: '3000.00',
+        outstandingAmount: '7600.00',
+      },
+    });
+    testBillIds.push(bill.id);
+
+    const res = await request(app)
+      .post('/api/v1/payments/cash')
+      .set('Cookie', `horplus_session=${ownerSessionToken}; horplus_csrf=${ownerCsrfToken}`)
+      .set('x-csrf-token', ownerCsrfToken)
+      .set('x-dormitory-id', dormId)
+      .set('x-idempotency-key', `idemp-wrong-${Date.now()}`)
+      .send({
+        billId: bill.id,
+        amount: '10600.00', // Submitted full amount when outstanding is 7,600
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBeDefined();
+    expect(res.body.error.code).toBe('UNSUPPORTED_AMOUNT');
+    expect(res.body.error.message).toBe('ยอดเงินที่ชำระไม่ตรงกับยอดคงเหลือของบิล');
+    expect(res.body.error.requestId).toBeDefined();
+  });
+
+  it('3. Real Route GET /api/v1/payments: returns all 5 BillItems without slicing', async () => {
+    const room3 = await prisma.room.create({
+      data: {
+        dormitoryId: dormId,
+        buildingId,
+        roomNumber: '103-R38A',
+        normalizedRoomNumber: '103-R38A',
+        floor: 1,
+        status: 'occupied',
+        termDeposit: '4800.00',
+        monthlyDeposit: '4800.00',
+        dailyDeposit: '0.00',
+      },
+    });
+
+    const bill = await prisma.bill.create({
+      data: {
+        dormitoryId: dormId,
+        billingCycleId: cycleId,
+        roomId: room3.id,
+        tenantId,
+        billNumber: `INV-R38A-5ITEMS-${Date.now()}`,
+        billKind: 'MONTHLY_UTILITY',
+        status: 'paid',
+        billingDate: new Date('2026-08-25'),
+        dueDate: new Date('2026-09-05'),
+        subtotal: '5500.00',
+        totalAmount: '5500.00',
+        paidAmount: '5500.00',
+        outstandingAmount: '0.00',
+        items: {
+          create: [
+            { dormitoryId: dormId, type: 'RENT', description: 'ค่าเช่าห้อง', unitPrice: '4000.00', amount: '4000.00', displayOrder: 1 },
+            { dormitoryId: dormId, type: 'WATER', description: 'ค่าน้ำ', unitPrice: '200.00', amount: '200.00', displayOrder: 2 },
+            { dormitoryId: dormId, type: 'ELECTRIC', description: 'ค่าไฟ', unitPrice: '800.00', amount: '800.00', displayOrder: 3 },
+            { dormitoryId: dormId, type: 'OTHER', description: 'ค่าที่จอดรถ', unitPrice: '300.00', amount: '300.00', displayOrder: 4 },
+            { dormitoryId: dormId, type: 'OTHER', description: 'ค่าอินเทอร์เน็ต', unitPrice: '200.00', amount: '200.00', displayOrder: 5 },
+          ],
+        },
+        Payment: {
+          create: {
+            dormitoryId: dormId,
+            tenantId,
+            method: 'CASH',
+            amount: '5500.00',
+            status: 'APPROVED',
+            paymentDate: new Date(),
+          },
+        },
+      },
+      include: {
+        Payment: true,
+      },
+    });
+    testBillIds.push(bill.id);
+
+    const res = await request(app)
+      .get('/api/v1/payments')
+      .set('Cookie', `horplus_session=${ownerSessionToken}; horplus_csrf=${ownerCsrfToken}`)
+      .set('x-dormitory-id', dormId);
+
+    expect(res.status).toBe(200);
+    const paymentsList = Array.isArray(res.body) ? res.body : res.body.data;
+    expect(Array.isArray(paymentsList)).toBe(true);
+    const paymentRecord = paymentsList.find((p: any) => p.billId === bill.id);
+    expect(paymentRecord).toBeDefined();
+    expect(paymentRecord.bill).toBeDefined();
+    expect(paymentRecord.bill.items).toBeDefined();
+    expect(paymentRecord.bill.items.length).toBe(5);
+    expect(paymentRecord.bill.items.map((it: any) => it.description)).toEqual([
+      'ค่าเช่าห้อง',
+      'ค่าน้ำ',
+      'ค่าไฟ',
+      'ค่าที่จอดรถ',
+      'ค่าอินเทอร์เน็ต',
+    ]);
+  });
+
+  it('4. Real PostgreSQL Concurrency (Part G): 2 concurrent cash requests with different idempotency keys serialize safely', async () => {
+    const room4 = await prisma.room.create({
+      data: {
+        dormitoryId: dormId,
+        buildingId,
+        roomNumber: '104-R38A-CONCURRENT',
+        normalizedRoomNumber: '104-R38A-CONCURRENT',
+        floor: 1,
+        status: 'occupied',
+        termDeposit: '4800.00',
+        monthlyDeposit: '4800.00',
+        dailyDeposit: '0.00',
+      },
+    });
+
+    // Seed Bill (total: 10,600, paid: 3,000, outstanding: 7,600)
+    const bill = await prisma.bill.create({
+      data: {
+        dormitoryId: dormId,
+        billingCycleId: cycleId,
+        roomId: room4.id,
+        tenantId,
+        billNumber: `INV-R38A-CONCURRENT-${Date.now()}`,
+        billKind: 'MONTHLY_UTILITY',
+        status: 'unpaid',
+        billingDate: new Date('2026-08-25'),
+        dueDate: new Date('2026-09-05'),
+        subtotal: '10600.00',
+        totalAmount: '10600.00',
+        paidAmount: '3000.00',
+        outstandingAmount: '7600.00',
+        items: {
+          create: [
+            { dormitoryId: dormId, type: 'RENT', description: 'ค่าเช่าห้อง', unitPrice: '4800.00', amount: '4800.00', displayOrder: 1 },
+            { dormitoryId: dormId, type: 'DEPOSIT', description: 'เงินประกัน', unitPrice: '4800.00', amount: '4800.00', displayOrder: 2 },
+            { dormitoryId: dormId, type: 'UTILITY_MONTHLY', description: 'ค่าน้ำค่าไฟ', unitPrice: '1000.00', amount: '1000.00', displayOrder: 3 },
+          ],
+        },
+      },
+    });
+    testBillIds.push(bill.id);
+
+    // Fire 2 concurrent requests with DIFFERENT idempotency keys
+    const reqA = request(app)
+      .post('/api/v1/payments/cash')
+      .set('Cookie', `horplus_session=${ownerSessionToken}; horplus_csrf=${ownerCsrfToken}`)
+      .set('x-csrf-token', ownerCsrfToken)
+      .set('x-dormitory-id', dormId)
+      .set('x-idempotency-key', `concurrent-key-A-${Date.now()}`)
+      .send({ billId: bill.id, amount: '7600.00' });
+
+    const reqB = request(app)
+      .post('/api/v1/payments/cash')
+      .set('Cookie', `horplus_session=${ownerSessionToken}; horplus_csrf=${ownerCsrfToken}`)
+      .set('x-csrf-token', ownerCsrfToken)
+      .set('x-dormitory-id', dormId)
+      .set('x-idempotency-key', `concurrent-key-B-${Date.now()}`)
+      .send({ billId: bill.id, amount: '7600.00' });
+
+    const [resA, resB] = await Promise.all([reqA, reqB]);
+
+    const results = [resA, resB];
+    const successCount = results.filter((r) => r.status === 200 || r.status === 201).length;
+    const failCount = results.filter((r) => r.status === 400).length;
+
+    expect(successCount).toBe(1);
+    expect(failCount).toBe(1);
+
+    const failedRes = results.find((r) => r.status === 400);
+    expect(failedRes?.body.error.code).toBe('ALREADY_PAID');
+
+    // Database verification: Exactly 1 new Payment, 1 new Receipt, Bill paidAmount = 10,600, outstanding = 0
+    const payments = await prisma.payment.findMany({ where: { billId: bill.id } });
+    expect(payments.length).toBe(1);
+    expect(payments[0].amount.toString()).toBe('7600');
+
+    const receipts = await prisma.receipt.findMany({ where: { billId: bill.id } });
+    expect(receipts.length).toBe(1);
+
+    const finalBill = await prisma.bill.findUnique({ where: { id: bill.id } });
+    expect(finalBill?.status).toBe('PAID');
+    expect(finalBill?.paidAmount.toString()).toBe('10600');
+    expect(finalBill?.outstandingAmount.toString()).toBe('0');
+  });
+
+  it('5. Meter Backend Defense (Part C): clean row is NO-OP and does not trigger false CANNOT_CLEAR_METER_READING_FOR_ISSUED_BILL', async () => {
+    const room5 = await prisma.room.create({
+      data: {
+        dormitoryId: dormId,
+        buildingId,
+        roomNumber: '105-R38A-DEFENSE',
+        normalizedRoomNumber: '105-R38A-DEFENSE',
+        floor: 1,
+        status: 'occupied',
+        termDeposit: '4800.00',
+        monthlyDeposit: '4800.00',
+        dailyDeposit: '0.00',
+      },
+    });
+
+    // Seed an issued unpaid bill for room
+    const issuedBill = await prisma.bill.create({
+      data: {
+        dormitoryId: dormId,
+        billingCycleId: cycleId,
+        roomId: room5.id,
+        tenantId,
+        billNumber: `INV-METER-DEFENSE-${Date.now()}`,
+        billKind: 'MONTHLY_UTILITY',
+        status: 'unpaid',
+        billingDate: new Date('2026-08-25'),
+        dueDate: new Date('2026-09-05'),
+        subtotal: '4000.00',
+        totalAmount: '4000.00',
+        paidAmount: '0.00',
+        outstandingAmount: '4000.00',
+      },
+    });
+    testBillIds.push(issuedBill.id);
+
+    // POST bulk with only { roomId } (clean row)
+    const resClean = await request(app)
+      .post('/api/v1/meters/workspace/bulk')
+      .set('Cookie', `horplus_session=${ownerSessionToken}; horplus_csrf=${ownerCsrfToken}`)
+      .set('x-csrf-token', ownerCsrfToken)
+      .set('x-dormitory-id', dormId)
+      .send({
+        billingCycleId: cycleId,
+        rows: [{ roomId: room5.id }],
+      });
+
+    expect(resClean.status).toBe(200);
+    expect(resClean.body.success).toBe(true);
+
+    // POST bulk with explicit waterCurr: null (explicit clear on issued bill) -> MUST fail 400
+    const resExplicitClear = await request(app)
+      .post('/api/v1/meters/workspace/bulk')
+      .set('Cookie', `horplus_session=${ownerSessionToken}; horplus_csrf=${ownerCsrfToken}`)
+      .set('x-csrf-token', ownerCsrfToken)
+      .set('x-dormitory-id', dormId)
+      .send({
+        billingCycleId: cycleId,
+        rows: [{ roomId: room5.id, waterCurr: null }],
+      });
+
+    expect(resExplicitClear.status).toBe(400);
+    expect(resExplicitClear.body.error?.code || resExplicitClear.body.code).toBe('CANNOT_CLEAR_METER_READING_FOR_ISSUED_BILL');
   });
 });

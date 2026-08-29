@@ -8,6 +8,7 @@ import { requireDormitoryPermission } from '../middleware/permission.js';
 import { requireDormitoryWriteEntitlement } from '../middleware/entitlement.js';
 import { resolveAuthoritativeDormitoryContext } from '../middleware/dormitory-context.js';
 import { logger } from '../config/logger.js';
+import { AppError } from '../types/index.js';
 import { PrismaClient } from '@prisma/client';
 import multer from 'multer';
 import crypto from 'crypto';
@@ -323,7 +324,7 @@ export function createPaymentRouter(authService: AuthenticationService) {
   });
 
   const handlePaymentError = (res: Response, req: Request, err: any) => {
-    const requestId = (req.headers['x-request-id'] as string) || (req as any).id || 'req-unknown';
+    const requestId = (req.headers['x-request-id'] as string) || (req as any).id || (req as any).requestId || 'req-unknown';
     const timestamp = new Date().toISOString();
 
     if (err instanceof z.ZodError) {
@@ -338,77 +339,124 @@ export function createPaymentRouter(authService: AuthenticationService) {
       });
     }
 
-    const rawCode = err.code || err.message;
-    let statusCode = err.statusCode || 400;
-    let code = 'PAYMENT_ERROR';
-    let message = 'เกิดข้อผิดพลาดในการทำรายการชำระเงิน';
+    if (err instanceof AppError) {
+      return res.status(err.statusCode).json({
+        error: {
+          code: err.code || err.errorCode || 'PAYMENT_ERROR',
+          message: err.message,
+          fieldErrors: err.fieldErrors || null,
+          requestId,
+          timestamp,
+        },
+      });
+    }
+
+    const rawCode = err.code || (typeof err.message === 'string' ? err.message : '');
 
     switch (rawCode) {
       case 'UNSUPPORTED_AMOUNT':
-        statusCode = 400;
-        code = 'UNSUPPORTED_AMOUNT';
-        message = 'ยอดเงินที่ชำระไม่ตรงกับยอดคงเหลือของบิล';
-        break;
+        return res.status(400).json({
+          error: {
+            code: 'UNSUPPORTED_AMOUNT',
+            message: 'ยอดเงินที่ชำระไม่ตรงกับยอดคงเหลือของบิล',
+            fieldErrors: null,
+            requestId,
+            timestamp,
+          },
+        });
       case 'ALREADY_PAID':
-        statusCode = 400;
-        code = 'ALREADY_PAID';
-        message = 'บิลนี้ได้รับการชำระเงินแล้ว';
-        break;
+        return res.status(400).json({
+          error: {
+            code: 'ALREADY_PAID',
+            message: 'บิลนี้ได้รับการชำระเงินแล้ว',
+            fieldErrors: null,
+            requestId,
+            timestamp,
+          },
+        });
+      case 'BILL_NOT_FOUND':
       case 'NOT_FOUND':
-        statusCode = 404;
-        code = 'BILL_NOT_FOUND';
-        message = 'ไม่พบข้อมูลบิลที่ระบุ';
-        break;
+        return res.status(404).json({
+          error: {
+            code: 'BILL_NOT_FOUND',
+            message: 'ไม่พบข้อมูลบิลที่ระบุ',
+            fieldErrors: null,
+            requestId,
+            timestamp,
+          },
+        });
       case 'FORBIDDEN':
-        statusCode = 403;
-        code = 'FORBIDDEN';
-        message = 'ไม่มีสิทธิ์ดำเนินการกับบิลนี้';
-        break;
+        return res.status(403).json({
+          error: {
+            code: 'FORBIDDEN',
+            message: 'ไม่มีสิทธิ์ดำเนินการกับบิลนี้',
+            fieldErrors: null,
+            requestId,
+            timestamp,
+          },
+        });
       case 'PAYMENT_IN_PROGRESS':
-        statusCode = 409;
-        code = 'PAYMENT_IN_PROGRESS';
-        message = 'มีรายการชำระเงินที่อยู่ระหว่างรอการตรวจสอบสำหรับบิลนี้แล้ว';
-        break;
+        return res.status(409).json({
+          error: {
+            code: 'PAYMENT_IN_PROGRESS',
+            message: 'มีรายการชำระเงินที่อยู่ระหว่างรอการตรวจสอบสำหรับบิลนี้แล้ว',
+            fieldErrors: null,
+            requestId,
+            timestamp,
+          },
+        });
       case 'IDEMPOTENCY_MISMATCH':
-        statusCode = 422;
-        code = 'IDEMPOTENCY_MISMATCH';
-        message = 'ข้อมูลการทำรายการไม่ตรงกับ Idempotency Key เดิม';
-        break;
+        return res.status(422).json({
+          error: {
+            code: 'IDEMPOTENCY_MISMATCH',
+            message: 'ข้อมูลการทำรายการไม่ตรงกับ Idempotency Key เดิม',
+            fieldErrors: null,
+            requestId,
+            timestamp,
+          },
+        });
       case 'CONCURRENT_REQUEST_IN_PROGRESS':
-        statusCode = 409;
-        code = 'CONCURRENT_REQUEST_IN_PROGRESS';
-        message = 'มีคำขอกำลังประมวลผลอยู่ กรุณารอสักครู่';
-        break;
+        return res.status(409).json({
+          error: {
+            code: 'CONCURRENT_REQUEST_IN_PROGRESS',
+            message: 'มีคำขอกำลังประมวลผลอยู่ กรุณารอสักครู่',
+            fieldErrors: null,
+            requestId,
+            timestamp,
+          },
+        });
       case 'DUPLICATE_PAYMENT_EVIDENCE':
-        statusCode = 409;
-        code = 'DUPLICATE_PAYMENT_EVIDENCE';
-        message = 'มีการแนบหลักฐานการชำระเงินนี้ไปแล้ว';
-        break;
+        return res.status(409).json({
+          error: {
+            code: 'DUPLICATE_PAYMENT_EVIDENCE',
+            message: 'มีการแนบหลักฐานการชำระเงินนี้ไปแล้ว',
+            fieldErrors: null,
+            requestId,
+            timestamp,
+          },
+        });
       case 'ACTIVE_REVIEW_EXISTS':
-        statusCode = 400;
-        code = 'ACTIVE_REVIEW_EXISTS';
-        message = 'มีรายการชำระเงินที่รอตรวจสอบอยู่แล้ว';
-        break;
+        return res.status(400).json({
+          error: {
+            code: 'ACTIVE_REVIEW_EXISTS',
+            message: 'มีรายการชำระเงินที่รอตรวจสอบอยู่แล้ว',
+            fieldErrors: null,
+            requestId,
+            timestamp,
+          },
+        });
       default:
-        if (err.statusCode && err.statusCode >= 400 && err.statusCode < 600) {
-          statusCode = err.statusCode;
-          code = err.code || 'PAYMENT_ERROR';
-          message = err.message || message;
-        } else if (err.message && typeof err.message === 'string') {
-          message = err.message;
-        }
-        break;
+        logger.error({ err, requestId }, 'Unhandled payment error caught in payment error boundary');
+        return res.status(500).json({
+          error: {
+            code: 'INTERNAL_ERROR',
+            message: 'ระบบไม่สามารถดำเนินการได้ กรุณาลองใหม่อีกครั้ง',
+            fieldErrors: null,
+            requestId,
+            timestamp,
+          },
+        });
     }
-
-    return res.status(statusCode).json({
-      error: {
-        code,
-        message,
-        fieldErrors: err.fieldErrors || null,
-        requestId,
-        timestamp,
-      },
-    });
   };
 
   // Owner: Record Cash

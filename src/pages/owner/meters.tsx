@@ -536,6 +536,36 @@ export function mapErrorMessageToThai(raw: any): string {
   if (code === 'CANNOT_CLEAR_METER_READING_FOR_ISSUED_BILL') {
     return 'ห้องนี้มีบิลที่ออกแล้ว หากต้องการล้างเลขมิเตอร์ปัจจุบัน กรุณายกเลิกบิลก่อน';
   }
+  if (code === 'UNSUPPORTED_AMOUNT') {
+    return 'ยอดเงินที่ชำระไม่ตรงกับยอดคงเหลือของบิล';
+  }
+  if (code === 'ALREADY_PAID') {
+    return 'บิลนี้ได้รับการชำระเงินแล้ว';
+  }
+  if (code === 'PAYMENT_IN_PROGRESS') {
+    return 'มีรายการชำระเงินที่อยู่ระหว่างรอการตรวจสอบสำหรับบิลนี้แล้ว';
+  }
+  if (code === 'BILL_NOT_FOUND') {
+    return 'ไม่พบข้อมูลบิลที่ระบุ';
+  }
+  if (code === 'FORBIDDEN') {
+    return 'ไม่มีสิทธิ์ดำเนินการกับบิลนี้';
+  }
+  if (code === 'IDEMPOTENCY_MISMATCH') {
+    return 'ข้อมูลการทำรายการไม่ตรงกับ Idempotency Key เดิม';
+  }
+  if (code === 'CONCURRENT_REQUEST_IN_PROGRESS') {
+    return 'มีคำขอกำลังประมวลผลอยู่ กรุณารอสักครู่';
+  }
+  if (code === 'DUPLICATE_PAYMENT_EVIDENCE') {
+    return 'มีการแนบหลักฐานการชำระเงินนี้ไปแล้ว';
+  }
+  if (code === 'ACTIVE_REVIEW_EXISTS') {
+    return 'มีรายการชำระเงินที่รอตรวจสอบอยู่แล้ว';
+  }
+  if (code === 'INTERNAL_ERROR') {
+    return 'ระบบไม่สามารถดำเนินการได้ กรุณาลองใหม่อีกครั้ง';
+  }
   if (code === 'MISSING_WATER_METER_READING' || code === 'MISSING_METER_READING') {
     return 'กรุณากรอกเลขมิเตอร์น้ำของงวดนี้ก่อนออกบิล';
   }
@@ -583,6 +613,15 @@ export function mapErrorMessageToThai(raw: any): string {
   if (msg.includes('CANNOT_CLEAR_METER_READING_FOR_ISSUED_BILL')) {
     return 'ห้องนี้มีบิลที่ออกแล้ว หากต้องการล้างเลขมิเตอร์ปัจจุบัน กรุณายกเลิกบิลก่อน';
   }
+  if (msg.includes('UNSUPPORTED_AMOUNT')) {
+    return 'ยอดเงินที่ชำระไม่ตรงกับยอดคงเหลือของบิล';
+  }
+  if (msg.includes('ALREADY_PAID')) {
+    return 'บิลนี้ได้รับการชำระเงินแล้ว';
+  }
+  if (msg.includes('PAYMENT_IN_PROGRESS')) {
+    return 'มีรายการชำระเงินที่อยู่ระหว่างรอการตรวจสอบสำหรับบิลนี้แล้ว';
+  }
   if (msg.includes('BILLING_CYCLE_NOT_FOUND')) {
     return 'ไม่พบข้อมูลรอบบิล';
   }
@@ -594,6 +633,14 @@ export function mapErrorMessageToThai(raw: any): string {
   }
   if (msg.includes('STALE_VERSION')) {
     return 'ข้อมูลถูกแก้ไขโดยผู้อื่น กรุณารีเฟรชหน้านี้';
+  }
+
+  // Mask database / Prisma / SQL internal leaks
+  if (
+    /prisma|select\s+|insert\s+|update\s+|delete\s+|where\s+|constraint|foreign\s+key|table\s+"|column\s+"/i.test(msg) ||
+    /prisma/i.test(String(raw?.stack || ''))
+  ) {
+    return 'ระบบไม่สามารถดำเนินการได้ กรุณาลองใหม่อีกครั้ง';
   }
 
   return msg || 'เกิดข้อผิดพลาดในการดำเนินการ';
@@ -2136,42 +2183,71 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       showToast('ข้อมูลหรือสิทธิ์การคิดรอบบิลยังไม่พร้อมใช้งาน', 'error');
       return;
     }
-    setIsSaving(true);
-    try {
-      // Exclude Daily rows from dirty rows payload for monthly bulk billing
-      const rawDirtyRows = meterRows.filter(r => {
-        const roomCtx = previewContext?.rooms?.find((ctx: any) => ctx.roomId === r.roomId);
-        if (roomCtx?.billingSource === 'DAILY_STAY') return false;
-
-        const orig = (originalRowsRef.current || []).find(o => o.roomId === r.roomId);
-        if (!orig) return true;
-        return (
-          r.waterCurr !== orig.waterCurr ||
-          r.waterPrev !== orig.waterPrev ||
-          r.elecCurr !== orig.elecCurr ||
-          r.elecPrev !== orig.elecPrev ||
-          r.peopleCount !== orig.peopleCount ||
-          r.overdueAmount !== orig.overdueAmount ||
-          JSON.stringify(r.otherFees || []) !== JSON.stringify(orig.otherFees || []) ||
-          r.isReplaced !== orig.isReplaced
-        );
-      }).map(r => {
+    
+    const rawDirtyRows: any[] = [];
+    for (const r of meterRows) {
         const orig = (originalRowsRef.current || []).find(o => o.roomId === r.roomId);
         const dirtyObj: any = { roomId: r.roomId };
-        if (!orig || r.waterCurr !== orig.waterCurr) dirtyObj.waterCurr = r.waterCurr;
-        if (!orig || r.waterPrev !== orig.waterPrev) dirtyObj.waterPrev = r.waterPrev;
-        if (!orig || r.elecCurr !== orig.elecCurr) dirtyObj.elecCurr = r.elecCurr;
-        if (!orig || r.elecPrev !== orig.elecPrev) dirtyObj.elecPrev = r.elecPrev;
-        if (!orig || r.peopleCount !== orig.peopleCount) dirtyObj.peopleCount = r.peopleCount;
-        if (!orig || r.overdueAmount !== orig.overdueAmount) dirtyObj.manualOutstandingAmount = r.overdueAmount;
-        if (!orig || JSON.stringify(r.otherFees || []) !== JSON.stringify(orig.otherFees || [])) dirtyObj.otherFees = r.otherFees;
-        if (!orig || r.isReplaced !== orig.isReplaced) dirtyObj.isReplaced = r.isReplaced;
-        return dirtyObj;
-      });
+        let hasDelta = false;
+
+        if (orig) {
+          if (r.waterCurr !== orig.waterCurr) {
+            dirtyObj.waterCurr = r.waterCurr;
+            hasDelta = true;
+          }
+          if (r.waterPrev !== orig.waterPrev) {
+            dirtyObj.waterPrev = r.waterPrev;
+            hasDelta = true;
+          }
+          if (r.elecCurr !== orig.elecCurr) {
+            dirtyObj.elecCurr = r.elecCurr;
+            hasDelta = true;
+          }
+          if (r.elecPrev !== orig.elecPrev) {
+            dirtyObj.elecPrev = r.elecPrev;
+            hasDelta = true;
+          }
+          if (r.peopleCount !== orig.peopleCount) {
+            dirtyObj.peopleCount = r.peopleCount;
+            hasDelta = true;
+          }
+          if (r.overdueAmount !== orig.overdueAmount) {
+            dirtyObj.manualOutstandingAmount = r.overdueAmount;
+            hasDelta = true;
+          }
+          if (JSON.stringify(r.otherFees || []) !== JSON.stringify(orig.otherFees || [])) {
+            dirtyObj.otherFees = r.otherFees;
+            hasDelta = true;
+          }
+          if (r.isReplaced !== orig.isReplaced) {
+            dirtyObj.isReplaced = r.isReplaced;
+            hasDelta = true;
+          }
+        } else {
+          if (r.waterCurr !== undefined) dirtyObj.waterCurr = r.waterCurr;
+          if (r.waterPrev !== undefined) dirtyObj.waterPrev = r.waterPrev;
+          if (r.elecCurr !== undefined) dirtyObj.elecCurr = r.elecCurr;
+          if (r.elecPrev !== undefined) dirtyObj.elecPrev = r.elecPrev;
+          if (r.peopleCount !== undefined) dirtyObj.peopleCount = r.peopleCount;
+          if (r.overdueAmount !== undefined) dirtyObj.manualOutstandingAmount = r.overdueAmount;
+          if (r.otherFees !== undefined) dirtyObj.otherFees = r.otherFees;
+          if (r.isReplaced !== undefined) dirtyObj.isReplaced = r.isReplaced;
+          hasDelta = true;
+        }
+
+        if (hasDelta) {
+          if (orig?.snapshotVersion !== undefined) {
+            dirtyObj.expectedVersion = orig.snapshotVersion;
+          }
+          rawDirtyRows.push(dirtyObj);
+        }
+      }
 
       const dirtyRows = serializeMeterWorkspaceDirtyRows(rawDirtyRows);
 
       // Single real backend operation
+      setIsSaving(true);
+      try {
       const res = await getDataProvider().billing.generateBulkBills(
         selectedBillingCycleId,
         undefined,
@@ -2272,23 +2348,73 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       return;
     }
 
+    const rawDirtyRows: any[] = [];
+    for (const r of meterRows) {
+      const orig = (originalRowsRef.current || []).find(o => o.roomId === r.roomId);
+      const dirtyObj: any = { roomId: r.roomId };
+      let hasDelta = false;
+
+      if (orig) {
+        if (r.waterCurr !== orig.waterCurr) {
+          dirtyObj.waterCurr = r.waterCurr;
+          hasDelta = true;
+        }
+        if (r.waterPrev !== orig.waterPrev) {
+          dirtyObj.waterPrev = r.waterPrev;
+          hasDelta = true;
+        }
+        if (r.elecCurr !== orig.elecCurr) {
+          dirtyObj.elecCurr = r.elecCurr;
+          hasDelta = true;
+        }
+        if (r.elecPrev !== orig.elecPrev) {
+          dirtyObj.elecPrev = r.elecPrev;
+          hasDelta = true;
+        }
+        if (r.peopleCount !== orig.peopleCount) {
+          dirtyObj.peopleCount = r.peopleCount;
+          hasDelta = true;
+        }
+        if (r.overdueAmount !== orig.overdueAmount) {
+          dirtyObj.manualOutstandingAmount = r.overdueAmount;
+          hasDelta = true;
+        }
+        if (JSON.stringify(r.otherFees || []) !== JSON.stringify(orig.otherFees || [])) {
+          dirtyObj.otherFees = r.otherFees;
+          hasDelta = true;
+        }
+        if (r.isReplaced !== orig.isReplaced) {
+          dirtyObj.isReplaced = r.isReplaced;
+          hasDelta = true;
+        }
+      } else {
+        if (r.waterCurr !== undefined) dirtyObj.waterCurr = r.waterCurr;
+        if (r.waterPrev !== undefined) dirtyObj.waterPrev = r.waterPrev;
+        if (r.elecCurr !== undefined) dirtyObj.elecCurr = r.elecCurr;
+        if (r.elecPrev !== undefined) dirtyObj.elecPrev = r.elecPrev;
+        if (r.peopleCount !== undefined) dirtyObj.peopleCount = r.peopleCount;
+        if (r.overdueAmount !== undefined) dirtyObj.manualOutstandingAmount = r.overdueAmount;
+        if (r.otherFees !== undefined) dirtyObj.otherFees = r.otherFees;
+        if (r.isReplaced !== undefined) dirtyObj.isReplaced = r.isReplaced;
+        hasDelta = true;
+      }
+
+      if (hasDelta) {
+        if (orig?.snapshotVersion !== undefined) {
+          dirtyObj.expectedVersion = orig.snapshotVersion;
+        }
+        rawDirtyRows.push(dirtyObj);
+      }
+    }
+
+    if (rawDirtyRows.length === 0) {
+      showToast('ไม่มีข้อมูลที่เปลี่ยนแปลง', 'info');
+      return;
+    }
+
     setIsSaving(true);
     try {
-      const dirtyRows = meterRows.map(r => {
-        const orig = (originalRowsRef.current || []).find(o => o.roomId === r.roomId);
-        const dirtyObj: any = { roomId: r.roomId };
-        if (!orig || r.waterCurr !== orig.waterCurr) dirtyObj.waterCurr = r.waterCurr;
-        if (!orig || r.waterPrev !== orig.waterPrev) dirtyObj.waterPrev = r.waterPrev;
-        if (!orig || r.elecCurr !== orig.elecCurr) dirtyObj.elecCurr = r.elecCurr;
-        if (!orig || r.elecPrev !== orig.elecPrev) dirtyObj.elecPrev = r.elecPrev;
-        if (!orig || r.peopleCount !== orig.peopleCount) dirtyObj.peopleCount = r.peopleCount;
-        if (!orig || r.overdueAmount !== orig.overdueAmount) dirtyObj.manualOutstandingAmount = r.overdueAmount;
-        if (!orig || JSON.stringify(r.otherFees || []) !== JSON.stringify(orig.otherFees || [])) dirtyObj.otherFees = r.otherFees;
-        if (!orig || r.isReplaced !== orig.isReplaced) dirtyObj.isReplaced = r.isReplaced;
-        return dirtyObj;
-      });
-
-      const serializedDirtyRows = serializeMeterWorkspaceDirtyRows(dirtyRows);
+      const serializedDirtyRows = serializeMeterWorkspaceDirtyRows(rawDirtyRows);
 
       const res = await getDataProvider().meters.saveBulkWorkspace?.(selectedBillingCycleId, serializedDirtyRows);
       setIsSaving(false);

@@ -678,7 +678,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
     if (!targetBill) return;
 
     const amount = Number(targetBill.outstandingAmount ?? targetBill.totalAmount ?? 0);
-    const opId = `cash-modal:${targetBill.id}:${amount}`;
+    const opId = `cash:${targetBill.id}:${amount}`;
     setIsSubmittingCash(true);
     try {
       await httpRequest(
@@ -717,26 +717,39 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
       return;
     }
 
-    const roomNumber = getRoomNum(payment.bill?.roomId || payment.bill?.room?.id);
-    const tenantName = payment.bill?.tenant?.displayName || getTenantName(payment.tenantId || payment.bill?.tenantId);
-    const totalAmount = Number(rcpt.totalAmount || payment.amount || payment.bill?.totalAmount || 0);
+    const snap = (rcpt.snapshotData as any) || {};
+    const roomNumber = snap.roomNumber || getRoomNum(payment.bill?.roomId || payment.bill?.room?.id);
+    const tenantName = snap.tenantName || payment.bill?.tenant?.displayName || getTenantName(payment.tenantId || payment.bill?.tenantId);
+    const totalAmount = Number(snap.total || rcpt.totalAmount || payment.amount || payment.bill?.totalAmount || 0);
 
-    const items = payment.bill?.items?.map(it => ({
-      description: it.description,
-      amount: Number(it.amount),
-    })) || [
-      { description: `ยอดชำระเงินงวด ${formatCycleThaiShort(getCycleCodeForCycleId(payment.bill?.billingCycleId))}`, amount: totalAmount }
-    ];
+    let items: Array<{ description: string; amount: number }> = [];
+    if (Array.isArray(snap.items) && snap.items.length > 0) {
+      items = snap.items.map((it: any) => ({
+        description: it.description,
+        amount: Number(it.amount),
+      }));
+    } else if (payment.bill?.items && payment.bill.items.length > 0) {
+      items = payment.bill.items.map(it => ({
+        description: it.description,
+        amount: Number(it.amount),
+      }));
+    } else {
+      items = [
+        { description: `ยอดชำระเงินงวด ${formatCycleThaiShort(getCycleCodeForCycleId(payment.bill?.billingCycleId))}`, amount: totalAmount }
+      ];
+    }
 
     setViewingReceipt({
-      receiptNumber: rcpt.receiptNumber,
-      billNumber: payment.bill?.billNumber,
+      receiptNumber: snap.receiptNumber || rcpt.receiptNumber,
+      billNumber: snap.billNumber || payment.bill?.billNumber,
       roomNumber,
       tenantName,
       totalAmount,
-      paidAt: rcpt.issuedAt || rcpt.paidAt || payment.paymentDate || payment.createdAt,
-      paymentMethod: (payment.method || '').toUpperCase() === 'CASH' ? 'เงินสดสำนักงาน' : 'แสกน PromptPay QR',
-      receiverName: rcpt.receiverName || 'ฝ่ายการเงิน หอพัก HorPlus',
+      paidAt: snap.paymentDate || rcpt.issuedAt || rcpt.paidAt || payment.paymentDate || payment.createdAt,
+      paymentMethod: snap.paymentMethod
+        ? (String(snap.paymentMethod).toUpperCase() === 'CASH' ? 'เงินสดสำนักงาน' : 'แสกน PromptPay QR')
+        : ((payment.method || '').toUpperCase() === 'CASH' ? 'เงินสดสำนักงาน' : 'แสกน PromptPay QR'),
+      receiverName: rcpt.receiverName || snap.dormitoryName || 'ฝ่ายการเงิน หอพัก HorPlus',
       items,
     });
     setIsReceiptOpen(true);

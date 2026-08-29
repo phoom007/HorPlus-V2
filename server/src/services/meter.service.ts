@@ -1215,6 +1215,21 @@ export class MeterService {
       const savedRows: SavedRoomSnapshotMeta[] = [];
 
       for (const row of data.rows) {
+        const hasMutationIntent =
+          row.waterPrev !== undefined ||
+          row.waterCurr !== undefined ||
+          row.elecPrev !== undefined ||
+          row.elecCurr !== undefined ||
+          row.peopleCount !== undefined ||
+          row.manualOutstandingAmount !== undefined ||
+          row.otherFees !== undefined ||
+          row.isReplaced !== undefined;
+
+        if (!hasMutationIntent) {
+          // NO-OP / skipped untouched clean row
+          continue;
+        }
+
         let activeBill: any = null;
         if (this.billRepo) {
           activeBill = await this.billRepo.findActiveMonthlyUtilityByRoomAndCycle(dormitoryId, data.billingCycleId, row.roomId, tx);
@@ -1242,16 +1257,6 @@ export class MeterService {
                 (err as any).message = 'ห้องนี้มีบิลที่ออกแล้ว หากต้องการล้างเลขมิเตอร์ปัจจุบัน กรุณายกเลิกบิลก่อน';
                 throw err;
               }
-              if (row.waterCurr === undefined) {
-                const existingW = await this.meterRepo.findReadingByCycleRoomAndType(dormitoryId, data.billingCycleId, row.roomId, 'water', tx);
-                if (existingW?.currentReading === null || existingW?.currentReading === undefined || String(existingW.currentReading).trim() === '') {
-                  const err = new Error('CANNOT_CLEAR_METER_READING_FOR_ISSUED_BILL');
-                  (err as any).statusCode = 400;
-                  (err as any).code = 'CANNOT_CLEAR_METER_READING_FOR_ISSUED_BILL';
-                  (err as any).message = 'ห้องนี้มีบิลที่ออกแล้ว หากต้องการล้างเลขมิเตอร์ปัจจุบัน กรุณายกเลิกบิลก่อน';
-                  throw err;
-                }
-              }
             }
 
             if (isElecPerUnit) {
@@ -1262,16 +1267,6 @@ export class MeterService {
                 (err as any).code = 'CANNOT_CLEAR_METER_READING_FOR_ISSUED_BILL';
                 (err as any).message = 'ห้องนี้มีบิลที่ออกแล้ว หากต้องการล้างเลขมิเตอร์ปัจจุบัน กรุณายกเลิกบิลก่อน';
                 throw err;
-              }
-              if (row.elecCurr === undefined) {
-                const existingE = await this.meterRepo.findReadingByCycleRoomAndType(dormitoryId, data.billingCycleId, row.roomId, 'electricity', tx);
-                if (existingE?.currentReading === null || existingE?.currentReading === undefined || String(existingE.currentReading).trim() === '') {
-                  const err = new Error('CANNOT_CLEAR_METER_READING_FOR_ISSUED_BILL');
-                  (err as any).statusCode = 400;
-                  (err as any).code = 'CANNOT_CLEAR_METER_READING_FOR_ISSUED_BILL';
-                  (err as any).message = 'ห้องนี้มีบิลที่ออกแล้ว หากต้องการล้างเลขมิเตอร์ปัจจุบัน กรุณายกเลิกบิลก่อน';
-                  throw err;
-                }
               }
             }
           }
