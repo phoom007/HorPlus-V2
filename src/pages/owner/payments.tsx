@@ -15,6 +15,7 @@ import {
   Calendar,
   DollarSign,
   Building,
+  FileText,
 } from 'lucide-react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Modal, formatBaht, formatThaiDate, PrintView } from '../../components/GlobalComponents';
@@ -279,6 +280,13 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
   // LINE notification modal
   const [isLineModalOpen, setIsLineModalOpen] = useState(false);
   const [targetScrollTenantId, setTargetScrollTenantId] = useState<string | null>(null);
+
+  // Full Bill Line-Item Detail Modal
+  const [viewingBillDetail, setViewingBillDetail] = useState<{
+    bill: any;
+    roomNum?: string;
+    tenantName?: string;
+  } | null>(null);
 
   // Clean up timers on unmount
   useEffect(() => {
@@ -924,7 +932,18 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                   )}
 
                   <div className="flex items-baseline justify-between pt-1 border-t border-slate-100">
-                    <span className="text-xs text-slate-400 font-bold">ยอดรอตรวจสอบ</span>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs text-slate-400 font-bold">ยอดรอตรวจสอบ</span>
+                      {p.bill && (
+                        <button
+                          type="button"
+                          onClick={() => setViewingBillDetail({ bill: p.bill, tenantName, roomNum })}
+                          className="text-[10px] text-indigo-600 hover:underline font-semibold cursor-pointer"
+                        >
+                          (ดูรายการ)
+                        </button>
+                      )}
+                    </div>
                     <span className="text-lg font-black text-indigo-600">{formatBaht(amount)}</span>
                   </div>
 
@@ -1026,22 +1045,59 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                   {/* Items summary */}
                   <div className="text-[11px] text-slate-500 space-y-1 border-t border-slate-100 pt-2">
                     {b.items && b.items.length > 0 ? (
-                      b.items.slice(0, 3).map((it, idx) => (
-                        <div key={idx} className="flex justify-between items-center">
-                          <span className="truncate pr-1 text-slate-500 font-medium">{formatItemDescription(it.description)}:</span>
-                          <span className="font-semibold text-slate-700 shrink-0">{formatBahtDash(it.amount)}</span>
-                        </div>
-                      ))
+                      <>
+                        {b.items.slice(0, 3).map((it, idx) => (
+                          <div key={idx} className="flex justify-between items-center">
+                            <span className="truncate pr-1 text-slate-500 font-medium">{formatItemDescription(it.description)}:</span>
+                            <span className="font-semibold text-slate-700 shrink-0">{formatBahtDash(it.amount)}</span>
+                          </div>
+                        ))}
+                        {b.items.length > 3 && (
+                          <button
+                            type="button"
+                            onClick={() => setViewingBillDetail({ bill: b, tenantName, roomNum })}
+                            className="text-[11px] font-bold text-indigo-600 hover:text-indigo-800 hover:underline flex items-center gap-1 pt-0.5 cursor-pointer"
+                          >
+                            <FileText className="w-3 h-3" />
+                            ดูรายละเอียด +{b.items.length - 3} รายการ
+                          </button>
+                        )}
+                      </>
                     ) : (
                       <div className="flex justify-between items-center">
                         <span className="text-slate-500">ค่าเช่าและบริการ:</span>
                         <span className="font-semibold text-slate-700">{formatBaht(amount)}</span>
                       </div>
                     )}
+
+                    {/* Partial Bill Reconciliation Notice */}
+                    {Number(b.paidAmount || 0) > 0 && (
+                      <div className="bg-amber-50/70 border border-amber-200/80 rounded-xl p-2 mt-1.5 text-[10px] space-y-0.5 text-amber-900">
+                        <div className="flex justify-between">
+                          <span className="text-slate-500">ยอดรวมเดิม:</span>
+                          <span className="font-semibold text-slate-700">{formatBaht(Number(b.totalAmount))}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-emerald-600 font-medium">ชำระแล้ว:</span>
+                          <span className="font-semibold text-emerald-600">-{formatBaht(Number(b.paidAmount))}</span>
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   <div className="flex items-baseline justify-between pt-1 border-t border-slate-100">
-                    <span className="text-xs text-slate-400 font-bold">ยอดที่ต้องชำระ</span>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs text-slate-400 font-bold">ยอดที่ต้องชำระ</span>
+                      {b.items && b.items.length > 0 && b.items.length <= 3 && (
+                        <button
+                          type="button"
+                          onClick={() => setViewingBillDetail({ bill: b, tenantName, roomNum })}
+                          className="text-[10px] text-indigo-600 hover:underline font-semibold cursor-pointer"
+                        >
+                          (ดูรายการ)
+                        </button>
+                      )}
+                    </div>
                     <span className="text-lg font-black text-slate-900">{formatBaht(amount)}</span>
                   </div>
 
@@ -1138,7 +1194,18 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                   </div>
 
                   <div className="flex items-baseline justify-between pt-1 border-t border-slate-100">
-                    <span className="text-xs text-slate-400 font-bold">ยอดชำระสำเร็จ</span>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs text-slate-400 font-bold">ยอดชำระสำเร็จ</span>
+                      {p.bill && (
+                        <button
+                          type="button"
+                          onClick={() => setViewingBillDetail({ bill: p.bill, tenantName, roomNum })}
+                          className="text-[10px] text-emerald-600 hover:underline font-semibold cursor-pointer"
+                        >
+                          (ดูรายการ)
+                        </button>
+                      )}
+                    </div>
                     <span className="text-lg font-black text-emerald-600">{formatBaht(amount)}</span>
                   </div>
 
@@ -1238,7 +1305,18 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                   )}
 
                   <div className="flex items-baseline justify-between pt-1 border-t border-slate-100">
-                    <span className="text-xs text-slate-400 font-bold">ยอดค้างชำระ</span>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs text-slate-400 font-bold">ยอดค้างชำระ</span>
+                      {p.bill && (
+                        <button
+                          type="button"
+                          onClick={() => setViewingBillDetail({ bill: p.bill, tenantName, roomNum })}
+                          className="text-[10px] text-rose-600 hover:underline font-semibold cursor-pointer"
+                        >
+                          (ดูรายการ)
+                        </button>
+                      )}
+                    </div>
                     <span className="text-lg font-black text-rose-600">{formatBaht(amount)}</span>
                   </div>
 
@@ -1455,6 +1533,115 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
               </div>
             </div>
           </PrintView>
+        )}
+      </Modal>
+
+      {/* Bill Line-Items and Reconciliation Detail Modal */}
+      <Modal
+        isOpen={!!viewingBillDetail}
+        onClose={() => setViewingBillDetail(null)}
+        title={`รายละเอียดรายการบิล ${viewingBillDetail?.roomNum ? `(ห้อง ${viewingBillDetail.roomNum})` : ''}`}
+        size="lg"
+      >
+        {viewingBillDetail && (
+          <div className="space-y-5 text-xs text-slate-800">
+            {/* Header info */}
+            <div className="p-3.5 bg-slate-50 border border-slate-200/80 rounded-2xl grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+              <div>
+                <span className="text-slate-400 font-medium">เลขที่บิล:</span>
+                <p className="font-bold text-slate-900">{viewingBillDetail.bill.billNumber || viewingBillDetail.bill.id}</p>
+              </div>
+              <div>
+                <span className="text-slate-400 font-medium">ผู้เช่า / ผู้พักอาศัย:</span>
+                <p className="font-bold text-slate-900">{viewingBillDetail.tenantName || 'ไม่ระบุชื่อ'}</p>
+              </div>
+              {viewingBillDetail.bill.dueDate && (
+                <div>
+                  <span className="text-slate-400 font-medium">กำหนดชำระ:</span>
+                  <p className="font-semibold text-slate-700">{formatThaiDate(viewingBillDetail.bill.dueDate)}</p>
+                </div>
+              )}
+              <div>
+                <span className="text-slate-400 font-medium">ประเภทบิล:</span>
+                <p className="font-semibold text-slate-700">
+                  {viewingBillDetail.bill.billKind === 'DEPOSIT'
+                    ? 'เงินประกันสัญญาเช่า'
+                    : viewingBillDetail.bill.billKind === 'RENT'
+                    ? 'ค่าเช่าห้องพัก'
+                    : viewingBillDetail.bill.billKind === 'MONTHLY_UTILITY'
+                    ? 'ค่าน้ำ-ค่าไฟรายเดือน'
+                    : viewingBillDetail.bill.billKind === 'LEGACY_COMBINED'
+                    ? 'บิลรวมเดิม (Legacy Combined)'
+                    : 'บิลค่าบริการ'}
+                </p>
+              </div>
+            </div>
+
+            {/* Line Items Table */}
+            <div className="border border-slate-200 rounded-2xl overflow-hidden">
+              <table className="w-full text-left border-collapse text-xs">
+                <thead className="bg-slate-50 text-slate-500 font-bold border-b border-slate-200">
+                  <tr>
+                    <th className="p-3 w-12 text-center">#</th>
+                    <th className="p-3">รายการ</th>
+                    <th className="p-3 text-center">จำนวน</th>
+                    <th className="p-3 text-right">ราคา/หน่วย</th>
+                    <th className="p-3 text-right">จำนวนเงิน</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {viewingBillDetail.bill.items && viewingBillDetail.bill.items.length > 0 ? (
+                    viewingBillDetail.bill.items.map((it: any, idx: number) => (
+                      <tr key={idx} className="hover:bg-slate-50/50">
+                        <td className="p-3 text-center text-slate-400 font-medium">{idx + 1}</td>
+                        <td className="p-3 font-semibold text-slate-800">{it.description || it.type || '-'}</td>
+                        <td className="p-3 text-center text-slate-600 font-medium">{it.quantity ? `${it.quantity} ${it.unit || ''}` : '-'}</td>
+                        <td className="p-3 text-right text-slate-600 font-medium">{it.unitPrice ? formatBaht(Number(it.unitPrice)) : '-'}</td>
+                        <td className="p-3 text-right font-bold text-slate-900">{formatBaht(Number(it.amount))}</td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan={5} className="p-4 text-center text-slate-400 font-semibold">
+                        ไม่พบรายละเอียดรายการย่อย
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Financial Reconciliation Box */}
+            <div className="p-4 bg-slate-50/80 border border-slate-200 rounded-2xl space-y-2 text-xs">
+              <div className="flex justify-between items-center text-slate-600">
+                <span className="font-semibold">ยอดรวมรายการบิลเดิม:</span>
+                <span className="font-bold text-slate-800">{formatBaht(Number(viewingBillDetail.bill.totalAmount ?? 0))}</span>
+              </div>
+              <div className="flex justify-between items-center text-emerald-700">
+                <span className="font-semibold">ชำระแล้วก่อนหน้า:</span>
+                <span className="font-bold">-{formatBaht(Number(viewingBillDetail.bill.paidAmount ?? 0))}</span>
+              </div>
+              <div className="pt-2 border-t border-slate-200 flex justify-between items-center text-sm font-black">
+                <span className="text-slate-900">ยอดคงเหลือที่ต้องชำระ:</span>
+                <span className="text-indigo-600">{formatBaht(Number(viewingBillDetail.bill.outstandingAmount ?? viewingBillDetail.bill.totalAmount ?? 0))}</span>
+              </div>
+              {Number(viewingBillDetail.bill.paidAmount || 0) > 0 && viewingBillDetail.bill.billKind === 'LEGACY_COMBINED' && (
+                <p className="text-[11px] text-amber-700 font-medium pt-1 border-t border-dashed border-amber-200">
+                  * ไม่สามารถระบุการจัดสรรยอดที่ชำระแล้วรายรายการจากข้อมูลเดิมได้
+                </p>
+              )}
+            </div>
+
+            <div className="pt-2 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setViewingBillDetail(null)}
+                className="px-5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl cursor-pointer transition-all"
+              >
+                ปิด
+              </button>
+            </div>
+          </div>
         )}
       </Modal>
 

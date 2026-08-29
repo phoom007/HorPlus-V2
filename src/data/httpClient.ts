@@ -203,15 +203,24 @@ export async function httpRequest<T>(
     }
 
     if (!response.ok) {
-      const code = mapStatusToDomainCode(response.status);
-      const serverMsg = typeof responseData === 'object' && responseData?.message
-        ? responseData.message
-        : (typeof responseData === 'object' && responseData?.error?.message ? responseData.error.message : getDefaultThaiErrorMessage(code, response.status));
+      const serverCode = typeof responseData === 'object'
+        ? (responseData?.error?.code || responseData?.code)
+        : undefined;
+
+      const code: DomainErrorCode = (typeof serverCode === 'string' && serverCode.trim())
+        ? (serverCode.trim() as DomainErrorCode)
+        : mapStatusToDomainCode(response.status);
+
+      const serverMsg = typeof responseData === 'object'
+        ? (responseData?.error?.message || responseData?.message || (typeof responseData?.error === 'string' ? responseData.error : undefined))
+        : undefined;
+
+      const message = serverMsg || getDefaultThaiErrorMessage(code, response.status);
 
       const errorObj: DomainError = {
         code,
-        message: serverMsg,
-        details: typeof responseData === 'object' ? responseData : { raw: responseData }
+        message,
+        details: typeof responseData === 'object' ? responseData : { raw: responseData },
       };
 
       throw new HttpClientError(errorObj);

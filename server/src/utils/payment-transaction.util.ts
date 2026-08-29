@@ -21,18 +21,41 @@ export async function recordCashPaymentInTx(
 ) {
   const bill = await tx.bill.findUnique({
     where: { id: input.billId },
-    include: { items: true },
+    include: {
+      items: true,
+      Payment: {
+        where: { status: { in: ['PENDING', 'UNDER_REVIEW', 'APPROVED'] } },
+      },
+    },
   });
   if (!bill) throw new Error('NOT_FOUND');
   if (bill.dormitoryId !== input.dormitoryId) throw new Error('FORBIDDEN');
-  if (bill.status === 'PAID') throw new Error('ALREADY_PAID');
+  if (bill.status === 'PAID' || bill.status === 'paid') throw new Error('ALREADY_PAID');
+
+  const hasActivePendingPayment = bill.Payment?.some(
+    (p: any) => p.status === 'PENDING' || p.status === 'UNDER_REVIEW'
+  );
+  if (hasActivePendingPayment) {
+    throw new Error('PAYMENT_IN_PROGRESS');
+  }
 
   Decimal.set({ rounding: Decimal.ROUND_HALF_UP });
   const totalAmount = bill.totalAmount !== undefined && bill.totalAmount !== null
     ? new Decimal(bill.totalAmount.toString())
     : bill.items.reduce((sum: Decimal, item: any) => sum.plus(new Decimal(item.amount.toString())), new Decimal(0));
+
+  const existingPaidAmount = bill.paidAmount !== undefined && bill.paidAmount !== null
+    ? new Decimal(bill.paidAmount.toString())
+    : new Decimal('0.00');
+
+  const currentOutstanding = bill.outstandingAmount !== undefined && bill.outstandingAmount !== null
+    ? new Decimal(bill.outstandingAmount.toString())
+    : totalAmount.minus(existingPaidAmount);
+
   const submitAmount = new Decimal(input.amount.toString());
-  if (!totalAmount.equals(submitAmount)) throw new Error('UNSUPPORTED_AMOUNT');
+  if (!currentOutstanding.equals(submitAmount) || submitAmount.lessThanOrEqualTo(0)) {
+    throw new Error('UNSUPPORTED_AMOUNT');
+  }
 
   const now = input.paymentDate || new Date();
   const safeUserId = input.userId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(input.userId)
@@ -75,13 +98,14 @@ export async function recordCashPaymentInTx(
     },
   });
 
+  const newPaidAmount = existingPaidAmount.plus(submitAmount);
   await tx.bill.update({
     where: { id: bill.id },
     data: {
       status: 'PAID',
       previousStatus: prePaymentStatus,
       paidAt: now,
-      paidAmount: new Prisma.Decimal(submitAmount.toFixed(2)),
+      paidAmount: new Prisma.Decimal(newPaidAmount.toFixed(2)),
       outstandingAmount: new Prisma.Decimal('0.00'),
     },
   });
@@ -134,11 +158,32 @@ export async function generateReceiptInTx(
   const receiptNumber = `RC-${yearMonth}-${normalizedRoom}-${sequenceStr}`;
 
   const payment = await tx.payment.findUnique({ where: { id: paymentId } });
+  if (!payment) throw new Error('PAYMENT_NOT_FOUND');
 
   Decimal.set({ rounding: Decimal.ROUND_HALF_UP });
-  const subtotal = bill.items.reduce((sum: Decimal, item: any) => sum.plus(new Decimal(item.amount.toString())), new Decimal(0));
-  const total = bill.totalAmount ? new Decimal(bill.totalAmount.toString()) : subtotal;
-  const discount = subtotal.minus(total).greaterThan(0) ? subtotal.minus(total).toFixed(2) : '0.00';
+  const paymentAmount = new Decimal(payment.amount.toString());
+  const billTotal = bill?.totalAmount ? new Decimal(bill.totalAmount.toString()) : paymentAmount;
+  const isPartialSettlement = !paymentAmount.equals(billTotal);
+
+  let receiptItems: any[] = [];
+  if (!isPartialSettlement && bill?.items && bill.items.length > 0) {
+    receiptItems = bill.items.map((i: any) => ({
+      description: i.description,
+      amount: new Decimal(i.amount.toString()).toFixed(2),
+      quantity: (i.quantity || 1).toString(),
+      unit: i.unit || null,
+      unitPrice: i.unitPrice ? new Decimal(i.unitPrice.toString()).toFixed(2) : null,
+    }));
+  } else {
+    const billRef = bill?.billNumber || bill?.id;
+    receiptItems = [
+      {
+        description: `ชำระยอดคงเหลือบิล ${billRef}`,
+        amount: paymentAmount.toFixed(2),
+        quantity: '1',
+      },
+    ];
+  }
 
   const snapshotData = {
     dormitoryName: bill?.dormitory?.name || 'หอพัก',
@@ -148,14 +193,10 @@ export async function generateReceiptInTx(
     tenantName: bill?.tenant?.name || bill?.tenant?.displayName || 'ผู้เช่า',
     roomNumber: bill?.room?.roomNumber || 'N/A',
     billNumber: bill?.billNumber || bill?.id,
-    items: bill?.items?.map((i: any) => ({
-      description: i.description,
-      amount: i.amount.toString(),
-      quantity: (i.quantity || 1).toString(),
-    })) || [],
-    subtotal: subtotal.toFixed(2),
-    discount: discount,
-    total: total.toFixed(2),
+    items: receiptItems,
+    subtotal: paymentAmount.toFixed(2),
+    discount: '0.00',
+    total: paymentAmount.toFixed(2),
     paymentMethod: payment?.method || 'CASH',
     paymentDate: payment?.paymentDate ? payment.paymentDate.toISOString() : today.toISOString(),
     approvalDate: payment?.reviewedAt ? payment.reviewedAt.toISOString() : today.toISOString(),
@@ -176,7 +217,7 @@ export async function generateReceiptInTx(
       billId,
       paymentId,
       issuedByUserId: safeUserId,
-            snapshotData: snapshotData as any,
+      snapshotData: snapshotData as any,
     },
   });
 }

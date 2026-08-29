@@ -36,7 +36,8 @@ export type DomainErrorCode =
   | 'SETTLEMENT_LOCKED'
   | 'PENDING_REGISTRATION_LOCK'
   | 'POLICY_VERSION_MISMATCH'
-  | 'INTERNAL_ERROR';
+  | 'INTERNAL_ERROR'
+  | (string & {});
 
 export interface DomainError {
   code: DomainErrorCode;

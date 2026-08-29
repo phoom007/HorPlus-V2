@@ -322,6 +322,95 @@ export function createPaymentRouter(authService: AuthenticationService) {
     }
   });
 
+  const handlePaymentError = (res: Response, req: Request, err: any) => {
+    const requestId = (req.headers['x-request-id'] as string) || (req as any).id || 'req-unknown';
+    const timestamp = new Date().toISOString();
+
+    if (err instanceof z.ZodError) {
+      return res.status(400).json({
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'ข้อมูลการทำรายการไม่ถูกต้อง',
+          fieldErrors: err.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
+          requestId,
+          timestamp,
+        },
+      });
+    }
+
+    const rawCode = err.code || err.message;
+    let statusCode = err.statusCode || 400;
+    let code = 'PAYMENT_ERROR';
+    let message = 'เกิดข้อผิดพลาดในการทำรายการชำระเงิน';
+
+    switch (rawCode) {
+      case 'UNSUPPORTED_AMOUNT':
+        statusCode = 400;
+        code = 'UNSUPPORTED_AMOUNT';
+        message = 'ยอดเงินที่ชำระไม่ตรงกับยอดคงเหลือของบิล';
+        break;
+      case 'ALREADY_PAID':
+        statusCode = 400;
+        code = 'ALREADY_PAID';
+        message = 'บิลนี้ได้รับการชำระเงินแล้ว';
+        break;
+      case 'NOT_FOUND':
+        statusCode = 404;
+        code = 'BILL_NOT_FOUND';
+        message = 'ไม่พบข้อมูลบิลที่ระบุ';
+        break;
+      case 'FORBIDDEN':
+        statusCode = 403;
+        code = 'FORBIDDEN';
+        message = 'ไม่มีสิทธิ์ดำเนินการกับบิลนี้';
+        break;
+      case 'PAYMENT_IN_PROGRESS':
+        statusCode = 409;
+        code = 'PAYMENT_IN_PROGRESS';
+        message = 'มีรายการชำระเงินที่อยู่ระหว่างรอการตรวจสอบสำหรับบิลนี้แล้ว';
+        break;
+      case 'IDEMPOTENCY_MISMATCH':
+        statusCode = 422;
+        code = 'IDEMPOTENCY_MISMATCH';
+        message = 'ข้อมูลการทำรายการไม่ตรงกับ Idempotency Key เดิม';
+        break;
+      case 'CONCURRENT_REQUEST_IN_PROGRESS':
+        statusCode = 409;
+        code = 'CONCURRENT_REQUEST_IN_PROGRESS';
+        message = 'มีคำขอกำลังประมวลผลอยู่ กรุณารอสักครู่';
+        break;
+      case 'DUPLICATE_PAYMENT_EVIDENCE':
+        statusCode = 409;
+        code = 'DUPLICATE_PAYMENT_EVIDENCE';
+        message = 'มีการแนบหลักฐานการชำระเงินนี้ไปแล้ว';
+        break;
+      case 'ACTIVE_REVIEW_EXISTS':
+        statusCode = 400;
+        code = 'ACTIVE_REVIEW_EXISTS';
+        message = 'มีรายการชำระเงินที่รอตรวจสอบอยู่แล้ว';
+        break;
+      default:
+        if (err.statusCode && err.statusCode >= 400 && err.statusCode < 600) {
+          statusCode = err.statusCode;
+          code = err.code || 'PAYMENT_ERROR';
+          message = err.message || message;
+        } else if (err.message && typeof err.message === 'string') {
+          message = err.message;
+        }
+        break;
+    }
+
+    return res.status(statusCode).json({
+      error: {
+        code,
+        message,
+        fieldErrors: err.fieldErrors || null,
+        requestId,
+        timestamp,
+      },
+    });
+  };
+
   // Owner: Record Cash
   router.post('/cash', requireAuth, requireDormitoryPermission('payment:write'), requireDormitoryWriteEntitlement, requireCsrf, async (req, res) => {
     try {
@@ -330,18 +419,32 @@ export function createPaymentRouter(authService: AuthenticationService) {
       const dormitoryId = context.dormitoryId;
 
       if (!ensureOwnerOrManager(req, res, dormitoryId)) {
-        return res.status(403).json({ error: 'Forbidden' });
+        return res.status(403).json({
+          error: {
+            code: 'FORBIDDEN',
+            message: 'ไม่มีสิทธิ์บันทึกการรับเงินสด',
+            requestId: (req.headers['x-request-id'] as string) || (req as any).id || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
       }
 
       const schema = z.object({
         billId: z.string(),
-        amount: z.string()
+        amount: z.string(),
       });
       const data = schema.parse(req.body);
 
       const bill = await prisma.bill.findUnique({ where: { id: data.billId } });
       if (!bill || bill.dormitoryId !== dormitoryId) {
-        return res.status(403).json({ error: 'Forbidden' });
+        return res.status(403).json({
+          error: {
+            code: 'FORBIDDEN',
+            message: 'ไม่มีสิทธิ์ดำเนินการกับบิลนี้',
+            requestId: (req.headers['x-request-id'] as string) || (req as any).id || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
       }
 
       const idempotencyKey = (req.headers['x-idempotency-key'] || req.headers['idempotency-key']) as string | undefined;
@@ -350,18 +453,12 @@ export function createPaymentRouter(authService: AuthenticationService) {
         dormitoryId,
         ...data,
         userId: auth.userId,
-        idempotencyKey
+        idempotencyKey,
       });
 
       res.json(payment);
     } catch (err: any) {
-      if (err.message === 'IDEMPOTENCY_MISMATCH') {
-        return res.status(422).json({ error: 'IDEMPOTENCY_MISMATCH' });
-      }
-      if (err.message === 'CONCURRENT_REQUEST_IN_PROGRESS') {
-        return res.status(409).json({ error: 'CONCURRENT_REQUEST_IN_PROGRESS' });
-      }
-      res.status(400).json({ error: err.message });
+      handlePaymentError(res, req, err);
     }
   });
 
@@ -373,7 +470,14 @@ export function createPaymentRouter(authService: AuthenticationService) {
       const dormitoryId = context.dormitoryId;
 
       if (!ensureOwnerOrManager(req, res, dormitoryId)) {
-        return res.status(403).json({ error: 'Forbidden' });
+        return res.status(403).json({
+          error: {
+            code: 'FORBIDDEN',
+            message: 'ไม่มีสิทธิ์บันทึกการรับเงินสด',
+            requestId: (req.headers['x-request-id'] as string) || (req as any).id || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
       }
 
       const schema = z.object({
@@ -393,13 +497,7 @@ export function createPaymentRouter(authService: AuthenticationService) {
 
       res.json(result);
     } catch (err: any) {
-      if (err.message === 'IDEMPOTENCY_MISMATCH') {
-        return res.status(422).json({ error: 'IDEMPOTENCY_MISMATCH' });
-      }
-      if (err.message === 'CONCURRENT_REQUEST_IN_PROGRESS') {
-        return res.status(409).json({ error: 'CONCURRENT_REQUEST_IN_PROGRESS' });
-      }
-      res.status(400).json({ error: err.message });
+      handlePaymentError(res, req, err);
     }
   });
 
@@ -411,11 +509,11 @@ export function createPaymentRouter(authService: AuthenticationService) {
       const dormitoryId = context.dormitoryId;
 
       const paymentRecord = await prisma.payment.findUnique({ where: { id: req.params.paymentId } });
-      if (!paymentRecord) return res.status(404).json({ error: 'Not found' });
-      if (paymentRecord.dormitoryId !== dormitoryId) return res.status(403).json({ error: 'Forbidden' });
+      if (!paymentRecord) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'ไม่พบรายการชำระเงิน' } });
+      if (paymentRecord.dormitoryId !== dormitoryId) return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'ไม่มีสิทธิ์' } });
 
       if (!ensureOwnerOrManager(req, res, dormitoryId)) {
-        return res.status(403).json({ error: 'Forbidden' });
+        return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'ไม่มีสิทธิ์' } });
       }
 
       const idempotencyKey = (req.headers['x-idempotency-key'] || req.headers['idempotency-key']) as string | undefined;
@@ -424,18 +522,12 @@ export function createPaymentRouter(authService: AuthenticationService) {
         dormitoryId,
         paymentId: req.params.paymentId,
         userId: auth.userId,
-        idempotencyKey
+        idempotencyKey,
       });
 
       res.json(payment);
     } catch (err: any) {
-      if (err.message === 'IDEMPOTENCY_MISMATCH') {
-        return res.status(422).json({ error: 'IDEMPOTENCY_MISMATCH' });
-      }
-      if (err.message === 'CONCURRENT_REQUEST_IN_PROGRESS') {
-        return res.status(409).json({ error: 'CONCURRENT_REQUEST_IN_PROGRESS' });
-      }
-      res.status(400).json({ error: err.message });
+      handlePaymentError(res, req, err);
     }
   });
 
@@ -447,11 +539,11 @@ export function createPaymentRouter(authService: AuthenticationService) {
       const dormitoryId = context.dormitoryId;
 
       const paymentRecord = await prisma.payment.findUnique({ where: { id: req.params.paymentId } });
-      if (!paymentRecord) return res.status(404).json({ error: 'Not found' });
-      if (paymentRecord.dormitoryId !== dormitoryId) return res.status(403).json({ error: 'Forbidden' });
+      if (!paymentRecord) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'ไม่พบรายการชำระเงิน' } });
+      if (paymentRecord.dormitoryId !== dormitoryId) return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'ไม่มีสิทธิ์' } });
 
       if (!ensureOwnerOrManager(req, res, dormitoryId)) {
-        return res.status(403).json({ error: 'Forbidden' });
+        return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'ไม่มีสิทธิ์' } });
       }
 
       const schema = z.object({ reason: z.string().min(1) });
@@ -464,18 +556,12 @@ export function createPaymentRouter(authService: AuthenticationService) {
         paymentId: req.params.paymentId,
         userId: auth.userId,
         reason: data.reason,
-        idempotencyKey
+        idempotencyKey,
       });
 
       res.json(payment);
     } catch (err: any) {
-      if (err.message === 'IDEMPOTENCY_MISMATCH') {
-        return res.status(422).json({ error: 'IDEMPOTENCY_MISMATCH' });
-      }
-      if (err.message === 'CONCURRENT_REQUEST_IN_PROGRESS') {
-        return res.status(409).json({ error: 'CONCURRENT_REQUEST_IN_PROGRESS' });
-      }
-      res.status(400).json({ error: err.message });
+      handlePaymentError(res, req, err);
     }
   });
 
@@ -487,15 +573,15 @@ export function createPaymentRouter(authService: AuthenticationService) {
       const dormitoryId = context.dormitoryId;
 
       const paymentRecord = await prisma.payment.findUnique({ where: { id: req.params.paymentId } });
-      if (!paymentRecord) return res.status(404).json({ error: 'Not found' });
-      if (paymentRecord.dormitoryId !== dormitoryId) return res.status(403).json({ error: 'Forbidden' });
+      if (!paymentRecord) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'ไม่พบรายการชำระเงิน' } });
+      if (paymentRecord.dormitoryId !== dormitoryId) return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'ไม่มีสิทธิ์' } });
 
       const isOwner = auth?.memberships?.find((m: any) => {
         const code = (m.roleCode || m.role || m.roleId || '').toLowerCase();
         return m.dormitoryId === dormitoryId && code.includes('owner');
       });
       if (!isOwner) {
-        return res.status(403).json({ error: 'Forbidden: Owner only' });
+        return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Forbidden: Owner only' } });
       }
 
       const schema = z.object({ reason: z.string().min(1) });
@@ -508,18 +594,12 @@ export function createPaymentRouter(authService: AuthenticationService) {
         paymentId: req.params.paymentId,
         userId: auth.userId,
         reason: data.reason,
-        idempotencyKey
+        idempotencyKey,
       });
 
       res.json(payment);
     } catch (err: any) {
-      if (err.message === 'IDEMPOTENCY_MISMATCH') {
-        return res.status(422).json({ error: 'IDEMPOTENCY_MISMATCH' });
-      }
-      if (err.message === 'CONCURRENT_REQUEST_IN_PROGRESS') {
-        return res.status(409).json({ error: 'CONCURRENT_REQUEST_IN_PROGRESS' });
-      }
-      res.status(400).json({ error: err.message });
+      handlePaymentError(res, req, err);
     }
   });
 
@@ -581,7 +661,13 @@ export function createPaymentRouter(authService: AuthenticationService) {
       const payments = await prisma.payment.findMany({
         where: { dormitoryId },
         include: {
-          bill: { include: { tenant: true, room: true } },
+          bill: {
+            include: {
+              tenant: true,
+              room: true,
+              items: true,
+            },
+          },
           receipt: true,
           statusHistories: { orderBy: { effectiveAt: 'desc' } }
         },
@@ -589,7 +675,7 @@ export function createPaymentRouter(authService: AuthenticationService) {
       });
       res.json(payments);
     } catch (err: any) {
-      res.status(400).json({ error: err.message });
+      handlePaymentError(res, req, err);
     }
   });
   // Tenant: Create upload intent for multiple bills combined with 1 slip

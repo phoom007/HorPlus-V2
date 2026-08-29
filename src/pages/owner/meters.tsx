@@ -2123,11 +2123,11 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         queryClient.invalidateQueries({ queryKey: queryKeys.meterPreviewContext(currentDormId, selectedBillingCycleId) });
         queryClient.invalidateQueries({ queryKey: queryKeys.bills(currentDormId) });
       } else {
-        showToast(mapErrorMessageToThai(res?.error?.message) || 'เกิดข้อผิดพลาดในการเปลี่ยนสถานะบิล', 'error');
+        showToast(mapErrorMessageToThai(res?.error) || 'เกิดข้อผิดพลาดในการเปลี่ยนสถานะบิล', 'error');
       }
     } catch (err: any) {
       setIsSaving(false);
-      showToast(mapErrorMessageToThai(err.message) || 'เกิดข้อผิดพลาดในการเปลี่ยนสถานะบิล', 'error');
+      showToast(mapErrorMessageToThai(err) || 'เกิดข้อผิดพลาดในการเปลี่ยนสถานะบิล', 'error');
     }
   };
 
@@ -2215,11 +2215,11 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         queryClient.invalidateQueries({ queryKey: queryKeys.meterPreviewContext(currentDormId, selectedBillingCycleId) });
         queryClient.invalidateQueries({ queryKey: queryKeys.bills(currentDormId) });
       } else {
-        showToast(mapErrorMessageToThai(res?.error?.message), 'error');
+        showToast(mapErrorMessageToThai(res?.error), 'error');
       }
     } catch (err: any) {
       setIsSaving(false);
-      showToast(mapErrorMessageToThai(err.message), 'error');
+      showToast(mapErrorMessageToThai(err), 'error');
     }
   };
 
@@ -2305,11 +2305,11 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         queryClient.invalidateQueries({ queryKey: queryKeys.meterPreviewContext(currentDormId, selectedBillingCycleId) });
         queryClient.invalidateQueries({ queryKey: queryKeys.bills(currentDormId) });
       } else {
-        showToast(mapErrorMessageToThai(res?.error?.message) || 'เกิดข้อผิดพลาดในการบันทึกข้อมูลมิเตอร์', 'error');
+        showToast(mapErrorMessageToThai(res?.error) || 'เกิดข้อผิดพลาดในการบันทึกข้อมูลมิเตอร์', 'error');
       }
     } catch (err: any) {
       setIsSaving(false);
-      showToast(mapErrorMessageToThai(err.message) || 'เกิดข้อผิดพลาดในการบันทึกข้อมูลมิเตอร์', 'error');
+      showToast(mapErrorMessageToThai(err) || 'เกิดข้อผิดพลาดในการบันทึกข้อมูลมิเตอร์', 'error');
     }
   };
 

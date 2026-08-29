@@ -320,6 +320,8 @@ export interface Bill {
   billingCycleId?: string;
   billKind?: 'MONTHLY_UTILITY' | 'DEPOSIT' | 'RENT' | string;
   outstandingAmount?: number | string;
+  paidAmount?: number | string;
+  subtotal?: number | string;
   roomId: string;
   tenantId: string;
   items: BillItem[];

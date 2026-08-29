@@ -814,18 +814,8 @@ export async function seedLocal07Data() {
     },
   });
 
-  // Billing Cycles: July (2026-07), August (2026-08 Current), September (2026-09 Rolling)
+  // Billing Cycles: July (2026-07 First Cycle), August (2026-08 Current), September (2026-09 Rolling)
   const compBillingCycleService = new BillingCycleService(new PrismaBillingCycleRepository(prisma));
-
-  const cycleJuneRes = await compBillingCycleService.createBillingCycle(compDorm.id, {
-    cycleCode: '2026-06',
-    name: 'รอบบิล มิถุนายน 2569',
-    periodStart: '2026-06-01',
-    periodEnd: '2026-06-30',
-    billingDate: '2026-06-25',
-    dueDate: '2026-07-05',
-  }, COMP_DORM.owner.id);
-  const cycleJune = cycleJuneRes.cycle;
 
   const cycleJulyRes = await compBillingCycleService.createBillingCycle(compDorm.id, {
     cycleCode: '2026-07',
@@ -838,8 +828,18 @@ export async function seedLocal07Data() {
   const cycleJuly = cycleJulyRes.cycle;
 
   // Persist authoritative status-history evidence for Room 206 (maintenance since July 2026)
-  await prisma.roomOperationalStatusChange.create({
-    data: {
+  await prisma.roomOperationalStatusChange.upsert({
+    where: {
+      dormitory_room_effective_cycle_unique: {
+        dormitoryId: compDorm.id,
+        roomId: createdRooms['206'].id,
+        effectiveBillingCycleId: cycleJuly.id,
+      },
+    },
+    update: {
+      status: 'maintenance',
+    },
+    create: {
       dormitoryId: compDorm.id,
       roomId: createdRooms['206'].id,
       effectiveBillingCycleId: cycleJuly.id,
@@ -1480,24 +1480,24 @@ export async function seedLocal07Data() {
     bCount++;
   }
 
-  // Seed Room 101 Start-Cycle Deposit Bill in June 2026 (Paid via canonical evidence)
+  // Seed Room 101 Start-Cycle Deposit Bill in July 2026 (Paid via canonical evidence)
   const bill101Dep = await prisma.bill.create({
     data: {
       dormitoryId: compDorm.id,
-      billingCycleId: cycleJune.id,
+      billingCycleId: cycleJuly.id,
       roomId: createdRooms['101'].id,
       tenantId: createdTenants['101'].id,
       contractId: createdContracts['101']?.id || null,
-      billNumber: 'INV-202606-101-D',
+      billNumber: 'INV-202607-101-D',
       billKind: 'DEPOSIT',
-      billingDate: new Date('2026-06-25'),
-      dueDate: new Date('2026-07-05'),
+      billingDate: new Date('2026-07-01'),
+      dueDate: new Date('2026-07-10'),
       subtotal: 4500.0,
       totalAmount: 4500.0,
       paidAmount: 4500.0,
       outstandingAmount: 0.0,
       status: 'paid',
-      paidAt: new Date('2026-06-28T14:30:00Z'),
+      paidAt: new Date('2026-07-05T14:30:00Z'),
     },
   });
   await prisma.billItem.create({
@@ -1518,8 +1518,30 @@ export async function seedLocal07Data() {
       tenantId: createdTenants['101'].id,
       amount: 4500.0,
       method: 'promptpay',
-      status: 'verified',
-      paymentDate: new Date('2026-06-28T14:30:00Z'),
+      status: 'APPROVED',
+      paymentDate: new Date('2026-07-05T14:30:00Z'),
+      reviewedByUserId: COMP_DORM.owner.id,
+      reviewedAt: new Date('2026-07-05T14:30:00Z'),
+    },
+  });
+  await prisma.paymentStatusHistory.create({
+    data: {
+      dormitoryId: compDorm.id,
+      paymentId: pay101Dep.id,
+      fromStatus: null,
+      toStatus: 'APPROVED',
+      changedByUserId: COMP_DORM.owner.id,
+      createdAt: new Date('2026-07-05T14:30:00Z'),
+    },
+  });
+  await prisma.billStatusHistory.create({
+    data: {
+      dormitoryId: compDorm.id,
+      billId: bill101Dep.id,
+      fromStatus: 'unpaid',
+      toStatus: 'PAID',
+      changedByUserId: COMP_DORM.owner.id,
+      createdAt: new Date('2026-07-05T14:30:00Z'),
     },
   });
   await prisma.receipt.create({
@@ -1527,7 +1549,7 @@ export async function seedLocal07Data() {
       dormitoryId: compDorm.id,
       billId: bill101Dep.id,
       paymentId: pay101Dep.id,
-      receiptNumber: 'RCP-202606-101-D',
+      receiptNumber: 'RCP-202607-101-D',
       snapshotData: {
         billNumber: bill101Dep.billNumber,
         roomNumber: '101',
@@ -1535,8 +1557,132 @@ export async function seedLocal07Data() {
         totalAmount: 4500.0,
         items: [{ type: 'deposit', description: 'เงินประกันสัญญาเช่า 101', amount: 4500 }],
       },
-      issuedAt: new Date('2026-06-28T14:35:00Z'),
+      issuedAt: new Date('2026-07-05T14:35:00Z'),
       isVoided: false,
+    },
+  });
+
+  // Seed Room 102 July Deposit Bill (Unpaid - deterministic รอชำระ fixture)
+  const bill102Dep = await prisma.bill.create({
+    data: {
+      dormitoryId: compDorm.id,
+      billingCycleId: cycleJuly.id,
+      roomId: createdRooms['102'].id,
+      tenantId: createdTenants['102'].id,
+      contractId: createdContracts['102']?.id || null,
+      billNumber: 'INV-202607-102-D',
+      billKind: 'DEPOSIT',
+      billingDate: new Date('2026-07-01'),
+      dueDate: new Date('2026-07-10'),
+      subtotal: 4500.0,
+      totalAmount: 4500.0,
+      paidAmount: 0.0,
+      outstandingAmount: 4500.0,
+      status: 'unpaid',
+    },
+  });
+  await prisma.billItem.create({
+    data: {
+      dormitoryId: compDorm.id,
+      billId: bill102Dep.id,
+      type: 'deposit',
+      description: 'เงินประกันสัญญาเช่า 102',
+      quantity: 1,
+      unitPrice: 4500,
+      amount: 4500,
+    },
+  });
+
+  // Seed Room 103 July Deposit Bill (Unpaid)
+  const bill103Dep = await prisma.bill.create({
+    data: {
+      dormitoryId: compDorm.id,
+      billingCycleId: cycleJuly.id,
+      roomId: createdRooms['103'].id,
+      tenantId: createdTenants['103'].id,
+      contractId: createdContracts['103']?.id || null,
+      billNumber: 'INV-202607-103-D',
+      billKind: 'DEPOSIT',
+      billingDate: new Date('2026-07-01'),
+      dueDate: new Date('2026-07-10'),
+      subtotal: 4500.0,
+      totalAmount: 4500.0,
+      paidAmount: 0.0,
+      outstandingAmount: 4500.0,
+      status: 'unpaid',
+    },
+  });
+  await prisma.billItem.create({
+    data: {
+      dormitoryId: compDorm.id,
+      billId: bill103Dep.id,
+      type: 'deposit',
+      description: 'เงินประกันสัญญาเช่า 103',
+      quantity: 1,
+      unitPrice: 4500,
+      amount: 4500,
+    },
+  });
+
+  // Seed Room 201 July Deposit Bill (Unpaid)
+  const bill201Dep = await prisma.bill.create({
+    data: {
+      dormitoryId: compDorm.id,
+      billingCycleId: cycleJuly.id,
+      roomId: createdRooms['201'].id,
+      tenantId: createdTenants['201'].id,
+      contractId: createdContracts['201']?.id || null,
+      billNumber: 'INV-202607-201-D',
+      billKind: 'DEPOSIT',
+      billingDate: new Date('2026-07-01'),
+      dueDate: new Date('2026-07-10'),
+      subtotal: 4800.0,
+      totalAmount: 4800.0,
+      paidAmount: 0.0,
+      outstandingAmount: 4800.0,
+      status: 'unpaid',
+    },
+  });
+  await prisma.billItem.create({
+    data: {
+      dormitoryId: compDorm.id,
+      billId: bill201Dep.id,
+      type: 'deposit',
+      description: 'เงินประกันสัญญาเช่า 201',
+      quantity: 1,
+      unitPrice: 4800,
+      amount: 4800,
+    },
+  });
+
+  // Seed Room 203 July Deposit Bill (Unpaid)
+  const bill203Dep = await prisma.bill.create({
+    data: {
+      dormitoryId: compDorm.id,
+      billingCycleId: cycleJuly.id,
+      roomId: createdRooms['203'].id,
+      tenantId: createdTenants['203'].id,
+      contractId: createdContracts['203']?.id || null,
+      billNumber: 'INV-202607-203-D',
+      billKind: 'DEPOSIT',
+      billingDate: new Date('2026-07-01'),
+      dueDate: new Date('2026-07-10'),
+      subtotal: 4800.0,
+      totalAmount: 4800.0,
+      paidAmount: 0.0,
+      outstandingAmount: 4800.0,
+      status: 'unpaid',
+    },
+  });
+  await prisma.billItem.create({
+    data: {
+      dormitoryId: compDorm.id,
+      billId: bill203Dep.id,
+      type: 'deposit',
+      description: 'เงินประกันสัญญาเช่า 203',
+      quantity: 1,
+      unitPrice: 4800,
+      amount: 4800,
     },
   });
 

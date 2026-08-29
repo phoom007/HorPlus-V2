@@ -164,25 +164,25 @@ export async function runVerification() {
   // Billing Cycle July 2026 verification
   const julyCycle = compDormDb?.billingCycles.find(c => c.cycleCode === '2026-07');
   assert(Boolean(julyCycle), 'Billing cycle 2026-07 exists and is open');
-  assert(julyCycle?.bills.length === 11, 'July bills count is 11', julyCycle?.bills.length);
+  assert(julyCycle?.bills.length === 16, 'July bills count is 16', julyCycle?.bills.length);
 
   const paidBills = julyCycle?.bills.filter(b => b.status === 'paid') || [];
   const unpaidBills = julyCycle?.bills.filter(b => b.status === 'unpaid') || [];
 
-  assert(paidBills.length === 7, 'Paid bills count is exactly 7', paidBills.length);
-  assert(unpaidBills.length === 4, 'Unpaid bills count is exactly 4', unpaidBills.length);
+  assert(paidBills.length === 8, 'Paid bills count is exactly 8', paidBills.length);
+  assert(unpaidBills.length === 8, 'Unpaid bills count is exactly 8', unpaidBills.length);
 
   const totalBilled = julyCycle?.bills.reduce((sum, b) => sum + Number(b.totalAmount), 0) || 0;
   const totalPaid = paidBills.reduce((sum, b) => sum + Number(b.totalAmount), 0);
   const totalUnpaid = unpaidBills.reduce((sum, b) => sum + Number(b.totalAmount), 0);
 
-  assert(Math.round(totalBilled) === 65899, 'Total billed in July 2026 equals ฿65,899.00', totalBilled);
-  assert(Math.round(totalPaid) === 41994, 'Total paid in July 2026 equals ฿41,994.00', totalPaid);
-  assert(Math.round(totalUnpaid) === 23905, 'Total unpaid in July 2026 equals ฿23,905.00', totalUnpaid);
+  assert(Math.round(totalBilled) === 88999, 'Total billed in July 2026 equals ฿88,999.00', totalBilled);
+  assert(Math.round(totalPaid) === 46494, 'Total paid in July 2026 equals ฿46,494.00', totalPaid);
+  assert(Math.round(totalUnpaid) === 42505, 'Total unpaid in July 2026 equals ฿42,505.00', totalUnpaid);
 
   // Receipts count verification
   const receiptsCount = julyCycle?.bills.reduce((sum, b) => sum + b.Receipt.length, 0) || 0;
-  assert(receiptsCount === 7, 'Receipts issued count is exactly 7', receiptsCount);
+  assert(receiptsCount === 8, 'Receipts issued count is exactly 8', receiptsCount);
 
   // 4. Session State Manifest Verification
   console.log('\n--- 4. Session Manifest & Playwright Storage State Verification ---');
@@ -378,9 +378,10 @@ export async function runVerification() {
     if (cycleJulyDb) {
       const julPreview = await meterService.getMeterBillingPreviewContext(COMP_DORM.id, cycleJulyDb.id);
       const r101Jul = julPreview.rooms.find(r => r.roomId === room101Db.id);
-      assert(r101Jul?.chargeComponents?.length === 2, 'Room 101 has 2 decomposed charge components in July 2026 (Rent + MU)', r101Jul?.chargeComponents?.length);
-      assert(r101Jul?.chargeComponents[0]?.type === 'rent' && r101Jul?.chargeComponents[0]?.amount === '4500.00', 'Room 101 July Rent component is 4500.00');
-      assert(r101Jul?.chargeComponents[1]?.type === 'monthly_utility' && r101Jul?.chargeComponents[1]?.amount === '950.00', 'Room 101 July MU component is 950.00');
+      assert(r101Jul?.chargeComponents?.length === 3, 'Room 101 has 3 decomposed charge components in July 2026 (Rent + Deposit + MU)', r101Jul?.chargeComponents?.length);
+      assert(r101Jul?.chargeComponents?.some(c => c.type === 'rent' && c.amount === '4500.00'), 'Room 101 July Rent component is 4500.00');
+      assert(r101Jul?.chargeComponents?.some(c => c.type === 'monthly_utility' && c.amount === '950.00'), 'Room 101 July MU component is 950.00');
+      assert(r101Jul?.chargeComponents?.some(c => c.type === 'deposit' && c.amount === '4500.00'), 'Room 101 July Deposit component is 4500.00');
       assert(!r101Jul?.chargeComponents?.some(c => c.type === 'legacy_combined' || (c.label && c.label.includes('รวมค่าเช่า'))), 'Room 101 July has no combined component');
     }
   }
@@ -574,6 +575,8 @@ export async function runVerification() {
   assert(Boolean(cycleOctDb), 'Oracle Fixture Precondition: cycle 2026-10 exists in DB');
 
   const r101Db = allRooms.find(r => r.roomNumber === '101');
+  const r102Db = allRooms.find(r => r.roomNumber === '102');
+  const r103Db = allRooms.find(r => r.roomNumber === '103');
   const r104Db = allRooms.find(r => r.roomNumber === '104');
   const r106Db = allRooms.find(r => r.roomNumber === '106');
   const r201Db = allRooms.find(r => r.roomNumber === '201');
@@ -584,6 +587,8 @@ export async function runVerification() {
   const r303Db = allRooms.find(r => r.roomNumber === '303');
 
   assert(Boolean(r101Db), 'Oracle Fixture Precondition: Room 101 exists in DB');
+  assert(Boolean(r102Db), 'Oracle Fixture Precondition: Room 102 exists in DB');
+  assert(Boolean(r103Db), 'Oracle Fixture Precondition: Room 103 exists in DB');
   assert(Boolean(r104Db), 'Oracle Fixture Precondition: Room 104 exists in DB');
   assert(Boolean(r106Db), 'Oracle Fixture Precondition: Room 106 exists in DB');
   assert(Boolean(r201Db), 'Oracle Fixture Precondition: Room 201 exists in DB');
@@ -607,6 +612,12 @@ export async function runVerification() {
       p101Jul?.agreementRentPaymentStatus
     );
 
+    // June Cycle Absence Check (July is first operational cycle)
+    assert(
+      !compDormDb?.billingCycles.some(c => c.cycleCode === '2026-06'),
+      'Comprehensive Owner has NO June 2026 cycle (July 2026 is the first operational cycle)'
+    );
+
     // Matrix Scenario A2: ROOM 101 DEPOSIT ORACLE & SINGLE SEEDED BILL IDENTITY
     const r101DepositBills = await prisma.bill.findMany({
       where: { dormitoryId: COMP_DORM.id, roomId: r101Db.id, billKind: 'DEPOSIT' },
@@ -616,8 +627,8 @@ export async function runVerification() {
       `Room 101 Deposit Bill single identity invariant (found ${r101DepositBills.length}, expected 1)`
     );
     assert(
-      r101DepositBills[0]?.billNumber === 'INV-202606-101-D',
-      `Room 101 Deposit Bill is the seeded June Deposit Bill INV-202606-101-D without duplicates (${r101DepositBills[0]?.billNumber})`
+      r101DepositBills[0]?.billNumber === 'INV-202607-101-D',
+      `Room 101 Deposit Bill is the seeded July Deposit Bill INV-202607-101-D without duplicates (${r101DepositBills[0]?.billNumber})`
     );
     assert(
       p101Jul?.agreementDepositPaymentStatus === 'PAID',
@@ -628,6 +639,21 @@ export async function runVerification() {
       p101Aug?.agreementDepositPaymentStatus === 'PAID',
       'Matrix A2: DEPOSIT PAID LIFECYCLE -> Room 101 (2026-08) deposit status is PAID (ชำระแล้ว)',
       p101Aug?.agreementDepositPaymentStatus
+    );
+
+    // Matrix Scenario A3: ROOM 102 DEPOSIT UNPAID IN JULY
+    const r102DepositBills = await prisma.bill.findMany({
+      where: { dormitoryId: COMP_DORM.id, roomId: r102Db.id, billKind: 'DEPOSIT' },
+    });
+    assert(
+      r102DepositBills.length === 1 && r102DepositBills[0]?.billNumber === 'INV-202607-102-D',
+      'Room 102 Deposit Bill is INV-202607-102-D'
+    );
+    const p102Jul = julyPreview.rooms.find(r => r.roomId === r102Db?.id);
+    assert(
+      p102Jul?.agreementDepositPaymentStatus === 'UNPAID',
+      'Matrix A3: DEPOSIT UNPAID -> Room 102 (2026-07) deposit status is UNPAID (รอชำระ)',
+      p102Jul?.agreementDepositPaymentStatus
     );
 
     // Matrix Scenario B: RENT UNPAID (August 2026 Room 201)
