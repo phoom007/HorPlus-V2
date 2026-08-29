@@ -168,44 +168,49 @@ export function getBillOverdueDays(dueDateStr?: string | null): number {
   return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 }
 
+export function resolveRecordBillingCycleId(
+  billingCycleId?: string | null,
+  cycleCode?: string | null,
+  billingCycles: BillingCycle[] = []
+): string | null {
+  if (billingCycleId && typeof billingCycleId === 'string' && billingCycleId.trim() !== '') {
+    return billingCycleId.trim();
+  }
+  if (cycleCode && typeof cycleCode === 'string' && cycleCode.trim() !== '') {
+    const found = billingCycles.find(c => c.cycleCode === cycleCode.trim());
+    return found ? found.id : null;
+  }
+  return null;
+}
+
 /* =========================================================================
- * API Fetchers
+ * API Fetchers (Fail Loudly to React Query on Network/HTTP Error)
  * ========================================================================= */
 export async function fetchPayments(dormitoryId?: string): Promise<PaymentRecord[]> {
   if (!dormitoryId) return [];
-  try {
-    const res = await httpRequest<PaymentRecord[] | { data: PaymentRecord[] } | { items: PaymentRecord[] }>(
-      'GET',
-      `/payments?dormitoryId=${dormitoryId}`,
-      undefined,
-      { headers: { 'x-dormitory-id': dormitoryId } }
-    );
-    if (Array.isArray(res)) return res;
-    if (res && Array.isArray((res as any).data)) return (res as any).data;
-    if (res && Array.isArray((res as any).items)) return (res as any).items;
-    return [];
-  } catch (err) {
-    console.error('Failed to fetch payments:', err);
-    return [];
-  }
+  const res = await httpRequest<PaymentRecord[] | { data: PaymentRecord[] } | { items: PaymentRecord[] }>(
+    'GET',
+    `/payments?dormitoryId=${dormitoryId}`,
+    undefined,
+    { headers: { 'x-dormitory-id': dormitoryId } }
+  );
+  if (Array.isArray(res)) return res;
+  if (res && Array.isArray((res as any).data)) return (res as any).data;
+  if (res && Array.isArray((res as any).items)) return (res as any).items;
+  return [];
 }
 
 export async function fetchDailyInvoices(dormitoryId?: string): Promise<DailyStayInvoice[]> {
   if (!dormitoryId) return [];
-  try {
-    const res = await httpRequest<{ data: DailyStayInvoice[] } | DailyStayInvoice[]>(
-      'GET',
-      `/daily-stays/invoices?dormitoryId=${dormitoryId}`,
-      undefined,
-      { headers: { 'x-dormitory-id': dormitoryId } }
-    );
-    if (Array.isArray(res)) return res;
-    if (res && Array.isArray((res as any).data)) return (res as any).data;
-    return [];
-  } catch (err) {
-    console.error('Failed to fetch daily stay invoices:', err);
-    return [];
-  }
+  const res = await httpRequest<{ data: DailyStayInvoice[] } | DailyStayInvoice[]>(
+    'GET',
+    `/daily-stays/invoices?dormitoryId=${dormitoryId}`,
+    undefined,
+    { headers: { 'x-dormitory-id': dormitoryId } }
+  );
+  if (Array.isArray(res)) return res;
+  if (res && Array.isArray((res as any).data)) return (res as any).data;
+  return [];
 }
 
 /* =========================================================================
@@ -296,12 +301,35 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
   /* -------------------------------------------------------------------------
    * React Queries
    * ------------------------------------------------------------------------- */
-  const { data: paymentsData = [] } = useQuery({
+  const {
+    data: paymentsData = [],
+    isLoading: isPaymentsLoading,
+    isError: isPaymentsError,
+    error: paymentsError,
+    refetch: refetchPayments,
+  } = useQuery({
     queryKey: queryKeys.payments(dormitoryId),
     queryFn: () => fetchPayments(dormitoryId),
     enabled: !!dormitoryId,
     staleTime: 5000,
   });
+
+  // Stable Idempotency Key Manager (retains key across retries/uncertainty, resets on success)
+  const idempotencyKeyMapRef = useRef<Map<string, string>>(new Map());
+
+  const getIdempotencyKey = (operationId: string): string => {
+    if (!idempotencyKeyMapRef.current.has(operationId)) {
+      const newKey = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : `key-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
+      idempotencyKeyMapRef.current.set(operationId, newKey);
+    }
+    return idempotencyKeyMapRef.current.get(operationId)!;
+  };
+
+  const clearIdempotencyKey = (operationId: string): void => {
+    idempotencyKeyMapRef.current.delete(operationId);
+  };
 
   // Effective billing cycle derivation
   const effectiveCycleId = selectedBillingCycleId || billingCycles.find(c => c.cycleCode === selectedCycleCode)?.id;
@@ -322,9 +350,9 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
   };
 
   const getCycleCodeForCycleId = (cId?: string | null): string => {
-    if (!cId) return effectiveCycleCode;
-    const cycle = billingCycles.find(c => c.id === cId);
-    return cycle?.cycleCode || cId;
+    if (!cId) return '';
+    const cycle = billingCycles.find(c => c.id === cId || c.cycleCode === cId);
+    return cycle?.cycleCode || '';
   };
 
   /* -------------------------------------------------------------------------
@@ -341,7 +369,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }, [paymentsData]);
 
-  // Tab 2: Cash (บันทึกเงินสด / ยังไม่ชำระ) -> Strictly Selected Header Cycle ONLY
+  // Tab 2: Cash (บันทึกเงินสด / ยังไม่ชำระ) -> Strictly Selected Header Cycle ONLY (Fail Closed on missing cycle authority)
   const cashPendingBills = useMemo(() => {
     // Collect bill IDs that already have an active/submitted payment
     const activePaymentBillIds = new Set(
@@ -355,13 +383,9 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
 
     return bills
       .filter(b => {
-        // Cycle filter
-        const matchCycle =
-          (b.billingCycleId && effectiveCycleId && b.billingCycleId === effectiveCycleId) ||
-          (b.cycleId && effectiveCycleCode && b.cycleId === effectiveCycleCode) ||
-          (!b.billingCycleId && !b.cycleId);
-
-        if (!matchCycle) return false;
+        // Strict cycle authority - FAIL CLOSED if cycle cannot be resolved
+        const resolvedCycleId = resolveRecordBillingCycleId(b.billingCycleId, b.cycleId, billingCycles);
+        if (!resolvedCycleId || !effectiveCycleId || resolvedCycleId !== effectiveCycleId) return false;
 
         // Unpaid or Overdue status
         const isPaid = (b.status || '').toLowerCase() === 'paid';
@@ -380,9 +404,9 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
         const roomB = getRoomNum(b.roomId);
         return roomA.localeCompare(roomB, undefined, { numeric: true, sensitivity: 'base' });
       });
-  }, [bills, effectiveCycleId, effectiveCycleCode, paymentsData, rooms]);
+  }, [bills, effectiveCycleId, effectiveCycleCode, billingCycles, paymentsData, rooms]);
 
-  // Tab 3: Paid (ชำระแล้ว) -> Strictly Selected Header Cycle ONLY (Grouped by Bill's billing cycle)
+  // Tab 3: Paid (ชำระแล้ว) -> Strictly Selected Header Cycle ONLY (Fail Closed on missing bill cycle authority)
   const paidPayments = useMemo(() => {
     return paymentsData
       .filter(p => {
@@ -390,18 +414,16 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
         const isApproved = s === 'APPROVED' || s === 'VERIFIED';
         if (!isApproved) return false;
 
-        // Check if the associated bill belongs to the selected header cycle
-        const billCycleId = p.bill?.billingCycleId;
-        const matchCycle =
-          (billCycleId && effectiveCycleId && billCycleId === effectiveCycleId) ||
-          (!billCycleId && effectiveCycleId); // fallback
+        // Strict cycle authority - FAIL CLOSED if bill cycle cannot be resolved
+        const resolvedCycleId = resolveRecordBillingCycleId(p.bill?.billingCycleId, (p.bill as any)?.cycleId, billingCycles);
+        if (!resolvedCycleId || !effectiveCycleId || resolvedCycleId !== effectiveCycleId) return false;
 
-        return matchCycle;
+        return true;
       })
       .sort((a, b) => new Date(b.paymentDate || b.createdAt).getTime() - new Date(a.paymentDate || a.createdAt).getTime());
-  }, [paymentsData, effectiveCycleId]);
+  }, [paymentsData, effectiveCycleId, billingCycles]);
 
-  // Tab 4: Rejected (สลิปผิดพลาด) -> Strictly Selected Header Cycle ONLY
+  // Tab 4: Rejected (สลิปผิดพลาด) -> Strictly Selected Header Cycle ONLY (Fail Closed on missing bill cycle authority)
   const rejectedPayments = useMemo(() => {
     return paymentsData
       .filter(p => {
@@ -409,15 +431,14 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
         const isRejected = s === 'REJECTED';
         if (!isRejected) return false;
 
-        const billCycleId = p.bill?.billingCycleId;
-        const matchCycle =
-          (billCycleId && effectiveCycleId && billCycleId === effectiveCycleId) ||
-          (!billCycleId && effectiveCycleId);
+        // Strict cycle authority - FAIL CLOSED if bill cycle cannot be resolved
+        const resolvedCycleId = resolveRecordBillingCycleId(p.bill?.billingCycleId, (p.bill as any)?.cycleId, billingCycles);
+        if (!resolvedCycleId || !effectiveCycleId || resolvedCycleId !== effectiveCycleId) return false;
 
-        return matchCycle;
+        return true;
       })
       .sort((a, b) => new Date(b.reviewedAt || b.createdAt).getTime() - new Date(a.reviewedAt || a.createdAt).getTime());
-  }, [paymentsData, effectiveCycleId]);
+  }, [paymentsData, effectiveCycleId, billingCycles]);
 
   // General search filter helpers
   const filterPaymentsByQuery = (list: PaymentRecord[]) => {
@@ -461,10 +482,12 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
     onUpdateBills();
   };
 
-  // 1. Approve Slip Payment
+  // 1. Approve Slip Payment (Stable Idempotency Key)
   const handleConfirmApprovePayment = async (payment: PaymentRecord) => {
     if (!dormitoryId) return;
     const roomNum = getRoomNum(payment.bill?.roomId || payment.bill?.room?.id);
+    const opId = `approve:${payment.id}`;
+    const idempotencyKey = getIdempotencyKey(opId);
     try {
       await httpRequest(
         'POST',
@@ -473,11 +496,12 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
         {
           headers: {
             'x-dormitory-id': dormitoryId,
-            'x-idempotency-key': `approve-${payment.id}-${Date.now()}`
-          }
+            'x-idempotency-key': idempotencyKey,
+          },
         }
       );
 
+      clearIdempotencyKey(opId);
       invalidateFinancialCaches();
       onAddLog('อนุมัติสลิปโอนเงิน', `ยืนยันความถูกต้องสลิปและปรับปรุงสถานะห้อง ${roomNum} ชำระแล้ว`, 'Payment', payment.id);
       triggerToast(`อนุมัติสลิปโอนเงิน ห้อง ${roomNum} เรียบร้อยแล้ว`);
@@ -534,6 +558,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
     if (!dormitoryId || !rejectPaymentTarget) return;
     const reasonText = rejectReason === 'อื่นๆ' ? rejectNote : rejectReason;
     const roomNum = getRoomNum(rejectPaymentTarget.bill?.roomId || rejectPaymentTarget.bill?.room?.id);
+    const opId = `reject:${rejectPaymentTarget.id}:${reasonText}`;
 
     try {
       await httpRequest(
@@ -543,11 +568,12 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
         {
           headers: {
             'x-dormitory-id': dormitoryId,
-            'x-idempotency-key': `reject-${rejectPaymentTarget.id}-${Date.now()}`
+            'x-idempotency-key': getIdempotencyKey(opId),
           }
         }
       );
 
+      clearIdempotencyKey(opId);
       invalidateFinancialCaches();
       onAddLog('ปฏิเสธสลิปโอนเงิน', `ปฏิเสธสลิปเนื่องจาก: ${reasonText} ห้อง ${roomNum}`, 'Payment', rejectPaymentTarget.id);
       setIsRejectOpen(false);
@@ -565,6 +591,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
     const roomNum = getRoomNum(bill.roomId);
     const amount = Number(bill.outstandingAmount ?? bill.totalAmount ?? 0);
     const amountStr = formatBaht(amount);
+    const opId = `cash:${bill.id}:${amount}`;
 
     try {
       await httpRequest(
@@ -577,11 +604,12 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
         {
           headers: {
             'x-dormitory-id': dormitoryId,
-            'x-idempotency-key': `cash-${bill.id}-${Date.now()}`
+            'x-idempotency-key': getIdempotencyKey(opId),
           }
         }
       );
 
+      clearIdempotencyKey(opId);
       invalidateFinancialCaches();
       onAddLog('รับชำระด้วยเงินสด', `รับชำระเงินสดจำนวน ${amountStr} จากห้อง ${roomNum} ณ เคาน์เตอร์`, 'Bill', bill.id);
       triggerToast(`บันทึกการรับเงินสด ห้อง ${roomNum} (${amountStr}) เรียบร้อยแล้ว`);
@@ -641,9 +669,10 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
     const targetBill = bills.find(b => b.id === cashTargetBillId);
     if (!targetBill) return;
 
+    const amount = Number(targetBill.outstandingAmount ?? targetBill.totalAmount ?? 0);
+    const opId = `cash-modal:${targetBill.id}:${amount}`;
     setIsSubmittingCash(true);
     try {
-      const amount = Number(targetBill.outstandingAmount ?? targetBill.totalAmount ?? 0);
       await httpRequest(
         'POST',
         '/payments/cash',
@@ -654,11 +683,12 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
         {
           headers: {
             'x-dormitory-id': dormitoryId,
-            'x-idempotency-key': `cash-modal-${targetBill.id}-${Date.now()}`
+            'x-idempotency-key': getIdempotencyKey(opId),
           }
         }
       );
 
+      clearIdempotencyKey(opId);
       invalidateFinancialCaches();
       onAddLog('รับชำระด้วยเงินสด', `รับชำระเงินสดจำนวน ${formatBaht(amount)} จากห้อง ${getRoomNum(targetBill.roomId)}`, 'Bill', targetBill.id);
       setIsCashModalOpen(false);
@@ -674,9 +704,14 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
   // 5. Open Real Receipt Modal
   const handleOpenReceipt = (payment: PaymentRecord) => {
     const rcpt = payment.receipt;
+    if (!rcpt || !rcpt.receiptNumber) {
+      triggerToast('ไม่พบข้อมูลใบเสร็จรับเงิน กรุณาโหลดข้อมูลใหม่');
+      return;
+    }
+
     const roomNumber = getRoomNum(payment.bill?.roomId || payment.bill?.room?.id);
     const tenantName = payment.bill?.tenant?.displayName || getTenantName(payment.tenantId || payment.bill?.tenantId);
-    const totalAmount = Number(rcpt?.totalAmount || payment.amount || payment.bill?.totalAmount || 0);
+    const totalAmount = Number(rcpt.totalAmount || payment.amount || payment.bill?.totalAmount || 0);
 
     const items = payment.bill?.items?.map(it => ({
       description: it.description,
@@ -686,14 +721,14 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
     ];
 
     setViewingReceipt({
-      receiptNumber: rcpt?.receiptNumber || `RCPT-${payment.id.slice(0, 8).toUpperCase()}`,
+      receiptNumber: rcpt.receiptNumber,
       billNumber: payment.bill?.billNumber,
       roomNumber,
       tenantName,
       totalAmount,
-      paidAt: rcpt?.issuedAt || rcpt?.paidAt || payment.paymentDate || payment.createdAt,
+      paidAt: rcpt.issuedAt || rcpt.paidAt || payment.paymentDate || payment.createdAt,
       paymentMethod: (payment.method || '').toUpperCase() === 'CASH' ? 'เงินสดสำนักงาน' : 'แสกน PromptPay QR',
-      receiverName: rcpt?.receiverName || 'ฝ่ายการเงิน หอพัก HorPlus',
+      receiverName: rcpt.receiverName || 'ฝ่ายการเงิน หอพัก HorPlus',
       items,
     });
     setIsReceiptOpen(true);
@@ -720,6 +755,23 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
         >
           <CheckCircle2 className="w-4.5 h-4.5 text-emerald-500 shrink-0" />
           <span>{successToast}</span>
+        </div>
+      )}
+
+      {/* Server Error State Banner */}
+      {isPaymentsError && (
+        <div className="bg-rose-50 border border-rose-200 p-4 rounded-3xl flex items-center justify-between gap-3 text-rose-800 text-xs font-semibold shadow-xs">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-4.5 h-4.5 text-rose-600 shrink-0" />
+            <span>ไม่สามารถโหลดข้อมูลการชำระเงินได้ กรุณาลองใหม่อีกครั้ง</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => refetchPayments()}
+            className="px-3.5 py-1.5 bg-rose-600 text-white font-extrabold text-xs rounded-xl hover:bg-rose-700 transition-all cursor-pointer shadow-2xs"
+          >
+            โหลดข้อมูลใหม่
+          </button>
         </div>
       )}
 
@@ -831,7 +883,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                     <span className="text-xl font-black text-slate-900">ห้อง {roomNum}</span>
                     <div className="flex items-center gap-1.5">
                       <span className="px-2.5 py-0.5 bg-indigo-50 text-indigo-700 border border-indigo-100 font-bold rounded-full text-[10px]">
-                        งวด {cycleLabel}
+                        {cycleCode ? `งวด ${cycleLabel}` : 'ไม่พบข้อมูลงวดบิล'}
                       </span>
                       <span className="px-3 py-1 bg-amber-50 text-amber-800 border border-amber-200 font-extrabold rounded-full text-[11px] flex items-center gap-1 animate-pulse">
                         <Clock className="w-3.5 h-3.5 text-amber-600" />

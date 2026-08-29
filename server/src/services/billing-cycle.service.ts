@@ -20,6 +20,7 @@ import {
 } from '../db/repositories/dormitory.repository.js';
 import { AuditService } from './audit.service.js';
 import { currentCycleResolverService } from './current-cycle-resolver.js';
+import { backfillRoomOperationalStatusBaseline } from './room-operational-baseline.service.js';
 import { normalizeUtilityBillingMode } from '../utils/billing-mode-normalizer.util.js';
 import {
   currentBusinessDateInBangkok,
@@ -298,6 +299,9 @@ export class BillingCycleService {
             ...snapshotData,
           },
         });
+
+        // Establish one-time room operational status baseline for existing rooms without history
+        await backfillRoomOperationalStatusBaseline(dormitoryId, tx);
 
         return { cycle, rateSnapshot };
       });
@@ -937,11 +941,14 @@ export class BillingCycleService {
       if (!targetCycles.includes(c)) targetCycles.push(c);
     });
 
-    // 3. Ensure onboarding start month
+    // 3. Ensure onboarding start month and bound below by startCode floor
     const startCode = toBangkokDateString(dorm.createdAt).slice(0, 7);
     if (!targetCycles.includes(startCode)) targetCycles.push(startCode);
 
-    for (const code of targetCycles) {
+    // Filter out any cycle earlier than the dormitory onboarding start floor
+    const validTargetCycles = targetCycles.filter((code) => code >= startCode).sort();
+
+    for (const code of validTargetCycles) {
       try {
         await this.createBillingCycle(
           dormitoryId,

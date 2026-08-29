@@ -1759,6 +1759,26 @@ export async function seedLocal07Data() {
       paymentDate: new Date('2026-08-25T10:00:00Z'),
     },
   });
+  await prisma.paymentStatusHistory.create({
+    data: {
+      dormitoryId: compDorm.id,
+      paymentId: pay202Dep.id,
+      fromStatus: null,
+      toStatus: 'APPROVED',
+      changedByUserId: COMP_DORM.owner.id,
+      createdAt: new Date('2026-08-25T10:00:00Z'),
+    },
+  });
+  await prisma.billStatusHistory.create({
+    data: {
+      dormitoryId: compDorm.id,
+      billId: bill202Dep.id,
+      fromStatus: 'unpaid',
+      toStatus: 'PAID',
+      changedByUserId: COMP_DORM.owner.id,
+      createdAt: new Date('2026-08-25T10:00:00Z'),
+    },
+  });
   await prisma.receipt.create({
     data: {
       dormitoryId: compDorm.id,

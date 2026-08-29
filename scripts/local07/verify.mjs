@@ -734,6 +734,95 @@ export async function runVerification() {
       `Rent: ${p104Aug?.agreementRentPaymentStatus}, Deposit: ${p104Aug?.agreementDepositPaymentStatus}`
     );
 
+    // --- R3.7a Verification Checks ---
+    console.log('\n--- 11. R3.7a Financial Strictness & Canonical Authority Verification ---');
+
+    // Check 1: Room 304 Canonical Quick Add Eligibility
+    const r304Db = await prisma.room.findFirst({
+      where: { dormitoryId: COMP_DORM.id, roomNumber: '304' },
+      include: { contracts: { where: { deletedAt: null, status: 'active' } } },
+    });
+    assert(
+      r304Db?.status === 'vacant' && r304Db?.contracts.length === 0,
+      'R3.7a Check 1: Room 304 is canonically vacant with 0 active contracts (eligible for Quick Add)',
+      `Status: ${r304Db?.status}, Active Contracts: ${r304Db?.contracts.length}`
+    );
+
+    // Check 2: Room 202 Complete Canonical PAID Deposit Evidence
+    const b202Dep = await prisma.bill.findFirst({
+      where: { dormitoryId: COMP_DORM.id, billNumber: 'INV-202608-202-D' },
+      include: {
+        items: true,
+      },
+    });
+    const p202Dep = await prisma.payment.findFirst({
+      where: { billId: b202Dep?.id },
+      include: {
+        receipt: true,
+        statusHistories: true,
+      },
+    });
+    const b202Histories = await prisma.billStatusHistory.findMany({
+      where: { billId: b202Dep?.id },
+    });
+    assert(
+      b202Dep?.status === 'paid' &&
+      Number(b202Dep?.paidAmount) === 4800 &&
+      Number(b202Dep?.outstandingAmount) === 0 &&
+      b202Dep?.paidAt !== null,
+      'R3.7a Check 2a: Room 202 deposit Bill has complete paid state (paid, paidAmount=4800, outstanding=0, paidAt)',
+      `Status: ${b202Dep?.status}, PaidAmount: ${b202Dep?.paidAmount}, Outstanding: ${b202Dep?.outstandingAmount}, PaidAt: ${b202Dep?.paidAt}`
+    );
+    assert(
+      p202Dep?.status === 'APPROVED' &&
+      Number(p202Dep?.amount) === 4800 &&
+      p202Dep?.statusHistories?.some(h => h.toStatus === 'APPROVED'),
+      'R3.7a Check 2b: Room 202 deposit Payment has APPROVED status and PaymentStatusHistory',
+      `PaymentStatus: ${p202Dep?.status}, HistoryCount: ${p202Dep?.statusHistories?.length}`
+    );
+    assert(
+      b202Histories?.some(h => h.toStatus === 'PAID'),
+      'R3.7a Check 2c: Room 202 deposit Bill has BillStatusHistory record (toStatus=PAID)',
+      `BillHistoryCount: ${b202Histories?.length}`
+    );
+    assert(
+      p202Dep?.receipt?.receiptNumber === 'RCP-202608-202-D' &&
+      Number(p202Dep?.receipt?.snapshotData?.totalAmount) === 4800,
+      'R3.7a Check 2d: Room 202 deposit has canonical Receipt (RCP-202608-202-D, totalAmount=4800)',
+      `ReceiptNumber: ${p202Dep?.receipt?.receiptNumber}, Total: ${p202Dep?.receipt?.snapshotData?.totalAmount}`
+    );
+
+    // Check 3: Room 303 Deposit status is NOT_ISSUED
+    const b303Dep = await prisma.bill.findFirst({
+      where: { dormitoryId: COMP_DORM.id, roomId: r303Db?.id, items: { some: { type: 'deposit' } } },
+    });
+    assert(
+      !b303Dep && p303Aug?.agreementDepositPaymentStatus === 'NOT_ISSUED',
+      'R3.7a Check 3: Room 303 requires deposit but has no deposit bill -> NOT_ISSUED',
+      `DepositBill: ${b303Dep?.id || 'none'}, Evaluated: ${p303Aug?.agreementDepositPaymentStatus}`
+    );
+
+    // Check 4: First Operational Cycle Baseline Authority (Fresh Dorm)
+    const freshAugCycle = await prisma.billingCycle.findFirst({
+      where: { dormitoryId: freshDormDb.id, cycleCode: '2026-08' },
+    });
+    const freshJulyCycle = await prisma.billingCycle.findFirst({
+      where: { dormitoryId: freshDormDb.id, cycleCode: '2026-07' },
+    });
+    const freshAugBaselineCount = await prisma.roomOperationalStatusChange.count({
+      where: { dormitoryId: freshDormDb.id, effectiveBillingCycleId: freshAugCycle?.id },
+    });
+    const freshJulyBaselineCount = freshJulyCycle
+      ? await prisma.roomOperationalStatusChange.count({
+          where: { dormitoryId: freshDormDb.id, effectiveBillingCycleId: freshJulyCycle.id },
+        })
+      : 0;
+    assert(
+      freshAugBaselineCount === FRESH_DORM.rooms.length && freshJulyBaselineCount === 0,
+      `R3.7a Check 4: Fresh Dorm established baseline for first cycle (2026-08: ${freshAugBaselineCount}/${FRESH_DORM.rooms.length}) and 0 for pre-onboarding July`,
+      `Aug: ${freshAugBaselineCount}, July: ${freshJulyBaselineCount}`
+    );
+
   console.log('\n================================================================================');
   if (failures === 0) {
     console.log('🎉 ALL LOCAL-07 SANDBOX INTEGRITY CHECKS PASSED PERFECTLY (0 FAILURES)');

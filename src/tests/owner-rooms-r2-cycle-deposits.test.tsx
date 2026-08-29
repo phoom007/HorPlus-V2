@@ -1720,7 +1720,7 @@ describe('OWNER ROOMS R2 & R2.1 — Rent-Cycle Deposit Model & Hardened Specific
         const action = resolveRoomTenantAction(occupiedRoom, vacantPres);
         expect(action.kind).toBe('DISABLED');
         if (action.kind === 'DISABLED') {
-          expect(action.reason).toBe('ห้องพักมีผู้เช่าปัจจุบันแล้ว');
+          expect(action.reason).toBe('ปัจจุบันมีผู้เช่า');
         }
       });
     });

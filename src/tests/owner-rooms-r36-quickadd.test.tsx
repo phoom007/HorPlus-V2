@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 /**
  * @license Apache-2.0
  * Owner Rooms R3.6a — Quick Add Live Financial Preview, Rendered Normalization, Production Error Shape & Cache Invalidation

@@ -180,27 +180,59 @@ export function resolveRoomTenantAction(
     };
   }
 
-  // 3. Quick Add is an operational action for current room state:
-  // Only offer Quick Add when CURRENT room state is actually eligible (vacant and not occupied today)
-  if (room.status === 'vacant' && !room.currentTenantId) {
-    return { kind: 'QUICK_ADD_CURRENT' };
+  // 3. Physical status blocks
+  if (room.status === 'maintenance') {
+    return { kind: 'DISABLED', reason: 'ปิดปรับปรุง' };
+  }
+  if (room.status === 'reserved') {
+    return { kind: 'DISABLED', reason: 'มีการจองล่วงหน้า' };
+  }
+  if (room.status === 'occupied') {
+    return { kind: 'DISABLED', reason: 'ปัจจุบันมีผู้เช่า' };
   }
 
-  // If today is occupied, maintenance, or reserved while selected cycle has no agreement:
-  let reason = 'ปัจจุบันมีผู้เช่า';
-  if (room.status === 'maintenance') {
-    reason = 'ปิดปรับปรุง';
-  } else if (room.status === 'reserved') {
-    reason = 'มีการจองล่วงหน้า';
-  } else if (room.status === 'occupied' || room.currentTenantId) {
-    reason = 'ปัจจุบันมีผู้เช่า';
-  } else if (!room.monthlyRent && !room.termRent && !room.dailyRent) {
-    reason = 'ข้อมูลค่าเช่าของห้องไม่ครบ';
+  // 4. Missing/malformed currentOperationalActions authority fails closed
+  const opActions = room.currentOperationalActions;
+  if (!opActions || typeof opActions !== 'object') {
+    return { kind: 'DISABLED', reason: 'ไม่สามารถตรวจสอบสถานะห้องได้ กรุณาโหลดข้อมูลใหม่' };
+  }
+
+  // 5. Canonical operational blocks
+  if (opActions.maintenanceBlockReason === 'ACTIVE_OCCUPANCY') {
+    return { kind: 'DISABLED', reason: 'ปัจจุบันมีผู้เช่า' };
+  }
+  if (opActions.maintenanceBlockReason === 'ACTIVE_RESERVATION') {
+    return { kind: 'DISABLED', reason: 'มีการจองล่วงหน้า' };
+  }
+  if (opActions.canSetMaintenance === false && opActions.maintenanceBlockReason) {
+    if (opActions.maintenanceBlockReason === 'ACTIVE_OCCUPANCY') {
+      return { kind: 'DISABLED', reason: 'ปัจจุบันมีผู้เช่า' };
+    }
+    if (opActions.maintenanceBlockReason === 'ACTIVE_RESERVATION') {
+      return { kind: 'DISABLED', reason: 'มีการจองล่วงหน้า' };
+    }
+    return { kind: 'DISABLED', reason: 'ไม่สามารถตรวจสอบสถานะห้องได้ กรุณาโหลดข้อมูลใหม่' };
+  }
+
+  // 6. Pricing configuration check
+  const hasPricing = Boolean(
+    (room.monthlyRent && Number(room.monthlyRent) > 0) ||
+    (room.termRent && Number(room.termRent) > 0) ||
+    (room.dailyRent && Number(room.dailyRent) > 0) ||
+    ((room as any).effectiveValues?.monthlyRent && Number((room as any).effectiveValues.monthlyRent) > 0)
+  );
+  if (!hasPricing) {
+    return { kind: 'DISABLED', reason: 'ข้อมูลค่าเช่าของห้องไม่ครบ' };
+  }
+
+  // 7. If room is current vacant and operational authority proves it's eligible
+  if (room.status === 'vacant') {
+    return { kind: 'QUICK_ADD_CURRENT' };
   }
 
   return {
     kind: 'DISABLED',
-    reason,
+    reason: 'ไม่สามารถตรวจสอบสถานะห้องได้ กรุณาโหลดข้อมูลใหม่',
   };
 }
 

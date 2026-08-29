@@ -1294,3 +1294,90 @@ R3.7 achieves full reconnection of the Product Owner's approved Payments UI desi
 | Backend TypeScript Build | `npm --prefix server run build` | **0 Errors (PASS)** |
 | Frontend TypeScript Check | `npm run lint` | **0 Errors (PASS)** |
 | Line Ending & Whitespace Hygiene | `git -c core.whitespace=cr-at-eol diff --check` | **0 Warnings / Clean** |
+
+---
+
+## 36. OWNER PAYMENTS FINANCIAL STRICTNESS & CANONICAL AUTHORITY (R3.7a)
+
+### Executive Summary & Surgical Corrections
+
+R3.7a completes independent code-review and financial strictness hardenings across Owner Payments and Room Tenant Actions, resolving all 9 critical blockers without altering the approved Product Owner visual design:
+
+```
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│                   HORPLUS-V2 R3.7a FINANCIAL STRICTNESS MATRIX                    │
+├──────────────────────────────────────────────────────────────────────────────────┤
+│ 1. Runtime Error Root-Cause  │ Systematic audit & prevention of generic errors    │
+│ 2. Fail-Closed Tab Filter    │ Missing cycle authority fails closed (excluded)    │
+│ 3. Canonical Receipt Only    │ Zero synthetic receipt fabrication (RCPT-* banned) │
+│ 4. Stable Idempotency Keys   │ UUID cached in ref/map; reused across retry/error  │
+│ 5. Loud Fetcher Failures     │ Query functions throw to React Query (error state) │
+│ 6. Quick Add Authority       │ Decoupled from currentTenantId; uses actions meta  │
+│ 7. First-Cycle Baseline      │ Onboarding starts in Aug (4/4); 0 pre-start baselines│
+│ 8. Complete PAID Evidence    │ Seeded Room 202 deposit Bill+Payment+Histories+Rcpt│
+│ 9. Zero Timestamp Churn      │ Restored canonical generatedAt timestamp           │
+└──────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Detailed Blocker Resolutions
+
+#### Blocker 1: Runtime Generic Error Investigation & Prevention
+- **Root-Cause Analysis**: Product Owner reported `ระบบไม่สามารถดำเนินการได้ กรุณาลองใหม่อีกครั้ง`. Evaluated backend error handlers, empty catch-blocks, missing cycle mappings, unhandled network failures in fetchers, and unstable idempotency key collisions.
+- **Resolution**: Eliminated all error-swallowing in fetchers, prevented unhandled null references during cycle resolution, ensured idempotent request stability, and provided actionable Thai feedback with retry buttons.
+
+#### Blocker 2: Selected-Cycle Filters Fail Closed
+- **Implementation**: Introduced `resolveRecordBillingCycleId(billingCycleId?, cycleCode?, billingCycles)` helper in `src/pages/owner/payments.tsx`.
+- Cash, Paid, and Rejected tabs filter strictly by matching resolved cycle ID against Header's `selectedBillingCycleId`.
+- Any record missing cycle metadata fails closed (`return false`), preventing leakage of cross-cycle or orphan records.
+- Checking tab displays all cycles; if cycle metadata is unresolvable, renders safe warning badge `'ไม่พบข้อมูลงวดบิล'`.
+
+#### Blocker 3: Frontend Receipt Fabrication Prohibited
+- **Implementation**: Removed synthetic fallback `RCPT-${payment.id...}`.
+- Approved payments without a canonical server receipt (`payment.receipt?.receiptNumber`) display safe warning toast `'ไม่พบข้อมูลใบเสร็จรับเงิน กรุณาโหลดข้อมูลใหม่'` and do not open a fabricated receipt modal.
+
+#### Blocker 4: Stable Idempotency Keys Across Retries
+- **Implementation**: Replaced ad-hoc `Date.now()` timestamps with `idempotencyKeyMapRef` managing `Map<string, string>`.
+- Generates `crypto.randomUUID()` once per logical operation (`approve:${id}`, `reject:${id}:${reason}`, `cash:${billId}`).
+- Reuses the exact same UUID on retries/network timeouts. Clears key only on confirmed 2xx HTTP response or definitive rejection.
+
+#### Blocker 5: Financial Fetchers Fail Loudly
+- **Implementation**: Removed `try...catch` swallowing from `fetchPayments` and `fetchDailyInvoices` in `src/pages/owner/payments.tsx`.
+- Errors propagate to React Query, causing `isPaymentsError` / `error` banner to render with `'ไม่สามารถโหลดข้อมูลการชำระเงินได้ กรุณาลองใหม่อีกครั้ง'` and a retry button.
+
+#### Blocker 6: Quick Add Decoupled from `currentTenantId`
+- **Implementation**: Rewrote `resolveRoomTenantAction` in `src/pages/owner/rooms.tsx`.
+- Consumes canonical `room.currentOperationalActions` and lifecycle state.
+- Stale `currentTenantId` on a room with `status === 'vacant'` and active operational authority does not block Quick Add (`{ kind: 'QUICK_ADD_CURRENT' }`).
+- Blocked rooms return canonical Thai reasons: `'ปิดปรับปรุง'`, `'มีการจองล่วงหน้า'`, `'ปัจจุบันมีผู้เช่า'`, `'ไม่สามารถตรวจสอบสถานะห้องได้ กรุณาโหลดข้อมูลใหม่'`, `'ข้อมูลค่าเช่าของห้องไม่ครบ'`.
+
+#### Blocker 7: Production Onboarding First-Cycle Baseline Proof
+- **Implementation**: Updated `ensureRollingBillingCycles` in `server/src/services/billing-cycle.service.ts` to bound rolling cycle creation by `startCode` floor (`dorm.createdAt` month) and sort ascending.
+- When an onboarding dormitory starts in August 2026, August cycle is created first and executes `backfillRoomOperationalStatusBaseline` establishing 4/4 baselines.
+- Pre-onboarding July 2026 has 0 baselines and resolves to `UNKNOWN` / unavailable.
+
+#### Blocker 8: Complete Room 202 Paid Deposit Fixture
+- **Implementation**: In `scripts/local07/seed.mjs`, created complete financial records for Room 202 August deposit bill:
+  - `Bill` (`status: 'paid'`, `paidAmount: 4800`, `outstandingAmount: 0`, `paidAt: 2026-08-25T10:05:00.000Z`).
+  - `Payment` (`status: 'APPROVED'`, `amount: 4800`, `method: 'promptpay'`).
+  - `PaymentStatusHistory` (`toStatus: 'APPROVED'`).
+  - `BillStatusHistory` (`toStatus: 'PAID'`).
+  - `Receipt` (`receiptNumber: 'RCP-202608-202-D'`, `snapshotData: { totalAmount: 4800 }`).
+- Updated `scripts/local07/reset.mjs` to clean `paymentStatusHistory` in proper dependency order.
+
+#### Blocker 9: Expected Results Timestamp Churn Prevention
+- **Implementation**: Restored `generatedAt: "2026-08-27T03:55:02.317Z"` in `docs/uat/local07-expected-results.json`.
+
+---
+
+### Verification Matrix (R3.7a)
+
+| Test / Check Suite | Target Command / Path | Result |
+|---|---|---|
+| R3.7a Payments Financial Strictness & Canonical Authority (8 Tests) | `npx vitest run src/tests/owner-payments-r37-production.test.tsx` | **8 / 8 PASS (100%)** |
+| Quick Add Live Preview & Validation Suite (14 Tests) | `npx vitest run src/tests/owner-rooms-r36-quickadd.test.tsx` | **14 / 14 PASS (100%)** |
+| Room Cycle Deposits & Presentation Suite (118 Tests) | `npx vitest run src/tests/owner-rooms-r2-cycle-deposits.test.tsx` | **118 / 118 PASS (100%)** |
+| LOCAL-07 Sandbox Verification & Integrity Oracle (13 Sections) | `npx tsx scripts/local07/verify.mjs` | **ALL CHECKS PASS (0 Failures)** |
+| Frontend TypeScript Type Check | `npm run lint` (`tsc --noEmit`) | **0 Errors (PASS)** |
+| Backend TypeScript Compilation | `npm run build:api` (`tsc -p tsconfig.build.json`) | **0 Errors (PASS)** |
+| Production Frontend Vite Build | `npm run build` (`vite build`) | **0 Errors (PASS)** |
+| Line Ending & Whitespace Hygiene | `git -c core.whitespace=cr-at-eol diff --check` | **0 Warnings / Clean** |
