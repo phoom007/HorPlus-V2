@@ -1210,3 +1210,39 @@ Following the R3.5c release and manual UAT review by the Product Owner:
 | Backend TypeScript Build | `npm --prefix server run build` | **0 Errors (PASS)** |
 | Frontend TypeScript Check | `npm run lint` | **0 Errors (PASS)** |
 | Line Ending & Whitespace Hygiene | `git -c core.whitespace=cr-at-eol diff --check` | **0 Warnings / Clean** |
+
+---
+
+## 34. OWNER ROOMS R3.6a — QUICK ADD COMMIT VISIBILITY, SAFE DOMAIN ERROR TRANSPORT, REAL INPUT NORMALIZATION PROOF & ROOM 101 DEPOSIT ORACLE
+
+### Objective & Architecture Directives
+
+R3.6a performs targeted post-R3.6 integration corrections without altering core operational architecture:
+1. **Dedicated Quick Add Mutation Cache Authority (`invalidateQuickAddTenantCaches`)**:
+   - Replaced invalid `onSaveRooms(rooms, { kind: 'create' })` call on Quick Add completion with dedicated `invalidateQuickAddTenantCaches(queryClient, dormitoryId, { rentalType })`.
+   - Multi-domain mutation invalidates direct consumers: `queryKeys.rooms(dormitoryId)`, `queryKeys.tenants(dormitoryId)`, `queryKeys.bills(dormitoryId)`, all `meterPreviewContext` queries across cycles, `queryKeys.contracts(dormitoryId)` for `MONTHLY`, and `queryKeys.dailyInvoices(dormitoryId)` + `queryKeys.payments(dormitoryId)` for `DAILY`.
+2. **Safe Global Domain Error Classification (`globalErrorHandler`)**:
+   - Enforced that plain domain errors are only exposed to clients when an explicit integer HTTP status (`statusCode` or `status` in 400..599) is present.
+   - Masked internal errors (e.g. Prisma `P2002`, connection errors) strictly to HTTP 500, `INTERNAL_ERROR`, and generic Thai messages without leaking database schemas or constraint details.
+3. **Client Domain Code Precedence (`QuickAddTenantModal`)**:
+   - Prioritized backend domain error code (`err?.domainError?.details?.error?.code` / `err?.domainError?.details?.code`) over generic HTTP-transport-mapped code (`CONFLICT`), ensuring exact actionable Thai messaging (e.g., `DEPOSIT_BILLING_CYCLE_NOT_FOUND`).
+4. **Real Rendered Numeric Input Normalization Proof**:
+   - Converted internal numeric modal state to handle string and number gracefully, allowing natural user typing while normalizing leading zeros on `blur` across `TERM`, `MONTHLY`, and `DAILY` inputs and preserving decimal precision.
+5. **Room 101 Deposit Oracle in LOCAL-07 Verification (`verify.mjs`)**:
+   - Added explicit production MeterService oracle for Room 101 in July and August: `agreementDepositPaymentStatus === 'PAID'` (`ชำระแล้ว`).
+   - Verified that the Deposit Bill identity is the single seeded June bill (`INV-202606-101-D`) with zero duplicates.
+
+---
+
+### Verification Matrix (R3.6a)
+
+| Test / Check Suite | Target Command / Path | Result |
+|---|---|---|
+| Frontend Quick Add Financial Preview, Normalization, Error & Cache Suite (14 Tests) | `npx vitest run src/tests/owner-rooms-r36-quickadd.test.tsx --environment happy-dom` | **14 / 14 PASS (100%)** |
+| Server Global Error Handler Safety Suite (5 Tests) | `npm --prefix server test -- src/__tests__/unit/error-handler.test.ts` | **5 / 5 PASS (100%)** |
+| Real PostgreSQL Full Integration Suite (14 Scenarios) | `npm --prefix server test -- src/__tests__/integration/owner-rooms-r35a-deposit-integration.test.ts` | **14 / 14 PASS (100%)** |
+| Frontend Deposit & Agreement Lifecycle Suite | `npx vitest run src/tests/owner-rooms-r2-cycle-deposits.test.tsx --environment happy-dom` | **118 / 118 PASS (100%)** |
+| LOCAL-07 Sandbox Integrity Oracle | `npx tsx scripts/local07/verify.mjs` | **ALL CHECKS PASS (0 Failures)** |
+| Backend TypeScript Build | `npm --prefix server run build` | **0 Errors (PASS)** |
+| Frontend TypeScript Check | `npm run lint` | **0 Errors (PASS)** |
+| Line Ending & Whitespace Hygiene | `git -c core.whitespace=cr-at-eol diff --check` | **0 Warnings / Clean** |

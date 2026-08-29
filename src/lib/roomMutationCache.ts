@@ -115,3 +115,5 @@ export function invalidateRoomMutationCaches(
     });
   }
 }
+
+export { invalidateQuickAddTenantCaches, type QuickAddCacheImpact } from './quickAddCache';

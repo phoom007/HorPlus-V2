@@ -43,9 +43,10 @@ import { getDataProvider } from '../../data/dataProvider';
 import { CreateRoomPayload, UpdateRoomChanges } from '../../data/contracts';
 import { httpRequest } from '../../data/httpClient';
 import { getOwnerRoomMutationErrorMessage, getOwnerRoomMutationDomainCode } from '../../lib/roomErrorMapper';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { queryKeys, STALE_TIMES, fetchMeterPreviewContext } from '../../lib/queryClient';
 import { QuickAddTenantModal } from '../../components/QuickAddTenantModal';
+import { invalidateQuickAddTenantCaches } from '../../lib/quickAddCache';
 import { QuickAddRoomContext } from '../../types';
 import {
   getGridRentRates,
@@ -213,6 +214,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
   selectedCycleCode,
   billingCycles = []
 }) => {
+  const queryClient = useQueryClient();
   const previewContextQuery = useQuery({
     queryKey: selectedBillingCycleId && dormitoryId ? queryKeys.meterPreviewContext(dormitoryId, selectedBillingCycleId) : ['previewContext-disabled'],
     queryFn: () => {
@@ -2195,9 +2197,9 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
           setSelectedQuickAddContext(null);
         }}
         context={selectedQuickAddContext}
-        onSuccess={async (msg) => {
+        onSuccess={async (msg, result) => {
           setToastMessage(msg);
-          onSaveRooms(rooms, { kind: 'create' });
+          invalidateQuickAddTenantCaches(queryClient, dormitoryId, { rentalType: result?.rentalType });
         }}
       />
 

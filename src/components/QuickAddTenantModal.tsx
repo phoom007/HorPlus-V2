@@ -18,11 +18,17 @@ import { queryKeys } from '../lib/queryClient';
 import { resolveLineFriendAddUrl } from '../utils/lineOa.util';
 import { LineLogo } from './LineLogo';
 
+export interface QuickAddSuccessResult {
+  rentalType: QuickAddMode;
+  roomId?: string;
+  tenantId?: string;
+}
+
 interface QuickAddTenantModalProps {
   isOpen: boolean;
   onClose: () => void;
   context: QuickAddRoomContext | null;
-  onSuccess: (message: string) => void;
+  onSuccess: (message: string, result?: QuickAddSuccessResult) => void;
   onNavigateToLineConfig?: () => void;
   onNavigate?: (tab: string) => void;
   defaultTab?: QuickAddMode;
@@ -64,16 +70,16 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
   const [idCardError, setIdCardError] = useState<string | null>(null);
 
   // Monthly fields
-  const [durationMonths, setDurationMonths] = useState(1);
-  const [monthlyRent, setMonthlyRent] = useState<number>(0);
-  const [monthlyDeposit, setMonthlyDeposit] = useState<number>(0);
+  const [durationMonths, setDurationMonths] = useState<string | number>(1);
+  const [monthlyRent, setMonthlyRent] = useState<string | number>(0);
+  const [monthlyDeposit, setMonthlyDeposit] = useState<string | number>(0);
   const [monthlyDepositDeclaredStatus, setMonthlyDepositDeclaredStatus] = useState<'PAID' | 'UNPAID'>('UNPAID');
   const [monthlyEndDate, setMonthlyEndDate] = useState('');
 
   // Term fields (Strictly Building-authoritative)
-  const [termMonths, setTermMonths] = useState<number | null>(null);
-  const [termRent, setTermRent] = useState<number | null>(null);
-  const [termDeposit, setTermDeposit] = useState<number>(0);
+  const [termMonths, setTermMonths] = useState<string | number | null>(null);
+  const [termRent, setTermRent] = useState<string | number | null>(null);
+  const [termDeposit, setTermDeposit] = useState<string | number>(0);
   const [termDepositDeclaredStatus, setTermDepositDeclaredStatus] = useState<'PAID' | 'UNPAID'>('UNPAID');
   const [termInstallmentCount, setTermInstallmentCount] = useState(1);
   const [maxInstallments, setMaxInstallments] = useState(1);
@@ -83,8 +89,8 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
   const [dailyEndDate, setDailyEndDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [checkInTime, setCheckInTime] = useState('');
   const [checkOutTime, setCheckOutTime] = useState('');
-  const [dailyRate, setDailyRate] = useState<number | null>(null);
-  const [dailyDeposit, setDailyDeposit] = useState<number>(0);
+  const [dailyRate, setDailyRate] = useState<string | number | null>(null);
+  const [dailyDeposit, setDailyDeposit] = useState<string | number>(0);
   const [dailyDepositDeclaredStatus, setDailyDepositDeclaredStatus] = useState<'PAID' | 'UNPAID'>('UNPAID');
 
   const [loading, setLoading] = useState(false);
@@ -306,13 +312,13 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
     Number(context.effective?.termRent) <= 0;
 
   const inclusiveDays = calculateInclusiveDays(startDate, dailyEndDate);
-  const dailyTotalRent = (dailyRate ?? 0) * inclusiveDays;
-  const dailyTotalAgreed = dailyTotalRent + dailyDeposit;
+  const dailyTotalRent = (Number(dailyRate) || 0) * inclusiveDays;
+  const dailyTotalAgreed = dailyTotalRent + (Number(dailyDeposit) || 0);
   const dailyOutstanding = dailyDepositDeclaredStatus === 'PAID' ? dailyTotalRent : dailyTotalAgreed;
 
   const isTermDisabled =
     activeTab === 'TERM' &&
-    (!termMonths || termMonths < 1 || termRent === null || termRent === undefined || isNaN(Number(termRent)) || Number(termRent) < 0);
+    (!termMonths || Number(termMonths) < 1 || termRent === null || termRent === undefined || isNaN(Number(termRent)) || Number(termRent) < 0);
 
   const isMonthlyDisabled =
     activeTab === 'MONTHLY' &&
@@ -334,7 +340,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
     }
 
     if (activeTab === 'TERM') {
-      if (!termMonths || termMonths < 1) {
+      if (!termMonths || Number(termMonths) < 1) {
         setErrorText('ไม่พบข้อมูลระยะเวลาสัญญาแบบเทอมของอาคาร (termMonths) กรุณากำหนดการตั้งค่าอาคารก่อนทำสัญญาแบบเทอม');
         return;
       }
@@ -375,8 +381,8 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
           startDate,
           endDate: monthlyEndDate || undefined,
           durationMonths: Number(durationMonths),
-          unitRentAmount: monthlyRent.toFixed(2),
-          totalRentAmount: (monthlyRent * durationMonths).toFixed(2),
+          unitRentAmount: Number(monthlyRent || 0).toFixed(2),
+          totalRentAmount: (Number(monthlyRent || 0) * Number(durationMonths || 1)).toFixed(2),
           depositAmount: Number(monthlyDeposit || 0).toFixed(2),
           depositDeclaredStatus: monthlyDepositDeclaredStatus,
         };
@@ -394,7 +400,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
           });
         }
 
-        onSuccess(`เพิ่มผู้เช่ารายเดือน (${context.roomNumber}) เรียบร้อยแล้ว`);
+        onSuccess(`เพิ่มผู้เช่ารายเดือน (${context.roomNumber}) เรียบร้อยแล้ว`, { rentalType: 'MONTHLY', roomId: context.roomId });
         onClose();
       } else if (activeTab === 'TERM') {
         const payload = {
@@ -425,7 +431,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
           });
         }
 
-        onSuccess(`เพิ่มผู้เช่ารายเทอม (${context.roomNumber}) เรียบร้อยแล้ว`);
+        onSuccess(`เพิ่มผู้เช่ารายเทอม (${context.roomNumber}) เรียบร้อยแล้ว`, { rentalType: 'TERM', roomId: context.roomId });
         onClose();
       } else if (activeTab === 'DAILY') {
         const payload = {
@@ -455,11 +461,15 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
           });
         }
 
-        onSuccess('เพิ่มผู้เช่า รายวัน เรียบร้อยแล้ว');
+        onSuccess('เพิ่มผู้เช่า รายวัน เรียบร้อยแล้ว', { rentalType: 'DAILY', roomId: context.roomId });
         onClose();
       }
     } catch (err: any) {
-      const code = err?.domainError?.code || err?.code || (err?.domainError?.details as any)?.error?.code;
+      const serverCode =
+        (err?.domainError?.details as any)?.error?.code ||
+        (err?.domainError?.details as any)?.code ||
+        err?.details?.error?.code;
+      const code = serverCode || err?.code || err?.domainError?.code;
       const knownMessages: Record<string, string> = {
         DEPOSIT_BILLING_CYCLE_NOT_FOUND: 'ไม่พบรอบบิลที่ตรงกับวันเริ่มสัญญา กรุณาสร้างรอบบิลก่อนยืนยันการเช่า',
         ROOM_UNDER_MAINTENANCE: 'ไม่สามารถอนุมัติผู้เช่าได้ เนื่องจากห้องนี้อยู่ระหว่างปิดปรับปรุง',
@@ -858,15 +868,12 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
                         type="number"
                         min="1"
                         required
-                        value={termMonths || ''}
-                        onChange={(e) => {
-                          const val = parseInt(e.target.value);
-                          setTermMonths(isNaN(val) || val < 1 ? 1 : val);
-                        }}
-                        onBlur={() => {
-                          if (termMonths !== null && termMonths !== undefined) {
-                            setTermMonths(Math.max(1, parseInt(normalizeNumericString(termMonths), 10) || 1));
-                          }
+                        value={termMonths ?? ''}
+                        onChange={(e) => setTermMonths(e.target.value)}
+                        onBlur={(e) => {
+                          const val = e.target.value;
+                          const norm = normalizeNumericString(val);
+                          setTermMonths(norm === '' ? null : Math.max(1, parseInt(norm, 10) || 1));
                         }}
                         className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
                       />
@@ -893,13 +900,15 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
                         required
                         placeholder="ระบุค่าเช่ารายเทอม"
                         value={termRent !== null && termRent !== undefined ? termRent : ''}
-                        onChange={(e) => {
+                        onChange={(e) => setTermRent(e.target.value)}
+                        onBlur={(e) => {
                           const val = e.target.value;
-                          setTermRent(val === '' ? null : normalizeMoneyInput(val));
-                        }}
-                        onBlur={() => {
-                          if (termRent !== null && termRent !== undefined) {
-                            setTermRent(normalizeMoneyInput(termRent));
+                          if (val !== '') {
+                            const norm = normalizeNumericString(val);
+                            e.target.value = norm;
+                            setTermRent(norm);
+                          } else {
+                            setTermRent(null);
                           }
                         }}
                         className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
@@ -913,9 +922,14 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
                         type="number"
                         min="0"
                         step="0.01"
-                        value={termDeposit}
-                        onChange={(e) => setTermDeposit(normalizeMoneyInput(e.target.value))}
-                        onBlur={() => setTermDeposit(normalizeMoneyInput(termDeposit))}
+                        value={termDeposit !== null && termDeposit !== undefined ? termDeposit : ''}
+                        onChange={(e) => setTermDeposit(e.target.value)}
+                        onBlur={(e) => {
+                          const val = e.target.value;
+                          const norm = normalizeNumericString(val);
+                          e.target.value = norm || '0';
+                          setTermDeposit(norm || '0');
+                        }}
                         className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
                       />
                     </div>
@@ -1079,9 +1093,14 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
                     min="0"
                     step="0.01"
                     required
-                    value={monthlyRent}
-                    onChange={(e) => setMonthlyRent(normalizeMoneyInput(e.target.value))}
-                    onBlur={() => setMonthlyRent(normalizeMoneyInput(monthlyRent))}
+                    value={monthlyRent !== null && monthlyRent !== undefined ? monthlyRent : ''}
+                    onChange={(e) => setMonthlyRent(e.target.value)}
+                    onBlur={(e) => {
+                      const val = e.target.value;
+                      const norm = normalizeNumericString(val);
+                      e.target.value = norm || '0';
+                      setMonthlyRent(norm || '0');
+                    }}
                     className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
                   />
                 </div>
@@ -1093,9 +1112,14 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
                     type="number"
                     min="0"
                     step="0.01"
-                    value={monthlyDeposit}
-                    onChange={(e) => setMonthlyDeposit(normalizeMoneyInput(e.target.value))}
-                    onBlur={() => setMonthlyDeposit(normalizeMoneyInput(monthlyDeposit))}
+                    value={monthlyDeposit !== null && monthlyDeposit !== undefined ? monthlyDeposit : ''}
+                    onChange={(e) => setMonthlyDeposit(e.target.value)}
+                    onBlur={(e) => {
+                      const val = e.target.value;
+                      const norm = normalizeNumericString(val);
+                      e.target.value = norm || '0';
+                      setMonthlyDeposit(norm || '0');
+                    }}
                     className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
                   />
                 </div>
@@ -1238,17 +1262,15 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
                     required
                     placeholder="ยังไม่ได้กำหนดค่าเช่ารายวัน"
                     value={dailyRate === null || dailyRate === undefined ? '' : dailyRate}
-                    onChange={(e) => {
+                    onChange={(e) => setDailyRate(e.target.value)}
+                    onBlur={(e) => {
                       const val = e.target.value;
-                      if (val === '') {
-                        setDailyRate(null);
+                      if (val !== '') {
+                        const norm = normalizeNumericString(val);
+                        e.target.value = norm;
+                        setDailyRate(norm);
                       } else {
-                        setDailyRate(normalizeMoneyInput(val));
-                      }
-                    }}
-                    onBlur={() => {
-                      if (dailyRate !== null && dailyRate !== undefined) {
-                        setDailyRate(normalizeMoneyInput(dailyRate));
+                        setDailyRate(null);
                       }
                     }}
                     className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
@@ -1267,9 +1289,14 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
                     type="number"
                     min="0"
                     step="0.01"
-                    value={dailyDeposit}
-                    onChange={(e) => setDailyDeposit(normalizeMoneyInput(e.target.value))}
-                    onBlur={() => setDailyDeposit(normalizeMoneyInput(dailyDeposit))}
+                    value={dailyDeposit !== null && dailyDeposit !== undefined ? dailyDeposit : ''}
+                    onChange={(e) => setDailyDeposit(e.target.value)}
+                    onBlur={(e) => {
+                      const val = e.target.value;
+                      const norm = normalizeNumericString(val);
+                      e.target.value = norm || '0';
+                      setDailyDeposit(norm || '0');
+                    }}
                     className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
                   />
                 </div>

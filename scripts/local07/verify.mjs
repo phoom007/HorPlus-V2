@@ -600,10 +600,34 @@ export async function runVerification() {
 
     // Matrix Scenario A: RENT PAID (July 2026 Room 101)
     const p101Jul = julyPreview.rooms.find(r => r.roomId === r101Db?.id);
+    const p101Aug = augPreview.rooms.find(r => r.roomId === r101Db?.id);
     assert(
       p101Jul?.agreementRentPaymentStatus === 'PAID',
       'Matrix A: RENT PAID -> Room 101 (2026-07) rent status is PAID (จ่ายแล้ว)',
       p101Jul?.agreementRentPaymentStatus
+    );
+
+    // Matrix Scenario A2: ROOM 101 DEPOSIT ORACLE & SINGLE SEEDED BILL IDENTITY
+    const r101DepositBills = await prisma.bill.findMany({
+      where: { dormitoryId: COMP_DORM.id, roomId: r101Db.id, billKind: 'DEPOSIT' },
+    });
+    assert(
+      r101DepositBills.length === 1,
+      `Room 101 Deposit Bill single identity invariant (found ${r101DepositBills.length}, expected 1)`
+    );
+    assert(
+      r101DepositBills[0]?.billNumber === 'INV-202606-101-D',
+      `Room 101 Deposit Bill is the seeded June Deposit Bill INV-202606-101-D without duplicates (${r101DepositBills[0]?.billNumber})`
+    );
+    assert(
+      p101Jul?.agreementDepositPaymentStatus === 'PAID',
+      'Matrix A2: DEPOSIT PAID -> Room 101 (2026-07) deposit status is PAID (ชำระแล้ว)',
+      p101Jul?.agreementDepositPaymentStatus
+    );
+    assert(
+      p101Aug?.agreementDepositPaymentStatus === 'PAID',
+      'Matrix A2: DEPOSIT PAID LIFECYCLE -> Room 101 (2026-08) deposit status is PAID (ชำระแล้ว)',
+      p101Aug?.agreementDepositPaymentStatus
     );
 
     // Matrix Scenario B: RENT UNPAID (August 2026 Room 201)

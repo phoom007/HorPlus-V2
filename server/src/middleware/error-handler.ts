@@ -20,11 +20,14 @@ export function globalErrorHandler(err: Error, req: Request, res: Response, _nex
     statusCode = 400;
     errorCode = 'INVALID_ID_FORMAT';
     message = 'รหัสระบุตัวตน (ID) ไม่ถูกต้องตามรูปแบบ UUID';
-  } else if ((err as any).statusCode || (err as any).status || (err as any).code || (err as any).errorCode) {
-    statusCode = Number((err as any).statusCode || (err as any).status) || 500;
-    errorCode = (err as any).code || (err as any).errorCode || 'INTERNAL_ERROR';
-    message = err.message || 'ระบบไม่สามารถดำเนินการได้ กรุณาลองใหม่อีกครั้ง';
-    fieldErrors = (err as any).fieldErrors || null;
+  } else {
+    const explicitStatus = Number((err as any).statusCode ?? (err as any).status);
+    if (Number.isInteger(explicitStatus) && explicitStatus >= 400 && explicitStatus <= 599) {
+      statusCode = explicitStatus;
+      errorCode = (err as any).code || (err as any).errorCode || 'DOMAIN_ERROR';
+      message = err.message || 'ระบบไม่สามารถดำเนินการได้ กรุณาลองใหม่อีกครั้ง';
+      fieldErrors = (err as any).fieldErrors || null;
+    }
   }
 
   logger.error({
