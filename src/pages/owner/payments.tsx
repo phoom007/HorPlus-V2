@@ -230,6 +230,21 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
 }) => {
   const queryClient = useQueryClient();
 
+  // Query auth session for authenticated actor name
+  const { data: sessionData } = useQuery({
+    queryKey: ['auth', 'session'],
+    queryFn: async () => {
+      try {
+        const res = await httpRequest<any>('GET', '/auth/session');
+        return res;
+      } catch {
+        return null;
+      }
+    },
+    staleTime: 5 * 60 * 1000,
+  });
+  const currentAuthUserName = sessionData?.user?.name || sessionData?.user?.displayName || 'ผู้ดูแลระบบ';
+
   // Active Tab: 'paid' | 'checking' | 'cash' | 'rejected'
   const [activeTab, setActiveTab] = useState<'paid' | 'checking' | 'cash' | 'rejected'>('checking');
   const [searchQuery, setSearchQuery] = useState('');
@@ -248,6 +263,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
   const [cashTargetBillId, setCashTargetBillId] = useState('');
   const [cashReceivedDate, setCashReceivedDate] = useState(new Date().toISOString().split('T')[0]);
   const [cashReceivedBy, setCashReceivedBy] = useState('เจ้าหน้าที่การเงิน');
+  const [customCashAmount, setCustomCashAmount] = useState('');
   const [isSubmittingCash, setIsSubmittingCash] = useState(false);
 
   // Countdown timers for Cash and Slip Approval
@@ -384,7 +400,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
       paymentsData
         .filter(p => {
           const s = (p.status || '').toUpperCase();
-          return s === 'PENDING' || s === 'UNDER_REVIEW' || s === 'APPROVED';
+          return s === 'PENDING' || s === 'UNDER_REVIEW';
         })
         .map(p => p.billId)
     );
@@ -677,7 +693,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
     const targetBill = bills.find(b => b.id === cashTargetBillId);
     if (!targetBill) return;
 
-    const amount = Number(targetBill.outstandingAmount ?? targetBill.totalAmount ?? 0);
+    const amount = customCashAmount ? Number(customCashAmount) : Number(targetBill.outstandingAmount ?? targetBill.totalAmount ?? 0);
     const opId = `cash:${targetBill.id}:${amount}`;
     setIsSubmittingCash(true);
     try {
@@ -1035,12 +1051,19 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                           เงินประกัน
                         </span>
                       )}
-                      <span className={`px-3 py-1 border font-extrabold rounded-full text-[11px] flex items-center gap-1 ${
-                        isOverdue ? 'bg-rose-50 text-rose-700 border-rose-200' : 'bg-indigo-50 text-indigo-700 border-indigo-200'
-                      }`}>
-                        <AlertCircle className="w-3.5 h-3.5" />
-                        {isOverdue ? `เกิน ${overdueDays > 0 ? `${overdueDays} วัน` : 'กำหนด'}` : 'ยังไม่ชำระ'}
-                      </span>
+                      {Number(b.paidAmount || 0) > 0 ? (
+                        <span className="px-3 py-1 bg-amber-50 text-amber-700 border border-amber-200 font-extrabold rounded-full text-[11px] flex items-center gap-1">
+                          <Clock className="w-3.5 h-3.5" />
+                          ชำระบางส่วน
+                        </span>
+                      ) : (
+                        <span className={`px-3 py-1 border font-extrabold rounded-full text-[11px] flex items-center gap-1 ${
+                          isOverdue ? 'bg-rose-50 text-rose-700 border-rose-200' : 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                        }`}>
+                          <AlertCircle className="w-3.5 h-3.5" />
+                          {isOverdue ? `เกิน ${overdueDays > 0 ? `${overdueDays} วัน` : 'กำหนด'}` : 'ยังไม่ชำระ'}
+                        </span>
+                      )}
                     </div>
                   </div>
 
@@ -1429,39 +1452,76 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
             <select
               required
               value={cashTargetBillId}
-              onChange={(e) => setCashTargetBillId(e.target.value)}
+              onChange={(e) => {
+                setCashTargetBillId(e.target.value);
+                const tb = bills.find(b => b.id === e.target.value);
+                if (tb) {
+                  setCustomCashAmount(String(tb.outstandingAmount ?? tb.totalAmount ?? ''));
+                }
+              }}
               className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white font-semibold text-slate-700"
             >
               <option value="">-- เลือกห้องพักที่มีบิลค้างชำระ --</option>
               {cashPendingBills.map(b => (
                 <option key={b.id} value={b.id}>
-                  ห้อง {getRoomNum(b.roomId)} &bull; ยอด: {formatBaht(Number(b.outstandingAmount ?? b.totalAmount ?? 0))}
+                  ห้อง {getRoomNum(b.roomId)} &bull; ยอดคงเหลือ: {formatBaht(Number(b.outstandingAmount ?? b.totalAmount ?? 0))}
                 </option>
               ))}
             </select>
           </div>
 
+          {(() => {
+            const tb = bills.find(b => b.id === cashTargetBillId);
+            if (!tb) return null;
+            return (
+              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-1.5 text-slate-700">
+                <div className="flex justify-between">
+                  <span>ยอดรวมบิล:</span>
+                  <span className="font-bold">{formatBaht(Number(tb.totalAmount || 0))}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>ชำระแล้ว:</span>
+                  <span className="font-bold text-emerald-600">{formatBaht(Number(tb.paidAmount || 0))}</span>
+                </div>
+                <div className="flex justify-between border-t border-slate-200 pt-1">
+                  <span>ยอดคงเหลือปัจจุบัน:</span>
+                  <span className="font-extrabold text-indigo-600">{formatBaht(Number(tb.outstandingAmount ?? tb.totalAmount ?? 0))}</span>
+                </div>
+              </div>
+            );
+          })()}
+
+          <div className="space-y-1">
+            <label className="block font-bold text-slate-700">จำนวนเงินที่รับ *</label>
+            <input
+              type="number"
+              step="0.01"
+              min="0.01"
+              max={(() => {
+                const tb = bills.find(b => b.id === cashTargetBillId);
+                return tb ? Number(tb.outstandingAmount ?? tb.totalAmount ?? 0) : undefined;
+              })()}
+              required
+              value={customCashAmount}
+              onChange={(e) => setCustomCashAmount(e.target.value)}
+              placeholder="ระบุจำนวนเงินสดที่รับ"
+              className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white font-bold text-slate-900 text-sm"
+            />
+          </div>
+
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1">
-              <label className="block font-bold text-slate-700">วันที่รับเงินสด *</label>
-              <input
-                type="date"
-                required
-                value={cashReceivedDate}
-                onChange={(e) => setCashReceivedDate(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800"
-              />
+              <label className="block font-bold text-slate-500">วันที่และเวลารับเงิน</label>
+              <div className="p-2.5 bg-slate-100 border border-slate-200 rounded-xl text-slate-600 font-medium">
+                บันทึกอัตโนมัติจากเวลาระบบ
+              </div>
             </div>
 
             <div className="space-y-1">
-              <label className="block font-bold text-slate-700">ผู้รับเงินสดสำนักงาน *</label>
-              <input
-                type="text"
-                required
-                value={cashReceivedBy}
-                onChange={(e) => setCashReceivedBy(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800"
-              />
+              <label className="block font-bold text-slate-500">ผู้รับเงินสด</label>
+              <div className="p-2.5 bg-slate-100 border border-slate-200 rounded-xl text-slate-700 font-bold truncate">
+                {currentAuthUserName}
+              </div>
             </div>
           </div>
 
@@ -1475,7 +1535,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
             </button>
             <button
               type="submit"
-              disabled={isSubmittingCash || !cashTargetBillId}
+              disabled={isSubmittingCash || !cashTargetBillId || !customCashAmount || Number(customCashAmount) <= 0}
               className="px-5 py-2 text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl shadow-xs disabled:opacity-50"
             >
               {isSubmittingCash ? 'กำลังบันทึก...' : 'บันทึกจ่ายเงินสด'}

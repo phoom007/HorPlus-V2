@@ -1,5 +1,12 @@
+/**
+ * @license Apache-2.0
+ * OWNER R3.8b — In-Transaction Cash Settlement & Canonical Receipt Authority
+ */
+
 import { Prisma } from '@prisma/client';
 import { Decimal } from 'decimal.js';
+import { AppError } from '../types/index.js';
+import { computeCanonicalAllocationPlan } from './allocation.util.js';
 
 export interface RecordCashPaymentInTxInput {
   dormitoryId: string;
@@ -12,8 +19,8 @@ export interface RecordCashPaymentInTxInput {
 
 /**
  * Canonical in-transaction cash settlement authority.
- * Creates Payment, PaymentStatusHistory, BillStatusHistory, updates Bill to PAID,
- * and generates sequential Receipt under the same database transaction.
+ * Creates CombinedPaymentGroup, Payment, PaymentAllocation, PaymentStatusHistory,
+ * BillStatusHistory, updates Bill to PAID or PARTIALLY_PAID, and generates Receipt.
  */
 export async function recordCashPaymentInTx(
   tx: any,
@@ -29,27 +36,19 @@ export async function recordCashPaymentInTx(
     where: { id: input.billId },
     include: {
       items: true,
+      dormitory: true,
+      tenant: true,
+      room: true,
+      billingCycle: true,
       Payment: {
         where: { status: { in: ['PENDING', 'UNDER_REVIEW', 'APPROVED'] } },
       },
+      allocations: true,
     },
   });
-  if (!bill) throw new Error('NOT_FOUND');
-  if (bill.dormitoryId !== input.dormitoryId) throw new Error('FORBIDDEN');
-  if (bill.status === 'PAID' || bill.status === 'paid') throw new Error('ALREADY_PAID');
 
-  // Active Payment Guard: check APPROVED, PENDING, UNDER_REVIEW
-  const hasApprovedPayment = bill.Payment?.some((p: any) => p.status === 'APPROVED');
-  if (hasApprovedPayment) {
-    throw new Error('ALREADY_PAID');
-  }
-
-  const hasActivePendingPayment = bill.Payment?.some(
-    (p: any) => p.status === 'PENDING' || p.status === 'UNDER_REVIEW'
-  );
-  if (hasActivePendingPayment) {
-    throw new Error('PAYMENT_IN_PROGRESS');
-  }
+  if (!bill) throw new AppError('ไม่พบข้อมูลบิลที่ระบุ', 404, 'BILL_NOT_FOUND');
+  if (bill.dormitoryId !== input.dormitoryId) throw new AppError('ไม่มีสิทธิ์ดำเนินการกับบิลนี้', 403, 'FORBIDDEN');
 
   Decimal.set({ rounding: Decimal.ROUND_HALF_UP });
   const totalAmount = bill.totalAmount !== undefined && bill.totalAmount !== null
@@ -62,30 +61,60 @@ export async function recordCashPaymentInTx(
 
   const currentOutstanding = bill.outstandingAmount !== undefined && bill.outstandingAmount !== null
     ? new Decimal(bill.outstandingAmount.toString())
-    : totalAmount.minus(existingPaidAmount);
+    : Decimal.max(totalAmount.minus(existingPaidAmount), new Decimal(0));
 
-  const submitAmount = new Decimal(input.amount.toString());
-  if (!currentOutstanding.equals(submitAmount) || submitAmount.lessThanOrEqualTo(0)) {
-    throw new Error('UNSUPPORTED_AMOUNT');
+  if (bill.status === 'PAID' || bill.status === 'paid' || currentOutstanding.lessThanOrEqualTo(0)) {
+    throw new AppError('บิลนี้ได้รับการชำระเงินครบแล้ว', 400, 'ALREADY_PAID');
   }
 
-  const now = input.paymentDate || new Date();
+  // Active Payment Guard: only block if there is a PENDING or UNDER_REVIEW submission
+  const hasActivePendingPayment = bill.Payment?.some(
+    (p: any) => p.status === 'PENDING' || p.status === 'UNDER_REVIEW'
+  );
+  if (hasActivePendingPayment) {
+    throw new AppError('มีรายการชำระเงินที่อยู่ระหว่างรอการตรวจสอบสำหรับบิลนี้แล้ว', 409, 'PAYMENT_IN_PROGRESS');
+  }
+
+  const submitAmount = new Decimal(input.amount.toString());
+  if (submitAmount.lessThanOrEqualTo(0) || submitAmount.greaterThan(currentOutstanding)) {
+    throw new AppError('ยอดเงินที่ชำระไม่ตรงกับยอดคงเหลือของบิล', 400, 'UNSUPPORTED_AMOUNT');
+  }
+
+  // 3. Cash Authority: Server timestamp ONLY
+  const now = new Date();
   const safeUserId = input.userId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(input.userId)
     ? input.userId
     : null;
 
+  // 4. Create CombinedPaymentGroup for real monetary transaction
+  const group = await tx.combinedPaymentGroup.create({
+    data: {
+      dormitoryId: input.dormitoryId,
+      tenantId: bill.tenantId,
+      totalAmount: new Prisma.Decimal(submitAmount.toFixed(2)),
+      method: 'CASH',
+      status: 'APPROVED',
+      paymentDate: now,
+      recordedByUserId: safeUserId,
+      idempotencyKey: input.idempotencyKey || null,
+      notes: 'รับชำระด้วยเงินสด ณ เคาน์เตอร์',
+    },
+  });
+
+  // 5. Create Payment record linked to group
   const payment = await tx.payment.create({
     data: {
       dormitoryId: input.dormitoryId,
       billId: bill.id,
       tenantId: bill.tenantId,
+      paymentGroupId: group.id,
       method: 'CASH',
       amount: new Prisma.Decimal(submitAmount.toFixed(2)),
       status: 'APPROVED',
       paymentDate: now,
       reviewedByUserId: safeUserId,
       reviewedAt: now,
-      idempotencyKey: input.idempotencyKey || null,
+      idempotencyKey: input.idempotencyKey ? `${input.idempotencyKey}-pay` : undefined,
     },
   });
 
@@ -96,35 +125,117 @@ export async function recordCashPaymentInTx(
       fromStatus: null,
       toStatus: 'APPROVED',
       changedByUserId: safeUserId,
+      effectiveAt: now,
     },
   });
 
+  // 6. Compute item-level allocations
+  const allocationPlan = computeCanonicalAllocationPlan({
+    submitAmount,
+    targetRoomId: bill.roomId,
+    targetTenantId: bill.tenantId,
+    eligibleBills: [
+      {
+        id: bill.id,
+        dormitoryId: bill.dormitoryId,
+        roomId: bill.roomId,
+        tenantId: bill.tenantId,
+        billNumber: bill.billNumber,
+        billKind: bill.billKind,
+        status: bill.status,
+        billingDate: bill.billingDate,
+        dueDate: bill.dueDate,
+        totalAmount,
+        paidAmount: existingPaidAmount,
+        outstandingAmount: currentOutstanding,
+        billingCycleId: bill.billingCycleId,
+        billingCycle: bill.billingCycle,
+        items: (bill.items || []).map((it: any) => {
+          const itemAllocated = (bill.allocations || [])
+            .filter((a: any) => a.billItemId === it.id)
+            .reduce((sum: Decimal, a: any) => sum.plus(new Decimal(a.allocatedAmount.toString())), new Decimal(0));
+          return {
+            id: it.id,
+            type: it.type,
+            code: it.code,
+            description: it.description,
+            amount: it.amount,
+            displayOrder: it.displayOrder,
+            allocatedAmount: itemAllocated,
+          };
+        }),
+      },
+    ],
+  });
+
+  // Persist allocations
+  for (const alloc of allocationPlan.allocations) {
+    await tx.paymentAllocation.create({
+      data: {
+        dormitoryId: input.dormitoryId,
+        paymentGroupId: group.id,
+        paymentId: payment.id,
+        billId: bill.id,
+        billItemId: alloc.billItemId || null,
+        allocatedAmount: new Prisma.Decimal(alloc.allocatedAmount.toFixed(2)),
+        allocationOrder: alloc.allocationOrder,
+      },
+    });
+  }
+
+  // 7. Update Bill balances and canonical status
+  const newPaidAmount = existingPaidAmount.plus(submitAmount);
+  const newOutstandingAmount = Decimal.max(totalAmount.minus(newPaidAmount), new Decimal(0));
+  const newStatus = newOutstandingAmount.equals(0) ? 'PAID' : 'PARTIALLY_PAID';
   const prePaymentStatus = bill.status;
+
   await tx.billStatusHistory.create({
     data: {
       dormitoryId: input.dormitoryId,
       billId: bill.id,
       fromStatus: prePaymentStatus,
-      toStatus: 'PAID',
+      toStatus: newStatus,
       changedByUserId: safeUserId,
+      effectiveAt: now,
     },
   });
 
-  const newPaidAmount = existingPaidAmount.plus(submitAmount);
   await tx.bill.update({
     where: { id: bill.id },
     data: {
-      status: 'PAID',
+      status: newStatus,
       previousStatus: prePaymentStatus,
-      paidAt: now,
+      paidAt: newStatus === 'PAID' ? now : (bill.paidAt || now),
       paidAmount: new Prisma.Decimal(newPaidAmount.toFixed(2)),
-      outstandingAmount: new Prisma.Decimal('0.00'),
+      outstandingAmount: new Prisma.Decimal(newOutstandingAmount.toFixed(2)),
+      paymentGroupId: group.id,
     },
   });
 
-  await generateReceiptInTx(tx, payment.id, input.dormitoryId, bill.id, safeUserId);
+  // 8. Generate sequential receipt tied to group, payment, and bill
+  const receipt = await generateReceiptInTx(
+    tx,
+    payment.id,
+    input.dormitoryId,
+    bill.id,
+    safeUserId,
+    group.id,
+    submitAmount
+  );
 
-  return payment;
+  return {
+    ...payment,
+    group,
+    receipt,
+    allocatedAmount: submitAmount.toFixed(2),
+    bill: {
+      id: bill.id,
+      billNumber: bill.billNumber,
+      paidAmount: newPaidAmount.toFixed(2),
+      outstandingAmount: newOutstandingAmount.toFixed(2),
+      status: newStatus,
+    },
+  };
 }
 
 /**
@@ -132,10 +243,12 @@ export async function recordCashPaymentInTx(
  */
 export async function generateReceiptInTx(
   tx: any,
-  paymentId: string,
+  paymentId: string | null,
   dormitoryId: string,
-  billId: string,
-  userId?: string | null
+  billId: string | null,
+  userId?: string | null,
+  paymentGroupId?: string | null,
+  customTotalAmount?: Decimal
 ) {
   const today = new Date();
   const yearMonth = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, '0')}`;
@@ -157,10 +270,13 @@ export async function generateReceiptInTx(
     },
   });
 
-  const bill = await tx.bill.findUnique({
-    where: { id: billId },
-    include: { items: true, dormitory: true, tenant: true, room: true },
-  });
+  let bill: any = null;
+  if (billId) {
+    bill = await tx.bill.findUnique({
+      where: { id: billId },
+      include: { items: true, dormitory: true, tenant: true, room: true },
+    });
+  }
 
   const rawRoomNumber = bill?.room?.normalizedRoomNumber || bill?.room?.roomNumber || 'GEN';
   const normalizedRoom = rawRoomNumber.replace(/[^a-zA-Z0-9]/g, '').toUpperCase() || 'GEN';
@@ -169,11 +285,13 @@ export async function generateReceiptInTx(
   // Locked format: RC-{YYYYMM}-{NORMALIZED_ROOM_NO}-{SEQUENCE}
   const receiptNumber = `RC-${yearMonth}-${normalizedRoom}-${sequenceStr}`;
 
-  const payment = await tx.payment.findUnique({ where: { id: paymentId } });
-  if (!payment) throw new Error('PAYMENT_NOT_FOUND');
+  let payment: any = null;
+  if (paymentId) {
+    payment = await tx.payment.findUnique({ where: { id: paymentId } });
+  }
 
   Decimal.set({ rounding: Decimal.ROUND_HALF_UP });
-  const paymentAmount = new Decimal(payment.amount.toString());
+  const paymentAmount = customTotalAmount || (payment ? new Decimal(payment.amount.toString()) : new Decimal('0.00'));
   const billTotal = bill?.totalAmount ? new Decimal(bill.totalAmount.toString()) : paymentAmount;
   const isPartialSettlement = !paymentAmount.equals(billTotal);
 
@@ -187,49 +305,52 @@ export async function generateReceiptInTx(
       unitPrice: i.unitPrice ? new Decimal(i.unitPrice.toString()).toFixed(2) : null,
     }));
   } else {
-    const billRef = bill?.billNumber || bill?.id;
+    const billRef = bill?.billNumber || bill?.id || '';
+    const isDeposit = bill?.billKind === 'DEPOSIT' || bill?.billKind === 'deposit';
+    const label = isDeposit ? 'ชำระเงินประกัน' : 'ชำระยอดคงเหลือบิล';
     receiptItems = [
       {
-        description: `ชำระยอดคงเหลือบิล ${billRef}`,
+        description: `${label} ${billRef}`.trim(),
         amount: paymentAmount.toFixed(2),
         quantity: '1',
       },
     ];
   }
 
+  // Resolve receiver display name from user if available
+  let receiverDisplayName = 'ฝ่ายการเงิน หอพัก HorPlus';
+  if (userId) {
+    const user = await tx.user.findUnique({ where: { id: userId }, select: { name: true } });
+    if (user?.name) {
+      receiverDisplayName = user.name;
+    }
+  }
+
   const snapshotData = {
-    dormitoryName: bill?.dormitory?.name || 'หอพัก',
-    dormitoryTaxId: bill?.dormitory?.taxId || '-',
-    dormitoryAddress: bill?.dormitory?.address || '-',
-    dormitoryPhone: bill?.dormitory?.phone || '-',
-    tenantName: bill?.tenant?.name || bill?.tenant?.displayName || 'ผู้เช่า',
-    roomNumber: bill?.room?.roomNumber || 'N/A',
-    billNumber: bill?.billNumber || bill?.id,
-    items: receiptItems,
-    subtotal: paymentAmount.toFixed(2),
-    discount: '0.00',
+    receiptNumber,
+    billNumber: bill?.billNumber || null,
     total: paymentAmount.toFixed(2),
+    items: receiptItems,
+    roomNumber: bill?.room?.roomNumber || 'GEN',
+    tenantName: bill?.tenant?.displayName || bill?.tenant?.firstName ? `${bill.tenant.firstName || ''} ${bill.tenant.lastName || ''}`.trim() : 'ผู้เช่า',
+    dormitoryName: bill?.dormitory?.name || 'หอพัก HorPlus',
     paymentMethod: payment?.method || 'CASH',
-    paymentDate: payment?.paymentDate ? payment.paymentDate.toISOString() : today.toISOString(),
-    approvalDate: payment?.reviewedAt ? payment.reviewedAt.toISOString() : today.toISOString(),
-    receiptNumber: receiptNumber,
-    issueDate: today.toISOString(),
-    isVoided: false,
-    voidReason: null,
+    paymentDate: (payment?.paymentDate || today).toISOString(),
+    receiverName: receiverDisplayName,
   };
 
-  const safeUserId = userId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userId)
-    ? userId
-    : null;
-
-  return await tx.receipt.create({
+  const receipt = await tx.receipt.create({
     data: {
       dormitoryId,
+      paymentId: paymentId || undefined,
+      paymentGroupId: paymentGroupId || undefined,
+      billId: billId || undefined,
       receiptNumber,
-      billId,
-      paymentId,
-      issuedByUserId: safeUserId,
-      snapshotData: snapshotData as any,
+      snapshotData,
+      issuedByUserId: userId || null,
+      issuedAt: today,
     },
   });
+
+  return receipt;
 }

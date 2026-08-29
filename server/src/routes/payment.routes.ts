@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { z } from 'zod';
+import crypto from 'crypto';
 import { paymentService } from '../services/payment.service.js';
 import { localStorageProvider } from '../services/local-storage.service.js';
 import { AuthenticationService } from '../services/auth.service.js';
@@ -9,9 +10,8 @@ import { requireDormitoryWriteEntitlement } from '../middleware/entitlement.js';
 import { resolveAuthoritativeDormitoryContext } from '../middleware/dormitory-context.js';
 import { logger } from '../config/logger.js';
 import { AppError } from '../types/index.js';
-import { PrismaClient } from '@prisma/client';
+import { getPrismaClient } from '../db/prisma.js';
 import multer from 'multer';
-import crypto from 'crypto';
 
 const upload = multer({
   limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
@@ -25,7 +25,7 @@ const upload = multer({
   }
 });
 
-const prisma = new PrismaClient();
+const prisma = getPrismaClient();
 
 export interface ImageValidationResult {
   mimeType: 'image/jpeg' | 'image/png' | 'image/webp';
@@ -52,7 +52,6 @@ export function detectAndValidateImage(buffer: Buffer, expectedMime?: string | n
     buffer[6] === 0x1A &&
     buffer[7] === 0x0A
   ) {
-    // Structural check: Must contain IEND chunk (49 45 4E 44)
     const iendIndex = buffer.indexOf(Buffer.from([0x49, 0x45, 0x4E, 0x44]));
     if (iendIndex === -1) {
       throw new Error('INVALID_FILE_STRUCTURE: Corrupt PNG image missing IEND chunk');
@@ -62,7 +61,6 @@ export function detectAndValidateImage(buffer: Buffer, expectedMime?: string | n
   }
   // Check JPEG: FF D8 FF
   else if (buffer[0] === 0xFF && buffer[1] === 0xD8 && buffer[2] === 0xFF) {
-    // Structural check: Must end with or contain EOI (FF D9)
     const eoiIndex = buffer.lastIndexOf(Buffer.from([0xFF, 0xD9]));
     if (eoiIndex === -1 || eoiIndex < 3) {
       throw new Error('INVALID_FILE_STRUCTURE: Corrupt JPEG image missing EOI marker');
@@ -72,10 +70,9 @@ export function detectAndValidateImage(buffer: Buffer, expectedMime?: string | n
   }
   // Check WebP: RIFF at 0..3 and WEBP at 8..11
   else if (
-    buffer[0] === 0x52 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x46 && // RIFF
-    buffer[8] === 0x57 && buffer[9] === 0x45 && buffer[10] === 0x42 && buffer[11] === 0x50 // WEBP
+    buffer[0] === 0x52 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x46 &&
+    buffer[8] === 0x57 && buffer[9] === 0x45 && buffer[10] === 0x42 && buffer[11] === 0x50
   ) {
-    // Check chunk type at 12..15 (VP8 , VP8L, VP8X)
     const chunkType = buffer.toString('ascii', 12, 16);
     if (!['VP8 ', 'VP8L', 'VP8X'].includes(chunkType)) {
       throw new Error('INVALID_FILE_STRUCTURE: Invalid WebP chunk header');
@@ -130,199 +127,6 @@ export function createPaymentRouter(authService: AuthenticationService) {
     return isOk;
   };
 
-  // Tenant: create upload intent
-  router.post('/slip/intent', requireAuth, requireDormitoryWriteEntitlement, requireCsrf, async (req, res) => {
-    try {
-      const auth = (req as any).auth;
-      const context = (req as any).dormitoryContext || (await resolveAuthoritativeDormitoryContext(req));
-      const dormitoryId = context.dormitoryId;
-      if (!dormitoryId) return res.status(400).json({ error: 'Missing dormitoryId' });
-
-      const tenant = await ensureTenant(req, res, dormitoryId);
-      if (!tenant) return res.status(403).json({ error: 'Forbidden' });
-
-      const schema = z.object({
-        billId: z.string(),
-        fileName: z.string(),
-        mimeType: z.enum(['image/jpeg', 'image/png', 'image/webp']),
-        fileSize: z.number().int().positive()
-      });
-      const data = schema.parse(req.body);
-
-      // Verify bill belongs to tenant
-      const bill = await prisma.bill.findUnique({ where: { id: data.billId } });
-      if (!bill || bill.tenantId !== tenant.id || bill.dormitoryId !== dormitoryId) {
-        return res.status(403).json({ error: 'Forbidden' });
-      }
-
-      if (bill.status === 'PAID') {
-        return res.status(400).json({ error: 'ALREADY_PAID' });
-      }
-
-      const activePayment = await prisma.payment.findFirst({
-        where: { billId: bill.id, status: { in: ['PENDING', 'UNDER_REVIEW', 'APPROVED'] } }
-      });
-      if (activePayment) {
-        return res.status(400).json({ error: 'ACTIVE_REVIEW_EXISTS' });
-      }
-
-      // Create PaymentUploadIntent in DB with 15-minute TTL
-      const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
-      const intent = await prisma.paymentUploadIntent.create({
-        data: {
-          authenticatedUserId: auth.userId,
-          tenantId: tenant.id,
-          dormitoryId: dormitoryId,
-          billId: data.billId,
-          expectedMimeType: data.mimeType,
-          expectedSize: data.fileSize,
-          expiresAt: expiresAt,
-          status: 'CREATED'
-        }
-      });
-
-      res.json({
-        intentId: intent.id,
-        uploadUrl: `/api/v1/payments/slip/upload/${intent.id}`,
-        expiresAt
-      });
-    } catch (err: any) {
-      res.status(400).json({ error: err.message });
-    }
-  });
-
-  // Secure multipart upload
-  router.post('/slip/upload/:intentId', requireAuth, requireDormitoryWriteEntitlement, requireCsrf, upload.single('file'), async (req, res) => {
-    let objectKey: string | null = null;
-    try {
-      if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-
-      const auth = (req as any).auth;
-      const context = (req as any).dormitoryContext || (await resolveAuthoritativeDormitoryContext(req));
-      const dormitoryId = context.dormitoryId;
-      const intentId = req.params.intentId;
-      const intent = await prisma.paymentUploadIntent.findUnique({ where: { id: intentId } });
-
-      if (!intent || intent.dormitoryId !== dormitoryId) return res.status(404).json({ error: 'Intent not found' });
-      if (intent.status !== 'CREATED') return res.status(409).json({ error: 'Intent already consumed or uploaded' });
-      if (intent.expiresAt < new Date()) return res.status(400).json({ error: 'Intent expired' });
-      if (intent.authenticatedUserId !== auth.userId) return res.status(403).json({ error: 'Forbidden' });
-
-      const buffer = req.file.buffer;
-
-      // 1. Structural and MIME validation against expected MIME
-      const validation = detectAndValidateImage(buffer, intent.expectedMimeType);
-
-      // 2. Expected size validation
-      if (intent.expectedSize && buffer.length !== intent.expectedSize) {
-        return res.status(400).json({ error: 'SIZE_MISMATCH: Uploaded size differs from expected size' });
-      }
-
-      // 3. Compute SHA-256 server-side only
-      const fileHash = crypto.createHash('sha256').update(buffer).digest('hex');
-
-      // 4. Check duplicate globally
-      const duplicateIntent = await prisma.paymentUploadIntent.findFirst({
-        where: { sha256: fileHash, status: { in: ['UPLOADED', 'CONSUMED'] } }
-      });
-      const duplicatePayment = await prisma.payment.findFirst({
-        where: { fileHash: fileHash }
-      });
-      if (duplicateIntent || duplicatePayment) {
-        return res.status(409).json({ error: 'DUPLICATE_PAYMENT_EVIDENCE' });
-      }
-
-      // 5. Generate secure object key and write file
-      objectKey = `payments/${intent.dormitoryId}/${intent.billId}/${intent.id}_${crypto.randomBytes(8).toString('hex')}${validation.extension}`;
-      await localStorageProvider.saveFile(objectKey, buffer);
-
-      // 6. Update database record with verified MIME and size
-      try {
-        await prisma.paymentUploadIntent.update({
-          where: { id: intent.id },
-          data: {
-            status: 'UPLOADED',
-            verifiedMimeType: validation.mimeType,
-            verifiedSize: validation.size,
-            objectKey,
-            sha256: fileHash,
-            uploadedAt: new Date()
-          }
-        });
-      } catch (dbErr: any) {
-        // Concurrency unique collision or constraint error
-        if (dbErr.code === 'P2002' || (dbErr.message && dbErr.message.includes('unique'))) {
-          throw new Error('DUPLICATE_PAYMENT_EVIDENCE');
-        }
-        throw dbErr;
-      }
-
-      // Return success without exposing raw internal objectKey or fileHash to client
-      res.json({ success: true, intentId: intent.id });
-    } catch (err: any) {
-      if (objectKey) {
-        try {
-          await localStorageProvider.deleteFile(objectKey);
-        } catch {}
-      }
-
-      if (err.message === 'DUPLICATE_PAYMENT_EVIDENCE') {
-        return res.status(409).json({ error: 'DUPLICATE_PAYMENT_EVIDENCE' });
-      }
-      if (err.message === 'INVALID_MIME_TYPE' || err.message.startsWith('MIME_TYPE_MISMATCH') || err.message.startsWith('INVALID_FILE')) {
-        return res.status(400).json({ error: err.message });
-      }
-      res.status(400).json({ error: err.message });
-    }
-  });
-
-  // Tenant: confirm upload and submit payment
-  router.post('/slip/submit', requireAuth, requireDormitoryWriteEntitlement, requireCsrf, async (req, res) => {
-    try {
-      const auth = (req as any).auth;
-      const context = (req as any).dormitoryContext || (await resolveAuthoritativeDormitoryContext(req));
-      const dormitoryId = context.dormitoryId;
-      if (!dormitoryId) return res.status(400).json({ error: 'Missing dormitoryId' });
-
-      const tenant = await ensureTenant(req, res, dormitoryId);
-      if (!tenant) return res.status(403).json({ error: 'Forbidden' });
-
-      const schema = z.object({
-        billId: z.string(),
-        amount: z.string(),
-        paymentDate: z.string(),
-        intentId: z.string()
-      });
-      const data = schema.parse(req.body);
-
-      const idempotencyKey = (req.headers['x-idempotency-key'] || req.headers['idempotency-key']) as string | undefined;
-
-      const payment = await paymentService.submitSlip({
-        dormitoryId,
-        billId: data.billId,
-        tenantId: tenant.id,
-        amount: data.amount,
-        paymentDate: new Date(data.paymentDate),
-        intentId: data.intentId,
-        idempotencyKey,
-        actorUserId: auth.userId
-      });
-
-      res.json(payment);
-    } catch (err: any) {
-      if (err.message === 'IDEMPOTENCY_MISMATCH') {
-        return res.status(422).json({ error: 'IDEMPOTENCY_MISMATCH' });
-      }
-      if (err.message === 'CONCURRENT_REQUEST_IN_PROGRESS') {
-        return res.status(409).json({ error: 'CONCURRENT_REQUEST_IN_PROGRESS' });
-      }
-      if (err.message === 'DUPLICATE_PAYMENT_EVIDENCE') {
-        return res.status(409).json({ error: err.message });
-      }
-      res.status(400).json({ error: err.message });
-    }
-  });
-
   const handlePaymentError = (res: Response, req: Request, err: any) => {
     const requestId = (req.headers['x-request-id'] as string) || (req as any).id || (req as any).requestId || 'req-unknown';
     const timestamp = new Date().toISOString();
@@ -364,6 +168,46 @@ export function createPaymentRouter(authService: AuthenticationService) {
             timestamp,
           },
         });
+      case 'PAYMENT_EXCEEDS_ELIGIBLE_OUTSTANDING':
+        return res.status(400).json({
+          error: {
+            code: 'PAYMENT_EXCEEDS_ELIGIBLE_OUTSTANDING',
+            message: 'ยอดในสลิปเกินกว่ายอดที่ต้องชำระจริง กรุณาติดต่อเจ้าของหอพัก',
+            fieldErrors: null,
+            requestId,
+            timestamp,
+          },
+        });
+      case 'FORBIDDEN_CROSS_ROOM':
+        return res.status(400).json({
+          error: {
+            code: 'FORBIDDEN_CROSS_ROOM',
+            message: 'ไม่อนุญาตให้จัดสรรการชำระเงินข้ามห้องพัก',
+            fieldErrors: null,
+            requestId,
+            timestamp,
+          },
+        });
+      case 'NO_ELIGIBLE_BILLS':
+        return res.status(400).json({
+          error: {
+            code: 'NO_ELIGIBLE_BILLS',
+            message: 'ไม่พบบิลที่มียอดค้างชำระสำหรับห้องนี้',
+            fieldErrors: null,
+            requestId,
+            timestamp,
+          },
+        });
+      case 'FINANCIAL_STATE_INCONSISTENT':
+        return res.status(400).json({
+          error: {
+            code: 'FINANCIAL_STATE_INCONSISTENT',
+            message: 'ข้อมูลทางการเงินไม่สอดคล้องกับระบบ',
+            fieldErrors: null,
+            requestId,
+            timestamp,
+          },
+        });
       case 'ALREADY_PAID':
         return res.status(400).json({
           error: {
@@ -386,6 +230,8 @@ export function createPaymentRouter(authService: AuthenticationService) {
           },
         });
       case 'FORBIDDEN':
+      case 'FORBIDDEN_BILL_OWNERSHIP':
+      case 'FORBIDDEN_INTENT_MISMATCH':
         return res.status(403).json({
           error: {
             code: 'FORBIDDEN',
@@ -400,6 +246,16 @@ export function createPaymentRouter(authService: AuthenticationService) {
           error: {
             code: 'PAYMENT_IN_PROGRESS',
             message: 'มีรายการชำระเงินที่อยู่ระหว่างรอการตรวจสอบสำหรับบิลนี้แล้ว',
+            fieldErrors: null,
+            requestId,
+            timestamp,
+          },
+        });
+      case 'ACTIVE_REVIEW_EXISTS':
+        return res.status(409).json({
+          error: {
+            code: 'ACTIVE_REVIEW_EXISTS',
+            message: 'มีรายการชำระเงินที่รอตรวจสอบอยู่แล้ว',
             fieldErrors: null,
             requestId,
             timestamp,
@@ -435,16 +291,6 @@ export function createPaymentRouter(authService: AuthenticationService) {
             timestamp,
           },
         });
-      case 'ACTIVE_REVIEW_EXISTS':
-        return res.status(400).json({
-          error: {
-            code: 'ACTIVE_REVIEW_EXISTS',
-            message: 'มีรายการชำระเงินที่รอตรวจสอบอยู่แล้ว',
-            fieldErrors: null,
-            requestId,
-            timestamp,
-          },
-        });
       default:
         logger.error({ err, requestId }, 'Unhandled payment error caught in payment error boundary');
         return res.status(500).json({
@@ -458,6 +304,152 @@ export function createPaymentRouter(authService: AuthenticationService) {
         });
     }
   };
+
+  // Tenant: create upload intent
+  router.post('/slip/intent', requireAuth, requireDormitoryWriteEntitlement, requireCsrf, async (req, res) => {
+    try {
+      const auth = (req as any).auth;
+      const context = (req as any).dormitoryContext || (await resolveAuthoritativeDormitoryContext(req));
+      const dormitoryId = context.dormitoryId;
+      if (!dormitoryId) return res.status(400).json({ error: 'Missing dormitoryId' });
+
+      const tenant = await ensureTenant(req, res, dormitoryId);
+      if (!tenant) return res.status(403).json({ error: 'Forbidden' });
+
+      const schema = z.object({
+        billId: z.string(),
+        fileName: z.string(),
+        mimeType: z.enum(['image/jpeg', 'image/png', 'image/webp']),
+        fileSize: z.number().int().positive()
+      });
+      const data = schema.parse(req.body);
+
+      const bill = await prisma.bill.findUnique({ where: { id: data.billId } });
+      if (!bill || bill.tenantId !== tenant.id || bill.dormitoryId !== dormitoryId) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+
+      if (bill.status === 'PAID') {
+        return res.status(400).json({ error: 'ALREADY_PAID' });
+      }
+
+      const activePayment = await prisma.payment.findFirst({
+        where: { billId: bill.id, status: { in: ['PENDING', 'UNDER_REVIEW'] } }
+      });
+      if (activePayment) {
+        return res.status(400).json({ error: 'ACTIVE_REVIEW_EXISTS' });
+      }
+
+      const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
+      const intent = await prisma.paymentUploadIntent.create({
+        data: {
+          authenticatedUserId: auth.userId,
+          tenantId: tenant.id,
+          dormitoryId: dormitoryId,
+          billId: data.billId,
+          expectedMimeType: data.mimeType,
+          expectedSize: data.fileSize,
+          expiresAt: expiresAt,
+          status: 'CREATED'
+        }
+      });
+
+      res.json({
+        intentId: intent.id,
+        uploadUrl: `/api/v1/payments/slip/upload/${intent.id}`,
+        expiresAt
+      });
+    } catch (err: any) {
+      handlePaymentError(res, req, err);
+    }
+  });
+
+  // Secure multipart upload
+  router.post('/slip/upload/:intentId', requireAuth, requireDormitoryWriteEntitlement, requireCsrf, upload.single('file'), async (req, res) => {
+    let objectKey: string | null = null;
+    try {
+      if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+
+      const auth = (req as any).auth;
+      const intent = await prisma.paymentUploadIntent.findUnique({ where: { id: req.params.intentId } });
+      if (!intent) return res.status(404).json({ error: 'Upload intent not found' });
+      if (intent.authenticatedUserId !== auth.userId) return res.status(403).json({ error: 'Forbidden' });
+      if (intent.status !== 'CREATED') return res.status(400).json({ error: 'Intent already used or invalid' });
+      if (intent.expiresAt < new Date()) return res.status(400).json({ error: 'Intent expired' });
+
+      const validation = detectAndValidateImage(req.file.buffer, intent.expectedMimeType);
+      const hash = crypto.createHash('sha256').update(req.file.buffer).digest('hex');
+
+      const existingDuplicate = await prisma.payment.findFirst({
+        where: {
+          fileHash: hash,
+          status: { in: ['PENDING', 'UNDER_REVIEW', 'APPROVED'] }
+        }
+      });
+      if (existingDuplicate) {
+        return res.status(409).json({ error: 'DUPLICATE_PAYMENT_EVIDENCE' });
+      }
+
+      const ext = validation.extension;
+      objectKey = `slips/${intent.dormitoryId}/${intent.id}${ext}`;
+      await localStorageProvider.saveFile(objectKey, req.file.buffer);
+
+      await prisma.paymentUploadIntent.update({
+        where: { id: intent.id },
+        data: {
+          status: 'UPLOADED',
+          objectKey,
+          sha256: hash,
+          verifiedMimeType: validation.mimeType,
+          verifiedSize: validation.size,
+          uploadedAt: new Date()
+        }
+      });
+
+      res.json({ success: true, objectKey, sha256: hash });
+    } catch (err: any) {
+      if (objectKey) {
+        try { await localStorageProvider.deleteFile(objectKey); } catch (e) {}
+      }
+      handlePaymentError(res, req, err);
+    }
+  });
+
+  // Tenant: Submit slip referencing intent
+  router.post('/slip/submit', requireAuth, requireDormitoryWriteEntitlement, requireCsrf, async (req, res) => {
+    try {
+      const auth = (req as any).auth;
+      const context = (req as any).dormitoryContext || (await resolveAuthoritativeDormitoryContext(req));
+      const dormitoryId = context.dormitoryId;
+
+      const tenant = await ensureTenant(req, res, dormitoryId);
+      if (!tenant) return res.status(403).json({ error: 'Forbidden' });
+
+      const schema = z.object({
+        billId: z.string(),
+        amount: z.string(),
+        intentId: z.string(),
+        paymentDate: z.string().transform((val) => new Date(val))
+      });
+      const data = schema.parse(req.body);
+      const idempotencyKey = (req.headers['x-idempotency-key'] || req.headers['idempotency-key']) as string | undefined;
+
+      const payment = await paymentService.submitSlip({
+        dormitoryId,
+        billId: data.billId,
+        tenantId: tenant.id,
+        amount: data.amount,
+        paymentDate: data.paymentDate,
+        intentId: data.intentId,
+        idempotencyKey,
+        actorUserId: auth.userId
+      });
+
+      res.json(payment);
+    } catch (err: any) {
+      handlePaymentError(res, req, err);
+    }
+  });
 
   // Owner: Record Cash
   router.post('/cash', requireAuth, requireDormitoryPermission('payment:write'), requireDormitoryWriteEntitlement, requireCsrf, async (req, res) => {
@@ -530,6 +522,7 @@ export function createPaymentRouter(authService: AuthenticationService) {
 
       const schema = z.object({
         billIds: z.array(z.string().uuid()).min(1, 'ต้องระบุรายการบิลอย่างน้อย 1 รายการ'),
+        amount: z.string().optional(),
         notes: z.string().optional(),
       });
       const data = schema.parse(req.body);
@@ -538,6 +531,7 @@ export function createPaymentRouter(authService: AuthenticationService) {
       const result = await paymentService.recordCombinedCash({
         dormitoryId,
         billIds: data.billIds,
+        amount: data.amount,
         userId: auth.userId,
         notes: data.notes,
         idempotencyKey,
@@ -596,7 +590,6 @@ export function createPaymentRouter(authService: AuthenticationService) {
 
       const schema = z.object({ reason: z.string().min(1) });
       const data = schema.parse(req.body);
-
       const idempotencyKey = (req.headers['x-idempotency-key'] || req.headers['idempotency-key']) as string | undefined;
 
       const payment = await paymentService.rejectPayment({
@@ -634,7 +627,6 @@ export function createPaymentRouter(authService: AuthenticationService) {
 
       const schema = z.object({ reason: z.string().min(1) });
       const data = schema.parse(req.body);
-
       const idempotencyKey = (req.headers['x-idempotency-key'] || req.headers['idempotency-key']) as string | undefined;
 
       const payment = await paymentService.reversePayment({
@@ -691,7 +683,7 @@ export function createPaymentRouter(authService: AuthenticationService) {
       res.setHeader('Content-Type', ext);
       res.send(fileBuffer);
     } catch (err: any) {
-      res.status(404).json({ error: err.message });
+      handlePaymentError(res, req, err);
     }
   });
 
@@ -714,9 +706,17 @@ export function createPaymentRouter(authService: AuthenticationService) {
               tenant: true,
               room: true,
               items: true,
+              allocations: true,
             },
           },
           receipt: true,
+          allocations: true,
+          paymentGroup: {
+            include: {
+              allocations: true,
+              receipts: true,
+            },
+          },
           statusHistories: { orderBy: { effectiveAt: 'desc' } }
         },
         orderBy: { createdAt: 'desc' }
@@ -726,6 +726,7 @@ export function createPaymentRouter(authService: AuthenticationService) {
       handlePaymentError(res, req, err);
     }
   });
+
   // Tenant: Create upload intent for multiple bills combined with 1 slip
   router.post('/combined-slip-intent', requireAuth, async (req, res) => {
     try {
@@ -754,7 +755,7 @@ export function createPaymentRouter(authService: AuthenticationService) {
 
       res.json(result);
     } catch (err: any) {
-      res.status(400).json({ error: err.message });
+      handlePaymentError(res, req, err);
     }
   });
 
@@ -787,7 +788,7 @@ export function createPaymentRouter(authService: AuthenticationService) {
 
       res.json(result);
     } catch (err: any) {
-      res.status(400).json({ error: err.message });
+      handlePaymentError(res, req, err);
     }
   });
 
@@ -811,7 +812,7 @@ export function createPaymentRouter(authService: AuthenticationService) {
 
       res.json(result);
     } catch (err: any) {
-      res.status(400).json({ error: err.message });
+      handlePaymentError(res, req, err);
     }
   });
 

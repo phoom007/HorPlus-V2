@@ -2186,6 +2186,10 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     
     const rawDirtyRows: any[] = [];
     for (const r of meterRows) {
+        const roomCtx = roomContextMap.get(r.roomId);
+        if (roomCtx?.billingSource === 'DAILY_STAY' || roomCtx?.isDailyUnpaid) {
+          continue;
+        }
         const orig = (originalRowsRef.current || []).find(o => o.roomId === r.roomId);
         const dirtyObj: any = { roomId: r.roomId };
         let hasDelta = false;
@@ -2424,6 +2428,19 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         setSaveSuccess(true);
         if (saveSuccessTimeoutRef.current) clearTimeout(saveSuccessTimeoutRef.current);
         saveSuccessTimeoutRef.current = setTimeout(() => setSaveSuccess(false), 3000);
+
+        if (Array.isArray(res.savedRows) && res.savedRows.length > 0) {
+          const versionMap = new Map(res.savedRows.map((s: any) => [s.roomId, s.version]));
+          setMeterRows(prev => prev.map(row => {
+            const v = versionMap.get(row.roomId);
+            return v !== undefined ? { ...row, snapshotVersion: v } : row;
+          }));
+          meterRowsRef.current = meterRowsRef.current.map(row => {
+            const v = versionMap.get(row.roomId);
+            return v !== undefined ? { ...row, snapshotVersion: v } : row;
+          });
+        }
+
         originalRowsRef.current = JSON.parse(JSON.stringify(meterRowsRef.current));
         originalRowsCycleIdRef.current = selectedBillingCycleId;
         resetHistory(meterRowsRef.current);

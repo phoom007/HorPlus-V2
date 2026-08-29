@@ -251,9 +251,10 @@ export interface PaymentStatusBadgeConfig {
 }
 
 export function getPaymentStatusBadge(
-  status?: 'PAID' | 'UNPAID' | 'PARTIAL' | 'NOT_ISSUED' | 'UNKNOWN' | null
+  status?: 'PAID' | 'UNPAID' | 'PARTIAL' | 'PARTIALLY_PAID' | 'NOT_ISSUED' | 'UNKNOWN' | string | null
 ): PaymentStatusBadgeConfig {
-  switch (status) {
+  const norm = (status || '').toUpperCase();
+  switch (norm) {
     case 'PAID':
       return {
         text: 'ชำระแล้ว',
@@ -267,6 +268,7 @@ export function getPaymentStatusBadge(
         dotColor: 'bg-amber-500',
       };
     case 'PARTIAL':
+    case 'PARTIALLY_PAID':
       return {
         text: 'ชำระบางส่วน',
         className: 'bg-amber-50 text-amber-700 border-amber-200',
