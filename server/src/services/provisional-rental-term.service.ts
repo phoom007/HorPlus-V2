@@ -16,6 +16,7 @@ import {
   doHalfOpenIntervalsOverlap,
   acquireRoomAvailabilityLock,
 } from '../utils/occupancy-interval.util.js';
+import { createDepositBillForAgreementInTx } from '../utils/deposit-billing.util.js';
 
 export interface CreateProvisionalRentalTermDto {
   roomId: string;
@@ -28,6 +29,7 @@ export interface CreateProvisionalRentalTermDto {
   unitRentAmount: string | number;
   totalRentAmount?: string | number;
   depositAmount?: string | number | null;
+  depositDeclaredStatus?: 'PAID' | 'UNPAID' | string | null;
   termInstallmentCount?: number;
 }
 
@@ -313,6 +315,18 @@ export class ProvisionalRentalTermService {
           status: termStatus,
           createdByUserId: userId && /^[0-9a-fA-F-]{36}$/.test(userId) ? userId : null,
         },
+      });
+
+      // 3.5. Create exactly one Deposit Bill for this agreement in the start billing cycle
+      await createDepositBillForAgreementInTx(tx, {
+        dormitoryId,
+        roomId: data.roomId,
+        tenantId: tenant.id,
+        startDate: data.startDate,
+        depositAmount: provisionalTerm.depositAmount || '0.00',
+        depositDeclaredStatus: data.depositDeclaredStatus,
+        provisionalRentalTermId: provisionalTerm.id,
+        actorUserId: userId,
       });
 
       // 4. Update Room status

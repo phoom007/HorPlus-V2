@@ -256,7 +256,7 @@ export function getPaymentStatusBadge(
   switch (status) {
     case 'PAID':
       return {
-        text: 'จ่ายแล้ว',
+        text: 'ชำระแล้ว',
         className: 'bg-emerald-50 text-emerald-700 border-emerald-200',
         dotColor: 'bg-emerald-500',
       };

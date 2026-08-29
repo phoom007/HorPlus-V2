@@ -51,11 +51,15 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
   // Monthly fields
   const [durationMonths, setDurationMonths] = useState(1);
   const [monthlyRent, setMonthlyRent] = useState<number>(0);
+  const [monthlyDeposit, setMonthlyDeposit] = useState<number>(0);
+  const [monthlyDepositDeclaredStatus, setMonthlyDepositDeclaredStatus] = useState<'PAID' | 'UNPAID'>('UNPAID');
   const [monthlyEndDate, setMonthlyEndDate] = useState('');
 
   // Term fields (Strictly Building-authoritative)
   const [termMonths, setTermMonths] = useState<number | null>(null);
   const [termRent, setTermRent] = useState<number | null>(null);
+  const [termDeposit, setTermDeposit] = useState<number>(0);
+  const [termDepositDeclaredStatus, setTermDepositDeclaredStatus] = useState<'PAID' | 'UNPAID'>('UNPAID');
   const [termInstallmentCount, setTermInstallmentCount] = useState(1);
   const [maxInstallments, setMaxInstallments] = useState(1);
   const [termEndDate, setTermEndDate] = useState('');
@@ -66,7 +70,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
   const [checkOutTime, setCheckOutTime] = useState('');
   const [dailyRate, setDailyRate] = useState<number | null>(null);
   const [dailyDeposit, setDailyDeposit] = useState<number>(0);
-  const [depositDeclaredStatus, setDepositDeclaredStatus] = useState<'PAID' | 'UNPAID'>('UNPAID');
+  const [dailyDepositDeclaredStatus, setDailyDepositDeclaredStatus] = useState<'PAID' | 'UNPAID'>('UNPAID');
 
   const [loading, setLoading] = useState(false);
   const [errorText, setErrorText] = useState<string | null>(null);
@@ -177,7 +181,12 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
 
       // 1. Monthly defaults: from authoritative server context
       const mRent = eff && typeof eff.monthlyRent === 'number' ? Number(eff.monthlyRent) : 0;
+      const mDep = eff?.monthlyDeposit !== null && eff?.monthlyDeposit !== undefined
+        ? Number(eff.monthlyDeposit)
+        : (eff?.depositAmount !== null && eff?.depositAmount !== undefined ? Number(eff.depositAmount) : 0);
       setMonthlyRent(mRent);
+      setMonthlyDeposit(mDep);
+      setMonthlyDepositDeclaredStatus('UNPAID');
       setDurationMonths(1);
       setMonthlyEndDate(calculateMonthEndDate(today, 1));
 
@@ -186,6 +195,12 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
       const bldMaxInstallments = bld?.maxTermRentInstallments && Number(bld.maxTermRentInstallments) >= 1
         ? Number(bld.maxTermRentInstallments)
         : 1;
+
+      const tDep = eff?.termDeposit !== null && eff?.termDeposit !== undefined
+        ? Number(eff.termDeposit)
+        : (eff?.depositAmount !== null && eff?.depositAmount !== undefined ? Number(eff.depositAmount) : 0);
+      setTermDeposit(tDep);
+      setTermDepositDeclaredStatus('UNPAID');
 
       if (bldTermMonths) {
         setTermMonths(bldTermMonths);
@@ -212,10 +227,10 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
 
       setDailyRate(dRent);
       setDailyDeposit(dDep);
+      setDailyDepositDeclaredStatus('UNPAID');
       setDailyEndDate(today);
       setCheckInTime('');
       setCheckOutTime('');
-      setDepositDeclaredStatus('UNPAID');
 
       // Set initial active tab: default = 'LINE' (Requirement R1 / T1)
       setActiveTab('LINE');
@@ -279,7 +294,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
   const inclusiveDays = calculateInclusiveDays(startDate, dailyEndDate);
   const dailyTotalRent = (dailyRate ?? 0) * inclusiveDays;
   const dailyTotalAgreed = dailyTotalRent + dailyDeposit;
-  const dailyOutstanding = depositDeclaredStatus === 'PAID' ? dailyTotalRent : dailyTotalAgreed;
+  const dailyOutstanding = dailyDepositDeclaredStatus === 'PAID' ? dailyTotalRent : dailyTotalAgreed;
 
   const isTermDisabled =
     activeTab === 'TERM' &&
@@ -338,8 +353,6 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
 
     try {
       if (activeTab === 'MONTHLY') {
-        const eff = context.effective;
-        const mDep = eff?.monthlyDeposit !== null && eff?.monthlyDeposit !== undefined ? Number(eff.monthlyDeposit) : (eff?.depositAmount !== null && eff?.depositAmount !== undefined ? Number(eff.depositAmount) : 0);
         const payload = {
           roomId: context.roomId,
           fullName: fullName.trim(),
@@ -350,7 +363,8 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
           durationMonths: Number(durationMonths),
           unitRentAmount: monthlyRent.toFixed(2),
           totalRentAmount: (monthlyRent * durationMonths).toFixed(2),
-          depositAmount: mDep.toFixed(2),
+          depositAmount: Number(monthlyDeposit || 0).toFixed(2),
+          depositDeclaredStatus: monthlyDepositDeclaredStatus,
         };
 
         if (idCardFile) {
@@ -369,8 +383,6 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
         onSuccess(`เพิ่มผู้เช่ารายเดือน (${context.roomNumber}) เรียบร้อยแล้ว`);
         onClose();
       } else if (activeTab === 'TERM') {
-        const eff = context.effective;
-        const tDep = eff?.termDeposit !== null && eff?.termDeposit !== undefined ? Number(eff.termDeposit) : (eff?.depositAmount !== null && eff?.depositAmount !== undefined ? Number(eff.depositAmount) : 0);
         const payload = {
           roomId: context.roomId,
           fullName: fullName.trim(),
@@ -381,7 +393,8 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
           durationMonths: termMonths ? Number(termMonths) : undefined,
           unitRentAmount: Number(termRent).toFixed(2),
           totalRentAmount: Number(termRent).toFixed(2),
-          depositAmount: tDep.toFixed(2),
+          depositAmount: Number(termDeposit || 0).toFixed(2),
+          depositDeclaredStatus: termDepositDeclaredStatus,
           termInstallmentCount: Number(termInstallmentCount),
         };
 
@@ -412,7 +425,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
           checkOutTime: checkOutTime || undefined,
           dailyRateAmount: Number(dailyRate).toFixed(2),
           depositAmount: Number(dailyDeposit || 0).toFixed(2),
-          depositDeclaredStatus,
+          depositDeclaredStatus: dailyDepositDeclaredStatus,
         };
 
         if (idCardFile) {
@@ -856,20 +869,65 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
                     </div>
                     <div>
                       <label className="block text-xs font-bold text-slate-700 mb-1">
-                        จำนวนงวดชำระ <span className="text-rose-500">*</span>
+                        เงินประกัน/มัดจำ (บาท)
                       </label>
-                      <select
-                        value={termInstallmentCount}
-                        onChange={(e) => setTermInstallmentCount(parseInt(e.target.value) || 1)}
-                        className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold cursor-pointer"
-                      >
-                        {Array.from({ length: maxInstallments }, (_, i) => i + 1).map((num) => (
-                          <option key={num} value={num}>
-                            {num} งวด {num === 1 ? '(ชำระครั้งเดียว)' : ''}
-                          </option>
-                        ))}
-                      </select>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={termDeposit}
+                        onChange={(e) => setTermDeposit(normalizeMoneyInput(e.target.value))}
+                        className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
+                      />
                     </div>
+                  </div>
+
+                  {/* Term Deposit Status Toggle */}
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      สถานะการรับเงินมัดจำ
+                    </label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setTermDepositDeclaredStatus('UNPAID')}
+                        className={`py-2 text-xs font-bold rounded-xl border transition-all cursor-pointer ${
+                          termDepositDeclaredStatus === 'UNPAID'
+                            ? 'bg-amber-50 text-amber-800 border-amber-300 font-extrabold'
+                            : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                        }`}
+                      >
+                        รอชำระ
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setTermDepositDeclaredStatus('PAID')}
+                        className={`py-2 text-xs font-bold rounded-xl border transition-all cursor-pointer ${
+                          termDepositDeclaredStatus === 'PAID'
+                            ? 'bg-emerald-50 text-emerald-800 border-emerald-300 font-extrabold'
+                            : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                        }`}
+                      >
+                        ชำระแล้ว
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      จำนวนงวดชำระ <span className="text-rose-500">*</span>
+                    </label>
+                    <select
+                      value={termInstallmentCount}
+                      onChange={(e) => setTermInstallmentCount(parseInt(e.target.value) || 1)}
+                      className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold cursor-pointer"
+                    >
+                      {Array.from({ length: maxInstallments }, (_, i) => i + 1).map((num) => (
+                        <option key={num} value={num}>
+                          {num} งวด {num === 1 ? '(ชำระครั้งเดียว)' : ''}
+                        </option>
+                      ))}
+                    </select>
                   </div>
 
                   {/* Live Installment Breakdown Preview & Total Term Rent */}
@@ -951,6 +1009,53 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
                     className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
                   />
                 </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    เงินประกัน/มัดจำ (บาท)
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={monthlyDeposit}
+                    onChange={(e) => setMonthlyDeposit(normalizeMoneyInput(e.target.value))}
+                    className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
+                  />
+                </div>
+              </div>
+
+              {/* Monthly Deposit Status Toggle */}
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  สถานะการรับเงินมัดจำ
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setMonthlyDepositDeclaredStatus('UNPAID')}
+                    className={`py-2 text-xs font-bold rounded-xl border transition-all cursor-pointer ${
+                      monthlyDepositDeclaredStatus === 'UNPAID'
+                        ? 'bg-amber-50 text-amber-800 border-amber-300 font-extrabold'
+                        : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                    }`}
+                  >
+                    รอชำระ
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMonthlyDepositDeclaredStatus('PAID')}
+                    className={`py-2 text-xs font-bold rounded-xl border transition-all cursor-pointer ${
+                      monthlyDepositDeclaredStatus === 'PAID'
+                        ? 'bg-emerald-50 text-emerald-800 border-emerald-300 font-extrabold'
+                        : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                    }`}
+                  >
+                    ชำระแล้ว
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-3">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">
                     ค่าเช่ารวม (บาท)
@@ -1073,25 +1178,25 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
                 <div className="grid grid-cols-2 gap-2">
                   <button
                     type="button"
-                    onClick={() => setDepositDeclaredStatus('UNPAID')}
-                    className={`py-2 text-xs font-bold rounded-xl border transition-all ${
-                      depositDeclaredStatus === 'UNPAID'
+                    onClick={() => setDailyDepositDeclaredStatus('UNPAID')}
+                    className={`py-2 text-xs font-bold rounded-xl border transition-all cursor-pointer ${
+                      dailyDepositDeclaredStatus === 'UNPAID'
                         ? 'bg-amber-50 text-amber-800 border-amber-300 font-extrabold'
                         : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
                     }`}
                   >
-                    ยังไม่ชำระมัดจำ
+                    รอชำระ
                   </button>
                   <button
                     type="button"
-                    onClick={() => setDepositDeclaredStatus('PAID')}
-                    className={`py-2 text-xs font-bold rounded-xl border transition-all ${
-                      depositDeclaredStatus === 'PAID'
+                    onClick={() => setDailyDepositDeclaredStatus('PAID')}
+                    className={`py-2 text-xs font-bold rounded-xl border transition-all cursor-pointer ${
+                      dailyDepositDeclaredStatus === 'PAID'
                         ? 'bg-emerald-50 text-emerald-800 border-emerald-300 font-extrabold'
                         : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
                     }`}
                   >
-                    ชำระเงินมัดจำแล้ว
+                    ชำระแล้ว
                   </button>
                 </div>
               </div>

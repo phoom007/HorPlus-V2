@@ -1,10 +1,11 @@
 /** @vitest-environment happy-dom */
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import React from 'react';
 import { normalizeAuthoritativeRoom } from '../lib/roomNormalizer';
 import { getGridRentRates, getListRentRates, getPresentationOrderedRates, getDepositForCycle, getCurrentAgreementDepositDisplay, formatBuildingDisplayName, formatRoomLocation, getPaymentStatusBadge, resolveRoomCyclePresentation, type RateItem } from '../lib/roomRentalSummary';
 import { getOwnerRoomMutationErrorMessage, getOwnerRoomMutationDomainCode } from '../lib/roomErrorMapper';
 import { resolveRoomTenantAction, OwnerRooms } from '../pages/owner/rooms';
+import { QuickAddTenantModal } from '../components/QuickAddTenantModal';
 import { mapRegistrationBuildingForFinalize } from '../pages/owner/register';
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -1463,7 +1464,7 @@ describe('OWNER ROOMS R2 & R2.1 — Rent-Cycle Deposit Model & Hardened Specific
 
     describe('Part E: Payment Status Badges & Presentation Extension', () => {
       it('1. getPaymentStatusBadge produces correct semantic Thai text and color classes', () => {
-        expect(getPaymentStatusBadge('PAID').text).toBe('จ่ายแล้ว');
+        expect(getPaymentStatusBadge('PAID').text).toBe('ชำระแล้ว');
         expect(getPaymentStatusBadge('PAID').className).toContain('emerald');
 
         expect(getPaymentStatusBadge('UNPAID').text).toBe('รอชำระ');
@@ -2100,7 +2101,7 @@ describe('OWNER ROOMS R2 & R2.1 — Rent-Cycle Deposit Model & Hardened Specific
       const rentBadge = await screen.findByText('รอชำระ');
       expect(rentBadge).toBeDefined();
 
-      const depositBadge = await screen.findByText('จ่ายแล้ว');
+      const depositBadge = await screen.findByText('ชำระแล้ว');
       expect(depositBadge).toBeDefined();
     });
 
@@ -2131,7 +2132,7 @@ describe('OWNER ROOMS R2 & R2.1 — Rent-Cycle Deposit Model & Hardened Specific
       const rentBadge = await screen.findByText('รอชำระ');
       expect(rentBadge).toBeDefined();
 
-      const depositBadge = await screen.findByText('จ่ายแล้ว');
+      const depositBadge = await screen.findByText('ชำระแล้ว');
       expect(depositBadge).toBeDefined();
       expect(screen.queryByText('ไม่มีผู้เช่าลงทะเบียน')).toBeNull();
     });
@@ -2166,7 +2167,7 @@ describe('OWNER ROOMS R2 & R2.1 — Rent-Cycle Deposit Model & Hardened Specific
       );
     };
     it('T1 — PAYMENT BADGE HELPER: maps all 5 canonical payment states accurately', () => {
-      expect(getPaymentStatusBadge('PAID').text).toBe('จ่ายแล้ว');
+      expect(getPaymentStatusBadge('PAID').text).toBe('ชำระแล้ว');
       expect(getPaymentStatusBadge('PAID').className).toContain('text-emerald-700');
 
       expect(getPaymentStatusBadge('UNPAID').text).toBe('รอชำระ');
@@ -2208,7 +2209,7 @@ describe('OWNER ROOMS R2 & R2.1 — Rent-Cycle Deposit Model & Hardened Specific
 
       const rentStatus = await screen.findByText('ยังไม่ออกบิล');
       expect(rentStatus).toBeDefined();
-      const depStatus = await screen.findByText('จ่ายแล้ว');
+      const depStatus = await screen.findByText('ชำระแล้ว');
       expect(depStatus).toBeDefined();
     });
 
@@ -3309,4 +3310,231 @@ describe('OWNER ROOMS R2 & R2.1 — Rent-Cycle Deposit Model & Hardened Specific
       });
     });
 
-});
+
+    // =========================================================================
+    // SECTION 29: OWNER ROOMS R3.5 — UNIFIED QUICK ADD DEPOSIT UI PARITY & PAYMENT WORDING SUITE
+    // =========================================================================
+    describe('SECTION 29: OWNER ROOMS R3.5 — Unified Quick Add Deposit UI Parity & Payment Wording', () => {
+      beforeEach(() => {
+        cleanup();
+      });
+
+      const mockContext: any = {
+        roomId: 'room-quick-101',
+        dormitoryId: 'dorm-1',
+        roomNumber: '101',
+        buildingId: 'bld-1',
+        effective: {
+          monthlyRent: 4500,
+          termRent: 18000,
+          dailyRent: 500,
+          depositAmount: 5000,
+        },
+        building: {
+          id: 'bld-1',
+          name: 'อาคาร A',
+          termMonths: 4,
+          maxTermRentInstallments: 3,
+        },
+      };
+
+      it('T1 — PAYMENT BADGE WORDING: verifies PAID renders ชำระแล้ว and preserves all canonical badges', () => {
+        expect(getPaymentStatusBadge('PAID').text).toBe('ชำระแล้ว');
+        expect(getPaymentStatusBadge('PAID').className).toContain('text-emerald-700');
+
+        expect(getPaymentStatusBadge('UNPAID').text).toBe('รอชำระ');
+        expect(getPaymentStatusBadge('UNPAID').className).toContain('text-amber-700');
+
+        expect(getPaymentStatusBadge('PARTIAL').text).toBe('ชำระบางส่วน');
+        expect(getPaymentStatusBadge('PARTIAL').className).toContain('text-amber-700');
+
+        expect(getPaymentStatusBadge('NOT_ISSUED').text).toBe('ยังไม่ออกบิล');
+        expect(getPaymentStatusBadge('NOT_ISSUED').className).toContain('text-sky-700');
+
+        expect(getPaymentStatusBadge('UNKNOWN').text).toBe('ไม่พบข้อมูลการชำระ');
+        expect(getPaymentStatusBadge('UNKNOWN').className).toContain('text-slate-600');
+      });
+
+      it('T2 — MONTHLY TAB DEPOSIT PARITY: renders deposit amount input and deposit status with default UNPAID (รอชำระ)', () => {
+        render(
+          <QuickAddTenantModal
+            isOpen={true}
+            onClose={vi.fn()}
+            context={mockContext}
+            onSuccess={vi.fn()}
+          />
+        );
+
+        // Switch to MONTHLY tab
+        fireEvent.click(screen.getByRole('button', { name: 'รายเดือน' }));
+
+        // Check deposit label and value
+        expect(screen.getByText('เงินประกัน/มัดจำ (บาท)')).toBeDefined();
+        const depositInput = screen.getByDisplayValue('5000');
+        expect(depositInput).toBeDefined();
+
+        // Check deposit status buttons: รอชำระ and ชำระแล้ว
+        expect(screen.getByText('สถานะการรับเงินมัดจำ')).toBeDefined();
+        const unpaidBtn = screen.getByRole('button', { name: 'รอชำระ' });
+        const paidBtn = screen.getByRole('button', { name: 'ชำระแล้ว' });
+        expect(unpaidBtn).toBeDefined();
+        expect(paidBtn).toBeDefined();
+
+        // Default active is UNPAID (รอชำระ)
+        expect(unpaidBtn.className).toContain('bg-amber-50');
+        expect(paidBtn.className).not.toContain('bg-emerald-50');
+      });
+
+      it('T3 — MONTHLY TAB SUBMIT: sends depositAmount and depositDeclaredStatus in payload', async () => {
+        const mockSubmitHttp = vi.fn().mockResolvedValue({ success: true, data: { tenant: { id: 't-1' } } });
+        vi.mocked(httpRequest).mockImplementation(mockSubmitHttp as any);
+
+        const onSuccess = vi.fn();
+        render(
+          <QuickAddTenantModal
+            isOpen={true}
+            onClose={vi.fn()}
+            context={mockContext}
+            onSuccess={onSuccess}
+          />
+        );
+
+        // Switch to MONTHLY tab
+        fireEvent.click(screen.getByRole('button', { name: 'รายเดือน' }));
+
+        // Fill tenant name and phone
+        fireEvent.change(screen.getByPlaceholderText('เช่น นายสมชาย ใจดี'), { target: { value: 'สมศักดิ์ รายเดือน' } });
+        fireEvent.change(screen.getByPlaceholderText('เช่น 081-234-5678'), { target: { value: '0891112233' } });
+
+        // Select PAID (ชำระแล้ว)
+        const paidBtn = screen.getByRole('button', { name: 'ชำระแล้ว' });
+        fireEvent.click(paidBtn);
+        expect(paidBtn.className).toContain('bg-emerald-50');
+
+        // Submit form
+        const submitBtn = screen.getByRole('button', { name: /ยืนยันเพิ่มผู้เช่า/i });
+        fireEvent.submit(submitBtn.closest('form')!);
+
+        await waitFor(() => {
+          expect(mockSubmitHttp).toHaveBeenCalled();
+        });
+
+        const postCall = mockSubmitHttp.mock.calls.find((c: any[]) => c[0] === 'POST' && c[1]?.includes('/provisional-terms'));
+        expect(postCall).toBeDefined();
+        const payload = postCall[2];
+        expect(payload.depositAmount).toBe('5000.00');
+        expect(payload.depositDeclaredStatus).toBe('PAID');
+      });
+
+      it('T4 — TERM TAB DEPOSIT PARITY: renders deposit and status buttons, submitting sends depositDeclaredStatus', async () => {
+        const mockSubmitHttp = vi.fn().mockResolvedValue({ success: true, data: { tenant: { id: 't-term' } } });
+        vi.mocked(httpRequest).mockImplementation(mockSubmitHttp as any);
+
+        const onSuccess = vi.fn();
+        render(
+          <QuickAddTenantModal
+            isOpen={true}
+            onClose={vi.fn()}
+            context={mockContext}
+            onSuccess={onSuccess}
+          />
+        );
+
+        // TERM tab is active by default
+        fireEvent.click(screen.getByRole('button', { name: 'รายเทอม' }));
+
+        // Check deposit label
+        expect(screen.getByText('เงินประกัน/มัดจำ (บาท)')).toBeDefined();
+        const unpaidBtn = screen.getByRole('button', { name: 'รอชำระ' });
+        expect(unpaidBtn.className).toContain('bg-amber-50');
+
+        // Fill tenant name & phone
+        fireEvent.change(screen.getByPlaceholderText('เช่น นายสมชาย ใจดี'), { target: { value: 'สมศรี รายเทอม' } });
+        fireEvent.change(screen.getByPlaceholderText('เช่น 081-234-5678'), { target: { value: '0894445566' } });
+
+        // Submit with default UNPAID
+        const submitBtn = screen.getByRole('button', { name: /ยืนยันเพิ่มผู้เช่า/i });
+        fireEvent.submit(submitBtn.closest('form')!);
+
+        await waitFor(() => {
+          expect(mockSubmitHttp).toHaveBeenCalled();
+        });
+
+        const postCall = mockSubmitHttp.mock.calls.find((c: any[]) => c[0] === 'POST' && c[1]?.includes('/provisional-terms'));
+        expect(postCall).toBeDefined();
+        const payload = postCall[2];
+        expect(payload.depositAmount).toBe('5000.00');
+        expect(payload.depositDeclaredStatus).toBe('UNPAID');
+      });
+
+      it('T5 — DAILY TAB DEPOSIT PARITY: renders รอชำระ / ชำระแล้ว buttons matching MONTHLY & TERM', () => {
+        render(
+          <QuickAddTenantModal
+            isOpen={true}
+            onClose={vi.fn()}
+            context={mockContext}
+            onSuccess={vi.fn()}
+          />
+        );
+
+        // Switch to DAILY tab
+        fireEvent.click(screen.getByRole('button', { name: 'รายวัน' }));
+
+        // Check deposit label and buttons
+        expect(screen.getByText('เงินประกัน/มัดจำ (บาท)')).toBeDefined();
+        expect(screen.getByText('สถานะการรับเงินมัดจำ')).toBeDefined();
+        const unpaidBtn = screen.getByRole('button', { name: 'รอชำระ' });
+        const paidBtn = screen.getByRole('button', { name: 'ชำระแล้ว' });
+        expect(unpaidBtn).toBeDefined();
+        expect(paidBtn).toBeDefined();
+
+        // Default active is UNPAID (รอชำระ)
+        expect(unpaidBtn.className).toContain('bg-amber-50');
+        expect(paidBtn.className).not.toContain('bg-emerald-50');
+      });
+
+      it('T6 — MODAL RESET ON REOPEN: always resets deposit status to UNPAID (รอชำระ)', () => {
+        const { rerender } = render(
+          <QuickAddTenantModal
+            isOpen={true}
+            onClose={vi.fn()}
+            context={mockContext}
+            onSuccess={vi.fn()}
+          />
+        );
+
+        // Switch to MONTHLY and select PAID
+        fireEvent.click(screen.getByRole('button', { name: 'รายเดือน' }));
+        const paidBtn = screen.getByRole('button', { name: 'ชำระแล้ว' });
+        fireEvent.click(paidBtn);
+        expect(paidBtn.className).toContain('bg-emerald-50');
+
+        // Close modal
+        rerender(
+          <QuickAddTenantModal
+            isOpen={false}
+            onClose={vi.fn()}
+            context={mockContext}
+            onSuccess={vi.fn()}
+          />
+        );
+
+        // Reopen modal
+        rerender(
+          <QuickAddTenantModal
+            isOpen={true}
+            onClose={vi.fn()}
+            context={mockContext}
+            onSuccess={vi.fn()}
+          />
+        );
+
+        // Switch to MONTHLY and verify status reset to UNPAID (รอชำระ)
+        fireEvent.click(screen.getByRole('button', { name: 'รายเดือน' }));
+        const unpaidBtnReopened = screen.getByRole('button', { name: 'รอชำระ' });
+        const paidBtnReopened = screen.getByRole('button', { name: 'ชำระแล้ว' });
+        expect(unpaidBtnReopened.className).toContain('bg-amber-50');
+        expect(paidBtnReopened.className).not.toContain('bg-emerald-50');
+      });
+    });
+  });

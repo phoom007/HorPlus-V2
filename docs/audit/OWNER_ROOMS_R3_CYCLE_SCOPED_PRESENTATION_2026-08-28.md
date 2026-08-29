@@ -925,3 +925,68 @@ Following the independent audit of R3.4d, a final authority defect in the Edit R
 | Frontend TypeScript Check | `npm run lint` | **0 Errors (PASS)** |
 | Line Ending & Whitespace Hygiene | `git -c core.whitespace=cr-at-eol diff --check` | **0 Warnings / Clean** |
 | UAT Expected Results Baseline Diff | `git diff 73b583990c8197c40a17475e160816ea0a19752b..HEAD -- docs/uat/local07-expected-results.json` | **0 Diff / Clean Baseline** |
+---
+
+## 29. OWNER ROOMS R3.5 — Unified Deposit Declaration UI, First-Cycle Deposit Billing, Immediate Unpaid Authority & Payment Wording (2026-08-29)
+
+### Context & Product Owner Manual UAT Findings
+During Product Owner Manual UAT for Owner Rooms & Quick Add:
+1. **Deposit Declaration Parity**: Quick Add `DAILY` had deposit inputs and deposit-received status buttons, but `MONTHLY` and `TERM` did not have deposit status selection controls.
+2. **Authoritative Deposit Billing**: When a rental agreement becomes committed/approved with `depositAmount > 0`, the tenant must immediately have an authoritative agreement-linked deposit bill created in the agreement's start billing cycle.
+3. **Immediate Financial Status Authority**: When a tenant is added with `UNPAID` deposit, their initial financial state in the meter workspace and room presentation is `UNPAID` (`รอชำระ`), not `NOT_ISSUED` (`ยังไม่ออกบิล`).
+4. **Single Charge per Agreement**: Deposit is charged ONCE per agreement in its start cycle. Subsequent cycles (e.g. September/October monthly bills) must NOT recreate or duplicate the deposit charge.
+5. **Agreement-Lifecycle Payment Status**: Rooms in subsequent cycles display deposit payment status from the original start-cycle bill evidence across the entire agreement lifecycle.
+6. **Unified Payment Status Wording**: Standardized Thai paid status badge wording across all room and billing presentations to `ชำระแล้ว` (was `จ่ายแล้ว`).
+
+---
+
+### Surgical Implementations & Architectural Guarantees (R3.5)
+
+#### Part A & B: Quick Add Deposit UI Parity across Tabs
+- `src/components/QuickAddTenantModal.tsx`:
+  - Added "เงินประกัน/มัดจำ (บาท)" and "สถานะการรับเงินมัดจำ" controls to both `MONTHLY` and `TERM` tabs matching `DAILY`.
+  - Initial default status whenever the modal opens or resets is strictly `UNPAID` (`รอชำระ`).
+  - Standardized UI toggle buttons to `รอชำระ` (`UNPAID`) and `ชำระแล้ว` (`PAID`).
+
+#### Part C: Backend Schema Extensions
+- Extended DTO contracts to accept `depositAmount` and `depositDeclaredStatus: 'PAID' | 'UNPAID'`:
+  - `server/src/schemas/billing-meter.schemas.ts` (`CreateProvisionalRentalTermSchema`)
+  - `server/src/schemas/property-tenant-contract.schemas.ts` (`CreateContractSchema`, `ActivateContractSchema`)
+
+#### Part D, E, F, G: Canonical Deposit Billing Utility (`server/src/utils/deposit-billing.util.ts`)
+- Created `createDepositBillForAgreementInTx(tx, input)`:
+  - **Idempotency**: Verifies whether an agreement-linked `billKind: 'DEPOSIT'` already exists before creation.
+  - **Start-Cycle Resolution**: Maps agreement start date to matching `BillingCycle` (handling future reservations gracefully).
+  - **UNPAID Status**: Creates `Bill` with `billKind: 'DEPOSIT'`, `status: 'unpaid'`, `paidAmount: 0`, `outstandingAmount: depositAmount`, `paidAt: null`, and `BillItem` (`type: 'deposit'`).
+  - **PAID Status**: Creates `Bill` with `billKind: 'DEPOSIT'`, `status: 'paid'`, `paidAmount: depositAmount`, `outstandingAmount: 0`, `paidAt: now`, `BillItem`, and records canonical `CASH` `Payment` evidence (`status: 'APPROVED'`).
+
+#### Part H, I, J, K: Service Integration & Lifecycle Invariants
+- Integrated `createDepositBillForAgreementInTx` atomically within transactions:
+  - `ProvisionalRentalTermService.createProvisionalTenantAndTerm`
+  - `ContractService.createContract` (active status)
+  - `ContractService.activateContract`
+- Ensured tenant creation in `PENDING_APPROVAL` does not emit bills until approval commit.
+- Ensured subsequent cycle bill generations do not duplicate deposit items.
+
+#### Part L: Shared Payment Status Wording Standardization
+- `src/lib/roomRentalSummary.ts`: Standardized `getPaymentStatusBadge('PAID')` text to `'ชำระแล้ว'`.
+- Preserved all other statuses:
+  - `UNPAID`: `'รอชำระ'`
+  - `PARTIAL`: `'ชำระบางส่วน'`
+  - `NOT_ISSUED`: `'ยังไม่ออกบิล'`
+  - `UNKNOWN`: `'ไม่พบข้อมูลการชำระ'`
+- `src/components/DailyStayApprovalModal.tsx`: Updated action buttons to `'ชำระแล้ว'` / `'รอชำระ'`.
+
+---
+
+### Verification Matrix (R3.5)
+
+| Test / Check Suite | Target Command / Path | Result |
+|---|---|---|
+| Frontend Vitest Test Suite (incl. Section 29 T1-T6) | `npx vitest run src/tests/owner-rooms-r2-cycle-deposits.test.tsx --environment happy-dom` | **118 / 118 PASS (100%)** |
+| Frontend API Contract & Normalizer Suite | `npx vitest run src/tests/owner-rooms-api-contract-uat-r1.test.tsx --environment happy-dom` | **9 / 9 PASS (100%)** |
+| Backend Deposit Billing Utility Suite | `npm --prefix server run test -- src/__tests__/unit/owner-rooms-r35-deposit-billing.test.ts` | **6 / 6 PASS (100%)** |
+| Frontend TypeScript Check | `npm run lint` | **0 Errors (PASS)** |
+| Backend Production Build | `npm --prefix server run build` | **0 Errors (PASS)** |
+| Line Ending & Whitespace Hygiene | `git -c core.whitespace=cr-at-eol diff --check` | **0 Warnings / Clean** |
+| Active Branch | `fix/owner-rooms-r35-deposit-first-cycle-billing-20260829` | **Ready for PO UAT** |

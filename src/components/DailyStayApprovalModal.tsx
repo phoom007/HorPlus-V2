@@ -259,7 +259,7 @@ export const DailyStayApprovalModal: React.FC<DailyStayApprovalModalProps> = ({
                 <div className="flex justify-between">
                   <span>สถานะมัดจำ:</span>
                   <span className={`font-bold ${depositDeclaredStatus === 'PAID' ? 'text-emerald-700' : 'text-amber-700'}`}>
-                    {depositDeclaredStatus === 'PAID' ? 'จ่ายแล้ว' : 'ยังไม่จ่าย'}
+                    {depositDeclaredStatus === 'PAID' ? 'ชำระแล้ว' : 'รอชำระ'}
                   </span>
                 </div>
               </div>

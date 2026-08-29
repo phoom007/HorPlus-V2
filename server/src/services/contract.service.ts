@@ -5,6 +5,7 @@ import { AuditService } from './audit.service.js';
 import { DocumentPdfService } from './document-pdf.service.js';
 import { getPrismaClient } from '../db/prisma.js';
 import { acquireRoomAvailabilityLock } from '../utils/occupancy-interval.util.js';
+import { createDepositBillForAgreementInTx } from '../utils/deposit-billing.util.js';
 
 export class ContractService {
   constructor(
