@@ -20,7 +20,6 @@ import {
 } from '../db/repositories/dormitory.repository.js';
 import { AuditService } from './audit.service.js';
 import { currentCycleResolverService } from './current-cycle-resolver.js';
-import { backfillRoomOperationalStatusBaseline } from './room-operational-baseline.service.js';
 import { normalizeUtilityBillingMode } from '../utils/billing-mode-normalizer.util.js';
 import {
   currentBusinessDateInBangkok,
@@ -28,6 +27,7 @@ import {
   getAdjacentCycleCode,
 } from '../utils/calendar-date.util.js';
 import { LATE_FEE_GRACE_DAYS } from '../utils/monthly-utility-calculator.util.js';
+import { backfillRoomOperationalStatusBaseline } from './room-operational-baseline.service.js';
 
 export interface CreateBillingCycleDto {
   cycleCode: string;
@@ -420,6 +420,44 @@ export class BillingCycleService {
     return { items, total: res.total, firstBillingCycleId: earliest?.id || null };
   }
 
+  public async resolveDormitoryOperationalStart(
+    dormitoryId: string,
+    tx?: any
+  ): Promise<{ operationalStartMonth: string; source: 'FINALIZED_DRAFT' | 'PERSISTED_BILLING_CYCLE' | 'CURRENT_OPERATIONAL' }> {
+    const prisma = tx || getPrismaClient();
+
+    // 1. Preferred authority for newly onboarded dormitory: finalized OnboardingDraft
+    const finalizedDraft = await prisma.onboardingDraft.findFirst({
+      where: {
+        provisionalDormitoryId: dormitoryId,
+        finalizedAt: { not: null },
+      },
+      orderBy: { finalizedAt: 'desc' },
+    });
+
+    if (finalizedDraft?.finalizedAt) {
+      const startMonth = toBangkokDateString(finalizedDraft.finalizedAt).slice(0, 7);
+      return { operationalStartMonth: startMonth, source: 'FINALIZED_DRAFT' };
+    }
+
+    // 2. Authoritative for existing active dormitories: earliest persisted BillingCycle
+    const earliestCycle = await prisma.billingCycle.findFirst({
+      where: { dormitoryId },
+      orderBy: { periodStart: 'asc' },
+    });
+
+    if (earliestCycle) {
+      const startMonth = earliestCycle.cycleCode || toBangkokDateString(earliestCycle.periodStart).slice(0, 7);
+      return { operationalStartMonth: startMonth, source: 'PERSISTED_BILLING_CYCLE' };
+    }
+
+    // 3. Fallback for active dormitory with no draft and no cycle:
+    // Fail closed / use current operational initialization month rather than inventing history
+    const todayBangkok = currentBusinessDateInBangkok();
+    const currentMonth = todayBangkok.slice(0, 7);
+    return { operationalStartMonth: currentMonth, source: 'CURRENT_OPERATIONAL' };
+  }
+
   public async getNavigationContext(
     dormitoryId: string
   ): Promise<{
@@ -427,14 +465,11 @@ export class BillingCycleService {
     openedUpperBoundCycleCode: string;
     selectableBillingCycles: SelectableBillingCycleRef[];
   }> {
-    const dorm = await this.dormitoryRepo.findById(dormitoryId);
+    const startAuth = await this.resolveDormitoryOperationalStart(dormitoryId);
+    const historicalFloorCycleCode = startAuth.operationalStartMonth;
 
     const operational = await currentCycleResolverService.resolveOperationalBillingCycle(dormitoryId);
     const opCode = operational.cycleCode || currentBusinessDateInBangkok().slice(0, 7);
-
-    const historicalFloorCycleCode = dorm?.createdAt
-      ? toBangkokDateString(dorm.createdAt).slice(0, 7)
-      : opCode;
 
     const openedUpperBoundCycleCode = getAdjacentCycleCode(opCode, 1);
 
@@ -941,11 +976,12 @@ export class BillingCycleService {
       if (!targetCycles.includes(c)) targetCycles.push(c);
     });
 
-    // 3. Ensure onboarding start month and bound below by startCode floor
-    const startCode = toBangkokDateString(dorm.createdAt).slice(0, 7);
+    // 3. Ensure onboarding start month and bound below by startCode floor derived from operational start authority
+    const startAuth = await this.resolveDormitoryOperationalStart(dormitoryId);
+    const startCode = startAuth.operationalStartMonth;
     if (!targetCycles.includes(startCode)) targetCycles.push(startCode);
 
-    // Filter out any cycle earlier than the dormitory onboarding start floor
+    // Filter out any cycle earlier than the dormitory onboarding start floor and sort ascending
     const validTargetCycles = targetCycles.filter((code) => code >= startCode).sort();
 
     for (const code of validTargetCycles) {
@@ -963,7 +999,18 @@ export class BillingCycleService {
           userId
         );
       } catch (err: any) {
-        // If cycle already exists, overlaps with custom cycle, or settings are missing, gracefully proceed
+        // Tolerated benign race conditions:
+        // 1. Unique constraint collision on (dormitoryId, cycleCode) - Prisma P2002
+        // 2. Already overlapping cycle explicitly defined
+        const isDuplicateOrOverlap =
+          err?.code === 'P2002' ||
+          err?.code === 'OVERLAPPING_BILLING_CYCLE' ||
+          err?.message?.includes('Unique constraint failed') ||
+          err?.message?.includes('OVERLAPPING_BILLING_CYCLE');
+
+        if (!isDuplicateOrOverlap) {
+          throw err;
+        }
       }
     }
 

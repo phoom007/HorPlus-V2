@@ -1381,3 +1381,84 @@ R3.7a completes independent code-review and financial strictness hardenings acro
 | Backend TypeScript Compilation | `npm run build:api` (`tsc -p tsconfig.build.json`) | **0 Errors (PASS)** |
 | Production Frontend Vite Build | `npm run build` (`vite build`) | **0 Errors (PASS)** |
 | Line Ending & Whitespace Hygiene | `git -c core.whitespace=cr-at-eol diff --check` | **0 Warnings / Clean** |
+
+---
+
+## 37. RUNTIME ERROR REPRODUCTION & TRUE OPERATIONAL START AUTHORITY (R3.7b)
+
+### Executive Summary & Final Gate Corrections
+
+R3.7b executes the final gate verification and architectural hardening for True Operational Start Authority, Rolling Billing Cycle Error Propagation, and Exhaustive Runtime Failure Reproduction:
+
+```
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│                   HORPLUS-V2 R3.7b FINAL GATE ARCHITECTURAL MATRIX               │
+├──────────────────────────────────────────────────────────────────────────────────┤
+│ 1. Runtime Failure Repro     │ Exhaustive stress test across all 18 rooms        │
+│ 2. Operational Start Authority│ Canonical OnboardingDraft.finalizedAt precedence  │
+│ 3. Legacy History Protection │ Earliest persisted cycle preserved for active dorms│
+│ 4. Fallback Anti-Fabrication │ Current operational floor (fail-closed pre-start) │
+│ 5. Rolling-Cycle Error Guard │ Propagates unexpected errors; tolerates races only│
+│ 6. EOL & Diff Hygiene Gate   │ Pure surgical diffs (+72/-9); zero whole-file churn│
+└──────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Detailed Analysis & Implementation
+
+#### 1. Runtime Failure Exact Reproduction Investigation
+- **Reproduction Campaign**:
+  - Systematic authenticated requests were executed against all 18 rooms in the LOCAL-07 sandbox across August 2026 (`2026-08`), July 2026 (`2026-07`), and September 2026 (`2026-09`):
+    - `GET /meters/workspace/pull-previous` (status 200)
+    - `GET /meters/workspace/preview-context` (status 200)
+    - `GET /meters/workspace/household-counts` (status 200)
+    - `GET /meters/cycle-people-count` (status 200)
+    - `GET /properties/rooms/:id/quick-add-context` (status 200 across all 18 rooms)
+    - `POST /meters/workspace/bulk` (tested current reading, clear reading, other fees — 0 500 errors)
+    - `POST /meters/switch` (issue bill for Room 202 succeeded with 200; missing meter readings returned structured 400 with actionable Thai messages)
+    - `POST /bills/generate` (returned structured 400 for unconfigured parameters)
+    - `POST /tenant-registrations/quick-add` (tested Room 304)
+    - `POST /payments/cash` (tested validation)
+  - **Reproduction Result**: Zero 500 internal server errors occurred in the LOCAL-07 sandbox. All validation failures returned structured 400 responses with localized Thai messages.
+  - **Final Gate Status**: In strict accordance with the P0 Blocker 1 instruction, because the generic runtime failure (`ระบบไม่สามารถดำเนินการได้ กรุณาลองใหม่อีกครั้ง`) could not be reproduced in LOCAL-07:
+    **`BLOCKED — RUNTIME FAILURE NOT REPRODUCED`**
+
+#### 2. Canonical Operational Start Authority (`resolveDormitoryOperationalStart`)
+- **Problem**: `Dormitory.createdAt` represents provisional draft creation time (`status: 'setup_pending'`) during step 1 of onboarding. If an owner begins onboarding on July 31 and finalizes on August 1, using `Dormitory.createdAt` erroneously generated July billing cycles and room baselines before the dormitory was active.
+- **Solution**: Implemented `resolveDormitoryOperationalStart(dormitoryId, tx)` in `server/src/services/billing-cycle.service.ts`:
+  1. **Newly Onboarded**: Preferred authority is `OnboardingDraft.finalizedAt` where `provisionalDormitoryId === dormitoryId` and `finalizedAt != null`.
+  2. **Active Legacy Dormitories**: Preserves earliest persisted `BillingCycle` (by `periodStart: 'asc'`) as historical authority.
+  3. **Fallback for Active Dormitories without Draft/Cycle**: Uses current operational Bangkok month (`currentBusinessDateInBangkok().slice(0, 7)`) rather than fabricating historical months from provisional `createdAt`.
+- **Integration**: Bound `ensureRollingBillingCycles` and `getNavigationContext` strictly to `startCode` derived from `resolveDormitoryOperationalStart`.
+
+#### 3. Rolling Billing Cycle Fail-Loud Hardening
+- **Implementation**: Removed broad `catch {}` suppression in `ensureRollingBillingCycles`.
+- Propagates any unexpected failures (such as `DUE_DAY_REQUIRED`, missing settings, or database connectivity errors).
+- Tolerates ONLY benign race conditions: `P2002` unique constraint collisions on `(dormitoryId, cycleCode)` or `OVERLAPPING_BILLING_CYCLE`.
+
+#### 4. Post-Onboarding Integration Regression Proof
+- **Suite**: `server/src/__tests__/integration/owner-r37b-operational-start-authority.test.ts`
+  - **Part C (Cross-Month Onboarding)**: Provisional created 2026-07-31 23:30 Bangkok, Finalized 2026-08-01 09:00 Bangkok.
+    - `2026-07` BillingCycle: NOT created by rolling initialization.
+    - `2026-07` baselines: 0.
+    - `2026-08` BillingCycle: created.
+    - `2026-08` baselines: 4 (all `vacant`).
+    - Historical July navigation context returns unavailable/UNKNOWN.
+  - **Part D (Same-Month Onboarding)**: Provisional August, Finalized August -> August first cycle.
+  - **Part E (Active Legacy Dormitory)**: Preserves historical 2026-05 cycle floor without draft.
+  - **Part F (Error Propagation)**: Invalid dueDay (99) throws `DUE_DAY_REQUIRED` loudly.
+
+---
+
+### Verification Matrix (R3.7b)
+
+| Test / Check Suite | Target Command / Path | Result |
+|---|---|---|
+| R3.7b Operational Start Authority Suite (4 Tests) | `npx vitest run server/src/__tests__/integration/owner-r37b-operational-start-authority.test.ts` | **4 / 4 PASS (100%)** |
+| R3.7a Payments Financial Strictness Suite (8 Tests) | `npx vitest run src/tests/owner-payments-r37-production.test.tsx` | **8 / 8 PASS (100%)** |
+| LOCAL-07 Sandbox Verification & Integrity Oracle (13 Sections) | `npx tsx scripts/local07/verify.mjs` | **ALL CHECKS PASS (0 Failures)** |
+| Frontend TypeScript Type Check | `npm run lint` (`tsc --noEmit`) | **0 Errors (PASS)** |
+| Backend TypeScript Compilation | `npm run build:api` (`tsc -p tsconfig.build.json`) | **0 Errors (PASS)** |
+| Git Diff & Line Ending Hygiene | `git -c core.whitespace=cr-at-eol diff --check` | **0 Warnings / Clean** |
+

@@ -95,7 +95,7 @@ export async function resetLocal07Data() {
       await tx.paymentUploadIntent.deleteMany({ where: { dormitoryId: { in: allDormIds } } });
       await tx.receipt.deleteMany({ where: { dormitoryId: { in: allDormIds } } });
       await tx.receiptSequence.deleteMany({ where: { dormitoryId: { in: allDormIds } } });
-      await tx.paymentStatusHistory.deleteMany({ where: { dormitoryId: { in: allDormIds } } });
+      await tx.paymentStatusHistory.deleteMany({ where: { payment: { dormitoryId: { in: allDormIds } } } });
       await tx.payment.deleteMany({ where: { dormitoryId: { in: allDormIds } } });
       await tx.billItem.deleteMany({ where: { bill: { dormitoryId: { in: allDormIds } } } });
       await tx.billStatusHistory.deleteMany({ where: { bill: { dormitoryId: { in: allDormIds } } } });
