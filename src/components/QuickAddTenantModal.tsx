@@ -5,7 +5,7 @@
  * 3-Type Owner Quick Add: รายเทอม (TERM), รายเดือน (MONTHLY), รายวัน (DAILY).
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { X, Calendar, User, Phone, DollarSign, Clock, Shield, CheckCircle, AlertCircle, Loader2, Image as ImageIcon, Trash2, Building2, GraduationCap, CalendarDays, MessageSquare, Check, Copy, ExternalLink, Settings, CheckCircle2 } from 'lucide-react';
 import { QuickAddRoomContext } from '../types';
 import { httpRequest } from '../data/httpClient';
@@ -25,9 +25,23 @@ interface QuickAddTenantModalProps {
   onSuccess: (message: string) => void;
   onNavigateToLineConfig?: () => void;
   onNavigate?: (tab: string) => void;
+  defaultTab?: QuickAddMode;
 }
 
 export type QuickAddMode = 'TERM' | 'MONTHLY' | 'DAILY' | 'LINE';
+
+export const normalizeNumericString = (raw: string | number | null | undefined): string => {
+  if (raw === null || raw === undefined || raw === '') return '';
+  const str = String(raw).trim();
+  if (!str) return '';
+  if (str.includes('.')) {
+    const [intPart, decPart] = str.split('.');
+    const cleanInt = intPart.replace(/^0+(?=\d)/, '') || '0';
+    return `${cleanInt}.${decPart}`;
+  }
+  return str.replace(/^0+(?=\d)/, '') || '0';
+};
+
 
 export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
   isOpen,
@@ -36,8 +50,9 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
   onSuccess,
   onNavigateToLineConfig,
   onNavigate,
+  defaultTab = 'LINE',
 }) => {
-  const [activeTab, setActiveTab] = useState<QuickAddMode>('LINE');
+  const [activeTab, setActiveTab] = useState<QuickAddMode>(defaultTab);
   const [fullName, setFullName] = useState('');
   const [phone, setPhone] = useState('');
   const [startDate, setStartDate] = useState(() => new Date().toISOString().slice(0, 10));
@@ -209,7 +224,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
           : null;
         setTermRent(tRent);
         setMaxInstallments(bldMaxInstallments);
-        setTermInstallmentCount(bldMaxInstallments);
+        setTermInstallmentCount(1);
         setTermEndDate(calculateMonthEndDate(today, bldTermMonths));
       } else {
         setTermMonths(null);
@@ -232,8 +247,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
       setCheckInTime('');
       setCheckOutTime('');
 
-      // Set initial active tab: default = 'LINE' (Requirement R1 / T1)
-      setActiveTab('LINE');
+      setActiveTab(defaultTab || 'LINE');
 
       // Clear ID card attachment on open
       if (idCardPreview) {
@@ -243,7 +257,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
       setIdCardPreview(null);
       setIdCardError(null);
     }
-  }, [context?.roomId, context, isOpen]);
+  }, [context?.roomId, isOpen, defaultTab]);
 
   const handleFileSelect = (file: File | null) => {
     setIdCardError(null);
@@ -445,7 +459,17 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
         onClose();
       }
     } catch (err: any) {
-      setErrorText(err.message || 'เกิดข้อผิดพลาดในการเพิ่มผู้เช่า');
+      const code = err?.domainError?.code || err?.code || (err?.domainError?.details as any)?.error?.code;
+      const knownMessages: Record<string, string> = {
+        DEPOSIT_BILLING_CYCLE_NOT_FOUND: 'ไม่พบรอบบิลที่ตรงกับวันเริ่มสัญญา กรุณาสร้างรอบบิลก่อนยืนยันการเช่า',
+        ROOM_UNDER_MAINTENANCE: 'ไม่สามารถอนุมัติผู้เช่าได้ เนื่องจากห้องนี้อยู่ระหว่างปิดปรับปรุง',
+        ROOM_OCCUPIED_OR_HAS_ACTIVE_AGREEMENT: 'ห้องพักนี้มีผู้เช่าหรือมีสัญญาเช่าที่ยังใช้งานอยู่',
+        BUILDING_TERM_CONFIG_INVALID: 'ไม่พบข้อมูลระยะเวลาสัญญาแบบเทอมของอาคาร (termMonths) กรุณากำหนดการตั้งค่าอาคารก่อนทำสัญญาแบบเทอม',
+        TERM_INSTALLMENTS_EXCEED_MAX: 'จำนวนงวดชำระเกินกว่าที่อาคารกำหนด',
+        VERSION_CONFLICT: 'ข้อมูลห้องพักมีการเปลี่ยนแปลง กรุณารีเฟรชแล้วลองใหม่อีกครั้ง',
+      };
+      const msg = (code && knownMessages[code]) || err?.domainError?.message || err?.message || 'เกิดข้อผิดพลาดในการเพิ่มผู้เช่า';
+      setErrorText(msg);
     } finally {
       setLoading(false);
     }
@@ -488,6 +512,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
           <div className="flex bg-slate-200/80 p-1 rounded-2xl gap-1">
             <button
               type="button"
+              data-testid="tab-term"
               disabled={isTermTabDisabled}
               title={isTermTabDisabled ? 'ยังไม่ได้กำหนดค่าเช่ารายเทอมของห้องพัก' : undefined}
               onClick={() => !isTermTabDisabled && setActiveTab('TERM')}
@@ -504,6 +529,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
             </button>
             <button
               type="button"
+              data-testid="tab-monthly"
               onClick={() => setActiveTab('MONTHLY')}
               className={`flex-1 py-2 text-xs font-extrabold rounded-xl transition-all flex items-center justify-center gap-1.5 ${
                 activeTab === 'MONTHLY'
@@ -516,6 +542,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
             </button>
             <button
               type="button"
+              data-testid="tab-daily"
               onClick={() => setActiveTab('DAILY')}
               className={`flex-1 py-2 text-xs font-extrabold rounded-xl transition-all flex items-center justify-center gap-1.5 ${
                 activeTab === 'DAILY'
@@ -531,6 +558,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
           {/* Row 2: Recommended LINE Onboarding */}
           <button
             type="button"
+            data-testid="tab-line"
             onClick={() => setActiveTab('LINE')}
             className={`w-full py-2.5 px-3 text-xs font-extrabold rounded-xl transition-all flex items-center justify-center gap-2 border cursor-pointer ${
               activeTab === 'LINE'
@@ -706,7 +734,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
             </div>
           </div>
         ) : (
-          <form onSubmit={handleSubmit} className="p-5 overflow-y-auto space-y-4 flex-1">
+          <form onSubmit={handleSubmit} data-testid="quick-add-form" className="p-5 overflow-y-auto space-y-4 flex-1">
           {/* Common Tenant Identity Fields */}
           <div className="space-y-3">
             <div>
@@ -835,6 +863,11 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
                           const val = parseInt(e.target.value);
                           setTermMonths(isNaN(val) || val < 1 ? 1 : val);
                         }}
+                        onBlur={() => {
+                          if (termMonths !== null && termMonths !== undefined) {
+                            setTermMonths(Math.max(1, parseInt(normalizeNumericString(termMonths), 10) || 1));
+                          }
+                        }}
                         className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
                       />
                     </div>
@@ -864,6 +897,11 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
                           const val = e.target.value;
                           setTermRent(val === '' ? null : normalizeMoneyInput(val));
                         }}
+                        onBlur={() => {
+                          if (termRent !== null && termRent !== undefined) {
+                            setTermRent(normalizeMoneyInput(termRent));
+                          }
+                        }}
                         className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
                       />
                     </div>
@@ -877,6 +915,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
                         step="0.01"
                         value={termDeposit}
                         onChange={(e) => setTermDeposit(normalizeMoneyInput(e.target.value))}
+                        onBlur={() => setTermDeposit(normalizeMoneyInput(termDeposit))}
                         className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
                       />
                     </div>
@@ -930,24 +969,50 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
                     </select>
                   </div>
 
-                  {/* Live Installment Breakdown Preview & Total Term Rent */}
+                  {/* Live Financial Breakdown & Installment Schedule Preview */}
                   {(() => {
-                    const schedule = calculateInstallmentSchedule(termRent || 0, termInstallmentCount);
+                    const totalRent = termRent || 0;
+                    const depAmount = termDeposit || 0;
+                    const totalAgreed = totalRent + depAmount;
+                    const paidAmt = termDepositDeclaredStatus === 'PAID' ? depAmount : 0;
+                    const outstanding = totalAgreed - paidAmt;
+                    const schedule = calculateInstallmentSchedule(totalRent, termInstallmentCount);
+                    const firstRentInst = schedule[0]?.amount ? Number(schedule[0].amount) : 0;
+                    const firstPaymentDue = termDepositDeclaredStatus === 'PAID' ? firstRentInst : (firstRentInst + depAmount);
+
                     return (
-                      <div className="p-3 bg-indigo-50/70 border border-indigo-100 rounded-2xl space-y-2.5">
-                        <div className="flex items-center justify-between text-xs pb-2 border-b border-indigo-100/70">
-                          <span className="font-bold text-indigo-900">ค่าเช่ารายเทอมทั้งหมด:</span>
-                          <span className="font-extrabold text-indigo-700 text-sm">{formatBaht(termRent || 0)}</span>
+                      <div className="space-y-2.5">
+                        <div className="p-3 bg-slate-50 border border-slate-200 rounded-2xl space-y-1.5 text-xs">
+                          <div className="flex justify-between text-slate-600">
+                            <span>ค่าเช่ารวม:</span>
+                            <span className="font-bold">{formatBaht(totalRent)}</span>
+                          </div>
+                          <div className="flex justify-between text-slate-600">
+                            <span>เงินประกัน/มัดจำ:</span>
+                            <span className="font-bold">{formatBaht(depAmount)}</span>
+                          </div>
+                          <div className="flex justify-between text-slate-900 pt-1 border-t border-slate-200 font-extrabold">
+                            <span>ยอดตามข้อตกลง:</span>
+                            <span className="text-indigo-700">{formatBaht(totalAgreed)}</span>
+                          </div>
+                          <div className="flex justify-between text-slate-900 font-extrabold">
+                            <span>ยอดชำระแล้ว:</span>
+                            <span className="text-emerald-700">{formatBaht(paidAmt)}</span>
+                          </div>
+                          <div className="flex justify-between text-slate-900 pt-1 font-extrabold border-t border-slate-200/60">
+                            <span>ยอดค้างชำระคงเหลือ:</span>
+                            <span className="text-rose-600">{formatBaht(outstanding)}</span>
+                          </div>
                         </div>
 
-                        <div className="space-y-1">
-                          <div className="text-[11px] font-bold text-slate-500 flex items-center justify-between">
+                        <div className="p-3 bg-indigo-50/70 border border-indigo-100 rounded-2xl space-y-2 text-xs">
+                          <div className="flex items-center justify-between font-bold text-indigo-950">
                             <span>ตารางแบ่งชำระรายงวด ({termInstallmentCount} งวด):</span>
                             {termInstallmentCount === 1 && (
                               <span className="text-[10px] text-indigo-600 font-semibold bg-indigo-100/60 px-2 py-0.5 rounded-md">ชำระเต็มจำนวน</span>
                             )}
                           </div>
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 pt-1">
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 pt-0.5">
                             {schedule.map((inst) => (
                               <div
                                 key={inst.installmentNo}
@@ -958,6 +1023,15 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
                               </div>
                             ))}
                           </div>
+                          <div className="flex items-center justify-between pt-1.5 border-t border-indigo-100 text-xs">
+                            <span className="font-bold text-indigo-900">ยอดที่ต้องชำระในงวดแรก:</span>
+                            <span className="font-extrabold text-indigo-700 text-sm font-mono">{formatBaht(firstPaymentDue)}</span>
+                          </div>
+                          <p className="text-[10px] text-indigo-600/80 italic">
+                            {termDepositDeclaredStatus === 'PAID'
+                              ? '* รวมเฉพาะค่าเช่างวดที่ 1 (เงินประกันชำระแล้ว)'
+                              : '* รวมค่าเช่างวดที่ 1 + เงินประกัน/มัดจำ'}
+                          </p>
                         </div>
                       </div>
                     );
@@ -981,6 +1055,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
                     required
                     value={durationMonths}
                     onChange={(e) => setDurationMonths(Math.max(1, parseInt(e.target.value) || 1))}
+                    onBlur={() => setDurationMonths(Math.max(1, parseInt(normalizeNumericString(durationMonths), 10) || 1))}
                     className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
                   />
                 </div>
@@ -997,7 +1072,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">
-                    ค่าเช่ารายเดือน (บาท)
+                    ค่าเช่ารายเดือน (บาท) <span className="text-rose-500">*</span>
                   </label>
                   <input
                     type="number"
@@ -1006,6 +1081,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
                     required
                     value={monthlyRent}
                     onChange={(e) => setMonthlyRent(normalizeMoneyInput(e.target.value))}
+                    onBlur={() => setMonthlyRent(normalizeMoneyInput(monthlyRent))}
                     className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
                   />
                 </div>
@@ -1019,6 +1095,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
                     step="0.01"
                     value={monthlyDeposit}
                     onChange={(e) => setMonthlyDeposit(normalizeMoneyInput(e.target.value))}
+                    onBlur={() => setMonthlyDeposit(normalizeMoneyInput(monthlyDeposit))}
                     className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
                   />
                 </div>
@@ -1055,16 +1132,38 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 gap-3">
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    ค่าเช่ารวม (บาท)
-                  </label>
-                  <div className="px-3 py-2 text-xs bg-indigo-50 border border-indigo-100 rounded-xl text-indigo-700 font-extrabold flex items-center justify-between">
-                    <span>{formatBaht(monthlyRent * durationMonths)}</span>
+              {/* Monthly Live Financial Breakdown */}
+              {(() => {
+                const totalRent = (monthlyRent || 0) * (durationMonths || 1);
+                const depAmount = monthlyDeposit || 0;
+                const totalAgreed = totalRent + depAmount;
+                const paidAmt = monthlyDepositDeclaredStatus === 'PAID' ? depAmount : 0;
+                const outstanding = totalAgreed - paidAmt;
+                return (
+                  <div className="p-3 bg-slate-50 border border-slate-200 rounded-2xl space-y-1.5 text-xs">
+                    <div className="flex justify-between text-slate-600">
+                      <span>ค่าเช่ารวม ({durationMonths} เดือน):</span>
+                      <span className="font-bold">{formatBaht(totalRent)}</span>
+                    </div>
+                    <div className="flex justify-between text-slate-600">
+                      <span>เงินประกัน/มัดจำ:</span>
+                      <span className="font-bold">{formatBaht(depAmount)}</span>
+                    </div>
+                    <div className="flex justify-between text-slate-900 pt-1 border-t border-slate-200 font-extrabold">
+                      <span>ยอดตามข้อตกลง:</span>
+                      <span className="text-indigo-700">{formatBaht(totalAgreed)}</span>
+                    </div>
+                    <div className="flex justify-between text-slate-900 font-extrabold">
+                      <span>ยอดชำระแล้ว:</span>
+                      <span className="text-emerald-700">{formatBaht(paidAmt)}</span>
+                    </div>
+                    <div className="flex justify-between text-slate-900 pt-1 font-extrabold border-t border-slate-200/60">
+                      <span>ยอดค้างชำระคงเหลือ:</span>
+                      <span className="text-rose-600">{formatBaht(outstanding)}</span>
+                    </div>
                   </div>
-                </div>
-              </div>
+                );
+              })()}
             </div>
           )}
 
@@ -1147,6 +1246,11 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
                         setDailyRate(normalizeMoneyInput(val));
                       }
                     }}
+                    onBlur={() => {
+                      if (dailyRate !== null && dailyRate !== undefined) {
+                        setDailyRate(normalizeMoneyInput(dailyRate));
+                      }
+                    }}
                     className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
                   />
                   {dailyRate === null && (
@@ -1165,6 +1269,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
                     step="0.01"
                     value={dailyDeposit}
                     onChange={(e) => setDailyDeposit(normalizeMoneyInput(e.target.value))}
+                    onBlur={() => setDailyDeposit(normalizeMoneyInput(dailyDeposit))}
                     className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
                   />
                 </div>
@@ -1201,25 +1306,38 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
                 </div>
               </div>
 
-              {/* Financial Breakdown */}
-              <div className="p-3 bg-slate-50 border border-slate-200 rounded-2xl space-y-1.5 text-xs">
-                <div className="flex justify-between text-slate-600">
-                  <span>ค่าเช่ารวม ({inclusiveDays} วัน):</span>
-                  <span className="font-bold">{formatBaht(dailyTotalRent)}</span>
-                </div>
-                <div className="flex justify-between text-slate-600">
-                  <span>เงินประกัน/มัดจำ:</span>
-                  <span className="font-bold">{formatBaht(dailyDeposit)}</span>
-                </div>
-                <div className="flex justify-between text-slate-900 pt-1 border-t border-slate-200 font-extrabold">
-                  <span>ยอดตามข้อตกลง:</span>
-                  <span className="text-indigo-700">{formatBaht(dailyTotalAgreed)}</span>
-                </div>
-                <div className="flex justify-between text-slate-900 pt-1 font-extrabold">
-                  <span>ยอดค้างชำระคงเหลือ:</span>
-                  <span className="text-rose-600">{formatBaht(dailyOutstanding)}</span>
-                </div>
-              </div>
+              {/* Daily Live Financial Breakdown */}
+              {(() => {
+                const totalRent = (dailyRate ?? 0) * inclusiveDays;
+                const depAmount = dailyDeposit || 0;
+                const totalAgreed = totalRent + depAmount;
+                const paidAmt = dailyDepositDeclaredStatus === 'PAID' ? depAmount : 0;
+                const outstanding = totalAgreed - paidAmt;
+                return (
+                  <div className="p-3 bg-slate-50 border border-slate-200 rounded-2xl space-y-1.5 text-xs">
+                    <div className="flex justify-between text-slate-600">
+                      <span>ค่าเช่ารวม ({inclusiveDays} วัน):</span>
+                      <span className="font-bold">{formatBaht(totalRent)}</span>
+                    </div>
+                    <div className="flex justify-between text-slate-600">
+                      <span>เงินประกัน/มัดจำ:</span>
+                      <span className="font-bold">{formatBaht(depAmount)}</span>
+                    </div>
+                    <div className="flex justify-between text-slate-900 pt-1 border-t border-slate-200 font-extrabold">
+                      <span>ยอดตามข้อตกลง:</span>
+                      <span className="text-indigo-700">{formatBaht(totalAgreed)}</span>
+                    </div>
+                    <div className="flex justify-between text-slate-900 font-extrabold">
+                      <span>ยอดชำระแล้ว:</span>
+                      <span className="text-emerald-700">{formatBaht(paidAmt)}</span>
+                    </div>
+                    <div className="flex justify-between text-slate-900 pt-1 font-extrabold border-t border-slate-200/60">
+                      <span>ยอดค้างชำระคงเหลือ:</span>
+                      <span className="text-rose-600">{formatBaht(outstanding)}</span>
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           )}
 

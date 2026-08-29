@@ -1152,3 +1152,61 @@ Consumers:
 | Backend TypeScript Build | `npm --prefix server run build` | **0 Errors (PASS)** |
 | Frontend TypeScript Check | `npm run lint` | **0 Errors (PASS)** |
 | Line Ending & Whitespace Hygiene | `git -c core.whitespace=cr-at-eol diff --check` | **0 Warnings / Clean** |
+
+---
+
+## 33. OWNER ROOMS R3.6 — Quick Add Financial Preview, Numeric Normalization, Term Installment Default & Actionable Error Handling (2026-08-29)
+
+### Context & Product Owner Locked Decisions
+Following the R3.5c release and manual UAT review by the Product Owner:
+1. **Financial Preview Calculations**: Quick Add modal must visibly display live calculations for all 3 rental modes (TERM, MONTHLY, DAILY). When deposit is `UNPAID` (รอชำระ), deposit is included in outstanding balance. When deposit is `PAID` (ชำระแล้ว), deposit remains visible as part of the agreement financial structure (`ยอดตามข้อตกลง`), but its outstanding contribution becomes zero. Contractual total (`ยอดตามข้อตกลง`) never changes merely because a deposit is paid. In TERM mode, `ยอดที่ต้องชำระในงวดแรก` dynamically computes Installment 1 Rent (+ Deposit if UNPAID).
+2. **Numeric Input Normalization**: Leading zeros in numeric inputs across all 3 modes (e.g. `01000` -> `1000`, `0004800` -> `4800`, `000` -> `0`, `001000.50` -> `1000.50`) are normalized on blur without altering valid decimal representations or precision.
+3. **TERM Installment Count Default**: When Quick Add opens on TERM mode, `จำนวนงวดชำระ` strictly defaults to `1 งวด (ชำระครั้งเดียว)`, while providing the full range of dormitory/building configured options (e.g. 1..`maxTermRentInstallments`).
+4. **Actionable Domain Error Presentation**: Generic 500 errors (`ระบบไม่สามารถดำเนินการได้ กรุณาลองใหม่อีกครั้ง`) are eliminated for known domain errors. Specifically, `DEPOSIT_BILLING_CYCLE_NOT_FOUND` maps directly to actionable Thai guidance: `ไม่พบรอบบิลที่ตรงกับวันเริ่มสัญญา กรุณาสร้างรอบบิลก่อนยืนยันการเช่า`. On failure, the modal stays open with user-entered values intact.
+5. **Observable Success Lifecycle**: On save success, the modal closes, success toast triggers, room query cache is invalidated with `{ kind: 'create' }`, and cycle-scoped presentation refetches to display updated tenant and deposit status immediately.
+6. **LOCAL-07 UAT Deterministic Fixtures**: Room 101 has a canonical PAID Deposit Bill in June 2026 (`INV-202606-101-D`), evaluating consistently to `PAID` (`ชำระแล้ว`) in July and August cycles while preserving exact July 11-bill baseline and August 1-component baseline. Room 303 serves as the dedicated `NOT_ISSUED` fixture (active agreement requiring deposit with no deposit bill issued). Legacy production agreements are NOT auto-backfilled.
+
+---
+
+### Surgical Implementations & Architectural Guarantees (R3.6)
+
+#### Part A: Quick Add Modal Financial Preview & Input Normalization (`src/components/QuickAddTenantModal.tsx`)
+- **Live Financial Breakdown Cards**:
+  - Added dedicated breakdown containers for `TERM`, `MONTHLY`, and `DAILY` displaying `ค่าเช่ารวม`, `เงินประกัน/มัดจำ`, `ยอดตามข้อตกลง`, `ยอดชำระแล้ว`, `ยอดค้างชำระคงเหลือ`, and in TERM `ยอดที่ต้องชำระในงวดแรก`.
+  - Formulas:
+    - $\text{Total Rent} = \text{Rent} \times \text{Duration}$ (or $\text{Term Rent}$ or $\text{Daily Rate} \times \text{Days}$)
+    - $\text{Contractual Total} = \text{Total Rent} + \text{Deposit}$
+    - $\text{Paid Amount} = (\text{Deposit Status} == \text{PAID} ? \text{Deposit} : 0)$
+    - $\text{Outstanding} = \text{Contractual Total} - \text{Paid Amount}$
+    - $\text{TERM First Payment Due} = \text{Installment 1 Rent} + (\text{Deposit Status} == \text{UNPAID} ? \text{Deposit} : 0)$
+- **Numeric Normalizer (`normalizeNumericString`)**:
+  - Strips leading zeros on integers and floats while preserving zero, empty string, and valid decimal digits.
+  - Attached to `onBlur` across duration, rent, deposit, and daily rate inputs.
+- **TERM Installment Default**:
+  - `setTermInstallmentCount(1)` on open, with `<select>` populated up to `context.building.maxTermRentInstallments`.
+- **Domain Error Handling**:
+  - Intercepts known backend error codes (`DEPOSIT_BILLING_CYCLE_NOT_FOUND`, `ROOM_UNDER_MAINTENANCE`, `ROOM_OCCUPIED_OR_HAS_ACTIVE_AGREEMENT`, `BUILDING_TERM_CONFIG_INVALID`, `TERM_INSTALLMENTS_EXCEED_MAX`, `VERSION_CONFLICT`) and displays Thai actionable messages without modal dismissal.
+
+#### Part B: Backend Custom Error Status Propagation (`server/src/middleware/error-handler.ts`)
+- In global error middleware, enhanced extraction of `err.statusCode || err.status || err.code || err.errorCode` from standard `Error` instances so domain exceptions propagate with proper HTTP status codes (e.g. 400/409/422) and their original domain message instead of collapsing into generic 500 error responses.
+
+#### Part C: Owner Rooms Query Cache Invalidation (`src/pages/owner/rooms.tsx`)
+- Updated `QuickAddTenantModal.onSuccess` from `{ kind: 'refresh' }` to `{ kind: 'create' }`, triggering full invalidation of room and preview-context queries on creation.
+
+#### Part D: LOCAL-07 UAT Sandbox Fixtures (`scripts/local07/seed.mjs`)
+- Seeded `cycleJune` (2026-06) with canonical PAID Deposit Bill `INV-202606-101-D` (฿4,500), Payment, and Receipt for Room 101.
+- Validated that July retains 11 bills (7 paid, ฿65,899 billed, ฿41,994 paid, 7 receipts), Room 101 has 2 decomposed charge components in July and 1 component in August, Room 101 evaluates to `PAID` across cycles, and Room 303 evaluates to `NOT_ISSUED`.
+
+---
+
+### Verification Matrix (R3.6)
+
+| Test / Check Suite | Target Command / Path | Result |
+|---|---|---|
+| Frontend Quick Add Financial Preview, Normalization & Error Suite (8 Tests) | `npx vitest run src/tests/owner-rooms-r36-quickadd.test.tsx --environment happy-dom` | **8 / 8 PASS (100%)** |
+| Real PostgreSQL Full Integration Suite (14 Scenarios) | `npm --prefix server test -- src/__tests__/integration/owner-rooms-r35a-deposit-integration.test.ts` | **14 / 14 PASS (100%)** |
+| Frontend Deposit & Agreement Lifecycle Suite | `npx vitest run src/tests/owner-rooms-r2-cycle-deposits.test.tsx --environment happy-dom` | **118 / 118 PASS (100%)** |
+| LOCAL-07 Sandbox Integrity Oracle | `npx tsx scripts/local07/verify.mjs` | **ALL CHECKS PASS (0 Failures)** |
+| Backend TypeScript Build | `npm --prefix server run build` | **0 Errors (PASS)** |
+| Frontend TypeScript Check | `npm run lint` | **0 Errors (PASS)** |
+| Line Ending & Whitespace Hygiene | `git -c core.whitespace=cr-at-eol diff --check` | **0 Warnings / Clean** |

@@ -2197,7 +2197,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
         context={selectedQuickAddContext}
         onSuccess={async (msg) => {
           setToastMessage(msg);
-          onSaveRooms(rooms, { kind: 'refresh' });
+          onSaveRooms(rooms, { kind: 'create' });
         }}
       />
 

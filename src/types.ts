@@ -87,6 +87,9 @@ export interface QuickAddEffectiveRates {
   termRent: number | null;
   dailyRent: number | null;
   depositAmount: number;
+  monthlyDeposit?: number | null;
+  termDeposit?: number | null;
+  dailyDeposit?: number | null;
 }
 
 export interface QuickAddBuildingContext {
@@ -100,9 +103,12 @@ export interface QuickAddRoomContext {
   roomId: string;
   dormitoryId: string;
   roomNumber: string;
-  buildingId: string;
+  buildingId?: string;
   effective: QuickAddEffectiveRates;
   building?: QuickAddBuildingContext | null;
+  roomType?: string;
+  floor?: number;
+  currentCatalogRates?: Array<{ type: string; price: number; unit: string }>;
 }
 
 export type RoomStatus = 'vacant' | 'occupied' | 'reserved' | 'maintenance';

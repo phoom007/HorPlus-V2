@@ -817,6 +817,16 @@ export async function seedLocal07Data() {
   // Billing Cycles: July (2026-07), August (2026-08 Current), September (2026-09 Rolling)
   const compBillingCycleService = new BillingCycleService(new PrismaBillingCycleRepository(prisma));
 
+  const cycleJuneRes = await compBillingCycleService.createBillingCycle(compDorm.id, {
+    cycleCode: '2026-06',
+    name: 'รอบบิล มิถุนายน 2569',
+    periodStart: '2026-06-01',
+    periodEnd: '2026-06-30',
+    billingDate: '2026-06-25',
+    dueDate: '2026-07-05',
+  }, COMP_DORM.owner.id);
+  const cycleJune = cycleJuneRes.cycle;
+
   const cycleJulyRes = await compBillingCycleService.createBillingCycle(compDorm.id, {
     cycleCode: '2026-07',
     name: 'รอบบิล กรกฎาคม 2569',
@@ -1469,6 +1479,66 @@ export async function seedLocal07Data() {
 
     bCount++;
   }
+
+  // Seed Room 101 Start-Cycle Deposit Bill in June 2026 (Paid via canonical evidence)
+  const bill101Dep = await prisma.bill.create({
+    data: {
+      dormitoryId: compDorm.id,
+      billingCycleId: cycleJune.id,
+      roomId: createdRooms['101'].id,
+      tenantId: createdTenants['101'].id,
+      contractId: createdContracts['101']?.id || null,
+      billNumber: 'INV-202606-101-D',
+      billKind: 'DEPOSIT',
+      billingDate: new Date('2026-06-25'),
+      dueDate: new Date('2026-07-05'),
+      subtotal: 4500.0,
+      totalAmount: 4500.0,
+      paidAmount: 4500.0,
+      outstandingAmount: 0.0,
+      status: 'paid',
+      paidAt: new Date('2026-06-28T14:30:00Z'),
+    },
+  });
+  await prisma.billItem.create({
+    data: {
+      dormitoryId: compDorm.id,
+      billId: bill101Dep.id,
+      type: 'deposit',
+      description: 'เงินประกันสัญญาเช่า 101',
+      quantity: 1,
+      unitPrice: 4500,
+      amount: 4500,
+    },
+  });
+  const pay101Dep = await prisma.payment.create({
+    data: {
+      dormitoryId: compDorm.id,
+      billId: bill101Dep.id,
+      tenantId: createdTenants['101'].id,
+      amount: 4500.0,
+      method: 'promptpay',
+      status: 'verified',
+      paymentDate: new Date('2026-06-28T14:30:00Z'),
+    },
+  });
+  await prisma.receipt.create({
+    data: {
+      dormitoryId: compDorm.id,
+      billId: bill101Dep.id,
+      paymentId: pay101Dep.id,
+      receiptNumber: 'RCP-202606-101-D',
+      snapshotData: {
+        billNumber: bill101Dep.billNumber,
+        roomNumber: '101',
+        tenantName: createdTenants['101'].displayName,
+        totalAmount: 4500.0,
+        items: [{ type: 'deposit', description: 'เงินประกันสัญญาเช่า 101', amount: 4500 }],
+      },
+      issuedAt: new Date('2026-06-28T14:35:00Z'),
+      isVoided: false,
+    },
+  });
 
   // Seed Room 101 July 2026 Snapshot with 1 person (Section 7: People-Count difference fixture; current household = 2)
   await prisma.roomBillingCycleSnapshot.create({
