@@ -659,9 +659,7 @@ export class BillingService {
       const rawTotal = subDecimals(subtotalDec, discountDec);
       const totalDec = compareDecimals(rawTotal, '0.00') < 0 ? toDecimal('0.00') : rawTotal;
 
-      const countRes = await this.billRepo.findAll(dormitoryId, { billingCycleId: data.billingCycleId }, tx);
-      const billSeq = (countRes.total + 1).toString().padStart(4, '0');
-      const billNumber = `INV-${cycle.cycleCode}-${billSeq}`;
+      const billNumber = await generateNextBillNumberInTx(tx, dormitoryId, cycle.cycleCode);
 
       let createdData;
       try {

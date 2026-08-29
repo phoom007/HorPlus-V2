@@ -1108,3 +1108,47 @@ During independent review of R3.5a:
 | Frontend Vite Production Build | `npm run build` | **0 Errors (PASS)** |
 | Frontend TypeScript Check | `npm run lint` | **0 Errors (PASS)** |
 | Line Ending & Whitespace Hygiene | `git -c core.whitespace=cr-at-eol diff --check` | **0 Warnings / Clean** |
+
+---
+
+## 32. OWNER ROOMS R3.5c — Global Bill Number Authority & High-Contention Allocation Invariants (2026-08-29)
+
+### Context & Independent Review Corrections (R3.5b Correction)
+During independent review of R3.5b:
+1. **BillingService Unification Verification**: While R3.5b created and imported `generateNextBillNumberInTx` in `BillingService`, `generateBill()` had retained its legacy `findAll/count + 1` allocation block. This left a secondary invoice allocator in production code.
+2. **High-Contention Concurrency Proof**: Strengthened concurrency testing with a 10-way high-contention mixed execution (5 Deposit Bills + 5 Normal Bills concurrently in the same cycle) to prove zero sequence collisions and zero P2002 conflicts under real database load.
+3. **Misleading Start-Cycle Boundary Test**: Corrected the test fixture to create an isolated cycle with `cycleCode = '2026-08'` but period strictly Aug 15–31, proving that an agreement starting Aug 1 is strictly rejected under period containment authority.
+
+---
+
+### Surgical Implementations & Architectural Guarantees (R3.5c)
+
+#### Part A: Unified Single Invoice Allocator in BillingService (`server/src/services/billing.service.ts`)
+- In `BillingService.generateBill()`:
+  - Completely removed `this.billRepo.findAll(dormitoryId, { billingCycleId }, tx)` and `count + 1` sequence calculation.
+  - Replaced with:
+    ```ts
+    const billNumber = await generateNextBillNumberInTx(tx, dormitoryId, cycle.cycleCode);
+    ```
+  - Executes inside the exact same database transaction (`tx`) used for bill creation.
+  - Advisory lock on namespace `bill_number:${dormitoryId}:${cycleCode}` serializes sequence allocation across all bill types.
+
+#### Part B: Production Bill Creation Call Graph
+The entire production codebase now contains strictly ONE bill-number allocation authority:
+- `generateNextBillNumberInTx(tx, dormitoryId, cycleCode)` in `server/src/utils/bill-number.util.ts`
+Consumers:
+1. `createDepositBillForAgreementInTx` (`server/src/utils/deposit-billing.util.ts`) — Agreement Deposit Bills
+2. `BillingService.generateBill` (`server/src/services/billing.service.ts`) — Monthly Utility & Rent Bills
+
+---
+
+### Verification Matrix (R3.5c)
+
+| Test / Check Suite | Target Command / Path | Result |
+|---|---|---|
+| Real PostgreSQL Full Integration Suite (14 Scenarios) | `npm --prefix server test -- src/__tests__/integration/owner-rooms-r35a-deposit-integration.test.ts` | **14 / 14 PASS (100%)** |
+| Unit Test Suite (Deposit Billing & Lifecycle) | `npm --prefix server test -- src/__tests__/unit/owner-rooms-r35-deposit-billing.test.ts` | **8 / 8 PASS (100%)** |
+| LOCAL-07 Sandbox Integrity Oracle | `npx tsx scripts/local07/verify.mjs` | **ALL CHECKS PASS (0 Failures)** |
+| Backend TypeScript Build | `npm --prefix server run build` | **0 Errors (PASS)** |
+| Frontend TypeScript Check | `npm run lint` | **0 Errors (PASS)** |
+| Line Ending & Whitespace Hygiene | `git -c core.whitespace=cr-at-eol diff --check` | **0 Warnings / Clean** |

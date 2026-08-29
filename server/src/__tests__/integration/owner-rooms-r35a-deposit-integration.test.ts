@@ -1,6 +1,6 @@
 /**
  * @license Apache-2.0
- * Real Prisma / PostgreSQL Integration Tests for Owner Rooms R3.5b
+ * Real Prisma / PostgreSQL Integration Tests for Owner Rooms R3.5c
  * Proves:
  * 1. Provisional MONTHLY UNPAID & start-cycle / later-cycle Meter presentation
  * 2. Provisional TERM UNPAID with multi-installment (single deposit charge)
@@ -9,12 +9,13 @@
  * 5. Contract activation PAID (canonical cash settlement & receipt)
  * 6. Future reservation start-cycle exact matching
  * 7. Missing start-cycle atomic rollback (no orphan tenant, occupancy, agreement)
- * 8. Misleading cycleCode strict period failure (period containment authority)
+ * 8. Misleading cycleCode strict period failure (cycleCode='2026-08' but period Aug 15–31 rejects start Aug 1)
  * 9. TenantRegistration sequential maintenance rejection & zero side effects
  * 10. TenantRegistration vs Room maintenance concurrency invariant
  * 11. Deposit Bill vs Normal Bill number concurrency (shared allocator)
  * 12. Normal vs Normal Bill number concurrency (shared allocator)
  * 13. Deposit vs Deposit Bill number concurrency (shared allocator)
+ * 14. High-Contention Mixed Bill Allocation (5 Deposit + 5 Normal concurrent Bills = 10 unique sequential numbers)
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
@@ -40,8 +41,8 @@ import { resetCachedEnv } from '../../config/env.js';
 
 const prisma = getPrismaClient();
 
-describe('HORPLUS R3.5b — Real Prisma / PostgreSQL Registration & Bill Authority Integration Suite', () => {
-  const testRunId = `r35b_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+describe('HORPLUS R3.5c — Real Prisma / PostgreSQL Registration & Global Bill Authority Integration Suite', () => {
+  const testRunId = `r35c_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
   let dormId: string;
   let bldId: string;
   let userId: string;
@@ -107,7 +108,7 @@ describe('HORPLUS R3.5b — Real Prisma / PostgreSQL Registration & Bill Authori
         googleSubject: `sub_${testRunId}`,
         email: ownerEmail,
         emailNormalized: ownerEmail.toLowerCase(),
-        name: 'Test Owner R3.5b',
+        name: 'Test Owner R3.5c',
       },
     });
     userId = user.id;
@@ -115,7 +116,7 @@ describe('HORPLUS R3.5b — Real Prisma / PostgreSQL Registration & Bill Authori
     // 2. Create Dormitory
     const dorm = await prisma.dormitory.create({
       data: {
-        name: `Dorm R3.5b ${testRunId}`,
+        name: `Dorm R3.5c ${testRunId}`,
         type: 'apartment',
         addressLine1: '123 Real Deposit St',
         status: 'active',
@@ -231,6 +232,8 @@ describe('HORPLUS R3.5b — Real Prisma / PostgreSQL Registration & Bill Authori
       await prisma.payment.deleteMany({ where: { dormitoryId: dormId } });
       await prisma.billItem.deleteMany({ where: { dormitoryId: dormId } });
       await prisma.bill.deleteMany({ where: { dormitoryId: dormId } });
+      await prisma.meterReading.deleteMany({ where: { dormitoryId: dormId } });
+      await prisma.meterDevice.deleteMany({ where: { dormitoryId: dormId } });
       await prisma.tenantRegistrationRequest.deleteMany({ where: { dormitoryId: dormId } });
       await prisma.provisionalRentalTerm.deleteMany({ where: { dormitoryId: dormId } });
       await prisma.contractSnapshot.deleteMany({ where: { dormitoryId: dormId } });
@@ -595,15 +598,47 @@ describe('HORPLUS R3.5b — Real Prisma / PostgreSQL Registration & Bill Authori
     expect(orphanTenant).toBeNull();
   });
 
-  it('8. Misleading cycleCode strict period failure: rejects cycle whose period does NOT contain startDate', async () => {
-    const room = await createTestRoom('108-MISLEAD', 5000, 5000);
+  it('8. Misleading cycleCode strict period failure: cycleCode="2026-08" with period Aug 15–31 rejects start Aug 1', async () => {
+    // 1. Create an isolated dormitory with ONLY one misleading cycle
+    const isolatedDorm = await prisma.dormitory.create({
+      data: {
+        name: `Isolated Dorm Misleading ${Date.now()}`,
+        type: 'apartment',
+        status: 'active',
+      },
+    });
 
-    // Create misleading cycle: cycleCode is '2026-08', but period is strictly 2026-08-15 to 2026-08-31
+    const isolatedBuilding = await prisma.building.create({
+      data: {
+        dormitoryId: isolatedDorm.id,
+        name: 'Building Iso',
+        floorCount: 2,
+      },
+    });
+
+    const isolatedRoom = await prisma.room.create({
+      data: {
+        dormitoryId: isolatedDorm.id,
+        buildingId: isolatedBuilding.id,
+        roomNumber: 'ISO-101',
+        normalizedRoomNumber: 'ISO-101',
+        floor: 1,
+        roomType: 'standard',
+        status: 'vacant',
+        monthlyRent: 5000,
+        depositAmount: 5000,
+        monthlyDeposit: 5000,
+        termDeposit: 5000,
+        dailyDeposit: 5000,
+      },
+    });
+
+    // Create misleading cycle: cycleCode is literally '2026-08', but period is strictly Aug 15 to Aug 31
     const misleadingCycle = await prisma.billingCycle.create({
       data: {
-        dormitoryId: dormId,
+        dormitoryId: isolatedDorm.id,
         name: 'รอบปลายเดือน สิงหาคม 2026',
-        cycleCode: '2026-08-LATE',
+        cycleCode: '2026-08',
         periodStart: new Date('2026-08-15T00:00:00.000Z'),
         periodEnd: new Date('2026-08-31T23:59:59.999Z'),
         billingDate: new Date('2026-08-25T00:00:00.000Z'),
@@ -612,15 +647,16 @@ describe('HORPLUS R3.5b — Real Prisma / PostgreSQL Registration & Bill Authori
       },
     });
 
-    // Try creating agreement starting 2026-07-15 (covered by no cycle)
+    // Attempt to create agreement starting 2026-08-01 (Aug 1 is NOT within [Aug 15, Aug 31])
+    // Period containment is the sole authority: must NOT match on cycleCode '2026-08'
     const errPromise = provisionalRentalTermService.createProvisionalTenantAndTerm(
-      dormId,
+      isolatedDorm.id,
       {
-        roomId: room.id,
-        fullName: 'ประสิทธิ์ นอกรอบ',
-        phone: '0811112233',
+        roomId: isolatedRoom.id,
+        fullName: 'เกรียงไกร นอกช่วงรอบ',
+        phone: '0844445566',
         rentalType: 'MONTHLY',
-        startDate: '2026-07-15',
+        startDate: '2026-08-01',
         durationMonths: 6,
         unitRentAmount: 5000,
         totalRentAmount: 30000,
@@ -635,7 +671,11 @@ describe('HORPLUS R3.5b — Real Prisma / PostgreSQL Registration & Bill Authori
       statusCode: 409,
     });
 
+    // Cleanup isolated dorm
     await prisma.billingCycle.delete({ where: { id: misleadingCycle.id } });
+    await prisma.room.delete({ where: { id: isolatedRoom.id } });
+    await prisma.building.delete({ where: { id: isolatedBuilding.id } });
+    await prisma.dormitory.delete({ where: { id: isolatedDorm.id } });
   });
 
   it('9. TenantRegistration sequential maintenance rejection & zero side effects', async () => {
@@ -1047,5 +1087,132 @@ describe('HORPLUS R3.5b — Real Prisma / PostgreSQL Registration & Bill Authori
     expect(billA!.billNumber).not.toBe(billB!.billNumber);
     expect(billA!.billNumber).toMatch(/^INV-2026-08-\d{4}$/);
     expect(billB!.billNumber).toMatch(/^INV-2026-08-\d{4}$/);
+  });
+
+  it('14. High-Contention Mixed Bill Allocation: 5 concurrent Deposit Bills + 5 concurrent Normal Bills produce 10 unique non-colliding sequences', async () => {
+    // 1. Create 10 rooms in the same dormitory: 5 for normal bills (501..505), 5 for deposit bills (506..510)
+    const normalRooms = await Promise.all([
+      createTestRoom('501-HC', 4000, 4000),
+      createTestRoom('502-HC', 4000, 4000),
+      createTestRoom('503-HC', 4000, 4000),
+      createTestRoom('504-HC', 4000, 4000),
+      createTestRoom('505-HC', 4000, 4000),
+    ]);
+
+    const depositRooms = await Promise.all([
+      createTestRoom('506-HC', 4000, 4000),
+      createTestRoom('507-HC', 4000, 4000),
+      createTestRoom('508-HC', 4000, 4000),
+      createTestRoom('509-HC', 4000, 4000),
+      createTestRoom('510-HC', 4000, 4000),
+    ]);
+
+    // Prepare active tenancies & contracts for normalRooms
+    for (let i = 0; i < normalRooms.length; i++) {
+      const room = normalRooms[i];
+      const tenant = await prisma.tenant.create({
+        data: {
+          dormitoryId: dormId,
+          tenantNumber: `TNT-HC-${Date.now()}-${i}`,
+          firstName: `ผู้เช่าปกติ${i}`,
+          lastName: 'ทดสอบแรงสูง',
+          displayName: `ผู้เช่าปกติ${i} ทดสอบแรงสูง`,
+          phone: `089100050${i}`,
+          status: 'active',
+        },
+      });
+
+      const contract = await prisma.contract.create({
+        data: {
+          dormitoryId: dormId,
+          roomId: room.id,
+          tenantId: tenant.id,
+          contractNumber: `CTR-HC-${Date.now()}-${i}`,
+          startDate: new Date('2026-08-01T00:00:00.000Z'),
+          endDate: new Date('2027-01-31T23:59:59.999Z'),
+          status: 'active',
+          rentAmount: 4000,
+          depositAmount: 4000,
+        },
+      });
+
+      await prisma.occupancy.create({
+        data: {
+          dormitoryId: dormId,
+          roomId: room.id,
+          tenantId: tenant.id,
+          contractId: contract.id,
+          status: 'ACTIVE',
+          startedAt: new Date('2026-08-01T00:00:00.000Z'),
+        },
+      });
+    }
+
+    // Save meter readings for all normalRooms
+    await meterService.saveBulkMeterWorkspace(dormId, {
+      billingCycleId: augCycle.id,
+      rows: normalRooms.map((r, idx) => ({
+        roomId: r.id,
+        waterPrev: '10',
+        waterCurr: `${20 + idx}`,
+        elecPrev: '100',
+        elecCurr: `${150 + idx}`,
+      })),
+    }, userId);
+
+    // Concurrently launch 10 operations (5 Deposit Bills + 5 Normal Bills) on the same cycle!
+    const operations: Promise<any>[] = [
+      // 5 Normal bill generations
+      ...normalRooms.map(r => billingService.generateBill(
+        dormId,
+        { billingCycleId: augCycle.id, roomId: r.id, billKind: 'MONTHLY_UTILITY' },
+        userId,
+        new Date('2026-08-25T00:00:00.000Z')
+      )),
+      // 5 Deposit bill generations
+      ...depositRooms.map((r, idx) => provisionalRentalTermService.createProvisionalTenantAndTerm(
+        dormId,
+        {
+          roomId: r.id,
+          fullName: `ผู้เช่ามัดจำ${idx} แรงสูง`,
+          phone: `089200050${idx}`,
+          rentalType: 'MONTHLY',
+          startDate: '2026-08-01',
+          durationMonths: 6,
+          unitRentAmount: 4000,
+          totalRentAmount: 24000,
+          depositAmount: 4000,
+          depositDeclaredStatus: 'UNPAID',
+        },
+        userId
+      )),
+    ];
+
+    const results = await Promise.all(operations);
+    expect(results.length).toBe(10);
+
+    // Extract all 10 bill numbers
+    const normalBillNumbers = results.slice(0, 5).map(res => res.bill.billNumber);
+    const depositTermIds = results.slice(5, 10).map(res => res.provisionalTerm.id);
+    const depositBills = await prisma.bill.findMany({
+      where: {
+        provisionalRentalTermId: { in: depositTermIds },
+        billKind: 'DEPOSIT',
+      },
+      select: { billNumber: true },
+    });
+    const depositBillNumbers = depositBills.map(b => b.billNumber);
+
+    const all10BillNumbers = [...normalBillNumbers, ...depositBillNumbers];
+    expect(all10BillNumbers.length).toBe(10);
+
+    // Verify all bill numbers match canonical format
+    for (const bNum of all10BillNumbers) {
+      expect(bNum).toMatch(/^INV-2026-08-\d{4}$/);
+    }
+
+    // Verify all 10 bill numbers are strictly UNIQUE (0 collisions, 0 duplicates)
+    const uniqueNumbers = new Set(all10BillNumbers);
+    expect(uniqueNumbers.size).toBe(10);
   });
 });
