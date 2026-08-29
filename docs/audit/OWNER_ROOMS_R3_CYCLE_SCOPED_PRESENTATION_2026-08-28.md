@@ -1048,3 +1048,63 @@ During independent verification of R3.5:
 | Frontend Vite Production Build | `npm run build` | **0 Errors (PASS)** |
 | Frontend TypeScript Check | `npm run lint` | **0 Errors (PASS)** |
 | Line Ending & Whitespace Hygiene | `git -c core.whitespace=cr-at-eol diff --check` | **0 Warnings / Clean** |
+
+---
+
+## 31. OWNER ROOMS R3.5b — Registration Commitment Lock, Global Bill Number Authority & Strict Start-Cycle Finalization (2026-08-29)
+
+### Context & Independent Review Corrections (R3.5a Correction)
+During independent review of R3.5a:
+1. **TenantRegistration Approval Missing Advisory Lock**: `TenantRegistrationService.approveRequest()` created committed tenancies using `SELECT ... FOR UPDATE` on the Room row, but failed to acquire `acquireRoomAvailabilityLock(tx, dormitoryId, roomId)` and failed to reject maintenance rooms (`room.status === 'maintenance'`). This was inconsistent with every other Room commitment path (`RoomService`, `ContractService`, `ProvisionalRentalTermService`, `DailyStayService`).
+2. **Dual Bill-Number Authorities**: R3.5a introduced `generateNextBillNumberInTx` inside `deposit-billing.util.ts`, but `BillingService.generateBill` still independently used `count + 1`. All bill generation must share a single neutral transaction-safe authority.
+3. **Incomplete Concurrency Proofs**: R3.5a only tested Deposit-vs-Deposit concurrency, leaving Deposit-vs-Normal and Normal-vs-Normal unproven.
+4. **Start-Cycle Fallback Vulnerability**: `deposit-billing.util.ts` retained a `cycleCode` fallback that could select a cycle whose actual date range did not contain the agreement's `startDate`.
+5. **LOCAL-07 Oracle Extension**: Extended the executable oracle to assert one-time deposit charges in start cycle and zero in subsequent cycles.
+
+---
+
+### Surgical Implementations & Architectural Guarantees (R3.5b)
+
+#### Part A & B: Tenant Registration Shared Lock & Maintenance Guard (`server/src/services/tenant-registration.service.ts`)
+- Inside `approveRequest` transaction:
+  1. Acquires shared advisory availability lock: `await acquireRoomAvailabilityLock(tx, dormitoryId, req.requestedRoomId)`.
+  2. Acquires row lock: `SELECT id FROM rooms WHERE id = ... FOR UPDATE`.
+  3. Performs fresh read of `tx.room.findFirst`.
+  4. If `room.status === 'maintenance'`, immediately rejects with `409 ROOM_UNDER_MAINTENANCE` (`ไม่สามารถอนุมัติผู้เช่าได้ เนื่องจากห้องนี้อยู่ระหว่างปิดปรับปรุง`).
+  5. `confirmReplacement` cannot bypass maintenance status under any circumstance.
+  6. Zero side effects: if maintenance blocks approval, request remains `pending_owner_approval` with 0 orphan tenancy or billing records.
+
+#### Part C: Neutral Global Bill Number Authority (`server/src/utils/bill-number.util.ts`)
+- Created `generateNextBillNumberInTx(tx, dormitoryId, cycleCode)`:
+  - Acquires transactional advisory lock on namespace `bill_number:${dormitoryId}:${cycleCode}`.
+  - Determines highest existing sequence with prefix `INV-${cycleCode}-` and increments by 1.
+  - Returns canonical format `INV-${cycleCode}-${seq}` (e.g. `INV-2026-08-0001`).
+- Delegated both `createDepositBillForAgreementInTx` and `BillingService.generateBill` inside their respective database transactions to call this shared utility.
+- Completely eliminated the old `count + 1` bill-number generator from production code.
+
+#### Part D: Strict Start-Cycle Period Containment Authority (`server/src/utils/deposit-billing.util.ts`)
+- Removed all `cycleCode` fallbacks. Billing cycle resolution is strictly governed by period containment:
+  `periodStart <= agreementStartDate AND periodEnd >= agreementStartDate`
+- Rejects with `409 DEPOSIT_BILLING_CYCLE_NOT_FOUND` if no cycle period covers the start date.
+
+#### Part E: Provisional Service DTO Type Safety (`server/src/services/provisional-rental-term.service.ts`)
+- Tightened `depositDeclaredStatus` in `CreateProvisionalRentalTermDto` to strictly `'PAID' | 'UNPAID' | null` (no arbitrary string).
+
+#### Part F: LOCAL-07 One-Time Deposit Oracle Matrix F3 (`scripts/local07/verify.mjs`)
+- Added `Matrix F3` assertion verifying that Room 202 has exactly 1 deposit charge component in start cycle (August) and 0 in subsequent cycles (September, October) while preserving continuous `PAID` lifecycle status.
+
+---
+
+### Verification Matrix (R3.5b)
+
+| Test / Check Suite | Target Command / Path | Result |
+|---|---|---|
+| Real PostgreSQL Full Integration Suite (13 Scenarios) | `npm --prefix server test -- src/__tests__/integration/owner-rooms-r35a-deposit-integration.test.ts` | **13 / 13 PASS (100%)** |
+| Unit Test Suite (Deposit Billing & Lifecycle) | `npm --prefix server test -- src/__tests__/unit/owner-rooms-r35-deposit-billing.test.ts` | **8 / 8 PASS (100%)** |
+| Frontend Deposit & Agreement Lifecycle Suite | `npx vitest run src/tests/owner-rooms-r2-cycle-deposits.test.tsx --environment happy-dom` | **118 / 118 PASS (100%)** |
+| Frontend API Contract & Normalizer Suite | `npx vitest run src/tests/owner-rooms-api-contract-uat-r1.test.tsx --environment happy-dom` | **9 / 9 PASS (100%)** |
+| LOCAL-07 Sandbox Integrity Oracle | `npx tsx scripts/local07/verify.mjs` | **ALL CHECKS PASS (0 Failures)** |
+| Backend TypeScript Build | `npm --prefix server run build` | **0 Errors (PASS)** |
+| Frontend Vite Production Build | `npm run build` | **0 Errors (PASS)** |
+| Frontend TypeScript Check | `npm run lint` | **0 Errors (PASS)** |
+| Line Ending & Whitespace Hygiene | `git -c core.whitespace=cr-at-eol diff --check` | **0 Warnings / Clean** |

@@ -1,5 +1,8 @@
 import { Prisma } from '@prisma/client';
 import { recordCashPaymentInTx } from './payment-transaction.util.js';
+import { generateNextBillNumberInTx } from './bill-number.util.js';
+
+export { generateNextBillNumberInTx };
 
 export interface CreateDepositBillInput {
   dormitoryId: string;
@@ -33,53 +36,13 @@ function formatDecimal(val: number | string | Prisma.Decimal): string {
 }
 
 /**
- * Transaction-safe bill number allocator serialized per dormitory & cycle
- * Format: INV-{cycleCode}-{seq} (e.g. INV-2026-08-0001)
- */
-export async function generateNextBillNumberInTx(
-  tx: any,
-  dormitoryId: string,
-  cycleCode: string
-): Promise<string> {
-  const prefix = `INV-${cycleCode}-`;
-
-  // Transaction-safe dormitory & cycle namespace advisory lock
-  if (tx.$executeRaw) {
-    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${'bill_number:' + dormitoryId + ':' + cycleCode}))`;
-  }
-
-  const lastBill = await tx.bill.findFirst({
-    where: {
-      dormitoryId,
-      billNumber: { startsWith: prefix },
-    },
-    orderBy: { billNumber: 'desc' },
-    select: { billNumber: true },
-  });
-
-  let nextSeq = 1;
-  if (lastBill?.billNumber) {
-    const match = lastBill.billNumber.slice(prefix.length).match(/^(\d+)/);
-    if (match) {
-      nextSeq = parseInt(match[1], 10) + 1;
-    }
-  } else {
-    const count = await tx.bill.count({
-      where: { dormitoryId, billNumber: { startsWith: prefix } },
-    });
-    nextSeq = count + 1;
-  }
-
-  return `${prefix}${String(nextSeq).padStart(4, '0')}`;
-}
-
-/**
  * Creates exactly ONE agreement-linked Deposit Bill in the agreement start cycle.
  * Guarantees:
  * 1. depositAmount <= 0 => returns null
  * 2. Identity strictness: requires contractId XOR provisionalRentalTermId
  * 3. Idempotency: returns existing bill if already generated
- * 4. Strict Start-Cycle Authority: fails with DEPOSIT_BILLING_CYCLE_NOT_FOUND if exact cycle does not exist
+ * 4. Strict Start-Cycle Authority: period containment [periodStart <= startDate <= periodEnd]
+ *    fails with DEPOSIT_BILLING_CYCLE_NOT_FOUND if exact matching period does not exist
  * 5. Single Payment Authority: settles through canonical recordCashPaymentInTx when declared PAID
  */
 export async function createDepositBillForAgreementInTx(
@@ -112,11 +75,10 @@ export async function createDepositBillForAgreementInTx(
     return existingBill;
   }
 
-  // 3. Strict Start-Cycle Authority
+  // 3. Strict Start-Cycle Authority: period containment is the sole authority
   const startD = new Date(input.startDate);
-  const cycleCode = toBangkokDateString(startD).slice(0, 7);
 
-  let cycle = await tx.billingCycle.findFirst({
+  const cycle = await tx.billingCycle.findFirst({
     where: {
       dormitoryId: input.dormitoryId,
       periodStart: { lte: startD },
@@ -125,23 +87,14 @@ export async function createDepositBillForAgreementInTx(
   });
 
   if (!cycle) {
-    cycle = await tx.billingCycle.findFirst({
-      where: {
-        dormitoryId: input.dormitoryId,
-        cycleCode,
-      },
-    });
-  }
-
-  if (!cycle) {
     const err = new Error('ไม่พบรอบบิลที่ตรงกับวันเริ่มสัญญา กรุณาสร้างรอบบิลก่อนยืนยันการเช่า');
     (err as any).code = 'DEPOSIT_BILLING_CYCLE_NOT_FOUND';
     (err as any).statusCode = 409;
     throw err;
   }
 
-  // 4. Generate transaction-safe Bill Number
-  const billNumber = await generateNextBillNumberInTx(tx, input.dormitoryId, cycle.cycleCode || cycleCode);
+  // 4. Generate transaction-safe Bill Number via shared neutral authority
+  const billNumber = await generateNextBillNumberInTx(tx, input.dormitoryId, cycle.cycleCode);
 
   // 5. Status and settlement dates
   const isPaid = (input.depositDeclaredStatus || '').toUpperCase() === 'PAID';

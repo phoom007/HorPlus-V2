@@ -29,7 +29,7 @@ export interface CreateProvisionalRentalTermDto {
   unitRentAmount: string | number;
   totalRentAmount?: string | number;
   depositAmount?: string | number | null;
-  depositDeclaredStatus?: 'PAID' | 'UNPAID' | string | null;
+  depositDeclaredStatus?: 'PAID' | 'UNPAID' | null;
   termInstallmentCount?: number;
 }
 

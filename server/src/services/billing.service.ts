@@ -1,3 +1,4 @@
+import { generateNextBillNumberInTx } from '../utils/bill-number.util.js';
 import {
   IBillRepository,
   BillEntity,

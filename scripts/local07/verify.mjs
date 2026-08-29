@@ -656,6 +656,16 @@ export async function runVerification() {
       `Aug: ${p202Aug?.agreementDepositPaymentStatus}, Sept: ${p202Sept?.agreementDepositPaymentStatus}, Oct: ${p202Oct?.agreementDepositPaymentStatus}`
     );
 
+    // Matrix Scenario F3: ONE-TIME DEPOSIT CHARGE IN START CYCLE (August Room 202)
+    const r202AugDepCompCount = p202Aug?.chargeComponents?.filter(c => c.type === 'deposit')?.length || 0;
+    const r202SeptDepCompCount = p202Sept?.chargeComponents?.filter(c => c.type === 'deposit')?.length || 0;
+    const r202OctDepCompCount = p202Oct?.chargeComponents?.filter(c => c.type === 'deposit')?.length || 0;
+    assert(
+      r202AugDepCompCount === 1 && r202SeptDepCompCount === 0 && r202OctDepCompCount === 0,
+      'Matrix F3: ONE-TIME DEPOSIT CHARGE -> Room 202 has exactly 1 deposit charge in start cycle (Aug) and 0 in subsequent cycles (Sept, Oct)',
+      `Aug: ${r202AugDepCompCount}, Sept: ${r202SeptDepCompCount}, Oct: ${r202OctDepCompCount}`
+    );
+
     // Matrix Scenario G: DEPOSIT NOT_ISSUED (August 2026 Room 303)
     assert(
       p303Aug?.agreementDepositPaymentStatus === 'NOT_ISSUED',

@@ -1,3 +1,4 @@
+import { acquireRoomAvailabilityLock } from '../utils/occupancy-interval.util.js';
 import { createDepositBillForAgreementInTx } from '../utils/deposit-billing.util.js';
 import { getPrismaClient } from '../db/prisma.js';
 import { logger } from '../config/logger.js';
@@ -412,9 +413,12 @@ export class TenantRegistrationService {
         throw err;
       }
 
-      // 2. Validate requestedRoomId and acquire database-authoritative row lock (FOR UPDATE)
+      // 2. Acquire shared room advisory availability lock, row lock, and validate maintenance status
       let room: any = null;
       if (req.requestedRoomId) {
+        // 2.1 Shared room advisory availability lock (matching RoomService, Contract, Provisional, Daily)
+        await acquireRoomAvailabilityLock(tx, dormitoryId, req.requestedRoomId);
+
         const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(req.requestedRoomId);
         if (isUuid) {
           try {
@@ -428,6 +432,15 @@ export class TenantRegistrationService {
           (err as any).statusCode = 400;
           (err as any).code = 'ROOM_DORM_MISMATCH';
           (err as any).message = 'ห้องพักที่ระบุไม่อยู่ในหอพักนี้';
+          throw err;
+        }
+
+        // 2.2 Maintenance must strictly block approval with zero side effects
+        if (room.status === 'maintenance') {
+          const err = new Error('ไม่สามารถอนุมัติผู้เช่าได้ เนื่องจากห้องนี้อยู่ระหว่างปิดปรับปรุง');
+          (err as any).code = 'ROOM_UNDER_MAINTENANCE';
+          (err as any).statusCode = 409;
+          (err as any).message = 'ไม่สามารถอนุมัติผู้เช่าได้ เนื่องจากห้องนี้อยู่ระหว่างปิดปรับปรุง';
           throw err;
         }
 
