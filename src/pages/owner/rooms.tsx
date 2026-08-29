@@ -186,10 +186,21 @@ export function resolveRoomTenantAction(
     return { kind: 'QUICK_ADD_CURRENT' };
   }
 
-  // If today is occupied or maintenance while selected cycle has no agreement:
+  // If today is occupied, maintenance, or reserved while selected cycle has no agreement:
+  let reason = 'ปัจจุบันมีผู้เช่า';
+  if (room.status === 'maintenance') {
+    reason = 'ปิดปรับปรุง';
+  } else if (room.status === 'reserved') {
+    reason = 'มีการจองล่วงหน้า';
+  } else if (room.status === 'occupied' || room.currentTenantId) {
+    reason = 'ปัจจุบันมีผู้เช่า';
+  } else if (!room.monthlyRent && !room.termRent && !room.dailyRent) {
+    reason = 'ข้อมูลค่าเช่าของห้องไม่ครบ';
+  }
+
   return {
     kind: 'DISABLED',
-    reason: room.status === 'maintenance' ? 'ห้องพักปิดปรับปรุงปัจจุบัน' : 'ห้องพักมีผู้เช่าปัจจุบันแล้ว',
+    reason,
   };
 }
 

@@ -1,284 +1,605 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
-
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
-  FileCheck2,
-  Check,
-  X,
-  Printer,
-  Calendar,
-  DollarSign,
-  AlertCircle,
-  Eye,
-  CreditCard,
-  Building,
-  Search,
-  User,
-  ChevronLeft,
-  FileText,
   CheckCircle,
   Clock,
+  AlertCircle,
   XCircle,
-  Send,
+  Search,
   CheckCircle2,
+  User,
+  Eye,
+  Printer,
   RotateCw,
-  Users,
-  BellRing,
-  MessageSquare,
-  LayoutGrid,
-  List,
-  ChevronDown,
-  ChevronUp
+  X,
+  Check,
+  Calendar,
+  DollarSign,
+  Building,
 } from 'lucide-react';
-import {
-  StatusBadge,
-  formatBaht,
-  formatBahtDash,
-  formatThaiDate,
-  Modal,
-  PrintView
-} from '../../components/GlobalComponents';
-import { Bill, Tenant, Room, Receipt, formatItemDescription, BillItem } from '../../types';
-import { generateMockSlipImage, getDormitory, getDormitoryRatesForCycle } from '../../data/mockData';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Modal, formatBaht, formatThaiDate, PrintView } from '../../components/GlobalComponents';
 import { LineNotificationModal, LineIcon } from '../../components/LineNotificationModal';
-import { calculateBillLateFee, getBillEffectiveItems, getEffectiveBillTotal, getBillOverdueDays } from '../../utils/lateFeeUtils';
+import { Bill, Tenant, Room } from '../../types';
+import { queryKeys } from '../../lib/queryClient';
+import { httpRequest } from '../../data/httpClient';
 
-interface OwnerPaymentsProps {
-  bills: Bill[];
-  tenants: Tenant[];
-  rooms: Room[];
-  onSaveBills: (bills: Bill[]) => void;
-  onAddLog: (action: string, details: string, type: string, id: string) => void;
-  selectedCycle: string;
+export interface BillingCycle {
+  id: string;
+  dormitoryId?: string;
+  cycleCode: string;
+  periodStart?: string | Date;
+  periodEnd?: string | Date;
+  dueDate?: string | Date;
+  status?: string;
 }
 
-export const OwnerPayments: React.FC<OwnerPaymentsProps> = ({
-  bills,
-  tenants,
-  rooms,
-  onSaveBills,
-  onAddLog,
-  selectedCycle
+/* =========================================================================
+ * Production Payment Record Type Definitions
+ * ========================================================================= */
+export interface PaymentRecord {
+  id: string;
+  dormitoryId: string;
+  billId: string;
+  tenantId?: string | null;
+  method: 'promptpay' | 'bank_transfer' | 'cash' | 'BANK_TRANSFER' | 'CASH' | 'PROMPTPAY';
+  amount: number | string;
+  status: 'PENDING' | 'UNDER_REVIEW' | 'APPROVED' | 'REJECTED' | 'REVERSED' | 'pending' | 'verified' | 'rejected' | 'voided';
+  paymentDate: string;
+  evidenceUrl?: string | null;
+  fileHash?: string | null;
+  rejectedReason?: string | null;
+  reversalReason?: string | null;
+  reviewedAt?: string | null;
+  createdAt: string;
+  updatedAt?: string;
+  bill?: {
+    id: string;
+    billNumber: string;
+    billingCycleId?: string | null;
+    totalAmount: number | string;
+    paidAmount?: number | string;
+    outstandingAmount?: number | string;
+    status: string;
+    billKind?: string;
+    dueDate?: string | null;
+    roomId?: string | null;
+    tenantId?: string | null;
+    room?: { id: string; roomNumber: string } | null;
+    tenant?: { id: string; name?: string; displayName?: string; firstName?: string; lastName?: string } | null;
+    items?: Array<{ id: string; description: string; amount: number | string; category?: string; type?: string }>;
+  } | null;
+  receipt?: {
+    id: string;
+    receiptNumber: string;
+    totalAmount: number | string;
+    paidAt?: string | null;
+    issuedAt?: string | null;
+    paymentMethod?: string | null;
+    receiverName?: string | null;
+    isVoided?: boolean;
+    snapshotData?: any;
+  } | null;
+  statusHistories?: Array<{
+    id: string;
+    fromStatus: string;
+    toStatus: string;
+    reason?: string | null;
+    effectiveAt: string;
+  }>;
+}
+
+export interface DailyStayInvoiceItem {
+  id: string;
+  dailyStayInvoiceId: string;
+  itemType: 'ROOM_CHARGE' | 'DEPOSIT' | 'DAMAGE_FEE' | 'EXTRA_SERVICE';
+  description: string;
+  amount: number | string;
+  isPaid: boolean;
+  paidAt?: string | null;
+}
+
+export interface DailyStayInvoice {
+  id: string;
+  dormitoryId: string;
+  roomId: string;
+  guestName: string;
+  guestPhone?: string;
+  checkInDate: string;
+  checkOutDate: string;
+  status: 'UNPAID' | 'PARTIALLY_PAID' | 'PAID' | 'REFUNDED' | 'CANCELLED';
+  totalAmount: number | string;
+  paidAmount: number | string;
+  outstandingAmount: number | string;
+  depositStatus: 'NO_DEPOSIT' | 'HELD' | 'REFUNDED' | 'FORFEITED';
+  items: DailyStayInvoiceItem[];
+  room?: { id: string; roomNumber: string };
+  createdAt: string;
+}
+
+export interface PaymentsOwnerViewProps {
+  bills?: Bill[];
+  dormitoryId?: string;
+  rooms?: Room[];
+  tenants?: Tenant[];
+  selectedBillingCycleId?: string;
+  selectedCycleCode?: string;
+  billingCycles?: BillingCycle[];
+  onAddLog?: (action: string, details: string, type: string, id: string) => void;
+  onUpdateBills?: () => void;
+}
+
+/* =========================================================================
+ * Helper Functions
+ * ========================================================================= */
+export function formatCycleThaiShort(cycleStr?: string): string {
+  if (!cycleStr) return '';
+  const parts = cycleStr.split('-');
+  if (parts.length === 2) {
+    const yearCE = parseInt(parts[0], 10);
+    const yearBE = yearCE + 543;
+    const shortBE = yearBE.toString().slice(-2);
+    const monthIdx = parseInt(parts[1], 10) - 1;
+    const months = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'];
+    if (monthIdx >= 0 && monthIdx < 12) {
+      return `${months[monthIdx]} ${shortBE}`;
+    }
+  }
+  return cycleStr;
+}
+
+export function formatItemDescription(desc?: string): string {
+  if (!desc) return '';
+  return desc.replace(/ค่าไฟฟ้า\s*\([^)]*\)/, 'ค่าไฟฟ้า').replace(/ค่าน้ำ\s*\([^)]*\)/, 'ค่าน้ำประปา');
+}
+
+export function formatBahtDash(amount: number | string | undefined): string {
+  if (amount === undefined || amount === null) return '฿0';
+  const val = Number(amount);
+  if (isNaN(val) || val === 0) return '-';
+  return formatBaht(val);
+}
+
+export function getBillOverdueDays(dueDateStr?: string | null): number {
+  if (!dueDateStr) return 0;
+  const due = new Date(dueDateStr);
+  const now = new Date();
+  if (isNaN(due.getTime()) || due >= now) return 0;
+  const diffTime = Math.abs(now.getTime() - due.getTime());
+  return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+}
+
+/* =========================================================================
+ * API Fetchers
+ * ========================================================================= */
+export async function fetchPayments(dormitoryId?: string): Promise<PaymentRecord[]> {
+  if (!dormitoryId) return [];
+  try {
+    const res = await httpRequest<PaymentRecord[] | { data: PaymentRecord[] } | { items: PaymentRecord[] }>(
+      'GET',
+      `/payments?dormitoryId=${dormitoryId}`,
+      undefined,
+      { headers: { 'x-dormitory-id': dormitoryId } }
+    );
+    if (Array.isArray(res)) return res;
+    if (res && Array.isArray((res as any).data)) return (res as any).data;
+    if (res && Array.isArray((res as any).items)) return (res as any).items;
+    return [];
+  } catch (err) {
+    console.error('Failed to fetch payments:', err);
+    return [];
+  }
+}
+
+export async function fetchDailyInvoices(dormitoryId?: string): Promise<DailyStayInvoice[]> {
+  if (!dormitoryId) return [];
+  try {
+    const res = await httpRequest<{ data: DailyStayInvoice[] } | DailyStayInvoice[]>(
+      'GET',
+      `/daily-stays/invoices?dormitoryId=${dormitoryId}`,
+      undefined,
+      { headers: { 'x-dormitory-id': dormitoryId } }
+    );
+    if (Array.isArray(res)) return res;
+    if (res && Array.isArray((res as any).data)) return (res as any).data;
+    return [];
+  } catch (err) {
+    console.error('Failed to fetch daily stay invoices:', err);
+    return [];
+  }
+}
+
+/* =========================================================================
+ * Main Component: PaymentsOwnerView
+ * ========================================================================= */
+export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
+  bills = [],
+  dormitoryId,
+  rooms = [],
+  tenants = [],
+  selectedBillingCycleId,
+  selectedCycleCode,
+  billingCycles = [],
+  onAddLog = (_a?: string, _b?: string, _c?: string, _d?: string) => {},
+  onUpdateBills = () => {},
 }) => {
-  const [activeTab, setActiveTab] = useState<'paid' | 'checking' | 'cash' | 'rejected'>(() => {
-    const saved = localStorage.getItem('payments_active_tab');
-    if (saved === 'cash' || saved === 'checking' || saved === 'paid' || saved === 'rejected') {
-      return saved;
-    }
-    return 'cash';
-  });
+  const queryClient = useQueryClient();
 
-  useEffect(() => {
-    const saved = localStorage.getItem('payments_active_tab');
-    if (saved === 'cash' || saved === 'checking' || saved === 'paid' || saved === 'rejected') {
-      setActiveTab(saved as any);
-    }
-  }, []);
-
-  useEffect(() => {
-    localStorage.setItem('payments_active_tab', activeTab);
-  }, [activeTab]);
-
-  const [displayMode, setDisplayMode] = useState<'grid' | 'table'>('grid');
+  // Active Tab: 'paid' | 'checking' | 'cash' | 'rejected'
+  const [activeTab, setActiveTab] = useState<'paid' | 'checking' | 'cash' | 'rejected'>('checking');
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedBill, setSelectedBill] = useState<Bill | null>(null);
-  const currentDorm = getDormitory();
 
-  const getBillTotalAmount = (b: Bill): number => {
-    return getEffectiveBillTotal(b, currentDorm);
-  };
+  // Selected item states
+  const [cashSearchQuery, setCashSearchQuery] = useState('');
 
-  // Rejection state
+  // Rejection modal state
   const [isRejectOpen, setIsRejectOpen] = useState(false);
+  const [rejectPaymentTarget, setRejectPaymentTarget] = useState<PaymentRecord | null>(null);
   const [rejectReason, setRejectReason] = useState('ยอดเงินโอนไม่ตรงกับยอดแจ้งหนี้');
   const [rejectNote, setRejectNote] = useState('');
 
-  // Cash state
-  const [isCashOpen, setIsCashOpen] = useState(false);
-  const [cashBillId, setCashBillId] = useState('');
+  // Manual Cash modal state
+  const [isCashModalOpen, setIsCashModalOpen] = useState(false);
+  const [cashTargetBillId, setCashTargetBillId] = useState('');
   const [cashReceivedDate, setCashReceivedDate] = useState(new Date().toISOString().split('T')[0]);
-  const [cashReceivedBy, setCashReceivedBy] = useState('ดวงใจ นวลแก้ว');
+  const [cashReceivedBy, setCashReceivedBy] = useState('เจ้าหน้าที่การเงิน');
+  const [isSubmittingCash, setIsSubmittingCash] = useState(false);
 
-  // New Cash tab state
-  const [selectedCashBill, setSelectedCashBill] = useState<Bill | null>(null);
-  const [cashSearchQuery, setCashSearchQuery] = useState('');
-
-  // Synchronized ref for latest bills to support concurrent async updates
-  const billsRef = useRef<Bill[]>(bills);
-  useEffect(() => {
-    billsRef.current = bills;
-  }, [bills]);
-
-  // Pending cash payment countdown state (Map of billId -> remaining seconds, supports multiple rooms simultaneously)
+  // Countdown timers for Cash and Slip Approval
   const [pendingCashMap, setPendingCashMap] = useState<Record<string, number>>({});
   const cashTimersRef = useRef<Record<string, NodeJS.Timeout>>({});
-
-  // Pending approve slip countdown state (Map of billId -> remaining seconds, supports multiple rooms simultaneously)
   const [pendingApproveMap, setPendingApproveMap] = useState<Record<string, number>>({});
   const approveTimersRef = useRef<Record<string, NodeJS.Timeout>>({});
 
-  // Clean up all timers on unmount
+  // Receipt Modal State
+  const [isReceiptOpen, setIsReceiptOpen] = useState(false);
+  const [viewingReceipt, setViewingReceipt] = useState<{
+    receiptNumber: string;
+    billNumber?: string;
+    roomNumber: string;
+    tenantName: string;
+    totalAmount: number;
+    paidAt?: string;
+    paymentMethod: string;
+    receiverName?: string;
+    items?: Array<{ description: string; amount: number }>;
+  } | null>(null);
+
+  // Toast notification state
+  const [successToast, setSuccessToast] = useState<string | null>(null);
+  const [isToastFading, setIsToastFading] = useState(false);
+
+  // Full Slip Image Viewer
+  const [viewingSlipUrl, setViewingSlipUrl] = useState<string | null>(null);
+
+  // LINE notification modal
+  const [isLineModalOpen, setIsLineModalOpen] = useState(false);
+  const [targetScrollTenantId, setTargetScrollTenantId] = useState<string | null>(null);
+
+  // Clean up timers on unmount
   useEffect(() => {
     return () => {
-      Object.keys(cashTimersRef.current).forEach(id => {
-        clearInterval(cashTimersRef.current[id]);
-      });
-      Object.keys(approveTimersRef.current).forEach(id => {
-        clearInterval(approveTimersRef.current[id]);
-      });
+      Object.keys(cashTimersRef.current).forEach(id => clearInterval(cashTimersRef.current[id]));
+      Object.keys(approveTimersRef.current).forEach(id => clearInterval(approveTimersRef.current[id]));
     };
   }, []);
 
-  // Target tenant ID to scroll to when opening LINE modal
-  const [targetScrollTenantId, setTargetScrollTenantId] = useState<string | null>(null);
-
-  // Receipt modal state
-  const [isReceiptOpen, setIsReceiptOpen] = useState(false);
-  const [viewingReceipt, setViewingReceipt] = useState<Receipt | null>(null);
-
-  // Cash success toast notification state
-  const [cashSuccessToast, setCashSuccessToast] = useState<string | null>(null);
-  const [isToastFading, setIsToastFading] = useState(false);
-
-  useEffect(() => {
-    if (cashSuccessToast) {
-      setIsToastFading(false);
-      const fadeTimer = setTimeout(() => {
-        setIsToastFading(true);
-      }, 2900);
-      const removeTimer = setTimeout(() => {
-        setCashSuccessToast(null);
-        setIsToastFading(false);
-      }, 3500);
-
-      return () => {
-        clearTimeout(fadeTimer);
-        clearTimeout(removeTimer);
-      };
-    }
-  }, [cashSuccessToast]);
-
-  // Big slip viewer modal
-  const [viewingSlipImage, setViewingSlipImage] = useState<string | null>(null);
-
-  /* =========================================================================
-   * SaaS LINE / Messaging API Notification State & Logic (For AI & Devs)
-   * =========================================================================
-   * lineNotifyMap tracks LINE notification history per tenant per cycle:
-   * Key: `${cycleId}_${tenantId}`
-   * Value: { status: 'sent' | 'resent', sentAt: string }
-   * ========================================================================= */
-  const [isLineModalOpen, setIsLineModalOpen] = useState(false);
-  const [lineSearchQuery, setLineSearchQuery] = useState('');
-  const [lineFilterTab, setLineFilterTab] = useState<'all' | 'unsent' | 'sent' | 'unpaid'>('unsent');
-  const [selectedTenantIdsForLine, setSelectedTenantIdsForLine] = useState<string[]>([]);
-  const [isSendingLine, setIsSendingLine] = useState(false);
-  const [lineToastSuccess, setLineToastSuccess] = useState<string | null>(null);
-  const [expandedBillIds, setExpandedBillIds] = useState<string[]>([]);
-  const hasInitializedLineSelection = useRef(false);
-
-  const toggleBillExpand = (billId: string) => {
-    setExpandedBillIds(prev =>
-      prev.includes(billId) ? prev.filter(id => id !== billId) : [...prev, billId]
-    );
-  };
-
-  // Auto scroll to target room card when opening LINE modal
-  useEffect(() => {
-    if (isLineModalOpen && targetScrollTenantId) {
-      const timer = setTimeout(() => {
-        const el = document.getElementById(`line-tenant-${targetScrollTenantId}`);
-        if (el) {
-          el.scrollIntoView({ behavior: 'auto', block: 'center' });
-        }
-      }, 50);
-      return () => clearTimeout(timer);
-    }
-  }, [isLineModalOpen, targetScrollTenantId]);
-
-  // Persistent line notify statuses map
-  const [lineNotifyMap, setLineNotifyMap] = useState<{ [key: string]: { status: 'sent' | 'resent'; sentAt: string } }>(() => {
-    try {
-      const saved = localStorage.getItem('HorPlus_line_notify_map');
-      if (saved) return JSON.parse(saved);
-    } catch { }
-    return {
-      [`2026-07_tenant-1`]: { status: 'sent', sentAt: '14 ก.ค. 2569 - 10:30 น.' },
-      [`2026-07_tenant-2`]: { status: 'sent', sentAt: '14 ก.ค. 2569 - 10:32 น.' },
-    };
-  });
-
-  useEffect(() => {
-    localStorage.setItem('HorPlus_line_notify_map', JSON.stringify(lineNotifyMap));
-  }, [lineNotifyMap]);
-
-  const getWaterUnits = (bill: Bill) => {
-    const item = bill.items.find(i => i.category === 'water');
-    if (!item) return 0;
-    const match = item.description.match(/(\d+)\s*หน่วย/);
-    return match ? parseInt(match[1]) : 12; // default 12
-  };
-
-  const getElecUnits = (bill: Bill) => {
-    const item = bill.items.find(i => i.category === 'electricity');
-    if (!item) return 0;
-    const match = item.description.match(/(\d+)\s*หน่วย/);
-    return match ? parseInt(match[1]) : 85; // default 85
-  };
-
-  const handleConfirmCashPayment = (bill: Bill, overdueAmount: number) => {
-    const currentBills = billsRef.current;
-    const effectiveItems = getBillEffectiveItems(bill, currentDorm);
-    const billTotal = getEffectiveBillTotal(bill, currentDorm);
-
-    // 1. Mark this bill as paid with effective items and total amount
-    const updated = currentBills.map(b => b.id === bill.id ? {
-      ...b,
-      items: effectiveItems,
-      totalAmount: billTotal,
-      status: 'paid' as const,
-      paymentMethod: 'cash' as const,
-      paidAt: new Date().toISOString()
-    } : b);
-
-    // 2. Clear other overdue bills for the same tenant too
-    const clearedOverdue = updated.map(b => (b.tenantId === bill.tenantId && b.status === 'overdue') ? {
-      ...b,
-      items: getBillEffectiveItems(b, currentDorm),
-      totalAmount: getEffectiveBillTotal(b, currentDorm),
-      status: 'paid' as const,
-      paymentMethod: 'cash' as const,
-      paidAt: new Date().toISOString()
-    } : b);
-
-    billsRef.current = clearedOverdue;
-    onSaveBills(clearedOverdue);
-    onAddLog('รับชำระด้วยเงินสด', `รับชำระเงินสดจำนวน ${formatBaht(billTotal + overdueAmount)} จากห้อง ${getRoomNum(bill.roomId)} ณ เคาน์เตอร์ (หักล้างยอดค้างสะสมเรียบร้อย)`, 'Bill', bill.id);
-
-    // Instead of opening receipt modal, show toast + fade notification
-    const roomNum = getRoomNum(bill.roomId);
-    const amountStr = formatBaht(billTotal + overdueAmount);
-    setCashSuccessToast(`บันทึกการรับเงินสด ห้อง ${roomNum} (${amountStr}) เรียบร้อยแล้ว`);
-    setSelectedCashBill(prev => (prev?.id === bill.id ? null : prev));
-
+  const triggerToast = (message: string) => {
+    setSuccessToast(message);
+    setIsToastFading(false);
+    setTimeout(() => setIsToastFading(true), 2900);
     setTimeout(() => {
-      setCashSuccessToast(null);
+      setSuccessToast(null);
+      setIsToastFading(false);
     }, 3500);
   };
 
-  const startCashPaymentWithCountdown = (bill: Bill, overdueAmount: number = 0) => {
-    // If a timer already exists for this bill, clear it before restarting
+  /* -------------------------------------------------------------------------
+   * React Queries
+   * ------------------------------------------------------------------------- */
+  const { data: paymentsData = [] } = useQuery({
+    queryKey: queryKeys.payments(dormitoryId),
+    queryFn: () => fetchPayments(dormitoryId),
+    enabled: !!dormitoryId,
+    staleTime: 5000,
+  });
+
+  // Effective billing cycle derivation
+  const effectiveCycleId = selectedBillingCycleId || billingCycles.find(c => c.cycleCode === selectedCycleCode)?.id;
+  const effectiveCycleCode = selectedCycleCode || billingCycles.find(c => c.id === effectiveCycleId)?.cycleCode || '';
+
+  // Helpers to resolve Room Number, Tenant Name, Cycle Code
+  const getRoomNum = (rId?: string | null): string => {
+    if (!rId) return 'ไม่ระบุ';
+    const room = rooms.find(r => r.id === rId || r.roomNumber === rId);
+    return room?.roomNumber || rId;
+  };
+
+  const getTenantName = (tId?: string | null): string => {
+    if (!tId) return 'ผู้เช่า';
+    const t = tenants.find(item => item.id === tId);
+    if (!t) return 'ผู้เช่า';
+    return t.displayName || t.name || `${t.firstName || ''} ${t.lastName || ''}`.trim() || 'ผู้เช่า';
+  };
+
+  const getCycleCodeForCycleId = (cId?: string | null): string => {
+    if (!cId) return effectiveCycleCode;
+    const cycle = billingCycles.find(c => c.id === cId);
+    return cycle?.cycleCode || cId;
+  };
+
+  /* -------------------------------------------------------------------------
+   * Tab Filter Projections
+   * ------------------------------------------------------------------------- */
+
+  // Tab 1: Checking (รอตรวจสอบ / รอตรวจสลิป) -> ALL BILLING CYCLES (No header cycle filter!)
+  const checkingPayments = useMemo(() => {
+    return paymentsData
+      .filter(p => {
+        const s = (p.status || '').toUpperCase();
+        return s === 'PENDING' || s === 'UNDER_REVIEW';
+      })
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }, [paymentsData]);
+
+  // Tab 2: Cash (บันทึกเงินสด / ยังไม่ชำระ) -> Strictly Selected Header Cycle ONLY
+  const cashPendingBills = useMemo(() => {
+    // Collect bill IDs that already have an active/submitted payment
+    const activePaymentBillIds = new Set(
+      paymentsData
+        .filter(p => {
+          const s = (p.status || '').toUpperCase();
+          return s === 'PENDING' || s === 'UNDER_REVIEW' || s === 'APPROVED';
+        })
+        .map(p => p.billId)
+    );
+
+    return bills
+      .filter(b => {
+        // Cycle filter
+        const matchCycle =
+          (b.billingCycleId && effectiveCycleId && b.billingCycleId === effectiveCycleId) ||
+          (b.cycleId && effectiveCycleCode && b.cycleId === effectiveCycleCode) ||
+          (!b.billingCycleId && !b.cycleId);
+
+        if (!matchCycle) return false;
+
+        // Unpaid or Overdue status
+        const isPaid = (b.status || '').toLowerCase() === 'paid';
+        if (isPaid) return false;
+
+        const outstanding = Number(b.outstandingAmount ?? b.totalAmount ?? 0);
+        if (outstanding <= 0) return false;
+
+        // Exclude bills that already have pending or approved payments
+        if (activePaymentBillIds.has(b.id)) return false;
+
+        return true;
+      })
+      .sort((a, b) => {
+        const roomA = getRoomNum(a.roomId);
+        const roomB = getRoomNum(b.roomId);
+        return roomA.localeCompare(roomB, undefined, { numeric: true, sensitivity: 'base' });
+      });
+  }, [bills, effectiveCycleId, effectiveCycleCode, paymentsData, rooms]);
+
+  // Tab 3: Paid (ชำระแล้ว) -> Strictly Selected Header Cycle ONLY (Grouped by Bill's billing cycle)
+  const paidPayments = useMemo(() => {
+    return paymentsData
+      .filter(p => {
+        const s = (p.status || '').toUpperCase();
+        const isApproved = s === 'APPROVED' || s === 'VERIFIED';
+        if (!isApproved) return false;
+
+        // Check if the associated bill belongs to the selected header cycle
+        const billCycleId = p.bill?.billingCycleId;
+        const matchCycle =
+          (billCycleId && effectiveCycleId && billCycleId === effectiveCycleId) ||
+          (!billCycleId && effectiveCycleId); // fallback
+
+        return matchCycle;
+      })
+      .sort((a, b) => new Date(b.paymentDate || b.createdAt).getTime() - new Date(a.paymentDate || a.createdAt).getTime());
+  }, [paymentsData, effectiveCycleId]);
+
+  // Tab 4: Rejected (สลิปผิดพลาด) -> Strictly Selected Header Cycle ONLY
+  const rejectedPayments = useMemo(() => {
+    return paymentsData
+      .filter(p => {
+        const s = (p.status || '').toUpperCase();
+        const isRejected = s === 'REJECTED';
+        if (!isRejected) return false;
+
+        const billCycleId = p.bill?.billingCycleId;
+        const matchCycle =
+          (billCycleId && effectiveCycleId && billCycleId === effectiveCycleId) ||
+          (!billCycleId && effectiveCycleId);
+
+        return matchCycle;
+      })
+      .sort((a, b) => new Date(b.reviewedAt || b.createdAt).getTime() - new Date(a.reviewedAt || a.createdAt).getTime());
+  }, [paymentsData, effectiveCycleId]);
+
+  // General search filter helpers
+  const filterPaymentsByQuery = (list: PaymentRecord[]) => {
+    if (!searchQuery?.trim()) return list;
+    const q = searchQuery.toLowerCase().trim();
+    return list.filter(p => {
+      const roomNum = getRoomNum(p.bill?.roomId || (p.bill as any)?.room?.roomNumber).toLowerCase();
+      const tenantName = (
+        p.bill?.tenant?.displayName ||
+        p.bill?.tenant?.name ||
+        getTenantName(p.tenantId || p.bill?.tenantId)
+      ).toLowerCase();
+      const billNum = (p.bill?.billNumber || '').toLowerCase();
+      return roomNum.includes(q) || tenantName.includes(q) || billNum.includes(q);
+    });
+  };
+
+  const filterBillsByQuery = (list: Bill[]) => {
+    const q = (cashSearchQuery || searchQuery || '').toLowerCase().trim();
+    if (!q) return list;
+    return list.filter(b => {
+      const roomNum = getRoomNum(b.roomId).toLowerCase();
+      const tenantName = getTenantName(b.tenantId).toLowerCase();
+      const billNum = (b.billNumber || '').toLowerCase();
+      return roomNum.includes(q) || tenantName.includes(q) || billNum.includes(q);
+    });
+  };
+
+  /* -------------------------------------------------------------------------
+   * Server Mutation Handlers
+   * ------------------------------------------------------------------------- */
+
+  // Invalidate all related query keys
+  const invalidateFinancialCaches = () => {
+    if (!dormitoryId) return;
+    queryClient.invalidateQueries({ queryKey: queryKeys.payments(dormitoryId) });
+    queryClient.invalidateQueries({ queryKey: queryKeys.bills(dormitoryId) });
+    queryClient.invalidateQueries({ queryKey: queryKeys.dailyInvoices(dormitoryId) });
+    queryClient.invalidateQueries({ queryKey: ['meterPreviewContext'] });
+    queryClient.invalidateQueries({ queryKey: queryKeys.rooms(dormitoryId) });
+    onUpdateBills();
+  };
+
+  // 1. Approve Slip Payment
+  const handleConfirmApprovePayment = async (payment: PaymentRecord) => {
+    if (!dormitoryId) return;
+    const roomNum = getRoomNum(payment.bill?.roomId || payment.bill?.room?.id);
+    try {
+      await httpRequest(
+        'POST',
+        `/payments/${payment.id}/approve`,
+        {},
+        {
+          headers: {
+            'x-dormitory-id': dormitoryId,
+            'x-idempotency-key': `approve-${payment.id}-${Date.now()}`
+          }
+        }
+      );
+
+      invalidateFinancialCaches();
+      onAddLog('อนุมัติสลิปโอนเงิน', `ยืนยันความถูกต้องสลิปและปรับปรุงสถานะห้อง ${roomNum} ชำระแล้ว`, 'Payment', payment.id);
+      triggerToast(`อนุมัติสลิปโอนเงิน ห้อง ${roomNum} เรียบร้อยแล้ว`);
+    } catch (err: any) {
+      console.error('Failed to approve payment:', err);
+      triggerToast(`เกิดข้อผิดพลาดในการอนุมัติสลิป: ${err.message || 'กรุณาลองใหม่อีกครั้ง'}`);
+    }
+  };
+
+  const startApproveWithCountdown = (payment: PaymentRecord) => {
+    if (approveTimersRef.current[payment.id]) {
+      clearInterval(approveTimersRef.current[payment.id]);
+      delete approveTimersRef.current[payment.id];
+    }
+
+    setPendingApproveMap(prev => ({ ...prev, [payment.id]: 5 }));
+    let currentCount = 5;
+
+    const timer = setInterval(() => {
+      currentCount -= 1;
+      if (currentCount <= 0) {
+        if (approveTimersRef.current[payment.id]) {
+          clearInterval(approveTimersRef.current[payment.id]);
+          delete approveTimersRef.current[payment.id];
+        }
+        setPendingApproveMap(prev => {
+          const next = { ...prev };
+          delete next[payment.id];
+          return next;
+        });
+        handleConfirmApprovePayment(payment);
+      } else {
+        setPendingApproveMap(prev => ({ ...prev, [payment.id]: currentCount }));
+      }
+    }, 1000);
+
+    approveTimersRef.current[payment.id] = timer;
+  };
+
+  const cancelPendingApprove = (paymentId: string) => {
+    if (approveTimersRef.current[paymentId]) {
+      clearInterval(approveTimersRef.current[paymentId]);
+      delete approveTimersRef.current[paymentId];
+    }
+    setPendingApproveMap(prev => {
+      const next = { ...prev };
+      delete next[paymentId];
+      return next;
+    });
+  };
+
+  // 2. Reject Slip Payment
+  const handleRejectPayment = async () => {
+    if (!dormitoryId || !rejectPaymentTarget) return;
+    const reasonText = rejectReason === 'อื่นๆ' ? rejectNote : rejectReason;
+    const roomNum = getRoomNum(rejectPaymentTarget.bill?.roomId || rejectPaymentTarget.bill?.room?.id);
+
+    try {
+      await httpRequest(
+        'POST',
+        `/payments/${rejectPaymentTarget.id}/reject`,
+        { reason: reasonText },
+        {
+          headers: {
+            'x-dormitory-id': dormitoryId,
+            'x-idempotency-key': `reject-${rejectPaymentTarget.id}-${Date.now()}`
+          }
+        }
+      );
+
+      invalidateFinancialCaches();
+      onAddLog('ปฏิเสธสลิปโอนเงิน', `ปฏิเสธสลิปเนื่องจาก: ${reasonText} ห้อง ${roomNum}`, 'Payment', rejectPaymentTarget.id);
+      setIsRejectOpen(false);
+      setRejectPaymentTarget(null);
+      triggerToast(`ปฏิเสธสลิปโอนเงิน ห้อง ${roomNum} เรียบร้อยแล้ว`);
+    } catch (err: any) {
+      console.error('Failed to reject payment:', err);
+      triggerToast(`เกิดข้อผิดพลาดในการปฏิเสธสลิป: ${err.message || 'กรุณาลองใหม่อีกครั้ง'}`);
+    }
+  };
+
+  // 3. Record Cash Payment (Single Bill Settlement Only)
+  const handleConfirmCashPayment = async (bill: Bill) => {
+    if (!dormitoryId) return;
+    const roomNum = getRoomNum(bill.roomId);
+    const amount = Number(bill.outstandingAmount ?? bill.totalAmount ?? 0);
+    const amountStr = formatBaht(amount);
+
+    try {
+      await httpRequest(
+        'POST',
+        '/payments/cash',
+        {
+          billId: bill.id,
+          amount: String(amount),
+        },
+        {
+          headers: {
+            'x-dormitory-id': dormitoryId,
+            'x-idempotency-key': `cash-${bill.id}-${Date.now()}`
+          }
+        }
+      );
+
+      invalidateFinancialCaches();
+      onAddLog('รับชำระด้วยเงินสด', `รับชำระเงินสดจำนวน ${amountStr} จากห้อง ${roomNum} ณ เคาน์เตอร์`, 'Bill', bill.id);
+      triggerToast(`บันทึกการรับเงินสด ห้อง ${roomNum} (${amountStr}) เรียบร้อยแล้ว`);
+    } catch (err: any) {
+      console.error('Failed to record cash payment:', err);
+      triggerToast(`เกิดข้อผิดพลาดในการบันทึกเงินสด: ${err.message || 'กรุณาลองใหม่อีกครั้ง'}`);
+    }
+  };
+
+  const startCashPaymentWithCountdown = (bill: Bill) => {
     if (cashTimersRef.current[bill.id]) {
       clearInterval(cashTimersRef.current[bill.id]);
       delete cashTimersRef.current[bill.id];
     }
 
     setPendingCashMap(prev => ({ ...prev, [bill.id]: 5 }));
-
     let currentCount = 5;
+
     const timer = setInterval(() => {
       currentCount -= 1;
       if (currentCount <= 0) {
@@ -291,7 +612,7 @@ export const OwnerPayments: React.FC<OwnerPaymentsProps> = ({
           delete next[bill.id];
           return next;
         });
-        handleConfirmCashPayment(bill, overdueAmount);
+        handleConfirmCashPayment(bill);
       } else {
         setPendingCashMap(prev => ({ ...prev, [bill.id]: currentCount }));
       }
@@ -312,360 +633,93 @@ export const OwnerPayments: React.FC<OwnerPaymentsProps> = ({
     });
   };
 
-  const startApproveWithCountdown = (bill: Bill) => {
-    if (approveTimersRef.current[bill.id]) {
-      clearInterval(approveTimersRef.current[bill.id]);
-      delete approveTimersRef.current[bill.id];
-    }
-
-    setPendingApproveMap(prev => ({ ...prev, [bill.id]: 5 }));
-
-    let currentCount = 5;
-    const timer = setInterval(() => {
-      currentCount -= 1;
-      if (currentCount <= 0) {
-        if (approveTimersRef.current[bill.id]) {
-          clearInterval(approveTimersRef.current[bill.id]);
-          delete approveTimersRef.current[bill.id];
-        }
-        setPendingApproveMap(prev => {
-          const next = { ...prev };
-          delete next[bill.id];
-          return next;
-        });
-        handleApproveSlip(bill);
-      } else {
-        setPendingApproveMap(prev => ({ ...prev, [bill.id]: currentCount }));
-      }
-    }, 1000);
-
-    approveTimersRef.current[bill.id] = timer;
-  };
-
-  const cancelPendingApprove = (billId: string) => {
-    if (approveTimersRef.current[billId]) {
-      clearInterval(approveTimersRef.current[billId]);
-      delete approveTimersRef.current[billId];
-    }
-    setPendingApproveMap(prev => {
-      const next = { ...prev };
-      delete next[billId];
-      return next;
-    });
-  };
-
-  const handleOpenLineModalForTenant = (tenantId: string) => {
-    setSelectedTenantIdsForLine([tenantId]);
-    setTargetScrollTenantId(tenantId);
-    setLineFilterTab('all');
-    setIsLineModalOpen(true);
-  };
-
-  const formatCycleThaiShort = (cycleStr: string) => {
-    if (!cycleStr) return '';
-    const parts = cycleStr.split('-');
-    if (parts.length === 2) {
-      const yearCE = parseInt(parts[0], 10);
-      const yearBE = yearCE + 543;
-      const shortBE = yearBE.toString().slice(-2);
-      const monthIdx = parseInt(parts[1], 10) - 1;
-      const months = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'];
-      if (monthIdx >= 0 && monthIdx < 12) {
-        return `${months[monthIdx]} ${shortBE}`;
-      }
-    }
-    return cycleStr;
-  };
-
-  const getTenantName = (tId: string) => tenants.find(t => t.id === tId)?.name || 'ผู้เช่า';
-  const getRoomNum = (rId: string) => rooms.find(r => r.id === rId)?.roomNumber || 'ไม่ระบุ';
-
-  const filterByQuery = (billList: Bill[]) => {
-    if (!searchQuery?.trim()) return billList;
-    const q = (searchQuery || '').toLowerCase().trim();
-    return billList.filter(b => {
-      const roomNum = (getRoomNum(b.roomId) || '').toLowerCase();
-      const tenantName = (getTenantName(b.tenantId) || '').toLowerCase();
-      return roomNum.includes(q) || tenantName.includes(q);
-    });
-  };
-
-  // Filters based on tabs and selectedCycle (Sorted descending latest first)
-  const sortedCycleBills = [...bills]
-    .filter(b => b.cycleId === selectedCycle)
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-
-  const checkingBills = sortedCycleBills.filter(b => b.status === 'checking');
-  const paidBills = sortedCycleBills.filter(b => b.status === 'paid');
-  const rejectedBills = sortedCycleBills.filter(b => b.status === 'rejected');
-  const cashPendingBills = [...sortedCycleBills]
-    .filter(b => b.status === 'pending' || b.status === 'overdue' || b.status === 'rejected')
-    .sort((a, b) => {
-      const roomA = getRoomNum(a.roomId);
-      const roomB = getRoomNum(b.roomId);
-      return roomA.localeCompare(roomB, undefined, { numeric: true, sensitivity: 'base' });
-    });
-
-  const handleApproveSlip = (bill: Bill) => {
-    const currentBills = billsRef.current;
-    const effectiveItems = getBillEffectiveItems(bill, currentDorm);
-    const billTotal = getEffectiveBillTotal(bill, currentDorm);
-
-    const updated = currentBills.map(b => b.id === bill.id ? {
-      ...b,
-      items: effectiveItems,
-      totalAmount: billTotal,
-      status: 'paid' as const,
-      paymentMethod: 'promptpay' as const,
-      paidAt: new Date().toISOString()
-    } : b);
-
-    billsRef.current = updated;
-    onSaveBills(updated);
-    onAddLog('อนุมัติสลิปโอนเงิน', `ยืนยันตรวจความถูกต้องสลิปและปรับปรุงสถานะห้อง ${getRoomNum(bill.roomId)} ชำระแล้ว`, 'Bill', bill.id);
-    setSelectedBill(prev => (prev?.id === bill.id ? null : prev));
-
-    const roomNum = getRoomNum(bill.roomId);
-    setCashSuccessToast(`อนุมัติสลิปโอนเงิน ห้อง ${roomNum} เรียบร้อยแล้ว`);
-    setTimeout(() => {
-      setCashSuccessToast(null);
-    }, 3500);
-  };
-
-  const handleRejectSlip = () => {
-    if (!selectedBill) return;
-
-    const currentBills = billsRef.current;
-    const reasonText = rejectReason === 'อื่นๆ' ? rejectNote : rejectReason;
-
-    const updated = currentBills.map(b => b.id === selectedBill.id ? {
-      ...b,
-      status: 'rejected' as const,
-      rejectReason: reasonText
-    } : b);
-
-    billsRef.current = updated;
-    onSaveBills(updated);
-    onAddLog('ปฏิเสธสลิปโอนเงิน', `ปฏิเสธสลิปเนื่องจาก: ${reasonText} ห้อง ${getRoomNum(selectedBill.roomId)}`, 'Bill', selectedBill.id);
-    const roomNum = getRoomNum(selectedBill.roomId);
-    setIsRejectOpen(false);
-    setSelectedBill(null);
-
-    setCashSuccessToast(`ปฏิเสธสลิปโอนเงิน ห้อง ${roomNum} เรียบร้อยแล้ว`);
-    setTimeout(() => {
-      setCashSuccessToast(null);
-    }, 3500);
-  };
-
-  const handleRecordCash = (e: React.FormEvent) => {
+  // 4. Manual Cash Modal Submit
+  const handleModalCashSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!cashBillId) return;
+    if (!dormitoryId || !cashTargetBillId) return;
 
-    const targetBill = bills.find(b => b.id === cashBillId);
+    const targetBill = bills.find(b => b.id === cashTargetBillId);
     if (!targetBill) return;
 
-    const updated = bills.map(b => b.id === cashBillId ? {
-      ...b,
-      status: 'paid' as const,
-      paymentMethod: 'cash' as const,
-      paidAt: new Date(cashReceivedDate).toISOString()
-    } : b);
-
-    onSaveBills(updated);
-    onAddLog('รับชำระด้วยเงินสด', `นิติหอรับชำระเงินสดจำนวน ${formatBaht(targetBill.totalAmount)} จากห้อง ${getRoomNum(targetBill.roomId)}`, 'Bill', cashBillId);
-
-    // Generate simulated Receipt object for view
-    const newReceipt: Receipt = {
-      id: `rcpt-${Date.now()}`,
-      receiptNumber: `RCPT-${selectedCycle.replace('-', '')}-${getRoomNum(targetBill.roomId)}`,
-      billId: targetBill.id,
-      paymentId: `pay-${Date.now()}`,
-      paymentMethod: 'cash',
-      totalAmount: targetBill.totalAmount,
-      paidAt: cashReceivedDate,
-      receiverName: cashReceivedBy,
-      createdAt: new Date().toISOString()
-    };
-
-    setViewingReceipt(newReceipt);
-    setIsCashOpen(false);
-    setIsReceiptOpen(true);
-  };
-
-  const handleOpenReceipt = (bill: Bill) => {
-    const rcpt: Receipt = {
-      id: `rcpt-${bill.id}`,
-      receiptNumber: `RCPT-${bill.cycleId.replace('-', '')}-${getRoomNum(bill.roomId)}`,
-      billId: bill.id,
-      paymentId: `pay-${bill.id}`,
-      paymentMethod: bill.paymentMethod || 'promptpay',
-      totalAmount: bill.totalAmount,
-      paidAt: bill.paidAt || new Date().toISOString(),
-      receiverName: 'ฝ่ายการเงิน หอพัก HorPlus',
-      createdAt: new Date().toISOString()
-    };
-    setViewingReceipt(rcpt);
-    setIsReceiptOpen(true);
-  };
-
-  /* =========================================================================
-   * LINE Notification Handler Functions
-   * ========================================================================= */
-  const handleOpenLineModal = () => {
-    setTargetScrollTenantId(null);
-    const unsentTenantIds = sortedCycleBills
-      .filter(b => b.status !== 'paid' && !lineNotifyMap[`${selectedCycle}_${b.tenantId}`])
-      .map(b => b.tenantId);
-
-    if (unsentTenantIds.length > 0) {
-      setSelectedTenantIdsForLine(unsentTenantIds);
-      setLineFilterTab('unsent');
-    } else {
-      setSelectedTenantIdsForLine([]);
-      setLineFilterTab('all');
-    }
-    setIsLineModalOpen(true);
-  };
-
-  const handleSendLineNotifications = () => {
-    if (selectedTenantIdsForLine.length === 0) return;
-
-    setIsSendingLine(true);
-
-    setTimeout(() => {
-      const nowStr = `${new Date().toLocaleDateString('th-TH', { day: 'numeric', month: 'short' })} - ${new Date().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })} น.`;
-
-      const newMap = { ...lineNotifyMap };
-      let newSentCount = 0;
-      let resentCount = 0;
-
-      // Automatically update status for rooms with 'draft' (ยังไม่ออกบิล) status to 'pending' (รอชำระเงิน)
-      // DO NOT touch rooms with 'paid' (ชำระแล้ว) status
-      const updatedBills = [...bills];
-      let billsModified = false;
-
-      selectedTenantIdsForLine.forEach(tenantId => {
-        const key = `${selectedCycle}_${tenantId}`;
-        const existing = newMap[key];
-        if (existing) {
-          newMap[key] = { status: 'resent', sentAt: nowStr };
-          resentCount++;
-        } else {
-          newMap[key] = { status: 'sent', sentAt: nowStr };
-          newSentCount++;
-        }
-
-        const tenant = tenants.find(t => t.id === tenantId);
-        const room = rooms.find(r => r.id === tenant?.roomId || r.roomNumber === tenant?.roomNumber);
-        const existingBillIdx = updatedBills.findIndex(
-          b => b.cycleId === selectedCycle && (b.tenantId === tenantId || (room && b.roomId === room.id))
-        );
-
-        if (existingBillIdx >= 0) {
-          const existingBill = updatedBills[existingBillIdx];
-          // Only update if bill status is 'draft' (ยังไม่ออกบิล). Never alter 'paid' bills!
-          if (existingBill.status === 'draft') {
-            updatedBills[existingBillIdx] = {
-              ...existingBill,
-              status: 'pending',
-              updatedAt: new Date().toISOString()
-            };
-            billsModified = true;
+    setIsSubmittingCash(true);
+    try {
+      const amount = Number(targetBill.outstandingAmount ?? targetBill.totalAmount ?? 0);
+      await httpRequest(
+        'POST',
+        '/payments/cash',
+        {
+          billId: targetBill.id,
+          amount: String(amount),
+        },
+        {
+          headers: {
+            'x-dormitory-id': dormitoryId,
+            'x-idempotency-key': `cash-modal-${targetBill.id}-${Date.now()}`
           }
-        } else if (tenant && room) {
-          // If no bill record exists yet for this room in selectedCycle, construct one with status = 'pending'
-          const newBillId = `bill-${selectedCycle}-${room.id}`;
-          const roomRent = room.monthlyRent || 3500;
-          const dorm = getDormitory();
-          const rates = getDormitoryRatesForCycle(dorm, selectedCycle);
-
-          const items: BillItem[] = [
-            { id: `rent-${newBillId}`, description: `ค่าเช่าห้อง ${room.roomNumber}`, amount: roomRent, category: 'rent' }
-          ];
-
-          if (rates.parkingFeeMode !== 'free') {
-            let parkingFeeAmt = 0;
-            let parkingDesc = 'ค่าที่จอดรถ';
-
-            if (rates.parkingFeeMode === 'vehicle') {
-              if (tenant.vehicle && tenant.vehicle.type && tenant.vehicle.type !== 'none') {
-                parkingFeeAmt = rates.parkingFee || room.parkingFee || 100;
-                const vType = tenant.vehicle.type === 'car' ? 'รถยนต์' : tenant.vehicle.type === 'motorcycle' ? 'รถจักรยานยนต์' : 'ยานพาหนะ';
-                parkingDesc = `ค่าที่จอดรถ${vType}${tenant.vehicle.licensePlate ? ` (${tenant.vehicle.licensePlate})` : ''}`;
-              }
-            } else {
-              parkingFeeAmt = rates.parkingFee || room.parkingFee || 100;
-            }
-
-            if (parkingFeeAmt > 0) {
-              items.push({
-                id: `parking-${newBillId}`,
-                description: parkingDesc,
-                amount: parkingFeeAmt,
-                category: 'parking'
-              });
-            }
-          }
-
-          const totalAmount = items.reduce((sum, item) => sum + item.amount, 0);
-
-          const newBill: Bill = {
-            id: newBillId,
-            billNumber: `BILL-${selectedCycle.replace('-', '')}-${room.roomNumber}`,
-            cycleId: selectedCycle,
-            roomId: room.id,
-            tenantId: tenant.id,
-            items,
-            totalAmount,
-            dueDate: `${selectedCycle}-05`,
-            status: 'pending',
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString()
-          };
-          updatedBills.push(newBill);
-          billsModified = true;
         }
-      });
-
-      if (billsModified) {
-        onSaveBills(updatedBills);
-      }
-
-      setLineNotifyMap(newMap);
-      setIsSendingLine(false);
-
-      const count = selectedTenantIdsForLine.length;
-      const msg = `ส่งแจ้งเตือนผ่าน LINE สำเร็จแล้ว (${count} ห้อง - ส่งใหม่ ${newSentCount} / ส่งซ้ำ ${resentCount})`;
-      setLineToastSuccess(msg);
-
-      // Unselect sent items so the counter resets (Requirement 7)
-      setSelectedTenantIdsForLine([]);
-
-      onAddLog(
-        'ส่งแจ้งเตือนผ่าน LINE',
-        `ส่งข้อความแจ้งเตือนบิลยอดชำระประจำงวด ${selectedCycle} ผ่าน LINE ให้แก่ ${count} รายการเรียบร้อยแล้ว`,
-        'Bill',
-        selectedCycle
       );
 
-      setTimeout(() => {
-        setLineToastSuccess(null);
-      }, 4000);
-    }, 800);
+      invalidateFinancialCaches();
+      onAddLog('รับชำระด้วยเงินสด', `รับชำระเงินสดจำนวน ${formatBaht(amount)} จากห้อง ${getRoomNum(targetBill.roomId)}`, 'Bill', targetBill.id);
+      setIsCashModalOpen(false);
+      triggerToast(`บันทึกการรับเงินสด ห้อง ${getRoomNum(targetBill.roomId)} เรียบร้อยแล้ว`);
+    } catch (err: any) {
+      console.error('Failed to submit cash modal:', err);
+      triggerToast(`เกิดข้อผิดพลาด: ${err.message || 'กรุณาลองใหม่อีกครั้ง'}`);
+    } finally {
+      setIsSubmittingCash(false);
+    }
+  };
+
+  // 5. Open Real Receipt Modal
+  const handleOpenReceipt = (payment: PaymentRecord) => {
+    const rcpt = payment.receipt;
+    const roomNumber = getRoomNum(payment.bill?.roomId || payment.bill?.room?.id);
+    const tenantName = payment.bill?.tenant?.displayName || getTenantName(payment.tenantId || payment.bill?.tenantId);
+    const totalAmount = Number(rcpt?.totalAmount || payment.amount || payment.bill?.totalAmount || 0);
+
+    const items = payment.bill?.items?.map(it => ({
+      description: it.description,
+      amount: Number(it.amount),
+    })) || [
+      { description: `ยอดชำระเงินงวด ${formatCycleThaiShort(getCycleCodeForCycleId(payment.bill?.billingCycleId))}`, amount: totalAmount }
+    ];
+
+    setViewingReceipt({
+      receiptNumber: rcpt?.receiptNumber || `RCPT-${payment.id.slice(0, 8).toUpperCase()}`,
+      billNumber: payment.bill?.billNumber,
+      roomNumber,
+      tenantName,
+      totalAmount,
+      paidAt: rcpt?.issuedAt || rcpt?.paidAt || payment.paymentDate || payment.createdAt,
+      paymentMethod: (payment.method || '').toUpperCase() === 'CASH' ? 'เงินสดสำนักงาน' : 'แสกน PromptPay QR',
+      receiverName: rcpt?.receiverName || 'ฝ่ายการเงิน หอพัก HorPlus',
+      items,
+    });
+    setIsReceiptOpen(true);
+  };
+
+  // Evidence Slip URL resolver
+  const getSlipEvidenceUrl = (payment: PaymentRecord): string => {
+    if (payment.evidenceUrl) {
+      return `/api/v1/payments/${payment.id}/evidence`;
+    }
+    return '';
   };
 
   return (
     <div className="space-y-6">
-      {/* Floating Cash Payment Success Toast Portal (Mobile: Centered above bottom nav, White bg, Smooth Fade) */}
-      {cashSuccessToast && (
+      {/* Floating Success Toast Portal */}
+      {successToast && (
         <div
-          className={`fixed bottom-20 left-1/2 -translate-x-1/2 sm:bottom-8 sm:right-8 sm:left-auto sm:translate-x-0 z-[9999] bg-white text-slate-800 px-4.5 py-3 rounded-2xl shadow-2xl border border-slate-200/90 flex items-center gap-2.5 text-xs font-bold transition-all duration-500 ease-in-out ${isToastFading
+          className={`fixed bottom-20 left-1/2 -translate-x-1/2 sm:bottom-8 sm:right-8 sm:left-auto sm:translate-x-0 z-[9999] bg-white text-slate-800 px-4.5 py-3 rounded-2xl shadow-2xl border border-slate-200/90 flex items-center gap-2.5 text-xs font-bold transition-all duration-500 ease-in-out ${
+            isToastFading
               ? 'opacity-0 translate-y-3 pointer-events-none'
               : 'opacity-100 translate-y-0 animate-in fade-in slide-in-from-bottom-3 duration-300'
-            }`}
+          }`}
         >
           <CheckCircle2 className="w-4.5 h-4.5 text-emerald-500 shrink-0" />
-          <span>{cashSuccessToast}</span>
+          <span>{successToast}</span>
         </div>
       )}
 
@@ -673,69 +727,73 @@ export const OwnerPayments: React.FC<OwnerPaymentsProps> = ({
       <div className="bg-white p-4 rounded-3xl border border-slate-100 shadow-xs space-y-4 shrink-0">
         <div className="flex flex-col lg:flex-row justify-between items-stretch lg:items-center gap-3">
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 sm:gap-2 bg-slate-50/80 p-1.5 rounded-2xl border border-slate-100 w-full lg:w-auto flex-1 max-w-3xl">
+            {/* Tab 1: รอตรวจสลิป (checking) -> ALL CYCLES */}
             <button
               type="button"
-              onClick={() => { setActiveTab('paid'); setSelectedBill(null); }}
-              className={`px-2.5 sm:px-3 py-2 sm:py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 w-full text-center ${activeTab === 'paid'
+              onClick={() => { setActiveTab('checking'); }}
+              className={`px-2.5 sm:px-3 py-2 sm:py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 w-full text-center ${
+                activeTab === 'checking'
                   ? 'bg-white text-indigo-600 shadow-2xs'
                   : 'text-slate-500 hover:text-slate-800'
-                }`}
-            >
-              <CheckCircle className="w-4 h-4 text-emerald-500 shrink-0" />
-              <span className="truncate">ชำระแล้ว ({paidBills.length})</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => { setActiveTab('checking'); setSelectedBill(null); }}
-              className={`px-2.5 sm:px-3 py-2 sm:py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 w-full text-center ${activeTab === 'checking'
-                  ? 'bg-white text-indigo-600 shadow-2xs'
-                  : 'text-slate-500 hover:text-slate-800'
-                }`}
+              }`}
             >
               <Clock className="w-4 h-4 text-amber-500 animate-pulse shrink-0" />
-              <span className="truncate">รอตรวจสลิป ({checkingBills.length})</span>
+              <span className="truncate">รอตรวจสลิป ({checkingPayments.length})</span>
             </button>
+
+            {/* Tab 2: ยังไม่ชำระ / บันทึกเงินสด (cash) -> SELECTED CYCLE ONLY */}
             <button
               type="button"
-              onClick={() => { setActiveTab('cash'); setSelectedBill(null); setSelectedCashBill(null); }}
-              className={`px-2.5 sm:px-3 py-2 sm:py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 w-full text-center ${activeTab === 'cash'
+              onClick={() => { setActiveTab('cash'); }}
+              className={`px-2.5 sm:px-3 py-2 sm:py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 w-full text-center ${
+                activeTab === 'cash'
                   ? 'bg-white text-indigo-600 shadow-2xs'
                   : 'text-slate-500 hover:text-slate-800'
-                }`}
+              }`}
             >
               <AlertCircle className="w-4 h-4 text-indigo-500 shrink-0" />
               <span className="truncate">ยังไม่ชำระ ({cashPendingBills.length})</span>
             </button>
+
+            {/* Tab 3: ชำระแล้ว (paid) -> SELECTED CYCLE ONLY */}
             <button
               type="button"
-              onClick={() => { setActiveTab('rejected'); setSelectedBill(null); }}
-              className={`px-2.5 sm:px-3 py-2 sm:py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 w-full text-center ${activeTab === 'rejected'
+              onClick={() => { setActiveTab('paid'); }}
+              className={`px-2.5 sm:px-3 py-2 sm:py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 w-full text-center ${
+                activeTab === 'paid'
                   ? 'bg-white text-indigo-600 shadow-2xs'
                   : 'text-slate-500 hover:text-slate-800'
-                }`}
+              }`}
+            >
+              <CheckCircle className="w-4 h-4 text-emerald-500 shrink-0" />
+              <span className="truncate">ชำระแล้ว ({paidPayments.length})</span>
+            </button>
+
+            {/* Tab 4: สลิปผิดพลาด (rejected) -> SELECTED CYCLE ONLY */}
+            <button
+              type="button"
+              onClick={() => { setActiveTab('rejected'); }}
+              className={`px-2.5 sm:px-3 py-2 sm:py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 w-full text-center ${
+                activeTab === 'rejected'
+                  ? 'bg-white text-indigo-600 shadow-2xs'
+                  : 'text-slate-500 hover:text-slate-800'
+              }`}
             >
               <XCircle className="w-4 h-4 text-rose-500 shrink-0" />
-              <span className="truncate">สลิปผิดพลาด ({rejectedBills.length})</span>
+              <span className="truncate">สลิปผิดพลาด ({rejectedPayments.length})</span>
             </button>
           </div>
 
-          {(() => {
-            const unsentCount = sortedCycleBills.filter(b => b.status !== 'paid' && !lineNotifyMap[`${selectedCycle}_${b.tenantId}`]).length;
-            const hasUnsentLineBills = unsentCount > 0;
-
-            return (
-              <button
-                onClick={handleOpenLineModal}
-                className="px-4 sm:px-5 py-2.5 sm:py-3 bg-[#06C755] hover:bg-[#05b34c] text-white font-bold text-xs rounded-xl flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer w-full lg:w-auto shrink-0 whitespace-nowrap relative"
-              >
-                <LineIcon className="w-4 h-4 shrink-0" />
-                <span className="whitespace-nowrap">แจ้งเตือนผ่าน LINE</span>
-                {hasUnsentLineBills && (
-                  <span className="w-3 h-3 bg-rose-500 rounded-full border-2 border-white absolute -top-1 -right-1 animate-pulse shadow-xs" />
-                )}
-              </button>
-            );
-          })()}
+          {/* Quick Actions (LINE + Manual Cash Modal) */}
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setIsLineModalOpen(true)}
+              className="px-4 sm:px-5 py-2.5 sm:py-3 bg-[#06C755] hover:bg-[#05b34c] text-white font-bold text-xs rounded-xl flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer w-full lg:w-auto shrink-0 whitespace-nowrap"
+            >
+              <LineIcon className="w-4 h-4 shrink-0" />
+              <span className="whitespace-nowrap">แจ้งเตือนผ่าน LINE</span>
+            </button>
+          </div>
         </div>
 
         {/* Search Bar */}
@@ -754,24 +812,266 @@ export const OwnerPayments: React.FC<OwnerPaymentsProps> = ({
       </div>
 
       {/* =========================================================================
-       * TAB 1: ชำระแล้ว (Paid Tab - Card Grid Only)
+       * TAB 1: รอตรวจสลิป (Checking Tab - ALL CYCLES)
+       * ========================================================================= */}
+      {activeTab === 'checking' && (
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-4">
+            {filterPaymentsByQuery(checkingPayments).map(p => {
+              const roomNum = getRoomNum(p.bill?.roomId || p.bill?.room?.id);
+              const tenantName = p.bill?.tenant?.displayName || getTenantName(p.tenantId || p.bill?.tenantId);
+              const slipUrl = getSlipEvidenceUrl(p);
+              const cycleCode = getCycleCodeForCycleId(p.bill?.billingCycleId);
+              const cycleLabel = formatCycleThaiShort(cycleCode);
+              const amount = Number(p.amount || p.bill?.totalAmount || 0);
+
+              return (
+                <div key={p.id} className="bg-white rounded-3xl border border-amber-200 shadow-2xs hover:shadow-md transition-all p-5 flex flex-col justify-between space-y-4">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xl font-black text-slate-900">ห้อง {roomNum}</span>
+                    <div className="flex items-center gap-1.5">
+                      <span className="px-2.5 py-0.5 bg-indigo-50 text-indigo-700 border border-indigo-100 font-bold rounded-full text-[10px]">
+                        งวด {cycleLabel}
+                      </span>
+                      <span className="px-3 py-1 bg-amber-50 text-amber-800 border border-amber-200 font-extrabold rounded-full text-[11px] flex items-center gap-1 animate-pulse">
+                        <Clock className="w-3.5 h-3.5 text-amber-600" />
+                        รอตรวจสลิป
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="text-xs space-y-1">
+                    <p className="font-bold text-slate-800 flex items-center gap-1.5">
+                      <User className="w-3.5 h-3.5 text-slate-400" />
+                      {tenantName}
+                    </p>
+                    <p className="text-[11px] text-slate-400">
+                      ยื่นตรวจเมื่อ: {formatThaiDate(p.createdAt)}
+                    </p>
+                  </div>
+
+                  {slipUrl ? (
+                    <div
+                      onClick={() => setViewingSlipUrl(slipUrl)}
+                      className="relative bg-slate-50 border border-slate-200 rounded-2xl h-36 flex items-center justify-center p-2 cursor-pointer hover:border-indigo-400 transition-all group overflow-hidden"
+                    >
+                      <img
+                        src={slipUrl}
+                        alt="สลิปโอนเงิน"
+                        className="max-h-full max-w-full object-contain rounded-xl group-hover:scale-105 transition-transform"
+                      />
+                      <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1 text-white text-xs font-bold rounded-2xl">
+                        <Eye className="w-4 h-4" />
+                        ดูรายละเอียด
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="bg-slate-50 border border-dashed border-slate-200 rounded-2xl h-24 flex items-center justify-center text-slate-400 text-xs font-semibold">
+                      ไม่มีไฟล์สลิปแนบ
+                    </div>
+                  )}
+
+                  <div className="flex items-baseline justify-between pt-1 border-t border-slate-100">
+                    <span className="text-xs text-slate-400 font-bold">ยอดรอตรวจสอบ</span>
+                    <span className="text-lg font-black text-indigo-600">{formatBaht(amount)}</span>
+                  </div>
+
+                  {pendingApproveMap[p.id] !== undefined ? (
+                    <div className="bg-amber-50 border border-amber-300 p-2.5 rounded-2xl flex items-center justify-between gap-2 text-amber-900 shadow-2xs animate-in fade-in">
+                      <div className="flex items-center gap-1.5 text-[11px] font-bold">
+                        <RotateCw className="w-3.5 h-3.5 animate-spin text-amber-600 shrink-0" />
+                        <span>กำลังอนุมัติ ({pendingApproveMap[p.id]}s)</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => cancelPendingApprove(p.id)}
+                        className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-[10px] rounded-lg shadow-xs transition-all cursor-pointer shrink-0 flex items-center gap-0.5"
+                      >
+                        <X className="w-3 h-3" />
+                        ยกเลิก
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-2 gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setRejectPaymentTarget(p);
+                          setIsRejectOpen(true);
+                        }}
+                        className="py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-xs rounded-xl flex items-center justify-center gap-1 transition-all cursor-pointer border border-rose-200/60"
+                      >
+                        <X className="w-4 h-4 text-rose-600" />
+                        ปฏิเสธ
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => startApproveWithCountdown(p)}
+                        className="py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-1 shadow-xs transition-all cursor-pointer"
+                      >
+                        <Check className="w-4 h-4" />
+                        ยอมรับ
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {filterPaymentsByQuery(checkingPayments).length === 0 && (
+            <div className="bg-white p-12 rounded-3xl border border-slate-100 text-center text-slate-400 font-bold text-xs">
+              ไม่มีสลิปรอตรวจสอบในขณะนี้
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* =========================================================================
+       * TAB 2: ยังไม่ชำระ / บันทึกเงินสด (Cash Tab - SELECTED CYCLE ONLY)
+       * ========================================================================= */}
+      {activeTab === 'cash' && (
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-4">
+            {filterBillsByQuery(cashPendingBills).map(b => {
+              const tenantName = getTenantName(b.tenantId);
+              const roomNum = getRoomNum(b.roomId);
+              const isOverdue = b.status === 'overdue' || (b.dueDate && new Date(b.dueDate) < new Date());
+              const overdueDays = getBillOverdueDays(b.dueDate);
+              const amount = Number(b.outstandingAmount ?? b.totalAmount ?? 0);
+              const isDepositBill = b.billKind === 'DEPOSIT';
+
+              return (
+                <div key={b.id} className="bg-white rounded-3xl border border-slate-200/90 shadow-2xs hover:shadow-md transition-all p-5 flex flex-col justify-between space-y-4">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xl font-black text-slate-900">ห้อง {roomNum}</span>
+                    <div className="flex items-center gap-1">
+                      {isDepositBill && (
+                        <span className="px-2 py-0.5 bg-purple-50 text-purple-700 border border-purple-200 font-bold rounded-full text-[10px]">
+                          เงินประกัน
+                        </span>
+                      )}
+                      <span className={`px-3 py-1 border font-extrabold rounded-full text-[11px] flex items-center gap-1 ${
+                        isOverdue ? 'bg-rose-50 text-rose-700 border-rose-200' : 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                      }`}>
+                        <AlertCircle className="w-3.5 h-3.5" />
+                        {isOverdue ? `เกิน ${overdueDays > 0 ? `${overdueDays} วัน` : 'กำหนด'}` : 'ยังไม่ชำระ'}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="p-3 bg-slate-50/80 rounded-2xl space-y-1.5 text-xs">
+                    <p className="font-bold text-slate-800 flex items-center gap-1.5">
+                      <User className="w-3.5 h-3.5 text-slate-400" />
+                      {tenantName}
+                    </p>
+                    <p className="text-[11px] text-slate-500 flex items-center gap-1">
+                      <Calendar className="w-3 h-3 text-slate-400" />
+                      กำหนดชำระ: <span className="font-bold text-slate-700">{b.dueDate ? formatThaiDate(b.dueDate) : '-'}</span>
+                    </p>
+                  </div>
+
+                  {/* Items summary */}
+                  <div className="text-[11px] text-slate-500 space-y-1 border-t border-slate-100 pt-2">
+                    {b.items && b.items.length > 0 ? (
+                      b.items.slice(0, 3).map((it, idx) => (
+                        <div key={idx} className="flex justify-between items-center">
+                          <span className="truncate pr-1 text-slate-500 font-medium">{formatItemDescription(it.description)}:</span>
+                          <span className="font-semibold text-slate-700 shrink-0">{formatBahtDash(it.amount)}</span>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="flex justify-between items-center">
+                        <span className="text-slate-500">ค่าเช่าและบริการ:</span>
+                        <span className="font-semibold text-slate-700">{formatBaht(amount)}</span>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex items-baseline justify-between pt-1 border-t border-slate-100">
+                    <span className="text-xs text-slate-400 font-bold">ยอดที่ต้องชำระ</span>
+                    <span className="text-lg font-black text-slate-900">{formatBaht(amount)}</span>
+                  </div>
+
+                  {pendingCashMap[b.id] !== undefined ? (
+                    <div className="bg-amber-50 border border-amber-300 p-2.5 rounded-2xl flex items-center justify-between gap-2 text-amber-900 shadow-2xs">
+                      <div className="flex items-center gap-1.5 text-[11px] font-bold">
+                        <RotateCw className="w-3.5 h-3.5 animate-spin text-amber-600 shrink-0" />
+                        <span>บันทึกเงินสด ({pendingCashMap[b.id]}s)</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => cancelPendingCashPayment(b.id)}
+                        className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-[10px] rounded-lg shadow-xs transition-all cursor-pointer shrink-0 flex items-center gap-0.5"
+                      >
+                        <X className="w-3 h-3" />
+                        ยกเลิก
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-2 gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setTargetScrollTenantId(b.tenantId || null);
+                          setIsLineModalOpen(true);
+                        }}
+                        className="py-2.5 bg-[#06C755] hover:bg-[#05b34c] text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-1.5 shadow-2xs transition-all cursor-pointer"
+                      >
+                        <LineIcon className="w-3.5 h-3.5" />
+                        เตือน LINE
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => startCashPaymentWithCountdown(b)}
+                        className="py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-1 shadow-xs transition-all cursor-pointer"
+                      >
+                        <DollarSign className="w-4 h-4" />
+                        รับเงินสด
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {filterBillsByQuery(cashPendingBills).length === 0 && (
+            <div className="bg-white p-12 rounded-3xl border border-slate-100 text-center text-slate-400 font-bold text-xs">
+              ไม่พบห้องพักค้างชำระในรอบบิลนี้
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* =========================================================================
+       * TAB 3: ชำระแล้ว (Paid Tab - SELECTED CYCLE ONLY)
        * ========================================================================= */}
       {activeTab === 'paid' && (
         <div className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-4">
-            {filterByQuery(paidBills).map(b => {
-              const tenantName = getTenantName(b.tenantId);
-              const roomNum = getRoomNum(b.roomId);
-              const slipUrl = b.slipImage || generateMockSlipImage(tenantName, b.totalAmount, roomNum, b.paidAt ? formatThaiDate(b.paidAt) : '14 ก.ค. 2569');
+            {filterPaymentsByQuery(paidPayments).map(p => {
+              const roomNum = getRoomNum(p.bill?.roomId || p.bill?.room?.id);
+              const tenantName = p.bill?.tenant?.displayName || getTenantName(p.tenantId || p.bill?.tenantId);
+              const slipUrl = getSlipEvidenceUrl(p);
+              const amount = Number(p.amount || p.bill?.totalAmount || 0);
+              const isDeposit = p.bill?.billKind === 'DEPOSIT';
 
               return (
-                <div key={b.id} className="bg-white rounded-3xl border border-emerald-100 shadow-2xs hover:shadow-md transition-all p-5 flex flex-col justify-between space-y-4">
+                <div key={p.id} className="bg-white rounded-3xl border border-emerald-100 shadow-2xs hover:shadow-md transition-all p-5 flex flex-col justify-between space-y-4">
                   <div className="flex items-center justify-between">
                     <span className="text-xl font-black text-slate-900">ห้อง {roomNum}</span>
-                    <span className="px-3 py-1 bg-emerald-50 text-emerald-700 border border-emerald-200 font-extrabold rounded-full text-[11px] flex items-center gap-1">
-                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                      ชำระผ่านแล้ว
-                    </span>
+                    <div className="flex items-center gap-1">
+                      {isDeposit && (
+                        <span className="px-2 py-0.5 bg-purple-50 text-purple-700 border border-purple-200 font-bold rounded-full text-[10px]">
+                          เงินประกัน
+                        </span>
+                      )}
+                      <span className="px-3 py-1 bg-emerald-50 text-emerald-700 border border-emerald-200 font-extrabold rounded-full text-[11px] flex items-center gap-1">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                        ชำระแล้ว
+                      </span>
+                    </div>
                   </div>
 
                   <div className="p-3 bg-slate-50/80 rounded-2xl space-y-1.5 text-xs">
@@ -780,28 +1080,34 @@ export const OwnerPayments: React.FC<OwnerPaymentsProps> = ({
                       {tenantName}
                     </p>
                     <div className="flex items-center justify-between text-[11px] text-slate-500 pt-1 border-t border-slate-200/50">
-                      <span>ช่องทาง: <strong className="text-slate-700">{b.paymentMethod === 'cash' ? 'เงินสด' : 'แนปสลิป'}</strong></span>
-                      <span>{b.paidAt ? formatThaiDate(b.paidAt) : 'ชำระแล้ว'}</span>
+                      <span>ช่องทาง: <strong className="text-slate-700">{(p.method || '').toUpperCase() === 'CASH' ? 'เงินสด' : 'โอน/แสกน'}</strong></span>
+                      <span>{p.paymentDate ? formatThaiDate(p.paymentDate) : formatThaiDate(p.createdAt)}</span>
                     </div>
                   </div>
 
                   <div className="flex items-baseline justify-between pt-1 border-t border-slate-100">
                     <span className="text-xs text-slate-400 font-bold">ยอดชำระสำเร็จ</span>
-                    <span className="text-lg font-black text-emerald-600">{formatBaht(b.totalAmount)}</span>
+                    <span className="text-lg font-black text-emerald-600">{formatBaht(amount)}</span>
                   </div>
 
                   <div className="grid grid-cols-2 gap-2">
+                    {slipUrl ? (
+                      <button
+                        type="button"
+                        onClick={() => setViewingSlipUrl(slipUrl)}
+                        className="py-2.5 bg-slate-100 hover:bg-indigo-50 hover:text-indigo-600 text-slate-700 font-extrabold text-xs rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer border border-slate-200/60"
+                      >
+                        <Eye className="w-4 h-4 text-indigo-600" />
+                        ดูสลิป
+                      </button>
+                    ) : (
+                      <div className="py-2.5 bg-slate-50 text-slate-400 font-bold text-xs rounded-xl flex items-center justify-center border border-slate-100">
+                        ไม่มีสลิป
+                      </div>
+                    )}
                     <button
                       type="button"
-                      onClick={() => setViewingSlipImage(slipUrl)}
-                      className="py-2.5 bg-slate-100 hover:bg-indigo-50 hover:text-indigo-600 text-slate-700 font-extrabold text-xs rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer border border-slate-200/60"
-                    >
-                      <Eye className="w-4 h-4 text-indigo-600" />
-                      ดูสลิป
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleOpenReceipt(b)}
+                      onClick={() => handleOpenReceipt(p)}
                       className="py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-xs"
                     >
                       <Printer className="w-4 h-4" />
@@ -812,862 +1118,120 @@ export const OwnerPayments: React.FC<OwnerPaymentsProps> = ({
               );
             })}
           </div>
-          {filterByQuery(paidBills).length === 0 && (
+
+          {filterPaymentsByQuery(paidPayments).length === 0 && (
             <div className="bg-white p-12 rounded-3xl border border-slate-100 text-center text-slate-400 font-bold text-xs">
-              ไม่พบบิลที่ชำระแล้วตามเงื่อนไขค้นหา
+              ไม่พบบิลที่ชำระแล้วในรอบบิลนี้
             </div>
           )}
         </div>
       )}
 
       {/* =========================================================================
-       * TAB 2: รอตรวจสลิป (Checking Slips Tab)
-       * ========================================================================= */}
-      {activeTab === 'checking' && (
-        displayMode === 'grid' ? (
-          <div className="space-y-4">
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-4">
-              {filterByQuery(checkingBills).map(b => {
-                const tenantName = getTenantName(b.tenantId);
-                const roomNum = getRoomNum(b.roomId);
-                const slipUrl = b.slipImage || generateMockSlipImage(tenantName, b.totalAmount, roomNum, '14 ก.ค. 2569 - 09:15 น.');
-
-                return (
-                  <div key={b.id} className="bg-white rounded-3xl border border-amber-200 shadow-2xs hover:shadow-md transition-all p-5 flex flex-col justify-between space-y-4">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xl font-black text-slate-900">ห้อง {roomNum}</span>
-                      <span className="px-3 py-1 bg-amber-50 text-amber-800 border border-amber-200 font-extrabold rounded-full text-[11px] flex items-center gap-1 animate-pulse">
-                        <Clock className="w-3.5 h-3.5 text-amber-600" />
-                        รอตรวจสลิป
-                      </span>
-                    </div>
-
-                    <div className="text-xs">
-                      <p className="font-bold text-slate-800 flex items-center gap-1.5">
-                        <User className="w-3.5 h-3.5 text-slate-400" />
-                        {tenantName}
-                      </p>
-                    </div>
-
-                    <div
-                      onClick={() => setViewingSlipImage(slipUrl)}
-                      className="relative bg-slate-50 border border-slate-200 rounded-2xl h-36 flex items-center justify-center p-2 cursor-pointer hover:border-indigo-400 transition-all group overflow-hidden"
-                    >
-                      <img
-                        src={slipUrl}
-                        alt="สลิปโอนเงิน"
-                        className="max-h-full max-w-full object-contain rounded-xl group-hover:scale-105 transition-transform"
-                        referrerPolicy="no-referrer"
-                      />
-                      <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1 text-white text-xs font-bold rounded-2xl">
-                        <Eye className="w-4 h-4" />
-                        ดูรายละเอียด
-                      </div>
-                    </div>
-
-                    <div className="flex items-baseline justify-between pt-1 border-t border-slate-100">
-                      <span className="text-xs text-slate-400 font-bold">ยอดรอตรวจสอบ</span>
-                      <span className="text-lg font-black text-indigo-600">{formatBaht(b.totalAmount)}</span>
-                    </div>
-
-                    {pendingApproveMap[b.id] !== undefined ? (
-                      <div className="bg-amber-50 border border-amber-300 p-2.5 rounded-2xl flex items-center justify-between gap-2 text-amber-900 shadow-2xs animate-in fade-in">
-                        <div className="flex items-center gap-1.5 text-[11px] font-bold">
-                          <RotateCw className="w-3.5 h-3.5 animate-spin text-amber-600 shrink-0" />
-                          <span>กำลังอนุมัติ ({pendingApproveMap[b.id]}s)</span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => cancelPendingApprove(b.id)}
-                          className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-[10px] rounded-lg shadow-xs transition-all cursor-pointer shrink-0 flex items-center gap-0.5"
-                        >
-                          <X className="w-3 h-3" />
-                          ยกเลิก
-                        </button>
-                      </div>
-                    ) : (
-                      <div className="grid grid-cols-2 gap-2 pt-1">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setSelectedBill(b);
-                            setIsRejectOpen(true);
-                          }}
-                          className="py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-xs rounded-xl flex items-center justify-center gap-1 transition-all cursor-pointer border border-rose-200/60"
-                        >
-                          <X className="w-4 h-4 text-rose-600" />
-                          ปฏิเสธ
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => startApproveWithCountdown(b)}
-                          className="py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-1 shadow-xs transition-all cursor-pointer"
-                        >
-                          <Check className="w-4 h-4" />
-                          ยอมรับ
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-            {filterByQuery(checkingBills).length === 0 && (
-              <div className="bg-white p-12 rounded-3xl border border-slate-100 text-center text-slate-400 font-bold text-xs">
-                ไม่มีสลิปรอนุมัติในขณะนี้
-              </div>
-            )}
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-12 gap-5 lg:gap-6">
-            <div className={`md:col-span-5 lg:col-span-4 bg-white p-4 rounded-3xl border border-gray-100 shadow-xs h-[550px] overflow-y-auto ${selectedBill ? 'hidden md:block' : 'block'}`}>
-              <h4 className="text-xs font-bold text-slate-800 mb-3 flex items-center gap-1.5">
-                <FileCheck2 className="w-4 h-4 text-indigo-600 animate-pulse" />
-                ใบคำขอรอตรวจสอบยอด
-              </h4>
-
-              <div className="space-y-2">
-                {filterByQuery(checkingBills).map(b => (
-                  <div
-                    key={b.id}
-                    onClick={() => setSelectedBill(b)}
-                    className={`p-3 rounded-2xl border cursor-pointer transition-all flex justify-between items-center gap-2 ${selectedBill?.id === b.id ? 'bg-indigo-50 border-indigo-150' : 'hover:bg-slate-50 border-gray-100'
-                      }`}
-                  >
-                    <div>
-                      <h5 className="font-extrabold text-xs text-slate-800">{getRoomNum(b.roomId)}</h5>
-                      <p className="text-[10px] text-gray-400 mt-1">{getTenantName(b.tenantId)}</p>
-                    </div>
-                    <span className="font-bold text-indigo-600 text-xs">{formatBaht(b.totalAmount)}</span>
-                  </div>
-                ))}
-                {filterByQuery(checkingBills).length === 0 && (
-                  <p className="text-center py-12 text-xs text-gray-400">ไม่มีสลิปรอนุมัติในขณะนี้</p>
-                )}
-              </div>
-            </div>
-
-            {selectedBill && (
-              <div className="block md:hidden bg-white p-5 rounded-3xl border border-gray-100 shadow-xs space-y-4">
-                <div className="flex justify-between items-center">
-                  <h4 className="text-xs font-extrabold text-slate-800">ตรวจสอบยอด {getRoomNum(selectedBill.roomId)}</h4>
-                  <button
-                    onClick={() => setSelectedBill(null)}
-                    className="text-[10px] font-bold text-indigo-600 bg-indigo-50 px-2.5 py-1.5 rounded-xl cursor-pointer"
-                  >
-                    ย้อนกลับ
-                  </button>
-                </div>
-
-                <div
-                  className="bg-slate-50 border border-gray-200 rounded-2xl flex items-center justify-center p-3 relative h-[320px] overflow-hidden cursor-pointer"
-                  onClick={() => { if (selectedBill.slipImage) setViewingSlipImage(selectedBill.slipImage); }}
-                >
-                  {selectedBill.slipImage ? (
-                    <img
-                      src={selectedBill.slipImage}
-                      alt="หลักฐานการชำระเงิน"
-                      className="max-h-full max-w-full object-contain rounded-xl hover:scale-102 transition-all"
-                      referrerPolicy="no-referrer"
-                    />
-                  ) : (
-                    <div className="bg-white w-full max-w-[180px] p-4 rounded-xl shadow-xs border border-emerald-100 text-[9px] text-center space-y-2 font-mono text-slate-600">
-                      <div className="w-6 h-6 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center mx-auto">
-                        <Check className="w-3.5 h-3.5" />
-                      </div>
-                      <p className="font-extrabold text-slate-900 leading-none">ทำรายการสำเร็จ</p>
-                      <p className="text-[7px] text-gray-400">14 ก.ค. 2569</p>
-                      <hr className="border-dashed border-gray-100" />
-                      <div className="text-left space-y-1">
-                        <p><span className="text-gray-400">ผู้โอน:</span> คุณ{getTenantName(selectedBill.tenantId)}</p>
-                        <p><span className="text-gray-400">ผู้รับ:</span> หอพัก HorPlus</p>
-                        <p><span className="text-gray-400">ยอดเงิน:</span> <span className="font-bold text-slate-900">{formatBaht(selectedBill.totalAmount)}</span></p>
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl text-xs space-y-1">
-                  <p><span className="text-gray-400">ห้อง:</span> <span className="font-extrabold text-slate-800">{getRoomNum(selectedBill.roomId)}</span></p>
-                  <p><span className="text-gray-400">ผู้เช่า:</span> <span className="font-semibold text-slate-700">{getTenantName(selectedBill.tenantId)}</span></p>
-                  <p><span className="text-gray-400">ยอดบิล:</span> <span className="font-bold text-indigo-600">{formatBaht(selectedBill.totalAmount)}</span></p>
-                </div>
-
-                {pendingApproveMap[selectedBill.id] !== undefined ? (
-                  <div className="bg-amber-50 border border-amber-300 p-3 rounded-2xl flex items-center justify-between gap-2 text-amber-900 shadow-2xs animate-in fade-in">
-                    <div className="flex items-center gap-1.5 text-xs font-bold">
-                      <RotateCw className="w-4 h-4 animate-spin text-amber-600 shrink-0" />
-                      <span>กำลังอนุมัติ ({pendingApproveMap[selectedBill.id]}s)</span>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => cancelPendingApprove(selectedBill.id)}
-                      className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-xs rounded-xl shadow-xs transition-all cursor-pointer shrink-0 flex items-center gap-1"
-                    >
-                      <X className="w-3.5 h-3.5" />
-                      ยกเลิก
-                    </button>
-                  </div>
-                ) : (
-                  <div className="flex gap-2.5 pt-2">
-                    <button
-                      onClick={() => setIsRejectOpen(true)}
-                      className="flex-1 py-3 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-xs rounded-xl flex items-center justify-center gap-1 transition-all cursor-pointer"
-                    >
-                      <X className="w-3.5 h-3.5" />
-                      ปฏิเสธ
-                    </button>
-                    <button
-                      onClick={() => startApproveWithCountdown(selectedBill)}
-                      className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-1 shadow-xs transition-all cursor-pointer"
-                    >
-                      <Check className="w-3.5 h-3.5" />
-                      ยอมรับ
-                    </button>
-                  </div>
-                )}
-              </div>
-            )}
-
-            <div className="md:col-span-7 lg:col-span-8 hidden md:block">
-              {selectedBill ? (
-                <div className="bg-white p-6 rounded-3xl border border-gray-100 shadow-xs h-[550px] flex flex-col justify-between">
-                  <div className="grid md:grid-cols-2 gap-6 h-[400px]">
-                    <div className="space-y-3 flex flex-col justify-between">
-                      <span className="text-[10px] text-gray-400 font-bold uppercase">รูปภาพหลักฐานการโอน</span>
-                      <div
-                        className="flex-1 bg-slate-50 border border-gray-200 rounded-3xl flex flex-col items-center justify-center p-4 relative overflow-hidden cursor-pointer"
-                        onClick={() => { if (selectedBill.slipImage) setViewingSlipImage(selectedBill.slipImage); }}
-                      >
-                        {selectedBill.slipImage ? (
-                          <img
-                            src={selectedBill.slipImage}
-                            alt="หลักฐานการชำระเงิน"
-                            className="max-h-full max-w-full object-contain rounded-2xl hover:scale-105 transition-all duration-200"
-                            referrerPolicy="no-referrer"
-                          />
-                        ) : (
-                          <div className="bg-white w-full max-w-[200px] p-4 rounded-2xl shadow-sm border border-emerald-100 text-[10px] text-center space-y-2 font-mono text-slate-600">
-                            <div className="w-8 h-8 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center mx-auto mb-1">
-                              <Check className="w-4 h-4" />
-                            </div>
-                            <p className="font-extrabold text-slate-900 leading-none">ทำรายการสำเร็จ</p>
-                            <p className="text-[8px] text-gray-400">14 ก.ค. 2569 - 08:34</p>
-                            <hr className="border-dashed border-gray-100" />
-                            <div className="text-left space-y-1">
-                              <p><span className="text-gray-400">ผู้โอน:</span> คุณ{getTenantName(selectedBill.tenantId)}</p>
-                              <p><span className="text-gray-400">ผู้รับ:</span> หอพัก HorPlus</p>
-                              <p><span className="text-gray-400">ยอดเงิน:</span> <span className="font-bold text-slate-900">{formatBaht(selectedBill.totalAmount)}</span></p>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="space-y-4 flex flex-col justify-between py-2">
-                      <div className="space-y-4">
-                        <span className="text-[10px] text-gray-400 font-bold uppercase">รายละเอียดใบแจ้งยอด</span>
-                        <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl text-xs space-y-2">
-                          <p><span className="text-gray-400">ห้อง:</span> <span className="font-extrabold text-slate-800">{getRoomNum(selectedBill.roomId)}</span></p>
-                          <p><span className="text-gray-400">บิลเลขที่:</span> <span className="font-semibold text-slate-800">{selectedBill.billNumber}</span></p>
-                          <p><span className="text-gray-400">ยอดที่ต้องจ่าย:</span> <span className="font-bold text-indigo-600">{formatBaht(selectedBill.totalAmount)}</span></p>
-                          <p><span className="text-gray-400">วันครบชำระ:</span> <span className="text-slate-600">{selectedBill.dueDate}</span></p>
-                        </div>
-                      </div>
-
-                      <div className="p-4 bg-blue-50/50 border border-blue-100 rounded-2xl text-[11px] text-blue-900 leading-relaxed">
-                        * สามารถคลิกที่รูปภาพสลิปหลักฐานเพื่อเปิดดูขนาดเต็มได้เพื่อตรวจเช็คความถูกต้องของรหัสสลิป
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="pt-4 border-t border-gray-100 flex gap-3 justify-end items-center shrink-0">
-                    {pendingApproveMap[selectedBill.id] !== undefined ? (
-                      <div className="bg-amber-50 border border-amber-300 px-4 py-2 rounded-xl flex items-center gap-3 text-amber-900 shadow-2xs animate-in fade-in">
-                        <div className="flex items-center gap-1.5 text-xs font-bold">
-                          <RotateCw className="w-3.5 h-3.5 animate-spin text-amber-600 shrink-0" />
-                          <span>กำลังอนุมัติ ({pendingApproveMap[selectedBill.id]}s)</span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => cancelPendingApprove(selectedBill.id)}
-                          className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-[10px] rounded-lg shadow-xs transition-all cursor-pointer flex items-center gap-0.5"
-                        >
-                          <X className="w-3 h-3" />
-                          ยกเลิก
-                        </button>
-                      </div>
-                    ) : (
-                      <>
-                        <button
-                          onClick={() => setIsRejectOpen(true)}
-                          className="px-4 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 font-semibold text-xs rounded-xl flex items-center gap-1 transition-all cursor-pointer"
-                        >
-                          <X className="w-3.5 h-3.5" />
-                          ปฏิเสธหลักฐาน
-                        </button>
-                        <button
-                          onClick={() => startApproveWithCountdown(selectedBill)}
-                          className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs rounded-xl flex items-center gap-1 shadow-sm transition-all cursor-pointer"
-                        >
-                          <Check className="w-3.5 h-3.5" />
-                          อนุมัติผ่านยอด
-                        </button>
-                      </>
-                    )}
-                  </div>
-                </div>
-              ) : (
-                <div className="bg-slate-50 border border-dashed border-gray-200 rounded-3xl h-[550px] flex flex-col justify-center items-center p-6 text-center text-gray-400">
-                  <FileCheck2 className="w-10 h-10 text-gray-300 mb-2" />
-                  <h4 className="text-xs font-bold text-slate-700">ไม่มีบิลเป้าหมายถูกเลือก</h4>
-                  <p className="text-[10px] text-gray-400 mt-0.5">กรุณาเลือกบิลรอรับชำระด้านซ้าย เพื่อตรวจสอบสลิปและโอนยอด</p>
-                </div>
-              )}
-            </div>
-          </div>
-        )
-      )}
-
-      {/* =========================================================================
-       * TAB 3: ยังไม่ชำระ (Pending / Cash Tab)
-       * ========================================================================= */}
-      {activeTab === 'cash' && (
-        displayMode === 'grid' ? (
-          <div className="space-y-4">
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-4">
-              {filterByQuery(cashPendingBills).map(b => {
-                const tenantName = getTenantName(b.tenantId);
-                const roomNum = getRoomNum(b.roomId);
-                const isOverdue = b.status === 'overdue' || new Date(b.dueDate) < new Date();
-                const overdueDays = getBillOverdueDays(b);
-                const waterUnits = getWaterUnits(b);
-                const elecUnits = getElecUnits(b);
-
-                return (
-                  <div key={b.id} className="bg-white rounded-3xl border border-slate-200/90 shadow-2xs hover:shadow-md transition-all p-5 flex flex-col justify-between space-y-4">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xl font-black text-slate-900">ห้อง {roomNum}</span>
-                      <span className={`px-3 py-1 border font-extrabold rounded-full text-[11px] flex items-center gap-1 ${isOverdue ? 'bg-rose-50 text-rose-700 border-rose-200' : 'bg-indigo-50 text-indigo-700 border-indigo-200'
-                        }`}>
-                        <AlertCircle className="w-3.5 h-3.5" />
-                        {isOverdue ? `เกิน ${overdueDays > 0 ? `${overdueDays} วัน` : 'กำหนด'}` : 'ยังไม่ชำระ'}
-                      </span>
-                    </div>
-
-                    <div className="p-3 bg-slate-50/80 rounded-2xl space-y-1.5 text-xs">
-                      <p className="font-bold text-slate-800 flex items-center gap-1.5">
-                        <User className="w-3.5 h-3.5 text-slate-400" />
-                        {tenantName}
-                      </p>
-                      <p className="text-[11px] text-slate-500 flex items-center gap-1">
-                        <Calendar className="w-3 h-3 text-slate-400" />
-                        กำหนดชำระ: <span className="font-bold text-slate-700">{formatThaiDate(b.dueDate)}</span>
-                      </p>
-                    </div>
-
-                    <div className="text-[11px] text-slate-500 space-y-1 border-t border-slate-100 pt-2">
-                      {(() => {
-                        const isExpanded = expandedBillIds.includes(b.id);
-                        const roomObj = rooms.find(r => r.id === b.roomId);
-                        const isTerm = roomObj?.rentCycle === 'term';
-
-                        const baseItems = b.items && b.items.length > 0 ? b.items : [
-                          { id: `rent-${b.id}`, description: isTerm ? 'ค่าเช่ารายเทอม (จ่ายแล้ว)' : 'ค่าเช่ารายเดือน', amount: isTerm ? 0 : (roomObj?.monthlyRent || 0), category: 'rent' as const },
-                          { id: `elec-${b.id}`, description: `ค่าไฟ (${elecUnits} หน่วย)`, amount: elecUnits * 8, category: 'electricity' as const },
-                          { id: `water-${b.id}`, description: `ค่าน้ำ (${waterUnits} หน่วย)`, amount: waterUnits * 18, category: 'water' as const },
-                        ];
-
-                        const rawItems = getBillEffectiveItems({ ...b, items: baseItems }, currentDorm);
-
-                        const topItems = rawItems.slice(0, 3);
-                        const extraItems = rawItems.slice(3);
-
-                        return (
-                          <div className="space-y-1">
-                            {topItems.map((it, idx) => {
-                              const isFine = it.category === 'fine' || it.description.includes('ค่าปรับ');
-                              return (
-                                <div key={idx} className="flex justify-between items-center">
-                                  <span className={`truncate pr-1 ${isFine ? 'text-rose-600 font-bold' : 'text-slate-500 font-medium'}`}>
-                                    {formatItemDescription(it.description)}:
-                                  </span>
-                                  <span className={`shrink-0 ${isFine ? 'text-rose-600 font-extrabold' : 'font-semibold text-slate-700'}`}>
-                                    {formatBahtDash(it.amount)}
-                                  </span>
-                                </div>
-                              );
-                            })}
-
-                            {!isExpanded ? (
-                              <button
-                                type="button"
-                                onClick={() => toggleBillExpand(b.id)}
-                                className="text-[10px] font-extrabold text-indigo-600 hover:text-indigo-800 flex items-center gap-1 mt-1 cursor-pointer select-none"
-                              >
-                                <span>ดูรายละเอียด {extraItems.length > 0 ? `(+${extraItems.length})` : ''}</span>
-                                <ChevronDown className="w-3 h-3" />
-                              </button>
-                            ) : (
-                              <>
-                                {extraItems.map((it, idx) => {
-                                  const isFine = it.category === 'fine' || it.description.includes('ค่าปรับ');
-                                  return (
-                                    <div key={idx + 3} className="flex justify-between items-center">
-                                      <span className={`truncate pr-1 ${isFine ? 'text-rose-600 font-bold' : 'text-slate-500 font-medium'}`}>
-                                        {formatItemDescription(it.description)}:
-                                      </span>
-                                      <span className={`shrink-0 ${isFine ? 'text-rose-600 font-extrabold' : 'font-semibold text-slate-700'}`}>
-                                        {formatBahtDash(it.amount)}
-                                      </span>
-                                    </div>
-                                  );
-                                })}
-                                <button
-                                  type="button"
-                                  onClick={() => toggleBillExpand(b.id)}
-                                  className="text-[10px] font-extrabold text-indigo-600 hover:text-indigo-800 flex items-center gap-1 mt-1 cursor-pointer select-none"
-                                >
-                                  <span>ซ่อนรายละเอียด</span>
-                                  <ChevronUp className="w-3 h-3" />
-                                </button>
-                              </>
-                            )}
-                          </div>
-                        );
-                      })()}
-                    </div>
-
-                    <div className="flex items-baseline justify-between pt-1 border-t border-slate-100">
-                      <span className="text-xs text-slate-400 font-bold">ยอดที่ต้องชำระ</span>
-                      <span className="text-lg font-black text-slate-900">{formatBaht(getBillTotalAmount(b))}</span>
-                    </div>
-
-                    {pendingCashMap[b.id] !== undefined ? (
-                      <div className="bg-amber-50 border border-amber-300 p-2.5 rounded-2xl flex items-center justify-between gap-2 text-amber-900 shadow-2xs">
-                        <div className="flex items-center gap-1.5 text-[11px] font-bold">
-                          <RotateCw className="w-3.5 h-3.5 animate-spin text-amber-600 shrink-0" />
-                          <span>บันทึกเงินสด ({pendingCashMap[b.id]}s)</span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => cancelPendingCashPayment(b.id)}
-                          className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-[10px] rounded-lg shadow-xs transition-all cursor-pointer shrink-0 flex items-center gap-0.5"
-                        >
-                          <X className="w-3 h-3" />
-                          ยกเลิก
-                        </button>
-                      </div>
-                    ) : (
-                      <div className="grid grid-cols-2 gap-2 pt-1">
-                        <button
-                          type="button"
-                          onClick={() => handleOpenLineModalForTenant(b.tenantId)}
-                          className="py-2.5 bg-[#06C755] hover:bg-[#05b34c] text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-1.5 shadow-2xs transition-all cursor-pointer"
-                        >
-                          <LineIcon className="w-3.5 h-3.5" />
-                          เตือน LINE
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => startCashPaymentWithCountdown(b, 0)}
-                          className="py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-1 shadow-xs transition-all cursor-pointer"
-                        >
-                          <DollarSign className="w-4 h-4" />
-                          รับเงินสด
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-            {filterByQuery(cashPendingBills).length === 0 && (
-              <div className="bg-white p-12 rounded-3xl border border-slate-100 text-center text-slate-400 font-bold text-xs">
-                ไม่พบห้องพักค้างชำระในขณะนี้
-              </div>
-            )}
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-12 gap-5 lg:gap-6">
-            <div className={`md:col-span-5 lg:col-span-4 bg-white p-4 rounded-3xl border border-gray-100 shadow-xs h-[580px] flex flex-col ${selectedCashBill ? 'hidden md:flex' : 'flex'}`}>
-              <div className="relative mb-3 shrink-0">
-                <Search className="absolute left-3 top-2.5 text-slate-400 w-4 h-4" />
-                <input
-                  type="text"
-                  placeholder="ค้นหาเลขห้อง หรือชื่อผู้เช่า..."
-                  value={cashSearchQuery}
-                  onChange={(e) => setCashSearchQuery(e.target.value)}
-                  className="w-full pl-9 pr-4 py-2 text-xs border border-gray-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold shadow-2xs"
-                />
-              </div>
-
-              <h4 className="text-xs font-bold text-slate-400 px-1 py-1 shrink-0 uppercase tracking-wider">
-                ห้องพักทั้งหมด ({filterByQuery(cashPendingBills).length})
-              </h4>
-
-              <div className="space-y-2 overflow-y-auto flex-1 pr-1 mt-1">
-                {filterByQuery(cashPendingBills).map(b => {
-                  const overdueAmount = bills
-                    .filter(ob => ob.tenantId === b.tenantId && ob.id !== b.id && ob.status === 'overdue')
-                    .reduce((sum, ob) => sum + ob.totalAmount, 0);
-                  const isItemOverdue = b.status === 'overdue' || new Date(b.dueDate) < new Date();
-                  const itemOverdueDays = getBillOverdueDays(b);
-
-                  return (
-                    <div
-                      key={b.id}
-                      onClick={() => setSelectedCashBill(b)}
-                      className={`p-4 rounded-2xl border cursor-pointer transition-all flex justify-between items-center gap-2 ${selectedCashBill?.id === b.id ? 'bg-indigo-50 border-indigo-200' : 'hover:bg-slate-50 border-gray-100 bg-white'
-                        }`}
-                    >
-                      <div className="flex items-center gap-3">
-                        <span className="relative flex h-2 w-2">
-                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
-                          <span className="relative inline-flex rounded-full h-2 w-2 bg-rose-500"></span>
-                        </span>
-                        <div>
-                          <h5 className="font-extrabold text-xs text-slate-800">{getRoomNum(b.roomId)}</h5>
-                          <p className="text-[10px] text-gray-400 mt-0.5">{getTenantName(b.tenantId)}</p>
-                        </div>
-                      </div>
-                      <div className="text-right space-y-1">
-                        <span className="font-bold text-slate-800 text-xs block">{formatBaht(getBillTotalAmount(b))}</span>
-                        <div className="flex gap-1 justify-end flex-wrap">
-                          <span className={`inline-block text-[9px] font-bold px-1.5 py-0.5 rounded-md leading-none ${isItemOverdue ? 'text-rose-600 bg-rose-50 border border-rose-100' : 'text-indigo-600 bg-indigo-50 border border-indigo-100'
-                            }`}>
-                            {isItemOverdue ? `เกิน ${itemOverdueDays > 0 ? `${itemOverdueDays} วัน` : 'กำหนด'}` : 'ยังไม่ชำระ'}
-                          </span>
-                          {overdueAmount > 0 && (
-                            <span className="inline-block text-[9px] font-bold text-amber-700 bg-amber-50 border border-amber-100 px-1.5 py-0.5 rounded-md leading-none">
-                              ค้างสะสม {formatBaht(overdueAmount)}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div className={`md:col-span-7 lg:col-span-8 ${selectedCashBill ? 'block' : 'hidden md:block'}`}>
-              {selectedCashBill ? (
-                (() => {
-                  const overdueAmount = bills
-                    .filter(ob => ob.tenantId === selectedCashBill.tenantId && ob.id !== selectedCashBill.id && ob.status === 'overdue')
-                    .reduce((sum, ob) => sum + ob.totalAmount, 0);
-
-                  const wUnits = getWaterUnits(selectedCashBill);
-                  const waterCurr = 214 + parseInt(getRoomNum(selectedCashBill.roomId).replace(/\D/g, '') || '0') * 2 + wUnits;
-                  const waterPrev = waterCurr - wUnits;
-
-                  const eUnits = getElecUnits(selectedCashBill);
-                  const elecCurr = 1245 + parseInt(getRoomNum(selectedCashBill.roomId).replace(/\D/g, '') || '0') * 5 + eUnits;
-                  const elecPrev = elecCurr - eUnits;
-
-                  const isSelOverdue = selectedCashBill.status === 'overdue' || new Date(selectedCashBill.dueDate) < new Date();
-                  const selOverdueDays = getBillOverdueDays(selectedCashBill);
-
-                  return (
-                    <div className="bg-white p-6 rounded-3xl border border-gray-100 shadow-xs h-[580px] flex flex-col justify-between">
-                      <div className="overflow-y-auto space-y-4 max-h-[460px] pr-1">
-                        <button
-                          onClick={() => setSelectedCashBill(null)}
-                          className="md:hidden mb-4 inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl text-slate-600 font-bold text-xs"
-                        >
-                          <ChevronLeft className="w-4 h-4" />
-                          กลับไปหน้าเลือกห้อง
-                        </button>
-
-                        <div className="flex justify-between items-start">
-                          <div>
-                            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">รายละเอียดใบแจ้งยอด</p>
-                            <h4 className="text-lg font-black text-slate-800 tracking-tight mt-0.5">{getRoomNum(selectedCashBill.roomId)}</h4>
-                          </div>
-                          <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full ${isSelOverdue ? 'text-rose-600 bg-rose-50 border border-rose-100' : 'text-indigo-600 bg-indigo-50 border border-indigo-100'
-                            }`}>
-                            {isSelOverdue ? `เกิน ${selOverdueDays > 0 ? `${selOverdueDays} วัน` : 'กำหนด'}` : 'ยังไม่ชำระรอบนี้'}
-                          </span>
-                        </div>
-
-                        <div className="border-t border-b border-dashed border-gray-100 py-3 flex justify-between items-center text-xs font-semibold">
-                          <span className="text-slate-400 font-bold">ผู้เช่าพัก</span>
-                          <span className="text-slate-800 font-bold">{getTenantName(selectedCashBill.tenantId)}</span>
-                        </div>
-
-                        <div className="space-y-4 pt-1">
-                          {getBillEffectiveItems(selectedCashBill, currentDorm).map((it, idx) => {
-                            const isFine = it.category === 'fine' || it.description.includes('ค่าปรับ');
-                            if (it.category === 'electricity') {
-                              return (
-                                <div key={idx} className="flex justify-between items-start text-xs font-semibold">
-                                  <div className="space-y-0.5">
-                                    <p className="text-slate-700">ค่าไฟฟ้า (มิเตอร์ {elecPrev} - {elecCurr})</p>
-                                    <p className="text-[10px] text-slate-400 font-bold">{eUnits} หน่วย x 8฿</p>
-                                  </div>
-                                  <span className="text-slate-800 font-bold text-sm">{formatBahtDash(it.amount)}</span>
-                                </div>
-                              );
-                            }
-                            if (it.category === 'water') {
-                              return (
-                                <div key={idx} className="flex justify-between items-start text-xs font-semibold">
-                                  <div className="space-y-0.5">
-                                    <p className="text-slate-700">ค่าน้ำประปา (มิเตอร์ {waterPrev} - {waterCurr})</p>
-                                    <p className="text-[10px] text-slate-400 font-bold">{wUnits} หน่วย x 18฿</p>
-                                  </div>
-                                  <span className="text-slate-800 font-bold text-sm">{formatBahtDash(it.amount)}</span>
-                                </div>
-                              );
-                            }
-                            if (it.category === 'rent') {
-                              return (
-                                <div key={idx} className="flex justify-between items-start text-xs font-semibold">
-                                  <p className="text-slate-700">ค่าเช่ารายเดือน</p>
-                                  <span className="text-slate-800 font-bold text-sm">{formatBahtDash(it.amount)}</span>
-                                </div>
-                              );
-                            }
-                            return (
-                              <div key={idx} className="flex justify-between items-start text-xs font-semibold">
-                                <p className={isFine ? 'text-rose-600 font-bold' : 'text-slate-700'}>{formatItemDescription(it.description)}</p>
-                                <span className={`text-sm ${isFine ? 'text-rose-600 font-extrabold' : 'text-slate-800 font-bold'}`}>{formatBahtDash(it.amount)}</span>
-                              </div>
-                            );
-                          })}
-                        </div>
-
-                        <div className="border-t border-dashed border-slate-200 pt-3 space-y-2 text-xs font-semibold">
-                          <div className="flex justify-between items-center">
-                            <span className="text-slate-400 font-bold">ยอดชำระประจำเดือนนี้</span>
-                            <span className="text-slate-800 font-bold">{formatBaht(getEffectiveBillTotal(selectedCashBill, currentDorm))}</span>
-                          </div>
-                          {overdueAmount > 0 && (
-                            <div className="flex justify-between items-center">
-                              <span className="text-rose-600 font-bold">⚠️ ค่าค้างชำระสะสม (ยกยอดมา)</span>
-                              <span className="text-rose-600 font-bold">{formatBaht(overdueAmount)}</span>
-                            </div>
-                          )}
-                        </div>
-
-                        <div className="border-t border-gray-200 pt-3 flex justify-between items-center">
-                          <span className="text-xs font-extrabold text-slate-800">ยอดชำระรวมสุทธิทั้งหมด</span>
-                          <span className="text-base font-black text-emerald-600">
-                            {formatBaht(getEffectiveBillTotal(selectedCashBill, currentDorm) + overdueAmount)}
-                          </span>
-                        </div>
-                      </div>
-
-                      <div className="pt-4 border-t border-gray-100 shrink-0">
-                        {pendingCashMap[selectedCashBill.id] !== undefined ? (
-                          <div className="w-full py-2.5 bg-amber-50 border border-amber-300 px-3 rounded-2xl flex items-center justify-between gap-2 text-amber-900 shadow-2xs">
-                            <div className="flex items-center gap-2 text-xs font-bold">
-                              <RotateCw className="w-4 h-4 animate-spin text-amber-600 shrink-0" />
-                              <span>กำลังบันทึกการรับเงินสด ({pendingCashMap[selectedCashBill.id]}s)...</span>
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => cancelPendingCashPayment(selectedCashBill.id)}
-                              className="px-3 py-1 bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-xs rounded-xl shadow-xs transition-all cursor-pointer flex items-center gap-1 shrink-0"
-                            >
-                              <X className="w-3.5 h-3.5" />
-                              ยกเลิก
-                            </button>
-                          </div>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => startCashPaymentWithCountdown(selectedCashBill, overdueAmount)}
-                            className="w-full py-3 bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-white font-extrabold text-xs rounded-2xl flex items-center justify-center gap-1.5 transition-all shadow-xs cursor-pointer"
-                          >
-                            <Check className="w-4 h-4" />
-                            บันทึกการจ่ายเงินสด
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })()
-              ) : (
-                <div className="bg-white p-6 rounded-3xl border border-gray-100 shadow-xs h-[580px] flex flex-col justify-center items-center text-center">
-                  <div className="w-16 h-16 bg-slate-50 text-slate-300 rounded-full flex items-center justify-center mb-4 border border-slate-100">
-                    <FileText className="w-8 h-8" />
-                  </div>
-                  <h4 className="font-extrabold text-slate-700 text-sm">ไม่ได้เลือกห้อง</h4>
-                  <p className="text-xs text-slate-400 max-w-xs mt-1.5 leading-relaxed font-semibold">
-                    คลิกเลือกห้องด้านซ้ายเพื่อดูรายละเอียดใบเสร็จและทำรายการชำระเงิน
-                  </p>
-                </div>
-              )}
-            </div>
-          </div>
-        )
-      )}
-
-      {/* =========================================================================
-       * TAB 4: สลิปผิดพลาด (Rejected Tab)
+       * TAB 4: สลิปผิดพลาด (Rejected Tab - SELECTED CYCLE ONLY)
        * ========================================================================= */}
       {activeTab === 'rejected' && (
-        displayMode === 'grid' ? (
-          <div className="space-y-4">
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-4">
-              {filterByQuery(rejectedBills).map(b => {
-                const tenantName = getTenantName(b.tenantId);
-                const roomNum = getRoomNum(b.roomId);
-                const slipUrl = b.slipImage || generateMockSlipImage(tenantName, b.totalAmount, roomNum, '12 ก.ค. 2569 - 16:40 น.');
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-4">
+            {filterPaymentsByQuery(rejectedPayments).map(p => {
+              const roomNum = getRoomNum(p.bill?.roomId || p.bill?.room?.id);
+              const tenantName = p.bill?.tenant?.displayName || getTenantName(p.tenantId || p.bill?.tenantId);
+              const slipUrl = getSlipEvidenceUrl(p);
+              const amount = Number(p.amount || p.bill?.totalAmount || 0);
 
-                return (
-                  <div key={b.id} className="bg-white rounded-3xl border border-rose-200/90 shadow-2xs hover:shadow-md transition-all p-5 flex flex-col justify-between space-y-4">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xl font-black text-slate-900">ห้อง {roomNum}</span>
-                      <span className="px-3 py-1 bg-rose-50 text-rose-700 border border-rose-200 font-extrabold rounded-full text-[11px] flex items-center gap-1">
-                        <XCircle className="w-3.5 h-3.5 text-rose-600" />
-                        สลิปผิดพลาด
-                      </span>
-                    </div>
+              return (
+                <div key={p.id} className="bg-white rounded-3xl border border-rose-200/90 shadow-2xs hover:shadow-md transition-all p-5 flex flex-col justify-between space-y-4">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xl font-black text-slate-900">ห้อง {roomNum}</span>
+                    <span className="px-3 py-1 bg-rose-50 text-rose-700 border border-rose-200 font-extrabold rounded-full text-[11px] flex items-center gap-1">
+                      <XCircle className="w-3.5 h-3.5 text-rose-600" />
+                      สลิปผิดพลาด
+                    </span>
+                  </div>
 
-                    <div className="text-xs">
-                      <p className="font-bold text-slate-800 flex items-center gap-1.5">
-                        <User className="w-3.5 h-3.5 text-slate-400" />
-                        {tenantName}
-                      </p>
-                    </div>
+                  <div className="text-xs">
+                    <p className="font-bold text-slate-800 flex items-center gap-1.5">
+                      <User className="w-3.5 h-3.5 text-slate-400" />
+                      {tenantName}
+                    </p>
+                  </div>
 
-                    <div className="p-3 bg-rose-50/80 border border-rose-200 rounded-2xl text-xs text-rose-800 space-y-1">
-                      <p className="font-extrabold text-[11px] flex items-center gap-1 text-rose-900">
-                        <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
-                        เหตุผลที่ปฏิเสธ:
-                      </p>
-                      <p className="text-[11px] font-medium leading-tight">{b.rejectReason || 'ยอดเงินโอนไม่ตรงกับยอดแจ้งหนี้'}</p>
-                    </div>
+                  <div className="p-3 bg-rose-50/80 border border-rose-200 rounded-2xl text-xs text-rose-800 space-y-1">
+                    <p className="font-extrabold text-[11px] flex items-center gap-1 text-rose-900">
+                      <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                      เหตุผลที่ปฏิเสธ:
+                    </p>
+                    <p className="text-[11px] font-medium leading-tight">{p.rejectedReason || 'ยอดเงินโอนไม่ตรงกับยอดแจ้งหนี้'}</p>
+                  </div>
 
+                  {slipUrl ? (
                     <div
-                      onClick={() => setViewingSlipImage(slipUrl)}
+                      onClick={() => setViewingSlipUrl(slipUrl)}
                       className="relative bg-slate-50 border border-slate-200 rounded-2xl h-28 flex items-center justify-center p-2 cursor-pointer hover:border-rose-400 transition-all group overflow-hidden"
                     >
                       <img
                         src={slipUrl}
                         alt="สลิปปฏิเสธ"
                         className="max-h-full max-w-full object-contain rounded-xl group-hover:scale-105 transition-transform"
-                        referrerPolicy="no-referrer"
                       />
                       <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1 text-white text-xs font-bold rounded-2xl">
                         <Eye className="w-4 h-4" />
                         คลิกดูสลิปที่แนบ
                       </div>
                     </div>
-
-                    <div className="flex items-baseline justify-between pt-1 border-t border-slate-100">
-                      <span className="text-xs text-slate-400 font-bold">ยอดค้างชำระ</span>
-                      <span className="text-lg font-black text-rose-600">{formatBaht(b.totalAmount)}</span>
+                  ) : (
+                    <div className="bg-slate-50 border border-dashed border-slate-200 rounded-2xl h-20 flex items-center justify-center text-slate-400 text-xs">
+                      ไม่มีภาพสลิป
                     </div>
+                  )}
 
-                    {pendingCashMap[b.id] !== undefined ? (
-                      <div className="bg-amber-50 border border-amber-300 p-2.5 rounded-2xl flex items-center justify-between gap-2 text-amber-900 shadow-2xs animate-in fade-in">
-                        <div className="flex items-center gap-1.5 text-[11px] font-bold">
-                          <RotateCw className="w-3.5 h-3.5 animate-spin text-amber-600 shrink-0" />
-                          <span>บันทึกเงินสด ({pendingCashMap[b.id]}s)</span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => cancelPendingCashPayment(b.id)}
-                          className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-[10px] rounded-lg shadow-xs transition-all cursor-pointer shrink-0 flex items-center gap-0.5"
-                        >
-                          <X className="w-3 h-3" />
-                          ยกเลิก
-                        </button>
-                      </div>
-                    ) : (
-                      <div className="grid grid-cols-2 gap-2 pt-1">
-                        <button
-                          type="button"
-                          onClick={() => handleOpenLineModalForTenant(b.tenantId)}
-                          className="py-2.5 bg-[#06C755] hover:bg-[#05b34c] text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-1 shadow-2xs transition-all cursor-pointer"
-                        >
-                          <LineIcon className="w-3.5 h-3.5" />
-                          ให้แนบใหม่
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => startCashPaymentWithCountdown(b, 0)}
-                          className="py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-1 shadow-xs transition-all cursor-pointer"
-                        >
-                          <DollarSign className="w-4 h-4" />
-                          รับเงินสด
-                        </button>
-                      </div>
+                  <div className="flex items-baseline justify-between pt-1 border-t border-slate-100">
+                    <span className="text-xs text-slate-400 font-bold">ยอดค้างชำระ</span>
+                    <span className="text-lg font-black text-rose-600">{formatBaht(amount)}</span>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setTargetScrollTenantId(p.tenantId || p.bill?.tenantId || null);
+                        setIsLineModalOpen(true);
+                      }}
+                      className="py-2.5 bg-[#06C755] hover:bg-[#05b34c] text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-1 shadow-2xs transition-all cursor-pointer"
+                    >
+                      <LineIcon className="w-3.5 h-3.5" />
+                      ให้แนบใหม่
+                    </button>
+                    {p.bill && (
+                      <button
+                        type="button"
+                        onClick={() => startCashPaymentWithCountdown(p.bill as any)}
+                        className="py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-1 shadow-xs transition-all cursor-pointer"
+                      >
+                        <DollarSign className="w-4 h-4" />
+                        รับเงินสด
+                      </button>
                     )}
                   </div>
-                );
-              })}
-            </div>
-            {filterByQuery(rejectedBills).length === 0 && (
-              <div className="bg-white p-12 rounded-3xl border border-slate-100 text-center text-slate-400 font-bold text-xs">
-                ไม่มีสลิปผิดพลาดในขณะนี้
-              </div>
-            )}
+                </div>
+              );
+            })}
           </div>
-        ) : (
-          <div className="bg-white border border-gray-100 rounded-3xl overflow-hidden shadow-xs">
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse text-xs font-semibold">
-                <thead className="bg-slate-50 text-slate-400 font-bold uppercase border-b border-gray-100">
-                  <tr>
-                    <th className="p-4">ห้อง</th>
-                    <th className="p-4">ผู้จ่าย</th>
-                    <th className="p-4">ยอดบิล</th>
-                    <th className="p-4">เหตุผลการปฏิเสธ</th>
-                    <th className="p-4 text-center">สลิปที่แนบ</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {filterByQuery(rejectedBills).map(b => (
-                    <tr key={b.id}>
-                      <td className="p-4 font-bold text-slate-800">{getRoomNum(b.roomId)}</td>
-                      <td className="p-4 text-slate-600">{getTenantName(b.tenantId)}</td>
-                      <td className="p-4 font-bold text-rose-600">{formatBaht(b.totalAmount)}</td>
-                      <td className="p-4 text-rose-700 font-medium">
-                        <span className="inline-flex items-center gap-1">
-                          <AlertCircle className="w-3.5 h-3.5 text-rose-500" />
-                          {b.rejectReason}
-                        </span>
-                      </td>
-                      <td className="p-4 text-center">
-                        {(() => {
-                          const imgUrl = b.slipImage || generateMockSlipImage(getTenantName(b.tenantId), b.totalAmount, getRoomNum(b.roomId), '12 ก.ค. 2569 - 16:40 น.');
-                          return (
-                            <div className="flex items-center justify-center gap-2">
-                              <img
-                                src={imgUrl}
-                                alt="สลิปปฏิเสธ"
-                                className="w-8 h-12 object-cover rounded-md border border-slate-200 cursor-pointer hover:scale-110 transition-transform shadow-2xs"
-                                onClick={() => setViewingSlipImage(imgUrl)}
-                                referrerPolicy="no-referrer"
-                              />
-                              <button
-                                type="button"
-                                onClick={() => setViewingSlipImage(imgUrl)}
-                                className="px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold rounded-lg text-[10px] transition-all flex items-center gap-1 cursor-pointer"
-                              >
-                                <Eye className="w-3 h-3" />
-                                เปิดดูสลิป
-                              </button>
-                            </div>
-                          );
-                        })()}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+
+          {filterPaymentsByQuery(rejectedPayments).length === 0 && (
+            <div className="bg-white p-12 rounded-3xl border border-slate-100 text-center text-slate-400 font-bold text-xs">
+              ไม่มีสลิปผิดพลาดในรอบบิลนี้
             </div>
-          </div>
-        )
+          )}
+        </div>
       )}
 
-      {/* Rejection input prompt modal */}
-      <Modal isOpen={isRejectOpen} onClose={() => setIsRejectOpen(false)} title="ระบุเหตุผลการปฏิเสธสลิป">
+      {/* =========================================================================
+       * MODALS
+       * ========================================================================= */}
+
+      {/* Rejection Prompt Modal */}
+      <Modal isOpen={isRejectOpen} onClose={() => { setIsRejectOpen(false); setRejectPaymentTarget(null); }} title="ระบุเหตุผลการปฏิเสธสลิป">
         <div className="space-y-4">
           <div className="space-y-1 text-xs">
             <label className="block font-bold text-slate-700">เหตุผลประกอบ *</label>
@@ -1699,13 +1263,13 @@ export const OwnerPayments: React.FC<OwnerPaymentsProps> = ({
 
           <div className="pt-4 border-t border-gray-100 flex gap-2 justify-end">
             <button
-              onClick={() => setIsRejectOpen(false)}
+              onClick={() => { setIsRejectOpen(false); setRejectPaymentTarget(null); }}
               className="px-4 py-2 text-xs font-medium text-gray-500 bg-gray-50 border border-gray-200 rounded-xl"
             >
               ยกเลิก
             </button>
             <button
-              onClick={handleRejectSlip}
+              onClick={handleRejectPayment}
               className="px-5 py-2 text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white rounded-xl"
             >
               ปฏิเสธและส่งคืนบิล
@@ -1714,21 +1278,21 @@ export const OwnerPayments: React.FC<OwnerPaymentsProps> = ({
         </div>
       </Modal>
 
-      {/* Cash receipt recording modal */}
-      <Modal isOpen={isCashOpen} onClose={() => setIsCashOpen(false)} title="บันทึกจ่ายด้วยเงินสด ณ เคาน์เตอร์">
-        <form onSubmit={handleRecordCash} className="space-y-4 text-xs">
+      {/* Manual Cash Recording Modal */}
+      <Modal isOpen={isCashModalOpen} onClose={() => setIsCashModalOpen(false)} title="บันทึกจ่ายด้วยเงินสด ณ เคาน์เตอร์">
+        <form onSubmit={handleModalCashSubmit} className="space-y-4 text-xs">
           <div className="space-y-1">
             <label className="block font-bold text-slate-700">เลือกบิลค้างชำระเป้าหมาย *</label>
             <select
               required
-              value={cashBillId}
-              onChange={(e) => setCashBillId(e.target.value)}
+              value={cashTargetBillId}
+              onChange={(e) => setCashTargetBillId(e.target.value)}
               className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white font-semibold text-slate-700"
             >
               <option value="">-- เลือกห้องพักที่มีบิลค้างชำระ --</option>
               {cashPendingBills.map(b => (
                 <option key={b.id} value={b.id}>
-                  ห้อง {getRoomNum(b.roomId)} &bull; ยอด: {formatBaht(b.totalAmount)} (รอบ {b.cycleId})
+                  ห้อง {getRoomNum(b.roomId)} &bull; ยอด: {formatBaht(Number(b.outstandingAmount ?? b.totalAmount ?? 0))}
                 </option>
               ))}
             </select>
@@ -1761,23 +1325,24 @@ export const OwnerPayments: React.FC<OwnerPaymentsProps> = ({
           <div className="pt-4 border-t border-gray-100 flex gap-2 justify-end">
             <button
               type="button"
-              onClick={() => setIsCashOpen(false)}
+              onClick={() => setIsCashModalOpen(false)}
               className="px-4 py-2 text-xs font-medium text-gray-500 bg-gray-50 border border-gray-200 rounded-xl"
             >
               ยกเลิก
             </button>
             <button
               type="submit"
-              className="px-5 py-2 text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl shadow-xs"
+              disabled={isSubmittingCash || !cashTargetBillId}
+              className="px-5 py-2 text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl shadow-xs disabled:opacity-50"
             >
-              บันทึกจ่ายเงินสด
+              {isSubmittingCash ? 'กำลังบันทึก...' : 'บันทึกจ่ายเงินสด'}
             </button>
           </div>
         </form>
       </Modal>
 
-      {/* Printable receipt modal */}
-      <Modal isOpen={isReceiptOpen} onClose={() => setIsReceiptOpen(false)} title="ใบเสร็จรับเงินประจำเดือนเสมือน" size="lg">
+      {/* Printable Receipt Modal */}
+      <Modal isOpen={isReceiptOpen} onClose={() => setIsReceiptOpen(false)} title="ใบเสร็จรับเงิน" size="lg">
         {viewingReceipt && (
           <PrintView title="พิมพ์ใบเสร็จ">
             <div className="space-y-6 text-xs text-slate-800 font-sans max-w-xl mx-auto leading-relaxed">
@@ -1800,11 +1365,11 @@ export const OwnerPayments: React.FC<OwnerPaymentsProps> = ({
               <div className="grid grid-cols-2 gap-4 text-[11px]">
                 <div>
                   <span className="text-gray-400">ชำระจากห้องพัก:</span>
-                  <p className="font-bold text-slate-800 mt-0.5">ห้อง {getRoomNum(bills.find(b => b.id === viewingReceipt.billId)?.roomId || '')}</p>
+                  <p className="font-bold text-slate-800 mt-0.5">ห้อง {viewingReceipt.roomNumber}</p>
                 </div>
                 <div>
                   <span className="text-gray-400">ผู้ชำระเงิน:</span>
-                  <p className="font-bold text-slate-800 mt-0.5">{getTenantName(bills.find(b => b.id === viewingReceipt.billId)?.tenantId || '')}</p>
+                  <p className="font-bold text-slate-800 mt-0.5">{viewingReceipt.tenantName}</p>
                 </div>
               </div>
 
@@ -1818,7 +1383,7 @@ export const OwnerPayments: React.FC<OwnerPaymentsProps> = ({
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
-                    {bills.find(b => b.id === viewingReceipt.billId)?.items.map((it, idx) => (
+                    {viewingReceipt.items?.map((it, idx) => (
                       <tr key={idx}>
                         <td className="p-3 text-slate-700 font-medium">{formatItemDescription(it.description)}</td>
                         <td className="p-3 text-right font-bold text-slate-800">{formatBahtDash(it.amount)}</td>
@@ -1833,10 +1398,9 @@ export const OwnerPayments: React.FC<OwnerPaymentsProps> = ({
               </div>
 
               <div className="grid grid-cols-2 gap-4 pt-6 text-[10px] text-gray-400 border-t border-dashed border-gray-200">
-                <p>ช่องทางรับชำระ: {viewingReceipt.paymentMethod === 'cash' ? 'เงินสดสำนักงาน' : 'แสกน PromptPay QR'}</p>
+                <p>ช่องทางรับชำระ: {viewingReceipt.paymentMethod}</p>
                 <p className="text-right">ผู้รับเงิน / พนักงาน: {viewingReceipt.receiverName}</p>
               </div>
-
             </div>
           </PrintView>
         )}
@@ -1852,44 +1416,40 @@ export const OwnerPayments: React.FC<OwnerPaymentsProps> = ({
         bills={bills}
         tenants={tenants}
         rooms={rooms}
-        selectedCycle={selectedCycle}
-        onSaveBills={onSaveBills}
+        selectedCycle={effectiveCycleCode}
         onAddLog={onAddLog}
         targetScrollTenantId={targetScrollTenantId}
-        onShowToast={(msg) => setCashSuccessToast(msg)}
+        onShowToast={(msg) => triggerToast(msg)}
       />
 
-      {/* Slip Viewer overlay */}
-      {viewingSlipImage && (
+      {/* Slip Viewer Overlay */}
+      {viewingSlipUrl && (
         <div
           className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 z-50 animate-in fade-in duration-200 cursor-zoom-out"
-          onClick={() => setViewingSlipImage(null)}
+          onClick={() => setViewingSlipUrl(null)}
         >
-          <div
-            className="relative"
-            onClick={e => e.stopPropagation()}
-          >
-            {/* Elegant close button positioned outside the top-right of the image itself */}
+          <div className="relative" onClick={e => e.stopPropagation()}>
             <button
               type="button"
               className="absolute -top-10 right-0 z-[10000] text-white/75 hover:text-white transition-all cursor-pointer p-1 hover:scale-110 active:scale-95 flex items-center justify-center"
-              onClick={() => setViewingSlipImage(null)}
+              onClick={() => setViewingSlipUrl(null)}
               title="ปิด"
             >
               <X className="w-8 h-8 stroke-[1.5]" />
             </button>
 
             <img
-              src={viewingSlipImage}
+              src={viewingSlipUrl}
               alt="หลักฐานขนาดเต็ม"
               className="max-w-[90vw] md:max-w-lg max-h-[80vh] md:max-h-[85vh] h-auto w-auto rounded-3xl shadow-2xl border border-white/10 select-none cursor-zoom-out transition-transform duration-300 hover:scale-[1.01]"
-              onClick={() => setViewingSlipImage(null)}
-              referrerPolicy="no-referrer"
+              onClick={() => setViewingSlipUrl(null)}
             />
           </div>
         </div>
       )}
-
     </div>
   );
 };
+
+export const OwnerPayments = PaymentsOwnerView;
+export default PaymentsOwnerView;

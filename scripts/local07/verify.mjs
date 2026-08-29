@@ -157,8 +157,8 @@ export async function runVerification() {
   const maintenanceRooms = allRooms.filter(r => r.status === 'maintenance');
 
   assert(occupiedRooms.length === 11, 'Occupied rooms count is exactly 11', occupiedRooms.length);
-  assert(vacantRooms.length === 5, 'Vacant rooms count is exactly 5', vacantRooms.length);
-  assert(reservedRooms.length === 1, 'Reserved rooms count is exactly 1', reservedRooms.length);
+  assert(vacantRooms.length === 6, 'Vacant rooms count is exactly 6', vacantRooms.length);
+  assert(reservedRooms.length === 0, 'Reserved rooms count is exactly 0', reservedRooms.length);
   assert(maintenanceRooms.length === 1, 'Maintenance rooms count is exactly 1', maintenanceRooms.length);
 
   // Billing Cycle July 2026 verification

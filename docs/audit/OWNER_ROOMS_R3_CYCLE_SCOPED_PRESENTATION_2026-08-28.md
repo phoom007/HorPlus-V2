@@ -1246,3 +1246,51 @@ R3.6a performs targeted post-R3.6 integration corrections without altering core 
 | Backend TypeScript Build | `npm --prefix server run build` | **0 Errors (PASS)** |
 | Frontend TypeScript Check | `npm run lint` | **0 Errors (PASS)** |
 | Line Ending & Whitespace Hygiene | `git -c core.whitespace=cr-at-eol diff --check` | **0 Warnings / Clean** |
+
+---
+
+## 35. OWNER PAYMENTS PRODUCTION RECONNECTION & UAT COHERENCE (R3.7)
+
+### Objective & Architecture Directives
+
+R3.7 achieves full reconnection of the Product Owner's approved Payments UI design to production financial authorities and delivers cohesive sandbox data alignment for UAT:
+
+1. **Product Owner Payments UI Preservation**:
+   - Preserved approved layout, cards, responsive tab styling, search filters, countdown animations, modals, and typography without regression.
+   - Completely eradicated mock financial mechanisms:
+     1. Removed direct mutation of `bill.status` in React state.
+     2. Removed `onSaveBills()` simulated settlements.
+     3. Removed multi-bill loops auto-settling other tenant bills on cash payments.
+     4. Replaced mock `RCPT-*` generation with canonical server receipts (`payment.receipt`).
+     5. Removed `generateMockSlipImage` and linked evidence viewer to `/api/v1/payments/:id/evidence`.
+     6. Strictly decoupled LINE notifications from financial mutations.
+
+2. **Tab Filtering Authority Contracts**:
+   - **Tab 1 (`checking` / รอตรวจสลิป)**: Encompasses ALL billing cycles. The Owner Header selected billing cycle does NOT filter this tab. Every card prominently displays its actual billing cycle badge (e.g. `งวด ก.ค. 69`). Statuses: `PENDING`, `UNDER_REVIEW`.
+   - **Tab 2 (`cash` / ยังไม่ชำระ)**: Strictly filtered to the Owner Header's selected billing cycle. Lists all unpaid/overdue bills (including deposit bills) and daily stays with outstanding balances.
+   - **Tab 3 (`paid` / ชำระแล้ว)**: Strictly filtered to the selected billing cycle by associated `bill.billingCycleId`. Renders authoritative server receipts (`payment.receipt.receiptNumber`).
+   - **Tab 4 (`rejected` / สลิปผิดพลาด)**: Strictly filtered to the selected billing cycle. Renders rejection reasons and allows slip re-inspection.
+
+3. **Single Bill Cash Settlement Invariant**:
+   - Recording cash payment via `POST /api/v1/payments/cash` settles ONLY the targeted bill. Does not mutate other overdue bills for the same tenant.
+
+4. **Coherent LOCAL-07 Financial World & First Operational Cycle Baseline**:
+   - August 2026 Room 202 deposit bill (`bill202Dep`) seeded with authoritative `Payment` (`status: 'APPROVED'`) and canonical `Receipt` (`RCP-202608-202-D`), rendering it paid across UI queries.
+   - First operational cycle baseline enforced: Initial state when onboarding a dormitory in August 2569 starts fresh (`vacant`, no fabricated past history in July, normal inheritance from August onward).
+
+5. **Room 304 Quick Add Eligibility**:
+   - Fixed Room 304 initial status to `vacant` (no tenant, no active occupancy, no reservation).
+   - `resolveRoomTenantAction` returns `{ kind: 'QUICK_ADD_CURRENT' }`, enabling `+ เพิ่มผู้เช่า` button. Canonical disabled reasons returned for occupied, reserved, maintenance rooms.
+
+---
+
+### Verification Matrix (R3.7)
+
+| Test / Check Suite | Target Command / Path | Result |
+|---|---|---|
+| R3.7 Owner Payments Reconnection & Room 304 Suite (6 Tests) | `npx vitest run src/tests/owner-payments-r37-production.test.tsx` | **6 / 6 PASS (100%)** |
+| LOCAL-07 Sandbox Verification & Integrity Oracle | `npx tsx scripts/local07/verify.mjs` | **ALL CHECKS PASS (0 Failures)** |
+| Full UAT Sandbox Refresh Workflow | `npm run uat:refresh` | **0 Failures (PASS)** |
+| Backend TypeScript Build | `npm --prefix server run build` | **0 Errors (PASS)** |
+| Frontend TypeScript Check | `npm run lint` | **0 Errors (PASS)** |
+| Line Ending & Whitespace Hygiene | `git -c core.whitespace=cr-at-eol diff --check` | **0 Warnings / Clean** |

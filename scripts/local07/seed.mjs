@@ -501,7 +501,7 @@ export async function seedLocal07Data() {
     { roomNumber: '301', floor: 3, rent: 5000, termRent: 20000, dailyRent: 600, status: 'occupied', bldId: bldA.id },
     { roomNumber: '302', floor: 3, rent: 5000, termRent: 20000, dailyRent: 600, status: 'occupied', bldId: bldA.id },
     { roomNumber: '303', floor: 3, rent: 5000, termRent: 20000, dailyRent: 600, status: 'occupied', bldId: bldA.id },
-    { roomNumber: '304', floor: 3, rent: 5000, termRent: 20000, dailyRent: 600, status: 'reserved', bldId: bldA.id },
+    { roomNumber: '304', floor: 3, rent: 5000, termRent: 20000, dailyRent: 600, status: 'vacant', bldId: bldA.id },
     // Building B
     { roomNumber: 'B101', floor: 1, rent: 5500, termRent: 22000, dailyRent: 600, status: 'occupied', bldId: bldB.id },
     { roomNumber: 'B102', floor: 2, rent: 5500, termRent: 22000, dailyRent: 600, status: 'vacant', bldId: bldB.id },
@@ -1746,6 +1746,34 @@ export async function seedLocal07Data() {
       quantity: 1,
       unitPrice: 4800,
       amount: 4800,
+    },
+  });
+  const pay202Dep = await prisma.payment.create({
+    data: {
+      dormitoryId: compDorm.id,
+      billId: bill202Dep.id,
+      tenantId: createdTenants['202'].id,
+      amount: 4800.0,
+      method: 'promptpay',
+      status: 'APPROVED',
+      paymentDate: new Date('2026-08-25T10:00:00Z'),
+    },
+  });
+  await prisma.receipt.create({
+    data: {
+      dormitoryId: compDorm.id,
+      billId: bill202Dep.id,
+      paymentId: pay202Dep.id,
+      receiptNumber: 'RCP-202608-202-D',
+      snapshotData: {
+        billNumber: bill202Dep.billNumber,
+        roomNumber: '202',
+        tenantName: createdTenants['202'].displayName,
+        totalAmount: 4800.0,
+        items: [{ type: 'deposit', description: 'เงินประกันสัญญาเช่า 202', amount: 4800 }],
+      },
+      issuedAt: new Date('2026-08-25T10:05:00Z'),
+      isVoided: false,
     },
   });
 

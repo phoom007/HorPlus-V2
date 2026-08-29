@@ -1182,7 +1182,19 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
           />
         );
       case 'payments':
-        return <PaymentsOwnerView bills={bills} dormitoryId={activeDormitoryId} onUpdateBills={() => queryClient.invalidateQueries({ queryKey: queryKeys.bills(activeDormitoryId) })} />;
+        return (
+          <PaymentsOwnerView
+            bills={bills}
+            dormitoryId={activeDormitoryId}
+            rooms={rooms}
+            tenants={tenants}
+            selectedBillingCycleId={selectedBillingCycleId || billingCycles.find(c => c.cycleCode === selectedCycleCode)?.id}
+            selectedCycleCode={selectedCycleCode}
+            billingCycles={billingCycles}
+            onAddLog={handleAddLog}
+            onUpdateBills={() => queryClient.invalidateQueries({ queryKey: queryKeys.bills(activeDormitoryId) })}
+          />
+        );
 
       case 'maintenance':
         return (
