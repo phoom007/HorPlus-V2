@@ -1,9 +1,9 @@
 # OWNER R3.8f — Manual-UAT Runtime Closure: Term Money Integrity, Room 302 Group Approval Forensics, Receipt Print & Local-07 Diagnostics
 
 **Date**: 2026-08-30
-**Branch**: `fix/owner-r38fr2-canonical-cash-oracle-truth-20260830`
+**Branch**: `fix/owner-r38fr3-local07-cors-runtime-authority-20260830`
 **Base Commit**: `3e4052dce8aaf567de47443ae8f8aa17b0955fff`
-**Parent Commit**: `cbee7c294d5c9c69ac2889ea75aff8414ffcc8e9`
+**Parent Commit**: `41d2d557426820933ecf902520027821c2f7082d`
 **Status**: PASSED / READY FOR PRODUCT OWNER MANUAL UAT
 
 ---
@@ -260,3 +260,52 @@ During independent source review, a P0 fixture integrity blocker was identified:
 | Room 302 Pending Group | `UNDER_REVIEW` (฿6,500) | `UNDER_REVIEW` (฿6,500) | **YES** |
 | Room 302 Pending Approval | Pending manual PO action | Pending manual PO action | **YES** |
 | Receipt Print Status | Source print fix ready | Source print fix ready | **YES** |
+
+---
+
+## 8. R3.8fR3 — LOCAL-07 Mutation CORS + Docker Runtime Authority Closure
+
+### 8.1 Product Owner CORS Runtime Evidence
+- **Browser Origin**: `http://127.0.0.1:5173/owner/payments`
+- **Symptom**: Read requests (`GET /api/v1/payments`, `GET /api/v1/properties/dormitory/defaults`) succeeded, but clicking "อนุมัติ" on Room 302 failed before the Payment API route could execute.
+- **Server Runtime Log**: `CORS policy blocked access from origin: http://127.0.0.1:5173`
+- **Root Cause**: Backend default `CORS_ORIGINS` was configured strictly to `http://localhost:5173`. When accessing via loopback IP `http://127.0.0.1:5173`, CORS preflight (`OPTIONS`) and mutations were blocked.
+
+### 8.2 Safe Loopback CORS Resolution
+- **Design Authority**: Preserved explicit `CORS_ORIGINS` configuration while updating the safe development default to both standard local loopback origins:
+  `http://localhost:5173,http://127.0.0.1:5173`
+- **Files Synchronized**:
+  - `server/src/config/env.ts`: Default updated to `'http://localhost:5173,http://127.0.0.1:5173'`.
+  - `server/.env`: Set `CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173`.
+  - `server/.env.example`: Set `CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173`.
+- **Security Invariant**: Production CORS wildcard `*` remains strictly prohibited and fails closed at startup.
+
+### 8.3 Docker & Host Runtime Container Classification
+| Container Name | Image | Host Port Mappings | Status | Classification | Rationale |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| `horplus_postgres` | `postgres:16-alpine` | `5455->5432`, `5432->5432` | Up (healthy) | **CURRENT_UAT_REQUIRED** | Hosts active PostgreSQL database target (`horplus_wave1d_fasttrack_test`) |
+| `horplus-v2-redis-1` | `redis:7-alpine` | `6380->6379` | Up (healthy) | **CURRENT_UAT_REQUIRED** | Active Redis cache for HorPlus-V2 backend |
+| `horplus-v2-db-1` | `postgres:15` | None (standby) | Created | **CURRENT_OPTIONAL** | Defined in `docker-compose.windows-pilot.yml`, standby |
+| `horplus_api` | `horplus_wave1d_fasttrack-api` | `3000->3000` | Up (healthy) | **LEGACY_NOT_USED_BY_CURRENT_UAT** | Legacy stack API; current UAT uses host Node.js API on port 3001 |
+| `horplus_redis` | `redis:7-alpine` | `6379` (internal) | Up (healthy) | **LEGACY_NOT_USED_BY_CURRENT_UAT** | Legacy stack internal Redis |
+| `horplus_wave1d_fasttrack-db-1` | `postgres:15` | `5432` (internal) | Up (healthy) | **LEGACY_NOT_USED_BY_CURRENT_UAT** | Legacy stack internal DB |
+| `horplus_wave1d_redis` | `redis:7-alpine` | `6379->6379` | Up | **LEGACY_NOT_USED_BY_CURRENT_UAT** | Legacy stack host Redis on port 6379 |
+| `chatbot_*` | Multiple | `8000`, `6333` | Paused | **UNKNOWN_DO_NOT_TOUCH** | Unrelated enterprise chatbot stack |
+
+### 8.4 Legacy Stack Safety Assessment
+- The legacy `horplus_wave1d_fasttrack` stack does not own ports `5455`, `6380`, `3001`, or the active `DATABASE_URL` target.
+- **Old Stack Status**: **SAFE TO STOP OLD STACK**
+- **Volume Safety**: **NOT SAFE TO DELETE VOLUMES YET** (Retain for data preservation).
+
+### 8.5 Unified Database Authority Verification
+- **API DB Target**: `127.0.0.1:5455 / horplus_wave1d_fasttrack_test`
+- **LOCAL-07 Script DB Target**: `127.0.0.1:5455 / horplus_wave1d_fasttrack_test`
+- **Result**: Unified single-database authority (Zero split).
+
+### 8.6 Room 302 Pending State Integrity
+- Room 302 was **NOT** approved or modified during automated test runs.
+- **Live Database Graph Verified**:
+  - July Bill (`INV-202607-009`): `PARTIALLY_PAID`, Paid `฿2,100.00`, Outstanding `฿4,000.00`.
+  - August Bill (`INV-202608-302-R`): `UNPAID`, Outstanding `฿5,000.00`.
+  - Pending Group (`฿6,500.00`): `UNDER_REVIEW`, Child Payments `UNDER_REVIEW` (July `฿4,000.00`, August `฿2,500.00`), Receipts `0`.
+  - Mutated by Agent: **NO**.
