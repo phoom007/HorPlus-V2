@@ -18,7 +18,7 @@ import {
   FileText,
 } from 'lucide-react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Modal, formatBaht, formatThaiDate, PrintView } from '../../components/GlobalComponents';
+import { Modal, formatBaht, formatThaiDate, formatCycleCode, PrintView, formatBillingQuantity, formatBillingRate } from '../../components/GlobalComponents';
 import { LineNotificationModal, LineIcon } from '../../components/LineNotificationModal';
 import { Bill, Tenant, Room } from '../../types';
 import { queryKeys } from '../../lib/queryClient';
@@ -58,12 +58,47 @@ export interface PaymentRecord {
       isVoided?: boolean;
       snapshotData?: any;
     }>;
+    allocations?: Array<{
+      id: string;
+      billId: string;
+      billItemId?: string | null;
+      allocatedAmount: number | string;
+      allocationOrder?: number;
+    }>;
+    payments?: Array<{
+      id: string;
+      billId: string;
+      amount: number | string;
+      bill?: {
+        id: string;
+        billNumber: string;
+        billingCycleId?: string | null;
+        totalAmount?: number | string;
+        items?: Array<{
+          id: string;
+          description: string;
+          amount: number | string;
+          quantity?: number | string;
+          unit?: string | null;
+          unitPrice?: number | string | null;
+        }>;
+      };
+    }>;
     billTargets?: Array<{
       billId: string;
       bill?: {
         id: string;
         billNumber: string;
         billingCycleId?: string | null;
+        totalAmount?: number | string;
+        items?: Array<{
+          id: string;
+          description: string;
+          amount: number | string;
+          quantity?: number | string;
+          unit?: string | null;
+          unitPrice?: number | string | null;
+        }>;
       };
     }>;
     verification?: {
@@ -332,7 +367,31 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
     paidAt?: string;
     paymentMethod: string;
     receiverName?: string;
-    items?: Array<{ description: string; amount: number }>;
+    isMultiBill?: boolean;
+    billGroups?: Array<{
+      billId: string;
+      billNumber: string;
+      cycleLabel?: string;
+      billTotal: number;
+      allocatedAmount: number;
+      items: Array<{
+        description: string;
+        quantity?: number | string | null;
+        unit?: string | null;
+        unitPrice?: number | string | null;
+        amount: number;
+      }>;
+    }>;
+    cycleLabel?: string;
+    billTotal?: number;
+    allocatedAmount?: number;
+    items?: Array<{
+      description: string;
+      quantity?: number | string | null;
+      unit?: string | null;
+      unitPrice?: number | string | null;
+      amount: number;
+    }>;
   } | null>(null);
 
   // Toast notification state
@@ -884,21 +943,135 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
     const tenantName = snap.tenantName || payment.bill?.tenant?.displayName || getTenantName(payment.tenantId || payment.bill?.tenantId);
     const totalAmount = Number(snap.total || rcpt.totalAmount || payment.amount || payment.bill?.totalAmount || 0);
 
-    let items: Array<{ description: string; amount: number }> = [];
-    if (Array.isArray(snap.items) && snap.items.length > 0) {
-      items = snap.items.map((it: any) => ({
-        description: it.description,
+    const targets = payment.paymentGroup?.billTargets || [];
+    const groupPayments = (payment.paymentGroup as any)?.payments || [];
+    const isMultiBill = targets.length > 1 || groupPayments.length > 1;
+
+    if (isMultiBill) {
+      const targetBillIds = [...new Set([
+        ...targets.map((t: any) => t.billId),
+        ...groupPayments.map((p: any) => p.billId),
+      ])].filter(Boolean);
+
+      const billGroups = targetBillIds.map((bId: string) => {
+        const foundBill: any =
+          targets.find((t: any) => t.billId === bId)?.bill ||
+          groupPayments.find((p: any) => p.billId === bId)?.bill ||
+          (payment.bill?.id === bId ? payment.bill : null) ||
+          bills.find(b => b.id === bId);
+
+        const cycleCode = foundBill?.billingCycle?.cycleCode || (foundBill?.billingCycleId ? getCycleCodeForCycleId(foundBill.billingCycleId) : '');
+        const cycleFormatted = cycleCode ? formatCycleCode(cycleCode) : '';
+        const cycleLabel = cycleFormatted ? `รอบบิล ${cycleFormatted}` : (foundBill?.billKind === 'DEPOSIT' ? 'เงินประกันสัญญาเช่า' : 'บิลค่าใช้จ่าย');
+
+        const billTotal = Number(foundBill?.totalAmount || 0);
+
+        const groupAllocations = payment.paymentGroup?.allocations || [];
+        const billAllocSum = groupAllocations
+          .filter((a: any) => a.billId === bId)
+          .reduce((sum: number, a: any) => sum + Number(a.allocatedAmount || 0), 0);
+
+        const childPayAmount = Number(groupPayments.find((p: any) => p.billId === bId)?.amount || 0);
+        const allocatedAmount = billAllocSum > 0 ? billAllocSum : (childPayAmount > 0 ? childPayAmount : billTotal);
+
+        let items: Array<{
+          description: string;
+          quantity?: number | string | null;
+          unit?: string | null;
+          unitPrice?: number | string | null;
+          amount: number;
+        }> = [];
+
+        if (foundBill?.items && foundBill.items.length > 0) {
+          items = foundBill.items.map((it: any) => ({
+            description: it.description || it.type || '-',
+            quantity: it.quantity,
+            unit: it.unit,
+            unitPrice: it.unitPrice,
+            amount: Number(it.amount),
+          }));
+        } else {
+          items = [{
+            description: `${cycleLabel} (${foundBill?.billNumber || bId})`,
+            amount: billTotal || allocatedAmount,
+          }];
+        }
+
+        return {
+          billId: bId,
+          billNumber: foundBill?.billNumber || bId,
+          cycleLabel,
+          billTotal: billTotal || allocatedAmount,
+          allocatedAmount,
+          items,
+        };
+      });
+
+      setViewingReceipt({
+        receiptNumber: snap.receiptNumber || rcpt.receiptNumber,
+        roomNumber,
+        tenantName,
+        totalAmount,
+        paidAt: snap.paymentDate || rcpt.issuedAt || rcpt.paidAt || payment.paymentDate || payment.createdAt,
+        paymentMethod: snap.paymentMethod
+          ? (String(snap.paymentMethod).toUpperCase() === 'CASH' ? 'เงินสดสำนักงาน' : 'แสกน PromptPay QR')
+          : ((payment.method || '').toUpperCase() === 'CASH' ? 'เงินสดสำนักงาน' : 'แสกน PromptPay QR'),
+        receiverName: rcpt.receiverName || snap.dormitoryName || 'ฝ่ายการเงิน หอพัก HorPlus',
+        isMultiBill: true,
+        billGroups,
+      });
+      setIsReceiptOpen(true);
+      return;
+    }
+
+    // Single-bill receipt
+    const targetBill: any = payment.bill || bills.find(b => b.id === payment.billId) || targets[0]?.bill;
+    const cycleCode = targetBill?.billingCycle?.cycleCode || (targetBill?.billingCycleId ? getCycleCodeForCycleId(targetBill.billingCycleId) : '');
+    const cycleFormatted = cycleCode ? formatCycleCode(cycleCode) : '';
+    const cycleLabel = cycleFormatted ? `รอบบิล ${cycleFormatted}` : (targetBill?.billKind === 'DEPOSIT' ? 'เงินประกันสัญญาเช่า' : '');
+
+    const billTotal = Number(targetBill?.totalAmount || totalAmount);
+    const allocatedAmount = totalAmount;
+
+    let items: Array<{
+      description: string;
+      quantity?: number | string | null;
+      unit?: string | null;
+      unitPrice?: number | string | null;
+      amount: number;
+    }> = [];
+
+    if (Array.isArray(snap.items)) {
+      if (snap.items.length > 0) {
+        items = snap.items.map((it: any) => ({
+          description: it.description,
+          quantity: it.quantity,
+          unit: it.unit,
+          unitPrice: it.unitPrice,
+          amount: Number(it.amount),
+        }));
+      } else {
+        items = [
+          { description: 'ยอดชำระตามใบเสร็จเดิม', amount: allocatedAmount }
+        ];
+      }
+    } else if (targetBill?.items && targetBill.items.length > 0) {
+      items = targetBill.items.map((it: any) => ({
+        description: it.description || it.type || '-',
+        quantity: it.quantity,
+        unit: it.unit,
+        unitPrice: it.unitPrice,
         amount: Number(it.amount),
       }));
     } else {
       items = [
-        { description: 'ยอดชำระตามใบเสร็จเดิม', amount: totalAmount }
+        { description: 'ยอดชำระตามใบเสร็จเดิม', amount: allocatedAmount }
       ];
     }
 
     setViewingReceipt({
       receiptNumber: snap.receiptNumber || rcpt.receiptNumber,
-      billNumber: snap.billNumber || payment.bill?.billNumber,
+      billNumber: snap.billNumber || targetBill?.billNumber,
       roomNumber,
       tenantName,
       totalAmount,
@@ -907,6 +1080,10 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
         ? (String(snap.paymentMethod).toUpperCase() === 'CASH' ? 'เงินสดสำนักงาน' : 'แสกน PromptPay QR')
         : ((payment.method || '').toUpperCase() === 'CASH' ? 'เงินสดสำนักงาน' : 'แสกน PromptPay QR'),
       receiverName: rcpt.receiverName || snap.dormitoryName || 'ฝ่ายการเงิน หอพัก HorPlus',
+      isMultiBill: false,
+      cycleLabel,
+      billTotal,
+      allocatedAmount,
       items,
     });
     setIsReceiptOpen(true);
@@ -1716,6 +1893,9 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                 <div className="text-right">
                   <h4 className="font-extrabold text-slate-950 text-sm uppercase leading-tight">ใบเสร็จรับเงิน</h4>
                   <p className="text-[11px] text-slate-600 font-semibold mt-1">เลขที่: {viewingReceipt.receiptNumber}</p>
+                  {viewingReceipt.paidAt && (
+                    <p className="text-[10px] text-slate-500 font-medium mt-0.5">วันที่ออก: {formatThaiDate(viewingReceipt.paidAt)}</p>
+                  )}
                 </div>
               </div>
 
@@ -1730,29 +1910,104 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                 </div>
               </div>
 
-              {/* Items Table inside Receipt */}
-              <div className="border border-slate-300 rounded-2xl overflow-hidden mt-3">
-                <table className="w-full text-left border-collapse text-xs">
-                  <thead className="bg-slate-100/80 text-slate-700 font-extrabold border-b border-slate-300">
-                    <tr>
-                      <th className="p-3">รายการ</th>
-                      <th className="p-3 text-right">จำนวนเงิน</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-200">
-                    {viewingReceipt.items?.map((it, idx) => (
-                      <tr key={idx}>
-                        <td className="p-3 text-slate-800 font-medium">{formatItemDescription(it.description)}</td>
-                        <td className="p-3 text-right font-bold text-slate-900">{formatBahtDash(it.amount)}</td>
-                      </tr>
-                    ))}
-                    <tr className="bg-slate-50 font-black">
-                      <td className="p-3 text-right text-slate-950">รวมชำระสุทธิ:</td>
-                      <td className="p-3 text-right text-indigo-900 font-black text-sm">{formatBaht(viewingReceipt.totalAmount)}</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
+              {viewingReceipt.isMultiBill && viewingReceipt.billGroups && viewingReceipt.billGroups.length > 0 ? (
+                /* Multi-Bill Receipt Section */
+                <div className="space-y-4">
+                  {viewingReceipt.billGroups.map((group, gIdx) => (
+                    <div key={gIdx} className="space-y-2 border border-slate-300 rounded-2xl p-3 bg-white">
+                      <div className="flex justify-between items-center text-xs pb-1 border-b border-slate-200">
+                        <span className="font-extrabold text-slate-800">{group.cycleLabel}</span>
+                        <span className="text-[11px] text-slate-500 font-medium">เลขที่บิล: {group.billNumber}</span>
+                      </div>
+
+                      <table className="w-full text-left border-collapse text-xs">
+                        <thead className="bg-slate-50 text-slate-700 font-bold border-b border-slate-200">
+                          <tr>
+                            <th className="p-2">รายการ</th>
+                            <th className="p-2 text-center">จำนวน</th>
+                            <th className="p-2 text-right">ราคา/หน่วย</th>
+                            <th className="p-2 text-right">จำนวนเงิน</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {group.items.map((it, idx) => (
+                            <tr key={idx}>
+                              <td className="p-2 text-slate-800 font-medium">{formatItemDescription(it.description)}</td>
+                              <td className="p-2 text-center text-slate-600 font-medium">{formatBillingQuantity(it.quantity, it.unit)}</td>
+                              <td className="p-2 text-right text-slate-600 font-medium">{formatBillingRate(it.unitPrice, it.unit)}</td>
+                              <td className="p-2 text-right font-bold text-slate-900">{formatBaht(it.amount)}</td>
+                            </tr>
+                          ))}
+                          <tr className="bg-slate-50/50 text-slate-600 text-[11px]">
+                            <td colSpan={3} className="p-2 text-right font-semibold">ยอดบิล:</td>
+                            <td className="p-2 text-right font-bold text-slate-700">{formatBaht(group.billTotal)}</td>
+                          </tr>
+                          <tr className="bg-slate-50/80 text-slate-700 text-[11px] font-bold">
+                            <td colSpan={3} className="p-2 text-right">ยอดรับชำระสำหรับรอบบิลนี้:</td>
+                            <td className="p-2 text-right text-indigo-700 font-extrabold">{formatBaht(group.allocatedAmount)}</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  ))}
+
+                  <div className="bg-slate-100 p-3 rounded-xl border border-slate-300 flex justify-between items-center text-xs font-black">
+                    <span className="text-slate-900 text-sm font-black">รวมรับสุทธิ:</span>
+                    <span className="text-indigo-900 text-base font-black">{formatBaht(viewingReceipt.totalAmount)}</span>
+                  </div>
+                </div>
+              ) : (
+                /* Single-Bill Receipt Section */
+                <div className="space-y-3">
+                  {viewingReceipt.cycleLabel && (
+                    <div className="text-xs bg-slate-100/60 p-2.5 rounded-xl border border-slate-200/80 flex justify-between items-center">
+                      <span className="font-bold text-slate-700">{viewingReceipt.cycleLabel}</span>
+                      {viewingReceipt.billNumber && (
+                        <span className="text-[11px] text-slate-500 font-medium">เลขที่บิล: {viewingReceipt.billNumber}</span>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="border border-slate-300 rounded-2xl overflow-hidden mt-3">
+                    <table className="w-full text-left border-collapse text-xs">
+                      <thead className="bg-slate-100/80 text-slate-700 font-extrabold border-b border-slate-300">
+                        <tr>
+                          <th className="p-3">รายการ</th>
+                          <th className="p-3 text-center">จำนวน</th>
+                          <th className="p-3 text-right">ราคา/หน่วย</th>
+                          <th className="p-3 text-right">จำนวนเงิน</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-200">
+                        {viewingReceipt.items?.map((it, idx) => (
+                          <tr key={idx}>
+                            <td className="p-3 text-slate-800 font-medium">{formatItemDescription(it.description)}</td>
+                            <td className="p-3 text-center text-slate-600 font-medium">{formatBillingQuantity(it.quantity, it.unit)}</td>
+                            <td className="p-3 text-right text-slate-600 font-medium">{formatBillingRate(it.unitPrice, it.unit)}</td>
+                            <td className="p-3 text-right font-bold text-slate-900">{formatBaht(it.amount)}</td>
+                          </tr>
+                        ))}
+                        {viewingReceipt.billTotal !== undefined && (
+                          <tr className="bg-slate-50/50 text-slate-600">
+                            <td colSpan={3} className="p-2.5 text-right font-semibold">ยอดบิล:</td>
+                            <td className="p-2.5 text-right font-bold text-slate-700">{formatBaht(viewingReceipt.billTotal)}</td>
+                          </tr>
+                        )}
+                        {viewingReceipt.billTotal !== undefined && viewingReceipt.allocatedAmount !== undefined && viewingReceipt.billTotal !== viewingReceipt.allocatedAmount && (
+                          <tr className="bg-slate-50/50 text-slate-600">
+                            <td colSpan={3} className="p-2.5 text-right font-semibold">ยอดรับชำระในใบเสร็จนี้:</td>
+                            <td className="p-2.5 text-right font-bold text-slate-900">{formatBaht(viewingReceipt.allocatedAmount)}</td>
+                          </tr>
+                        )}
+                        <tr className="bg-slate-100 font-black border-t border-slate-300">
+                          <td colSpan={3} className="p-3 text-right text-slate-950 font-black">รวมรับสุทธิ:</td>
+                          <td className="p-3 text-right text-indigo-900 font-black text-sm">{formatBaht(viewingReceipt.totalAmount)}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
 
               <div className="grid grid-cols-2 gap-4 pt-4 text-[11px] text-slate-600 font-medium border-t border-dashed border-slate-300">
                 <p>ช่องทางรับชำระ: {viewingReceipt.paymentMethod}</p>
@@ -1821,9 +2076,9 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                     viewingBillDetail.bill.items.map((it: any, idx: number) => (
                       <tr key={idx} className="hover:bg-slate-50/50">
                         <td className="p-3 text-center text-slate-400 font-medium">{idx + 1}</td>
-                        <td className="p-3 font-semibold text-slate-800">{it.description || it.type || '-'}</td>
-                        <td className="p-3 text-center text-slate-600 font-medium">{it.quantity ? `${it.quantity} ${it.unit || ''}` : '-'}</td>
-                        <td className="p-3 text-right text-slate-600 font-medium">{it.unitPrice ? formatBaht(Number(it.unitPrice)) : '-'}</td>
+                        <td className="p-3 font-semibold text-slate-800">{formatItemDescription(it.description || it.type || '-')}</td>
+                        <td className="p-3 text-center text-slate-600 font-medium">{formatBillingQuantity(it.quantity, it.unit)}</td>
+                        <td className="p-3 text-right text-slate-600 font-medium">{formatBillingRate(it.unitPrice, it.unit)}</td>
                         <td className="p-3 text-right font-bold text-slate-900">{formatBaht(Number(it.amount))}</td>
                       </tr>
                     ))

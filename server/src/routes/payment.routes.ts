@@ -768,6 +768,7 @@ export function createPaymentRouter(authService: AuthenticationService) {
               room: true,
               items: true,
               allocations: true,
+              billingCycle: true,
             },
           },
           receipt: true,
@@ -776,10 +777,23 @@ export function createPaymentRouter(authService: AuthenticationService) {
             include: {
               allocations: true,
               receipts: true,
+              payments: {
+                include: {
+                  bill: {
+                    include: {
+                      items: true,
+                      billingCycle: true,
+                      room: true,
+                      tenant: true,
+                    },
+                  },
+                },
+              },
               billTargets: {
                 include: {
                   bill: {
                     include: {
+                      items: true,
                       billingCycle: true,
                       room: true,
                       tenant: true,

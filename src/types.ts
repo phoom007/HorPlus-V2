@@ -584,6 +584,69 @@ export const formatItemDescription = (desc: string): string => {
   return str;
 };
 
+export function formatBillingUnit(unit?: string | null): string {
+  if (!unit) return '';
+  const u = String(unit).trim().toLowerCase();
+  switch (u) {
+    case 'unit':
+      return 'หน่วย';
+    case 'person':
+      return 'คน';
+    case 'room':
+      return 'ห้อง';
+    case 'charge':
+      return 'รายการ';
+    case 'vehicle':
+      return 'คัน';
+    case 'month':
+      return 'เดือน';
+    case 'day':
+      return 'วัน';
+    case 'installment':
+      return 'งวด';
+    case 'bill':
+      return 'บิล';
+    case 'หน่วย':
+      return 'หน่วย';
+    case 'คน':
+      return 'คน';
+    case 'ห้อง':
+      return 'ห้อง';
+    case 'รายการ':
+      return 'รายการ';
+    case 'คัน':
+      return 'คัน';
+    case 'เดือน':
+      return 'เดือน';
+    case 'วัน':
+      return 'วัน';
+    case 'งวด':
+      return 'งวด';
+    case 'บิล':
+      return 'บิล';
+    default:
+      return unit.trim();
+  }
+}
+
+export function formatBillingQuantity(quantity?: number | string | null, unit?: string | null): string {
+  if (quantity === undefined || quantity === null || quantity === '') return '-';
+  const num = Number(quantity);
+  if (isNaN(num)) return '-';
+  const formattedNum = num % 1 === 0 ? num.toString() : num.toLocaleString('th-TH', { maximumFractionDigits: 2 });
+  const thaiUnit = formatBillingUnit(unit);
+  return thaiUnit ? `${formattedNum} ${thaiUnit}` : formattedNum;
+}
+
+export function formatBillingRate(unitPrice?: number | string | null, unit?: string | null): string {
+  if (unitPrice === undefined || unitPrice === null || unitPrice === '') return '-';
+  const val = Number(unitPrice);
+  if (isNaN(val)) return '-';
+  const formattedVal = val.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const thaiUnit = formatBillingUnit(unit);
+  return thaiUnit ? `${formattedVal} บาท/${thaiUnit}` : `${formattedVal} บาท`;
+}
+
 export interface ActiveRentalSummary {
   type: 'TERM' | 'MONTHLY' | 'DAILY';
   rentAmount: number;

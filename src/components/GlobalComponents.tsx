@@ -75,6 +75,8 @@ export const formatOwnerMonthYear = (cycleCodeOrIso?: string): string => {
   return `${months[month - 1]} ${year + 543}`;
 };
 
+export const formatCycleCode = formatOwnerMonthYear;
+
 export const renderOptionalText = (val: any, fallback = '-'): string => {
   if (val === null || val === undefined) return fallback;
   const s = String(val).trim();
@@ -1027,3 +1029,5 @@ export const PrintView: React.FC<PrintViewProps> = ({ children, title = 'พิ�
     </div>
   );
 };
+
+export { formatBillingUnit, formatBillingQuantity, formatBillingRate } from '../types';
