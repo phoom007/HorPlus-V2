@@ -21,7 +21,7 @@ import {
 import { AuditService } from './audit.service.js';
 import { currentCycleResolverService } from './current-cycle-resolver.js';
 import { normalizeUtilityBillingMode } from '../utils/billing-mode-normalizer.util.js';
-import { validateCanonicalUtilityTiers } from '../utils/utility-tier-validator.util.js';
+import { validateCanonicalUtilityTiers, validateUtilityTierModeConfiguration } from '../utils/utility-tier-validator.util.js';
 import {
   currentBusinessDateInBangkok,
   toBangkokDateString,
@@ -241,13 +241,17 @@ export class BillingCycleService {
         if (precedingCycle?.rateSnapshot) {
           const pSnap = precedingCycle.rateSnapshot;
           const waterBillingType = normalizeUtilityBillingMode(pSnap.waterBillingType);
-          const waterTierRates = waterBillingType === 'tiered' && pSnap.waterTierRates
-            ? validateCanonicalUtilityTiers(pSnap.waterTierRates)
-            : null;
+          const waterTierRates = validateUtilityTierModeConfiguration({
+            mode: waterBillingType,
+            tiers: pSnap.waterTierRates,
+            utilityName: `Water (inherited from cycle '${precedingCycle.cycleCode}')`,
+          });
           const electricityBillingType = normalizeUtilityBillingMode(pSnap.electricityBillingType);
-          const electricityTierRates = electricityBillingType === 'tiered' && pSnap.electricityTierRates
-            ? validateCanonicalUtilityTiers(pSnap.electricityTierRates)
-            : null;
+          const electricityTierRates = validateUtilityTierModeConfiguration({
+            mode: electricityBillingType,
+            tiers: pSnap.electricityTierRates,
+            utilityName: `Electricity (inherited from cycle '${precedingCycle.cycleCode}')`,
+          });
 
           snapshotData = {
             waterBillingType,
@@ -273,13 +277,17 @@ export class BillingCycleService {
           };
         } else {
           const waterBillingType = normalizeUtilityBillingMode(settings.waterBillingType);
-          const waterTierRates = waterBillingType === 'tiered' && (settings as any).waterTierRates
-            ? validateCanonicalUtilityTiers((settings as any).waterTierRates)
-            : null;
+          const waterTierRates = validateUtilityTierModeConfiguration({
+            mode: waterBillingType,
+            tiers: (settings as any).waterTierRates,
+            utilityName: 'Water',
+          });
           const electricityBillingType = normalizeUtilityBillingMode(settings.electricityBillingType);
-          const electricityTierRates = electricityBillingType === 'tiered' && (settings as any).electricityTierRates
-            ? validateCanonicalUtilityTiers((settings as any).electricityTierRates)
-            : null;
+          const electricityTierRates = validateUtilityTierModeConfiguration({
+            mode: electricityBillingType,
+            tiers: (settings as any).electricityTierRates,
+            utilityName: 'Electricity',
+          });
 
           snapshotData = {
             waterBillingType,
@@ -686,31 +694,23 @@ export class BillingCycleService {
       ? '0.00'
       : (data.parkingFee !== undefined ? cleanDec(data.parkingFee, 'parkingFee') : rateSnapshot.parkingFee);
 
-    const waterType = normalizeUtilityBillingMode(data.waterBillingType || rateSnapshot.waterBillingType);
+    const waterType = normalizeUtilityBillingMode(data.waterBillingType !== undefined ? data.waterBillingType : rateSnapshot.waterBillingType);
     const waterRate = data.waterRate !== undefined ? cleanDec(data.waterRate, 'waterRate') : rateSnapshot.waterRate;
-    let waterTierRates: any = undefined;
-    if (waterType === 'tiered') {
-      if (data.waterTierRates !== undefined) {
-        waterTierRates = data.waterTierRates ? validateCanonicalUtilityTiers(data.waterTierRates) : null;
-      } else if (rateSnapshot.waterTierRates) {
-        waterTierRates = validateCanonicalUtilityTiers(rateSnapshot.waterTierRates);
-      }
-    } else {
-      waterTierRates = null;
-    }
+    const candidateWaterTiers = data.waterTierRates !== undefined ? data.waterTierRates : rateSnapshot.waterTierRates;
+    const waterTierRates = validateUtilityTierModeConfiguration({
+      mode: waterType,
+      tiers: candidateWaterTiers,
+      utilityName: 'Water',
+    });
 
-    const electricityType = normalizeUtilityBillingMode(data.electricityBillingType || rateSnapshot.electricityBillingType);
+    const electricityType = normalizeUtilityBillingMode(data.electricityBillingType !== undefined ? data.electricityBillingType : rateSnapshot.electricityBillingType);
     const electricityRate = data.electricityRate !== undefined ? cleanDec(data.electricityRate, 'electricityRate') : rateSnapshot.electricityRate;
-    let electricityTierRates: any = undefined;
-    if (electricityType === 'tiered') {
-      if (data.electricityTierRates !== undefined) {
-        electricityTierRates = data.electricityTierRates ? validateCanonicalUtilityTiers(data.electricityTierRates) : null;
-      } else if (rateSnapshot.electricityTierRates) {
-        electricityTierRates = validateCanonicalUtilityTiers(rateSnapshot.electricityTierRates);
-      }
-    } else {
-      electricityTierRates = null;
-    }
+    const candidateElecTiers = data.electricityTierRates !== undefined ? data.electricityTierRates : rateSnapshot.electricityTierRates;
+    const electricityTierRates = validateUtilityTierModeConfiguration({
+      mode: electricityType,
+      tiers: candidateElecTiers,
+      utilityName: 'Electricity',
+    });
 
     const lateType = data.lateFeeType || rateSnapshot.lateFeeType;
     const lateValue = lateType === 'none'

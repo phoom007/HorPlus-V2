@@ -8,10 +8,11 @@
  * 2. Intermediate tiers (index < length - 1) MUST have finite, positive, strictly ascending upTo boundaries.
  * 3. Final tier (index === length - 1) MUST have upTo: null (unlimited).
  * 4. All rates must be non-negative decimals (rate >= 0.00). Rate of 0.00 is explicitly valid.
- * 5. Rejects NaN, Infinity, negative values, malformed structures, gaps, and duplicates.
+ * 5. Rejects scientific notation ("1e2", "5e-1"), leading '+', untrimmed strings, >2 decimal places, NaN, Infinity, negative values, malformed structures, gaps, and duplicates.
  */
 
-import { toDecimal, formatDecimal, compareDecimals, isZeroDecimal } from './decimal-math.util.js';
+import { toDecimal, formatDecimal, compareDecimals } from './decimal-math.util.js';
+import type { CanonicalUtilityBillingMode } from './billing-mode-normalizer.util.js';
 
 export interface CanonicalTierRecord {
   upTo: string | null; // Exact 2-decimal upper boundary (e.g. "10.00") or null for unlimited
@@ -30,6 +31,64 @@ export interface CanonicalTieredBillItemMetadata {
   mode: 'tiered';
   usageUnits: string;
   tierBreakdown: CanonicalTierBreakdown[];
+}
+
+export interface ValidateTierModeOptions {
+  mode: CanonicalUtilityBillingMode;
+  tiers: unknown;
+  utilityName?: string;
+}
+
+const STRICT_DECIMAL_SYNTAX = /^\d{1,10}(\.\d{1,2})?$/;
+
+function parseAndValidateStrictDecimal(val: unknown, fieldDesc: string): string {
+  if (val === undefined || val === null || val === '') {
+    const err = new Error(`INVALID_TIER_CONFIGURATION: ${fieldDesc} is required and cannot be empty`);
+    (err as any).statusCode = 400;
+    (err as any).code = 'INVALID_TIER_CONFIGURATION';
+    throw err;
+  }
+
+  let strVal: string;
+  if (typeof val === 'string') {
+    if (!STRICT_DECIMAL_SYNTAX.test(val)) {
+      const err = new Error(`INVALID_TIER_CONFIGURATION: ${fieldDesc} '${val}' must be a valid non-negative decimal string with up to 2 decimal places (no scientific notation, signs, or excessive precision)`);
+      (err as any).statusCode = 400;
+      (err as any).code = 'INVALID_TIER_CONFIGURATION';
+      throw err;
+    }
+    strVal = val;
+  } else if (typeof val === 'number') {
+    if (!Number.isFinite(val) || Number.isNaN(val) || val < 0) {
+      const err = new Error(`INVALID_TIER_CONFIGURATION: ${fieldDesc} '${val}' must be a finite non-negative number`);
+      (err as any).statusCode = 400;
+      (err as any).code = 'INVALID_TIER_CONFIGURATION';
+      throw err;
+    }
+    const fixedStr = val.toFixed(2);
+    if (Number(fixedStr) !== val && Math.abs(Number(fixedStr) - val) > 1e-9) {
+      const err = new Error(`INVALID_TIER_CONFIGURATION: ${fieldDesc} '${val}' cannot have more than 2 decimal places`);
+      (err as any).statusCode = 400;
+      (err as any).code = 'INVALID_TIER_CONFIGURATION';
+      throw err;
+    }
+    strVal = fixedStr;
+  } else {
+    const err = new Error(`INVALID_TIER_CONFIGURATION: ${fieldDesc} must be a decimal string or number`);
+    (err as any).statusCode = 400;
+    (err as any).code = 'INVALID_TIER_CONFIGURATION';
+    throw err;
+  }
+
+  const dec = toDecimal(strVal);
+  if (compareDecimals(dec, toDecimal('0.00')) < 0) {
+    const err = new Error(`INVALID_TIER_CONFIGURATION: ${fieldDesc} cannot be negative`);
+    (err as any).statusCode = 400;
+    (err as any).code = 'INVALID_TIER_CONFIGURATION';
+    throw err;
+  }
+
+  return formatDecimal(dec);
 }
 
 export function validateCanonicalUtilityTiers(input: unknown): CanonicalTierRecord[] {
@@ -68,41 +127,10 @@ export function validateCanonicalUtilityTiers(input: unknown): CanonicalTierReco
 
     const isLast = i === input.length - 1;
 
-    // Validate rate
-    const rawRate = rawTier.rate;
-    if (
-      rawRate === undefined ||
-      rawRate === null ||
-      rawRate === '' ||
-      (typeof rawRate === 'string' && (rawRate.trim() === '' || isNaN(Number(rawRate)))) ||
-      (typeof rawRate === 'number' && (!isFinite(rawRate) || isNaN(rawRate)))
-    ) {
-      const err = new Error(`INVALID_TIER_CONFIGURATION: Tier at index ${i} has invalid rate '${rawRate}'`);
-      (err as any).statusCode = 400;
-      (err as any).code = 'INVALID_TIER_CONFIGURATION';
-      throw err;
-    }
+    // Strict rate validation
+    const normalizedRate = parseAndValidateStrictDecimal(rawTier.rate, `Tier at index ${i} rate`);
 
-    let rateDec;
-    try {
-      rateDec = toDecimal(rawRate.toString().trim());
-    } catch {
-      const err = new Error(`INVALID_TIER_CONFIGURATION: Tier at index ${i} has unparseable rate '${rawRate}'`);
-      (err as any).statusCode = 400;
-      (err as any).code = 'INVALID_TIER_CONFIGURATION';
-      throw err;
-    }
-
-    if (compareDecimals(rateDec, toDecimal('0.00')) < 0) {
-      const err = new Error(`INVALID_TIER_CONFIGURATION: Tier at index ${i} rate cannot be negative`);
-      (err as any).statusCode = 400;
-      (err as any).code = 'INVALID_TIER_CONFIGURATION';
-      throw err;
-    }
-
-    const normalizedRate = formatDecimal(rateDec);
-
-    // Validate upTo boundary
+    // Strict upTo validation
     const rawUpTo = rawTier.upTo;
 
     if (isLast) {
@@ -122,25 +150,8 @@ export function validateCanonicalUtilityTiers(input: unknown): CanonicalTierReco
         throw err;
       }
 
-      if (
-        (typeof rawUpTo === 'string' && isNaN(Number(rawUpTo))) ||
-        (typeof rawUpTo === 'number' && (!isFinite(rawUpTo) || isNaN(rawUpTo)))
-      ) {
-        const err = new Error(`INVALID_TIER_CONFIGURATION: Tier at index ${i} has invalid upTo boundary '${rawUpTo}'`);
-        (err as any).statusCode = 400;
-        (err as any).code = 'INVALID_TIER_CONFIGURATION';
-        throw err;
-      }
-
-      let upToDec;
-      try {
-        upToDec = toDecimal(rawUpTo.toString().trim());
-      } catch {
-        const err = new Error(`INVALID_TIER_CONFIGURATION: Tier at index ${i} has unparseable upTo boundary '${rawUpTo}'`);
-        (err as any).statusCode = 400;
-        (err as any).code = 'INVALID_TIER_CONFIGURATION';
-        throw err;
-      }
+      const normalizedUpTo = parseAndValidateStrictDecimal(rawUpTo, `Tier at index ${i} upTo boundary`);
+      const upToDec = toDecimal(normalizedUpTo);
 
       if (compareDecimals(upToDec, toDecimal('0.00')) <= 0) {
         const err = new Error(`INVALID_TIER_CONFIGURATION: Tier at index ${i} upTo boundary must be strictly greater than 0`);
@@ -157,9 +168,28 @@ export function validateCanonicalUtilityTiers(input: unknown): CanonicalTierReco
       }
 
       prevUpToDec = upToDec;
-      normalizedTiers.push({ upTo: formatDecimal(upToDec), rate: normalizedRate });
+      normalizedTiers.push({ upTo: normalizedUpTo, rate: normalizedRate });
     }
   }
 
   return normalizedTiers;
+}
+
+/**
+ * Shared authority for validating utility tier configurations in context of a billing mode.
+ * - When mode === 'tiered': tiers MUST be present and valid. Returns CanonicalTierRecord[].
+ * - When mode !== 'tiered': returns null (active calculation does not use tiers).
+ */
+export function validateUtilityTierModeConfiguration(options: ValidateTierModeOptions): CanonicalTierRecord[] | null {
+  const { mode, tiers, utilityName = 'Utility' } = options;
+  if (mode === 'tiered') {
+    if (tiers === null || tiers === undefined || (Array.isArray(tiers) && tiers.length === 0)) {
+      const err = new Error(`INVALID_TIER_CONFIGURATION: ${utilityName} billing mode is 'tiered' but no tier configuration was provided`);
+      (err as any).statusCode = 400;
+      (err as any).code = 'INVALID_TIER_CONFIGURATION';
+      throw err;
+    }
+    return validateCanonicalUtilityTiers(tiers);
+  }
+  return null;
 }

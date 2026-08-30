@@ -19,6 +19,7 @@ import {
   PaymentSettingsInputSchema,
 } from '../types/onboarding-validation.js';
 import { validateCanonicalUtilityTiers } from '../utils/utility-tier-validator.util.js';
+import { normalizeUtilityBillingMode } from '../utils/billing-mode-normalizer.util.js';
 
 import multer from 'multer';
 const upload = multer({ limits: { fileSize: 5 * 1024 * 1024 } });
@@ -231,32 +232,81 @@ export function createDormitoryRouter(
       current = await billingRepo.create({ dormitoryId });
     }
 
-    const updatePayload: any = { ...parsed.data };
-    if (parsed.data.waterTierRates !== undefined) {
-      if (parsed.data.waterTierRates) {
-        updatePayload.waterTierRates = validateCanonicalUtilityTiers(parsed.data.waterTierRates);
-      } else {
-        updatePayload.waterTierRates = null;
-      }
-    }
-    if (parsed.data.electricityTierRates !== undefined) {
-      if (parsed.data.electricityTierRates) {
-        updatePayload.electricityTierRates = validateCanonicalUtilityTiers(parsed.data.electricityTierRates);
-      } else {
-        updatePayload.electricityTierRates = null;
-      }
-    }
+    try {
+      const effectiveWaterBillingType = normalizeUtilityBillingMode(
+        parsed.data.waterBillingType !== undefined ? parsed.data.waterBillingType : current.waterBillingType
+      );
+      const effectiveElectricityBillingType = normalizeUtilityBillingMode(
+        parsed.data.electricityBillingType !== undefined ? parsed.data.electricityBillingType : current.electricityBillingType
+      );
 
-    let updated: any;
-    if (prisma?.dormitoryBillingSettings) {
-      updated = await prisma.dormitoryBillingSettings.update({
-        where: { dormitoryId },
-        data: updatePayload,
+      let effectiveWaterTierRates: any = undefined;
+      if (effectiveWaterBillingType === 'tiered') {
+        const candidate = parsed.data.waterTierRates !== undefined ? parsed.data.waterTierRates : current.waterTierRates;
+        if (!candidate || (Array.isArray(candidate) && candidate.length === 0)) {
+          const err = new Error("INVALID_TIER_CONFIGURATION: Water billing mode is 'tiered' but no tier configuration was provided");
+          (err as any).statusCode = 400;
+          (err as any).code = 'INVALID_TIER_CONFIGURATION';
+          throw err;
+        }
+        effectiveWaterTierRates = validateCanonicalUtilityTiers(candidate);
+      } else {
+        // Preserve inactive saved tiers unless client explicitly updated them
+        if (parsed.data.waterTierRates !== undefined) {
+          effectiveWaterTierRates = parsed.data.waterTierRates ? validateCanonicalUtilityTiers(parsed.data.waterTierRates) : null;
+        } else {
+          effectiveWaterTierRates = current.waterTierRates ?? null;
+        }
+      }
+
+      let effectiveElectricityTierRates: any = undefined;
+      if (effectiveElectricityBillingType === 'tiered') {
+        const candidate = parsed.data.electricityTierRates !== undefined ? parsed.data.electricityTierRates : current.electricityTierRates;
+        if (!candidate || (Array.isArray(candidate) && candidate.length === 0)) {
+          const err = new Error("INVALID_TIER_CONFIGURATION: Electricity billing mode is 'tiered' but no tier configuration was provided");
+          (err as any).statusCode = 400;
+          (err as any).code = 'INVALID_TIER_CONFIGURATION';
+          throw err;
+        }
+        effectiveElectricityTierRates = validateCanonicalUtilityTiers(candidate);
+      } else {
+        // Preserve inactive saved tiers unless client explicitly updated them
+        if (parsed.data.electricityTierRates !== undefined) {
+          effectiveElectricityTierRates = parsed.data.electricityTierRates ? validateCanonicalUtilityTiers(parsed.data.electricityTierRates) : null;
+        } else {
+          effectiveElectricityTierRates = current.electricityTierRates ?? null;
+        }
+      }
+
+      const updatePayload: any = {
+        ...parsed.data,
+        waterBillingType: effectiveWaterBillingType,
+        waterTierRates: effectiveWaterTierRates,
+        electricityBillingType: effectiveElectricityBillingType,
+        electricityTierRates: effectiveElectricityTierRates,
+      };
+
+      let updated: any;
+      if (prisma?.dormitoryBillingSettings) {
+        updated = await prisma.dormitoryBillingSettings.update({
+          where: { dormitoryId },
+          data: updatePayload,
+        });
+      } else {
+        updated = await billingRepo.update(dormitoryId, updatePayload as any);
+      }
+      res.json({ data: updated });
+    } catch (err: any) {
+      return res.status(err.statusCode || 400).json({
+        error: {
+          code: err.code || 'INVALID_TIER_CONFIGURATION',
+          message: err.message,
+          fieldErrors: null,
+          requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+          timestamp: new Date().toISOString(),
+        },
       });
-    } else {
-      updated = await billingRepo.update(dormitoryId, updatePayload as any);
     }
-    res.json({ data: updated });
   });
 
   // GET /api/v1/dormitories/:dormitoryId/payment-settings (PS-002, PS-003, PS-008)

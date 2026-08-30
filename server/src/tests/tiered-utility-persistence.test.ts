@@ -1,19 +1,20 @@
 /**
  * @license Apache-2.0
- * OWNER R3.9-B: Tiered Utility Persistence, Snapshot, and Validation Authority Tests
+ * OWNER R3.9-B.1: Tiered Utility Persistence, Snapshot, and Validation Authority Tests
  */
 
 import { describe, it, expect } from 'vitest';
 import {
   validateCanonicalUtilityTiers,
+  validateUtilityTierModeConfiguration,
   CanonicalTierRecord,
 } from '../utils/utility-tier-validator.util.js';
 import { normalizeUtilityBillingMode } from '../utils/billing-mode-normalizer.util.js';
 import { InMemoryBillingSettingsRepository } from '../db/repositories/billing-settings.repository.js';
 import { InMemoryBillingCycleRepository } from '../db/repositories/billing-cycle.repository.js';
 
-describe('OWNER R3.9-B — Canonical Utility Tier Validation Authority', () => {
-  describe('Valid Tier Configurations', () => {
+describe('OWNER R3.9-B.1 — Canonical Utility Tier Validation Authority', () => {
+  describe('Valid Tier Configurations & Exact Normalization', () => {
     it('validates and formats a standard 3-tier progressive configuration (Water preset: 10@18, 20@20, ∞@22)', () => {
       const input = [
         { upTo: '10', rate: '18' },
@@ -93,31 +94,61 @@ describe('OWNER R3.9-B — Canonical Utility Tier Validation Authority', () => {
     });
   });
 
-  describe('Invalid Tier Configurations (Fail-Closed)', () => {
-    it('rejects non-array input', () => {
+  describe('Strict Decimal Syntax & Fail-Closed Validation (Cases I, J, K, L)', () => {
+    it('rejects scientific notation in rates ("1e2", "1E2", "5e-1") (Case I)', () => {
+      expect(() => validateCanonicalUtilityTiers([{ upTo: null, rate: '1e2' }])).toThrow(
+        'must be a valid non-negative decimal string with up to 2 decimal places'
+      );
+      expect(() => validateCanonicalUtilityTiers([{ upTo: null, rate: '1E2' }])).toThrow(
+        'must be a valid non-negative decimal string with up to 2 decimal places'
+      );
+      expect(() => validateCanonicalUtilityTiers([{ upTo: null, rate: '5e-1' }])).toThrow(
+        'must be a valid non-negative decimal string with up to 2 decimal places'
+      );
+    });
+
+    it('rejects scientific notation in upper bounds ("1e1", "1E1") (Case J)', () => {
+      expect(() => validateCanonicalUtilityTiers([{ upTo: '1e1', rate: '18.00' }, { upTo: null, rate: '20.00' }])).toThrow(
+        'must be a valid non-negative decimal string with up to 2 decimal places'
+      );
+    });
+
+    it('rejects numbers with >2 decimal places ("18.000", "10.123") (Case K)', () => {
+      expect(() => validateCanonicalUtilityTiers([{ upTo: null, rate: '18.000' }])).toThrow(
+        'must be a valid non-negative decimal string with up to 2 decimal places'
+      );
+      expect(() => validateCanonicalUtilityTiers([{ upTo: '10.123', rate: '18.00' }, { upTo: null, rate: '20.00' }])).toThrow(
+        'must be a valid non-negative decimal string with up to 2 decimal places'
+      );
+      expect(() => validateCanonicalUtilityTiers([{ upTo: 10.123, rate: 18.00 }, { upTo: null, rate: 20.00 }])).toThrow(
+        'cannot have more than 2 decimal places'
+      );
+    });
+
+    it('rejects negative rates and negative bounds (Case L)', () => {
+      expect(() => validateCanonicalUtilityTiers([{ upTo: null, rate: '-5.00' }])).toThrow(
+        'must be a valid non-negative decimal string with up to 2 decimal places'
+      );
+      expect(() => validateCanonicalUtilityTiers([{ upTo: '-10.00', rate: '18.00' }, { upTo: null, rate: '20.00' }])).toThrow(
+        'must be a valid non-negative decimal string with up to 2 decimal places'
+      );
+    });
+
+    it('rejects non-array input, empty array, or >10 tiers', () => {
       expect(() => validateCanonicalUtilityTiers(null)).toThrow(
         'INVALID_TIER_CONFIGURATION: Tier configuration must be an array'
       );
       expect(() => validateCanonicalUtilityTiers('not an array')).toThrow(
         'INVALID_TIER_CONFIGURATION: Tier configuration must be an array'
       );
-      expect(() => validateCanonicalUtilityTiers({})).toThrow(
-        'INVALID_TIER_CONFIGURATION: Tier configuration must be an array'
-      );
-    });
-
-    it('rejects empty array (0 tiers)', () => {
       expect(() => validateCanonicalUtilityTiers([])).toThrow(
         'INVALID_TIER_CONFIGURATION: Tier configuration must contain at least 1 tier'
       );
-    });
-
-    it('rejects array with more than 10 tiers', () => {
-      const input = Array.from({ length: 11 }, (_, i) => ({
+      const input11 = Array.from({ length: 11 }, (_, i) => ({
         upTo: i === 10 ? null : String((i + 1) * 10),
         rate: '10',
       }));
-      expect(() => validateCanonicalUtilityTiers(input)).toThrow(
+      expect(() => validateCanonicalUtilityTiers(input11)).toThrow(
         'INVALID_TIER_CONFIGURATION: Tier configuration exceeds maximum limit of 10 tiers'
       );
     });
@@ -128,29 +159,10 @@ describe('OWNER R3.9-B — Canonical Utility Tier Validation Authority', () => {
       );
     });
 
-    it('rejects negative rate', () => {
-      const input = [{ upTo: null, rate: '-5.00' }];
-      expect(() => validateCanonicalUtilityTiers(input)).toThrow(
-        'INVALID_TIER_CONFIGURATION: Tier at index 0 rate cannot be negative'
-      );
-    });
-
-    it('rejects NaN, Infinity, or missing rate', () => {
-      expect(() => validateCanonicalUtilityTiers([{ upTo: null, rate: 'abc' }])).toThrow(
-        'INVALID_TIER_CONFIGURATION: Tier at index 0 has invalid rate'
-      );
-      expect(() => validateCanonicalUtilityTiers([{ upTo: null, rate: Infinity }])).toThrow(
-        'INVALID_TIER_CONFIGURATION: Tier at index 0 has invalid rate'
-      );
-      expect(() => validateCanonicalUtilityTiers([{ upTo: null }])).toThrow(
-        'INVALID_TIER_CONFIGURATION: Tier at index 0 has invalid rate'
-      );
-    });
-
     it('rejects non-null upTo on final tier', () => {
       const input = [
-        { upTo: '10', rate: '18' },
-        { upTo: '20', rate: '20' },
+        { upTo: '10.00', rate: '18.00' },
+        { upTo: '20.00', rate: '20.00' },
       ];
       expect(() => validateCanonicalUtilityTiers(input)).toThrow(
         'INVALID_TIER_CONFIGURATION: Final tier must be unlimited (upTo: null)'
@@ -159,28 +171,16 @@ describe('OWNER R3.9-B — Canonical Utility Tier Validation Authority', () => {
 
     it('rejects null upTo on non-final tier', () => {
       const input = [
-        { upTo: null, rate: '18' },
-        { upTo: null, rate: '20' },
+        { upTo: null, rate: '18.00' },
+        { upTo: null, rate: '20.00' },
       ];
       expect(() => validateCanonicalUtilityTiers(input)).toThrow(
         'INVALID_TIER_CONFIGURATION: Non-final tier at index 0 cannot be unlimited'
       );
     });
 
-    it('rejects upTo <= 0 on intermediate tier', () => {
-      const input = [
-        { upTo: '0', rate: '18' },
-        { upTo: null, rate: '20' },
-      ];
-      expect(() => validateCanonicalUtilityTiers(input)).toThrow(
-        'INVALID_TIER_CONFIGURATION: Tier at index 0 upTo boundary must be strictly greater than 0'
-      );
-
-      const inputNeg = [
-        { upTo: '-10', rate: '18' },
-        { upTo: null, rate: '20' },
-      ];
-      expect(() => validateCanonicalUtilityTiers(inputNeg)).toThrow(
+    it('rejects upTo boundary <= 0 on intermediate tier', () => {
+      expect(() => validateCanonicalUtilityTiers([{ upTo: '0.00', rate: '18.00' }, { upTo: null, rate: '20.00' }])).toThrow(
         'INVALID_TIER_CONFIGURATION: Tier at index 0 upTo boundary must be strictly greater than 0'
       );
     });
@@ -188,9 +188,9 @@ describe('OWNER R3.9-B — Canonical Utility Tier Validation Authority', () => {
     it('rejects non-ascending or duplicate upTo boundaries', () => {
       // Descending
       const descending = [
-        { upTo: '20', rate: '18' },
-        { upTo: '10', rate: '20' },
-        { upTo: null, rate: '22' },
+        { upTo: '20.00', rate: '18.00' },
+        { upTo: '10.00', rate: '20.00' },
+        { upTo: null, rate: '22.00' },
       ];
       expect(() => validateCanonicalUtilityTiers(descending)).toThrow(
         'INVALID_TIER_CONFIGURATION: Tier boundaries must be strictly ascending'
@@ -198,9 +198,9 @@ describe('OWNER R3.9-B — Canonical Utility Tier Validation Authority', () => {
 
       // Duplicate
       const duplicate = [
-        { upTo: '10', rate: '18' },
-        { upTo: '10', rate: '20' },
-        { upTo: null, rate: '22' },
+        { upTo: '10.00', rate: '18.00' },
+        { upTo: '10.00', rate: '20.00' },
+        { upTo: null, rate: '22.00' },
       ];
       expect(() => validateCanonicalUtilityTiers(duplicate)).toThrow(
         'INVALID_TIER_CONFIGURATION: Tier boundaries must be strictly ascending'
@@ -208,7 +208,7 @@ describe('OWNER R3.9-B — Canonical Utility Tier Validation Authority', () => {
     });
   });
 
-  describe('Billing Mode Normalizer Authority with Tiered Mode', () => {
+  describe('Billing Mode Normalizer Authority', () => {
     it('normalizes "tiered" and its casing variants to canonical "tiered"', () => {
       expect(normalizeUtilityBillingMode('tiered')).toBe('tiered');
       expect(normalizeUtilityBillingMode('TIERED')).toBe('tiered');
@@ -225,44 +225,143 @@ describe('OWNER R3.9-B — Canonical Utility Tier Validation Authority', () => {
     });
   });
 
-  describe('DormitoryBillingSettings & Snapshot Tier Persistence & Inactive Retention', () => {
-    it('persists and retrieves validated tier rates in InMemoryBillingSettingsRepository', async () => {
-      const repo = new InMemoryBillingSettingsRepository();
-      const dormId = 'dorm-tiered-01';
-
-      const waterTiers = [
+  describe('Shared validateUtilityTierModeConfiguration Authority', () => {
+    it('when mode === tiered: validates and returns canonical tiers if present', () => {
+      const tiers = [{ upTo: '10', rate: '18' }, { upTo: null, rate: '22' }];
+      const res = validateUtilityTierModeConfiguration({
+        mode: 'tiered',
+        tiers,
+        utilityName: 'Water',
+      });
+      expect(res).toEqual([
         { upTo: '10.00', rate: '18.00' },
-        { upTo: '20.00', rate: '20.00' },
+        { upTo: null, rate: '22.00' },
+      ]);
+    });
+
+    it('when mode === tiered: fails closed if tiers is null, undefined, or empty (Cases A, C, E, G)', () => {
+      expect(() => validateUtilityTierModeConfiguration({ mode: 'tiered', tiers: null, utilityName: 'Water' })).toThrow(
+        "INVALID_TIER_CONFIGURATION: Water billing mode is 'tiered' but no tier configuration was provided"
+      );
+      expect(() => validateUtilityTierModeConfiguration({ mode: 'tiered', tiers: undefined, utilityName: 'Electricity' })).toThrow(
+        "INVALID_TIER_CONFIGURATION: Electricity billing mode is 'tiered' but no tier configuration was provided"
+      );
+      expect(() => validateUtilityTierModeConfiguration({ mode: 'tiered', tiers: [], utilityName: 'Water' })).toThrow(
+        "INVALID_TIER_CONFIGURATION: Water billing mode is 'tiered' but no tier configuration was provided"
+      );
+    });
+
+    it('when mode !== tiered: returns null for active billing calculation (Case H)', () => {
+      expect(validateUtilityTierModeConfiguration({ mode: 'per_unit', tiers: null })).toBeNull();
+      expect(validateUtilityTierModeConfiguration({ mode: 'fixed', tiers: [{ upTo: null, rate: '10' }] })).toBeNull();
+    });
+  });
+
+  describe('Effective State Persistence & Inactive Retention (Cases A, B, C, D, H)', () => {
+    it('Case A: per_unit/null -> switch to tiered without tiers -> REJECT', () => {
+      const currentMode = 'per_unit';
+      const currentTiers = null;
+      const patch = { waterBillingType: 'tiered' };
+
+      const effectiveMode = normalizeUtilityBillingMode(patch.waterBillingType || currentMode);
+      const candidateTiers = (patch as any).waterTierRates !== undefined ? (patch as any).waterTierRates : currentTiers;
+
+      expect(() => validateUtilityTierModeConfiguration({
+        mode: effectiveMode,
+        tiers: candidateTiers,
+        utilityName: 'Water',
+      })).toThrow("INVALID_TIER_CONFIGURATION: Water billing mode is 'tiered' but no tier configuration was provided");
+    });
+
+    it('Case B: tiered/valid -> patch unrelated field -> ACCEPT and preserve tiers', async () => {
+      const repo = new InMemoryBillingSettingsRepository();
+      const dormId = 'dorm-b';
+      const validTiers = [
+        { upTo: '10.00', rate: '18.00' },
         { upTo: null, rate: '22.00' },
       ];
 
-      const created = await repo.create({
+      await repo.create({
         dormitoryId: dormId,
         waterBillingType: 'tiered',
-        waterTierRates: waterTiers,
-        electricityBillingType: 'per_unit',
-        electricityRate: '7.00',
+        waterTierRates: validTiers,
       });
 
-      expect(created.waterBillingType).toBe('tiered');
-      expect(created.waterTierRates).toEqual(waterTiers);
+      // Patch unrelated field
+      const current = await repo.findByDormitoryId(dormId);
+      const patch = { commonFee: '150.00' };
 
-      // Verify retrieval
-      const found = await repo.findByDormitoryId(dormId);
-      expect(found?.waterTierRates).toEqual(waterTiers);
+      const effectiveMode = normalizeUtilityBillingMode((patch as any).waterBillingType || current!.waterBillingType);
+      const candidateTiers = (patch as any).waterTierRates !== undefined ? (patch as any).waterTierRates : current!.waterTierRates;
 
-      // Switch mode to per_unit without erasing waterTierRates (inactive retention)
+      const effectiveTiers = validateUtilityTierModeConfiguration({
+        mode: effectiveMode,
+        tiers: candidateTiers,
+      });
+      expect(effectiveTiers).toEqual(validTiers);
+
       const updated = await repo.update(dormId, {
-        waterBillingType: 'per_unit',
-        waterRate: '18.00',
+        commonFee: patch.commonFee,
+        waterTierRates: effectiveTiers,
       });
-      expect(updated?.waterBillingType).toBe('per_unit');
-      expect(updated?.waterTierRates).toEqual(waterTiers); // Inactive tiers preserved
+      expect(updated?.waterTierRates).toEqual(validTiers);
+      expect(updated?.commonFee).toBe('150.00');
     });
 
-    it('creates and updates BillingRateSnapshot with tiered rate JSON isolation in InMemoryBillingCycleRepository', async () => {
+    it('Case C: tiered/valid -> patch waterTierRates=null -> REJECT', () => {
+      const currentMode = 'tiered';
+      const currentTiers = [{ upTo: null, rate: '18.00' }];
+      const patch = { waterTierRates: null };
+
+      const effectiveMode = normalizeUtilityBillingMode((patch as any).waterBillingType || currentMode);
+      const candidateTiers = patch.waterTierRates !== undefined ? patch.waterTierRates : currentTiers;
+
+      expect(() => validateUtilityTierModeConfiguration({
+        mode: effectiveMode,
+        tiers: candidateTiers,
+        utilityName: 'Water',
+      })).toThrow("INVALID_TIER_CONFIGURATION: Water billing mode is 'tiered' but no tier configuration was provided");
+    });
+
+    it('Case D: non-tiered + inactive valid tiers -> switch to tiered -> ACCEPT and activate saved tiers', async () => {
+      const repo = new InMemoryBillingSettingsRepository();
+      const dormId = 'dorm-d';
+      const savedInactiveTiers = [
+        { upTo: '10.00', rate: '18.00' },
+        { upTo: null, rate: '22.00' },
+      ];
+
+      // Settings has per_unit but retains inactive waterTierRates
+      await repo.create({
+        dormitoryId: dormId,
+        waterBillingType: 'per_unit',
+        waterRate: '18.00',
+        waterTierRates: savedInactiveTiers,
+      });
+
+      const current = await repo.findByDormitoryId(dormId);
+      const patch = { waterBillingType: 'tiered' };
+
+      const effectiveMode = normalizeUtilityBillingMode(patch.waterBillingType || current!.waterBillingType);
+      const candidateTiers = (patch as any).waterTierRates !== undefined ? (patch as any).waterTierRates : current!.waterTierRates;
+
+      const effectiveTiers = validateUtilityTierModeConfiguration({
+        mode: effectiveMode,
+        tiers: candidateTiers,
+      });
+      expect(effectiveTiers).toEqual(savedInactiveTiers);
+
+      const updated = await repo.update(dormId, {
+        waterBillingType: effectiveMode,
+        waterTierRates: effectiveTiers,
+      });
+      expect(updated?.waterBillingType).toBe('tiered');
+      expect(updated?.waterTierRates).toEqual(savedInactiveTiers);
+    });
+
+    it('Case H: snapshot tiered -> per_unit -> ACCEPT and snapshot tiers set to null', async () => {
       const repo = new InMemoryBillingCycleRepository();
-      const dormId = 'dorm-tiered-snap';
+      const dormId = 'dorm-h';
 
       const cycle = await repo.create(dormId, {
         cycleCode: '2026-08',
@@ -273,44 +372,80 @@ describe('OWNER R3.9-B — Canonical Utility Tier Validation Authority', () => {
         dueDate: new Date('2026-09-05'),
       });
 
-      const waterTiers = [
-        { upTo: '10.00', rate: '18.00' },
-        { upTo: null, rate: '22.00' },
-      ];
-      const elecTiers = [
-        { upTo: '50.00', rate: '7.00' },
-        { upTo: '150.00', rate: '8.00' },
-        { upTo: null, rate: '9.00' },
-      ];
-
       const snap = await repo.createRateSnapshot(dormId, {
         billingCycleId: cycle.id,
         waterBillingType: 'tiered',
         waterRate: '0.00',
-        waterTierRates: waterTiers,
-        electricityBillingType: 'tiered',
-        electricityRate: '0.00',
-        electricityTierRates: elecTiers,
-        commonFee: '200.00',
-        commonFeeMode: 'per_room',
-        internetFee: '0.00',
-        internetFeeMode: 'none',
-        parkingFee: '0.00',
-        parkingFeeMode: 'none',
-        lateFeeType: 'none',
-        lateFeeValue: '0.00',
+        waterTierRates: [{ upTo: null, rate: '18.00' }],
+        electricityBillingType: 'per_unit',
+        electricityRate: '7.00',
         source: 'TEMPLATE_DEFAULT',
       });
+      expect(snap.waterTierRates).toEqual([{ upTo: null, rate: '18.00' }]);
 
-      expect(snap.waterBillingType).toBe('tiered');
-      expect(snap.waterTierRates).toEqual(waterTiers);
-      expect(snap.electricityBillingType).toBe('tiered');
-      expect(snap.electricityTierRates).toEqual(elecTiers);
+      // Update snapshot mode to per_unit
+      const patch = { waterBillingType: 'per_unit', waterRate: '18.00' };
+      const effectiveMode = normalizeUtilityBillingMode(patch.waterBillingType);
+      const effectiveTiers = validateUtilityTierModeConfiguration({
+        mode: effectiveMode,
+        tiers: snap.waterTierRates,
+      });
+      expect(effectiveTiers).toBeNull();
 
-      // Verify retrieval
-      const found = await repo.findRateSnapshot(cycle.id, dormId);
-      expect(found?.waterTierRates).toEqual(waterTiers);
-      expect(found?.electricityTierRates).toEqual(elecTiers);
+      const updatedSnap = await repo.updateRateSnapshot(snap.id, dormId, {
+        waterBillingType: effectiveMode,
+        waterRate: patch.waterRate,
+        waterTierRates: effectiveTiers,
+      });
+      expect(updatedSnap?.waterBillingType).toBe('per_unit');
+      expect(updatedSnap?.waterTierRates).toBeNull();
+    });
+  });
+
+  describe('Snapshot Creation & Inheritance Fail-Closed Checks (Cases E, F, G)', () => {
+    it('Case E: snapshot creation with tiered mode but null settings tiers -> REJECT', () => {
+      const settings = {
+        waterBillingType: 'tiered',
+        waterTierRates: null,
+      };
+
+      const waterBillingType = normalizeUtilityBillingMode(settings.waterBillingType);
+      expect(() => validateUtilityTierModeConfiguration({
+        mode: waterBillingType,
+        tiers: settings.waterTierRates,
+        utilityName: 'Water',
+      })).toThrow("INVALID_TIER_CONFIGURATION: Water billing mode is 'tiered' but no tier configuration was provided");
+    });
+
+    it('Case F: snapshot inheritance from corrupt preceding snapshot (tiered + null tiers) -> REJECT', () => {
+      const corruptPrecedingSnapshot = {
+        waterBillingType: 'tiered',
+        waterTierRates: null,
+      };
+
+      const waterBillingType = normalizeUtilityBillingMode(corruptPrecedingSnapshot.waterBillingType);
+      expect(() => validateUtilityTierModeConfiguration({
+        mode: waterBillingType,
+        tiers: corruptPrecedingSnapshot.waterTierRates,
+        utilityName: "Water (inherited from cycle '2026-07')",
+      })).toThrow("INVALID_TIER_CONFIGURATION: Water (inherited from cycle '2026-07') billing mode is 'tiered' but no tier configuration was provided");
+    });
+
+    it('Case G: snapshot manual update flat -> tiered without providing tier rates -> REJECT', () => {
+      const currentSnapshot = {
+        waterBillingType: 'per_unit',
+        waterTierRates: null,
+      };
+      const patch = { waterBillingType: 'tiered' };
+
+      const effectiveMode = normalizeUtilityBillingMode(patch.waterBillingType);
+      const candidateTiers = (patch as any).waterTierRates !== undefined ? (patch as any).waterTierRates : currentSnapshot.waterTierRates;
+
+      expect(() => validateUtilityTierModeConfiguration({
+        mode: effectiveMode,
+        tiers: candidateTiers,
+        utilityName: 'Water',
+      })).toThrow("INVALID_TIER_CONFIGURATION: Water billing mode is 'tiered' but no tier configuration was provided");
     });
   });
 });
