@@ -81,25 +81,7 @@ input[type="number"] {
 
 /* Print styles for window.print() */
 @media print {
-  body * {
-    visibility: hidden;
-  }
-  .printable-area, .printable-area * {
-    visibility: visible;
-  }
-  .printable-area {
-    position: absolute;
-    left: 0;
-    top: 0;
-    width: 100%;
-    background: white !important;
-    padding: 0 !important;
-    margin: 0 !important;
-    box-shadow: none !important;
-    border: none !important;
-    z-index: 99999;
-  }
-  .print\:hidden {
+  .print\\:hidden {
     display: none !important;
   }
 }

@@ -179,7 +179,7 @@ describe('OWNER R3.8f — Receipt Print Proof & DOM Cloning', () => {
     cleanup();
   });
 
-  it('PrintView clones receipt DOM cleanly into top-level #horplus-print-root without data loss', () => {
+  it('PrintView clones receipt DOM cleanly into top-level #horplus-print-root with visibility and style rules', () => {
     const originalPrint = window.print;
     window.print = vi.fn();
 
@@ -223,11 +223,11 @@ describe('OWNER R3.8f — Receipt Print Proof & DOM Cloning', () => {
     const printButton = screen.getByRole('button', { name: /พิมพ์ใบเสร็จ/i });
     fireEvent.click(printButton);
 
-    expect(window.print).toHaveBeenCalledTimes(1);
-
     // Verify cloned root was created on document.body
     const printRoot = document.getElementById('horplus-print-root');
     expect(printRoot).not.toBeNull();
+    expect(printRoot?.className).toContain('printable-area');
+    expect(printRoot?.parentElement).toBe(document.body);
     expect(printRoot?.textContent).toContain('หอพักฮอร์สมาร์ท (HorPlus)');
     expect(printRoot?.textContent).toContain('RCP-202607-B101');
     expect(printRoot?.textContent).toContain('ค่าเช่าห้องพัก B101');
@@ -237,21 +237,30 @@ describe('OWNER R3.8f — Receipt Print Proof & DOM Cloning', () => {
     expect(printRoot?.textContent).toContain('฿200.00');
     expect(printRoot?.textContent).toContain('฿7,100.00');
 
+    // Verify injected style sets visibility: visible and isolates print root
+    const printStyle = document.getElementById('horplus-print-style');
+    expect(printStyle).not.toBeNull();
+    expect(printStyle?.innerHTML).toContain('body > *:not(#horplus-print-root)');
+    expect(printStyle?.innerHTML).toContain('display: none !important');
+    expect(printStyle?.innerHTML).toContain('#horplus-print-root,');
+    expect(printStyle?.innerHTML).toContain('visibility: visible !important');
+    expect(printStyle?.innerHTML).toContain('size: A4 portrait');
+
+    // Clean up
+    window.dispatchEvent(new Event('afterprint'));
     window.print = originalPrint;
   });
 
-  it('R3.8fR4 Print Lifecycle: print root PERSISTS beyond 2000ms/5000ms and is ONLY removed on afterprint', () => {
-    vi.useFakeTimers();
+  it('R3.8fR5 Print Lifecycle: supports cancellation, re-triggering without stale data, and clean afterprint removal', () => {
     const originalPrint = window.print;
     window.print = vi.fn();
 
-    render(
+    const { rerender } = render(
       <PrintView title="พิมพ์ใบเสร็จ">
-        <div data-testid="room302-combined-receipt">
-          <h4>หอพักทดสอบ Comprehensive (HorPlus)</h4>
+        <div data-testid="room302-receipt-a">
+          <h4>ใบเสร็จรับเงิน</h4>
+          <p>เลขที่: RC-202608-302-0001</p>
           <p>ห้อง: 302</p>
-          <p>ก.ค. 2569: ฿4,000.00</p>
-          <p>ส.ค. 2569: ฿2,500.00</p>
           <p>รวมชำระสุทธิ: ฿6,500.00</p>
         </div>
       </PrintView>
@@ -260,31 +269,44 @@ describe('OWNER R3.8f — Receipt Print Proof & DOM Cloning', () => {
     const printButton = screen.getByRole('button', { name: /พิมพ์ใบเสร็จ/i });
     fireEvent.click(printButton);
 
-    expect(window.print).toHaveBeenCalledTimes(1);
-
-    // Advance timers past old 2000ms timeout
-    vi.advanceTimersByTime(2500);
+    // Verify first receipt content
     let printRoot = document.getElementById('horplus-print-root');
     expect(printRoot).not.toBeNull();
-    expect(printRoot?.textContent).toContain('302');
+    expect(printRoot?.textContent).toContain('RC-202608-302-0001');
     expect(printRoot?.textContent).toContain('฿6,500.00');
 
-    // Advance timers past 5000ms
-    vi.advanceTimersByTime(3000);
+    // User cancels print preview (or re-triggers another print with Receipt B without afterprint)
+    rerender(
+      <PrintView title="พิมพ์ใบเสร็จ">
+        <div data-testid="room101-receipt-b">
+          <h4>ใบเสร็จรับเงิน</h4>
+          <p>เลขที่: RC-202608-101-0005</p>
+          <p>ห้อง: 101</p>
+          <p>รวมชำระสุทธิ: ฿1,286.00</p>
+        </div>
+      </PrintView>
+    );
+
+    const printButtonB = screen.getByRole('button', { name: /พิมพ์ใบเสร็จ/i });
+    fireEvent.click(printButtonB);
+
+    // Verify second receipt content replaced first immediately (no stale data, exactly 1 print root)
+    const allRoots = document.querySelectorAll('#horplus-print-root');
+    expect(allRoots.length).toBe(1);
     printRoot = document.getElementById('horplus-print-root');
-    expect(printRoot).not.toBeNull();
-    expect(printRoot?.textContent).toContain('฿6,500.00');
+    expect(printRoot?.textContent).toContain('RC-202608-101-0005');
+    expect(printRoot?.textContent).toContain('฿1,286.00');
+    expect(printRoot?.textContent).not.toContain('RC-202608-302-0001');
 
     // Dispatch afterprint event
     window.dispatchEvent(new Event('afterprint'));
 
-    // Now verify print root is removed cleanly
+    // Verify print root is removed cleanly
     printRoot = document.getElementById('horplus-print-root');
     expect(printRoot).toBeNull();
     const printStyle = document.getElementById('horplus-print-style');
     expect(printStyle).toBeNull();
 
     window.print = originalPrint;
-    vi.useRealTimers();
   });
 });

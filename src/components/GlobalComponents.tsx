@@ -919,15 +919,16 @@ export const PrintView: React.FC<PrintViewProps> = ({ children, title = 'พิ�
   const handlePrint = () => {
     if (!contentRef.current) return;
 
-    // Remove any existing print container/styles
+    // Remove any pre-existing print container/styles idempotently
     const oldRoot = document.getElementById('horplus-print-root');
-    if (oldRoot) document.body.removeChild(oldRoot);
+    if (oldRoot) oldRoot.remove();
     const oldStyle = document.getElementById('horplus-print-style');
-    if (oldStyle) document.head.removeChild(oldStyle);
+    if (oldStyle) oldStyle.remove();
 
     // Create top-level print root attached directly to document.body
     const printRoot = document.createElement('div');
     printRoot.id = 'horplus-print-root';
+    printRoot.className = 'printable-area';
     printRoot.innerHTML = contentRef.current.innerHTML;
     document.body.appendChild(printRoot);
 
@@ -951,6 +952,12 @@ export const PrintView: React.FC<PrintViewProps> = ({ children, title = 'พิ�
           -webkit-print-color-adjust: exact !important;
           print-color-adjust: exact !important;
         }
+        #horplus-print-root,
+        #horplus-print-root * {
+          visibility: visible !important;
+          -webkit-print-color-adjust: exact !important;
+          print-color-adjust: exact !important;
+        }
         #horplus-print-root {
           display: block !important;
           position: static !important;
@@ -958,19 +965,15 @@ export const PrintView: React.FC<PrintViewProps> = ({ children, title = 'พิ�
           max-width: 100% !important;
           margin: 0 auto !important;
           padding: 0 !important;
-          background: transparent !important;
+          background: #ffffff !important;
           box-shadow: none !important;
           border: none !important;
           overflow: visible !important;
           page-break-inside: avoid !important;
           break-inside: avoid !important;
         }
-        #horplus-print-root * {
-          -webkit-print-color-adjust: exact !important;
-          print-color-adjust: exact !important;
-        }
         #horplus-print-root .printable-area {
-          background: transparent !important;
+          background: #ffffff !important;
           box-shadow: none !important;
           border: none !important;
           padding: 0 !important;
@@ -989,15 +992,17 @@ export const PrintView: React.FC<PrintViewProps> = ({ children, title = 'พิ�
     const cleanup = () => {
       window.removeEventListener('afterprint', cleanup);
       const root = document.getElementById('horplus-print-root');
-      if (root) document.body.removeChild(root);
+      if (root) root.remove();
       const st = document.getElementById('horplus-print-style');
-      if (st) document.head.removeChild(st);
+      if (st) st.remove();
     };
 
     window.addEventListener('afterprint', cleanup);
 
-    // Trigger browser print
-    window.print();
+    // Trigger browser print on next frame after layout reflow
+    requestAnimationFrame(() => {
+      window.print();
+    });
   };
 
   return (
