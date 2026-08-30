@@ -284,6 +284,12 @@ export class PrismaBillingSettingsRepository implements IBillingSettingsReposito
       !!str && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
     if (!isUuid(dormitoryId)) return null;
 
+    const existing = await this.prisma.dormitoryBillingSettings.findUnique({
+      where: { dormitoryId },
+      select: { id: true },
+    });
+    if (!existing) return null;
+
     const updateData: any = {
       updatedAt: new Date(),
     };
@@ -327,8 +333,11 @@ export class PrismaBillingSettingsRepository implements IBillingSettingsReposito
         data: updateData,
       });
       return this.mapToEntity(s);
-    } catch {
-      return null;
+    } catch (err: any) {
+      if (err?.code === 'P2025') {
+        return null;
+      }
+      throw err;
     }
   }
 }

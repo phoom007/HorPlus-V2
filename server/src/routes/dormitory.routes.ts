@@ -277,12 +277,42 @@ export function createDormitoryRouter(
       };
 
       const updated = await billingRepo.update(dormitoryId, updatePayload as any);
+      if (!updated) {
+        return res.status(404).json({
+          error: {
+            code: 'DORMITORY_BILLING_SETTINGS_NOT_FOUND',
+            message: 'ไม่พบการตั้งค่าการเรียกเก็บเงินของหอพัก',
+            fieldErrors: null,
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+
       res.json({ data: updated });
     } catch (err: any) {
-      return res.status(err.statusCode || 400).json({
+      if (
+        err.code === 'INVALID_TIER_CONFIGURATION' ||
+        err.code === 'INVALID_BILLING_MODE' ||
+        err.message?.startsWith('INVALID_TIER_CONFIGURATION') ||
+        err.message?.startsWith('INVALID_BILLING_MODE')
+      ) {
+        return res.status(400).json({
+          error: {
+            code: err.code || 'INVALID_TIER_CONFIGURATION',
+            message: err.message,
+            fieldErrors: null,
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+
+      console.error('PATCH billing settings internal error:', err);
+      return res.status(500).json({
         error: {
-          code: err.code || 'INVALID_TIER_CONFIGURATION',
-          message: err.message,
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'เกิดข้อผิดพลาดภายในระบบ',
           fieldErrors: null,
           requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
           timestamp: new Date().toISOString(),
@@ -379,7 +409,22 @@ export function createDormitoryRouter(
 
     const dormitoryId = req.params.dormitoryId;
 
-    const currentSettings: any = await billingRepo.findByDormitoryId(dormitoryId);
+    let currentSettings: any = null;
+    try {
+      currentSettings = await billingRepo.findByDormitoryId(dormitoryId);
+    } catch (err: any) {
+      console.error('PATCH payment settings findByDormitoryId error:', err.message);
+      return res.status(500).json({
+        error: {
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'เกิดข้อผิดพลาดภายในระบบ',
+          fieldErrors: null,
+          requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+          timestamp: new Date().toISOString(),
+        },
+      });
+    }
+
     if (!currentSettings) {
       return res.status(404).json({
         error: {
@@ -498,7 +543,22 @@ export function createDormitoryRouter(
       bankAccountNumberEncrypted: finalBankAccEnc,
     };
 
-    const updated = await billingRepo.update(dormitoryId, updateData);
+    let updated: any;
+    try {
+      updated = await billingRepo.update(dormitoryId, updateData);
+    } catch (err: any) {
+      console.error('PATCH payment settings update error:', err.message);
+      return res.status(500).json({
+        error: {
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'เกิดข้อผิดพลาดภายในระบบ',
+          fieldErrors: null,
+          requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+          timestamp: new Date().toISOString(),
+        },
+      });
+    }
+
     if (!updated) {
       return res.status(404).json({
         error: {

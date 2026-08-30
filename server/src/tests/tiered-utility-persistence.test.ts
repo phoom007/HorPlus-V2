@@ -1,7 +1,7 @@
 /**
  * @license Apache-2.0
- * OWNER R3.9-B.3: Tiered Utility Persistence, Snapshot, Validation Authority, Legacy Mode Compatibility,
- * and Production Billing Settings Persistence Authority (Prisma Repository + Phantom Save Regression Proof)
+ * OWNER R3.9-B.3.1: Tiered Utility Persistence, Snapshot, Validation Authority, Legacy Mode Compatibility,
+ * Production Billing Settings Persistence Authority, and Persistence Error Semantics (No False Success)
  */
 
 import { describe, it, expect, vi } from 'vitest';
@@ -740,11 +740,14 @@ describe('OWNER R3.9-B — Canonical Utility Tier Validation & Persistence Autho
       const { mockPrisma, db } = createMockPrismaStore();
       const repo = new PrismaBillingSettingsRepository(mockPrisma);
 
-      await repo.create({
+      // Pre-seed record
+      db.set(TEST_DORM_UUID, {
+        id: 'bset-001',
         dormitoryId: TEST_DORM_UUID,
         waterBillingType: 'per_unit',
         waterRate: '18.00',
         dueDay: 5,
+        billingDay: 25,
       });
 
       const updated = await repo.update(TEST_DORM_UUID, {
@@ -870,6 +873,199 @@ describe('OWNER R3.9-B — Canonical Utility Tier Validation & Persistence Autho
       expect(created.parkingFeeMode).toBe('per_room');
       expect(created.gracePeriodDays).toBe(2);
       expect(created.advanceRentMonths).toBe(1);
+    });
+  });
+
+  describe('OWNER R3.9-B.3.1: Billing Settings Persistence Error Semantics & No False Success', () => {
+    const TEST_DORM_UUID = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+    const TEST_DORM_ID = '11111111-1111-4111-8111-111111111111';
+    const TEST_USER_ID = '22222222-2222-4222-8222-222222222222';
+
+    function setupTestExpressApp() {
+      const app = express();
+      app.use(express.json());
+
+      vi.spyOn(subscriptionEntitlementService, 'assertDormitoryWritable').mockResolvedValue(undefined as any);
+
+      app.use((req: any, _res, next) => {
+        req.cookies = req.cookies || {};
+        req.cookies['horplus_session'] = 'valid-test-session';
+        req.cookies['horplus_csrf'] = 'valid-csrf-token';
+        req.headers['authorization'] = 'Bearer valid-test-session';
+        next();
+      });
+
+      const authService: any = {
+        validateSession: async () => ({
+          user: { id: TEST_USER_ID, role: 'OWNER' },
+          session: { id: 'sess-01', userId: TEST_USER_ID, tokenVersion: 1 },
+          memberships: [
+            { id: 'mem-01', dormitoryId: TEST_DORM_ID, userId: TEST_USER_ID, roleCode: 'OWNER', status: 'active' },
+          ],
+          rawSessionId: 'sess-01',
+        }),
+        verifyCsrf: () => true,
+      };
+
+      const dormitoryRepo = new InMemoryDormitoryRepository();
+      const billingRepo = new InMemoryBillingSettingsRepository();
+      const subRepo = new InMemorySubscriptionRepository();
+      const planRepo = new InMemoryPlanRepository();
+      const sensitiveFieldService = new SensitiveFieldService('12345678901234567890123456789012');
+
+      const membershipRepo: any = {
+        findByUserAndDormitory: async () => ({
+          id: 'mem-01',
+          dormitoryId: TEST_DORM_ID,
+          userId: TEST_USER_ID,
+          roleCode: 'OWNER',
+          status: 'active',
+        }),
+        findByDormitoryAndUser: async () => ({
+          id: 'mem-01',
+          dormitoryId: TEST_DORM_ID,
+          userId: TEST_USER_ID,
+          roleCode: 'OWNER',
+          status: 'active',
+        }),
+        findActiveByDormitoryAndUser: async () => ({
+          id: 'mem-01',
+          dormitoryId: TEST_DORM_ID,
+          userId: TEST_USER_ID,
+          roleCode: 'OWNER',
+          status: 'active',
+        }),
+      };
+
+      const roleRepo: any = {
+        findByCode: async () => ({
+          id: 'role-owner',
+          code: 'OWNER',
+          name: 'Owner',
+          permissions: { '*': ['*'] },
+        }),
+      };
+
+      const router = createDormitoryRouter(
+        authService,
+        dormitoryRepo,
+        billingRepo,
+        subRepo,
+        planRepo,
+        sensitiveFieldService,
+        membershipRepo,
+        roleRepo
+      );
+
+      app.use('/api/v1/dormitories', router);
+
+      return { app, billingRepo, dormitoryRepo };
+    }
+
+    it('Test 8.A (Mocked Prisma): Prisma repo update returns null when record is absent', async () => {
+      const mockPrisma: any = {
+        dormitoryBillingSettings: {
+          findUnique: vi.fn(async () => null),
+          update: vi.fn(),
+        },
+      };
+      const repo = new PrismaBillingSettingsRepository(mockPrisma);
+      const result = await repo.update(TEST_DORM_UUID, { waterRate: '20.00' });
+      expect(result).toBeNull();
+      expect(mockPrisma.dormitoryBillingSettings.update).not.toHaveBeenCalled();
+    });
+
+    it('Test 8.B (Mocked Prisma): Prisma repo update throws on generic database failure (does NOT return null)', async () => {
+      const mockPrisma: any = {
+        dormitoryBillingSettings: {
+          findUnique: vi.fn(async () => ({ id: 'bset-1' })),
+          update: vi.fn(async () => {
+            throw new Error('database unavailable');
+          }),
+        },
+      };
+      const repo = new PrismaBillingSettingsRepository(mockPrisma);
+      await expect(repo.update(TEST_DORM_UUID, { waterRate: '20.00' })).rejects.toThrow('database unavailable');
+    });
+
+    it('Test 8.C (Real Express Route): PATCH /billing-settings returns 404 when billingRepo.update returns null', async () => {
+      const { app, billingRepo } = setupTestExpressApp();
+      const dormId = TEST_DORM_ID;
+
+      vi.spyOn(billingRepo, 'update').mockResolvedValueOnce(null);
+
+      const res = await request(app)
+        .patch(`/api/v1/dormitories/${dormId}/billing-settings`)
+        .set('x-dormitory-id', dormId)
+        .set('x-csrf-token', 'valid-csrf-token')
+        .send({ commonFee: '200.00' });
+
+      expect(res.status).toBe(404);
+      expect(res.body.error.code).toBe('DORMITORY_BILLING_SETTINGS_NOT_FOUND');
+      expect(res.body.data).toBeUndefined();
+    });
+
+    it('Test 8.D (Real Express Route): PATCH /billing-settings returns 500 when billingRepo.update throws DB error (not 400/INVALID_TIER_CONFIGURATION)', async () => {
+      const { app, billingRepo } = setupTestExpressApp();
+      const dormId = TEST_DORM_ID;
+
+      await billingRepo.create({
+        dormitoryId: dormId,
+        waterBillingType: 'per_unit',
+        waterRate: '18.00',
+      });
+
+      vi.spyOn(billingRepo, 'update').mockRejectedValueOnce(new Error('connection timeout to postgres'));
+
+      const res = await request(app)
+        .patch(`/api/v1/dormitories/${dormId}/billing-settings`)
+        .set('x-dormitory-id', dormId)
+        .set('x-csrf-token', 'valid-csrf-token')
+        .send({ commonFee: '200.00' });
+
+      expect(res.status).toBe(500);
+      expect(res.body.error.code).toBe('INTERNAL_SERVER_ERROR');
+      expect(res.body.error.code).not.toBe('INVALID_TIER_CONFIGURATION');
+      expect(res.body.data).toBeUndefined();
+    });
+
+    it('Test 8.G (Real Express Route): PATCH /payment-settings returns 404 when settings record is missing', async () => {
+      const { app, billingRepo } = setupTestExpressApp();
+      const dormId = TEST_DORM_ID;
+
+      // Force findByDormitoryId to return null (no settings exist)
+      vi.spyOn(billingRepo, 'findByDormitoryId').mockResolvedValueOnce(null);
+
+      const res = await request(app)
+        .patch(`/api/v1/dormitories/${dormId}/payment-settings`)
+        .set('x-dormitory-id', dormId)
+        .set('x-csrf-token', 'valid-csrf-token')
+        .send({ cashAccepted: false });
+
+      expect(res.status).toBe(404);
+      expect(res.body.error.code).toBe('DORMITORY_BILLING_SETTINGS_NOT_FOUND');
+    });
+
+    it('Test 8.H (Real Express Route): PATCH /payment-settings does NOT report DB failure as 404', async () => {
+      const { app, billingRepo } = setupTestExpressApp();
+      const dormId = TEST_DORM_ID;
+
+      await billingRepo.create({
+        dormitoryId: dormId,
+        cashAccepted: true,
+      });
+
+      vi.spyOn(billingRepo, 'update').mockRejectedValueOnce(new Error('DB connection pool exhausted'));
+
+      const res = await request(app)
+        .patch(`/api/v1/dormitories/${dormId}/payment-settings`)
+        .set('x-dormitory-id', dormId)
+        .set('x-csrf-token', 'valid-csrf-token')
+        .send({ cashAccepted: false });
+
+      expect(res.status).not.toBe(404);
+      expect(res.status).toBe(500);
+      expect(res.body.error.code).toBe('INTERNAL_SERVER_ERROR');
     });
   });
 });
