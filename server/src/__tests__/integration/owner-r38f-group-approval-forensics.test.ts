@@ -342,7 +342,7 @@ describe('OWNER R3.8f: Group Payment Approval Forensics & Direct-Consumer Integr
     expect(res.body.error.message).toBe('ยอดคงเหลือของบิลมีการเปลี่ยนแปลงหลังส่งสลิป กรุณาตรวจสอบรายการใหม่ก่อนอนุมัติ');
   });
 
-  it('CASE 2: Deterministic Clean Combined Approval — Bills update cleanly and creates exactly 1 combined receipt', async () => {
+  it('CASE 2: Deterministic Clean Combined Approval — Builds canonical prior payment graph, verifies zero legacyUnallocatedPaidAmount, settles bills cleanly and creates exactly 1 combined receipt', async () => {
     const room = await prisma.room.create({
       data: {
         dormitoryId: dormId,
@@ -372,7 +372,7 @@ describe('OWNER R3.8f: Group Payment Approval Forensics & Direct-Consumer Integr
       },
     });
 
-    // July bill with total ฿6,100, previously paid ฿2,100, outstanding ฿4,000
+    // 1. Initial July bill (total ฿6,100, unpaid)
     const billJuly = await prisma.bill.create({
       data: {
         dormitory: { connect: { id: dormId } },
@@ -382,16 +382,16 @@ describe('OWNER R3.8f: Group Payment Approval Forensics & Direct-Consumer Integr
         billingCycle: { connect: { id: cycleJulyId } },
         billNumber: `INV-JULY-CLEAN-${testRunId}`,
         billKind: 'MONTHLY_UTILITY',
-        status: 'PARTIALLY_PAID',
+        status: 'UNPAID',
         billingDate: new Date('2026-07-25'),
         dueDate: new Date('2026-08-05'),
         subtotal: '6100.00',
         totalAmount: '6100.00',
-        paidAmount: '2100.00',
-        outstandingAmount: '4000.00',
+        paidAmount: '0.00',
+        outstandingAmount: '6100.00',
       },
     });
-    await prisma.billItem.create({
+    const itemJuly = await prisma.billItem.create({
       data: {
         dormitoryId: dormId,
         billId: billJuly.id,
@@ -403,7 +403,126 @@ describe('OWNER R3.8f: Group Payment Approval Forensics & Direct-Consumer Integr
       },
     });
 
-    // August bill with total ฿5,000, outstanding ฿5,000
+    // 2. Canonical Prior Cash Event: ฿2,100 partial payment
+    const priorPaymentDate = new Date('2026-08-10T10:00:00Z');
+    const priorGroup = await prisma.combinedPaymentGroup.create({
+      data: {
+        dormitoryId: dormId,
+        tenantId: tenantRecordId,
+        totalAmount: 2100.0,
+        method: 'CASH',
+        status: 'APPROVED',
+        paymentDate: priorPaymentDate,
+        notes: 'ชำระเงินสดบางส่วนที่เคาน์เตอร์',
+      },
+    });
+
+    await prisma.combinedPaymentGroupBillTarget.create({
+      data: {
+        dormitoryId: dormId,
+        paymentGroupId: priorGroup.id,
+        billId: billJuly.id,
+        targetOrder: 1,
+      },
+    });
+
+    const priorPayment = await prisma.payment.create({
+      data: {
+        dormitoryId: dormId,
+        billId: billJuly.id,
+        tenantId: tenantRecordId,
+        paymentGroupId: priorGroup.id,
+        method: 'CASH',
+        amount: 2100.0,
+        status: 'APPROVED',
+        paymentDate: priorPaymentDate,
+        reviewedAt: priorPaymentDate,
+      },
+    });
+
+    await prisma.paymentStatusHistory.create({
+      data: {
+        dormitoryId: dormId,
+        paymentId: priorPayment.id,
+        fromStatus: null,
+        toStatus: 'APPROVED',
+        effectiveAt: priorPaymentDate,
+      },
+    });
+
+    await prisma.paymentAllocation.create({
+      data: {
+        dormitoryId: dormId,
+        paymentGroupId: priorGroup.id,
+        paymentId: priorPayment.id,
+        billId: billJuly.id,
+        billItemId: itemJuly.id,
+        allocatedAmount: 2100.0,
+        allocationOrder: 1,
+      },
+    });
+
+    await prisma.billStatusHistory.create({
+      data: {
+        dormitoryId: dormId,
+        billId: billJuly.id,
+        fromStatus: 'UNPAID',
+        toStatus: 'PARTIALLY_PAID',
+        effectiveAt: priorPaymentDate,
+      },
+    });
+
+    const priorReceipt = await prisma.receipt.create({
+      data: {
+        dormitoryId: dormId,
+        billId: billJuly.id,
+        paymentId: priorPayment.id,
+        paymentGroupId: priorGroup.id,
+        receiptNumber: `RCP-PRIOR-2100-${testRunId}`,
+        snapshotData: {
+          receiptNumber: `RCP-PRIOR-2100-${testRunId}`,
+          billNumber: billJuly.billNumber,
+          roomNumber: room.roomNumber,
+          tenantName: 'ผู้เช่าทดสอบ',
+          dormitoryName: `Dorm R38f ${testRunId}`,
+          total: '2100.00',
+          totalAmount: 2100.0,
+          paymentMethod: 'CASH',
+          paymentDate: priorPaymentDate.toISOString(),
+          items: [{ description: 'ค่าเช่า ก.ค. — ชำระบางส่วน', amount: 2100.0 }],
+        },
+        issuedAt: priorPaymentDate,
+        isVoided: false,
+      },
+    });
+
+    await prisma.bill.update({
+      where: { id: billJuly.id },
+      data: {
+        paidAmount: '2100.00',
+        outstandingAmount: '4000.00',
+        status: 'PARTIALLY_PAID',
+      },
+    });
+
+    // 3. Pre-Approval Financial Graph Assertions
+    const preJulyBill = await prisma.bill.findUnique({
+      where: { id: billJuly.id },
+      include: { allocations: true, Receipt: true, Payment: true },
+    });
+    expect(Number(preJulyBill?.totalAmount)).toBe(6100.0);
+    expect(Number(preJulyBill?.paidAmount)).toBe(2100.0);
+    expect(Number(preJulyBill?.outstandingAmount)).toBe(4000.0);
+    expect(preJulyBill?.status).toBe('PARTIALLY_PAID');
+
+    const preAllocationsSum = preJulyBill?.allocations.reduce((s, a) => s + Number(a.allocatedAmount), 0) || 0;
+    expect(preAllocationsSum).toBe(2100.0);
+    const legacyUnallocatedPaidAmount = Math.max(Number(preJulyBill?.paidAmount) - preAllocationsSum, 0);
+    expect(legacyUnallocatedPaidAmount).toBe(0.0); // Strict non-legacy proof
+    expect(preJulyBill?.Receipt.length).toBe(1);
+    expect(preJulyBill?.Receipt[0].receiptNumber).toBe(priorReceipt.receiptNumber);
+
+    // 4. August bill (total ฿5,000, outstanding ฿5,000, unpaid)
     const billAug = await prisma.bill.create({
       data: {
         dormitory: { connect: { id: dormId } },
@@ -422,7 +541,7 @@ describe('OWNER R3.8f: Group Payment Approval Forensics & Direct-Consumer Integr
         outstandingAmount: '5000.00',
       },
     });
-    await prisma.billItem.create({
+    const itemAug = await prisma.billItem.create({
       data: {
         dormitoryId: dormId,
         billId: billAug.id,
@@ -434,7 +553,7 @@ describe('OWNER R3.8f: Group Payment Approval Forensics & Direct-Consumer Integr
       },
     });
 
-    // Combined payment group ฿6,500: allocates ฿4,000 to July (closes it) and ฿2,500 to August (partial)
+    // 5. Combined payment group ฿6,500: allocates ฿4,000 to July (closes it) and ฿2,500 to August (partial)
     const paymentGroup = await prisma.combinedPaymentGroup.create({
       data: {
         dormitoryId: dormId,
@@ -453,7 +572,7 @@ describe('OWNER R3.8f: Group Payment Approval Forensics & Direct-Consumer Integr
       data: { dormitoryId: dormId, paymentGroupId: paymentGroup.id, billId: billAug.id, targetOrder: 2 },
     });
 
-    await prisma.payment.create({
+    const payJuly = await prisma.payment.create({
       data: {
         dormitoryId: dormId,
         billId: billJuly.id,
@@ -465,7 +584,7 @@ describe('OWNER R3.8f: Group Payment Approval Forensics & Direct-Consumer Integr
         paymentDate: new Date('2026-08-28T14:30:00Z'),
       },
     });
-    await prisma.payment.create({
+    const payAug = await prisma.payment.create({
       data: {
         dormitoryId: dormId,
         billId: billAug.id,
@@ -478,7 +597,7 @@ describe('OWNER R3.8f: Group Payment Approval Forensics & Direct-Consumer Integr
       },
     });
 
-    // Approve via HTTP
+    // 6. Approve via HTTP
     const res = await request(app)
       .post(`/api/v1/payments/combined-groups/${paymentGroup.id}/approve`)
       .set('Cookie', [`horplus_session=${ownerSessionToken}`, `horplus_csrf=${ownerCsrfToken}`])
@@ -489,13 +608,13 @@ describe('OWNER R3.8f: Group Payment Approval Forensics & Direct-Consumer Integr
     expect(res.status).toBe(200);
     expect(res.body.group.status).toBe('APPROVED');
 
-    // Verify Group Status & Receipt
+    // 7. Post-Approval Financial Graph Assertions
     const updatedGroup = await prisma.combinedPaymentGroup.findUnique({
       where: { id: paymentGroup.id },
       include: { receipts: true, payments: true },
     });
     expect(updatedGroup?.status).toBe('APPROVED');
-    expect(updatedGroup?.receipts.length).toBe(1);
+    expect(updatedGroup?.receipts.length).toBe(1); // Exactly 1 new combined receipt for this group
     expect(updatedGroup?.receipts[0].paymentGroupId).toBe(paymentGroup.id);
     const receiptSnapshot = updatedGroup?.receipts[0].snapshotData as any;
     expect(Number(receiptSnapshot?.total || receiptSnapshot?.totalAmount)).toBe(6500.0);
@@ -506,17 +625,33 @@ describe('OWNER R3.8f: Group Payment Approval Forensics & Direct-Consumer Integr
       expect(p.status).toBe('APPROVED');
     }
 
-    // Verify July Bill (PAID, paidAt set, outstanding = 0)
-    const updatedJuly = await prisma.bill.findUnique({ where: { id: billJuly.id } });
+    // Verify July Bill (PAID, paidAt set, outstanding = 0, total allocations = 6100)
+    const updatedJuly = await prisma.bill.findUnique({
+      where: { id: billJuly.id },
+      include: { allocations: true, Receipt: true, Payment: true },
+    });
     expect(updatedJuly?.status).toBe('PAID');
     expect(Number(updatedJuly?.paidAmount)).toBe(6100.0);
     expect(Number(updatedJuly?.outstandingAmount)).toBe(0.0);
     expect(updatedJuly?.paidAt).not.toBeNull();
+    const postJulyAllocationsSum = updatedJuly?.allocations.reduce((s, a) => s + Number(a.allocatedAmount), 0) || 0;
+    expect(postJulyAllocationsSum).toBe(6100.0); // 2100 prior + 4000 group = 6100 (0 orphan/phantom paidAmount)
+    expect(Number(updatedJuly?.paidAmount) - postJulyAllocationsSum).toBe(0.0);
 
-    // Verify August Bill (PARTIAL, paid = 2500, outstanding = 2500)
-    const updatedAug = await prisma.bill.findUnique({ where: { id: billAug.id } });
+    // Verify August Bill (PARTIAL, paid = 2500, outstanding = 2500, total allocations = 2500)
+    const updatedAug = await prisma.bill.findUnique({
+      where: { id: billAug.id },
+      include: { allocations: true },
+    });
     expect(updatedAug?.status).toBe('PARTIALLY_PAID');
     expect(Number(updatedAug?.paidAmount)).toBe(2500.0);
     expect(Number(updatedAug?.outstandingAmount)).toBe(2500.0);
+    const postAugAllocationsSum = updatedAug?.allocations.reduce((s, a) => s + Number(a.allocatedAmount), 0) || 0;
+    expect(postAugAllocationsSum).toBe(2500.0);
+    expect(Number(updatedAug?.paidAmount) - postAugAllocationsSum).toBe(0.0);
+
+    // Total Monetary Evidence: 2100 (prior) + 6500 (group) = 8600.00
+    const totalApprovedPaymentsSum = [priorPayment.amount, payJuly.amount, payAug.amount].reduce((s, a) => s + Number(a), 0);
+    expect(totalApprovedPaymentsSum).toBe(8600.0);
   });
 });

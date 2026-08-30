@@ -184,7 +184,7 @@ export async function runVerification() {
 
   // Receipts count verification
   const receiptsCount = julyCycle?.bills.reduce((sum, b) => sum + b.Receipt.length, 0) || 0;
-  assert(receiptsCount === 8, 'Receipts issued count is exactly 8', receiptsCount);
+  assert(receiptsCount === 9, 'Receipts issued count is exactly 9 (7 regular + 1 deposit + 1 Room 302 prior partial)', receiptsCount);
 
   // 4. Session State Manifest Verification
   console.log('\n--- 4. Session Manifest & Playwright Storage State Verification ---');
@@ -850,6 +850,83 @@ export async function runVerification() {
       `R3.7a Check 4: Fresh Dorm established baseline for first cycle (2026-08: ${freshAugBaselineCount}/${FRESH_DORM.rooms.length}) and 0 for pre-onboarding July`,
       `Aug: ${freshAugBaselineCount}, July: ${freshJulyBaselineCount}`
     );
+
+    // 14. Room 302 Canonical Financial Graph & Pending Group Verification
+    console.log('\n--- 14. Room 302 Canonical Financial Graph & Pending Group Verification ---');
+    const room302Db = allRooms.find(r => r.roomNumber === '302');
+    assert(Boolean(room302Db), 'Room 302 exists in DB');
+
+    const bill302July = await prisma.bill.findFirst({
+      where: { dormitoryId: COMP_DORM.id, roomId: room302Db.id, billingCycleId: cycleJulyDb.id },
+      include: {
+        items: true,
+        allocations: true,
+        Receipt: true,
+        Payment: { include: { statusHistories: true } },
+      },
+    });
+
+    assert(Boolean(bill302July), 'Room 302 July bill exists');
+    assert(Number(bill302July.totalAmount) === 6100, 'Room 302 July Bill total is ฿6,100.00', Number(bill302July.totalAmount));
+    assert(Number(bill302July.paidAmount) === 2100, 'Room 302 July Bill paid is ฿2,100.00', Number(bill302July.paidAmount));
+    assert(Number(bill302July.outstandingAmount) === 4000, 'Room 302 July Bill outstanding is ฿4,000.00', Number(bill302July.outstandingAmount));
+    assert(bill302July.status === 'partial', 'Room 302 July Bill status is partial', bill302July.status);
+
+    // Prior Approved Payment & Allocations
+    const priorApprovedPayment = bill302July.Payment.find(p => p.status === 'APPROVED');
+    assert(Boolean(priorApprovedPayment), 'Room 302 July has an APPROVED prior Payment');
+    assert(Number(priorApprovedPayment?.amount) === 2100, 'Approved prior Payment amount is ฿2,100.00', Number(priorApprovedPayment?.amount));
+
+    const approvedAllocationsSum = bill302July.allocations.reduce((sum, a) => sum + Number(a.allocatedAmount), 0);
+    assert(approvedAllocationsSum === 2100, 'Approved prior PaymentAllocation sum against July Bill is ฿2,100.00', approvedAllocationsSum);
+
+    const unbackedPaidDelta = Number(bill302July.paidAmount) - approvedAllocationsSum;
+    assert(unbackedPaidDelta === 0, 'Bill.paidAmount - approved allocation sum is exactly 0 (No phantom paidAmount)', unbackedPaidDelta);
+
+    const legacyUnallocatedPaidAmount = Math.max(Number(bill302July.paidAmount) - approvedAllocationsSum, 0);
+    assert(legacyUnallocatedPaidAmount === 0, 'legacyUnallocatedPaidAmount is exactly 0 for modern Room 302 fixture', legacyUnallocatedPaidAmount);
+
+    // Prior Receipt
+    assert(bill302July.Receipt.length === 1, 'Room 302 July has exactly 1 prior event Receipt', bill302July.Receipt.length);
+    const priorReceipt = bill302July.Receipt[0];
+    assert(
+      Number(priorReceipt?.snapshotData?.totalAmount || priorReceipt?.snapshotData?.total) === 2100,
+      'Prior receipt snapshot total is ฿2,100.00',
+      priorReceipt?.snapshotData?.totalAmount || priorReceipt?.snapshotData?.total
+    );
+
+    // Pending Combined Payment Group
+    const bill302Aug = await prisma.bill.findFirst({
+      where: { dormitoryId: COMP_DORM.id, roomId: room302Db.id, billingCycleId: cycleAugDb.id },
+    });
+    assert(Boolean(bill302Aug), 'Room 302 August bill exists');
+    assert(Number(bill302Aug.outstandingAmount) === 5000, 'Room 302 August Bill outstanding is ฿5,000.00', Number(bill302Aug.outstandingAmount));
+
+    const pendingGroup = await prisma.combinedPaymentGroup.findFirst({
+      where: {
+        dormitoryId: COMP_DORM.id,
+        status: 'UNDER_REVIEW',
+        payments: { some: { bill: { roomId: room302Db.id } } },
+      },
+      include: {
+        payments: true,
+        billTargets: true,
+        receipts: true,
+      },
+    });
+
+    assert(Boolean(pendingGroup), 'Room 302 pending combined group exists in UNDER_REVIEW status');
+    assert(Number(pendingGroup?.totalAmount) === 6500, 'Pending group total is ฿6,500.00', Number(pendingGroup?.totalAmount));
+
+    const pendingChildSum = pendingGroup?.payments.reduce((sum, p) => sum + Number(p.amount), 0) || 0;
+    assert(pendingChildSum === 6500, 'Pending child payments sum equals ฿6,500.00', pendingChildSum);
+
+    const pendingJulyChild = pendingGroup?.payments.find(p => p.billId === bill302July.id);
+    const pendingAugChild = pendingGroup?.payments.find(p => p.billId === bill302Aug.id);
+    assert(Number(pendingJulyChild?.amount) === 4000, 'Pending July child payment amount is ฿4,000.00', Number(pendingJulyChild?.amount));
+    assert(Number(pendingAugChild?.amount) === 2500, 'Pending August child payment amount is ฿2,500.00', Number(pendingAugChild?.amount));
+
+    assert(pendingGroup?.receipts.length === 0, 'Combined pending group Receipt count is 0 before approval', pendingGroup?.receipts.length);
 
   console.log('\n================================================================================');
   if (failures === 0) {

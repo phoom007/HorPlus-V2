@@ -1,10 +1,10 @@
 # OWNER R3.8f — Manual-UAT Runtime Closure: Term Money Integrity, Room 302 Group Approval Forensics, Receipt Print & Local-07 Diagnostics
 
-**Date**: 2026-08-30  
-**Branch**: `fix/owner-r38f-uat-runtime-term-approval-print-infra-20260830`  
-**Base Commit**: `3e4052dce8aaf567de47443ae8f8aa17b0955fff`  
-**Parent Commit**: `3e4052dce8aaf567de47443ae8f8aa17b0955fff`  
-**Status**: PASSED / 100% PRODUCTION READY FOR PRODUCT OWNER UAT  
+**Date**: 2026-08-30
+**Branch**: `fix/owner-r38fr1-financial-fixture-source-cleanup-20260830`
+**Base Commit**: `3e4052dce8aaf567de47443ae8f8aa17b0955fff`
+**Parent Commit**: `189ddd61416e97c808811f67bc9137669136b609`
+**Status**: PASSED / READY FOR PRODUCT OWNER MANUAL UAT
 
 ---
 
@@ -145,8 +145,61 @@ Antigravity has **NOT** approved or rejected the test slip. The Product Owner ca
 
 ---
 
+---
+
 ## 5. Git Snapshot Summary
 
-- **Branch**: `fix/owner-r38f-uat-runtime-term-approval-print-infra-20260830`
-- **Parent Commit**: `3e4052dce8aaf567de47443ae8f8aa17b0955fff`
+- **Branch**: `fix/owner-r38fr1-financial-fixture-source-cleanup-20260830`
+- **Parent Commit**: `189ddd61416e97c808811f67bc9137669136b609`
+- **R3.8f Base**: `3e4052dce8aaf567de47443ae8f8aa17b0955fff`
 - **origin/main**: Preserved untouched at `7609817303e1403b87ab790935941ee8f90f1258`
+
+---
+
+## 6. R3.8fR1 — Independent Source-Gate Correction & Canonical Financial Fixture
+
+### 6.1 Independent Source Gate Blocker & Root Cause
+During independent source review, a P0 fixture integrity blocker was identified:
+- In `scripts/local07/seed.mjs`, Room 302 July bill (`INV-202607-009`) had its `paidAmount` directly set to `2,100.00` (leaving `4,000.00` outstanding) without creating canonical financial event records (Payment, PaymentAllocation, Receipt, CombinedPaymentGroup).
+- This shortcut caused the modern Room 302 fixture to rely on `legacyUnallocatedPaidAmount`, which violated financial integrity since Room 302 is not a legacy ambiguous fixture.
+- Furthermore, integration test CASE 2 replicated this shortcut by creating a bill with `paidAmount: 2100` and zero backing payment evidence.
+
+### 6.2 Canonical Prior Payment Fixture Correction
+1. **Full Canonical Monetary Graph Constructed**:
+   - `CombinedPaymentGroup`: Total `฿2,100.00`, method `CASH`, status `APPROVED`, date `2026-08-10`.
+   - `CombinedPaymentGroupBillTarget`: Target order 1 linked to July Bill.
+   - `Payment`: Amount `฿2,100.00`, status `APPROVED`, method `CASH`.
+   - `PaymentStatusHistory`: `toStatus = 'APPROVED'`.
+   - `PaymentAllocation`: Exactly `฿2,100.00` allocated against July rent item.
+   - `BillStatusHistory`: `fromStatus = 'unpaid'`, `toStatus = 'partial'`.
+   - `Receipt`: Exactly 1 immutable receipt (`RCP-202607-302-P1`) with snapshot total `฿2,100.00`.
+   - `Bill`: `paidAmount = 2100.00`, `outstandingAmount = 4000.00`, `status = 'partial'`.
+
+2. **Invariants Proven**:
+   - `SUM(approved allocations against July Bill) = 2,100.00 = Bill.paidAmount`.
+   - `Bill.totalAmount - Bill.paidAmount = 6,100.00 - 2,100.00 = 4,000.00 = Bill.outstandingAmount`.
+   - `legacyUnallocatedPaidAmount = Bill.paidAmount - allocationsSum = 0.00` (Strict non-legacy proof).
+
+3. **Pending Slip & Post-Approval Verification**:
+   - Pending Combined Group (`฿6,500.00`, `UNDER_REVIEW`) with child payments July `฿4,000.00` and August `฿2,500.00`.
+   - Canonical FIFO allocation of ฿6,500 produces July `฿4,000.00` (closes bill to `PAID`, `outstanding = 0`, `paidAt` recorded) and August `฿2,500.00` (`PARTIALLY_PAID`, `outstanding = 2,500.00`).
+   - Post-approval creates exactly **1 NEW Combined Receipt** (`฿6,500.00`).
+   - Total monetary evidence across both events = `฿2,100.00 + ฿6,500.00 = ฿8,600.00` with **0 orphan/phantom paidAmount**.
+
+### 6.3 Receipt Count Reconciliations
+- July 2026 cycle bills receipt count updated from 8 to **9** (7 regular paid bills + 1 deposit bill + 1 Room 302 prior partial payment receipt).
+
+### 6.4 Single Shared Money Normalizer
+- Removed local duplicate `normalizeMoneyInput` in `src/components/QuickAddTenantModal.tsx`.
+- Widened shared `normalizeMoneyInput` in `src/components/GlobalComponents.tsx` to handle `null | undefined | string | number`, ensuring single authority.
+
+### 6.5 True DAILY 2-Day Test
+- Updated `src/tests/owner-r38f-quickadd-and-print.test.tsx` to set checkout date to tomorrow, verifying actual 2-day calculation: `฿800 x 2 days (฿1,600) + ฿1,000 deposit = ฿2,600.00`.
+
+### 6.6 Diff Hygiene & Timestamp Churn Removal
+- Preserved stable `generatedAt` in `scripts/local07/generate-oracle.mjs` to eliminate timestamp churn on `docs/uat/local07-expected-results.json`.
+- Restored repository-native LF line endings to `src/components/GlobalComponents.tsx` and `server/src/tests/local07-line-tenant-onboarding-a2.test.ts`, eliminating whole-file diffs.
+
+### 6.7 PrintView Status
+- Top-level print root DOM-cloning verified via unit tests.
+- Physical Chrome one-page layout status: **SOURCE PRINT FIX READY FOR MANUAL CHROME PRINT UAT**.

@@ -152,16 +152,25 @@ describe('OWNER R3.8f — QuickAdd Money Type Integrity & Live Preview', () => {
     const dailyTab = screen.getByTestId('tab-daily');
     fireEvent.click(dailyTab);
 
+    // Set checkout date to tomorrow to create a 2-day inclusive stay (today + tomorrow = 2 days)
+    const dateInputs = screen.getAllByPlaceholderText('วว/ดด/ปปปป');
+    const tomorrow = new Date(Date.now() + 24 * 3600 * 1000);
+    const tomorrowThai = `${String(tomorrow.getDate()).padStart(2, '0')}/${String(tomorrow.getMonth() + 1).padStart(2, '0')}/${tomorrow.getFullYear() + 543}`;
+
+    fireEvent.change(dateInputs[1], { target: { value: tomorrowThai } });
+    fireEvent.blur(dateInputs[1]);
+
     const rateInput = screen.getAllByRole('spinbutton')[0];
     fireEvent.change(rateInput, { target: { value: '800' } });
 
     const depositInput = screen.getAllByRole('spinbutton')[1];
     fireEvent.change(depositInput, { target: { value: '1000' } });
 
-    // Verify
-    expect(screen.getAllByText(/(?:^|[^d,])800.00/).length).toBeGreaterThanOrEqual(1); // default 1 day rent
+    // Verify 2-day calculations
+    expect(screen.getAllByText(/2 วัน/).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/1,600.00/).length).toBeGreaterThanOrEqual(1); // totalRent (800 x 2 days)
     expect(screen.getAllByText(/1,000.00/).length).toBeGreaterThanOrEqual(1); // depAmount
-    expect(screen.getAllByText(/1,800.00/).length).toBeGreaterThanOrEqual(1); // totalAgreed
+    expect(screen.getAllByText(/2,600.00/).length).toBeGreaterThanOrEqual(1); // totalAgreed (1600 + 1000)
   });
 });
 

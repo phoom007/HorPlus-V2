@@ -98,9 +98,10 @@ export const formatCountDisplay = (val: string | number | null | undefined): str
   return isNaN(num) ? '0' : Math.max(0, num).toString();
 };
 
-export const normalizeMoneyInput = (val: string | number): number => {
+export const normalizeMoneyInput = (val: string | number | null | undefined): number => {
+  if (val === null || val === undefined || val === '') return 0;
   if (typeof val === 'number') return isNaN(val) ? 0 : val;
-  const clean = String(val).replace(/[^0-9.]/g, '');
+  const clean = String(val).replace(/,/g, '').trim();
   const parsed = parseFloat(clean);
   return isNaN(parsed) ? 0 : parsed;
 };

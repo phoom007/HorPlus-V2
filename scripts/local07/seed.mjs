@@ -2030,8 +2030,110 @@ export async function seedLocal07Data() {
   });
 
   if (bill302July) {
-    // Set Room 302 July bill to PARTIAL with ฿4,000 outstanding (฿2,100 paid previously via cash)
-    // so that the ฿6,500 combined slip deterministically allocates ฿4,000 to July (closing it) and ฿2,500 to August
+    // Canonical Prior Cash Event: ฿2,100 paid against July Bill (Total ฿6,100)
+    // yielding: paidAmount = ฿2,100, outstandingAmount = ฿4,000, legacyUnallocatedPaidAmount = 0.00
+    const priorPaymentDate = new Date('2026-08-10T10:00:00Z');
+
+    const priorGroup = await prisma.combinedPaymentGroup.create({
+      data: {
+        dormitoryId: compDorm.id,
+        tenantId: createdTenants['302'].id,
+        totalAmount: 2100.0,
+        method: 'CASH',
+        status: 'APPROVED',
+        paymentDate: priorPaymentDate,
+        notes: 'ชำระเงินสดบางส่วนที่เคาน์เตอร์ (ก.ค. 2569)',
+      },
+    });
+
+    await prisma.combinedPaymentGroupBillTarget.create({
+      data: {
+        dormitoryId: compDorm.id,
+        paymentGroupId: priorGroup.id,
+        billId: bill302July.id,
+        targetOrder: 1,
+      },
+    });
+
+    const priorPayment = await prisma.payment.create({
+      data: {
+        dormitoryId: compDorm.id,
+        billId: bill302July.id,
+        tenantId: createdTenants['302'].id,
+        paymentGroupId: priorGroup.id,
+        method: 'CASH',
+        amount: 2100.0,
+        status: 'APPROVED',
+        paymentDate: priorPaymentDate,
+        reviewedAt: priorPaymentDate,
+      },
+    });
+
+    await prisma.paymentStatusHistory.create({
+      data: {
+        dormitoryId: compDorm.id,
+        paymentId: priorPayment.id,
+        fromStatus: null,
+        toStatus: 'APPROVED',
+        effectiveAt: priorPaymentDate,
+      },
+    });
+
+    const julyItems = await prisma.billItem.findMany({
+      where: { billId: bill302July.id },
+      orderBy: { id: 'asc' },
+    });
+    const rentItem = julyItems.find(it => it.type === 'rent') || julyItems[0];
+
+    await prisma.paymentAllocation.create({
+      data: {
+        dormitoryId: compDorm.id,
+        paymentGroupId: priorGroup.id,
+        paymentId: priorPayment.id,
+        billId: bill302July.id,
+        billItemId: rentItem ? rentItem.id : null,
+        allocatedAmount: 2100.0,
+        allocationOrder: 1,
+      },
+    });
+
+    await prisma.billStatusHistory.create({
+      data: {
+        dormitoryId: compDorm.id,
+        billId: bill302July.id,
+        fromStatus: 'unpaid',
+        toStatus: 'partial',
+        effectiveAt: priorPaymentDate,
+      },
+    });
+
+    await prisma.receipt.create({
+      data: {
+        dormitoryId: compDorm.id,
+        billId: bill302July.id,
+        paymentId: priorPayment.id,
+        paymentGroupId: priorGroup.id,
+        receiptNumber: 'RCP-202607-302-P1',
+        snapshotData: {
+          receiptNumber: 'RCP-202607-302-P1',
+          billNumber: bill302July.billNumber,
+          roomNumber: '302',
+          tenantName: createdTenants['302'].displayName,
+          dormitoryName: compDorm.name,
+          totalAmount: 2100.0,
+          total: '2100.00',
+          paymentMethod: 'CASH',
+          paymentDate: priorPaymentDate.toISOString(),
+          receiverName: 'เจ้าของหอพัก',
+          items: [
+            { description: 'ค่าเช่าห้องพัก 302 (ก.ค. 2569) — ชำระบางส่วน', amount: 2100.0 },
+          ],
+        },
+        issuedAt: priorPaymentDate,
+        isVoided: false,
+      },
+    });
+
     await prisma.bill.update({
       where: { id: bill302July.id },
       data: {

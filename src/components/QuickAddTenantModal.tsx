@@ -64,15 +64,6 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
   const [startDate, setStartDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [copiedLineId, setCopiedLineId] = useState(false);
 
-  // Helper: safe numeric money normalization to prevent string concatenation
-  const normalizeMoneyInput = (val: string | number | null | undefined): number => {
-    if (val === null || val === undefined) return 0;
-    if (typeof val === 'number') return isNaN(val) ? 0 : val;
-    const cleaned = String(val).replace(/,/g, '').trim();
-    const parsed = parseFloat(cleaned);
-    return isNaN(parsed) ? 0 : parsed;
-  };
-
   // Identity Card Document upload (0 or 1 image, max 5 MB, JPEG/PNG/WebP only, no PDF)
   const [idCardFile, setIdCardFile] = useState<File | null>(null);
   const [idCardPreview, setIdCardPreview] = useState<string | null>(null);

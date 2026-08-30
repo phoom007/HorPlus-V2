@@ -18,9 +18,18 @@ const __dirname = path.dirname(__filename);
 const ROOT_DIR = path.resolve(__dirname, '../..');
 
 export function generateOracle() {
+  const jsonPath = path.join(ROOT_DIR, 'docs/uat/local07-expected-results.json');
+  let stableGeneratedAt = '2026-08-27T03:55:02.317Z';
+  if (fs.existsSync(jsonPath)) {
+    try {
+      const existing = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+      if (existing.generatedAt) stableGeneratedAt = existing.generatedAt;
+    } catch {}
+  }
+
   const oracleData = {
     schemaVersion: '1.0.0',
-    generatedAt: new Date().toISOString(),
+    generatedAt: stableGeneratedAt,
     dataset: 'LOCAL-07 Manual UAT Review Sandbox',
     dormitories: {
       freshOwner: {
@@ -120,7 +129,6 @@ export function generateOracle() {
     },
   };
 
-  const jsonPath = path.join(ROOT_DIR, 'docs/uat/local07-expected-results.json');
   fs.writeFileSync(jsonPath, JSON.stringify(oracleData, null, 2), 'utf8');
 
   // Generate Markdown Guide
