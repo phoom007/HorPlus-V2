@@ -720,10 +720,10 @@ export class BillingCycleService {
     const effectiveUpdate = {
       waterBillingType: waterType,
       waterRate,
-      waterTierRates,
+      waterTierRates: waterTierRates === null ? Prisma.DbNull : (waterTierRates as any),
       electricityBillingType: electricityType,
       electricityRate,
-      electricityTierRates,
+      electricityTierRates: electricityTierRates === null ? Prisma.DbNull : (electricityTierRates as any),
       commonFee,
       commonFeeMode: commonMode,
       internetFee,

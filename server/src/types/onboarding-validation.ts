@@ -21,10 +21,10 @@ export const OnboardingBillingInputSchema = z.object({
   dueDay: z.coerce.number({ required_error: 'กรุณาระบุวันครบกำหนดชำระ (dueDay is required)', invalid_type_error: 'วันครบกำหนดชำระต้องเป็นตัวเลข' }).int().min(1, 'วันครบกำหนดชำระต้องอยู่ระหว่างวันที่ 1-28').max(28, 'วันครบกำหนดชำระต้องอยู่ระหว่างวันที่ 1-28'),
   waterBillingType: z.enum(['per_unit', 'fixed_monthly', 'flat_rate', 'unit', 'flat', 'per_person', 'person', 'room', 'per_room', 'tiered']).default('per_person'),
   waterRate: z.string().regex(/^\d+(\.\d{1,2})?$/, 'ค่าน้ำต้องเป็นตัวเลขจำนวนเงินที่ถูกต้อง').default('0.00'),
-  waterTierRates: z.array(z.object({ upTo: z.string().nullable().optional(), rate: z.string() })).nullable().optional(),
+  waterTierRates: z.array(z.object({ upTo: z.string().nullable(), rate: z.string() })).nullable().optional(),
   electricityBillingType: z.enum(['per_unit', 'fixed_monthly', 'flat_rate', 'unit', 'flat', 'per_person', 'person', 'room', 'per_room', 'tiered']).default('per_unit'),
   electricityRate: z.string().regex(/^\d+(\.\d{1,2})?$/, 'ค่าไฟต้องเป็นตัวเลขจำนวนเงินที่ถูกต้อง').default('0.00'),
-  electricityTierRates: z.array(z.object({ upTo: z.string().nullable().optional(), rate: z.string() })).nullable().optional(),
+  electricityTierRates: z.array(z.object({ upTo: z.string().nullable(), rate: z.string() })).nullable().optional(),
   commonFee: z.string().regex(/^\d+(\.\d{1,2})?$/, 'ค่าส่วนกลางต้องเป็นตัวเลขจำนวนเงินที่ถูกต้อง').default('0.00'),
   commonFeeMode: z.string().trim().optional().nullable().default('per_room'),
   internetFee: z.string().regex(/^\d+(\.\d{1,2})?$/, 'ค่าอินเทอร์เน็ตต้องเป็นตัวเลขจำนวนเงินที่ถูกต้อง').default('0.00'),
@@ -224,8 +224,9 @@ export const OnboardingRoomInputSchema = z.object({
   depositInheritsBuildingDefault: z.boolean().optional().default(true),
   parkingFee: z.coerce.number().min(0).default(0),
   maximumOccupants: z.coerce.number().int().min(1).optional().nullable().default(2),
-  initialWaterReading: z.coerce.number().min(0).default(0),
-  initialElectricityReading: z.coerce.number().min(0).default(0),
+  // LOCKED POLICY: All new rooms begin with meter baseline = 0. Real meter readings are entered in Meter Workspace.
+  initialWaterReading: z.coerce.number().refine(val => val === 0, { message: 'ค่ามิเตอร์เริ่มต้นสำหรับห้องใหม่ต้องเป็น 0 (initial meter reading must be 0)' }).optional().default(0),
+  initialElectricityReading: z.coerce.number().refine(val => val === 0, { message: 'ค่ามิเตอร์เริ่มต้นสำหรับห้องใหม่ต้องเป็น 0 (initial meter reading must be 0)' }).optional().default(0),
   status: z.enum(['vacant', 'occupied', 'reserved', 'maintenance']).default('vacant'),
 }).strict();
 
