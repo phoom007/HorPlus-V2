@@ -105,11 +105,26 @@ describe('LOCAL-07 — Secure LINE Tenant Registration A2 Authority', () => {
           roomType: 'STANDARD',
           floor: 1,
           monthlyRent: 4500,
-          depositAmount: 5000,
+          monthlyDeposit: 5000,
+          termDeposit: 5000,
+          dailyDeposit: 500,
           status: 'AVAILABLE',
         },
       });
       testRoomA101Id = roomA.id;
+
+      await tx.billingCycle.create({
+        data: {
+          dormitoryId: testDormAId,
+          cycleCode: '2026-09',
+          name: 'September 2026',
+          periodStart: new Date('2026-09-01T00:00:00.000Z'),
+          periodEnd: new Date('2026-09-30T00:00:00.000Z'),
+          billingDate: new Date('2026-09-25T00:00:00.000Z'),
+          dueDate: new Date('2026-10-05T00:00:00.000Z'),
+          status: 'published',
+        },
+      });
 
       const webhookKey = 'test_webhook_key_' + Math.random().toString(36).substring(2, 10);
       const webhookKeyHash = hashToken(webhookKey);
@@ -165,6 +180,15 @@ describe('LOCAL-07 — Secure LINE Tenant Registration A2 Authority', () => {
       if (testDormAId) {
         await prisma.$transaction(async (tx) => {
           await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${testDormAId}, true)`;
+          await tx.receipt.deleteMany({ where: { dormitoryId: testDormAId } });
+          await tx.combinedPaymentGroupBillTarget.deleteMany({ where: { dormitoryId: testDormAId } });
+          await tx.paymentStatusHistory.deleteMany({ where: { payment: { dormitoryId: testDormAId } } });
+          await tx.payment.deleteMany({ where: { dormitoryId: testDormAId } });
+          await tx.combinedPaymentGroup.deleteMany({ where: { dormitoryId: testDormAId } });
+          await tx.billItem.deleteMany({ where: { bill: { dormitoryId: testDormAId } } });
+          await tx.billStatusHistory.deleteMany({ where: { bill: { dormitoryId: testDormAId } } });
+          await tx.bill.deleteMany({ where: { dormitoryId: testDormAId } });
+          await tx.billingCycle.deleteMany({ where: { dormitoryId: testDormAId } });
           await tx.tenantRegistrationInvite.deleteMany({ where: { dormitoryId: testDormAId } });
           await tx.occupancy.deleteMany({ where: { dormitoryId: testDormAId } });
           await tx.contract.deleteMany({ where: { dormitoryId: testDormAId } });

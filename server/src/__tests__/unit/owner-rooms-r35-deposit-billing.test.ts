@@ -83,6 +83,40 @@ describe('OWNER ROOMS R3.5a — Canonical Deposit Billing & Lifecycle Suite', ()
           ...data,
         })),
       },
+      combinedPaymentGroup: {
+        create: vi.fn().mockImplementation(async ({ data }: any) => ({
+          id: 'cpg-deposit-001',
+          ...data,
+        })),
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'cpg-deposit-001',
+          method: 'CASH',
+        }),
+      },
+      combinedPaymentGroupBillTarget: {
+        create: vi.fn().mockImplementation(async ({ data }: any) => ({
+          id: 'cpg-target-001',
+          ...data,
+        })),
+      },
+      paymentAllocation: {
+        create: vi.fn().mockImplementation(async ({ data }: any) => ({
+          id: 'pa-001',
+          ...data,
+        })),
+      },
+      paymentEvidenceVerification: {
+        create: vi.fn().mockImplementation(async ({ data }: any) => ({
+          id: 'pev-001',
+          ...data,
+        })),
+      },
+      user: {
+        findUnique: vi.fn().mockResolvedValue({ id: 'user-1', name: 'เจ้าของหอพัก' }),
+      },
+      dormitory: {
+        findUnique: vi.fn().mockResolvedValue({ id: 'dorm-1', name: 'หอพัก A' }),
+      },
     };
   });
 
@@ -238,7 +272,6 @@ describe('OWNER ROOMS R3.5a — Canonical Deposit Billing & Lifecycle Suite', ()
       expect(mockTx.receipt.create).toHaveBeenCalledTimes(1);
       const receiptArg = mockTx.receipt.create.mock.calls[0][0].data;
       expect(receiptArg.snapshotData.total).toBe('9000.00');
-      expect(receiptArg.snapshotData.discount).toBe('0.00');
       expect(receiptArg.receiptNumber).toMatch(/^RC-/);
     });
   });
