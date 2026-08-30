@@ -168,13 +168,7 @@ export function createDormitoryRouter(
   // GET /api/v1/dormitories/:dormitoryId/billing-settings (PS-001 Public Billing DTO Isolation)
   router.get('/:dormitoryId/billing-settings', requireSession, requireDormitory, requireBillingView, async (req: Request, res: Response) => {
     const dormitoryId = req.params.dormitoryId;
-    let settings: any = await billingRepo.findByDormitoryId(dormitoryId);
-    if (!settings) {
-      const prisma = getPrismaClient();
-      if (prisma?.dormitoryBillingSettings) {
-        settings = await prisma.dormitoryBillingSettings.findUnique({ where: { dormitoryId } });
-      }
-    }
+    const settings: any = await billingRepo.findByDormitoryId(dormitoryId);
 
     if (!settings) {
       return res.json({ data: null });
@@ -300,13 +294,7 @@ export function createDormitoryRouter(
   // GET /api/v1/dormitories/:dormitoryId/payment-settings (PS-002, PS-003, PS-008)
   router.get('/:dormitoryId/payment-settings', requireSession, requireDormitory, requirePaymentView, async (req: Request, res: Response) => {
     const dormitoryId = req.params.dormitoryId;
-    let settings: any = await billingRepo.findByDormitoryId(dormitoryId);
-    if (!settings) {
-      const prisma = getPrismaClient();
-      if (prisma?.dormitoryBillingSettings) {
-        settings = await prisma.dormitoryBillingSettings.findUnique({ where: { dormitoryId } });
-      }
-    }
+    const settings: any = await billingRepo.findByDormitoryId(dormitoryId);
 
     if (!settings) {
       return res.json({ data: null });
@@ -390,13 +378,18 @@ export function createDormitoryRouter(
     }
 
     const dormitoryId = req.params.dormitoryId;
-    const prisma = getPrismaClient();
 
-    let currentSettings: any = null;
-    if (prisma?.dormitoryBillingSettings) {
-      currentSettings = await prisma.dormitoryBillingSettings.findUnique({ where: { dormitoryId } });
-    } else {
-      currentSettings = await billingRepo.findByDormitoryId(dormitoryId);
+    const currentSettings: any = await billingRepo.findByDormitoryId(dormitoryId);
+    if (!currentSettings) {
+      return res.status(404).json({
+        error: {
+          code: 'DORMITORY_BILLING_SETTINGS_NOT_FOUND',
+          message: 'ไม่พบการตั้งค่าการเรียกเก็บเงินของหอพัก',
+          fieldErrors: null,
+          requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+          timestamp: new Date().toISOString(),
+        },
+      });
     }
 
     let finalPromptPayEnc: string | null = currentSettings?.promptPayValueEncrypted ?? null;
@@ -505,26 +498,17 @@ export function createDormitoryRouter(
       bankAccountNumberEncrypted: finalBankAccEnc,
     };
 
-    let updated: any;
-    if (prisma?.dormitoryBillingSettings) {
-      if (currentSettings) {
-        updated = await prisma.dormitoryBillingSettings.update({
-          where: { dormitoryId },
-          data: updateData,
-        });
-      } else {
-        return res.status(404).json({
-          error: {
-            code: 'DORMITORY_BILLING_SETTINGS_NOT_FOUND',
-            message: 'ไม่พบการตั้งค่าการเรียกเก็บเงินของหอพัก',
-            fieldErrors: null,
-            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
-            timestamp: new Date().toISOString(),
-          },
-        });
-      }
-    } else {
-      updated = await billingRepo.update(dormitoryId, updateData);
+    const updated = await billingRepo.update(dormitoryId, updateData);
+    if (!updated) {
+      return res.status(404).json({
+        error: {
+          code: 'DORMITORY_BILLING_SETTINGS_NOT_FOUND',
+          message: 'ไม่พบการตั้งค่าการเรียกเก็บเงินของหอพัก',
+          fieldErrors: null,
+          requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+          timestamp: new Date().toISOString(),
+        },
+      });
     }
 
     if (!decryptedPromptPay && updated.promptPayValueEncrypted) {

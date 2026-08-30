@@ -22,7 +22,7 @@ import { InMemorySessionRepository, PrismaSessionRepository } from './db/reposit
 import { InMemoryMembershipRepository, PrismaMembershipRepository } from './db/repositories/membership.repository.js';
 import { InMemoryRoleRepository, PrismaRoleRepository } from './db/repositories/role.repository.js';
 import { InMemoryDormitoryRepository, PrismaDormitoryRepository } from './db/repositories/dormitory.repository.js';
-import { InMemoryBillingSettingsRepository } from './db/repositories/billing-settings.repository.js';
+import { InMemoryBillingSettingsRepository, PrismaBillingSettingsRepository } from './db/repositories/billing-settings.repository.js';
 import { InMemoryPlanRepository } from './db/repositories/plan.repository.js';
 import { InMemorySubscriptionRepository, PrismaSubscriptionRepository } from './db/repositories/subscription.repository.js';
 import { EntitlementService } from './services/entitlement.service.js';
@@ -98,7 +98,7 @@ export function createApp(optionsOrAuth?: CreateAppOptions | AuthenticationServi
   const membershipRepo = useInMemoryRepos ? new InMemoryMembershipRepository() : new PrismaMembershipRepository(prisma!);
   const roleRepo = useInMemoryRepos ? new InMemoryRoleRepository() : new PrismaRoleRepository(prisma!);
   const dormitoryRepo = useInMemoryRepos ? new InMemoryDormitoryRepository() : new PrismaDormitoryRepository(prisma!);
-  const billingRepo = new InMemoryBillingSettingsRepository();
+  const billingRepo = useInMemoryRepos ? new InMemoryBillingSettingsRepository() : new PrismaBillingSettingsRepository(prisma!);
   const planRepo = new InMemoryPlanRepository();
   const subRepo = useInMemoryRepos ? new InMemorySubscriptionRepository() : new PrismaSubscriptionRepository(prisma!);
   const promoRepo = new InMemoryPromoRepository();
