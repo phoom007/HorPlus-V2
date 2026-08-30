@@ -376,8 +376,10 @@ export class BillingService {
     }
 
     let waterUsageStr = '0.00';
+    let waterRateStr = formatDecimal(waterRate);
     let waterItemAmount = '0.00';
     let elecUsageStr = '0.00';
+    let elecRateStr = formatDecimal(elecRate);
     let elecItemAmount = '0.00';
     let commonItemAmount = '0.00';
     let internetItemAmount = '0.00';
@@ -457,8 +459,10 @@ export class BillingService {
 
       items.push(...utilityResult.items);
       waterUsageStr = utilityResult.waterUsage;
+      waterRateStr = utilityResult.waterRate;
       waterItemAmount = utilityResult.waterAmount;
       elecUsageStr = utilityResult.electricityUsage;
+      elecRateStr = utilityResult.electricityRate;
       elecItemAmount = utilityResult.electricityAmount;
       commonItemAmount = utilityResult.commonFee;
       internetItemAmount = utilityResult.internetFee;
@@ -481,10 +485,10 @@ export class BillingService {
       tenantId: tenantId || (tenant ? tenant.id : ''),
       rentAmount: rentItemAmount,
       waterUsage: waterUsageStr,
-      waterRate: formatDecimal(waterRate),
+      waterRate: waterRateStr,
       waterAmount: waterItemAmount,
       electricityUsage: elecUsageStr,
-      electricityRate: formatDecimal(elecRate),
+      electricityRate: elecRateStr,
       electricityAmount: elecItemAmount,
       commonFee: commonItemAmount,
       internetFee: internetItemAmount,

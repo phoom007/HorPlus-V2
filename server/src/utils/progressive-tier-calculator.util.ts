@@ -93,6 +93,12 @@ export function validateCanonicalUsageUnits(rawUsage: unknown): Prisma.Decimal {
     (err as any).code = 'INVALID_USAGE';
     throw err;
   }
+  if (!dec.isInteger()) {
+    const err = new Error(`INVALID_USAGE: Usage units '${str}' must be a whole integer unit`);
+    (err as any).statusCode = 400;
+    (err as any).code = 'INVALID_USAGE';
+    throw err;
+  }
 
   return dec;
 }

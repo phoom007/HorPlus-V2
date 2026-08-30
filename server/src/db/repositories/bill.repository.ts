@@ -256,6 +256,7 @@ export class InMemoryBillRepository implements IBillRepository {
       provisionalRentalTermId: data.provisionalRentalTermId || null,
       roomId: data.roomId,
       tenantId: data.tenantId,
+      billKind: data.billKind || 'LEGACY_COMBINED',
       billNumber,
       status: data.status || 'draft',
       billingDate: data.billingDate,

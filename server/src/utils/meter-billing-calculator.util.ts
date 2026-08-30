@@ -8,17 +8,20 @@
  * 3. 100% Mathematical Parity with server BillingService.generateBillPreview & decimal-math.util.
  * 4. Meter usage preserves exact 2-decimal fractional units without integer rounding (e.g. 105.75 - 100.25 = 5.50). */
 import { normalizeUtilityBillingMode } from './billing-mode-normalizer.util.js';
+import { CanonicalTierRecord } from './utility-tier-validator.util.js';
 
 export interface RateSnapshotContext {
-  waterBillingType?: 'per_unit' | 'per_person' | 'fixed' | 'per_room' | 'room' | 'person';
+  waterBillingType?: 'per_unit' | 'per_person' | 'fixed' | 'per_room' | 'room' | 'person' | 'tiered' | string;
   waterRate?: string | number;
-  electricityBillingType?: 'per_unit' | 'per_person' | 'fixed' | 'per_room' | 'room' | 'person';
+  waterTierRates?: CanonicalTierRecord[] | null;
+  electricityBillingType?: 'per_unit' | 'per_person' | 'fixed' | 'per_room' | 'room' | 'person' | 'tiered' | string;
   electricityRate?: string | number;
-  commonFeeMode?: 'per_room' | 'per_person' | 'free' | 'room' | 'person' | 'none';
+  electricityTierRates?: CanonicalTierRecord[] | null;
+  commonFeeMode?: 'per_room' | 'per_person' | 'free' | 'room' | 'person' | 'none' | string;
   commonFee?: string | number;
-  internetFeeMode?: 'per_room' | 'per_person' | 'free' | 'room' | 'person' | 'none';
+  internetFeeMode?: 'per_room' | 'per_person' | 'free' | 'room' | 'person' | 'none' | string;
   internetFee?: string | number;
-  parkingFeeMode?: 'per_room' | 'per_person' | 'per_vehicle' | 'free' | 'room' | 'person' | 'vehicle' | 'none';
+  parkingFeeMode?: 'per_room' | 'per_person' | 'per_vehicle' | 'free' | 'room' | 'person' | 'vehicle' | 'none' | string;
   parkingFee?: string | number;
 }
 

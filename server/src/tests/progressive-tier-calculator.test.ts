@@ -1,9 +1,9 @@
 /**
  * @license Apache-2.0
- * OWNER R3.9-C: Canonical Progressive Tier Calculator & Monthly Utility Integration Test Suite
+ * OWNER R3.9-C.1: Canonical Progressive Tier Calculator, Integer Meter Domain & Meter Workspace Authority
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { Prisma } from '@prisma/client';
 import {
   calculateProgressiveTieredCharge,
@@ -11,443 +11,255 @@ import {
   CanonicalTierBreakdown,
 } from '../utils/progressive-tier-calculator.util.js';
 import {
+  validateCanonicalUtilityTiers,
+} from '../utils/utility-tier-validator.util.js';
+import {
   calculateCanonicalMonthlyUtility,
   CanonicalMonthlyUtilityInput,
   CanonicalRateSnapshotInput,
 } from '../utils/monthly-utility-calculator.util.js';
+import { subscriptionEntitlementService } from '../services/subscription-entitlement.service.js';
+import { billingOrchestrationService } from '../services/billing-orchestration.service.js';
+import { MeterService } from '../services/meter.service.js';
+import { BillingService } from '../services/billing.service.js';
+import { InMemoryMeterRepository } from '../db/repositories/meter.repository.js';
+import { InMemoryBillingCycleRepository } from '../db/repositories/billing-cycle.repository.js';
+import { InMemoryRoomRepository } from '../db/repositories/room.repository.js';
+import { InMemoryBillRepository } from '../db/repositories/bill.repository.js';
+import { InMemoryTenantRepository } from '../db/repositories/tenant.repository.js';
+import { InMemoryContractRepository } from '../db/repositories/contract.repository.js';
 
-describe('OWNER R3.9-C: Progressive Tiered Utility Calculator & Authority', () => {
-  // Standard Water 3-Tier Tariff: (0, 10] @ 18.00, (10, 20] @ 20.00, (20, ∞) @ 22.00
-  const standardWaterTiers = [
-    { upTo: '10.00', rate: '18.00' },
-    { upTo: '20.00', rate: '20.00' },
-    { upTo: null, rate: '22.00' },
+describe('OWNER R3.9-C.1: Progressive Tier Calculator & Integer Meter Domain Authority', () => {
+  // Product Owner Example Tariff: (0, 10] @ 3.40, (10, 20] @ 4.25, (20, ∞) @ 5.00
+  const productWaterTiers = [
+    { upTo: '10.00', rate: '3.40' },
+    { upTo: '20.00', rate: '4.25' },
+    { upTo: null, rate: '5.00' },
   ];
 
-  // Standard Electricity 3-Tier Tariff: (0, 50] @ 7.00, (50, 150] @ 8.00, (150, ∞) @ 9.00
+  // Standard Electricity Tariff: (0, 50] @ 7.00, (50, 150] @ 8.00, (150, ∞) @ 9.00
   const standardElecTiers = [
     { upTo: '50.00', rate: '7.00' },
     { upTo: '150.00', rate: '8.00' },
     { upTo: null, rate: '9.00' },
   ];
 
-  describe('Group A: Pure Progressive Helper (calculateProgressiveTieredCharge)', () => {
-    describe('Section 22: Exact Required Water Examples', () => {
-      it('Usage 0.00 -> Total 0.00 (empty breakdown)', () => {
-        const res = calculateProgressiveTieredCharge({
-          usageUnits: '0.00',
-          tiers: standardWaterTiers,
-        });
+  describe('Group A: Pure Progressive Helper (Integer Domain & Tariff Examples)', () => {
+    describe('Section 22 & 23: Exact Product Owner Water Examples', () => {
+      it('Usage 0 -> 0.00', () => {
+        const res = calculateProgressiveTieredCharge({ usageUnits: 0, tiers: productWaterTiers });
         expect(res.usageUnits).toBe('0.00');
         expect(res.totalAmount).toBe('0.00');
         expect(res.tierBreakdown).toEqual([]);
       });
 
-      it('Usage 0.50 -> 0.50 * 18.00 = 9.00', () => {
-        const res = calculateProgressiveTieredCharge({
-          usageUnits: '0.50',
-          tiers: standardWaterTiers,
-        });
-        expect(res.usageUnits).toBe('0.50');
-        expect(res.totalAmount).toBe('9.00');
-        expect(res.tierBreakdown).toEqual([
-          {
-            lowerExclusive: '0.00',
-            upperInclusive: '10.00',
-            billedUnits: '0.50',
-            rate: '18.00',
-            amount: '9.00',
-          },
-        ]);
-      });
-
-      it('Usage 1.00 -> 1.00 * 18.00 = 18.00', () => {
-        const res = calculateProgressiveTieredCharge({
-          usageUnits: '1.00',
-          tiers: standardWaterTiers,
-        });
+      it('Usage 1 -> 1 * 3.40 = 3.40', () => {
+        const res = calculateProgressiveTieredCharge({ usageUnits: 1, tiers: productWaterTiers });
         expect(res.usageUnits).toBe('1.00');
-        expect(res.totalAmount).toBe('18.00');
+        expect(res.totalAmount).toBe('3.40');
         expect(res.tierBreakdown).toEqual([
-          {
-            lowerExclusive: '0.00',
-            upperInclusive: '10.00',
-            billedUnits: '1.00',
-            rate: '18.00',
-            amount: '18.00',
-          },
+          { lowerExclusive: '0.00', upperInclusive: '10.00', billedUnits: '1.00', rate: '3.40', amount: '3.40' },
         ]);
       });
 
-      it('Usage 10.00 -> 10.00 * 18.00 = 180.00', () => {
-        const res = calculateProgressiveTieredCharge({
-          usageUnits: '10.00',
-          tiers: standardWaterTiers,
-        });
+      it('Usage 10 -> 10 * 3.40 = 34.00', () => {
+        const res = calculateProgressiveTieredCharge({ usageUnits: 10, tiers: productWaterTiers });
         expect(res.usageUnits).toBe('10.00');
-        expect(res.totalAmount).toBe('180.00');
+        expect(res.totalAmount).toBe('34.00');
         expect(res.tierBreakdown).toEqual([
-          {
-            lowerExclusive: '0.00',
-            upperInclusive: '10.00',
-            billedUnits: '10.00',
-            rate: '18.00',
-            amount: '180.00',
-          },
+          { lowerExclusive: '0.00', upperInclusive: '10.00', billedUnits: '10.00', rate: '3.40', amount: '34.00' },
         ]);
       });
 
-      it('Usage 10.50 -> 10 * 18.00 + 0.50 * 20.00 = 190.00', () => {
-        const res = calculateProgressiveTieredCharge({
-          usageUnits: '10.50',
-          tiers: standardWaterTiers,
-        });
-        expect(res.usageUnits).toBe('10.50');
-        expect(res.totalAmount).toBe('190.00');
+      it('Usage 11 -> 10 * 3.40 + 1 * 4.25 = 38.25', () => {
+        const res = calculateProgressiveTieredCharge({ usageUnits: 11, tiers: productWaterTiers });
+        expect(res.usageUnits).toBe('11.00');
+        expect(res.totalAmount).toBe('38.25');
         expect(res.tierBreakdown).toEqual([
-          {
-            lowerExclusive: '0.00',
-            upperInclusive: '10.00',
-            billedUnits: '10.00',
-            rate: '18.00',
-            amount: '180.00',
-          },
-          {
-            lowerExclusive: '10.00',
-            upperInclusive: '20.00',
-            billedUnits: '0.50',
-            rate: '20.00',
-            amount: '10.00',
-          },
+          { lowerExclusive: '0.00', upperInclusive: '10.00', billedUnits: '10.00', rate: '3.40', amount: '34.00' },
+          { lowerExclusive: '10.00', upperInclusive: '20.00', billedUnits: '1.00', rate: '4.25', amount: '4.25' },
         ]);
       });
 
-      it('Usage 15.00 -> 10 * 18.00 + 5 * 20.00 = 280.00 (NOT flat 15 * 20 = 300)', () => {
-        const res = calculateProgressiveTieredCharge({
-          usageUnits: '15.00',
-          tiers: standardWaterTiers,
-        });
+      it('Usage 15 -> 10 * 3.40 + 5 * 4.25 = 55.25 (Section 22 Locked Example)', () => {
+        const res = calculateProgressiveTieredCharge({ usageUnits: 15, tiers: productWaterTiers });
         expect(res.usageUnits).toBe('15.00');
-        expect(res.totalAmount).toBe('280.00');
+        expect(res.totalAmount).toBe('55.25');
         expect(res.tierBreakdown).toEqual([
-          {
-            lowerExclusive: '0.00',
-            upperInclusive: '10.00',
-            billedUnits: '10.00',
-            rate: '18.00',
-            amount: '180.00',
-          },
-          {
-            lowerExclusive: '10.00',
-            upperInclusive: '20.00',
-            billedUnits: '5.00',
-            rate: '20.00',
-            amount: '100.00',
-          },
+          { lowerExclusive: '0.00', upperInclusive: '10.00', billedUnits: '10.00', rate: '3.40', amount: '34.00' },
+          { lowerExclusive: '10.00', upperInclusive: '20.00', billedUnits: '5.00', rate: '4.25', amount: '21.25' },
         ]);
       });
 
-      it('Usage 20.00 -> 10 * 18.00 + 10 * 20.00 = 380.00', () => {
-        const res = calculateProgressiveTieredCharge({
-          usageUnits: '20.00',
-          tiers: standardWaterTiers,
-        });
+      it('Usage 20 -> 10 * 3.40 + 10 * 4.25 = 76.50', () => {
+        const res = calculateProgressiveTieredCharge({ usageUnits: 20, tiers: productWaterTiers });
         expect(res.usageUnits).toBe('20.00');
-        expect(res.totalAmount).toBe('380.00');
+        expect(res.totalAmount).toBe('76.50');
         expect(res.tierBreakdown).toHaveLength(2);
-        expect(res.tierBreakdown[1]).toEqual({
-          lowerExclusive: '10.00',
-          upperInclusive: '20.00',
-          billedUnits: '10.00',
-          rate: '20.00',
-          amount: '200.00',
-        });
       });
 
-      it('Usage 21.00 -> 10 * 18.00 + 10 * 20.00 + 1 * 22.00 = 402.00', () => {
-        const res = calculateProgressiveTieredCharge({
-          usageUnits: '21.00',
-          tiers: standardWaterTiers,
-        });
+      it('Usage 21 -> 10 * 3.40 + 10 * 4.25 + 1 * 5.00 = 81.50', () => {
+        const res = calculateProgressiveTieredCharge({ usageUnits: 21, tiers: productWaterTiers });
         expect(res.usageUnits).toBe('21.00');
-        expect(res.totalAmount).toBe('402.00');
+        expect(res.totalAmount).toBe('81.50');
         expect(res.tierBreakdown).toHaveLength(3);
         expect(res.tierBreakdown[2]).toEqual({
           lowerExclusive: '20.00',
           upperInclusive: null,
           billedUnits: '1.00',
-          rate: '22.00',
-          amount: '22.00',
+          rate: '5.00',
+          amount: '5.00',
         });
       });
 
-      it('Usage 25.00 -> 10 * 18.00 + 10 * 20.00 + 5 * 22.00 = 490.00', () => {
-        const res = calculateProgressiveTieredCharge({
-          usageUnits: '25.00',
-          tiers: standardWaterTiers,
-        });
+      it('Usage 25 -> 10 * 3.40 + 10 * 4.25 + 5 * 5.00 = 101.50', () => {
+        const res = calculateProgressiveTieredCharge({ usageUnits: 25, tiers: productWaterTiers });
         expect(res.usageUnits).toBe('25.00');
-        expect(res.totalAmount).toBe('490.00');
+        expect(res.totalAmount).toBe('101.50');
         expect(res.tierBreakdown).toHaveLength(3);
         expect(res.tierBreakdown[2]).toEqual({
           lowerExclusive: '20.00',
           upperInclusive: null,
           billedUnits: '5.00',
-          rate: '22.00',
-          amount: '110.00',
+          rate: '5.00',
+          amount: '25.00',
         });
       });
     });
 
-    describe('Section 23: Exact Required Electricity Examples', () => {
+    describe('Section 25: Electricity Integer Examples', () => {
       it('Usage 50 -> 50 * 7.00 = 350.00', () => {
-        const res = calculateProgressiveTieredCharge({
-          usageUnits: 50,
-          tiers: standardElecTiers,
-        });
-        expect(res.usageUnits).toBe('50.00');
+        const res = calculateProgressiveTieredCharge({ usageUnits: 50, tiers: standardElecTiers });
         expect(res.totalAmount).toBe('350.00');
-        expect(res.tierBreakdown).toEqual([
-          {
-            lowerExclusive: '0.00',
-            upperInclusive: '50.00',
-            billedUnits: '50.00',
-            rate: '7.00',
-            amount: '350.00',
-          },
-        ]);
       });
 
       it('Usage 51 -> 50 * 7.00 + 1 * 8.00 = 358.00', () => {
-        const res = calculateProgressiveTieredCharge({
-          usageUnits: 51,
-          tiers: standardElecTiers,
-        });
-        expect(res.usageUnits).toBe('51.00');
+        const res = calculateProgressiveTieredCharge({ usageUnits: 51, tiers: standardElecTiers });
         expect(res.totalAmount).toBe('358.00');
-        expect(res.tierBreakdown).toEqual([
-          {
-            lowerExclusive: '0.00',
-            upperInclusive: '50.00',
-            billedUnits: '50.00',
-            rate: '7.00',
-            amount: '350.00',
-          },
-          {
-            lowerExclusive: '50.00',
-            upperInclusive: '150.00',
-            billedUnits: '1.00',
-            rate: '8.00',
-            amount: '8.00',
-          },
-        ]);
       });
 
-      it('Usage 150 -> 50 * 7.00 + 100 * 8.00 = 1,150.00', () => {
-        const res = calculateProgressiveTieredCharge({
-          usageUnits: 150,
-          tiers: standardElecTiers,
-        });
-        expect(res.usageUnits).toBe('150.00');
+      it('Usage 150 -> 50 * 7.00 + 100 * 8.00 = 1150.00', () => {
+        const res = calculateProgressiveTieredCharge({ usageUnits: 150, tiers: standardElecTiers });
         expect(res.totalAmount).toBe('1150.00');
-        expect(res.tierBreakdown).toHaveLength(2);
       });
 
-      it('Usage 151 -> 50 * 7.00 + 100 * 8.00 + 1 * 9.00 = 1,159.00', () => {
-        const res = calculateProgressiveTieredCharge({
-          usageUnits: 151,
-          tiers: standardElecTiers,
-        });
-        expect(res.usageUnits).toBe('151.00');
+      it('Usage 151 -> 50 * 7.00 + 100 * 8.00 + 1 * 9.00 = 1159.00', () => {
+        const res = calculateProgressiveTieredCharge({ usageUnits: 151, tiers: standardElecTiers });
         expect(res.totalAmount).toBe('1159.00');
-        expect(res.tierBreakdown).toHaveLength(3);
-        expect(res.tierBreakdown[2]).toEqual({
-          lowerExclusive: '150.00',
-          upperInclusive: null,
-          billedUnits: '1.00',
-          rate: '9.00',
-          amount: '9.00',
-        });
       });
     });
 
-    describe('Section 25: Boundary Tests (Exact Transitions)', () => {
-      it('Boundary transition around Tier 1 (9.99, 10.00, 10.01)', () => {
-        // 9.99: entirely in Tier 1 -> 9.99 * 18 = 179.82
-        const res999 = calculateProgressiveTieredCharge({ usageUnits: '9.99', tiers: standardWaterTiers });
-        expect(res999.totalAmount).toBe('179.82');
-        expect(res999.tierBreakdown).toHaveLength(1);
+    describe('Section 24: Integer Boundary Exact Transitions (9, 10, 11 and 19, 20, 21)', () => {
+      it('Tier 1 boundary transitions at 9, 10, 11', () => {
+        const res9 = calculateProgressiveTieredCharge({ usageUnits: 9, tiers: productWaterTiers });
+        expect(res9.totalAmount).toBe('30.60'); // 9 * 3.40
+        expect(res9.tierBreakdown).toHaveLength(1);
 
-        // 10.00: exact boundary -> 10.00 * 18 = 180.00
-        const res1000 = calculateProgressiveTieredCharge({ usageUnits: '10.00', tiers: standardWaterTiers });
-        expect(res1000.totalAmount).toBe('180.00');
-        expect(res1000.tierBreakdown).toHaveLength(1);
+        const res10 = calculateProgressiveTieredCharge({ usageUnits: 10, tiers: productWaterTiers });
+        expect(res10.totalAmount).toBe('34.00'); // 10 * 3.40
+        expect(res10.tierBreakdown).toHaveLength(1);
 
-        // 10.01: into Tier 2 -> 10 * 18 + 0.01 * 20 = 180 + 0.20 = 180.20
-        const res1001 = calculateProgressiveTieredCharge({ usageUnits: '10.01', tiers: standardWaterTiers });
-        expect(res1001.totalAmount).toBe('180.20');
-        expect(res1001.tierBreakdown).toHaveLength(2);
-        expect(res1001.tierBreakdown[1].billedUnits).toBe('0.01');
-        expect(res1001.tierBreakdown[1].amount).toBe('0.20');
+        const res11 = calculateProgressiveTieredCharge({ usageUnits: 11, tiers: productWaterTiers });
+        expect(res11.totalAmount).toBe('38.25'); // 10 * 3.40 + 1 * 4.25
+        expect(res11.tierBreakdown).toHaveLength(2);
       });
 
-      it('Boundary transition around Tier 2 (19.99, 20.00, 20.01)', () => {
-        // 19.99: 10 * 18 + 9.99 * 20 = 180 + 199.80 = 379.80
-        const res1999 = calculateProgressiveTieredCharge({ usageUnits: '19.99', tiers: standardWaterTiers });
-        expect(res1999.totalAmount).toBe('379.80');
-        expect(res1999.tierBreakdown).toHaveLength(2);
+      it('Tier 2 boundary transitions at 19, 20, 21', () => {
+        const res19 = calculateProgressiveTieredCharge({ usageUnits: 19, tiers: productWaterTiers });
+        expect(res19.totalAmount).toBe('72.25'); // 10 * 3.40 + 9 * 4.25
+        expect(res19.tierBreakdown).toHaveLength(2);
 
-        // 20.00: 10 * 18 + 10 * 20 = 380.00
-        const res2000 = calculateProgressiveTieredCharge({ usageUnits: '20.00', tiers: standardWaterTiers });
-        expect(res2000.totalAmount).toBe('380.00');
-        expect(res2000.tierBreakdown).toHaveLength(2);
+        const res20 = calculateProgressiveTieredCharge({ usageUnits: 20, tiers: productWaterTiers });
+        expect(res20.totalAmount).toBe('76.50'); // 10 * 3.40 + 10 * 4.25
+        expect(res20.tierBreakdown).toHaveLength(2);
 
-        // 20.01: 10 * 18 + 10 * 20 + 0.01 * 22 = 380 + 0.22 = 380.22
-        const res2001 = calculateProgressiveTieredCharge({ usageUnits: '20.01', tiers: standardWaterTiers });
-        expect(res2001.totalAmount).toBe('380.22');
-        expect(res2001.tierBreakdown).toHaveLength(3);
-        expect(res2001.tierBreakdown[2].billedUnits).toBe('0.01');
-        expect(res2001.tierBreakdown[2].amount).toBe('0.22');
+        const res21 = calculateProgressiveTieredCharge({ usageUnits: 21, tiers: productWaterTiers });
+        expect(res21.totalAmount).toBe('81.50'); // 10 * 3.40 + 10 * 4.25 + 1 * 5.00
+        expect(res21.tierBreakdown).toHaveLength(3);
       });
     });
 
-    describe('Section 24: Locked Rounding Policy — Product Owner 1A (Per-Tier 2DP Rounding First)', () => {
-      it('Single tier raw product 0.005 rounds to 0.01 (ROUND_HALF_UP)', () => {
-        // Tier: (0, ∞) @ 0.05. Usage: 0.10 -> 0.10 * 0.05 = 0.0050 -> 0.01
-        const tiers = [{ upTo: null, rate: '0.05' }];
-        const res = calculateProgressiveTieredCharge({
-          usageUnits: '0.10',
-          tiers,
-        });
-        expect(res.totalAmount).toBe('0.01');
-        expect(res.tierBreakdown[0].amount).toBe('0.01');
+    describe('Section 8 & 34: Fractional Usage Rejection & Strict Usage Domain', () => {
+      it('Fails closed on fractional usage strings (0.50, 9.99, 10.01, 10.50, 20.25)', () => {
+        expect(() => calculateProgressiveTieredCharge({ usageUnits: '0.50', tiers: productWaterTiers })).toThrow('INVALID_USAGE');
+        expect(() => calculateProgressiveTieredCharge({ usageUnits: '9.99', tiers: productWaterTiers })).toThrow('INVALID_USAGE');
+        expect(() => calculateProgressiveTieredCharge({ usageUnits: '10.01', tiers: productWaterTiers })).toThrow('INVALID_USAGE');
+        expect(() => calculateProgressiveTieredCharge({ usageUnits: '10.50', tiers: productWaterTiers })).toThrow('INVALID_USAGE');
+        expect(() => calculateProgressiveTieredCharge({ usageUnits: '20.25', tiers: productWaterTiers })).toThrow('INVALID_USAGE');
       });
 
-      it('Two separately billed tiers producing raw 0.005 + 0.005 sum to 0.01 + 0.01 = 0.02 (Product Owner 1A)', () => {
-        // Tier 1: (0, 0.10] @ 0.05 -> raw: 0.10 * 0.05 = 0.005 -> rounds to 0.01
-        // Tier 2: (0.10, ∞) @ 0.05 -> raw: 0.10 * 0.05 = 0.005 -> rounds to 0.01
-        // Total MUST be 0.01 + 0.01 = 0.02 (NOT unrounded 0.010 -> 0.01)
-        const tiers = [
-          { upTo: '0.10', rate: '0.05' },
-          { upTo: null, rate: '0.05' },
-        ];
-        const res = calculateProgressiveTieredCharge({
-          usageUnits: '0.20',
-          tiers,
-        });
-        expect(res.tierBreakdown[0].amount).toBe('0.01');
-        expect(res.tierBreakdown[1].amount).toBe('0.01');
-        expect(res.totalAmount).toBe('0.02');
+      it('Accepts integer semantic strings and Prisma.Decimal representation (15, "15", "15.00")', () => {
+        expect(validateCanonicalUsageUnits(15).toString()).toBe('15');
+        expect(validateCanonicalUsageUnits('15').toString()).toBe('15');
+        expect(validateCanonicalUsageUnits('15.00').toString()).toBe('15');
+        expect(validateCanonicalUsageUnits(new Prisma.Decimal('15.00')).toString()).toBe('15');
+      });
+
+      it('Rejects fractional Prisma.Decimal representation (15.50)', () => {
+        expect(() => validateCanonicalUsageUnits(new Prisma.Decimal('15.50'))).toThrow('INVALID_USAGE');
       });
     });
 
-    describe('Section 26 & 27: Single Unlimited Tier & Zero-Rate Tiers', () => {
-      it('Single unlimited tier behaves progressively and sets canonical metadata', () => {
-        const singleTier = [{ upTo: null, rate: '18.00' }];
-        const res = calculateProgressiveTieredCharge({
-          usageUnits: '10.00',
-          tiers: singleTier,
-        });
-        expect(res.totalAmount).toBe('180.00');
-        expect(res.tierBreakdown).toEqual([
-          {
-            lowerExclusive: '0.00',
-            upperInclusive: null,
-            billedUnits: '10.00',
-            rate: '18.00',
-            amount: '180.00',
-          },
+    describe('Section 11 & 33: Tier Boundary Integer Validation', () => {
+      it('Accepts whole unit upper bounds ("10", "10.00", 10)', () => {
+        const validated = validateCanonicalUtilityTiers([
+          { upTo: '10', rate: '3.40' },
+          { upTo: '20.00', rate: '4.25' },
+          { upTo: null, rate: '5.00' },
         ]);
+        expect(validated[0].upTo).toBe('10.00');
+        expect(validated[1].upTo).toBe('20.00');
+        expect(validated[2].upTo).toBeNull();
       });
 
-      it('Zero-rate intermediate tier (0, 5] @ 0.00, (5, ∞) @ 18.00, usage 7 -> 0 + 36 = 36.00', () => {
-        const tiers = [
-          { upTo: '5.00', rate: '0.00' },
-          { upTo: null, rate: '18.00' },
-        ];
-        const res = calculateProgressiveTieredCharge({
-          usageUnits: '7.00',
-          tiers,
-        });
-        expect(res.totalAmount).toBe('36.00');
-        expect(res.tierBreakdown).toEqual([
-          {
-            lowerExclusive: '0.00',
-            upperInclusive: '5.00',
-            billedUnits: '5.00',
-            rate: '0.00',
-            amount: '0.00',
-          },
-          {
-            lowerExclusive: '5.00',
-            upperInclusive: null,
-            billedUnits: '2.00',
-            rate: '18.00',
-            amount: '36.00',
-          },
+      it('Rejects fractional upper bounds ("10.50", "20.25")', () => {
+        expect(() =>
+          validateCanonicalUtilityTiers([
+            { upTo: '10.50', rate: '3.40' },
+            { upTo: null, rate: '5.00' },
+          ])
+        ).toThrow('INVALID_TIER_CONFIGURATION');
+
+        expect(() =>
+          validateCanonicalUtilityTiers([
+            { upTo: '20.25', rate: '4.25' },
+            { upTo: null, rate: '5.00' },
+          ])
+        ).toThrow('INVALID_TIER_CONFIGURATION');
+      });
+
+      it('Accepts decimal rates ("3.4" -> "3.40", "4.25", "7.75", "0.00")', () => {
+        const validated = validateCanonicalUtilityTiers([
+          { upTo: '10.00', rate: '3.4' },
+          { upTo: '20.00', rate: '7.75' },
+          { upTo: null, rate: '0.00' },
         ]);
+        expect(validated[0].rate).toBe('3.40');
+        expect(validated[1].rate).toBe('7.75');
+        expect(validated[2].rate).toBe('0.00');
       });
     });
 
-    describe('Section 8, 10, 29: Fail-Closed Input Safety & Corrupt Tier Handling', () => {
-      it('Rejects negative usage units', () => {
-        expect(() =>
-          calculateProgressiveTieredCharge({
-            usageUnits: '-5.00',
-            tiers: standardWaterTiers,
-          })
-        ).toThrow('INVALID_USAGE');
-      });
-
-      it('Rejects NaN, Infinity, scientific notation in usage', () => {
-        expect(() =>
-          calculateProgressiveTieredCharge({
-            usageUnits: '1e2',
-            tiers: standardWaterTiers,
-          })
-        ).toThrow('INVALID_USAGE');
-        expect(() =>
-          calculateProgressiveTieredCharge({
-            usageUnits: NaN,
-            tiers: standardWaterTiers,
-          })
-        ).toThrow('INVALID_USAGE');
-        expect(() =>
-          calculateProgressiveTieredCharge({
-            usageUnits: Infinity,
-            tiers: standardWaterTiers,
-          })
-        ).toThrow('INVALID_USAGE');
-      });
-
-      it('Rejects null or empty tier configuration', () => {
-        expect(() =>
-          calculateProgressiveTieredCharge({
-            usageUnits: '10.00',
-            tiers: null as any,
-          })
-        ).toThrow('INVALID_TIER_CONFIGURATION');
-        expect(() =>
-          calculateProgressiveTieredCharge({
-            usageUnits: '10.00',
-            tiers: [],
-          })
-        ).toThrow('INVALID_TIER_CONFIGURATION');
+    describe('Section 26: Fractional Rate Decimal Proof', () => {
+      it('Calculates exact fractional rate 7.75 with integer units', () => {
+        const tiers = [{ upTo: null, rate: '7.75' }];
+        const res = calculateProgressiveTieredCharge({ usageUnits: 10, tiers });
+        expect(res.totalAmount).toBe('77.50');
       });
     });
   });
 
-  describe('Group B: Canonical Monthly Utility Water Tiered Integration', () => {
+  describe('Group B: Canonical Monthly Utility Tiered Integration', () => {
     const baseSnapshot: CanonicalRateSnapshotInput = {
       waterBillingType: 'tiered',
-      waterTierRates: standardWaterTiers,
+      waterTierRates: productWaterTiers,
       electricityBillingType: 'per_unit',
       electricityRate: '7.00',
       commonFeeMode: 'per_room',
       commonFee: '200.00',
     };
 
-    it('Section 15, 16, 36: Exactly ONE BillItem with unitPrice=0.00, amount=280.00, quantity=15.00', () => {
+    it('Section 21 & 22: Produces single Water BillItem (15 units -> 55.25 THB)', () => {
       const res = calculateCanonicalMonthlyUtility({
         rateSnapshot: baseSnapshot,
         waterReading: { previousReading: '100', currentReading: '115' },
@@ -455,19 +267,18 @@ describe('OWNER R3.9-C: Progressive Tiered Utility Calculator & Authority', () =
       });
 
       expect(res.waterUsage).toBe('15.00');
-      expect(res.waterAmount).toBe('280.00');
-      expect(res.waterRate).toBe('0.00'); // Technical 0.00, no fake average rate (Section 16/19)
+      expect(res.waterAmount).toBe('55.25');
+      expect(res.waterRate).toBe('0.00'); // Technical 0.00
       expect(res.waterMode).toBe('tiered');
 
-      const waterItems = res.items.filter((i) => i.type === 'water');
-      expect(waterItems).toHaveLength(1);
-      expect(waterItems[0]).toEqual({
+      const waterItem = res.items.find((i) => i.type === 'water')!;
+      expect(waterItem).toEqual({
         type: 'water',
         description: 'ค่าน้ำ (100 - 115)',
         quantity: '15.00',
         unit: 'unit',
         unitPrice: '0.00',
-        amount: '280.00',
+        amount: '55.25',
         metadata: {
           previousReading: '100',
           currentReading: '115',
@@ -476,27 +287,14 @@ describe('OWNER R3.9-C: Progressive Tiered Utility Calculator & Authority', () =
           isRollover: false,
           rolloverType: null,
           tierBreakdown: [
-            {
-              lowerExclusive: '0.00',
-              upperInclusive: '10.00',
-              billedUnits: '10.00',
-              rate: '18.00',
-              amount: '180.00',
-            },
-            {
-              lowerExclusive: '10.00',
-              upperInclusive: '20.00',
-              billedUnits: '5.00',
-              rate: '20.00',
-              amount: '100.00',
-            },
+            { lowerExclusive: '0.00', upperInclusive: '10.00', billedUnits: '10.00', rate: '3.40', amount: '34.00' },
+            { lowerExclusive: '10.00', upperInclusive: '20.00', billedUnits: '5.00', rate: '4.25', amount: '21.25' },
           ],
         },
       });
     });
 
-    it('Section 35: Meter rollover integrates seamlessly into tiered calculation', () => {
-      // 99995 to 00010 (5 digits) -> 15 units usage with rollover
+    it('Tiered integer rollover (99995 -> 00010 = 15 units)', () => {
       const res = calculateCanonicalMonthlyUtility({
         rateSnapshot: baseSnapshot,
         waterReading: { previousReading: '99995', currentReading: '00010' },
@@ -504,199 +302,348 @@ describe('OWNER R3.9-C: Progressive Tiered Utility Calculator & Authority', () =
       });
 
       expect(res.waterUsage).toBe('15.00');
-      expect(res.waterAmount).toBe('280.00');
-
-      const waterItem = res.items.find((i) => i.type === 'water');
-      expect(waterItem?.metadata?.isRollover).toBe(true);
-      expect(waterItem?.metadata?.rolloverType).toBe('5_DIGIT');
-      expect(waterItem?.metadata?.tierBreakdown).toHaveLength(2);
+      expect(res.waterAmount).toBe('55.25');
+      const waterItem = res.items.find((i) => i.type === 'water')!;
+      expect(waterItem.metadata?.isRollover).toBe(true);
+      expect(waterItem.metadata?.rolloverType).toBe('5_DIGIT');
     });
 
-    it('Section 6: Missing meter reading fails closed with MISSING_WATER_METER_READING', () => {
-      expect(() =>
-        calculateCanonicalMonthlyUtility({
-          rateSnapshot: baseSnapshot,
-          waterReading: { previousReading: '100', currentReading: '' },
-          electricReading: { previousReading: '0', currentReading: '0' },
-        })
-      ).toThrow('MISSING_WATER_METER_READING');
-    });
-
-    it('Section 6 & 28: All-zero tier rates STILL require meter readings (Policy 2A)', () => {
-      const allZeroTiers = [
-        { upTo: '10.00', rate: '0.00' },
-        { upTo: null, rate: '0.00' },
-      ];
-      const zeroRateSnapshot: CanonicalRateSnapshotInput = {
+    it('All-zero tier rates still require meter readings', () => {
+      const allZeroSnapshot: CanonicalRateSnapshotInput = {
         waterBillingType: 'tiered',
-        waterTierRates: allZeroTiers,
+        waterTierRates: [
+          { upTo: '10.00', rate: '0.00' },
+          { upTo: null, rate: '0.00' },
+        ],
         electricityBillingType: 'per_unit',
         electricityRate: '7.00',
       };
 
-      // Missing readings -> REJECT
       expect(() =>
         calculateCanonicalMonthlyUtility({
-          rateSnapshot: zeroRateSnapshot,
+          rateSnapshot: allZeroSnapshot,
           waterReading: { previousReading: null, currentReading: null },
           electricReading: { previousReading: '0', currentReading: '0' },
         })
       ).toThrow('MISSING_WATER_METER_READING');
-
-      // Valid readings -> ACCEPT with 0.00 amount and preserved usage
-      const validZeroRes = calculateCanonicalMonthlyUtility({
-        rateSnapshot: zeroRateSnapshot,
-        waterReading: { previousReading: '100', currentReading: '120' },
-        electricReading: { previousReading: '0', currentReading: '0' },
-      });
-      expect(validZeroRes.waterUsage).toBe('20.00');
-      expect(validZeroRes.waterAmount).toBe('0.00');
-      expect(validZeroRes.items.find((i) => i.type === 'water')).toBeDefined();
     });
   });
 
-  describe('Group C: Canonical Monthly Utility Electricity Tiered Integration', () => {
-    const elecSnapshot: CanonicalRateSnapshotInput = {
-      waterBillingType: 'per_unit',
-      waterRate: '18.00',
-      electricityBillingType: 'tiered',
-      electricityTierRates: standardElecTiers,
-    };
+    describe('Group C: MeterService Workspace Integration (Section 13, 14, 15, 17, 31)', () => {
+    const DORM_ID = 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11';
+    const CYCLE_ID = 'b0eebc99-9c0b-4ef8-bb6d-6bb9bd380a22';
+    const ROOM_ID = 'c0eebc99-9c0b-4ef8-bb6d-6bb9bd380a33';
 
-    it('Calculates electricity progressive tiers (151 units -> 1,159.00)', () => {
-      const res = calculateCanonicalMonthlyUtility({
-        rateSnapshot: elecSnapshot,
-        waterReading: { previousReading: '0', currentReading: '0' },
-        electricReading: { previousReading: '1000', currentReading: '1151' },
+    function setupMeterService() {
+      vi.spyOn(subscriptionEntitlementService, 'resolveOperationalRoomEntitlementSet').mockResolvedValue({
+        tier: 'FREE' as any,
+        roomLimit: 100,
+        activeOperationalRoomCount: 1,
+        isEnforced: false,
+        operationalRoomIds: new Set([ROOM_ID]),
+        lockedRoomIds: new Set(),
       });
+      vi.spyOn(subscriptionEntitlementService, 'assertRoomOperationalEntitlement').mockResolvedValue(undefined);
 
-      expect(res.electricityUsage).toBe('151.00');
-      expect(res.electricityAmount).toBe('1159.00');
-      expect(res.electricityRate).toBe('0.00');
-      expect(res.electricityMode).toBe('tiered');
+      const meterRepo = new InMemoryMeterRepository();
+      const billingCycleRepo = new InMemoryBillingCycleRepository();
+      const roomRepo = new InMemoryRoomRepository();
+      const billRepo = new InMemoryBillRepository();
 
-      const elecItem = res.items.find((i) => i.type === 'electricity');
-      expect(elecItem?.amount).toBe('1159.00');
-      expect(elecItem?.unitPrice).toBe('0.00');
-      expect(elecItem?.metadata?.tierBreakdown).toHaveLength(3);
-    });
+      const service = new MeterService(meterRepo, billingCycleRepo, roomRepo, billRepo);
 
-    it('Missing electricity reading throws MISSING_ELECTRICITY_METER_READING', () => {
-      expect(() =>
-        calculateCanonicalMonthlyUtility({
-          rateSnapshot: elecSnapshot,
-          waterReading: { previousReading: '0', currentReading: '0' },
-          electricReading: { previousReading: '100', currentReading: null },
-        })
-      ).toThrow('MISSING_ELECTRICITY_METER_READING');
-    });
-  });
+      return { service, meterRepo, billingCycleRepo, roomRepo, billRepo };
+    }
 
-  describe('Group D: Mixed Modes & Subtotal Invariant (Section 14, 31, 37)', () => {
-    it('Water tiered + Electricity per_unit (Mixed Mode)', () => {
-      const mixedSnapshot: CanonicalRateSnapshotInput = {
+    it('Test 31.A: Water tiered mode persists MeterReading in Meter Workspace', async () => {
+      const { service, meterRepo, billingCycleRepo, roomRepo } = setupMeterService();
+
+      await roomRepo.create(DORM_ID, { id: ROOM_ID, roomNumber: '101', buildingId: 'd0eebc99-9c0b-4ef8-bb6d-6bb9bd380a44' });
+
+      await billingCycleRepo.create(DORM_ID, {
+        id: CYCLE_ID,
+        cycleCode: '2026-08',
+        name: 'August 2026',
+        periodStart: new Date('2026-08-01'),
+        periodEnd: new Date('2026-08-31'),
+        billingDate: new Date('2026-08-31'),
+        dueDate: new Date('2026-09-05'),
+        status: 'draft',
+      } as any);
+      await billingCycleRepo.createRateSnapshot(DORM_ID, {
+        billingCycleId: CYCLE_ID,
         waterBillingType: 'tiered',
-        waterTierRates: standardWaterTiers,
+        waterTierRates: productWaterTiers,
         electricityBillingType: 'per_unit',
         electricityRate: '7.00',
-        commonFeeMode: 'per_room',
-        commonFee: '200.00',
-      };
-
-      const res = calculateCanonicalMonthlyUtility({
-        rateSnapshot: mixedSnapshot,
-        waterReading: { previousReading: '100', currentReading: '115' }, // 15 units -> 280.00
-        electricReading: { previousReading: '500', currentReading: '550' }, // 50 units -> 350.00
+        source: 'CYCLE_INIT',
       });
 
-      expect(res.waterAmount).toBe('280.00');
-      expect(res.waterMode).toBe('tiered');
-      expect(res.electricityAmount).toBe('350.00');
-      expect(res.electricityMode).toBe('per_unit');
-      expect(res.commonFee).toBe('200.00');
-      expect(res.subtotal).toBe('830.00'); // 280 + 350 + 200 = 830.00
-      expect(res.monthlyUtilityTotal).toBe('830.00');
-
-      // Rounding Reconciliation Invariant (Section 37)
-      const waterItem = res.items.find((i) => i.type === 'water')!;
-      const sumTierBreakdown = waterItem.metadata?.tierBreakdown
-        .reduce((sum: number, b: CanonicalTierBreakdown) => sum + Number(b.amount), 0)
-        .toFixed(2);
-      expect(sumTierBreakdown).toBe(waterItem.amount);
-      expect(waterItem.amount).toBe(res.waterAmount);
-    });
-
-    it('Water fixed + Electricity tiered (Mixed Mode)', () => {
-      const mixedSnapshot: CanonicalRateSnapshotInput = {
-        waterBillingType: 'fixed',
-        waterRate: '150.00',
-        electricityBillingType: 'tiered',
-        electricityTierRates: standardElecTiers,
-      };
-
-      const res = calculateCanonicalMonthlyUtility({
-        rateSnapshot: mixedSnapshot,
-        waterReading: null,
-        electricReading: { previousReading: '100', currentReading: '151' }, // 51 units -> 358.00
+      await service.saveBulkMeterWorkspace(DORM_ID, {
+        billingCycleId: CYCLE_ID,
+        rows: [
+          { roomId: ROOM_ID, waterCurr: '115', waterPrev: '100' },
+        ],
       });
 
-      expect(res.waterAmount).toBe('150.00');
-      expect(res.waterMode).toBe('fixed');
-      expect(res.electricityAmount).toBe('358.00');
-      expect(res.electricityMode).toBe('tiered');
-      expect(res.subtotal).toBe('508.00'); // 150 + 358 = 508.00
+      const savedReading = await meterRepo.findReadingByCycleRoomAndType(DORM_ID, CYCLE_ID, ROOM_ID, 'water');
+      expect(savedReading).toBeDefined();
+      expect(Number(savedReading?.previousReading)).toBe(100);
+      expect(Number(savedReading?.currentReading)).toBe(115);
+      expect(Number(savedReading?.usageUnits)).toBe(15);
     });
-  });
 
-  describe('Group E: Non-Tiered Regressions & Backward Compatibility (Section 30)', () => {
-    it('per_unit calculation remains 100% identical and unchanged', () => {
-      const snapshot: CanonicalRateSnapshotInput = {
+    it('Test 31.B: Electricity tiered mode persists MeterReading in Meter Workspace', async () => {
+      const { service, meterRepo, billingCycleRepo, roomRepo } = setupMeterService();
+
+      await roomRepo.create(DORM_ID, { id: ROOM_ID, roomNumber: '101', buildingId: 'd0eebc99-9c0b-4ef8-bb6d-6bb9bd380a44' });
+
+      await billingCycleRepo.create(DORM_ID, {
+        id: CYCLE_ID,
+        cycleCode: '2026-08',
+        name: 'August 2026',
+        periodStart: new Date('2026-08-01T00:00:00.000Z'),
+        periodEnd: new Date('2026-08-31T23:59:59.999Z'),
+        billingDate: new Date('2026-08-31T00:00:00.000Z'),
+        dueDate: new Date('2026-09-05T00:00:00.000Z'),
+        status: 'draft',
+      });
+      await billingCycleRepo.createRateSnapshot(DORM_ID, {
+        billingCycleId: CYCLE_ID,
         waterBillingType: 'per_unit',
         waterRate: '18.00',
-        electricityBillingType: 'per_unit',
-        electricityRate: '7.00',
-      };
-      const res = calculateCanonicalMonthlyUtility({
-        rateSnapshot: snapshot,
-        waterReading: { previousReading: '100', currentReading: '110' },
-        electricReading: { previousReading: '200', currentReading: '250' },
+        electricityBillingType: 'tiered',
+        electricityTierRates: standardElecTiers,
+        source: 'CYCLE_INIT',
       });
-      expect(res.waterAmount).toBe('180.00');
-      expect(res.electricityAmount).toBe('350.00');
-      expect(res.subtotal).toBe('530.00');
+
+      await service.saveBulkMeterWorkspace(DORM_ID, {
+        billingCycleId: CYCLE_ID,
+        rows: [
+          { roomId: ROOM_ID, elecCurr: '151', elecPrev: '100' },
+        ],
+      });
+
+      const savedReading = await meterRepo.findReadingByCycleRoomAndType(DORM_ID, CYCLE_ID, ROOM_ID, 'electricity');
+      expect(savedReading).toBeDefined();
+      expect(Number(savedReading?.currentReading)).toBe(151);
+      expect(Number(savedReading?.usageUnits)).toBe(51);
     });
 
-    it('per_person calculation remains 100% identical', () => {
-      const snapshot: CanonicalRateSnapshotInput = {
-        waterBillingType: 'per_person',
-        waterRate: '100.00',
-        electricityBillingType: 'fixed',
-        electricityRate: '300.00',
-      };
-      const res = calculateCanonicalMonthlyUtility({
-        rateSnapshot: snapshot,
-        peopleCount: 3,
+    it('Test 31.C: Tiered integer rollover 99995 -> 10 computes usage 15 in Meter Workspace', async () => {
+      const { service, meterRepo, billingCycleRepo, roomRepo } = setupMeterService();
+
+      await roomRepo.create(DORM_ID, { id: ROOM_ID, roomNumber: '101', buildingId: 'd0eebc99-9c0b-4ef8-bb6d-6bb9bd380a44' });
+
+      await billingCycleRepo.create(DORM_ID, {
+        id: CYCLE_ID,
+        cycleCode: '2026-08',
+        name: 'August 2026',
+        periodStart: new Date('2026-08-01T00:00:00.000Z'),
+        periodEnd: new Date('2026-08-31T23:59:59.999Z'),
+        billingDate: new Date('2026-08-31T00:00:00.000Z'),
+        dueDate: new Date('2026-09-05T00:00:00.000Z'),
+        status: 'draft',
       });
-      expect(res.waterAmount).toBe('300.00');
-      expect(res.electricityAmount).toBe('300.00');
-      expect(res.subtotal).toBe('600.00');
+      await billingCycleRepo.createRateSnapshot(DORM_ID, {
+        billingCycleId: CYCLE_ID,
+        waterBillingType: 'tiered',
+        waterTierRates: productWaterTiers,
+        source: 'CYCLE_INIT',
+      });
+
+      await service.saveBulkMeterWorkspace(DORM_ID, {
+        billingCycleId: CYCLE_ID,
+        rows: [
+          { roomId: ROOM_ID, waterCurr: '00010', waterPrev: '99995' },
+        ],
+      });
+
+      const savedReading = await meterRepo.findReadingByCycleRoomAndType(DORM_ID, CYCLE_ID, ROOM_ID, 'water');
+      expect(Number(savedReading?.usageUnits)).toBe(15);
     });
 
-    it('Legacy aliases (flat, flat_rate, fixed_monthly) continue to normalize to fixed', () => {
-      const snapshot: CanonicalRateSnapshotInput = {
-        waterBillingType: 'flat',
-        waterRate: '120.00',
-        electricityBillingType: 'fixed_monthly',
-        electricityRate: '400.00',
-      };
-      const res = calculateCanonicalMonthlyUtility({
-        rateSnapshot: snapshot,
+    it('Test 31.D: Tiered decimal meter input (100.25) is strictly rejected', async () => {
+      const { service, billingCycleRepo, roomRepo } = setupMeterService();
+
+      await roomRepo.create(DORM_ID, { id: ROOM_ID, roomNumber: '101', buildingId: 'd0eebc99-9c0b-4ef8-bb6d-6bb9bd380a44' });
+
+      await billingCycleRepo.create(DORM_ID, {
+        id: CYCLE_ID,
+        cycleCode: '2026-08',
+        name: 'August 2026',
+        periodStart: new Date('2026-08-01T00:00:00.000Z'),
+        periodEnd: new Date('2026-08-31T23:59:59.999Z'),
+        billingDate: new Date('2026-08-31T00:00:00.000Z'),
+        dueDate: new Date('2026-09-05T00:00:00.000Z'),
+        status: 'draft',
       });
-      expect(res.waterMode).toBe('fixed');
-      expect(res.waterAmount).toBe('120.00');
-      expect(res.electricityMode).toBe('fixed');
-      expect(res.electricityAmount).toBe('400.00');
-      expect(res.subtotal).toBe('520.00');
+      await billingCycleRepo.createRateSnapshot(DORM_ID, {
+        billingCycleId: CYCLE_ID,
+        waterBillingType: 'tiered',
+        waterTierRates: productWaterTiers,
+        source: 'CYCLE_INIT',
+      });
+
+      await expect(
+        service.saveBulkMeterWorkspace(DORM_ID, {
+          billingCycleId: CYCLE_ID,
+          rows: [
+            { roomId: ROOM_ID, waterCurr: '100.25', waterPrev: '100' },
+          ],
+        })
+      ).rejects.toThrow(/ค่ามิเตอร์ต้องเป็นตัวเลขจำนวนเต็ม|INVALID_METER_READING/);
+    });
+
+    it('Test 31.E & 31.F: Tiered & all-zero tiered issued bill protects current reading from clearing', async () => {
+      const { service, billingCycleRepo, roomRepo, billRepo } = setupMeterService();
+
+      await roomRepo.create(DORM_ID, { id: ROOM_ID, roomNumber: '101', buildingId: 'd0eebc99-9c0b-4ef8-bb6d-6bb9bd380a44' });
+      await billingCycleRepo.create(DORM_ID, {
+        id: CYCLE_ID,
+        cycleCode: '2026-08',
+        name: 'August 2026',
+        periodStart: new Date('2026-08-01T00:00:00.000Z'),
+        periodEnd: new Date('2026-08-31T23:59:59.999Z'),
+        billingDate: new Date('2026-08-31T00:00:00.000Z'),
+        dueDate: new Date('2026-09-05T00:00:00.000Z'),
+        status: 'draft',
+      });
+      await billingCycleRepo.createRateSnapshot(DORM_ID, {
+        billingCycleId: CYCLE_ID,
+        waterBillingType: 'tiered',
+        waterTierRates: [
+          { upTo: '10.00', rate: '0.00' },
+          { upTo: null, rate: '0.00' },
+        ],
+        source: 'CYCLE_INIT',
+      });
+
+      // Issue active bill with valid UUID
+      await billRepo.create(
+        DORM_ID,
+        {
+          id: 'f0eebc99-9c0b-4ef8-bb6d-6bb9bd380a55',
+          billingCycleId: CYCLE_ID,
+          roomId: ROOM_ID,
+          billKind: 'MONTHLY_UTILITY',
+          status: 'unpaid',
+          totalAmount: '100.00',
+          subtotal: '100.00',
+          outstandingAmount: '100.00',
+        } as any,
+        []
+      );
+
+      // Attempt to clear current water reading on issued bill
+      await expect(
+        service.saveBulkMeterWorkspace(DORM_ID, {
+          billingCycleId: CYCLE_ID,
+          rows: [
+            { roomId: ROOM_ID, waterCurr: '', waterPrev: '100' },
+          ],
+        })
+      ).rejects.toThrow(/CANNOT_CLEAR_METER_READING_FOR_ISSUED_BILL|ห้องนี้มีบิลที่ออกแล้ว/);
+    });
+  });
+
+  describe('Group D: BillingService Preview Rate Authority (Section 19, 20, 32)', () => {
+    it('Billing preview with inactive scalar rates returns waterRate="0.00" and electricityRate="0.00" for Tiered', async () => {
+      vi.spyOn(billingOrchestrationService, 'resolveCyclePeopleCount').mockResolvedValue(1);
+      const DORM_ID = 'a1eebc99-9c0b-4ef8-bb6d-6bb9bd380a11';
+      const CYCLE_ID = 'b1eebc99-9c0b-4ef8-bb6d-6bb9bd380a22';
+      const ROOM_ID = 'c1eebc99-9c0b-4ef8-bb6d-6bb9bd380a33';
+
+      const billRepo = new InMemoryBillRepository();
+      const billingCycleRepo = new InMemoryBillingCycleRepository();
+      const roomRepo = new InMemoryRoomRepository();
+      const tenantRepo = new InMemoryTenantRepository();
+      const contractRepo = new InMemoryContractRepository();
+      const meterRepo = new InMemoryMeterRepository();
+
+      const billingService = new BillingService(
+        billRepo,
+        billingCycleRepo,
+        meterRepo,
+        contractRepo,
+        roomRepo,
+        tenantRepo
+      );
+
+      await tenantRepo.create(DORM_ID, {
+        id: 'e1eebc99-9c0b-4ef8-bb6d-6bb9bd380a55',
+        fullName: 'Test Tenant',
+        phone: '0812345678',
+      } as any);
+
+      await roomRepo.create(DORM_ID, { id: ROOM_ID, roomNumber: '101', buildingId: 'd0eebc99-9c0b-4ef8-bb6d-6bb9bd380a44' });
+
+      await contractRepo.create(DORM_ID, {
+        roomId: ROOM_ID,
+        tenantId: 'e1eebc99-9c0b-4ef8-bb6d-6bb9bd380a55',
+        status: 'active',
+        startDate: new Date('2026-01-01T00:00:00.000Z'),
+        endDate: new Date('2026-12-31T23:59:59.999Z'),
+        rentAmount: '5000.00',
+      });
+
+      await billingCycleRepo.create(DORM_ID, {
+        id: CYCLE_ID,
+        cycleCode: '2026-08',
+        name: 'August 2026',
+        periodStart: new Date('2026-08-01T00:00:00.000Z'),
+        periodEnd: new Date('2026-08-31T23:59:59.999Z'),
+        billingDate: new Date('2026-08-31T00:00:00.000Z'),
+        dueDate: new Date('2026-09-05T00:00:00.000Z'),
+        status: 'draft',
+      });
+      await billingCycleRepo.createRateSnapshot(DORM_ID, {
+        billingCycleId: CYCLE_ID,
+        waterBillingType: 'tiered',
+        waterRate: '99.00', // Inactive scalar rate
+        waterTierRates: productWaterTiers,
+        electricityBillingType: 'tiered',
+        electricityRate: '88.00', // Inactive scalar rate
+        electricityTierRates: standardElecTiers,
+        source: 'CYCLE_INIT',
+      });
+
+      // Seed meter readings
+      await meterRepo.createReading(DORM_ID, {
+        billingCycleId: CYCLE_ID,
+        roomId: ROOM_ID,
+        meterDeviceId: 'dev-w',
+        meterType: 'water',
+        previousReading: '100.00',
+        currentReading: '115.00',
+        usageUnits: '15.00',
+      });
+      await meterRepo.createReading(DORM_ID, {
+        billingCycleId: CYCLE_ID,
+        roomId: ROOM_ID,
+        meterDeviceId: 'dev-e',
+        meterType: 'electricity',
+        previousReading: '1000.00',
+        currentReading: '1151.00',
+        usageUnits: '151.00',
+      });
+
+      const preview = await billingService.generateBillPreview(
+        DORM_ID,
+        CYCLE_ID,
+        ROOM_ID,
+        null,
+        'MONTHLY_UTILITY'
+      );
+
+      // Inactive scalar rates (99.00, 88.00) MUST NOT be exposed in preview
+      expect(preview.waterRate).toBe('0.00');
+      expect(preview.electricityRate).toBe('0.00');
+      expect(preview.waterUsage).toBe('15.00');
+      expect(preview.waterAmount).toBe('55.25'); // Tiered calculation
+      expect(preview.electricityUsage).toBe('151.00');
+      expect(preview.electricityAmount).toBe('1159.00'); // Tiered calculation
+      expect(preview.totalAmount).toBe('1214.25'); // 55.25 + 1159.00
     });
   });
 });

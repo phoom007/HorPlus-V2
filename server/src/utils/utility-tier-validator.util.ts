@@ -153,6 +153,13 @@ export function validateCanonicalUtilityTiers(input: unknown): CanonicalTierReco
       const normalizedUpTo = parseAndValidateStrictDecimal(rawUpTo, `Tier at index ${i} upTo boundary`);
       const upToDec = toDecimal(normalizedUpTo);
 
+      if (!upToDec.isInteger()) {
+        const err = new Error(`INVALID_TIER_CONFIGURATION: Tier at index ${i} upTo boundary '${rawUpTo}' must represent a whole positive integer unit threshold (fractional boundaries are not permitted)`);
+        (err as any).statusCode = 400;
+        (err as any).code = 'INVALID_TIER_CONFIGURATION';
+        throw err;
+      }
+
       if (compareDecimals(upToDec, toDecimal('0.00')) <= 0) {
         const err = new Error(`INVALID_TIER_CONFIGURATION: Tier at index ${i} upTo boundary must be strictly greater than 0`);
         (err as any).statusCode = 400;
