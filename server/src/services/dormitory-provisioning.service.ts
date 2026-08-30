@@ -19,6 +19,7 @@ import { coinWalletService } from './coin-wallet.service.js';
 import { subscriptionIntentService } from './subscription-intent.service.js';
 import { normalizeUtilityBillingMode } from '../utils/billing-mode-normalizer.util.js';
 import { LATE_FEE_GRACE_DAYS } from '../utils/monthly-utility-calculator.util.js';
+import { CanonicalTierRecord, validateCanonicalUtilityTiers } from '../utils/utility-tier-validator.util.js';
 
 export interface CompleteOwnerOnboardingParams {
   userId: string;
@@ -44,8 +45,10 @@ export interface CompleteOwnerOnboardingParams {
     dueDay?: number;
     waterBillingType?: string;
     waterRate?: string;
+    waterTierRates?: CanonicalTierRecord[] | null;
     electricityBillingType?: string;
     electricityRate?: string;
+    electricityTierRates?: CanonicalTierRecord[] | null;
     commonFee?: string;
     commonFeeMode?: string | null;
     internetFee?: string;
@@ -688,16 +691,49 @@ export class DormitoryProvisioningService {
           ? Number(billing.billingDay)
           : validatedDueDay;
 
+        const effectiveWaterBillingType = normalizeUtilityBillingMode(billing.waterBillingType || 'per_person');
+        const effectiveElectricityBillingType = normalizeUtilityBillingMode(billing.electricityBillingType || 'per_unit');
+
+        let effectiveWaterTierRates: CanonicalTierRecord[] | null = null;
+        if (effectiveWaterBillingType === 'tiered') {
+          if (billing.waterTierRates === null || billing.waterTierRates === undefined || (Array.isArray(billing.waterTierRates) && billing.waterTierRates.length === 0)) {
+            throw new AppError("INVALID_TIER_CONFIGURATION: Water billing mode is 'tiered' but no tier configuration was provided", 400, 'INVALID_TIER_CONFIGURATION');
+          }
+          effectiveWaterTierRates = validateCanonicalUtilityTiers(billing.waterTierRates);
+        } else {
+          if (billing.waterTierRates) {
+            effectiveWaterTierRates = validateCanonicalUtilityTiers(billing.waterTierRates);
+          } else {
+            effectiveWaterTierRates = null;
+          }
+        }
+
+        let effectiveElectricityTierRates: CanonicalTierRecord[] | null = null;
+        if (effectiveElectricityBillingType === 'tiered') {
+          if (billing.electricityTierRates === null || billing.electricityTierRates === undefined || (Array.isArray(billing.electricityTierRates) && billing.electricityTierRates.length === 0)) {
+            throw new AppError("INVALID_TIER_CONFIGURATION: Electricity billing mode is 'tiered' but no tier configuration was provided", 400, 'INVALID_TIER_CONFIGURATION');
+          }
+          effectiveElectricityTierRates = validateCanonicalUtilityTiers(billing.electricityTierRates);
+        } else {
+          if (billing.electricityTierRates) {
+            effectiveElectricityTierRates = validateCanonicalUtilityTiers(billing.electricityTierRates);
+          } else {
+            effectiveElectricityTierRates = null;
+          }
+        }
+
         await tx.dormitoryBillingSettings.upsert({
           where: { dormitoryId: dormId },
           create: {
             dormitoryId: dormId,
             billingDay: legacyCompatBillingDay,
             dueDay: validatedDueDay,
-            waterBillingType: normalizeUtilityBillingMode(billing.waterBillingType || 'per_person'),
+            waterBillingType: effectiveWaterBillingType,
             waterRate: waterRateStr,
-            electricityBillingType: normalizeUtilityBillingMode(billing.electricityBillingType || 'per_unit'),
+            waterTierRates: effectiveWaterTierRates === null ? Prisma.DbNull : (effectiveWaterTierRates as any),
+            electricityBillingType: effectiveElectricityBillingType,
             electricityRate: electricityRateStr,
+            electricityTierRates: effectiveElectricityTierRates === null ? Prisma.DbNull : (effectiveElectricityTierRates as any),
             commonFee: commonFeeStr,
             commonFeeMode: billing.commonFeeMode || 'per_room',
             internetFee: internetFeeStr,
@@ -713,10 +749,12 @@ export class DormitoryProvisioningService {
           update: {
             billingDay: legacyCompatBillingDay,
             dueDay: validatedDueDay,
-            waterBillingType: normalizeUtilityBillingMode(billing.waterBillingType || 'per_person'),
+            waterBillingType: effectiveWaterBillingType,
             waterRate: waterRateStr,
-            electricityBillingType: normalizeUtilityBillingMode(billing.electricityBillingType || 'per_unit'),
+            waterTierRates: effectiveWaterTierRates === null ? Prisma.DbNull : (effectiveWaterTierRates as any),
+            electricityBillingType: effectiveElectricityBillingType,
             electricityRate: electricityRateStr,
+            electricityTierRates: effectiveElectricityTierRates === null ? Prisma.DbNull : (effectiveElectricityTierRates as any),
             commonFee: commonFeeStr,
             commonFeeMode: billing.commonFeeMode || 'per_room',
             internetFee: internetFeeStr,
