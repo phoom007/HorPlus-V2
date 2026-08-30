@@ -168,7 +168,21 @@ export function createDormitoryRouter(
   // GET /api/v1/dormitories/:dormitoryId/billing-settings (PS-001 Public Billing DTO Isolation)
   router.get('/:dormitoryId/billing-settings', requireSession, requireDormitory, requireBillingView, async (req: Request, res: Response) => {
     const dormitoryId = req.params.dormitoryId;
-    const settings: any = await billingRepo.findByDormitoryId(dormitoryId);
+    let settings: any = null;
+    try {
+      settings = await billingRepo.findByDormitoryId(dormitoryId);
+    } catch (err: any) {
+      console.error('GET billing settings internal error:', err);
+      return res.status(500).json({
+        error: {
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'เกิดข้อผิดพลาดภายในระบบ',
+          fieldErrors: null,
+          requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+          timestamp: new Date().toISOString(),
+        },
+      });
+    }
 
     if (!settings) {
       return res.json({ data: null });
@@ -217,9 +231,23 @@ export function createDormitoryRouter(
 
     const dormitoryId = req.params.dormitoryId;
 
-    let current = await billingRepo.findByDormitoryId(dormitoryId);
-    if (!current) {
-      current = await billingRepo.create({ dormitoryId });
+    let current: any = null;
+    try {
+      current = await billingRepo.findByDormitoryId(dormitoryId);
+      if (!current) {
+        current = await billingRepo.create({ dormitoryId });
+      }
+    } catch (err: any) {
+      console.error('PATCH billing settings initialization error:', err);
+      return res.status(500).json({
+        error: {
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'เกิดข้อผิดพลาดภายในระบบ',
+          fieldErrors: null,
+          requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+          timestamp: new Date().toISOString(),
+        },
+      });
     }
 
     try {
@@ -324,7 +352,21 @@ export function createDormitoryRouter(
   // GET /api/v1/dormitories/:dormitoryId/payment-settings (PS-002, PS-003, PS-008)
   router.get('/:dormitoryId/payment-settings', requireSession, requireDormitory, requirePaymentView, async (req: Request, res: Response) => {
     const dormitoryId = req.params.dormitoryId;
-    const settings: any = await billingRepo.findByDormitoryId(dormitoryId);
+    let settings: any = null;
+    try {
+      settings = await billingRepo.findByDormitoryId(dormitoryId);
+    } catch (err: any) {
+      console.error('GET payment settings internal error:', err);
+      return res.status(500).json({
+        error: {
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'เกิดข้อผิดพลาดภายในระบบ',
+          fieldErrors: null,
+          requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+          timestamp: new Date().toISOString(),
+        },
+      });
+    }
 
     if (!settings) {
       return res.json({ data: null });

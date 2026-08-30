@@ -1,7 +1,7 @@
 /**
  * @license Apache-2.0
- * OWNER R3.9-B.3.1: Tiered Utility Persistence, Snapshot, Validation Authority, Legacy Mode Compatibility,
- * Production Billing Settings Persistence Authority, and Persistence Error Semantics (No False Success)
+ * OWNER R3.9-B.3.2: Tiered Utility Persistence, Snapshot, Validation Authority, Legacy Mode Compatibility,
+ * Production Billing Settings Persistence Authority, and Async Error Boundary Closure
  */
 
 import { describe, it, expect, vi } from 'vitest';
@@ -876,7 +876,7 @@ describe('OWNER R3.9-B — Canonical Utility Tier Validation & Persistence Autho
     });
   });
 
-  describe('OWNER R3.9-B.3.1: Billing Settings Persistence Error Semantics & No False Success', () => {
+  describe('OWNER R3.9-B.3.1 & R3.9-B.3.2: Async Error Boundary Closure & Persistence Error Semantics', () => {
     const TEST_DORM_UUID = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
     const TEST_DORM_ID = '11111111-1111-4111-8111-111111111111';
     const TEST_USER_ID = '22222222-2222-4222-8222-222222222222';
@@ -986,6 +986,71 @@ describe('OWNER R3.9-B — Canonical Utility Tier Validation & Persistence Autho
       };
       const repo = new PrismaBillingSettingsRepository(mockPrisma);
       await expect(repo.update(TEST_DORM_UUID, { waterRate: '20.00' })).rejects.toThrow('database unavailable');
+    });
+
+    it('Test 7.A (Real Express Route): GET /billing-settings returns 500 when billingRepo.findByDormitoryId throws DB error', async () => {
+      const { app, billingRepo } = setupTestExpressApp();
+      const dormId = TEST_DORM_ID;
+
+      vi.spyOn(billingRepo, 'findByDormitoryId').mockRejectedValueOnce(new Error('Postgres connection pool exhausted'));
+
+      const res = await request(app)
+        .get(`/api/v1/dormitories/${dormId}/billing-settings`)
+        .set('x-dormitory-id', dormId);
+
+      expect(res.status).toBe(500);
+      expect(res.body.error.code).toBe('INTERNAL_SERVER_ERROR');
+      expect(res.body.data).toBeUndefined();
+    });
+
+    it('Test 7.B (Real Express Route): PATCH /billing-settings returns 500 when initial billingRepo.findByDormitoryId throws DB error', async () => {
+      const { app, billingRepo } = setupTestExpressApp();
+      const dormId = TEST_DORM_ID;
+
+      vi.spyOn(billingRepo, 'findByDormitoryId').mockRejectedValueOnce(new Error('DB read timeout'));
+
+      const res = await request(app)
+        .patch(`/api/v1/dormitories/${dormId}/billing-settings`)
+        .set('x-dormitory-id', dormId)
+        .set('x-csrf-token', 'valid-csrf-token')
+        .send({ commonFee: '200.00' });
+
+      expect(res.status).toBe(500);
+      expect(res.body.error.code).toBe('INTERNAL_SERVER_ERROR');
+      expect(res.body.data).toBeUndefined();
+    });
+
+    it('Test 7.C (Real Express Route): PATCH /billing-settings returns 500 when billingRepo.create throws DB error', async () => {
+      const { app, billingRepo } = setupTestExpressApp();
+      const dormId = TEST_DORM_ID;
+
+      vi.spyOn(billingRepo, 'findByDormitoryId').mockResolvedValueOnce(null);
+      vi.spyOn(billingRepo, 'create').mockRejectedValueOnce(new Error('DB insert failed: disk full'));
+
+      const res = await request(app)
+        .patch(`/api/v1/dormitories/${dormId}/billing-settings`)
+        .set('x-dormitory-id', dormId)
+        .set('x-csrf-token', 'valid-csrf-token')
+        .send({ commonFee: '200.00' });
+
+      expect(res.status).toBe(500);
+      expect(res.body.error.code).toBe('INTERNAL_SERVER_ERROR');
+      expect(res.body.data).toBeUndefined();
+    });
+
+    it('Test 7.D (Real Express Route): GET /payment-settings returns 500 when billingRepo.findByDormitoryId throws DB error', async () => {
+      const { app, billingRepo } = setupTestExpressApp();
+      const dormId = TEST_DORM_ID;
+
+      vi.spyOn(billingRepo, 'findByDormitoryId').mockRejectedValueOnce(new Error('Postgres replica sync failure'));
+
+      const res = await request(app)
+        .get(`/api/v1/dormitories/${dormId}/payment-settings`)
+        .set('x-dormitory-id', dormId);
+
+      expect(res.status).toBe(500);
+      expect(res.body.error.code).toBe('INTERNAL_SERVER_ERROR');
+      expect(res.body.data).toBeUndefined();
     });
 
     it('Test 8.C (Real Express Route): PATCH /billing-settings returns 404 when billingRepo.update returns null', async () => {
