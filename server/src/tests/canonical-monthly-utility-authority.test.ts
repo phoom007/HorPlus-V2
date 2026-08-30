@@ -1260,4 +1260,147 @@ describe('LOCAL-07 Shared Canonical Monthly Utility Calculation Authority', () =
       expect(sum).toBe(5450.0);
     });
   });
+
+  describe('OWNER R3.8fR5-C.7 — Partial LEGACY_COMBINED Outstanding Balance Projection (Cases 1–6)', () => {
+    const room104Items = [
+      { id: '1', type: 'rent', description: 'ค่าเช่าห้องพัก 104', amount: '4800.00' },
+      { id: '2', type: 'deposit', description: 'เงินประกันห้องพัก 104', amount: '4800.00' },
+      { id: '3', type: 'electric', description: 'ค่าไฟฟ้าส่วนกลาง 104', amount: '1000.00' },
+    ];
+
+    it('CASE 1 — Legacy Unpaid: 10,600 / paid 0 / outstanding 10,600 projects 3 original components totaling 10,600', () => {
+      const components = MeterService.decomposeBillToChargeComponents({
+        bill: {
+          billNumber: 'INV-202608-104-UNPAID',
+          billKind: 'LEGACY_COMBINED',
+          totalAmount: '10600.00',
+          paidAmount: '0.00',
+          outstandingAmount: '10600.00',
+          status: 'UNPAID',
+          items: room104Items,
+        },
+      });
+
+      expect(components).toHaveLength(3);
+      expect(components[0].label).toBe('ค่าเช่า (เดือน)');
+      expect(components[0].amount).toBe('4800.00');
+      expect(components[0].includedInAmountDue).toBe(true);
+
+      expect(components[1].label).toBe('ค่าประกัน');
+      expect(components[1].amount).toBe('4800.00');
+      expect(components[1].includedInAmountDue).toBe(true);
+
+      expect(components[2].label).toBe('บิลรายเดือน');
+      expect(components[2].amount).toBe('1000.00');
+      expect(components[2].includedInAmountDue).toBe(true);
+
+      const collectibleSum = components
+        .filter(c => c.includedInAmountDue)
+        .reduce((sum, c) => sum + parseFloat(c.amount), 0);
+      expect(collectibleSum).toBe(10600.0);
+    });
+
+    it('CASE 2 — Legacy Partial (Room 104 exact): 10,600 / paid 3,000 / outstanding 7,600 collapses to ONE บิลรวมเดิม component with 7,600', () => {
+      const components = MeterService.decomposeBillToChargeComponents({
+        bill: {
+          billNumber: 'INV-202608-104-PARTIAL',
+          billKind: 'LEGACY_COMBINED',
+          totalAmount: '10600.00',
+          paidAmount: '3000.00',
+          outstandingAmount: '7600.00',
+          status: 'PARTIAL',
+          items: room104Items,
+        },
+      });
+
+      expect(components).toHaveLength(1);
+      expect(components[0].type).toBe('legacy_combined');
+      expect(components[0].label).toBe('บิลรวมเดิม');
+      expect(components[0].amount).toBe('7600.00');
+      expect(components[0].status).toBe('UNPAID');
+      expect(components[0].includedInAmountDue).toBe(true);
+      expect(components[0].lineItems).toEqual([]);
+
+      const collectibleSum = components
+        .filter(c => c.includedInAmountDue)
+        .reduce((sum, c) => sum + parseFloat(c.amount), 0);
+      expect(collectibleSum).toBe(7600.0);
+    });
+
+    it('CASE 3 — Legacy Partial Fallback: derives 7,600 from totalAmount - paidAmount when outstandingAmount is null', () => {
+      const components = MeterService.decomposeBillToChargeComponents({
+        bill: {
+          billNumber: 'INV-202608-104-FALLBACK',
+          billKind: 'LEGACY_COMBINED',
+          totalAmount: '10600.00',
+          paidAmount: '3000.00',
+          outstandingAmount: null, // Test fallback derivation
+          status: 'PARTIALLY_PAID',
+          items: room104Items,
+        },
+      });
+
+      expect(components).toHaveLength(1);
+      expect(components[0].label).toBe('บิลรวมเดิม');
+      expect(components[0].amount).toBe('7600.00');
+      expect(components[0].includedInAmountDue).toBe(true);
+    });
+
+    it('CASE 4 — Legacy Paid: 10,600 / paid 10,600 / outstanding 0 preserves 3 PAID components and contributes 0 to amountDue', () => {
+      const components = MeterService.decomposeBillToChargeComponents({
+        bill: {
+          billNumber: 'INV-202607-104-PAID',
+          billKind: 'LEGACY_COMBINED',
+          totalAmount: '10600.00',
+          paidAmount: '10600.00',
+          outstandingAmount: '0.00',
+          status: 'PAID',
+          paidAt: new Date('2026-07-28T10:00:00Z'),
+          items: room104Items,
+        },
+      });
+
+      expect(components).toHaveLength(3);
+      for (const comp of components) {
+        expect(comp.status).toBe('PAID');
+        expect(comp.includedInAmountDue).toBe(false);
+      }
+
+      const collectibleSum = components
+        .filter(c => c.includedInAmountDue)
+        .reduce((sum, c) => sum + parseFloat(c.amount), 0);
+      expect(collectibleSum).toBe(0.0);
+    });
+
+    it('CASE 5 & 6 — Modern partial (Rent 2,500) and Room 302 pattern (Rent 2,500 + Utility 1,550 = 4,050) remain unchanged', () => {
+      const rent = MeterService.decomposeBillToChargeComponents({
+        bill: {
+          billKind: 'RENT',
+          totalAmount: '5000.00',
+          paidAmount: '2500.00',
+          outstandingAmount: '2500.00',
+          status: 'PARTIALLY_PAID',
+          items: [{ type: 'rent', description: 'ค่าเช่า', amount: '5000.00' }],
+        },
+      });
+
+      const util = MeterService.decomposeBillToChargeComponents({
+        bill: {
+          billKind: 'MONTHLY_UTILITY',
+          totalAmount: '1550.00',
+          paidAmount: '0.00',
+          outstandingAmount: '1550.00',
+          status: 'UNPAID',
+          items: [{ type: 'water', description: 'ค่าน้ำ', amount: '1550.00' }],
+        },
+      });
+
+      expect(rent[0].amount).toBe('2500.00');
+      expect(util[0].amount).toBe('1550.00');
+
+      const all = [...rent, ...util];
+      const sum = all.filter(c => c.includedInAmountDue).reduce((s, c) => s + parseFloat(c.amount), 0);
+      expect(sum).toBe(4050.0);
+    });
+  });
 });

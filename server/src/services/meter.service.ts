@@ -1573,6 +1573,27 @@ export class MeterService {
     const billTotal = toDecimal(bill.totalAmount ? bill.totalAmount.toString() : '0.00');
     const rawKind = (bill.billKind || '').toString().trim().toUpperCase();
 
+    // Authoritative collectible outstanding resolution (Option B - Compact Outstanding Presentation)
+    const billOutstandingDec = (() => {
+      if (isPaid) return toDecimal('0.00');
+      if (bill.outstandingAmount !== undefined && bill.outstandingAmount !== null) {
+        return toDecimal(bill.outstandingAmount.toString());
+      }
+      const totalDec = toDecimal(bill.totalAmount ? bill.totalAmount.toString() : '0.00');
+      const paidDec = toDecimal(bill.paidAmount ? bill.paidAmount.toString() : '0.00');
+      const diffDec = subDecimals(totalDec, paidDec);
+      return compareDecimals(diffDec, toDecimal('0.00')) > 0 ? diffDec : toDecimal('0.00');
+    })();
+
+    const paidAmtDec = toDecimal(bill.paidAmount ? bill.paidAmount.toString() : '0.00');
+    const rawStatus = (bill.status || '').toString().trim().toUpperCase();
+    const hasPartialPayment = !isPaid && (
+      !isZeroDecimal(paidAmtDec) ||
+      compareDecimals(billOutstandingDec, billTotal) < 0 ||
+      rawStatus === 'PARTIAL' ||
+      rawStatus === 'PARTIALLY_PAID'
+    );
+
     const components: Array<{
       type: string;
       label: string;
@@ -1596,63 +1617,77 @@ export class MeterService {
     });
 
     if (rawKind === 'LEGACY_COMBINED') {
-      const allItems = bill.items || [];
-      const rentItems = allItems.filter((it: any) => (it.type || '').toString().toLowerCase() === 'rent');
-      const depositItems = allItems.filter((it: any) => (it.type || '').toString().toLowerCase() === 'deposit');
-      const utilityItems = allItems.filter((it: any) => {
-        const t = (it.type || '').toString().toLowerCase();
-        return t !== 'rent' && t !== 'deposit';
-      });
-
-      const rentTotalDec = rentItems.reduce((acc: any, it: any) => addDecimals(acc, toDecimal(it.amount?.toString() || '0.00')), toDecimal('0.00'));
-      const depositTotalDec = depositItems.reduce((acc: any, it: any) => addDecimals(acc, toDecimal(it.amount?.toString() || '0.00')), toDecimal('0.00'));
-      const utilityTotalDec = utilityItems.reduce((acc: any, it: any) => addDecimals(acc, toDecimal(it.amount?.toString() || '0.00')), toDecimal('0.00'));
-
-      const componentSumDec = addDecimals(addDecimals(rentTotalDec, depositTotalDec), utilityTotalDec);
-
-      // Strict Reconciliation Invariant: Fail closed if immutable item sum does not equal bill total
-      if (!isZeroDecimal(billTotal) && compareDecimals(componentSumDec, billTotal) !== 0) {
-        throw new Error(`HISTORICAL_FINANCIAL_DECOMPOSITION_RECONCILIATION_FAILED: Bill ${bill.billNumber || bill.id} total (${formatDecimal(billTotal)}) does not match decomposed items sum (${formatDecimal(componentSumDec)})`);
-      }
-
-      if (!isZeroDecimal(rentTotalDec)) {
-        const rentLabel = billingSource === 'PROVISIONAL_TERM' ? 'ค่าเช่า (เทอม)' : 'ค่าเช่า (เดือน)';
+      if (hasPartialPayment) {
+        // C.7: Collapse partial LEGACY_COMBINED to single 'บิลรวมเดิม' component with outstanding balance
         components.push({
-          type: 'rent',
-          label: rentLabel,
-          amount: formatDecimal(rentTotalDec),
-          status: isPaid ? 'PAID' : 'UNPAID',
+          type: 'legacy_combined',
+          label: 'บิลรวมเดิม',
+          amount: formatDecimal(billOutstandingDec),
+          status: 'UNPAID',
           paidAt: bill.paidAt ? bill.paidAt.toISOString() : null,
           occurredInDisplayedPeriod: true,
-          includedInAmountDue: isUnpaid,
-          lineItems: rentItems.map(mapItem),
+          includedInAmountDue: true,
+          lineItems: [],
         });
-      }
+      } else {
+        const allItems = bill.items || [];
+        const rentItems = allItems.filter((it: any) => (it.type || '').toString().toLowerCase() === 'rent');
+        const depositItems = allItems.filter((it: any) => (it.type || '').toString().toLowerCase() === 'deposit');
+        const utilityItems = allItems.filter((it: any) => {
+          const t = (it.type || '').toString().toLowerCase();
+          return t !== 'rent' && t !== 'deposit';
+        });
 
-      if (!isZeroDecimal(depositTotalDec)) {
-        components.push({
-          type: 'deposit',
-          label: 'ค่าประกัน',
-          amount: formatDecimal(depositTotalDec),
-          status: isPaid ? 'PAID' : 'UNPAID',
-          paidAt: bill.paidAt ? bill.paidAt.toISOString() : null,
-          occurredInDisplayedPeriod: true,
-          includedInAmountDue: isUnpaid,
-          lineItems: depositItems.map(mapItem),
-        });
-      }
+        const rentTotalDec = rentItems.reduce((acc: any, it: any) => addDecimals(acc, toDecimal(it.amount?.toString() || '0.00')), toDecimal('0.00'));
+        const depositTotalDec = depositItems.reduce((acc: any, it: any) => addDecimals(acc, toDecimal(it.amount?.toString() || '0.00')), toDecimal('0.00'));
+        const utilityTotalDec = utilityItems.reduce((acc: any, it: any) => addDecimals(acc, toDecimal(it.amount?.toString() || '0.00')), toDecimal('0.00'));
 
-      if (!isZeroDecimal(utilityTotalDec)) {
-        components.push({
-          type: 'monthly_utility',
-          label: 'บิลรายเดือน',
-          amount: formatDecimal(utilityTotalDec),
-          status: isPaid ? 'PAID' : 'UNPAID',
-          paidAt: bill.paidAt ? bill.paidAt.toISOString() : null,
-          occurredInDisplayedPeriod: true,
-          includedInAmountDue: isUnpaid,
-          lineItems: utilityItems.map(mapItem),
-        });
+        const componentSumDec = addDecimals(addDecimals(rentTotalDec, depositTotalDec), utilityTotalDec);
+
+        // Strict Reconciliation Invariant: Fail closed if immutable item sum does not equal bill total
+        if (!isZeroDecimal(billTotal) && compareDecimals(componentSumDec, billTotal) !== 0) {
+          throw new Error(`HISTORICAL_FINANCIAL_DECOMPOSITION_RECONCILIATION_FAILED: Bill ${bill.billNumber || bill.id} total (${formatDecimal(billTotal)}) does not match decomposed items sum (${formatDecimal(componentSumDec)})`);
+        }
+
+        if (!isZeroDecimal(rentTotalDec)) {
+          const rentLabel = billingSource === 'PROVISIONAL_TERM' ? 'ค่าเช่า (เทอม)' : 'ค่าเช่า (เดือน)';
+          components.push({
+            type: 'rent',
+            label: rentLabel,
+            amount: formatDecimal(rentTotalDec),
+            status: isPaid ? 'PAID' : 'UNPAID',
+            paidAt: bill.paidAt ? bill.paidAt.toISOString() : null,
+            occurredInDisplayedPeriod: true,
+            includedInAmountDue: isUnpaid,
+            lineItems: rentItems.map(mapItem),
+          });
+        }
+
+        if (!isZeroDecimal(depositTotalDec)) {
+          components.push({
+            type: 'deposit',
+            label: 'ค่าประกัน',
+            amount: formatDecimal(depositTotalDec),
+            status: isPaid ? 'PAID' : 'UNPAID',
+            paidAt: bill.paidAt ? bill.paidAt.toISOString() : null,
+            occurredInDisplayedPeriod: true,
+            includedInAmountDue: isUnpaid,
+            lineItems: depositItems.map(mapItem),
+          });
+        }
+
+        if (!isZeroDecimal(utilityTotalDec)) {
+          components.push({
+            type: 'monthly_utility',
+            label: 'บิลรายเดือน',
+            amount: formatDecimal(utilityTotalDec),
+            status: isPaid ? 'PAID' : 'UNPAID',
+            paidAt: bill.paidAt ? bill.paidAt.toISOString() : null,
+            occurredInDisplayedPeriod: true,
+            includedInAmountDue: isUnpaid,
+            lineItems: utilityItems.map(mapItem),
+          });
+        }
       }
     } else {
       let billType = 'monthly_utility';
@@ -1668,18 +1703,6 @@ export class MeterService {
         billType = 'monthly_utility';
         label = 'บิลรายเดือน';
       }
-
-      // Authoritative collectible outstanding resolution (Option B - Compact Outstanding Presentation)
-      const billOutstandingDec = (() => {
-        if (isPaid) return toDecimal('0.00');
-        if (bill.outstandingAmount !== undefined && bill.outstandingAmount !== null) {
-          return toDecimal(bill.outstandingAmount.toString());
-        }
-        const totalDec = toDecimal(bill.totalAmount ? bill.totalAmount.toString() : '0.00');
-        const paidDec = toDecimal(bill.paidAmount ? bill.paidAmount.toString() : '0.00');
-        const diffDec = subDecimals(totalDec, paidDec);
-        return compareDecimals(diffDec, toDecimal('0.00')) > 0 ? diffDec : toDecimal('0.00');
-      })();
 
       const compAmount = isPaid ? billTotal : billOutstandingDec;
 
@@ -2406,7 +2429,7 @@ export class MeterService {
           for (const comp of decomposed) {
             if (comp.type === 'rent') {
               hasRentBill = true;
-            } else if (comp.type === 'monthly_utility') {
+            } else if (comp.type === 'monthly_utility' || comp.type === 'legacy_combined') {
               hasMonthlyUtilityBill = true;
             }
             chargeComponents.push(comp);
