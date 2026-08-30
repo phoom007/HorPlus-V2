@@ -1030,4 +1030,4 @@ export const PrintView: React.FC<PrintViewProps> = ({ children, title = 'พิ�
   );
 };
 
-export { formatBillingUnit, formatBillingQuantity, formatBillingRate, resolveBillingDisplayUnit } from '../types';
+export { formatBillingUnit, formatBillingQuantity, formatBillingRate, resolveBillingDisplayUnit, isNonZeroAmount, filterNonZeroBillItems } from '../types';

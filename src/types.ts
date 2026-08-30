@@ -684,6 +684,25 @@ export function resolveBillingDisplayUnit(params: {
   }
 }
 
+/**
+ * Helper to determine if a financial line item has a non-zero amount.
+ * Items with exactly 0.00 amount are suppressed from user-facing expense breakdowns.
+ */
+export function isNonZeroAmount(amount?: number | string | null): boolean {
+  if (amount === undefined || amount === null || amount === '') return false;
+  const num = Number(amount);
+  if (isNaN(num)) return false;
+  return Math.abs(num) >= 0.005;
+}
+
+/**
+ * Filters out zero-amount items from an array of bill items or line items.
+ */
+export function filterNonZeroBillItems<T extends { amount?: number | string | null }>(items?: T[] | null): T[] {
+  if (!items || !Array.isArray(items)) return [];
+  return items.filter(it => isNonZeroAmount(it.amount));
+}
+
 export interface ActiveRentalSummary {
   type: 'TERM' | 'MONTHLY' | 'DAILY';
   rentAmount: number;

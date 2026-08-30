@@ -13,7 +13,7 @@ import '@testing-library/jest-dom/vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { queryKeys } from '../lib/queryClient';
 import { QuickAddTenantModal } from '../components/QuickAddTenantModal';
-import { PrintView, formatBillingUnit, formatBillingQuantity, formatBillingRate } from '../components/GlobalComponents';
+import { PrintView, formatBillingUnit, formatBillingQuantity, formatBillingRate, isNonZeroAmount, filterNonZeroBillItems } from '../components/GlobalComponents';
 import { formatItemDescription as canonicalFormatItemDescription, resolveBillingDisplayUnit } from '../types';
 import { formatItemDescription as paymentsFormatItemDescription, PaymentsOwnerView } from '../pages/owner/payments';
 
@@ -1056,6 +1056,272 @@ describe('OWNER R3.8fR5-C — Itemized Receipts & Thai Billing Units', () => {
       // Must display "ห้อง ไม่ระบุ" and MUST NOT expose raw UUID
       expect(screen.getByText('ห้อง ไม่ระบุ')).toBeInTheDocument();
       expect(screen.queryByText(new RegExp(rawUuid, 'i'))).toBeNull();
+    });
+
+    it('Zero-amount line suppression: isNonZeroAmount and filterNonZeroBillItems correctly filter 0.00 items', () => {
+      expect(isNonZeroAmount(0)).toBe(false);
+      expect(isNonZeroAmount('0.00')).toBe(false);
+      expect(isNonZeroAmount('0')).toBe(false);
+      expect(isNonZeroAmount(null)).toBe(false);
+      expect(isNonZeroAmount(undefined)).toBe(false);
+      expect(isNonZeroAmount(150)).toBe(true);
+      expect(isNonZeroAmount('18.00')).toBe(true);
+
+      const items = [
+        { description: 'ค่าน้ำ', amount: 180 },
+        { description: 'ค่าไฟฟ้า', amount: 420 },
+        { description: 'ค่าส่วนกลาง', amount: 200 },
+        { description: 'ค่าอินเทอร์เน็ต (ฟรี)', amount: 0 },
+        { description: 'ค่าปรับ (ไม่มี)', amount: '0.00' },
+      ];
+      const filtered = filterNonZeroBillItems(items);
+      expect(filtered.length).toBe(3);
+      expect(filtered.map(i => i.description)).toEqual(['ค่าน้ำ', 'ค่าไฟฟ้า', 'ค่าส่วนกลาง']);
+    });
+
+    it('Zero-amount items are suppressed in Bill Detail Modal and Unpaid preview cards', () => {
+      const mockDormitoryId = 'dorm-zero-suppress-test';
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+      const mockBills = [
+        {
+          id: 'bill-zero-test',
+          dormitoryId: mockDormitoryId,
+          billNumber: 'INV-202608-ZERO',
+          billingCycleId: 'cycle-aug-2026',
+          roomId: 'room-101',
+          tenantId: 'tenant-101',
+          totalAmount: 800,
+          paidAmount: 0,
+          outstandingAmount: 800,
+          status: 'unpaid',
+          items: [
+            { type: 'water', description: 'ค่าน้ำ (10 หน่วย @ ฿18)', quantity: 10, unit: 'unit', unitPrice: 18, amount: 180 },
+            { type: 'electric', description: 'ค่าไฟฟ้า (60 หน่วย @ ฿7)', quantity: 60, unit: 'unit', unitPrice: 7, amount: 420 },
+            { type: 'common', description: 'ค่าส่วนกลาง', quantity: 1, unit: 'room', unitPrice: 200, amount: 200 },
+            { type: 'internet', description: 'ค่าอินเทอร์เน็ต', quantity: 1, unit: 'room', unitPrice: 0, amount: 0 }, // ZERO AMOUNT
+            { type: 'parking', description: 'ค่าที่จอดรถ', quantity: 1, unit: 'room', unitPrice: 0, amount: '0.00' }, // ZERO AMOUNT
+          ],
+          room: { id: 'room-101', roomNumber: '101' },
+          tenant: { id: 'tenant-101', displayName: 'สมชาย ทดสอบ' },
+        },
+      ];
+
+      queryClient.setQueryData(queryKeys.payments(mockDormitoryId), []);
+
+      render(
+        <QueryClientProvider client={queryClient}>
+          <PaymentsOwnerView
+            dormitoryId={mockDormitoryId}
+            selectedCycleCode="2026-08"
+            billingCycles={[{ id: 'cycle-aug-2026', cycleCode: '2026-08' }]}
+            rooms={[{ id: 'room-101', roomNumber: '101' } as any]}
+            tenants={[{ id: 'tenant-101', displayName: 'สมชาย ทดสอบ' } as any]}
+            bills={mockBills as any}
+            onAddLog={vi.fn()}
+          />
+        </QueryClientProvider>
+      );
+
+      // Switch to unpaid tab (Tab 2)
+      const unpaidTab = screen.getByRole('button', { name: /ยังไม่ชำระ/i });
+      fireEvent.click(unpaidTab);
+
+      // Zero-amount lines must NOT be rendered in item preview
+      expect(screen.queryByText(/ค่าอินเทอร์เน็ต/)).toBeNull();
+      expect(screen.queryByText(/ค่าที่จอดรถ/)).toBeNull();
+
+      // Non-zero items ARE rendered
+      expect(screen.getByText(/ค่าน้ำ/)).toBeInTheDocument();
+      expect(screen.getByText(/ค่าไฟฟ้า/)).toBeInTheDocument();
+      expect(screen.getByText(/ค่าส่วนกลาง/)).toBeInTheDocument();
+
+      // Open Bill Detail Modal via (ดูรายการ)
+      const viewDetailBtn = screen.getByRole('button', { name: /\(ดูรายการ\)/i });
+      fireEvent.click(viewDetailBtn);
+
+      // Inside modal, 0.00 items are NOT shown
+      expect(screen.queryByText('ค่าอินเทอร์เน็ต')).toBeNull();
+      expect(screen.queryByText('ค่าที่จอดรถ')).toBeNull();
+      expect(screen.getByText('10 หน่วย')).toBeInTheDocument();
+      expect(screen.getByText('18.00 บาท/หน่วย')).toBeInTheDocument();
+      expect(screen.getAllByText(/180.00/).length).toBeGreaterThanOrEqual(2);
+    });
+
+    it('Tab 1 (รอตรวจสลิป) renders 2 realistic pending review items and Tab 4 (สลิปผิดพลาด) renders 2 rejected records with reasons', () => {
+      const mockDormitoryId = 'dorm-slip-states-test';
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+      const mockPayments = [
+        // Tab 1 item 1: Room 302 Group Combined Slip (฿6,500)
+        {
+          id: 'pay-302-july',
+          dormitoryId: mockDormitoryId,
+          billId: 'bill-302-july',
+          tenantId: 'tenant-302',
+          paymentGroupId: 'group-302-combined',
+          method: 'BANK_TRANSFER',
+          amount: 4000,
+          status: 'UNDER_REVIEW',
+          paymentDate: '2026-08-28T14:30:00Z',
+          evidenceUrl: 'fixtures/slips/local-uat-test-slip-room302.png',
+          bill: {
+            id: 'bill-302-july',
+            billNumber: 'INV-202607-009',
+            billingCycleId: 'cycle-jul-2026',
+            totalAmount: 6100,
+            room: { id: 'room-302', roomNumber: '302' },
+            tenant: { id: 'tenant-302', displayName: 'นายนิรันดร์ สุขใจ' },
+          },
+          paymentGroup: {
+            id: 'group-302-combined',
+            totalAmount: 6500,
+            status: 'UNDER_REVIEW',
+          },
+        },
+        {
+          id: 'pay-302-aug',
+          dormitoryId: mockDormitoryId,
+          billId: 'bill-302-aug',
+          tenantId: 'tenant-302',
+          paymentGroupId: 'group-302-combined',
+          method: 'BANK_TRANSFER',
+          amount: 2500,
+          status: 'UNDER_REVIEW',
+          paymentDate: '2026-08-28T14:30:00Z',
+          evidenceUrl: 'fixtures/slips/local-uat-test-slip-room302.png',
+          bill: {
+            id: 'bill-302-aug',
+            billNumber: 'INV-202608-302-R',
+            billingCycleId: 'cycle-aug-2026',
+            totalAmount: 5000,
+            room: { id: 'room-302', roomNumber: '302' },
+            tenant: { id: 'tenant-302', displayName: 'นายนิรันดร์ สุขใจ' },
+          },
+          paymentGroup: {
+            id: 'group-302-combined',
+            totalAmount: 6500,
+            status: 'UNDER_REVIEW',
+          },
+        },
+        // Tab 1 item 2: Room 102 Single Bill Slip (฿830)
+        {
+          id: 'pay-102-single',
+          dormitoryId: mockDormitoryId,
+          billId: 'bill-102-aug',
+          tenantId: 'tenant-102',
+          method: 'BANK_TRANSFER',
+          amount: 830,
+          status: 'UNDER_REVIEW',
+          paymentDate: '2026-08-28T15:00:00Z',
+          evidenceUrl: 'fixtures/slips/local-uat-test-slip-room102.png',
+          bill: {
+            id: 'bill-102-aug',
+            billNumber: 'INV-202608-102-U',
+            billingCycleId: 'cycle-aug-2026',
+            totalAmount: 830,
+            room: { id: 'room-102', roomNumber: '102' },
+            tenant: { id: 'tenant-102', displayName: 'นายสมศักดิ์ รักสงบ' },
+          },
+        },
+        // Tab 4 item 1: Room 103 Rejected Slip (฿1,000 against ฿1,030)
+        {
+          id: 'pay-103-rejected',
+          dormitoryId: mockDormitoryId,
+          billId: 'bill-103-aug',
+          tenantId: 'tenant-103',
+          method: 'BANK_TRANSFER',
+          amount: 1000,
+          status: 'REJECTED',
+          rejectedReason: 'ยอดเงินโอนไม่ตรงกับยอดแจ้งหนี้',
+          reviewedAt: '2026-08-27T12:00:00Z',
+          bill: {
+            id: 'bill-103-aug',
+            billNumber: 'INV-202608-103-U',
+            billingCycleId: 'cycle-aug-2026',
+            totalAmount: 1030,
+            room: { id: 'room-103', roomNumber: '103' },
+            tenant: { id: 'tenant-103', displayName: 'นางสาวอนงค์ งามยิ่ง' },
+          },
+        },
+        // Tab 4 item 2: Room 202 Rejected Slip (฿1,200 duplicate)
+        {
+          id: 'pay-202-rejected',
+          dormitoryId: mockDormitoryId,
+          billId: 'bill-202-aug',
+          tenantId: 'tenant-202',
+          method: 'BANK_TRANSFER',
+          amount: 1200,
+          status: 'REJECTED',
+          rejectedReason: 'สลิปซ้ำ / ไม่พบยอดเงินเข้าบัญชี',
+          reviewedAt: '2026-08-27T17:00:00Z',
+          bill: {
+            id: 'bill-202-aug',
+            billNumber: 'INV-202608-202-U',
+            billingCycleId: 'cycle-aug-2026',
+            totalAmount: 1200,
+            room: { id: 'room-202', roomNumber: '202' },
+            tenant: { id: 'tenant-202', displayName: 'นายปิติ สบายดี' },
+          },
+        },
+      ];
+
+      queryClient.setQueryData(queryKeys.payments(mockDormitoryId), mockPayments);
+
+      render(
+        <QueryClientProvider client={queryClient}>
+          <PaymentsOwnerView
+            dormitoryId={mockDormitoryId}
+            selectedCycleCode="2026-08"
+            billingCycles={[
+              { id: 'cycle-jul-2026', cycleCode: '2026-07' },
+              { id: 'cycle-aug-2026', cycleCode: '2026-08' },
+            ]}
+            rooms={[
+              { id: 'room-102', roomNumber: '102' } as any,
+              { id: 'room-103', roomNumber: '103' } as any,
+              { id: 'room-202', roomNumber: '202' } as any,
+              { id: 'room-302', roomNumber: '302' } as any,
+            ]}
+            tenants={[
+              { id: 'tenant-102', displayName: 'นายสมศักดิ์ รักสงบ' } as any,
+              { id: 'tenant-103', displayName: 'นางสาวอนงค์ งามยิ่ง' } as any,
+              { id: 'tenant-202', displayName: 'นายปิติ สบายดี' } as any,
+              { id: 'tenant-302', displayName: 'นายนิรันดร์ สุขใจ' } as any,
+            ]}
+            bills={[]}
+            onAddLog={vi.fn()}
+          />
+        </QueryClientProvider>
+      );
+
+      // Verify Tab 1: รอตรวจสลิป badge shows 2
+      const tab1Btn = screen.getByRole('button', { name: /รอตรวจสลิป/i });
+      expect(tab1Btn).toBeInTheDocument();
+      fireEvent.click(tab1Btn);
+
+      // Room 302 combined slip (฿6,500) and Room 102 single slip (฿830)
+      expect(screen.getByText('ห้อง 302')).toBeInTheDocument();
+      expect(screen.getByText('นายนิรันดร์ สุขใจ')).toBeInTheDocument();
+      expect(screen.getByText(/6,500.00/)).toBeInTheDocument();
+
+      expect(screen.getByText('ห้อง 102')).toBeInTheDocument();
+      expect(screen.getByText('นายสมศักดิ์ รักสงบ')).toBeInTheDocument();
+      expect(screen.getByText(/830.00/)).toBeInTheDocument();
+
+      // Verify Tab 4: สลิปผิดพลาด badge shows 2
+      const tab4Btn = screen.getByRole('button', { name: /สลิปผิดพลาด/i });
+      expect(tab4Btn).toBeInTheDocument();
+      fireEvent.click(tab4Btn);
+
+      // Room 103 and Room 202 rejected cards with reasons
+      expect(screen.getByText('ห้อง 103')).toBeInTheDocument();
+      expect(screen.getByText('นางสาวอนงค์ งามยิ่ง')).toBeInTheDocument();
+      expect(screen.getByText('ยอดเงินโอนไม่ตรงกับยอดแจ้งหนี้')).toBeInTheDocument();
+
+      expect(screen.getByText('ห้อง 202')).toBeInTheDocument();
+      expect(screen.getByText('นายปิติ สบายดี')).toBeInTheDocument();
+      expect(screen.getByText('สลิปซ้ำ / ไม่พบยอดเงินเข้าบัญชี')).toBeInTheDocument();
     });
   });
 });

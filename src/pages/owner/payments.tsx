@@ -18,7 +18,7 @@ import {
   FileText,
 } from 'lucide-react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Modal, formatBaht, formatThaiDate, formatCycleCode, PrintView, formatBillingQuantity, formatBillingRate, resolveBillingDisplayUnit } from '../../components/GlobalComponents';
+import { Modal, formatBaht, formatThaiDate, formatCycleCode, PrintView, formatBillingQuantity, formatBillingRate, resolveBillingDisplayUnit, isNonZeroAmount, filterNonZeroBillItems } from '../../components/GlobalComponents';
 import { LineNotificationModal, LineIcon } from '../../components/LineNotificationModal';
 import { Bill, Tenant, Room } from '../../types';
 import { queryKeys } from '../../lib/queryClient';
@@ -1008,7 +1008,8 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
         }> = [];
 
         if (foundBill?.items && foundBill.items.length > 0) {
-          items = foundBill.items.map((it: any) => ({
+          const nonZeroItems = filterNonZeroBillItems(foundBill.items);
+          items = nonZeroItems.map((it: any) => ({
             description: it.description || it.type || '-',
             quantity: it.quantity,
             unit: resolveBillingDisplayUnit({ unit: it.unit, type: it.type }),
@@ -1067,8 +1068,9 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
     }> = [];
 
     if (Array.isArray(snap.items)) {
-      if (snap.items.length > 0) {
-        items = snap.items.map((it: any) => ({
+      const nonZeroSnap = filterNonZeroBillItems(snap.items);
+      if (nonZeroSnap.length > 0) {
+        items = nonZeroSnap.map((it: any) => ({
           description: it.description,
           quantity: it.quantity,
           unit: resolveBillingDisplayUnit({ unit: it.unit, type: it.type }),
@@ -1081,13 +1083,20 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
         ];
       }
     } else if (targetBill?.items && targetBill.items.length > 0) {
-      items = targetBill.items.map((it: any) => ({
-        description: it.description || it.type || '-',
-        quantity: it.quantity,
-        unit: resolveBillingDisplayUnit({ unit: it.unit, type: it.type }),
-        unitPrice: it.unitPrice,
-        amount: Number(it.amount),
-      }));
+      const nonZeroTarget = filterNonZeroBillItems(targetBill.items);
+      if (nonZeroTarget.length > 0) {
+        items = nonZeroTarget.map((it: any) => ({
+          description: it.description || it.type || '-',
+          quantity: it.quantity,
+          unit: resolveBillingDisplayUnit({ unit: it.unit, type: it.type }),
+          unitPrice: it.unitPrice,
+          amount: Number(it.amount),
+        }));
+      } else {
+        items = [
+          { description: 'ยอดชำระตามใบเสร็จเดิม', amount: allocatedAmount }
+        ];
+      }
     } else {
       items = [
         { description: 'ยอดชำระตามใบเสร็จเดิม', amount: allocatedAmount }
@@ -1436,31 +1445,34 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
 
                   {/* Items summary */}
                   <div className="text-[11px] text-slate-500 space-y-1 border-t border-slate-100 pt-2">
-                    {b.items && b.items.length > 0 ? (
-                      <>
-                        {b.items.slice(0, 3).map((it, idx) => (
-                          <div key={idx} className="flex justify-between items-center">
-                            <span className="truncate pr-1 text-slate-500 font-medium">{formatItemDescription(it.description)}:</span>
-                            <span className="font-semibold text-slate-700 shrink-0">{formatBahtDash(it.amount)}</span>
-                          </div>
-                        ))}
-                        {b.items.length > 3 && (
-                          <button
-                            type="button"
-                            onClick={() => setViewingBillDetail({ bill: b, tenantName, roomNum })}
-                            className="text-[11px] font-bold text-indigo-600 hover:text-indigo-800 hover:underline flex items-center gap-1 pt-0.5 cursor-pointer"
-                          >
-                            <FileText className="w-3 h-3" />
-                            ดูรายละเอียด +{b.items.length - 3} รายการ
-                          </button>
-                        )}
-                      </>
-                    ) : (
-                      <div className="flex justify-between items-center">
-                        <span className="text-slate-500">ค่าเช่าและบริการ:</span>
-                        <span className="font-semibold text-slate-700">{formatBaht(amount)}</span>
-                      </div>
-                    )}
+                    {(() => {
+                      const nonZeroItems = filterNonZeroBillItems(b.items);
+                      return nonZeroItems.length > 0 ? (
+                        <>
+                          {nonZeroItems.slice(0, 3).map((it, idx) => (
+                            <div key={idx} className="flex justify-between items-center">
+                              <span className="truncate pr-1 text-slate-500 font-medium">{formatItemDescription(it.description)}:</span>
+                              <span className="font-semibold text-slate-700 shrink-0">{formatBahtDash(it.amount)}</span>
+                            </div>
+                          ))}
+                          {nonZeroItems.length > 3 && (
+                            <button
+                              type="button"
+                              onClick={() => setViewingBillDetail({ bill: b, tenantName, roomNum })}
+                              className="text-[11px] font-bold text-indigo-600 hover:text-indigo-800 hover:underline flex items-center gap-1 pt-0.5 cursor-pointer"
+                            >
+                              <FileText className="w-3 h-3" />
+                              ดูรายละเอียด +{nonZeroItems.length - 3} รายการ
+                            </button>
+                          )}
+                        </>
+                      ) : (
+                        <div className="flex justify-between items-center">
+                          <span className="text-slate-500">ค่าเช่าและบริการ:</span>
+                          <span className="font-semibold text-slate-700">{formatBaht(amount)}</span>
+                        </div>
+                      );
+                    })()}
 
                     {/* Partial Bill Reconciliation Notice */}
                     {Number(b.paidAmount || 0) > 0 && (
@@ -1480,15 +1492,18 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                   <div className="flex items-baseline justify-between pt-1 border-t border-slate-100">
                     <div className="flex items-center gap-1.5">
                       <span className="text-xs text-slate-400 font-bold">ยอดที่ต้องชำระ</span>
-                      {b.items && b.items.length > 0 && b.items.length <= 3 && (
-                        <button
-                          type="button"
-                          onClick={() => setViewingBillDetail({ bill: b, tenantName, roomNum })}
-                          className="text-[10px] text-indigo-600 hover:underline font-semibold cursor-pointer"
-                        >
-                          (ดูรายการ)
-                        </button>
-                      )}
+                      {(() => {
+                        const nonZeroItems = filterNonZeroBillItems(b.items);
+                        return nonZeroItems.length > 0 && nonZeroItems.length <= 3 && (
+                          <button
+                            type="button"
+                            onClick={() => setViewingBillDetail({ bill: b, tenantName, roomNum })}
+                            className="text-[10px] text-indigo-600 hover:underline font-semibold cursor-pointer"
+                          >
+                            (ดูรายการ)
+                          </button>
+                        );
+                      })()}
                     </div>
                     <span className="text-lg font-black text-slate-900">{formatBaht(amount)}</span>
                   </div>
@@ -2097,26 +2112,29 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {viewingBillDetail.bill.items && viewingBillDetail.bill.items.length > 0 ? (
-                    viewingBillDetail.bill.items.map((it: any, idx: number) => {
-                      const displayUnit = resolveBillingDisplayUnit({ unit: it.unit, type: it.type });
-                      return (
-                        <tr key={idx} className="hover:bg-slate-50/50">
-                          <td className="p-3 text-center text-slate-400 font-medium">{idx + 1}</td>
-                          <td className="p-3 font-semibold text-slate-800">{formatItemDescription(it.description || it.type || '-')}</td>
-                          <td className="p-3 text-center text-slate-600 font-medium">{formatBillingQuantity(it.quantity, displayUnit)}</td>
-                          <td className="p-3 text-right text-slate-600 font-medium">{formatBillingRate(it.unitPrice, displayUnit)}</td>
-                          <td className="p-3 text-right font-bold text-slate-900">{formatBaht(Number(it.amount))}</td>
-                        </tr>
-                      );
-                    })
-                  ) : (
-                    <tr>
-                      <td colSpan={5} className="p-4 text-center text-slate-400 font-semibold">
-                        ไม่พบรายละเอียดรายการย่อย
-                      </td>
-                    </tr>
-                  )}
+                  {(() => {
+                    const visibleItems = filterNonZeroBillItems(viewingBillDetail.bill.items);
+                    return visibleItems.length > 0 ? (
+                      visibleItems.map((it: any, idx: number) => {
+                        const displayUnit = resolveBillingDisplayUnit({ unit: it.unit, type: it.type });
+                        return (
+                          <tr key={idx} className="hover:bg-slate-50/50">
+                            <td className="p-3 text-center text-slate-400 font-medium">{idx + 1}</td>
+                            <td className="p-3 font-semibold text-slate-800">{formatItemDescription(it.description || it.type || '-')}</td>
+                            <td className="p-3 text-center text-slate-600 font-medium">{formatBillingQuantity(it.quantity, displayUnit)}</td>
+                            <td className="p-3 text-right text-slate-600 font-medium">{formatBillingRate(it.unitPrice, displayUnit)}</td>
+                            <td className="p-3 text-right font-bold text-slate-900">{formatBaht(Number(it.amount))}</td>
+                          </tr>
+                        );
+                      })
+                    ) : (
+                      <tr>
+                        <td colSpan={5} className="p-4 text-center text-slate-400 font-semibold">
+                          ไม่พบรายละเอียดรายการย่อย
+                        </td>
+                      </tr>
+                    );
+                  })()}
                 </tbody>
               </table>
             </div>

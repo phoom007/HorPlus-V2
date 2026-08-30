@@ -1375,7 +1375,7 @@ export async function seedLocal07Data() {
     { roomNum: '101', rent: 4500, wUnits: 10, wRate: 18, eUnits: 60, eRate: 7, common: 200, internet: 150, parking: 0, surcharge: 0, paid: true, rcpNum: 'RCP-202607-001' },
     { roomNum: '102', rent: 4500, wUnits: 10, wRate: 18, eUnits: 60, eRate: 7, common: 200, internet: 150, parking: 0, surcharge: 0, paid: false },
     { roomNum: '103', rent: 4500, wUnits: 8, wRate: 18, eUnits: 48, eRate: 7, common: 200, internet: 0, parking: 300, surcharge: 0, paid: true, rcpNum: 'RCP-202607-002' },
-    { roomNum: '104', rent: 4500, wUnits: 18, wRate: 18, eUnits: 120, eRate: 7, common: 200, internet: 0, parking: 0, surcharge: 600, paid: false },
+    { roomNum: '104', rent: 4500, wUnits: 18, wRate: 18, eUnits: 120, eRate: 7, common: 200, internet: 0, parking: 0, surcharge: 0, paid: false },
     { roomNum: '201', rent: 4800, wUnits: 12, wRate: 18, eUnits: 70, eRate: 7, common: 200, internet: 150, parking: 0, surcharge: 0, paid: true, rcpNum: 'RCP-202607-003' },
     { roomNum: '202', rent: 4800, wUnits: 10, wRate: 18, eUnits: 65, eRate: 7, common: 200, internet: 0, parking: 0, surcharge: 0, paid: true, rcpNum: 'RCP-202607-004' },
     { roomNum: '203', rent: 4800, wUnits: 12, wRate: 18, eUnits: 75, eRate: 7, common: 200, internet: 150, parking: 0, surcharge: 0, paid: false },
@@ -1414,22 +1414,19 @@ export async function seedLocal07Data() {
       },
     });
 
-    // Bill Items
+    // Bill Items with explicit units
     const items = [
-      { type: 'rent', description: `ค่าเช่าห้องพัก ${bf.roomNum}`, quantity: 1, unitPrice: bf.rent, amount: bf.rent },
-      { type: 'water', description: `ค่าน้ำ (${bf.wUnits} หน่วย @ ฿${bf.wRate})`, quantity: bf.wUnits, unitPrice: bf.wRate, amount: waterTotal },
-      { type: 'electric', description: `ค่าไฟฟ้า (${bf.eUnits} หน่วย @ ฿${bf.eRate})`, quantity: bf.eUnits, unitPrice: bf.eRate, amount: elecTotal },
-      { type: 'common', description: 'ค่าส่วนกลาง', quantity: 1, unitPrice: bf.common, amount: bf.common },
+      { type: 'rent', description: `ค่าเช่าห้องพัก ${bf.roomNum}`, quantity: 1, unit: 'month', unitPrice: bf.rent, amount: bf.rent },
+      { type: 'water', description: `ค่าน้ำ (${bf.wUnits} หน่วย @ ฿${bf.wRate})`, quantity: bf.wUnits, unit: 'unit', unitPrice: bf.wRate, amount: waterTotal },
+      { type: 'electric', description: `ค่าไฟฟ้า (${bf.eUnits} หน่วย @ ฿${bf.eRate})`, quantity: bf.eUnits, unit: 'unit', unitPrice: bf.eRate, amount: elecTotal },
+      { type: 'common', description: 'ค่าส่วนกลาง', quantity: 1, unit: 'room', unitPrice: bf.common, amount: bf.common },
     ];
 
     if (bf.internet > 0) {
-      items.push({ type: 'internet', description: 'ค่าอินเทอร์เน็ต', quantity: 1, unitPrice: bf.internet, amount: bf.internet });
+      items.push({ type: 'internet', description: 'ค่าอินเทอร์เน็ต', quantity: 1, unit: 'room', unitPrice: bf.internet, amount: bf.internet });
     }
     if (bf.parking > 0) {
-      items.push({ type: 'parking', description: 'ค่าที่จอดรถยนต์', quantity: 1, unitPrice: bf.parking, amount: bf.parking });
-    }
-    if (bf.surcharge > 0) {
-      items.push({ type: 'co_occupant_surcharge', description: 'ค่าบริการผู้พักอาศัยร่วมเกินกำหนด (3 ท่าน)', quantity: 3, unitPrice: 200, amount: bf.surcharge });
+      items.push({ type: 'parking', description: 'ค่าที่จอดรถยนต์', quantity: 1, unit: 'room', unitPrice: bf.parking, amount: bf.parking });
     }
 
     for (const it of items) {
@@ -1440,6 +1437,7 @@ export async function seedLocal07Data() {
           type: it.type,
           description: it.description,
           quantity: it.quantity,
+          unit: it.unit,
           unitPrice: it.unitPrice,
           amount: it.amount,
         },
@@ -1509,6 +1507,7 @@ export async function seedLocal07Data() {
       type: 'deposit',
       description: 'เงินประกันสัญญาเช่า 101',
       quantity: 1,
+      unit: 'room',
       unitPrice: 4500,
       amount: 4500,
     },
@@ -1557,7 +1556,7 @@ export async function seedLocal07Data() {
         roomNumber: '101',
         tenantName: createdTenants['101'].displayName,
         totalAmount: 4500.0,
-        items: [{ type: 'deposit', description: 'เงินประกันสัญญาเช่า 101', amount: 4500 }],
+        items: [{ type: 'deposit', description: 'เงินประกันสัญญาเช่า 101', unit: 'room', quantity: 1, unitPrice: 4500, amount: 4500 }],
       },
       issuedAt: new Date('2026-07-05T14:35:00Z'),
       isVoided: false,
@@ -1590,6 +1589,7 @@ export async function seedLocal07Data() {
       type: 'deposit',
       description: 'เงินประกันสัญญาเช่า 102',
       quantity: 1,
+      unit: 'room',
       unitPrice: 4500,
       amount: 4500,
     },
@@ -1621,6 +1621,7 @@ export async function seedLocal07Data() {
       type: 'deposit',
       description: 'เงินประกันสัญญาเช่า 103',
       quantity: 1,
+      unit: 'room',
       unitPrice: 4500,
       amount: 4500,
     },
@@ -1652,6 +1653,7 @@ export async function seedLocal07Data() {
       type: 'deposit',
       description: 'เงินประกันสัญญาเช่า 201',
       quantity: 1,
+      unit: 'room',
       unitPrice: 4800,
       amount: 4800,
     },
@@ -1683,6 +1685,7 @@ export async function seedLocal07Data() {
       type: 'deposit',
       description: 'เงินประกันสัญญาเช่า 203',
       quantity: 1,
+      unit: 'room',
       unitPrice: 4800,
       amount: 4800,
     },
@@ -1722,11 +1725,11 @@ export async function seedLocal07Data() {
   });
 
   const bill101AugItems = [
-    { type: 'water', description: 'ค่าน้ำ (11 หน่วย @ ฿18)', quantity: 11, unitPrice: 18, amount: 198 },
-    { type: 'electric', description: 'ค่าไฟฟ้า (60 หน่วย @ ฿7)', quantity: 60, unitPrice: 7, amount: 420 },
-    { type: 'common', description: 'ค่าส่วนกลาง', quantity: 1, unitPrice: 200, amount: 200 },
-    { type: 'internet', description: 'ค่าอินเทอร์เน็ต', quantity: 1, unitPrice: 150, amount: 150 },
-    { type: 'parking', description: 'ค่าที่จอดรถ', quantity: 1, unitPrice: 300, amount: 300 },
+    { type: 'water', description: 'ค่าน้ำ (11 หน่วย @ ฿18)', quantity: 11, unit: 'unit', unitPrice: 18, amount: 198 },
+    { type: 'electric', description: 'ค่าไฟฟ้า (60 หน่วย @ ฿7)', quantity: 60, unit: 'unit', unitPrice: 7, amount: 420 },
+    { type: 'common', description: 'ค่าส่วนกลาง', quantity: 1, unit: 'room', unitPrice: 200, amount: 200 },
+    { type: 'internet', description: 'ค่าอินเทอร์เน็ต', quantity: 1, unit: 'room', unitPrice: 150, amount: 150 },
+    { type: 'parking', description: 'ค่าที่จอดรถ', quantity: 1, unit: 'room', unitPrice: 300, amount: 300 },
   ];
   for (const it of bill101AugItems) {
     await prisma.billItem.create({
@@ -1736,11 +1739,93 @@ export async function seedLocal07Data() {
         type: it.type,
         description: it.description,
         quantity: it.quantity,
+        unit: it.unit,
         unitPrice: it.unitPrice,
         amount: it.amount,
       },
     });
   }
+
+  // Room 102 August Utility Bill: ฿830 (unpaid) -> will have Pending Slip #2
+  const bill102Aug = await prisma.bill.create({
+    data: {
+      dormitoryId: compDorm.id,
+      billingCycleId: cycleAug.id,
+      roomId: createdRooms['102'].id,
+      tenantId: createdTenants['102'].id,
+      contractId: createdContracts['102']?.id || null,
+      billNumber: 'INV-202608-102-U',
+      billKind: 'MONTHLY_UTILITY',
+      billingDate: new Date('2026-08-25'),
+      dueDate: new Date('2026-09-05'),
+      subtotal: 830.0,
+      totalAmount: 830.0,
+      paidAmount: 0.0,
+      outstandingAmount: 830.0,
+      status: 'unpaid',
+    },
+  });
+  const bill102AugItems = [
+    { type: 'water', description: 'ค่าน้ำ (8 หน่วย @ ฿18)', quantity: 8, unit: 'unit', unitPrice: 18, amount: 144 },
+    { type: 'electric', description: 'ค่าไฟฟ้า (48 หน่วย @ ฿7)', quantity: 48, unit: 'unit', unitPrice: 7, amount: 336 },
+    { type: 'common', description: 'ค่าส่วนกลาง', quantity: 1, unit: 'room', unitPrice: 200, amount: 200 },
+    { type: 'internet', description: 'ค่าอินเทอร์เน็ต', quantity: 1, unit: 'room', unitPrice: 150, amount: 150 },
+  ];
+  for (const it of bill102AugItems) {
+    await prisma.billItem.create({
+      data: {
+        dormitoryId: compDorm.id,
+        billId: bill102Aug.id,
+        type: it.type,
+        description: it.description,
+        quantity: it.quantity,
+        unit: it.unit,
+        unitPrice: it.unitPrice,
+        amount: it.amount,
+      },
+    });
+  }
+
+  // Room 103 August Utility Bill: ฿1,030 (unpaid) -> will have Rejected Slip #1
+  const bill103Aug = await prisma.bill.create({
+    data: {
+      dormitoryId: compDorm.id,
+      billingCycleId: cycleAug.id,
+      roomId: createdRooms['103'].id,
+      tenantId: createdTenants['103'].id,
+      contractId: createdContracts['103']?.id || null,
+      billNumber: 'INV-202608-103-U',
+      billKind: 'MONTHLY_UTILITY',
+      billingDate: new Date('2026-08-25'),
+      dueDate: new Date('2026-09-05'),
+      subtotal: 1030.0,
+      totalAmount: 1030.0,
+      paidAmount: 0.0,
+      outstandingAmount: 1030.0,
+      status: 'unpaid',
+    },
+  });
+  const bill103AugItems = [
+    { type: 'water', description: 'ค่าน้ำ (10 หน่วย @ ฿18)', quantity: 10, unit: 'unit', unitPrice: 18, amount: 180 },
+    { type: 'electric', description: 'ค่าไฟฟ้า (50 หน่วย @ ฿7)', quantity: 50, unit: 'unit', unitPrice: 7, amount: 350 },
+    { type: 'common', description: 'ค่าส่วนกลาง', quantity: 1, unit: 'room', unitPrice: 200, amount: 200 },
+    { type: 'parking', description: 'ค่าที่จอดรถยนต์', quantity: 1, unit: 'room', unitPrice: 300, amount: 300 },
+  ];
+  for (const it of bill103AugItems) {
+    await prisma.billItem.create({
+      data: {
+        dormitoryId: compDorm.id,
+        billId: bill103Aug.id,
+        type: it.type,
+        description: it.description,
+        quantity: it.quantity,
+        unit: it.unit,
+        unitPrice: it.unitPrice,
+        amount: it.amount,
+      },
+    });
+  }
+
   // Room 203 August Rent PARTIAL (total ฿4,800, paid ฿2,000, outstanding ฿2,800)
   const bill203Rent = await prisma.bill.create({
     data: {
@@ -1767,15 +1852,13 @@ export async function seedLocal07Data() {
       type: 'rent',
       description: 'ค่าเช่าห้องพัก 203 (ชำระบางส่วน)',
       quantity: 1,
+      unit: 'month',
       unitPrice: 4800,
       amount: 4800,
     },
   });
 
-
-
-
-  // 2 Components: Room 201 (RENT unpaid ฿4,800 + DEPOSIT paid ฿4,800)
+  // Room 201 Rent
   const bill201Rent = await prisma.bill.create({
     data: {
       dormitoryId: compDorm.id,
@@ -1801,14 +1884,13 @@ export async function seedLocal07Data() {
       type: 'rent',
       description: 'ค่าเช่าห้องพัก 201',
       quantity: 1,
+      unit: 'month',
       unitPrice: 4800,
       amount: 4800,
     },
   });
 
-// Note: Room 201 deposit is paid in July (INV-202607-201-D) and inherited across lifecycle
-
-  // Ambiguous Legacy Combined Partial: Room 104 in August 2026 (RENT 4800 + DEPOSIT 4800 + UTILITY 1000 = 10600, paid 3000, partial without line allocations)
+  // Ambiguous Legacy Combined Partial: Room 104 in August 2026
   const bill104Combined = await prisma.bill.create({
     data: {
       dormitoryId: compDorm.id,
@@ -1829,13 +1911,13 @@ export async function seedLocal07Data() {
   });
   await prisma.billItem.createMany({
     data: [
-      { dormitoryId: compDorm.id, billId: bill104Combined.id, type: 'rent', description: 'ค่าเช่าห้องพัก 104', quantity: 1, unitPrice: 4800, amount: 4800 },
-      { dormitoryId: compDorm.id, billId: bill104Combined.id, type: 'deposit', description: 'เงินประกันห้องพัก 104', quantity: 1, unitPrice: 4800, amount: 4800 },
-      { dormitoryId: compDorm.id, billId: bill104Combined.id, type: 'electric', description: 'ค่าไฟฟ้าส่วนกลาง 104', quantity: 1, unitPrice: 1000, amount: 1000 },
+      { dormitoryId: compDorm.id, billId: bill104Combined.id, type: 'rent', description: 'ค่าเช่าห้องพัก 104', quantity: 1, unit: 'month', unitPrice: 4800, amount: 4800 },
+      { dormitoryId: compDorm.id, billId: bill104Combined.id, type: 'deposit', description: 'เงินประกันห้องพัก 104', quantity: 1, unit: 'room', unitPrice: 4800, amount: 4800 },
+      { dormitoryId: compDorm.id, billId: bill104Combined.id, type: 'electric', description: 'ค่าไฟฟ้าส่วนกลาง 104', quantity: 1, unit: 'unit', unitPrice: 1000, amount: 1000 },
     ],
   });
 
-  // 3 Components: Room 202 (RENT unpaid ฿4,800 + DEPOSIT paid ฿4,800 + MONTHLY_UTILITY unpaid ฿1,200)
+  // 3 Components: Room 202 (RENT unpaid + DEPOSIT paid + MONTHLY_UTILITY unpaid)
   const bill202Rent = await prisma.bill.create({
     data: {
       dormitoryId: compDorm.id,
@@ -1861,6 +1943,7 @@ export async function seedLocal07Data() {
       type: 'rent',
       description: 'ค่าเช่าห้องพัก 202',
       quantity: 1,
+      unit: 'month',
       unitPrice: 4800,
       amount: 4800,
     },
@@ -1892,6 +1975,7 @@ export async function seedLocal07Data() {
       type: 'deposit',
       description: 'เงินประกันสัญญาเช่า 202',
       quantity: 1,
+      unit: 'room',
       unitPrice: 4800,
       amount: 4800,
     },
@@ -1938,7 +2022,7 @@ export async function seedLocal07Data() {
         roomNumber: '202',
         tenantName: createdTenants['202'].displayName,
         totalAmount: 4800.0,
-        items: [{ type: 'deposit', description: 'เงินประกันสัญญาเช่า 202', amount: 4800 }],
+        items: [{ type: 'deposit', description: 'เงินประกันสัญญาเช่า 202', unit: 'room', quantity: 1, unitPrice: 4800, amount: 4800 }],
       },
       issuedAt: new Date('2026-08-25T10:05:00Z'),
       isVoided: false,
@@ -1962,11 +2046,10 @@ export async function seedLocal07Data() {
       status: 'unpaid',
     },
   });
-
   const bill202UtilItems = [
-    { type: 'water', description: 'ค่าน้ำ (5 หน่วย @ ฿18)', quantity: 5, unitPrice: 18, amount: 90 },
-    { type: 'electric', description: 'ค่าไฟฟ้า (130 หน่วย @ ฿7)', quantity: 130, unitPrice: 7, amount: 910 },
-    { type: 'common', description: 'ค่าส่วนกลาง', quantity: 1, unitPrice: 200, amount: 200 },
+    { type: 'water', description: 'ค่าน้ำ (5 หน่วย @ ฿18)', quantity: 5, unit: 'unit', unitPrice: 18, amount: 90 },
+    { type: 'electric', description: 'ค่าไฟฟ้า (130 หน่วย @ ฿7)', quantity: 130, unit: 'unit', unitPrice: 7, amount: 910 },
+    { type: 'common', description: 'ค่าส่วนกลาง', quantity: 1, unit: 'room', unitPrice: 200, amount: 200 },
   ];
   for (const it of bill202UtilItems) {
     await prisma.billItem.create({
@@ -1976,20 +2059,173 @@ export async function seedLocal07Data() {
         type: it.type,
         description: it.description,
         quantity: it.quantity,
+        unit: it.unit,
         unitPrice: it.unitPrice,
         amount: it.amount,
       },
     });
   }
 
-  // =========================================================================
-  // R3.8c DETERMINISTIC UAT FIXTURE — MANUAL-UNVERIFIED COMBINED SLIP (Room 302)
-  // Tenant: ธนากร สุขใจ (Room 302)
-  // July 2026 Monthly Bill: ฿4,000 unpaid
-  // August 2026 Monthly Bill: ฿5,000 unpaid
-  // Combined Slip: ฿6,500 submitted for review (July: ฿4,000, August: ฿2,500)
-  // Verification: UNVERIFIED, provider: NONE, claimedTransferAt: 2026-08-28 14:30
-  // =========================================================================
+  // Room 301 August Utility: ฿1,312 (unpaid)
+  const bill301Aug = await prisma.bill.create({
+    data: {
+      dormitoryId: compDorm.id,
+      billingCycleId: cycleAug.id,
+      roomId: createdRooms['301'].id,
+      tenantId: createdTenants['301'].id,
+      contractId: createdContracts['301']?.id || null,
+      billNumber: 'INV-202608-301-U',
+      billKind: 'MONTHLY_UTILITY',
+      billingDate: new Date('2026-08-25'),
+      dueDate: new Date('2026-09-05'),
+      subtotal: 1312.0,
+      totalAmount: 1312.0,
+      paidAmount: 0.0,
+      outstandingAmount: 1312.0,
+      status: 'unpaid',
+    },
+  });
+  const bill301AugItems = [
+    { type: 'water', description: 'ค่าน้ำ (14 หน่วย @ ฿18)', quantity: 14, unit: 'unit', unitPrice: 18, amount: 252 },
+    { type: 'electric', description: 'ค่าไฟฟ้า (80 หน่วย @ ฿7)', quantity: 80, unit: 'unit', unitPrice: 7, amount: 560 },
+    { type: 'common', description: 'ค่าส่วนกลาง', quantity: 1, unit: 'room', unitPrice: 200, amount: 200 },
+    { type: 'parking', description: 'ค่าที่จอดรถยนต์', quantity: 1, unit: 'room', unitPrice: 300, amount: 300 },
+  ];
+  for (const it of bill301AugItems) {
+    await prisma.billItem.create({
+      data: {
+        dormitoryId: compDorm.id,
+        billId: bill301Aug.id,
+        type: it.type,
+        description: it.description,
+        quantity: it.quantity,
+        unit: it.unit,
+        unitPrice: it.unitPrice,
+        amount: it.amount,
+      },
+    });
+  }
+
+  // Room 303 August Utility: ฿1,161 (unpaid)
+  const bill303Aug = await prisma.bill.create({
+    data: {
+      dormitoryId: compDorm.id,
+      billingCycleId: cycleAug.id,
+      roomId: createdRooms['303'].id,
+      tenantId: createdTenants['303'].id,
+      contractId: createdContracts['303']?.id || null,
+      billNumber: 'INV-202608-303-U',
+      billKind: 'MONTHLY_UTILITY',
+      billingDate: new Date('2026-08-25'),
+      dueDate: new Date('2026-09-05'),
+      subtotal: 1161.0,
+      totalAmount: 1161.0,
+      paidAmount: 0.0,
+      outstandingAmount: 1161.0,
+      status: 'unpaid',
+    },
+  });
+  const bill303AugItems = [
+    { type: 'water', description: 'ค่าน้ำ (12 หน่วย @ ฿18)', quantity: 12, unit: 'unit', unitPrice: 18, amount: 216 },
+    { type: 'electric', description: 'ค่าไฟฟ้า (85 หน่วย @ ฿7)', quantity: 85, unit: 'unit', unitPrice: 7, amount: 595 },
+    { type: 'common', description: 'ค่าส่วนกลาง', quantity: 1, unit: 'room', unitPrice: 200, amount: 200 },
+    { type: 'internet', description: 'ค่าอินเทอร์เน็ต', quantity: 1, unit: 'room', unitPrice: 150, amount: 150 },
+  ];
+  for (const it of bill303AugItems) {
+    await prisma.billItem.create({
+      data: {
+        dormitoryId: compDorm.id,
+        billId: bill303Aug.id,
+        type: it.type,
+        description: it.description,
+        quantity: it.quantity,
+        unit: it.unit,
+        unitPrice: it.unitPrice,
+        amount: it.amount,
+      },
+    });
+  }
+
+  // Room B101 August Utility: ฿1,600 (PAID with Receipt)
+  const billB101Aug = await prisma.bill.create({
+    data: {
+      dormitoryId: compDorm.id,
+      billingCycleId: cycleAug.id,
+      roomId: createdRooms['B101'].id,
+      tenantId: createdTenants['B101'].id,
+      contractId: createdContracts['B101']?.id || null,
+      billNumber: 'INV-202608-B101-U',
+      billKind: 'MONTHLY_UTILITY',
+      billingDate: new Date('2026-08-25'),
+      dueDate: new Date('2026-09-05'),
+      subtotal: 1600.0,
+      totalAmount: 1600.0,
+      paidAmount: 1600.0,
+      outstandingAmount: 0.0,
+      status: 'paid',
+      paidAt: new Date('2026-08-26T11:00:00Z'),
+    },
+  });
+  const billB101AugItems = [
+    { type: 'water', description: 'ค่าน้ำ (15 หน่วย @ ฿20)', quantity: 15, unit: 'unit', unitPrice: 20, amount: 300 },
+    { type: 'electric', description: 'ค่าไฟฟ้า (100 หน่วย @ ฿8)', quantity: 100, unit: 'unit', unitPrice: 8, amount: 800 },
+    { type: 'common', description: 'ค่าส่วนกลาง', quantity: 1, unit: 'room', unitPrice: 200, amount: 200 },
+    { type: 'parking', description: 'ค่าที่จอดรถ', quantity: 1, unit: 'room', unitPrice: 300, amount: 300 },
+  ];
+  for (const it of billB101AugItems) {
+    await prisma.billItem.create({
+      data: {
+        dormitoryId: compDorm.id,
+        billId: billB101Aug.id,
+        type: it.type,
+        description: it.description,
+        quantity: it.quantity,
+        unit: it.unit,
+        unitPrice: it.unitPrice,
+        amount: it.amount,
+      },
+    });
+  }
+  const payB101Aug = await prisma.payment.create({
+    data: {
+      dormitoryId: compDorm.id,
+      billId: billB101Aug.id,
+      tenantId: createdTenants['B101'].id,
+      amount: 1600.0,
+      method: 'promptpay',
+      status: 'APPROVED',
+      paymentDate: new Date('2026-08-26T11:00:00Z'),
+    },
+  });
+  await prisma.paymentStatusHistory.create({
+    data: {
+      dormitoryId: compDorm.id,
+      paymentId: payB101Aug.id,
+      fromStatus: null,
+      toStatus: 'APPROVED',
+      changedByUserId: COMP_DORM.owner.id,
+      createdAt: new Date('2026-08-26T11:00:00Z'),
+    },
+  });
+  await prisma.receipt.create({
+    data: {
+      dormitoryId: compDorm.id,
+      billId: billB101Aug.id,
+      paymentId: payB101Aug.id,
+      receiptNumber: 'RCP-202608-B101-U',
+      snapshotData: {
+        billNumber: billB101Aug.billNumber,
+        roomNumber: 'B101',
+        tenantName: createdTenants['B101'].displayName,
+        totalAmount: 1600.0,
+        items: billB101AugItems,
+      },
+      issuedAt: new Date('2026-08-26T11:05:00Z'),
+      isVoided: false,
+    },
+  });
+
+  // Room 302 August Rent Bill
   const bill302Aug = await prisma.bill.create({
     data: {
       dormitoryId: compDorm.id,
@@ -2015,6 +2251,7 @@ export async function seedLocal07Data() {
       type: 'rent',
       description: 'ค่าเช่าห้องพัก 302 (ส.ค. 2569)',
       quantity: 1,
+      unit: 'month',
       unitPrice: 5000,
       amount: 5000,
     },
@@ -2130,7 +2367,7 @@ export async function seedLocal07Data() {
           paymentDate: priorPaymentDate.toISOString(),
           receiverName: COMP_DORM.owner.name,
           items: [
-            { description: 'ค่าเช่าห้องพัก 302 (ก.ค. 2569) — ชำระบางส่วน', amount: 2100.0 },
+            { description: 'ค่าเช่าห้องพัก 302 (ก.ค. 2569) — ชำระบางส่วน', unit: 'month', quantity: 1, unitPrice: 2100, amount: 2100.0 },
           ],
         },
         issuedByUserId: COMP_DORM.owner.id,
@@ -2151,7 +2388,7 @@ export async function seedLocal07Data() {
     bill302July.paidAmount = 2100.0;
     bill302July.status = 'PARTIALLY_PAID';
 
-    // 1. Create CombinedPaymentGroup (6,500 total, UNDER_REVIEW)
+    // 1. Pending Slip #1 (รอตรวจสลิป #1): Room 302 Combined Slip (6,500 total, UNDER_REVIEW)
     const uatSlipGroup = await prisma.combinedPaymentGroup.create({
       data: {
         dormitoryId: compDorm.id,
@@ -2164,7 +2401,7 @@ export async function seedLocal07Data() {
       },
     });
 
-    // 2. Create GroupBillTargets
+    // GroupBillTargets
     await prisma.combinedPaymentGroupBillTarget.create({
       data: {
         dormitoryId: compDorm.id,
@@ -2182,24 +2419,22 @@ export async function seedLocal07Data() {
       },
     });
 
-    // 3. Create Child Payments (SUM == 6,500)
-    // July allocation: ฿4,000 (or up to July outstanding)
+    // Child Payments (SUM == 6,500)
     const julyAlloc = Math.min(4000, Number(bill302July.outstandingAmount || bill302July.totalAmount));
     const augAlloc = 6500 - julyAlloc;
 
-    // Create deterministic synthetic test slip file for Room 302 UAT via canonical storage authority
-    const slipObjectKey = 'fixtures/slips/local-uat-test-slip-room302.png';
-    const syntheticPng = await generateSyntheticSlipPng({
+    const slip302Key = 'fixtures/slips/local-uat-test-slip-room302.png';
+    const synthetic302Png = await generateSyntheticSlipPng({
       roomNumber: 'ROOM 302',
       amount: 6500,
       claimedDate: '2026-08-28 14:30',
       status: 'UNVERIFIED',
       title: 'LOCAL UAT TEST SLIP',
-      subtitle: 'NOT REAL',
+      subtitle: 'NOT REAL (ก.ค. + ส.ค.)',
     });
-    await localStorageProvider.saveFile(slipObjectKey, syntheticPng);
+    await localStorageProvider.saveFile(slip302Key, synthetic302Png);
 
-    const payJuly = await prisma.payment.create({
+    await prisma.payment.create({
       data: {
         dormitoryId: compDorm.id,
         billId: bill302July.id,
@@ -2209,12 +2444,12 @@ export async function seedLocal07Data() {
         amount: julyAlloc,
         status: 'UNDER_REVIEW',
         paymentDate: new Date('2026-08-28T14:30:00Z'),
-        evidenceUrl: 'fixtures/slips/local-uat-test-slip-room302.png',
+        evidenceUrl: slip302Key,
         fileHash: 'local-uat-fake-hash-room302-july',
       },
     });
 
-    const payAug = await prisma.payment.create({
+    await prisma.payment.create({
       data: {
         dormitoryId: compDorm.id,
         billId: bill302Aug.id,
@@ -2224,12 +2459,11 @@ export async function seedLocal07Data() {
         amount: augAlloc,
         status: 'UNDER_REVIEW',
         paymentDate: new Date('2026-08-28T14:30:00Z'),
-        evidenceUrl: 'fixtures/slips/local-uat-test-slip-room302.png',
+        evidenceUrl: slip302Key,
         fileHash: 'local-uat-fake-hash-room302-aug',
       },
     });
 
-    // 4. Create PaymentEvidenceVerification (UNVERIFIED, provider: NONE, verifiedTransferAt: NULL)
     await prisma.paymentEvidenceVerification.create({
       data: {
         dormitoryId: compDorm.id,
@@ -2243,6 +2477,141 @@ export async function seedLocal07Data() {
       },
     });
   }
+
+  // 2. Pending Slip #2 (รอตรวจสลิป #2): Room 102 Single Bill Slip (฿830, UNDER_REVIEW)
+  const slip102Key = 'fixtures/slips/local-uat-test-slip-room102.png';
+  const synthetic102Png = await generateSyntheticSlipPng({
+    roomNumber: 'ROOM 102',
+    amount: 830,
+    claimedDate: '2026-08-28 15:00',
+    status: 'UNVERIFIED',
+    title: 'LOCAL UAT TEST SLIP',
+    subtitle: 'ROOM 102 UTILITY',
+  });
+  await localStorageProvider.saveFile(slip102Key, synthetic102Png);
+
+  const pay102Aug = await prisma.payment.create({
+    data: {
+      dormitoryId: compDorm.id,
+      billId: bill102Aug.id,
+      tenantId: createdTenants['102'].id,
+      method: 'BANK_TRANSFER',
+      amount: 830.0,
+      status: 'UNDER_REVIEW',
+      paymentDate: new Date('2026-08-28T15:00:00Z'),
+      evidenceUrl: slip102Key,
+      fileHash: 'local-uat-fake-hash-room102-aug',
+    },
+  });
+  await prisma.paymentEvidenceVerification.create({
+    data: {
+      dormitoryId: compDorm.id,
+      paymentId: pay102Aug.id,
+      provider: 'NONE',
+      status: 'UNVERIFIED',
+      claimedTransferAt: new Date('2026-08-28T15:00:00Z'),
+      verifiedTransferAt: null,
+      verifiedAmount: null,
+    },
+  });
+
+  // 3. Rejected Slip #1 (สลิปผิดพลาด #1): Room 103 August Utility (Bill ฿1,030, transferred ฿1,000)
+  const slip103Key = 'fixtures/slips/local-uat-test-slip-room103.png';
+  const synthetic103Png = await generateSyntheticSlipPng({
+    roomNumber: 'ROOM 103',
+    amount: 1000,
+    claimedDate: '2026-08-27 11:00',
+    status: 'REJECTED',
+    title: 'LOCAL UAT TEST SLIP',
+    subtitle: 'AMOUNT MISMATCH (1000 vs 1030)',
+  });
+  await localStorageProvider.saveFile(slip103Key, synthetic103Png);
+
+  const pay103Aug = await prisma.payment.create({
+    data: {
+      dormitoryId: compDorm.id,
+      billId: bill103Aug.id,
+      tenantId: createdTenants['103'].id,
+      method: 'BANK_TRANSFER',
+      amount: 1000.0,
+      status: 'REJECTED',
+      rejectedReason: 'ยอดเงินโอนไม่ตรงกับยอดแจ้งหนี้',
+      paymentDate: new Date('2026-08-27T11:00:00Z'),
+      reviewedAt: new Date('2026-08-27T12:00:00Z'),
+      reviewedByUserId: COMP_DORM.owner.id,
+      evidenceUrl: slip103Key,
+      fileHash: 'local-uat-fake-hash-room103-aug',
+    },
+  });
+  await prisma.paymentStatusHistory.create({
+    data: {
+      dormitoryId: compDorm.id,
+      paymentId: pay103Aug.id,
+      fromStatus: 'UNDER_REVIEW',
+      toStatus: 'REJECTED',
+      reason: 'ยอดเงินโอนไม่ตรงกับยอดแจ้งหนี้',
+      changedByUserId: COMP_DORM.owner.id,
+      effectiveAt: new Date('2026-08-27T12:00:00Z'),
+    },
+  });
+  await prisma.paymentEvidenceVerification.create({
+    data: {
+      dormitoryId: compDorm.id,
+      paymentId: pay103Aug.id,
+      provider: 'NONE',
+      status: 'REJECTED',
+      claimedTransferAt: new Date('2026-08-27T11:00:00Z'),
+    },
+  });
+
+  // 4. Rejected Slip #2 (สลิปผิดพลาด #2): Room 202 August Utility (Bill ฿1,200, Duplicate / Unmatched transaction)
+  const slip202Key = 'fixtures/slips/local-uat-test-slip-room202.png';
+  const synthetic202Png = await generateSyntheticSlipPng({
+    roomNumber: 'ROOM 202',
+    amount: 1200,
+    claimedDate: '2026-08-27 16:00',
+    status: 'REJECTED',
+    title: 'LOCAL UAT TEST SLIP',
+    subtitle: 'DUPLICATE / UNFOUND TX',
+  });
+  await localStorageProvider.saveFile(slip202Key, synthetic202Png);
+
+  const pay202UtilRejected = await prisma.payment.create({
+    data: {
+      dormitoryId: compDorm.id,
+      billId: bill202Util.id,
+      tenantId: createdTenants['202'].id,
+      method: 'BANK_TRANSFER',
+      amount: 1200.0,
+      status: 'REJECTED',
+      rejectedReason: 'สลิปซ้ำ / ไม่พบยอดเงินเข้าบัญชี',
+      paymentDate: new Date('2026-08-27T16:00:00Z'),
+      reviewedAt: new Date('2026-08-27T17:00:00Z'),
+      reviewedByUserId: COMP_DORM.owner.id,
+      evidenceUrl: slip202Key,
+      fileHash: 'local-uat-fake-hash-room202-aug-rejected',
+    },
+  });
+  await prisma.paymentStatusHistory.create({
+    data: {
+      dormitoryId: compDorm.id,
+      paymentId: pay202UtilRejected.id,
+      fromStatus: 'UNDER_REVIEW',
+      toStatus: 'REJECTED',
+      reason: 'สลิปซ้ำ / ไม่พบยอดเงินเข้าบัญชี',
+      changedByUserId: COMP_DORM.owner.id,
+      effectiveAt: new Date('2026-08-27T17:00:00Z'),
+    },
+  });
+  await prisma.paymentEvidenceVerification.create({
+    data: {
+      dormitoryId: compDorm.id,
+      paymentId: pay202UtilRejected.id,
+      provider: 'NONE',
+      status: 'REJECTED',
+      claimedTransferAt: new Date('2026-08-27T16:00:00Z'),
+    },
+  });
 
   // Seed sample Tenant Registration Request (Pending) with acceptance snapshot & signature
   const room102 = await prisma.room.findFirst({
