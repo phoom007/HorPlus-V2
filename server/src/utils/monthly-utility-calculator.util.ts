@@ -20,6 +20,8 @@ import {
   isZeroDecimal,
 } from './decimal-math.util.js';
 import { calculateMeterUsageUnits, MeterUsageResult } from './meter-billing-calculator.util.js';
+import { CanonicalTierRecord, validateCanonicalUtilityTiers } from './utility-tier-validator.util.js';
+import { calculateProgressiveTieredCharge } from './progressive-tier-calculator.util.js';
 import { toBangkokDateString } from './calendar-date.util.js';
 
 export const LATE_FEE_GRACE_DAYS = 2;
@@ -50,8 +52,10 @@ export function calculateChargeableOverdueDays(dueDate: Date | string, asOfDate?
 export interface CanonicalRateSnapshotInput {
   waterBillingType?: string | null;
   waterRate?: string | number | null;
+  waterTierRates?: CanonicalTierRecord[] | null;
   electricityBillingType?: string | null;
   electricityRate?: string | number | null;
+  electricityTierRates?: CanonicalTierRecord[] | null;
   commonFeeMode?: string | null;
   commonFee?: string | number | null;
   internetFeeMode?: string | null;
@@ -257,6 +261,59 @@ export function calculateCanonicalMonthlyUtility(
         metadata: { mode: 'fixed' },
       });
     }
+  } else if (waterMode === 'tiered') {
+    const prevRaw = cleanReadingInput(waterReading?.previousReading);
+    const currRaw = cleanReadingInput(waterReading?.currentReading);
+    const hasPrev = prevRaw !== undefined && prevRaw !== null && String(prevRaw).trim() !== '';
+    const hasCurr = currRaw !== undefined && currRaw !== null && String(currRaw).trim() !== '';
+
+    if (!hasPrev || !hasCurr) {
+      const err = new Error('MISSING_WATER_METER_READING: กรุณากรอกเลขมิเตอร์น้ำของงวดนี้ก่อนออกบิล');
+      (err as any).statusCode = 400;
+      (err as any).code = 'MISSING_WATER_METER_READING';
+      throw err;
+    }
+
+    const usageRes = calculateMeterUsageUnits(prevRaw, currRaw);
+    if (!usageRes.isValid) {
+      const err = new Error(usageRes.errorMessage || 'ค่ามิเตอร์น้ำไม่ถูกต้อง');
+      (err as any).statusCode = 400;
+      (err as any).code = usageRes.errorCode || 'INVALID_METER_READING';
+      throw err;
+    }
+
+    if (!rateSnapshot.waterTierRates || !Array.isArray(rateSnapshot.waterTierRates) || rateSnapshot.waterTierRates.length === 0) {
+      const err = new Error("INVALID_TIER_CONFIGURATION: Water billing mode is 'tiered' but no tier configuration was provided");
+      (err as any).statusCode = 400;
+      (err as any).code = 'INVALID_TIER_CONFIGURATION';
+      throw err;
+    }
+
+    const validatedTiers = validateCanonicalUtilityTiers(rateSnapshot.waterTierRates);
+    const progRes = calculateProgressiveTieredCharge({
+      usageUnits: usageRes.usageUnits.toString(),
+      tiers: validatedTiers,
+    });
+
+    waterUsageStr = progRes.usageUnits;
+    waterAmountStr = progRes.totalAmount;
+    items.push({
+      type: 'water',
+      description: `ค่าน้ำ (${prevRaw} - ${currRaw})`,
+      quantity: waterUsageStr,
+      unit: 'unit',
+      unitPrice: '0.00',
+      amount: waterAmountStr,
+      metadata: {
+        previousReading: String(prevRaw),
+        currentReading: String(currRaw),
+        usageUnits: waterUsageStr,
+        mode: 'tiered',
+        isRollover: usageRes.isRollover,
+        rolloverType: usageRes.rolloverType,
+        tierBreakdown: progRes.tierBreakdown,
+      },
+    });
   }
 
   // 2. Electricity Calculation
@@ -339,6 +396,59 @@ export function calculateCanonicalMonthlyUtility(
         metadata: { mode: 'fixed' },
       });
     }
+  } else if (elecMode === 'tiered') {
+    const prevRaw = cleanReadingInput(electricReading?.previousReading);
+    const currRaw = cleanReadingInput(electricReading?.currentReading);
+    const hasPrev = prevRaw !== undefined && prevRaw !== null && String(prevRaw).trim() !== '';
+    const hasCurr = currRaw !== undefined && currRaw !== null && String(currRaw).trim() !== '';
+
+    if (!hasPrev || !hasCurr) {
+      const err = new Error('MISSING_ELECTRICITY_METER_READING: กรุณากรอกเลขมิเตอร์ไฟฟ้าของงวดนี้ก่อนออกบิล');
+      (err as any).statusCode = 400;
+      (err as any).code = 'MISSING_ELECTRICITY_METER_READING';
+      throw err;
+    }
+
+    const usageRes = calculateMeterUsageUnits(prevRaw, currRaw);
+    if (!usageRes.isValid) {
+      const err = new Error(usageRes.errorMessage || 'ค่ามิเตอร์ไฟฟ้าไม่ถูกต้อง');
+      (err as any).statusCode = 400;
+      (err as any).code = usageRes.errorCode || 'INVALID_METER_READING';
+      throw err;
+    }
+
+    if (!rateSnapshot.electricityTierRates || !Array.isArray(rateSnapshot.electricityTierRates) || rateSnapshot.electricityTierRates.length === 0) {
+      const err = new Error("INVALID_TIER_CONFIGURATION: Electricity billing mode is 'tiered' but no tier configuration was provided");
+      (err as any).statusCode = 400;
+      (err as any).code = 'INVALID_TIER_CONFIGURATION';
+      throw err;
+    }
+
+    const validatedTiers = validateCanonicalUtilityTiers(rateSnapshot.electricityTierRates);
+    const progRes = calculateProgressiveTieredCharge({
+      usageUnits: usageRes.usageUnits.toString(),
+      tiers: validatedTiers,
+    });
+
+    elecUsageStr = progRes.usageUnits;
+    elecAmountStr = progRes.totalAmount;
+    items.push({
+      type: 'electricity',
+      description: `ค่าไฟฟ้า (${prevRaw} - ${currRaw})`,
+      quantity: elecUsageStr,
+      unit: 'unit',
+      unitPrice: '0.00',
+      amount: elecAmountStr,
+      metadata: {
+        previousReading: String(prevRaw),
+        currentReading: String(currRaw),
+        usageUnits: elecUsageStr,
+        mode: 'tiered',
+        isRollover: usageRes.isRollover,
+        rolloverType: usageRes.rolloverType,
+        tierBreakdown: progRes.tierBreakdown,
+      },
+    });
   }
 
   // 3. Common Fee Calculation
@@ -524,11 +634,11 @@ export function calculateCanonicalMonthlyUtility(
 
   return {
     waterUsage: waterUsageStr,
-    waterRate: formatDecimal(waterRate),
+    waterRate: waterMode === 'tiered' ? '0.00' : formatDecimal(waterRate),
     waterAmount: waterAmountStr,
     waterMode,
     electricityUsage: elecUsageStr,
-    electricityRate: formatDecimal(elecRate),
+    electricityRate: elecMode === 'tiered' ? '0.00' : formatDecimal(elecRate),
     electricityAmount: elecAmountStr,
     electricityMode: elecMode,
     commonFee: commonFeeStr,
