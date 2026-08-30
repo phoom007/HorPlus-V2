@@ -6,7 +6,7 @@
  * 1. ZERO floating-point operations. All financial amounts calculated in exact integer satangs (BigInt).
  * 2. Exact two-decimal canonical strings ("0.00", "3500.00", "4200.50").
  * 3. 100% Mathematical Parity with server BillingService.generateBillPreview & decimal-math.util.
- * 4. Meter usage preserves exact 2-decimal fractional units without integer rounding (e.g. 105.75 - 100.25 = 5.50). */
+ * 4. Meter readings are integer-only (0..99999); usage is whole-unit. Money/rates remain exact Decimal/satang. */
 import { normalizeUtilityBillingMode } from './billing-mode-normalizer.util.js';
 import { CanonicalTierRecord } from './utility-tier-validator.util.js';
 

@@ -5,7 +5,7 @@
  * Exact Decimal / Satang Monetary Authority:
  * 1. ZERO JavaScript floating-point arithmetic. All financial products and totals calculated using exact Prisma.Decimal.
  * 2. Progressive / Marginal Tiered Accumulation: each tier only charges usage within its (lowerExclusive, upperInclusive] interval.
- * 3. Fractional Units Supported: meter usage preserves exact fractional decimals without integer rounding.
+ * 3. Whole-Unit Usage Domain: meter readings are integer-only (0..99999); usage is whole-unit. Money/rates remain exact Decimal/satang.
  * 4. Product Owner Rounding Policy 1A: Each tier product (billedUnits × rate) is rounded to 2 decimal places FIRST (ROUND_HALF_UP, e.g. 0.005 -> 0.01), then sum already-rounded tier amounts.
  * 5. Fail-Closed Validation: Invalid tiers, negative usage, or malformed inputs throw structured errors.
  */

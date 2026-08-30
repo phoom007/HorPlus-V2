@@ -4,7 +4,7 @@
  *
  * Enforces strict fail-closed validation and decimal normalization for progressive tiered utility rates.
  * Rules:
- * 1. 1 <= tiers.length <= 10
+ * 1. 1 <= tiers.length <= 5
  * 2. Intermediate tiers (index < length - 1) MUST have finite, positive, strictly ascending upTo boundaries.
  * 3. Final tier (index === length - 1) MUST have upTo: null (unlimited).
  * 4. All rates must be non-negative decimals (rate >= 0.00). Rate of 0.00 is explicitly valid.
@@ -106,8 +106,8 @@ export function validateCanonicalUtilityTiers(input: unknown): CanonicalTierReco
     throw err;
   }
 
-  if (input.length > 10) {
-    const err = new Error('INVALID_TIER_CONFIGURATION: Tier configuration exceeds maximum limit of 10 tiers');
+  if (input.length > 5) {
+    const err = new Error('INVALID_TIER_CONFIGURATION: Tier configuration exceeds maximum limit of 5 tiers');
     (err as any).statusCode = 400;
     (err as any).code = 'INVALID_TIER_CONFIGURATION';
     throw err;

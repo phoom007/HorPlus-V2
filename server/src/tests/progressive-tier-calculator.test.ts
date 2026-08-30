@@ -22,6 +22,7 @@ import { subscriptionEntitlementService } from '../services/subscription-entitle
 import { billingOrchestrationService } from '../services/billing-orchestration.service.js';
 import { MeterService } from '../services/meter.service.js';
 import { BillingService } from '../services/billing.service.js';
+import * as billingServiceModule from '../services/billing.service.js';
 import { InMemoryMeterRepository } from '../db/repositories/meter.repository.js';
 import { InMemoryBillingCycleRepository } from '../db/repositories/billing-cycle.repository.js';
 import { InMemoryRoomRepository } from '../db/repositories/room.repository.js';
@@ -200,8 +201,13 @@ describe('OWNER R3.9-C.1: Progressive Tier Calculator & Integer Meter Domain Aut
       });
     });
 
-    describe('Section 11 & 33: Tier Boundary Integer Validation', () => {
-      it('Accepts whole unit upper bounds ("10", "10.00", 10)', () => {
+    describe('Section 11 & 33: Tier Boundary Integer Validation & Max 5 Limits', () => {
+      it('Accepts 1 tier up to max 5 tiers with whole unit upper bounds ("10", "10.00", 10)', () => {
+        // 1 tier
+        const single = validateCanonicalUtilityTiers([{ upTo: null, rate: '15.00' }]);
+        expect(single).toHaveLength(1);
+
+        // 3 tiers
         const validated = validateCanonicalUtilityTiers([
           { upTo: '10', rate: '3.40' },
           { upTo: '20.00', rate: '4.25' },
@@ -210,6 +216,30 @@ describe('OWNER R3.9-C.1: Progressive Tier Calculator & Integer Meter Domain Aut
         expect(validated[0].upTo).toBe('10.00');
         expect(validated[1].upTo).toBe('20.00');
         expect(validated[2].upTo).toBeNull();
+
+        // 5 tiers (max allowed)
+        const fiveTiers = validateCanonicalUtilityTiers([
+          { upTo: '10', rate: '1.00' },
+          { upTo: '20', rate: '2.00' },
+          { upTo: '30', rate: '3.00' },
+          { upTo: '40', rate: '4.00' },
+          { upTo: null, rate: '5.00' },
+        ]);
+        expect(fiveTiers).toHaveLength(5);
+      });
+
+      it('Rejects 6 tiers with INVALID_TIER_CONFIGURATION (exceeds max 5)', () => {
+        const sixTiers = [
+          { upTo: '10', rate: '1.00' },
+          { upTo: '20', rate: '2.00' },
+          { upTo: '30', rate: '3.00' },
+          { upTo: '40', rate: '4.00' },
+          { upTo: '50', rate: '5.00' },
+          { upTo: null, rate: '6.00' },
+        ];
+        expect(() => validateCanonicalUtilityTiers(sixTiers)).toThrow(
+          'INVALID_TIER_CONFIGURATION: Tier configuration exceeds maximum limit of 5 tiers'
+        );
       });
 
       it('Rejects fractional upper bounds ("10.50", "20.25")', () => {
@@ -495,8 +525,13 @@ describe('OWNER R3.9-C.1: Progressive Tier Calculator & Integer Meter Domain Aut
       ).rejects.toThrow(/ค่ามิเตอร์ต้องเป็นตัวเลขจำนวนเต็ม|INVALID_METER_READING/);
     });
 
-    it('Test 31.E & 31.F: Tiered & all-zero tiered issued bill protects current reading from clearing', async () => {
+    it('Test 22.A & 22.E (31.E & 31.F): Tiered & all-zero tiered issued bill protects current reading from clearing when eligible', async () => {
       const { service, billingCycleRepo, roomRepo, billRepo } = setupMeterService();
+
+      vi.spyOn(billingServiceModule, 'resolveBillDirectRecalculationEligibilityInTx').mockResolvedValue({
+        eligible: true,
+        bill: { id: 'f0eebc99-9c0b-4ef8-bb6d-6bb9bd380a55', status: 'unpaid', billKind: 'MONTHLY_UTILITY' } as any,
+      });
 
       await roomRepo.create(DORM_ID, { id: ROOM_ID, roomNumber: '101', buildingId: 'd0eebc99-9c0b-4ef8-bb6d-6bb9bd380a44' });
       await billingCycleRepo.create(DORM_ID, {
@@ -519,7 +554,7 @@ describe('OWNER R3.9-C.1: Progressive Tier Calculator & Integer Meter Domain Aut
         source: 'CYCLE_INIT',
       });
 
-      // Issue active bill with valid UUID
+      // Issue active bill
       await billRepo.create(
         DORM_ID,
         {
@@ -536,14 +571,128 @@ describe('OWNER R3.9-C.1: Progressive Tier Calculator & Integer Meter Domain Aut
       );
 
       // Attempt to clear current water reading on issued bill
-      await expect(
-        service.saveBulkMeterWorkspace(DORM_ID, {
+      let errorThrown: any = null;
+      try {
+        await service.saveBulkMeterWorkspace(DORM_ID, {
           billingCycleId: CYCLE_ID,
           rows: [
             { roomId: ROOM_ID, waterCurr: '', waterPrev: '100' },
           ],
+        });
+      } catch (err: any) {
+        errorThrown = err;
+      }
+      expect(errorThrown).not.toBeNull();
+      expect(errorThrown.code).toBe('CANNOT_CLEAR_METER_READING_FOR_ISSUED_BILL');
+    });
+
+    it('Test 22.B: Active monthly bill fails closed when eligibility returns BILL_NOT_FOUND', async () => {
+      const { service, billingCycleRepo, roomRepo, billRepo } = setupMeterService();
+
+      vi.spyOn(billingServiceModule, 'resolveBillDirectRecalculationEligibilityInTx').mockResolvedValue({
+        eligible: false,
+        code: 'BILL_NOT_FOUND',
+        message: 'ไม่พบบิลที่ต้องการคำนวณใหม่',
+      });
+
+      await roomRepo.create(DORM_ID, { id: ROOM_ID, roomNumber: '101', buildingId: 'd0eebc99-9c0b-4ef8-bb6d-6bb9bd380a44' });
+      await billingCycleRepo.create(DORM_ID, {
+        id: CYCLE_ID,
+        cycleCode: '2026-08',
+      } as any);
+
+      await billRepo.create(
+        DORM_ID,
+        {
+          id: 'f0eebc99-9c0b-4ef8-bb6d-6bb9bd380a55',
+          billingCycleId: CYCLE_ID,
+          roomId: ROOM_ID,
+          billKind: 'MONTHLY_UTILITY',
+          status: 'unpaid',
+        } as any,
+        []
+      );
+
+      await expect(
+        service.saveBulkMeterWorkspace(DORM_ID, {
+          billingCycleId: CYCLE_ID,
+          rows: [
+            { roomId: ROOM_ID, waterCurr: '120', waterPrev: '100' },
+          ],
         })
-      ).rejects.toThrow(/CANNOT_CLEAR_METER_READING_FOR_ISSUED_BILL|ห้องนี้มีบิลที่ออกแล้ว/);
+      ).rejects.toThrow('ไม่พบบิลที่ต้องการคำนวณใหม่');
+    });
+
+    it('Test 22.C: Active monthly bill propagates unexpected error from eligibility check', async () => {
+      const { service, billingCycleRepo, roomRepo, billRepo } = setupMeterService();
+
+      vi.spyOn(billingServiceModule, 'resolveBillDirectRecalculationEligibilityInTx').mockRejectedValue(
+        new Error('DB transaction deadlock')
+      );
+
+      await roomRepo.create(DORM_ID, { id: ROOM_ID, roomNumber: '101', buildingId: 'd0eebc99-9c0b-4ef8-bb6d-6bb9bd380a44' });
+      await billingCycleRepo.create(DORM_ID, {
+        id: CYCLE_ID,
+        cycleCode: '2026-08',
+      } as any);
+
+      await billRepo.create(
+        DORM_ID,
+        {
+          id: 'f0eebc99-9c0b-4ef8-bb6d-6bb9bd380a55',
+          billingCycleId: CYCLE_ID,
+          roomId: ROOM_ID,
+          billKind: 'MONTHLY_UTILITY',
+          status: 'unpaid',
+        } as any,
+        []
+      );
+
+      await expect(
+        service.saveBulkMeterWorkspace(DORM_ID, {
+          billingCycleId: CYCLE_ID,
+          rows: [
+            { roomId: ROOM_ID, waterCurr: '120', waterPrev: '100' },
+          ],
+        })
+      ).rejects.toThrow('DB transaction deadlock');
+    });
+
+    it('Test 22.D: Active monthly bill fails closed with BILL_HAS_FINANCIAL_EVIDENCE', async () => {
+      const { service, billingCycleRepo, roomRepo, billRepo } = setupMeterService();
+
+      vi.spyOn(billingServiceModule, 'resolveBillDirectRecalculationEligibilityInTx').mockResolvedValue({
+        eligible: false,
+        code: 'BILL_HAS_FINANCIAL_EVIDENCE',
+        message: 'บิลนี้มีรายการชำระเงินหรือสลิปที่เกี่ยวข้องแล้ว\nไม่สามารถแก้ยอดโดยตรงได้',
+      });
+
+      await roomRepo.create(DORM_ID, { id: ROOM_ID, roomNumber: '101', buildingId: 'd0eebc99-9c0b-4ef8-bb6d-6bb9bd380a44' });
+      await billingCycleRepo.create(DORM_ID, {
+        id: CYCLE_ID,
+        cycleCode: '2026-08',
+      } as any);
+
+      await billRepo.create(
+        DORM_ID,
+        {
+          id: 'f0eebc99-9c0b-4ef8-bb6d-6bb9bd380a55',
+          billingCycleId: CYCLE_ID,
+          roomId: ROOM_ID,
+          billKind: 'MONTHLY_UTILITY',
+          status: 'unpaid',
+        } as any,
+        []
+      );
+
+      await expect(
+        service.saveBulkMeterWorkspace(DORM_ID, {
+          billingCycleId: CYCLE_ID,
+          rows: [
+            { roomId: ROOM_ID, waterCurr: '120', waterPrev: '100' },
+          ],
+        })
+      ).rejects.toThrow('บิลนี้มีรายการชำระเงินหรือสลิปที่เกี่ยวข้องแล้ว');
     });
   });
 

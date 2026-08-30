@@ -1250,32 +1250,23 @@ export class MeterService {
         if (this.billRepo) {
           activeBill = await this.billRepo.findActiveMonthlyUtilityByRoomAndCycle(dormitoryId, data.billingCycleId, row.roomId, tx);
           if (activeBill && activeBill.status !== 'cancelled' && activeBill.status !== 'void') {
-            try {
-              const eligibility = await resolveBillDirectRecalculationEligibilityInTx(dormitoryId, activeBill.id, tx);
-              if (!eligibility.eligible) {
-                if (eligibility.code === 'BILL_HAS_FINANCIAL_EVIDENCE') {
-                  throw new AppError(
-                    eligibility.message || 'บิลนี้มีรายการชำระเงินหรือสลิปที่เกี่ยวข้องแล้ว\nไม่สามารถแก้ยอดโดยตรงได้',
-                    409,
-                    'BILL_HAS_FINANCIAL_EVIDENCE'
-                  );
-                }
-                if (eligibility.code === 'ROOM_LOCKED_PAID' || activeBill.status === 'paid' || activeBill.status === 'PAID') {
-                  throw new AppError('บิลนี้ชำระเงินแล้ว ไม่สามารถแก้ไขข้อมูลมิเตอร์ได้', 400, 'ROOM_LOCKED_PAID');
-                }
-                if (eligibility.code !== 'BILL_NOT_FOUND') {
-                  throw new AppError(eligibility.message || 'บิลไม่สามารถแก้ไขยอดโดยตรงได้', 400, eligibility.code || 'BILL_NOT_ELIGIBLE');
-                }
+            const eligibility = await resolveBillDirectRecalculationEligibilityInTx(dormitoryId, activeBill.id, tx);
+            if (!eligibility.eligible) {
+              if (eligibility.code === 'BILL_HAS_FINANCIAL_EVIDENCE') {
+                throw new AppError(
+                  eligibility.message || 'บิลนี้มีรายการชำระเงินหรือสลิปที่เกี่ยวข้องแล้ว\nไม่สามารถแก้ยอดโดยตรงได้',
+                  409,
+                  'BILL_HAS_FINANCIAL_EVIDENCE'
+                );
               }
-            } catch (eligErr: any) {
-              if (eligErr instanceof AppError) {
-                throw eligErr;
+              if (eligibility.code === 'ROOM_LOCKED_PAID' || activeBill.status === 'paid' || activeBill.status === 'PAID') {
+                throw new AppError('บิลนี้ชำระเงินแล้ว ไม่สามารถแก้ไขข้อมูลมิเตอร์ได้', 400, 'ROOM_LOCKED_PAID');
               }
-              if (eligErr.message?.includes('ไม่พบบิลที่ต้องการคำนวณใหม่')) {
-                // In-memory test environment fallback: proceed with issued bill checks
-              } else {
-                throw eligErr;
-              }
+              throw new AppError(
+                eligibility.message || 'บิลไม่สามารถแก้ไขยอดโดยตรงได้',
+                eligibility.code === 'BILL_NOT_FOUND' ? 404 : 400,
+                eligibility.code || 'BILL_NOT_ELIGIBLE'
+              );
             }
 
             // Strict Issued-Bill Integrity: Ensure required per_unit meter readings cannot be cleared/omitted
