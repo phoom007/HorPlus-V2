@@ -40,6 +40,7 @@ import { PrismaBillingCycleRepository } from '../../server/src/db/repositories/b
 import { backfillRoomOperationalStatusBaseline } from '../../server/src/services/room-operational-baseline.service.ts';
 import { localStorageProvider } from '../../server/src/services/local-storage.service.ts';
 import { generateSyntheticSlipPng } from '../../server/src/utils/synthetic-slip.util.ts';
+import { calculateCanonicalMonthlyUtility } from '../../server/src/utils/monthly-utility-calculator.util.ts';
 
 const targetInfo = assertSafeDatabaseTarget();
 
@@ -400,6 +401,9 @@ export async function seedLocal07Data() {
       internetFeeMode: 'fixed',
       parkingRate: COMP_DORM.billing.parkingRate,
       parkingFeeMode: 'fixed',
+      gracePeriodDays: 2,
+      lateFeeType: COMP_DORM.billing.lateFeeType || 'fixed',
+      lateFeeValue: COMP_DORM.billing.lateFeeValue || '100.00',
       cashAccepted: true,
       promptPayType: COMP_DORM.payment.promptPayType,
       promptPayValueEncrypted: encPromptPay,
@@ -1220,6 +1224,20 @@ export async function seedLocal07Data() {
     { roomNum: 'B101', prevWater: 40, curWater: 55, prevElec: 200, curElec: 300 },  // W: 15, E: 100
   ];
 
+  const augMeterMap = {
+    '101': { prevWater: 110, curWater: 121, prevElec: 560, curElec: 620, parking: 1 }, // W: 11, E: 60, P: 1
+    '102': { prevWater: 90, curWater: 100, prevElec: 460, curElec: 515, parking: 0 },  // W: 10, E: 55, P: 0
+    '103': { prevWater: 68, curWater: 76, prevElec: 368, curElec: 420, parking: 1 },   // W: 8, E: 52, P: 1
+    '104': { prevWater: 138, curWater: 138, prevElec: 720, curElec: 720, parking: 0 }, // Legacy combined fixture
+    '201': { prevWater: 82, curWater: 94, prevElec: 420, curElec: 490, parking: 0 },   // W: 12, E: 70, P: 0
+    '202': { prevWater: 100, curWater: 105, prevElec: 515, curElec: 645, parking: 0 }, // W: 5, E: 130, P: 0
+    '203': { prevWater: 97, curWater: 107, prevElec: 485, curElec: 555, parking: 0 },  // W: 10, E: 70, P: 0
+    '301': { prevWater: 124, curWater: 138, prevElec: 600, curElec: 680, parking: 1 }, // W: 14, E: 80, P: 1
+    '302': { prevWater: 110, curWater: 125, prevElec: 570, curElec: 660, parking: 0 }, // W: 15, E: 90, P: 0
+    '303': { prevWater: 62, curWater: 74, prevElec: 385, curElec: 470, parking: 0 },   // W: 12, E: 85, P: 0
+    'B101': { prevWater: 55, curWater: 70, prevElec: 300, curElec: 400, parking: 1 },  // W: 15, E: 100, P: 1
+  };
+
   for (const mf of meterFacts) {
     const room = createdRooms[mf.roomNum];
 
@@ -1231,7 +1249,7 @@ export async function seedLocal07Data() {
         type: 'water',
         meterNumber: `WM-${mf.roomNum}`,
         initialReading: mf.prevWater,
-        currentReading: mf.curWater,
+        currentReading: augMeterMap[mf.roomNum]?.curWater ?? mf.curWater,
       },
     });
 
@@ -1242,11 +1260,11 @@ export async function seedLocal07Data() {
         type: 'electricity',
         meterNumber: `EM-${mf.roomNum}`,
         initialReading: mf.prevElec,
-        currentReading: mf.curElec,
+        currentReading: augMeterMap[mf.roomNum]?.curElec ?? mf.curElec,
       },
     });
 
-    // Water Reading
+    // July 2026 Water Reading
     await prisma.meterReading.create({
       data: {
         dormitoryId: compDorm.id,
@@ -1261,7 +1279,7 @@ export async function seedLocal07Data() {
       },
     });
 
-    // Electric Reading
+    // July 2026 Electric Reading
     await prisma.meterReading.create({
       data: {
         dormitoryId: compDorm.id,
@@ -1276,8 +1294,9 @@ export async function seedLocal07Data() {
       },
     });
 
-    // Seed realistic zero-payable meter reading for Room 104 in August 2026 (draft cycle with complete readings)
-    if (mf.roomNum === '104') {
+    // August 2026 Meter Readings
+    const augM = augMeterMap[mf.roomNum];
+    if (augM) {
       await prisma.meterReading.create({
         data: {
           dormitoryId: compDorm.id,
@@ -1285,9 +1304,9 @@ export async function seedLocal07Data() {
           meterDeviceId: waterDevice.id,
           billingCycleId: cycleAug.id,
           meterType: 'water',
-          previousReading: mf.curWater,
-          currentReading: mf.curWater,
-          usageUnits: 0,
+          previousReading: augM.prevWater,
+          currentReading: augM.curWater,
+          usageUnits: augM.curWater - augM.prevWater,
           readAt: new Date('2026-08-24'),
         },
       });
@@ -1299,71 +1318,9 @@ export async function seedLocal07Data() {
           meterDeviceId: elecDevice.id,
           billingCycleId: cycleAug.id,
           meterType: 'electricity',
-          previousReading: mf.curElec,
-          currentReading: mf.curElec,
-          usageUnits: 0,
-          readAt: new Date('2026-08-24'),
-        },
-      });
-    }
-
-    // Seed realistic meter readings for Room 101 in August 2026 (issued UNPAID MONTHLY_UTILITY bill INV-202608-101)
-    if (mf.roomNum === '101') {
-      await prisma.meterReading.create({
-        data: {
-          dormitoryId: compDorm.id,
-          roomId: room.id,
-          meterDeviceId: waterDevice.id,
-          billingCycleId: cycleAug.id,
-          meterType: 'water',
-          previousReading: 110,
-          currentReading: 121,
-          usageUnits: 11,
-          readAt: new Date('2026-08-24'),
-        },
-      });
-
-      await prisma.meterReading.create({
-        data: {
-          dormitoryId: compDorm.id,
-          roomId: room.id,
-          meterDeviceId: elecDevice.id,
-          billingCycleId: cycleAug.id,
-          meterType: 'electricity',
-          previousReading: 560,
-          currentReading: 620,
-          usageUnits: 60,
-          readAt: new Date('2026-08-24'),
-        },
-      });
-    }
-
-    // Seed realistic meter readings for Room 202 in August 2026 (issued UNPAID MONTHLY_UTILITY bill INV-202608-202-U)
-    if (mf.roomNum === '202') {
-      await prisma.meterReading.create({
-        data: {
-          dormitoryId: compDorm.id,
-          roomId: room.id,
-          meterDeviceId: waterDevice.id,
-          billingCycleId: cycleAug.id,
-          meterType: 'water',
-          previousReading: 100,
-          currentReading: 105,
-          usageUnits: 5,
-          readAt: new Date('2026-08-24'),
-        },
-      });
-
-      await prisma.meterReading.create({
-        data: {
-          dormitoryId: compDorm.id,
-          roomId: room.id,
-          meterDeviceId: elecDevice.id,
-          billingCycleId: cycleAug.id,
-          meterType: 'electricity',
-          previousReading: 455,
-          currentReading: 585,
-          usageUnits: 130,
+          previousReading: augM.prevElec,
+          currentReading: augM.curElec,
+          usageUnits: augM.curElec - augM.prevElec,
           readAt: new Date('2026-08-24'),
         },
       });
@@ -1702,129 +1659,116 @@ export async function seedLocal07Data() {
     },
   });
 
-
-
-  // August 2026 Multi-Component Bills for Deterministic Matrix Testing (0, 1, 2, 3 components)
-  // 1 Component: Room 101 (MONTHLY_UTILITY) -> ฿1,268.00 unpaid
-  const bill101Aug = await prisma.bill.create({
-    data: {
-      dormitoryId: compDorm.id,
-      billingCycleId: cycleAug.id,
-      roomId: createdRooms['101'].id,
-      tenantId: createdTenants['101'].id,
-      billNumber: 'INV-202608-101',
-      billKind: 'MONTHLY_UTILITY',
-      billingDate: new Date('2026-08-25'),
-      dueDate: new Date('2026-09-05'),
-      subtotal: 1268.0,
-      totalAmount: 1268.0,
-      paidAmount: 0.0,
-      outstandingAmount: 1268.0,
-      status: 'unpaid',
-    },
+  // August 2026 Authoritative Snapshot & Canonical Monthly Utility Generation
+  const augSnapshot = await prisma.billingRateSnapshot.findUniqueOrThrow({
+    where: { billingCycleId: cycleAug.id },
   });
 
-  const bill101AugItems = [
-    { type: 'water', description: 'ค่าน้ำ (11 หน่วย @ ฿18)', quantity: 11, unit: 'unit', unitPrice: 18, amount: 198 },
-    { type: 'electric', description: 'ค่าไฟฟ้า (60 หน่วย @ ฿7)', quantity: 60, unit: 'unit', unitPrice: 7, amount: 420 },
-    { type: 'common', description: 'ค่าส่วนกลาง', quantity: 1, unit: 'room', unitPrice: 200, amount: 200 },
-    { type: 'internet', description: 'ค่าอินเทอร์เน็ต', quantity: 1, unit: 'room', unitPrice: 150, amount: 150 },
-    { type: 'parking', description: 'ค่าที่จอดรถ', quantity: 1, unit: 'room', unitPrice: 300, amount: 300 },
-  ];
-  for (const it of bill101AugItems) {
-    await prisma.billItem.create({
+  async function seedCanonicalMonthlyUtility({
+    roomNum,
+    billNumber,
+    waterReading,
+    electricReading,
+    peopleCount = 1,
+    parkingQuantity = 0,
+    otherFees = [],
+    dueDate = new Date('2026-09-05'),
+    asOfDate = new Date('2026-08-25'),
+    status = 'unpaid',
+    paidAmount = 0,
+    paidAt = null,
+  }) {
+    const room = createdRooms[roomNum];
+    const tenant = createdTenants[roomNum];
+    const contract = createdContracts[roomNum];
+
+    // Building B rate override
+    const effectiveSnapshot = room.buildingId === bldB.id
+      ? { ...augSnapshot, waterRate: '20.00', electricityRate: '8.00' }
+      : augSnapshot;
+
+    const calcResult = calculateCanonicalMonthlyUtility({
+      rateSnapshot: effectiveSnapshot,
+      waterReading,
+      electricReading,
+      peopleCount,
+      parkingQuantity,
+      otherFees,
+      dueDate,
+      asOfDate,
+    });
+
+    const subtotal = Number(calcResult.monthlyUtilityTotal);
+    const totalAmount = subtotal;
+    const outstandingAmount = Math.max(0, totalAmount - paidAmount);
+
+    const bill = await prisma.bill.create({
       data: {
         dormitoryId: compDorm.id,
-        billId: bill101Aug.id,
-        type: it.type,
-        description: it.description,
-        quantity: it.quantity,
-        unit: it.unit,
-        unitPrice: it.unitPrice,
-        amount: it.amount,
+        billingCycleId: cycleAug.id,
+        roomId: room.id,
+        tenantId: tenant.id,
+        contractId: contract?.id || null,
+        billNumber,
+        billKind: 'MONTHLY_UTILITY',
+        billingDate: new Date('2026-08-25'),
+        dueDate,
+        subtotal,
+        totalAmount,
+        paidAmount,
+        outstandingAmount,
+        status,
+        paidAt,
       },
     });
+
+    for (const it of calcResult.items) {
+      await prisma.billItem.create({
+        data: {
+          dormitoryId: compDorm.id,
+          billId: bill.id,
+          type: it.type,
+          description: it.description,
+          quantity: Number(it.quantity),
+          unit: it.unit,
+          unitPrice: Number(it.unitPrice),
+          amount: Number(it.amount),
+        },
+      });
+    }
+
+    return { bill, calcResult, subtotal, items: calcResult.items };
   }
 
-  // Room 102 August Utility Bill: ฿830 (unpaid) -> will have Pending Slip #2
-  const bill102Aug = await prisma.bill.create({
-    data: {
-      dormitoryId: compDorm.id,
-      billingCycleId: cycleAug.id,
-      roomId: createdRooms['102'].id,
-      tenantId: createdTenants['102'].id,
-      contractId: createdContracts['102']?.id || null,
-      billNumber: 'INV-202608-102-U',
-      billKind: 'MONTHLY_UTILITY',
-      billingDate: new Date('2026-08-25'),
-      dueDate: new Date('2026-09-05'),
-      subtotal: 830.0,
-      totalAmount: 830.0,
-      paidAmount: 0.0,
-      outstandingAmount: 830.0,
-      status: 'unpaid',
-    },
+  // Room 101 August Utility: ฿1,268.00 (unpaid)
+  const res101 = await seedCanonicalMonthlyUtility({
+    roomNum: '101',
+    billNumber: 'INV-202608-101',
+    waterReading: { previousReading: 110, currentReading: 121 },
+    electricReading: { previousReading: 560, currentReading: 620 },
+    parkingQuantity: 1,
   });
-  const bill102AugItems = [
-    { type: 'water', description: 'ค่าน้ำ (8 หน่วย @ ฿18)', quantity: 8, unit: 'unit', unitPrice: 18, amount: 144 },
-    { type: 'electric', description: 'ค่าไฟฟ้า (48 หน่วย @ ฿7)', quantity: 48, unit: 'unit', unitPrice: 7, amount: 336 },
-    { type: 'common', description: 'ค่าส่วนกลาง', quantity: 1, unit: 'room', unitPrice: 200, amount: 200 },
-    { type: 'internet', description: 'ค่าอินเทอร์เน็ต', quantity: 1, unit: 'room', unitPrice: 150, amount: 150 },
-  ];
-  for (const it of bill102AugItems) {
-    await prisma.billItem.create({
-      data: {
-        dormitoryId: compDorm.id,
-        billId: bill102Aug.id,
-        type: it.type,
-        description: it.description,
-        quantity: it.quantity,
-        unit: it.unit,
-        unitPrice: it.unitPrice,
-        amount: it.amount,
-      },
-    });
-  }
+  const bill101Aug = res101.bill;
 
-  // Room 103 August Utility Bill: ฿1,030 (unpaid) -> will have Rejected Slip #1
-  const bill103Aug = await prisma.bill.create({
-    data: {
-      dormitoryId: compDorm.id,
-      billingCycleId: cycleAug.id,
-      roomId: createdRooms['103'].id,
-      tenantId: createdTenants['103'].id,
-      contractId: createdContracts['103']?.id || null,
-      billNumber: 'INV-202608-103-U',
-      billKind: 'MONTHLY_UTILITY',
-      billingDate: new Date('2026-08-25'),
-      dueDate: new Date('2026-09-05'),
-      subtotal: 1030.0,
-      totalAmount: 1030.0,
-      paidAmount: 0.0,
-      outstandingAmount: 1030.0,
-      status: 'unpaid',
-    },
+  // Room 102 August Utility: ฿915.00 (unpaid) -> will have Pending Review Slip #2
+  const res102 = await seedCanonicalMonthlyUtility({
+    roomNum: '102',
+    billNumber: 'INV-202608-102-U',
+    waterReading: { previousReading: 90, currentReading: 100 },
+    electricReading: { previousReading: 460, currentReading: 515 },
+    parkingQuantity: 0,
   });
-  const bill103AugItems = [
-    { type: 'water', description: 'ค่าน้ำ (10 หน่วย @ ฿18)', quantity: 10, unit: 'unit', unitPrice: 18, amount: 180 },
-    { type: 'electric', description: 'ค่าไฟฟ้า (50 หน่วย @ ฿7)', quantity: 50, unit: 'unit', unitPrice: 7, amount: 350 },
-    { type: 'common', description: 'ค่าส่วนกลาง', quantity: 1, unit: 'room', unitPrice: 200, amount: 200 },
-    { type: 'parking', description: 'ค่าที่จอดรถยนต์', quantity: 1, unit: 'room', unitPrice: 300, amount: 300 },
-  ];
-  for (const it of bill103AugItems) {
-    await prisma.billItem.create({
-      data: {
-        dormitoryId: compDorm.id,
-        billId: bill103Aug.id,
-        type: it.type,
-        description: it.description,
-        quantity: it.quantity,
-        unit: it.unit,
-        unitPrice: it.unitPrice,
-        amount: it.amount,
-      },
-    });
-  }
+  const bill102Aug = res102.bill;
+
+  // Room 103 August Utility: ฿1,158.00 (unpaid) -> will have Rejected Slip #1 (transfer ฿1,000 mismatch)
+  const res103 = await seedCanonicalMonthlyUtility({
+    roomNum: '103',
+    billNumber: 'INV-202608-103-U',
+    waterReading: { previousReading: 68, currentReading: 76 },
+    electricReading: { previousReading: 368, currentReading: 420 },
+    parkingQuantity: 1,
+  });
+  const bill103Aug = res103.bill;
 
   // Room 203 August Rent PARTIAL (total ฿4,800, paid ฿2,000, outstanding ฿2,800)
   const bill203Rent = await prisma.bill.create({
@@ -1890,7 +1834,7 @@ export async function seedLocal07Data() {
     },
   });
 
-  // Ambiguous Legacy Combined Partial: Room 104 in August 2026
+  // Explicit Legacy Combined Partial: Room 104 in August 2026 (kept explicitly for legacy compatibility testing)
   const bill104Combined = await prisma.bill.create({
     data: {
       dormitoryId: compDorm.id,
@@ -1917,7 +1861,7 @@ export async function seedLocal07Data() {
     ],
   });
 
-  // 3 Components: Room 202 (RENT unpaid + DEPOSIT paid + MONTHLY_UTILITY unpaid)
+  // Room 202 Rent + Deposit + Monthly Utility
   const bill202Rent = await prisma.bill.create({
     data: {
       dormitoryId: compDorm.id,
@@ -2029,169 +1973,82 @@ export async function seedLocal07Data() {
     },
   });
 
-  const bill202Util = await prisma.bill.create({
-    data: {
-      dormitoryId: compDorm.id,
-      billingCycleId: cycleAug.id,
-      roomId: createdRooms['202'].id,
-      tenantId: createdTenants['202'].id,
-      billNumber: 'INV-202608-202-U',
-      billKind: 'MONTHLY_UTILITY',
-      billingDate: new Date('2026-08-25'),
-      dueDate: new Date('2026-09-05'),
-      subtotal: 1200.0,
-      totalAmount: 1200.0,
-      paidAmount: 0.0,
-      outstandingAmount: 1200.0,
-      status: 'unpaid',
-    },
+  // Room 202 August Utility: ฿1,350.00 (unpaid) -> will have Rejected Slip #2 (duplicate)
+  const res202 = await seedCanonicalMonthlyUtility({
+    roomNum: '202',
+    billNumber: 'INV-202608-202-U',
+    waterReading: { previousReading: 100, currentReading: 105 },
+    electricReading: { previousReading: 515, currentReading: 645 },
+    parkingQuantity: 0,
   });
-  const bill202UtilItems = [
-    { type: 'water', description: 'ค่าน้ำ (5 หน่วย @ ฿18)', quantity: 5, unit: 'unit', unitPrice: 18, amount: 90 },
-    { type: 'electric', description: 'ค่าไฟฟ้า (130 หน่วย @ ฿7)', quantity: 130, unit: 'unit', unitPrice: 7, amount: 910 },
-    { type: 'common', description: 'ค่าส่วนกลาง', quantity: 1, unit: 'room', unitPrice: 200, amount: 200 },
-  ];
-  for (const it of bill202UtilItems) {
-    await prisma.billItem.create({
-      data: {
-        dormitoryId: compDorm.id,
-        billId: bill202Util.id,
-        type: it.type,
-        description: it.description,
-        quantity: it.quantity,
-        unit: it.unit,
-        unitPrice: it.unitPrice,
-        amount: it.amount,
-      },
-    });
-  }
+  const bill202Util = res202.bill;
 
-  // Room 301 August Utility: ฿1,312 (unpaid)
-  const bill301Aug = await prisma.bill.create({
-    data: {
-      dormitoryId: compDorm.id,
-      billingCycleId: cycleAug.id,
-      roomId: createdRooms['301'].id,
-      tenantId: createdTenants['301'].id,
-      contractId: createdContracts['301']?.id || null,
-      billNumber: 'INV-202608-301-U',
-      billKind: 'MONTHLY_UTILITY',
-      billingDate: new Date('2026-08-25'),
-      dueDate: new Date('2026-09-05'),
-      subtotal: 1312.0,
-      totalAmount: 1312.0,
-      paidAmount: 0.0,
-      outstandingAmount: 1312.0,
-      status: 'unpaid',
-    },
+  // Room 201 August Utility: ฿1,056.00 (unpaid)
+  const res201 = await seedCanonicalMonthlyUtility({
+    roomNum: '201',
+    billNumber: 'INV-202608-201-U',
+    waterReading: { previousReading: 82, currentReading: 94 },
+    electricReading: { previousReading: 420, currentReading: 490 },
+    parkingQuantity: 0,
   });
-  const bill301AugItems = [
-    { type: 'water', description: 'ค่าน้ำ (14 หน่วย @ ฿18)', quantity: 14, unit: 'unit', unitPrice: 18, amount: 252 },
-    { type: 'electric', description: 'ค่าไฟฟ้า (80 หน่วย @ ฿7)', quantity: 80, unit: 'unit', unitPrice: 7, amount: 560 },
-    { type: 'common', description: 'ค่าส่วนกลาง', quantity: 1, unit: 'room', unitPrice: 200, amount: 200 },
-    { type: 'parking', description: 'ค่าที่จอดรถยนต์', quantity: 1, unit: 'room', unitPrice: 300, amount: 300 },
-  ];
-  for (const it of bill301AugItems) {
-    await prisma.billItem.create({
-      data: {
-        dormitoryId: compDorm.id,
-        billId: bill301Aug.id,
-        type: it.type,
-        description: it.description,
-        quantity: it.quantity,
-        unit: it.unit,
-        unitPrice: it.unitPrice,
-        amount: it.amount,
-      },
-    });
-  }
 
-  // Room 303 August Utility: ฿1,161 (unpaid)
-  const bill303Aug = await prisma.bill.create({
-    data: {
-      dormitoryId: compDorm.id,
-      billingCycleId: cycleAug.id,
-      roomId: createdRooms['303'].id,
-      tenantId: createdTenants['303'].id,
-      contractId: createdContracts['303']?.id || null,
-      billNumber: 'INV-202608-303-U',
-      billKind: 'MONTHLY_UTILITY',
-      billingDate: new Date('2026-08-25'),
-      dueDate: new Date('2026-09-05'),
-      subtotal: 1161.0,
-      totalAmount: 1161.0,
-      paidAmount: 0.0,
-      outstandingAmount: 1161.0,
-      status: 'unpaid',
-    },
+  // Room 203 August Utility: ฿1,020.00 (unpaid)
+  const res203 = await seedCanonicalMonthlyUtility({
+    roomNum: '203',
+    billNumber: 'INV-202608-203-U',
+    waterReading: { previousReading: 97, currentReading: 107 },
+    electricReading: { previousReading: 485, currentReading: 555 },
+    parkingQuantity: 0,
   });
-  const bill303AugItems = [
-    { type: 'water', description: 'ค่าน้ำ (12 หน่วย @ ฿18)', quantity: 12, unit: 'unit', unitPrice: 18, amount: 216 },
-    { type: 'electric', description: 'ค่าไฟฟ้า (85 หน่วย @ ฿7)', quantity: 85, unit: 'unit', unitPrice: 7, amount: 595 },
-    { type: 'common', description: 'ค่าส่วนกลาง', quantity: 1, unit: 'room', unitPrice: 200, amount: 200 },
-    { type: 'internet', description: 'ค่าอินเทอร์เน็ต', quantity: 1, unit: 'room', unitPrice: 150, amount: 150 },
-  ];
-  for (const it of bill303AugItems) {
-    await prisma.billItem.create({
-      data: {
-        dormitoryId: compDorm.id,
-        billId: bill303Aug.id,
-        type: it.type,
-        description: it.description,
-        quantity: it.quantity,
-        unit: it.unit,
-        unitPrice: it.unitPrice,
-        amount: it.amount,
-      },
-    });
-  }
 
-  // Room B101 August Utility: ฿1,600 (PAID with Receipt)
-  const billB101Aug = await prisma.bill.create({
-    data: {
-      dormitoryId: compDorm.id,
-      billingCycleId: cycleAug.id,
-      roomId: createdRooms['B101'].id,
-      tenantId: createdTenants['B101'].id,
-      contractId: createdContracts['B101']?.id || null,
-      billNumber: 'INV-202608-B101-U',
-      billKind: 'MONTHLY_UTILITY',
-      billingDate: new Date('2026-08-25'),
-      dueDate: new Date('2026-09-05'),
-      subtotal: 1600.0,
-      totalAmount: 1600.0,
-      paidAmount: 1600.0,
-      outstandingAmount: 0.0,
-      status: 'paid',
-      paidAt: new Date('2026-08-26T11:00:00Z'),
-    },
+  // Room 301 August Utility: ฿1,462.00 (unpaid)
+  const res301 = await seedCanonicalMonthlyUtility({
+    roomNum: '301',
+    billNumber: 'INV-202608-301-U',
+    waterReading: { previousReading: 124, currentReading: 138 },
+    electricReading: { previousReading: 600, currentReading: 680 },
+    parkingQuantity: 1,
   });
-  const billB101AugItems = [
-    { type: 'water', description: 'ค่าน้ำ (15 หน่วย @ ฿20)', quantity: 15, unit: 'unit', unitPrice: 20, amount: 300 },
-    { type: 'electric', description: 'ค่าไฟฟ้า (100 หน่วย @ ฿8)', quantity: 100, unit: 'unit', unitPrice: 8, amount: 800 },
-    { type: 'common', description: 'ค่าส่วนกลาง', quantity: 1, unit: 'room', unitPrice: 200, amount: 200 },
-    { type: 'parking', description: 'ค่าที่จอดรถ', quantity: 1, unit: 'room', unitPrice: 300, amount: 300 },
-  ];
-  for (const it of billB101AugItems) {
-    await prisma.billItem.create({
-      data: {
-        dormitoryId: compDorm.id,
-        billId: billB101Aug.id,
-        type: it.type,
-        description: it.description,
-        quantity: it.quantity,
-        unit: it.unit,
-        unitPrice: it.unitPrice,
-        amount: it.amount,
-      },
-    });
-  }
+  const bill301Aug = res301.bill;
+
+  // Room 302 August Utility: ฿1,250.00 (unpaid)
+  const res302 = await seedCanonicalMonthlyUtility({
+    roomNum: '302',
+    billNumber: 'INV-202608-302-U',
+    waterReading: { previousReading: 110, currentReading: 125 },
+    electricReading: { previousReading: 570, currentReading: 660 },
+    parkingQuantity: 0,
+  });
+
+  // Room 303 August Utility: ฿1,161.00 (unpaid)
+  const res303 = await seedCanonicalMonthlyUtility({
+    roomNum: '303',
+    billNumber: 'INV-202608-303-U',
+    waterReading: { previousReading: 62, currentReading: 74 },
+    electricReading: { previousReading: 385, currentReading: 470 },
+    parkingQuantity: 0,
+  });
+  const bill303Aug = res303.bill;
+
+  // Room B101 August Utility: ฿1,750.00 (PAID with Receipt)
+  const resB101 = await seedCanonicalMonthlyUtility({
+    roomNum: 'B101',
+    billNumber: 'INV-202608-B101-U',
+    waterReading: { previousReading: 55, currentReading: 70 },
+    electricReading: { previousReading: 300, currentReading: 400 },
+    parkingQuantity: 1,
+    status: 'paid',
+    paidAmount: 1750.0,
+    paidAt: new Date('2026-08-26T11:00:00Z'),
+  });
+  const billB101Aug = resB101.bill;
+
   const payB101Aug = await prisma.payment.create({
     data: {
       dormitoryId: compDorm.id,
       billId: billB101Aug.id,
       tenantId: createdTenants['B101'].id,
-      amount: 1600.0,
+      amount: 1750.0,
       method: 'promptpay',
       status: 'APPROVED',
       paymentDate: new Date('2026-08-26T11:00:00Z'),
@@ -2217,8 +2074,8 @@ export async function seedLocal07Data() {
         billNumber: billB101Aug.billNumber,
         roomNumber: 'B101',
         tenantName: createdTenants['B101'].displayName,
-        totalAmount: 1600.0,
-        items: billB101AugItems,
+        totalAmount: 1750.0,
+        items: resB101.items,
       },
       issuedAt: new Date('2026-08-26T11:05:00Z'),
       isVoided: false,
@@ -2478,11 +2335,11 @@ export async function seedLocal07Data() {
     });
   }
 
-  // 2. Pending Slip #2 (รอตรวจสลิป #2): Room 102 Single Bill Slip (฿830, UNDER_REVIEW)
+  // 2. Pending Slip #2 (รอตรวจสลิป #2): Room 102 Single Bill Slip (UNDER_REVIEW)
   const slip102Key = 'fixtures/slips/local-uat-test-slip-room102.png';
   const synthetic102Png = await generateSyntheticSlipPng({
     roomNumber: 'ROOM 102',
-    amount: 830,
+    amount: res102.subtotal,
     claimedDate: '2026-08-28 15:00',
     status: 'UNVERIFIED',
     title: 'LOCAL UAT TEST SLIP',
@@ -2496,7 +2353,7 @@ export async function seedLocal07Data() {
       billId: bill102Aug.id,
       tenantId: createdTenants['102'].id,
       method: 'BANK_TRANSFER',
-      amount: 830.0,
+      amount: res102.subtotal,
       status: 'UNDER_REVIEW',
       paymentDate: new Date('2026-08-28T15:00:00Z'),
       evidenceUrl: slip102Key,
@@ -2515,7 +2372,7 @@ export async function seedLocal07Data() {
     },
   });
 
-  // 3. Rejected Slip #1 (สลิปผิดพลาด #1): Room 103 August Utility (Bill ฿1,030, transferred ฿1,000)
+  // 3. Rejected Slip #1 (สลิปผิดพลาด #1): Room 103 August Utility (Bill ฿1,158, transferred ฿1,000)
   const slip103Key = 'fixtures/slips/local-uat-test-slip-room103.png';
   const synthetic103Png = await generateSyntheticSlipPng({
     roomNumber: 'ROOM 103',
@@ -2523,7 +2380,7 @@ export async function seedLocal07Data() {
     claimedDate: '2026-08-27 11:00',
     status: 'REJECTED',
     title: 'LOCAL UAT TEST SLIP',
-    subtitle: 'AMOUNT MISMATCH (1000 vs 1030)',
+    subtitle: `AMOUNT MISMATCH (1000 vs ${res103.subtotal})`,
   });
   await localStorageProvider.saveFile(slip103Key, synthetic103Png);
 
@@ -2564,11 +2421,11 @@ export async function seedLocal07Data() {
     },
   });
 
-  // 4. Rejected Slip #2 (สลิปผิดพลาด #2): Room 202 August Utility (Bill ฿1,200, Duplicate / Unmatched transaction)
+  // 4. Rejected Slip #2 (สลิปผิดพลาด #2): Room 202 August Utility (Bill ฿1,350, Duplicate / Unmatched transaction)
   const slip202Key = 'fixtures/slips/local-uat-test-slip-room202.png';
   const synthetic202Png = await generateSyntheticSlipPng({
     roomNumber: 'ROOM 202',
-    amount: 1200,
+    amount: res202.subtotal,
     claimedDate: '2026-08-27 16:00',
     status: 'REJECTED',
     title: 'LOCAL UAT TEST SLIP',
@@ -2582,7 +2439,7 @@ export async function seedLocal07Data() {
       billId: bill202Util.id,
       tenantId: createdTenants['202'].id,
       method: 'BANK_TRANSFER',
-      amount: 1200.0,
+      amount: res202.subtotal,
       status: 'REJECTED',
       rejectedReason: 'สลิปซ้ำ / ไม่พบยอดเงินเข้าบัญชี',
       paymentDate: new Date('2026-08-27T16:00:00Z'),

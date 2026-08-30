@@ -1038,5 +1038,47 @@ describe('LOCAL-07 Shared Canonical Monthly Utility Calculation Authority', () =
       expect(components[0].label).toBe('ค่าประกัน');
       expect(components[0].amount).toBe('3000.00');
     });
+
+    it('Fixed late fee produces unit: "charge" with quantity 1.00 and unitPrice', () => {
+      const res = calculateCanonicalMonthlyUtility({
+        rateSnapshot: {
+          ...baseRates,
+          lateFeeType: 'fixed',
+          lateFeeValue: '100.00',
+        },
+        waterReading: { previousReading: '10', currentReading: '20' },
+        electricReading: { previousReading: '100', currentReading: '150' },
+        dueDate: '2026-09-05',
+        asOfDate: '2026-09-10', // 5 calendar days past due -> > 2 grace days
+      });
+
+      const lateFeeItem = res.items.find(i => i.type === 'late_fee');
+      expect(lateFeeItem).toBeDefined();
+      expect(lateFeeItem?.unit).toBe('charge');
+      expect(lateFeeItem?.quantity).toBe('1.00');
+      expect(lateFeeItem?.unitPrice).toBe('100.00');
+      expect(lateFeeItem?.amount).toBe('100.00');
+    });
+
+    it('Daily late fee produces unit: "day" with chargeableDays past 2-day silent grace', () => {
+      const res = calculateCanonicalMonthlyUtility({
+        rateSnapshot: {
+          ...baseRates,
+          lateFeeType: 'daily',
+          lateFeeValue: '50.00',
+        },
+        waterReading: { previousReading: '10', currentReading: '20' },
+        electricReading: { previousReading: '100', currentReading: '150' },
+        dueDate: '2026-09-05',
+        asOfDate: '2026-09-10', // 5 calendar days past due - 2 grace = 3 chargeable days
+      });
+
+      const lateFeeItem = res.items.find(i => i.type === 'late_fee');
+      expect(lateFeeItem).toBeDefined();
+      expect(lateFeeItem?.unit).toBe('day');
+      expect(lateFeeItem?.quantity).toBe('3');
+      expect(lateFeeItem?.unitPrice).toBe('50.00');
+      expect(lateFeeItem?.amount).toBe('150.00');
+    });
   });
 });

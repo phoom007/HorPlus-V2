@@ -506,7 +506,7 @@ export function calculateCanonicalMonthlyUtility(
           type: 'late_fee',
           description: 'ค่าปรับล่าช้า',
           quantity: '1.00',
-          unit: 'bill',
+          unit: 'charge',
           unitPrice: formatDecimal(lateFeeVal),
           amount: lateFeeAmountStr,
           metadata: { mode: 'fixed', overdueDays, rate: formatDecimal(lateFeeVal) },

@@ -1151,6 +1151,7 @@ describe('OWNER R3.8fR5-C — Itemized Receipts & Thai Billing Units', () => {
     it('Tab 1 (รอตรวจสลิป) renders 2 realistic pending review items and Tab 4 (สลิปผิดพลาด) renders 2 rejected records with reasons', () => {
       const mockDormitoryId = 'dorm-slip-states-test';
       const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      const mockOwnerUserId = 'owner-123';
 
       const mockPayments = [
         // Tab 1 item 1: Room 302 Group Combined Slip (฿6,500)
@@ -1204,14 +1205,14 @@ describe('OWNER R3.8fR5-C — Itemized Receipts & Thai Billing Units', () => {
             status: 'UNDER_REVIEW',
           },
         },
-        // Tab 1 item 2: Room 102 Single Bill Slip (฿830)
+        // Tab 1 item 2: Room 102 Single Bill Slip (฿1,215)
         {
           id: 'pay-102-single',
           dormitoryId: mockDormitoryId,
           billId: 'bill-102-aug',
           tenantId: 'tenant-102',
           method: 'BANK_TRANSFER',
-          amount: 830,
+          amount: 1215,
           status: 'UNDER_REVIEW',
           paymentDate: '2026-08-28T15:00:00Z',
           evidenceUrl: 'fixtures/slips/local-uat-test-slip-room102.png',
@@ -1219,12 +1220,12 @@ describe('OWNER R3.8fR5-C — Itemized Receipts & Thai Billing Units', () => {
             id: 'bill-102-aug',
             billNumber: 'INV-202608-102-U',
             billingCycleId: 'cycle-aug-2026',
-            totalAmount: 830,
+            totalAmount: 1215,
             room: { id: 'room-102', roomNumber: '102' },
             tenant: { id: 'tenant-102', displayName: 'นายสมศักดิ์ รักสงบ' },
           },
         },
-        // Tab 4 item 1: Room 103 Rejected Slip (฿1,000 against ฿1,030)
+        // Tab 4 item 1: Room 103 Rejected Slip (฿1,000 against ฿1,158)
         {
           id: 'pay-103-rejected',
           dormitoryId: mockDormitoryId,
@@ -1239,19 +1240,19 @@ describe('OWNER R3.8fR5-C — Itemized Receipts & Thai Billing Units', () => {
             id: 'bill-103-aug',
             billNumber: 'INV-202608-103-U',
             billingCycleId: 'cycle-aug-2026',
-            totalAmount: 1030,
+            totalAmount: 1158,
             room: { id: 'room-103', roomNumber: '103' },
             tenant: { id: 'tenant-103', displayName: 'นางสาวอนงค์ งามยิ่ง' },
           },
         },
-        // Tab 4 item 2: Room 202 Rejected Slip (฿1,200 duplicate)
+        // Tab 4 item 2: Room 202 Rejected Slip (฿1,650 duplicate)
         {
           id: 'pay-202-rejected',
           dormitoryId: mockDormitoryId,
           billId: 'bill-202-aug',
           tenantId: 'tenant-202',
           method: 'BANK_TRANSFER',
-          amount: 1200,
+          amount: 1650,
           status: 'REJECTED',
           rejectedReason: 'สลิปซ้ำ / ไม่พบยอดเงินเข้าบัญชี',
           reviewedAt: '2026-08-27T17:00:00Z',
@@ -1259,7 +1260,7 @@ describe('OWNER R3.8fR5-C — Itemized Receipts & Thai Billing Units', () => {
             id: 'bill-202-aug',
             billNumber: 'INV-202608-202-U',
             billingCycleId: 'cycle-aug-2026',
-            totalAmount: 1200,
+            totalAmount: 1650,
             room: { id: 'room-202', roomNumber: '202' },
             tenant: { id: 'tenant-202', displayName: 'นายปิติ สบายดี' },
           },
@@ -1300,14 +1301,14 @@ describe('OWNER R3.8fR5-C — Itemized Receipts & Thai Billing Units', () => {
       expect(tab1Btn).toBeInTheDocument();
       fireEvent.click(tab1Btn);
 
-      // Room 302 combined slip (฿6,500) and Room 102 single slip (฿830)
+      // Room 302 combined slip (฿6,500) and Room 102 single slip (฿1,215)
       expect(screen.getByText('ห้อง 302')).toBeInTheDocument();
       expect(screen.getByText('นายนิรันดร์ สุขใจ')).toBeInTheDocument();
       expect(screen.getByText(/6,500.00/)).toBeInTheDocument();
 
       expect(screen.getByText('ห้อง 102')).toBeInTheDocument();
       expect(screen.getByText('นายสมศักดิ์ รักสงบ')).toBeInTheDocument();
-      expect(screen.getByText(/830.00/)).toBeInTheDocument();
+      expect(screen.getByText(/1,215.00/)).toBeInTheDocument();
 
       // Verify Tab 4: สลิปผิดพลาด badge shows 2
       const tab4Btn = screen.getByRole('button', { name: /สลิปผิดพลาด/i });
@@ -1322,6 +1323,54 @@ describe('OWNER R3.8fR5-C — Itemized Receipts & Thai Billing Units', () => {
       expect(screen.getByText('ห้อง 202')).toBeInTheDocument();
       expect(screen.getByText('นายปิติ สบายดี')).toBeInTheDocument();
       expect(screen.getByText('สลิปซ้ำ / ไม่พบยอดเงินเข้าบัญชี')).toBeInTheDocument();
+    });
+  });
+
+  describe('OWNER R3.8fR5-C.5 — Late Fee Policy & Thai Unit Formatting & Non-Zero Filtering', () => {
+    it('formats fixed late fee with canonical charge unit and daily late fee with day unit', () => {
+      // 1. Fixed late fee: unit 'charge' or legacy 'bill' resolves to 'รายการ'
+      const fixedUnit = resolveBillingDisplayUnit({ unit: 'charge', type: 'late_fee' });
+      expect(fixedUnit).toBe('charge');
+      expect(formatBillingUnit(fixedUnit)).toBe('รายการ');
+      expect(formatBillingRate(100, fixedUnit)).toBe('100.00 บาท/รายการ');
+
+      // Legacy 'bill' mapping to 'charge'
+      const legacyBillUnit = resolveBillingDisplayUnit({ unit: 'bill', type: 'late_fee' });
+      expect(legacyBillUnit).toBe('charge');
+      expect(formatBillingUnit(legacyBillUnit)).toBe('รายการ');
+
+      // 2. Daily late fee: unit 'day' resolves to 'วัน'
+      const dailyUnit = resolveBillingDisplayUnit({ unit: 'day', type: 'late_fee' });
+      expect(dailyUnit).toBe('day');
+      expect(formatBillingUnit(dailyUnit)).toBe('วัน');
+      expect(formatBillingRate(50, dailyUnit)).toBe('50.00 บาท/วัน');
+    });
+
+    it('exact zero-amount filtering suppresses exact 0.00 but preserves negative credits and fractional satang amounts', () => {
+      expect(isNonZeroAmount(0)).toBe(false);
+      expect(isNonZeroAmount('0.00')).toBe(false);
+      expect(isNonZeroAmount(null)).toBe(false);
+      expect(isNonZeroAmount(undefined)).toBe(false);
+
+      // Negative discounts/credits
+      expect(isNonZeroAmount(-50.00)).toBe(true);
+      expect(isNonZeroAmount('-100.00')).toBe(true);
+
+      // Positive satangs
+      expect(isNonZeroAmount(0.01)).toBe(true);
+      expect(isNonZeroAmount('0.50')).toBe(true);
+
+      const items = [
+        { id: '1', amount: 0, description: 'Zero Item' },
+        { id: '2', amount: 150, description: 'Internet' },
+        { id: '3', amount: -50, description: 'Discount' },
+        { id: '4', amount: '0.00', description: 'Zero Text' },
+        { id: '5', amount: '0.01', description: 'Satang' },
+      ];
+
+      const filtered = filterNonZeroBillItems(items as any);
+      expect(filtered).toHaveLength(3);
+      expect(filtered.map(i => i.id)).toEqual(['2', '3', '5']);
     });
   });
 });

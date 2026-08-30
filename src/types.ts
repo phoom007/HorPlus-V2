@@ -659,7 +659,9 @@ export function resolveBillingDisplayUnit(params: {
   type?: string | null;
 }): string | null {
   if (params.unit && String(params.unit).trim() !== '') {
-    return params.unit.trim();
+    const u = String(params.unit).trim().toLowerCase();
+    if (u === 'bill') return 'charge';
+    return u;
   }
 
   if (!params.type) return null;
@@ -692,7 +694,7 @@ export function isNonZeroAmount(amount?: number | string | null): boolean {
   if (amount === undefined || amount === null || amount === '') return false;
   const num = Number(amount);
   if (isNaN(num)) return false;
-  return Math.abs(num) >= 0.005;
+  return num !== 0;
 }
 
 /**
