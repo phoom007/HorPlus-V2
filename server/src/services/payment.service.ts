@@ -866,7 +866,7 @@ export class PaymentService {
               data: {
                 status: aff.newStatus,
                 previousStatus: preStatus,
-                paidAt: aff.newStatus === 'PAID' ? (targetBill.paidAt || now) : targetBill.paidAt,
+                paidAt: aff.newStatus === 'PAID' ? now : (targetBill.paidAt ?? null),
                 paidAmount: new Prisma.Decimal(aff.newPaidAmount.toFixed(2)),
                 outstandingAmount: new Prisma.Decimal(aff.newOutstandingAmount.toFixed(2)),
               },
@@ -1310,7 +1310,7 @@ export class PaymentService {
             data: {
               status: aff.newStatus,
               previousStatus: bill.status,
-              paidAt: aff.newStatus === 'PAID' ? (bill.paidAt || now) : bill.paidAt,
+              paidAt: aff.newStatus === 'PAID' ? now : (bill.paidAt ?? null),
               paidAmount: new Prisma.Decimal(aff.newPaidAmount.toFixed(2)),
               outstandingAmount: new Prisma.Decimal(aff.newOutstandingAmount.toFixed(2)),
             },

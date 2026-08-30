@@ -807,6 +807,18 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
     });
   };
 
+  const cancelPendingApprove = (paymentId: string) => {
+    if (approveTimersRef.current[paymentId]) {
+      clearInterval(approveTimersRef.current[paymentId]);
+      delete approveTimersRef.current[paymentId];
+    }
+    setPendingApproveMap(prev => {
+      const next = { ...prev };
+      delete next[paymentId];
+      return next;
+    });
+  };
+
   // 4. Manual Cash Modal Submit
   const handleModalCashSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

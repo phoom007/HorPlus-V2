@@ -382,17 +382,33 @@ export class LateFeeReconciliationService {
         return { status: 'skipped', reason: 'BILL_NOT_FOUND' };
       }
 
+      // FAIL-CLOSED LOCKED-STATE ELIGIBILITY VALIDATION (P0)
+      const normalizedStatus = (bill.status || '').toUpperCase();
+      const isEligibleStatus = normalizedStatus === 'UNPAID' || normalizedStatus === 'PARTIALLY_PAID';
+      if (!isEligibleStatus) {
+        return { status: 'skipped', reason: 'STATUS_NO_LONGER_LATE_FEE_ELIGIBLE' };
+      }
+
       if (bill.billKind !== 'MONTHLY_UTILITY') {
         return { status: 'skipped', reason: 'NOT_MONTHLY_UTILITY' };
+      }
+
+      const outstanding = toDecimal(bill.outstandingAmount?.toString() || '0');
+      if (outstanding.lessThanOrEqualTo(0)) {
+        return { status: 'skipped', reason: 'NO_OUTSTANDING_BALANCE' };
+      }
+
+      if (!bill.dueDate) {
+        return { status: 'skipped', reason: 'NO_DUE_DATE_ON_BILL' };
+      }
+
+      if (bill.dueDate >= referenceTime) {
+        return { status: 'skipped', reason: 'DUE_DATE_NO_LONGER_OVERDUE' };
       }
 
       const effectiveAsOf = resolveBillLateFeeEffectiveAsOfInTx(bill, referenceTime);
       if (!effectiveAsOf) {
         return { status: 'skipped', reason: 'NOT_ELIGIBLE_FOR_LATE_FEE' };
-      }
-
-      if (!bill.dueDate) {
-        return { status: 'skipped', reason: 'NO_DUE_DATE_ON_BILL' };
       }
 
       const rateSnapshot = bill.billingCycle?.rateSnapshot;

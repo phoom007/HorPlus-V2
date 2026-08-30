@@ -38,6 +38,8 @@ import { subscriptionIntentService } from '../../server/src/services/subscriptio
 import { BillingCycleService } from '../../server/src/services/billing-cycle.service.ts';
 import { PrismaBillingCycleRepository } from '../../server/src/db/repositories/billing-cycle.repository.ts';
 import { backfillRoomOperationalStatusBaseline } from '../../server/src/services/room-operational-baseline.service.ts';
+import { localStorageProvider } from '../../server/src/services/local-storage.service.ts';
+import { generateSyntheticSlipPng } from '../../server/src/utils/synthetic-slip.util.ts';
 
 const targetInfo = assertSafeDatabaseTarget();
 
@@ -2064,22 +2066,17 @@ export async function seedLocal07Data() {
     const julyAlloc = Math.min(4000, Number(bill302July.outstandingAmount || bill302July.totalAmount));
     const augAlloc = 6500 - julyAlloc;
 
-    // Create deterministic synthetic test slip file for Room 302 UAT
-    const uploadDirs = [
-      path.join(process.cwd(), 'server/uploads/private/fixtures/slips'),
-      path.join(process.cwd(), 'uploads/private/fixtures/slips'),
-    ];
-    for (const dir of uploadDirs) {
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
-      }
-      const slipPath = path.join(dir, 'local-uat-test-slip-room302.png');
-      const syntheticPng = Buffer.from(
-        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
-        'base64'
-      );
-      fs.writeFileSync(slipPath, syntheticPng);
-    }
+    // Create deterministic synthetic test slip file for Room 302 UAT via canonical storage authority
+    const slipObjectKey = 'fixtures/slips/local-uat-test-slip-room302.png';
+    const syntheticPng = await generateSyntheticSlipPng({
+      roomNumber: 'ROOM 302',
+      amount: 6500,
+      claimedDate: '2026-08-28 14:30',
+      status: 'UNVERIFIED',
+      title: 'LOCAL UAT TEST SLIP',
+      subtitle: 'NOT REAL',
+    });
+    await localStorageProvider.saveFile(slipObjectKey, syntheticPng);
 
     const payJuly = await prisma.payment.create({
       data: {

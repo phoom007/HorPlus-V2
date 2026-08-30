@@ -222,7 +222,7 @@ export async function recordCashPaymentInTx(
     data: {
       status: newStatus,
       previousStatus: prePaymentStatus,
-      paidAt: newStatus === 'PAID' ? (bill.paidAt || now) : (bill.paidAt || null),
+      paidAt: newStatus === 'PAID' ? now : (bill.paidAt ?? null),
       paidAmount: new Prisma.Decimal(newPaidAmount.toFixed(2)),
       outstandingAmount: new Prisma.Decimal(newOutstandingAmount.toFixed(2)),
     },
