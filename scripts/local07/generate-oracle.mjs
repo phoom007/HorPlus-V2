@@ -91,7 +91,8 @@ export function generateOracle() {
           cycleName: 'รอบบิล กรกฎาคม 2569',
           totalBills: 11,
           paidBillsCount: 7,
-          unpaidBillsCount: 4,
+          partialBillsCount: 1,
+          unpaidBillsCount: 3,
           financialBreakdown: {
             fixedRentTotal: 52900.0,
             waterUnitsTotal: 136,
@@ -105,10 +106,10 @@ export function generateOracle() {
             otherFeesTotal: 600.0,
             fineTotal: 0.0,
             totalBilledAmount: 65899.0,
-            totalPaidRevenue: 41994.0,
-            totalOutstandingUnpaid: 23905.0,
-            paidPercent: 64,
-            unpaidPercent: 36,
+            totalPaidRevenue: 44094.0,
+            totalOutstandingUnpaid: 21805.0,
+            paidPercent: 67,
+            unpaidPercent: 33,
             averageRevenuePerUser: 5991,
           },
           billsList: [
@@ -120,7 +121,7 @@ export function generateOracle() {
             { room: '202', tenant: 'นายปิติ สบายดี', rent: 4800, water: 180, elec: 455, common: 200, internet: 0, parking: 0, surcharge: 0, total: 5635, status: 'PAID', receipt: 'RCP-202607-004' },
             { room: '203', tenant: 'นางสาวชูใจ ใจอารี', rent: 4800, water: 216, elec: 525, common: 200, internet: 150, parking: 0, surcharge: 0, total: 5891, status: 'UNPAID', receipt: null },
             { room: '301', tenant: 'นายดนัย ดียิ่ง', rent: 5000, water: 252, elec: 560, common: 200, internet: 0, parking: 300, surcharge: 0, total: 6312, status: 'PAID', receipt: 'RCP-202607-005' },
-            { room: '302', tenant: 'นายนิรันดร์ สุขใจ', rent: 5000, water: 270, elec: 630, common: 200, internet: 0, parking: 0, surcharge: 0, total: 6100, status: 'UNPAID', receipt: null },
+            { room: '302', tenant: 'นายนิรันดร์ สุขใจ', rent: 5000, water: 270, elec: 630, common: 200, internet: 0, parking: 0, surcharge: 0, total: 6100, paidAmount: 2100, outstandingAmount: 4000, status: 'PARTIALLY_PAID', receipt: 'RCP-202607-302-P1' },
             { room: '303', tenant: 'นายประเสริฐ เกิดผล', rent: 5000, water: 216, elec: 595, common: 200, internet: 150, parking: 0, surcharge: 0, total: 6161, status: 'PAID', receipt: 'RCP-202607-006' },
             { room: 'B101', tenant: 'นางสาวมาลัย หอมหวล', rent: 5500, water: 300, elec: 800, common: 200, internet: 0, parking: 300, surcharge: 0, total: 7100, status: 'PAID', receipt: 'RCP-202607-007' },
           ],
@@ -178,8 +179,8 @@ export function generateOracle() {
 | **ค่าที่จอดรถ (Parking Fee)** | 3 ห้อง $\times$ ฿300 (ห้อง 103, 301, B101) | 3 คัน | **฿900.00** |
 | **ค่าผู้พักอาศัยร่วมเกินโควต้า** | ห้อง 104 (3 คนเกิน $\times$ ฿200) | 3 คน | **฿600.00** |
 | **รวมยอดเรียกเก็บทั้งสิ้น (Total Billed)** | **รวมทุกหมวดข้างต้น** | **11 บิล** | **฿65,899.00** |
-| **ยอดรับชำระแล้ว (Paid Revenue)** | **7 ห้องที่ชำระแล้ว (ออกใบเสร็จ)** | **7 บิล** | **฿41,994.00 (64%)** |
-| **ยอดค้างชำระ (Unpaid Outstanding)** | **4 ห้องที่ยังไม่ชำระ (ห้อง 102, 104, 203, 302)** | **4 บิล** | **฿23,905.00 (36%)** |
+| **ยอดรับชำระแล้ว (Paid Revenue)** | **7 ห้องที่ชำระเต็ม + 1 ห้องชำระบางส่วน (ออกใบเสร็จ)** | **8 รายการ** | **฿44,094.00 (67%)** |
+| **ยอดค้างชำระ (Unpaid Outstanding)** | **3 ห้องที่ยังไม่ชำระ + 1 ห้องค้างบางส่วน (ห้อง 102, 104, 203, 302)** | **4 บิล** | **฿21,805.00 (33%)** |
 | **รายรับเฉลี่ยต่อห้อง (ARPU)** | ฿65,899 / 11 ห้อง | - | **฿5,991.00** |
 
 ---
@@ -196,7 +197,7 @@ export function generateOracle() {
 | **202** | นายปิติ สบายดี | 4,800 | 180 (10u) | 455 (65u) | 200 | - | **5,635.00** | ชำระแล้ว | \`RCP-202607-004\` |
 | **203** | นางสาวชูใจ ใจอารี | 4,800 | 216 (12u) | 525 (75u) | 200 | 150 (เน็ต) | **5,891.00** | ค้างชำระ | - |
 | **301** | นายดนัย ดียิ่ง | 5,000 | 252 (14u) | 560 (80u) | 200 | 300 (จอดรถ) | **6,312.00** | ชำระแล้ว | \`RCP-202607-005\` |
-| **302** | นายนิรันดร์ สุขใจ | 5,000 | 270 (15u) | 630 (90u) | 200 | - | **6,100.00** | ค้างชำระ | - |
+| **302** | นายนิรันดร์ สุขใจ | 5,000 | 270 (15u) | 630 (90u) | 200 | - | **6,100.00** | ชำระบางส่วน (จ่าย 2,100 / ค้าง 4,000) | \`RCP-202607-302-P1\` |
 | **303** | นายประเสริฐ เกิดผล | 5,000 | 216 (12u) | 595 (85u) | 200 | 150 (เน็ต) | **6,161.00** | ชำระแล้ว | \`RCP-202607-006\` |
 | **B101** | นางสาวมาลัย หอมหวล | 5,500 | 300 (15u@20) | 800 (100u@8) | 200 | 300 (จอดรถ) | **7,100.00** | ชำระแล้ว | \`RCP-202607-007\` |
 `;

@@ -166,9 +166,17 @@ export async function runVerification() {
   assert(Boolean(julyCycle), 'Billing cycle 2026-07 exists and is open');
   assert(julyCycle?.bills.length === 16, 'July bills count is 16', julyCycle?.bills.length);
 
-  const paidBills = julyCycle?.bills.filter(b => b.status === 'paid') || [];
-  const partialBills = julyCycle?.bills.filter(b => b.status === 'partial') || [];
-  const unpaidBills = julyCycle?.bills.filter(b => b.status === 'unpaid') || [];
+  const normalizeBillStatus = (status) => {
+    const s = String(status || '').toUpperCase();
+    if (s === 'PAID') return 'PAID';
+    if (s === 'PARTIAL' || s === 'PARTIALLY_PAID') return 'PARTIALLY_PAID';
+    if (s === 'UNPAID') return 'UNPAID';
+    return s;
+  };
+
+  const paidBills = julyCycle?.bills.filter(b => normalizeBillStatus(b.status) === 'PAID') || [];
+  const partialBills = julyCycle?.bills.filter(b => normalizeBillStatus(b.status) === 'PARTIALLY_PAID') || [];
+  const unpaidBills = julyCycle?.bills.filter(b => normalizeBillStatus(b.status) === 'UNPAID') || [];
 
   assert(paidBills.length === 8, 'Paid bills count is exactly 8', paidBills.length);
   assert(partialBills.length === 1, 'Partial bills count is exactly 1 (Room 302 July prior partial)', partialBills.length);
@@ -870,12 +878,18 @@ export async function runVerification() {
     assert(Number(bill302July.totalAmount) === 6100, 'Room 302 July Bill total is ฿6,100.00', Number(bill302July.totalAmount));
     assert(Number(bill302July.paidAmount) === 2100, 'Room 302 July Bill paid is ฿2,100.00', Number(bill302July.paidAmount));
     assert(Number(bill302July.outstandingAmount) === 4000, 'Room 302 July Bill outstanding is ฿4,000.00', Number(bill302July.outstandingAmount));
-    assert(bill302July.status === 'partial', 'Room 302 July Bill status is partial', bill302July.status);
+    assert(bill302July.status === 'PARTIALLY_PAID', 'Room 302 July Bill status is canonical PARTIALLY_PAID', bill302July.status);
 
-    // Prior Approved Payment & Allocations
+    // Prior Approved Payment, Allocations & Audit Actor Identity
     const priorApprovedPayment = bill302July.Payment.find(p => p.status === 'APPROVED');
     assert(Boolean(priorApprovedPayment), 'Room 302 July has an APPROVED prior Payment');
     assert(Number(priorApprovedPayment?.amount) === 2100, 'Approved prior Payment amount is ฿2,100.00', Number(priorApprovedPayment?.amount));
+    assert(priorApprovedPayment?.reviewedByUserId === COMP_DORM.owner.id, 'Prior Payment reviewedByUserId is Comprehensive Owner ID', priorApprovedPayment?.reviewedByUserId);
+    assert(Boolean(priorApprovedPayment?.reviewedAt), 'Prior Payment reviewedAt is populated');
+    assert(
+      priorApprovedPayment?.statusHistories?.some(h => h.changedByUserId === COMP_DORM.owner.id && h.toStatus === 'APPROVED'),
+      'Prior Payment status history recorded Comprehensive Owner as changedByUserId'
+    );
 
     const approvedAllocationsSum = bill302July.allocations.reduce((sum, a) => sum + Number(a.allocatedAmount), 0);
     assert(approvedAllocationsSum === 2100, 'Approved prior PaymentAllocation sum against July Bill is ฿2,100.00', approvedAllocationsSum);
@@ -886,6 +900,15 @@ export async function runVerification() {
     const legacyUnallocatedPaidAmount = Math.max(Number(bill302July.paidAmount) - approvedAllocationsSum, 0);
     assert(legacyUnallocatedPaidAmount === 0, 'legacyUnallocatedPaidAmount is exactly 0 for modern Room 302 fixture', legacyUnallocatedPaidAmount);
 
+    // Prior Bill Status History Audit
+    const bill302Histories = await prisma.billStatusHistory.findMany({
+      where: { billId: bill302July.id },
+    });
+    assert(
+      bill302Histories.some(h => h.toStatus === 'PARTIALLY_PAID' && h.changedByUserId === COMP_DORM.owner.id),
+      'Room 302 Bill status history has toStatus=PARTIALLY_PAID and changedByUserId=Comprehensive Owner'
+    );
+
     // Prior Receipt
     assert(bill302July.Receipt.length === 1, 'Room 302 July has exactly 1 prior event Receipt', bill302July.Receipt.length);
     const priorReceipt = bill302July.Receipt[0];
@@ -893,6 +916,12 @@ export async function runVerification() {
       Number(priorReceipt?.snapshotData?.totalAmount || priorReceipt?.snapshotData?.total) === 2100,
       'Prior receipt snapshot total is ฿2,100.00',
       priorReceipt?.snapshotData?.totalAmount || priorReceipt?.snapshotData?.total
+    );
+    assert(priorReceipt?.issuedByUserId === COMP_DORM.owner.id, 'Prior Receipt issuedByUserId is Comprehensive Owner ID');
+    assert(
+      priorReceipt?.snapshotData?.receiverName === COMP_DORM.owner.name,
+      'Prior Receipt receiverName is Comprehensive Owner display name',
+      priorReceipt?.snapshotData?.receiverName
     );
 
     // Pending Combined Payment Group

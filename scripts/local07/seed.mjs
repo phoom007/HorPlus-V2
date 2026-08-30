@@ -2042,6 +2042,7 @@ export async function seedLocal07Data() {
         method: 'CASH',
         status: 'APPROVED',
         paymentDate: priorPaymentDate,
+        recordedByUserId: COMP_DORM.owner.id,
         notes: 'ชำระเงินสดบางส่วนที่เคาน์เตอร์ (ก.ค. 2569)',
       },
     });
@@ -2065,6 +2066,7 @@ export async function seedLocal07Data() {
         amount: 2100.0,
         status: 'APPROVED',
         paymentDate: priorPaymentDate,
+        reviewedByUserId: COMP_DORM.owner.id,
         reviewedAt: priorPaymentDate,
       },
     });
@@ -2075,6 +2077,7 @@ export async function seedLocal07Data() {
         paymentId: priorPayment.id,
         fromStatus: null,
         toStatus: 'APPROVED',
+        changedByUserId: COMP_DORM.owner.id,
         effectiveAt: priorPaymentDate,
       },
     });
@@ -2101,8 +2104,9 @@ export async function seedLocal07Data() {
       data: {
         dormitoryId: compDorm.id,
         billId: bill302July.id,
-        fromStatus: 'unpaid',
-        toStatus: 'partial',
+        fromStatus: 'UNPAID',
+        toStatus: 'PARTIALLY_PAID',
+        changedByUserId: COMP_DORM.owner.id,
         effectiveAt: priorPaymentDate,
       },
     });
@@ -2124,11 +2128,12 @@ export async function seedLocal07Data() {
           total: '2100.00',
           paymentMethod: 'CASH',
           paymentDate: priorPaymentDate.toISOString(),
-          receiverName: 'เจ้าของหอพัก',
+          receiverName: COMP_DORM.owner.name,
           items: [
             { description: 'ค่าเช่าห้องพัก 302 (ก.ค. 2569) — ชำระบางส่วน', amount: 2100.0 },
           ],
         },
+        issuedByUserId: COMP_DORM.owner.id,
         issuedAt: priorPaymentDate,
         isVoided: false,
       },
@@ -2139,12 +2144,12 @@ export async function seedLocal07Data() {
       data: {
         paidAmount: 2100.0,
         outstandingAmount: 4000.0,
-        status: 'partial',
+        status: 'PARTIALLY_PAID',
       },
     });
     bill302July.outstandingAmount = 4000.0;
     bill302July.paidAmount = 2100.0;
-    bill302July.status = 'partial';
+    bill302July.status = 'PARTIALLY_PAID';
 
     // 1. Create CombinedPaymentGroup (6,500 total, UNDER_REVIEW)
     const uatSlipGroup = await prisma.combinedPaymentGroup.create({

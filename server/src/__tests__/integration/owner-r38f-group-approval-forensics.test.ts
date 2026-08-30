@@ -403,7 +403,7 @@ describe('OWNER R3.8f: Group Payment Approval Forensics & Direct-Consumer Integr
       },
     });
 
-    // 2. Canonical Prior Cash Event: ฿2,100 partial payment
+    // 2. Canonical Prior Cash Event: ฿2,100 partial payment with full audit actor identity
     const priorPaymentDate = new Date('2026-08-10T10:00:00Z');
     const priorGroup = await prisma.combinedPaymentGroup.create({
       data: {
@@ -413,6 +413,7 @@ describe('OWNER R3.8f: Group Payment Approval Forensics & Direct-Consumer Integr
         method: 'CASH',
         status: 'APPROVED',
         paymentDate: priorPaymentDate,
+        recordedByUserId: ownerUserId,
         notes: 'ชำระเงินสดบางส่วนที่เคาน์เตอร์',
       },
     });
@@ -436,16 +437,18 @@ describe('OWNER R3.8f: Group Payment Approval Forensics & Direct-Consumer Integr
         amount: 2100.0,
         status: 'APPROVED',
         paymentDate: priorPaymentDate,
+        reviewedByUserId: ownerUserId,
         reviewedAt: priorPaymentDate,
       },
     });
 
-    await prisma.paymentStatusHistory.create({
+    const priorPaymentStatusHist = await prisma.paymentStatusHistory.create({
       data: {
         dormitoryId: dormId,
         paymentId: priorPayment.id,
         fromStatus: null,
         toStatus: 'APPROVED',
+        changedByUserId: ownerUserId,
         effectiveAt: priorPaymentDate,
       },
     });
@@ -462,12 +465,13 @@ describe('OWNER R3.8f: Group Payment Approval Forensics & Direct-Consumer Integr
       },
     });
 
-    await prisma.billStatusHistory.create({
+    const priorBillStatusHist = await prisma.billStatusHistory.create({
       data: {
         dormitoryId: dormId,
         billId: billJuly.id,
         fromStatus: 'UNPAID',
         toStatus: 'PARTIALLY_PAID',
+        changedByUserId: ownerUserId,
         effectiveAt: priorPaymentDate,
       },
     });
@@ -489,8 +493,10 @@ describe('OWNER R3.8f: Group Payment Approval Forensics & Direct-Consumer Integr
           totalAmount: 2100.0,
           paymentMethod: 'CASH',
           paymentDate: priorPaymentDate.toISOString(),
+          receiverName: 'Owner User R38f',
           items: [{ description: 'ค่าเช่า ก.ค. — ชำระบางส่วน', amount: 2100.0 }],
         },
+        issuedByUserId: ownerUserId,
         issuedAt: priorPaymentDate,
         isVoided: false,
       },
@@ -505,7 +511,15 @@ describe('OWNER R3.8f: Group Payment Approval Forensics & Direct-Consumer Integr
       },
     });
 
-    // 3. Pre-Approval Financial Graph Assertions
+    // 3. Pre-Approval Financial Graph & Audit Actor Assertions
+    expect(priorGroup.recordedByUserId).toBe(ownerUserId);
+    expect(priorPayment.reviewedByUserId).toBe(ownerUserId);
+    expect(priorPayment.reviewedAt?.toISOString()).toBe(priorPaymentDate.toISOString());
+    expect(priorPaymentStatusHist.changedByUserId).toBe(ownerUserId);
+    expect(priorBillStatusHist.changedByUserId).toBe(ownerUserId);
+    expect(priorReceipt.issuedByUserId).toBe(ownerUserId);
+    expect((priorReceipt.snapshotData as any)?.receiverName).toBe('Owner User R38f');
+
     const preJulyBill = await prisma.bill.findUnique({
       where: { id: billJuly.id },
       include: { allocations: true, Receipt: true, Payment: true },

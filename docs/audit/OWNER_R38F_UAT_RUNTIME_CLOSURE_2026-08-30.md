@@ -1,9 +1,9 @@
 # OWNER R3.8f — Manual-UAT Runtime Closure: Term Money Integrity, Room 302 Group Approval Forensics, Receipt Print & Local-07 Diagnostics
 
 **Date**: 2026-08-30
-**Branch**: `fix/owner-r38fr1-financial-fixture-source-cleanup-20260830`
+**Branch**: `fix/owner-r38fr2-canonical-cash-oracle-truth-20260830`
 **Base Commit**: `3e4052dce8aaf567de47443ae8f8aa17b0955fff`
-**Parent Commit**: `189ddd61416e97c808811f67bc9137669136b609`
+**Parent Commit**: `cbee7c294d5c9c69ac2889ea75aff8414ffcc8e9`
 **Status**: PASSED / READY FOR PRODUCT OWNER MANUAL UAT
 
 ---
@@ -203,3 +203,60 @@ During independent source review, a P0 fixture integrity blocker was identified:
 ### 6.7 PrintView Status
 - Top-level print root DOM-cloning verified via unit tests.
 - Physical Chrome one-page layout status: **SOURCE PRINT FIX READY FOR MANUAL CHROME PRINT UAT**.
+
+---
+
+## 7. R3.8fR2 — Canonical Cash-Actor Status + LOCAL07 Oracle Truth Closure
+
+### 7.1 Canonical Bill Status Correction
+- **Issue**: R3.8fR1 used `'partial'` for `Bill.status` and `BillStatusHistory.toStatus`, which deviated from production canonical settlement authority (`PARTIALLY_PAID`).
+- **Correction**: Updated `scripts/local07/seed.mjs` to transition Room 302 July bill (`INV-202607-009`) to `status = 'PARTIALLY_PAID'` and `BillStatusHistory.toStatus = 'PARTIALLY_PAID'`, matching production allocation and test semantics.
+- **Verification**: Updated `scripts/local07/verify.mjs` with `normalizeBillStatus` helper (`PAID`, `PARTIALLY_PAID`, `UNPAID`) and strict assertion `bill302July.status === 'PARTIALLY_PAID'`.
+
+### 7.2 Cash Audit Actor Authority
+- **Actor Invariant**: Historical Cash payments must reflect authenticated logged-in actor relationships.
+- **Seeded Actor ID**: `COMP_DORM.owner.id` (`20000002-0000-4000-8000-000000000002`)
+- **Seeded Actor Name**: `COMP_DORM.owner.name` (`'เจ้าของทดสอบ Comprehensive Owner'`)
+- **Relationships Established & Verified**:
+  - `CombinedPaymentGroup.recordedByUserId = COMP_DORM.owner.id`
+  - `Payment.reviewedByUserId = COMP_DORM.owner.id`
+  - `Payment.reviewedAt = 2026-08-10T10:00:00.000Z`
+  - `PaymentStatusHistory.changedByUserId = COMP_DORM.owner.id`
+  - `BillStatusHistory.changedByUserId = COMP_DORM.owner.id`
+  - `Receipt.issuedByUserId = COMP_DORM.owner.id`
+  - `Receipt.snapshotData.receiverName = COMP_DORM.owner.name`
+- **Backend Integration Test**: Updated CASE 2 in `server/src/__tests__/integration/owner-r38f-group-approval-forensics.test.ts` to assert all 7 actor identity fields explicitly.
+
+### 7.3 LOCAL07 Committed Oracle Truth Closure
+- **Root Problem**: `docs/uat/local07-expected-results.json` and `scripts/local07/generate-oracle.mjs` previously described Room 302 as `UNPAID` with null receipt, missing the canonical prior ฿2,100 Cash payment.
+- **Semantic Oracle Updates in `generate-oracle.mjs`**:
+  - **Room 302 Entry**: `status = 'PARTIALLY_PAID'`, `paidAmount = 2100`, `outstandingAmount = 4000`, `receipt = 'RCP-202607-302-P1'`.
+  - **Bill Counts**: `totalBills = 11`, `paidBillsCount = 7`, `partialBillsCount = 1`, `unpaidBillsCount = 3` (7 + 1 + 3 = 11).
+  - **Financial Totals**:
+    - `totalBilledAmount = 65899.0`
+    - `totalPaidRevenue = 44094.0` (`41994.0 + 2100.0`)
+    - `totalOutstandingUnpaid = 21805.0` (`23905.0 - 2100.0`)
+    - `paidPercent = 67` (`Math.round(44094 / 65899 * 100)`)
+    - `unpaidPercent = 33` (`Math.round(21805 / 65899 * 100)`)
+    - `averageRevenuePerUser = 5991` (`Math.round(65899 / 11)`)
+  - **Markdown Guide (`docs/uat/LOCAL07_EXPECTED_RESULTS_TH.md`)**: Updated summary tables to show 8 paid/partial receipts and Room 302 breakdown.
+
+### 7.4 Generator Idempotency & Timestamp Stability
+- `generatedAt` remains locked at `2026-08-27T03:55:02.317Z` without timestamp churn.
+- Double execution of `node scripts/local07/generate-oracle.mjs` produces exact **0 diff**, proving deterministic generation.
+
+### 7.5 Database $\leftrightarrow$ Oracle Reconciliation
+| Entity / Field | Oracle Value | DB Value (`npm run uat:refresh`) | Reconciled? |
+| :--- | :--- | :--- | :---: |
+| Room 302 July Status | `PARTIALLY_PAID` | `PARTIALLY_PAID` | **YES** |
+| Room 302 July Paid | `฿2,100.00` | `฿2,100.00` | **YES** |
+| Room 302 July Outstanding | `฿4,000.00` | `฿4,000.00` | **YES** |
+| Room 302 July Receipt | `RCP-202607-302-P1` | `RCP-202607-302-P1` | **YES** |
+| July Fully Paid Bills | 7 | 7 | **YES** |
+| July Partially Paid Bills | 1 | 1 | **YES** |
+| July Unpaid Bills | 3 | 3 | **YES** |
+| July Total Paid Revenue | `฿44,094.00` | `฿44,094.00` (11 monthly bills) | **YES** |
+| July Total Outstanding | `฿21,805.00` | `฿21,805.00` (11 monthly bills) | **YES** |
+| Room 302 Pending Group | `UNDER_REVIEW` (฿6,500) | `UNDER_REVIEW` (฿6,500) | **YES** |
+| Room 302 Pending Approval | Pending manual PO action | Pending manual PO action | **YES** |
+| Receipt Print Status | Source print fix ready | Source print fix ready | **YES** |
