@@ -18,7 +18,7 @@ import {
   FileText,
 } from 'lucide-react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Modal, formatBaht, formatThaiDate, formatCycleCode, PrintView, formatBillingQuantity, formatBillingRate } from '../../components/GlobalComponents';
+import { Modal, formatBaht, formatThaiDate, formatCycleCode, PrintView, formatBillingQuantity, formatBillingRate, resolveBillingDisplayUnit } from '../../components/GlobalComponents';
 import { LineNotificationModal, LineIcon } from '../../components/LineNotificationModal';
 import { Bill, Tenant, Room } from '../../types';
 import { queryKeys } from '../../lib/queryClient';
@@ -468,10 +468,35 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
   const effectiveCycleCode = selectedCycleCode || billingCycles.find(c => c.id === effectiveCycleId)?.cycleCode || '';
 
   // Helpers to resolve Room Number, Tenant Name, Cycle Code
-  const getRoomNum = (rId?: string | null): string => {
-    if (!rId) return 'ไม่ระบุ';
-    const room = rooms.find(r => r.id === rId || r.roomNumber === rId);
-    return room?.roomNumber || rId;
+  const isUuidString = (str: string): boolean => {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str.trim());
+  };
+
+  const getRoomNum = (rIdOrRoom?: string | { id?: string; roomNumber?: string } | null, fallbackNumber?: string): string => {
+    if (!rIdOrRoom) return fallbackNumber || 'ไม่ระบุ';
+    if (typeof rIdOrRoom === 'object') {
+      if (rIdOrRoom.roomNumber && String(rIdOrRoom.roomNumber).trim() !== '' && !isUuidString(rIdOrRoom.roomNumber)) {
+        return String(rIdOrRoom.roomNumber).trim();
+      }
+      return getRoomNum(rIdOrRoom.id, fallbackNumber);
+    }
+    const str = String(rIdOrRoom).trim();
+    if (!str) return fallbackNumber || 'ไม่ระบุ';
+
+    const room = rooms.find(r => r.id === str || r.roomNumber === str);
+    if (room?.roomNumber && !isUuidString(room.roomNumber)) {
+      return room.roomNumber;
+    }
+
+    if (fallbackNumber && String(fallbackNumber).trim() !== '' && !isUuidString(fallbackNumber)) {
+      return String(fallbackNumber).trim();
+    }
+
+    if (!isUuidString(str)) {
+      return str;
+    }
+
+    return 'ไม่ระบุ';
   };
 
   const getTenantName = (tId?: string | null): string => {
@@ -527,7 +552,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
       if (p.paymentGroupId) {
         if (!groupsMap.has(p.paymentGroupId)) {
           const groupTotal = Number(p.paymentGroup?.totalAmount || p.amount || 0);
-          const roomNum = getRoomNum(p.bill?.roomId || (p.bill as any)?.room?.id);
+          const roomNum = p.bill?.room?.roomNumber || getRoomNum(p.bill?.roomId || (p.bill as any)?.room?.id);
           const tenantName = p.bill?.tenant?.displayName || getTenantName(p.tenantId || p.bill?.tenantId);
           const slipUrl = getSlipEvidenceUrl(p);
 
@@ -556,7 +581,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
           bill: p.bill,
         });
       } else {
-        const roomNum = getRoomNum(p.bill?.roomId || (p.bill as any)?.room?.id);
+        const roomNum = p.bill?.room?.roomNumber || getRoomNum(p.bill?.roomId || (p.bill as any)?.room?.id);
         const tenantName = p.bill?.tenant?.displayName || getTenantName(p.tenantId || p.bill?.tenantId);
         const slipUrl = getSlipEvidenceUrl(p);
         const cycleCode = getCycleCodeForCycleId(p.bill?.billingCycleId);
@@ -939,7 +964,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
     }
 
     const snap = (rcpt.snapshotData as any) || {};
-    const roomNumber = snap.roomNumber || getRoomNum(payment.bill?.roomId || payment.bill?.room?.id);
+    const roomNumber = snap.roomNumber || payment.bill?.room?.roomNumber || getRoomNum(payment.bill?.roomId || payment.bill?.room?.id);
     const tenantName = snap.tenantName || payment.bill?.tenant?.displayName || getTenantName(payment.tenantId || payment.bill?.tenantId);
     const totalAmount = Number(snap.total || rcpt.totalAmount || payment.amount || payment.bill?.totalAmount || 0);
 
@@ -986,7 +1011,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
           items = foundBill.items.map((it: any) => ({
             description: it.description || it.type || '-',
             quantity: it.quantity,
-            unit: it.unit,
+            unit: resolveBillingDisplayUnit({ unit: it.unit, type: it.type }),
             unitPrice: it.unitPrice,
             amount: Number(it.amount),
           }));
@@ -1046,7 +1071,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
         items = snap.items.map((it: any) => ({
           description: it.description,
           quantity: it.quantity,
-          unit: it.unit,
+          unit: resolveBillingDisplayUnit({ unit: it.unit, type: it.type }),
           unitPrice: it.unitPrice,
           amount: Number(it.amount),
         }));
@@ -1059,7 +1084,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
       items = targetBill.items.map((it: any) => ({
         description: it.description || it.type || '-',
         quantity: it.quantity,
-        unit: it.unit,
+        unit: resolveBillingDisplayUnit({ unit: it.unit, type: it.type }),
         unitPrice: it.unitPrice,
         amount: Number(it.amount),
       }));
@@ -1526,7 +1551,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
         <div className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-4">
             {filterPaymentsByQuery(paidPayments).map(p => {
-              const roomNum = getRoomNum(p.bill?.roomId || p.bill?.room?.id);
+              const roomNum = p.bill?.room?.roomNumber || getRoomNum(p.bill?.roomId || p.bill?.room?.id);
               const tenantName = p.bill?.tenant?.displayName || getTenantName(p.tenantId || p.bill?.tenantId);
               const slipUrl = getSlipEvidenceUrl(p);
               const amount = Number(p.amount || p.bill?.totalAmount || 0);
@@ -1620,7 +1645,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
         <div className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-4">
             {filterPaymentsByQuery(rejectedPayments).map(p => {
-              const roomNum = getRoomNum(p.bill?.roomId || p.bill?.room?.id);
+              const roomNum = p.bill?.room?.roomNumber || getRoomNum(p.bill?.roomId || p.bill?.room?.id);
               const tenantName = p.bill?.tenant?.displayName || getTenantName(p.tenantId || p.bill?.tenantId);
               const slipUrl = getSlipEvidenceUrl(p);
               const amount = Number(p.amount || p.bill?.totalAmount || 0);
@@ -2073,15 +2098,18 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {viewingBillDetail.bill.items && viewingBillDetail.bill.items.length > 0 ? (
-                    viewingBillDetail.bill.items.map((it: any, idx: number) => (
-                      <tr key={idx} className="hover:bg-slate-50/50">
-                        <td className="p-3 text-center text-slate-400 font-medium">{idx + 1}</td>
-                        <td className="p-3 font-semibold text-slate-800">{formatItemDescription(it.description || it.type || '-')}</td>
-                        <td className="p-3 text-center text-slate-600 font-medium">{formatBillingQuantity(it.quantity, it.unit)}</td>
-                        <td className="p-3 text-right text-slate-600 font-medium">{formatBillingRate(it.unitPrice, it.unit)}</td>
-                        <td className="p-3 text-right font-bold text-slate-900">{formatBaht(Number(it.amount))}</td>
-                      </tr>
-                    ))
+                    viewingBillDetail.bill.items.map((it: any, idx: number) => {
+                      const displayUnit = resolveBillingDisplayUnit({ unit: it.unit, type: it.type });
+                      return (
+                        <tr key={idx} className="hover:bg-slate-50/50">
+                          <td className="p-3 text-center text-slate-400 font-medium">{idx + 1}</td>
+                          <td className="p-3 font-semibold text-slate-800">{formatItemDescription(it.description || it.type || '-')}</td>
+                          <td className="p-3 text-center text-slate-600 font-medium">{formatBillingQuantity(it.quantity, displayUnit)}</td>
+                          <td className="p-3 text-right text-slate-600 font-medium">{formatBillingRate(it.unitPrice, displayUnit)}</td>
+                          <td className="p-3 text-right font-bold text-slate-900">{formatBaht(Number(it.amount))}</td>
+                        </tr>
+                      );
+                    })
                   ) : (
                     <tr>
                       <td colSpan={5} className="p-4 text-center text-slate-400 font-semibold">

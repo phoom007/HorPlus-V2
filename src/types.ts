@@ -647,6 +647,43 @@ export function formatBillingRate(unitPrice?: number | string | null, unit?: str
   return thaiUnit ? `${formattedVal} บาท/${thaiUnit}` : `${formattedVal} บาท`;
 }
 
+/**
+ * Resolves the display unit for a BillItem.
+ * Precedence:
+ * 1. Persisted `unit` (if provided, non-empty, and non-null)
+ * 2. Verified deterministic fallback by `type` (only where source proves a single canonical unit)
+ * 3. `null` / empty (no guessed unit)
+ */
+export function resolveBillingDisplayUnit(params: {
+  unit?: string | null;
+  type?: string | null;
+}): string | null {
+  if (params.unit && String(params.unit).trim() !== '') {
+    return params.unit.trim();
+  }
+
+  if (!params.type) return null;
+
+  const normalizedType = String(params.type).trim().toLowerCase();
+  switch (normalizedType) {
+    case 'water':
+      return 'unit';
+    case 'electric':
+    case 'electricity':
+      return 'unit';
+    case 'common':
+    case 'common_fee':
+      return 'room';
+    case 'manual_outstanding':
+    case 'other_fee':
+      return 'charge';
+    default:
+      // Ambiguous types (rent, deposit, internet, parking, surcharge, late_fee, etc.)
+      // do not guess a fallback unit.
+      return null;
+  }
+}
+
 export interface ActiveRentalSummary {
   type: 'TERM' | 'MONTHLY' | 'DAILY';
   rentAmount: number;

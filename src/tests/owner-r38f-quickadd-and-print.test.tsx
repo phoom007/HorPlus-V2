@@ -14,7 +14,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { queryKeys } from '../lib/queryClient';
 import { QuickAddTenantModal } from '../components/QuickAddTenantModal';
 import { PrintView, formatBillingUnit, formatBillingQuantity, formatBillingRate } from '../components/GlobalComponents';
-import { formatItemDescription as canonicalFormatItemDescription } from '../types';
+import { formatItemDescription as canonicalFormatItemDescription, resolveBillingDisplayUnit } from '../types';
 import { formatItemDescription as paymentsFormatItemDescription, PaymentsOwnerView } from '../pages/owner/payments';
 
 describe('OWNER R3.8f — QuickAdd Money Type Integrity & Live Preview', () => {
@@ -839,5 +839,223 @@ describe('OWNER R3.8fR5-C — Itemized Receipts & Thai Billing Units', () => {
     if (closeBtn) fireEvent.click(closeBtn);
 
     window.print = originalPrint;
+  });
+
+  describe('OWNER R3.8fR5-C.3 — Verified Type Fallbacks & Room UUID Suppression', () => {
+    it('resolveBillingDisplayUnit enforces persisted-unit precedence and verified deterministic fallbacks', () => {
+      // 1. Persisted unit always wins over type fallback
+      expect(resolveBillingDisplayUnit({ unit: 'person', type: 'water' })).toBe('person');
+      expect(resolveBillingDisplayUnit({ unit: 'room', type: 'electric' })).toBe('room');
+      expect(resolveBillingDisplayUnit({ unit: 'person', type: 'internet' })).toBe('person');
+      expect(resolveBillingDisplayUnit({ unit: 'vehicle', type: 'parking' })).toBe('vehicle');
+
+      // 2. Verified deterministic fallbacks for null/empty persisted unit
+      expect(resolveBillingDisplayUnit({ unit: null, type: 'water' })).toBe('unit');
+      expect(resolveBillingDisplayUnit({ unit: '', type: 'water' })).toBe('unit');
+      expect(resolveBillingDisplayUnit({ unit: null, type: 'electric' })).toBe('unit');
+      expect(resolveBillingDisplayUnit({ unit: null, type: 'electricity' })).toBe('unit');
+      expect(resolveBillingDisplayUnit({ unit: null, type: 'common' })).toBe('room');
+      expect(resolveBillingDisplayUnit({ unit: null, type: 'common_fee' })).toBe('room');
+      expect(resolveBillingDisplayUnit({ unit: null, type: 'manual_outstanding' })).toBe('charge');
+      expect(resolveBillingDisplayUnit({ unit: null, type: 'other_fee' })).toBe('charge');
+
+      // 3. Ambiguous / unmapped types return null (no guessing)
+      expect(resolveBillingDisplayUnit({ unit: null, type: 'rent' })).toBeNull();
+      expect(resolveBillingDisplayUnit({ unit: null, type: 'deposit' })).toBeNull();
+      expect(resolveBillingDisplayUnit({ unit: null, type: 'internet' })).toBeNull();
+      expect(resolveBillingDisplayUnit({ unit: null, type: 'parking' })).toBeNull();
+      expect(resolveBillingDisplayUnit({ unit: null, type: 'surcharge' })).toBeNull();
+      expect(resolveBillingDisplayUnit({ unit: null, type: 'late_fee' })).toBeNull();
+      expect(resolveBillingDisplayUnit({ unit: null, type: null })).toBeNull();
+    });
+
+    it('Bill Detail modal renders Room 202-style utility bill with verified Thai units when persisted unit is null', () => {
+      const mockDormitoryId = 'dorm-r202-test';
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+      const mockPayments = [
+        {
+          id: 'pay-202',
+          dormitoryId: mockDormitoryId,
+          billId: 'bill-202-u',
+          method: 'CASH',
+          amount: 1200,
+          status: 'APPROVED',
+          createdAt: '2026-08-28T10:00:00Z',
+          bill: {
+            id: 'bill-202-u',
+            billNumber: 'INV-202608-202-U',
+            billKind: 'MONTHLY_UTILITY',
+            billingCycleId: 'cycle-aug-2026',
+            roomId: 'room-202-uuid',
+            totalAmount: 1200,
+            room: {
+              id: 'room-202-uuid',
+              roomNumber: '202',
+            },
+            items: [
+              { id: 'it-w', type: 'water', description: 'ค่าน้ำ (5 หน่วย @ ฿18)', quantity: 5, unitPrice: 18, amount: 90, unit: null },
+              { id: 'it-e', type: 'electric', description: 'ค่าไฟฟ้า (130 หน่วย @ ฿7)', quantity: 130, unitPrice: 7, amount: 910, unit: null },
+              { id: 'it-c', type: 'common', description: 'ค่าส่วนกลาง', quantity: 1, unitPrice: 200, amount: 200, unit: null },
+            ],
+          },
+        },
+      ];
+
+      queryClient.setQueryData(queryKeys.payments(mockDormitoryId), mockPayments);
+
+      render(
+        <QueryClientProvider client={queryClient}>
+          <PaymentsOwnerView
+            dormitoryId={mockDormitoryId}
+            selectedCycleCode="2026-08"
+            billingCycles={[{ id: 'cycle-aug-2026', cycleCode: '2026-08' }]}
+            rooms={[{ id: 'room-202-uuid', roomNumber: '202', floor: 2, status: 'occupied' } as any]}
+            tenants={[{ id: 't-202', displayName: 'นายปิติ สบายดี', roomId: 'room-202-uuid' } as any]}
+            bills={[]}
+            onAddLog={vi.fn()}
+          />
+        </QueryClientProvider>
+      );
+
+      // Switch to paid tab
+      const paidTab = screen.getByRole('button', { name: /ชำระแล้ว/i });
+      fireEvent.click(paidTab);
+
+      // Verify card displays human room number "ห้อง 202" and NOT the UUID
+      expect(screen.getByText('ห้อง 202')).toBeInTheDocument();
+      expect(screen.queryByText(/room-202-uuid/i)).toBeNull();
+
+      // Open Bill Detail modal via "(ดูรายการ)"
+      const viewDetailBtn = screen.getByRole('button', { name: /\(ดูรายการ\)/i });
+      fireEvent.click(viewDetailBtn);
+
+      // Verify Bill Detail table renders verified fallbacks
+      expect(screen.getByText('5 หน่วย')).toBeInTheDocument();
+      expect(screen.getByText('18.00 บาท/หน่วย')).toBeInTheDocument();
+      expect(screen.getByText('130 หน่วย')).toBeInTheDocument();
+      expect(screen.getByText('7.00 บาท/หน่วย')).toBeInTheDocument();
+      expect(screen.getByText('1 ห้อง')).toBeInTheDocument();
+      expect(screen.getByText('200.00 บาท/ห้อง')).toBeInTheDocument();
+    });
+
+    it('Bill Detail modal renders Room 104 legacy combined bill without guessing unverified units', () => {
+      const mockDormitoryId = 'dorm-r104-test';
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+      const mockPayments = [
+        {
+          id: 'pay-104',
+          dormitoryId: mockDormitoryId,
+          billId: 'bill-104-comb',
+          method: 'CASH',
+          amount: 10600,
+          status: 'APPROVED',
+          createdAt: '2026-08-28T10:00:00Z',
+          bill: {
+            id: 'bill-104-comb',
+            billNumber: 'INV-202608-104-COMBINED',
+            billKind: 'LEGACY_COMBINED',
+            billingCycleId: 'cycle-aug-2026',
+            roomId: 'room-104-uuid',
+            totalAmount: 10600,
+            room: {
+              id: 'room-104-uuid',
+              roomNumber: '104',
+            },
+            items: [
+              { id: 'it-r', type: 'rent', description: 'ค่าเช่าห้องพัก 104', quantity: 1, unitPrice: 4800, amount: 4800, unit: null },
+              { id: 'it-d', type: 'deposit', description: 'เงินประกันห้องพัก 104', quantity: 1, unitPrice: 4800, amount: 4800, unit: null },
+              { id: 'it-e', type: 'electric', description: 'ค่าไฟฟ้าส่วนกลาง 104', quantity: 1, unitPrice: 1000, amount: 1000, unit: null },
+            ],
+          },
+        },
+      ];
+
+      queryClient.setQueryData(queryKeys.payments(mockDormitoryId), mockPayments);
+
+      render(
+        <QueryClientProvider client={queryClient}>
+          <PaymentsOwnerView
+            dormitoryId={mockDormitoryId}
+            selectedCycleCode="2026-08"
+            billingCycles={[{ id: 'cycle-aug-2026', cycleCode: '2026-08' }]}
+            rooms={[{ id: 'room-104-uuid', roomNumber: '104', floor: 1, status: 'occupied' } as any]}
+            tenants={[{ id: 't-104', displayName: 'นายสมศักดิ์ รักดี', roomId: 'room-104-uuid' } as any]}
+            bills={[]}
+            onAddLog={vi.fn()}
+          />
+        </QueryClientProvider>
+      );
+
+      // Switch to paid tab
+      const paidTab = screen.getByRole('button', { name: /ชำระแล้ว/i });
+      fireEvent.click(paidTab);
+
+      // Verify card displays human room number "ห้อง 104"
+      expect(screen.getByText('ห้อง 104')).toBeInTheDocument();
+
+      // Open Bill Detail modal
+      const viewDetailBtn = screen.getByRole('button', { name: /\(ดูรายการ\)/i });
+      fireEvent.click(viewDetailBtn);
+
+      // Verified electric gets fallback "1 หน่วย" and "1,000.00 บาท/หน่วย"
+      expect(screen.getByText('1 หน่วย')).toBeInTheDocument();
+      expect(screen.getByText('1,000.00 บาท/หน่วย')).toBeInTheDocument();
+
+      // Unverified rent & deposit render without fabricated units (rendered as 1 and 4,800.00 บาท)
+      expect(screen.getAllByText('4,800.00 บาท').length).toBe(2);
+      expect(screen.queryByText('4,800.00 บาท/ห้อง')).toBeNull();
+    });
+
+    it('Payment card suppresses internal UUID and falls back to ไม่ระบุ when roomNumber is completely absent', () => {
+      const mockDormitoryId = 'dorm-uuid-suppress-test';
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+      const rawUuid = '4a453a30-5ec6-427c-97fd-4c36d2e7b8d3';
+      const mockPayments = [
+        {
+          id: 'pay-uuid-test',
+          dormitoryId: mockDormitoryId,
+          billId: 'bill-uuid-test',
+          method: 'CASH',
+          amount: 5000,
+          status: 'APPROVED',
+          createdAt: '2026-08-28T10:00:00Z',
+          bill: {
+            id: 'bill-uuid-test',
+            billNumber: 'INV-202608-ORPHAN',
+            billingCycleId: 'cycle-aug-2026',
+            roomId: rawUuid,
+            totalAmount: 5000,
+            room: null,
+          },
+        },
+      ];
+
+      queryClient.setQueryData(queryKeys.payments(mockDormitoryId), mockPayments);
+
+      render(
+        <QueryClientProvider client={queryClient}>
+          <PaymentsOwnerView
+            dormitoryId={mockDormitoryId}
+            selectedCycleCode="2026-08"
+            billingCycles={[{ id: 'cycle-aug-2026', cycleCode: '2026-08' }]}
+            rooms={[]}
+            tenants={[]}
+            bills={[]}
+            onAddLog={vi.fn()}
+          />
+        </QueryClientProvider>
+      );
+
+      // Switch to paid tab
+      const paidTab = screen.getByRole('button', { name: /ชำระแล้ว/i });
+      fireEvent.click(paidTab);
+
+      // Must display "ห้อง ไม่ระบุ" and MUST NOT expose raw UUID
+      expect(screen.getByText('ห้อง ไม่ระบุ')).toBeInTheDocument();
+      expect(screen.queryByText(new RegExp(rawUuid, 'i'))).toBeNull();
+    });
   });
 });
