@@ -64,6 +64,15 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
   const [startDate, setStartDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [copiedLineId, setCopiedLineId] = useState(false);
 
+  // Helper: safe numeric money normalization to prevent string concatenation
+  const normalizeMoneyInput = (val: string | number | null | undefined): number => {
+    if (val === null || val === undefined) return 0;
+    if (typeof val === 'number') return isNaN(val) ? 0 : val;
+    const cleaned = String(val).replace(/,/g, '').trim();
+    const parsed = parseFloat(cleaned);
+    return isNaN(parsed) ? 0 : parsed;
+  };
+
   // Identity Card Document upload (0 or 1 image, max 5 MB, JPEG/PNG/WebP only, no PDF)
   const [idCardFile, setIdCardFile] = useState<File | null>(null);
   const [idCardPreview, setIdCardPreview] = useState<string | null>(null);
@@ -312,8 +321,8 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
     Number(context.effective?.termRent) <= 0;
 
   const inclusiveDays = calculateInclusiveDays(startDate, dailyEndDate);
-  const dailyTotalRent = (Number(dailyRate) || 0) * inclusiveDays;
-  const dailyTotalAgreed = dailyTotalRent + (Number(dailyDeposit) || 0);
+  const dailyTotalRent = normalizeMoneyInput(dailyRate) * inclusiveDays;
+  const dailyTotalAgreed = dailyTotalRent + normalizeMoneyInput(dailyDeposit);
   const dailyOutstanding = dailyDepositDeclaredStatus === 'PAID' ? dailyTotalRent : dailyTotalAgreed;
 
   const isTermDisabled =
@@ -381,9 +390,9 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
           startDate,
           endDate: monthlyEndDate || undefined,
           durationMonths: Number(durationMonths),
-          unitRentAmount: Number(monthlyRent || 0).toFixed(2),
-          totalRentAmount: (Number(monthlyRent || 0) * Number(durationMonths || 1)).toFixed(2),
-          depositAmount: Number(monthlyDeposit || 0).toFixed(2),
+          unitRentAmount: normalizeMoneyInput(monthlyRent).toFixed(2),
+          totalRentAmount: (normalizeMoneyInput(monthlyRent) * Number(durationMonths || 1)).toFixed(2),
+          depositAmount: normalizeMoneyInput(monthlyDeposit).toFixed(2),
           depositDeclaredStatus: monthlyDepositDeclaredStatus,
         };
 
@@ -411,9 +420,9 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
           startDate,
           endDate: termEndDate || undefined,
           durationMonths: termMonths ? Number(termMonths) : undefined,
-          unitRentAmount: Number(termRent).toFixed(2),
-          totalRentAmount: Number(termRent).toFixed(2),
-          depositAmount: Number(termDeposit || 0).toFixed(2),
+          unitRentAmount: normalizeMoneyInput(termRent).toFixed(2),
+          totalRentAmount: normalizeMoneyInput(termRent).toFixed(2),
+          depositAmount: normalizeMoneyInput(termDeposit).toFixed(2),
           depositDeclaredStatus: termDepositDeclaredStatus,
           termInstallmentCount: Number(termInstallmentCount),
         };
@@ -443,8 +452,8 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
           endDate: dailyEndDate,
           checkInTime: checkInTime || undefined,
           checkOutTime: checkOutTime || undefined,
-          dailyRateAmount: Number(dailyRate).toFixed(2),
-          depositAmount: Number(dailyDeposit || 0).toFixed(2),
+          dailyRateAmount: normalizeMoneyInput(dailyRate).toFixed(2),
+          depositAmount: normalizeMoneyInput(dailyDeposit).toFixed(2),
           depositDeclaredStatus: dailyDepositDeclaredStatus,
         };
 
@@ -985,8 +994,8 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
 
                   {/* Live Financial Breakdown & Installment Schedule Preview */}
                   {(() => {
-                    const totalRent = termRent || 0;
-                    const depAmount = termDeposit || 0;
+                    const totalRent = normalizeMoneyInput(termRent);
+                    const depAmount = normalizeMoneyInput(termDeposit);
                     const totalAgreed = totalRent + depAmount;
                     const paidAmt = termDepositDeclaredStatus === 'PAID' ? depAmount : 0;
                     const outstanding = totalAgreed - paidAmt;
@@ -1158,8 +1167,10 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
 
               {/* Monthly Live Financial Breakdown */}
               {(() => {
-                const totalRent = (monthlyRent || 0) * (durationMonths || 1);
-                const depAmount = monthlyDeposit || 0;
+                const rentPerMonth = normalizeMoneyInput(monthlyRent);
+                const duration = Math.max(1, parseInt(String(durationMonths), 10) || 1);
+                const totalRent = rentPerMonth * duration;
+                const depAmount = normalizeMoneyInput(monthlyDeposit);
                 const totalAgreed = totalRent + depAmount;
                 const paidAmt = monthlyDepositDeclaredStatus === 'PAID' ? depAmount : 0;
                 const outstanding = totalAgreed - paidAmt;
@@ -1335,8 +1346,9 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
 
               {/* Daily Live Financial Breakdown */}
               {(() => {
-                const totalRent = (dailyRate ?? 0) * inclusiveDays;
-                const depAmount = dailyDeposit || 0;
+                const rate = normalizeMoneyInput(dailyRate);
+                const totalRent = rate * inclusiveDays;
+                const depAmount = normalizeMoneyInput(dailyDeposit);
                 const totalAgreed = totalRent + depAmount;
                 const paidAmt = dailyDepositDeclaredStatus === 'PAID' ? depAmount : 0;
                 const outstanding = totalAgreed - paidAmt;

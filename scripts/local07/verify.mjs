@@ -167,18 +167,20 @@ export async function runVerification() {
   assert(julyCycle?.bills.length === 16, 'July bills count is 16', julyCycle?.bills.length);
 
   const paidBills = julyCycle?.bills.filter(b => b.status === 'paid') || [];
+  const partialBills = julyCycle?.bills.filter(b => b.status === 'partial') || [];
   const unpaidBills = julyCycle?.bills.filter(b => b.status === 'unpaid') || [];
 
   assert(paidBills.length === 8, 'Paid bills count is exactly 8', paidBills.length);
-  assert(unpaidBills.length === 8, 'Unpaid bills count is exactly 8', unpaidBills.length);
+  assert(partialBills.length === 1, 'Partial bills count is exactly 1 (Room 302 July prior partial)', partialBills.length);
+  assert(unpaidBills.length === 7, 'Unpaid bills count is exactly 7', unpaidBills.length);
 
   const totalBilled = julyCycle?.bills.reduce((sum, b) => sum + Number(b.totalAmount), 0) || 0;
-  const totalPaid = paidBills.reduce((sum, b) => sum + Number(b.totalAmount), 0);
-  const totalUnpaid = unpaidBills.reduce((sum, b) => sum + Number(b.totalAmount), 0);
+  const totalPaid = (julyCycle?.bills.reduce((sum, b) => sum + Number(b.paidAmount || 0), 0)) || 0;
+  const totalUnpaid = (julyCycle?.bills.reduce((sum, b) => sum + Number(b.outstandingAmount || 0), 0)) || 0;
 
   assert(Math.round(totalBilled) === 88999, 'Total billed in July 2026 equals ฿88,999.00', totalBilled);
-  assert(Math.round(totalPaid) === 46494, 'Total paid in July 2026 equals ฿46,494.00', totalPaid);
-  assert(Math.round(totalUnpaid) === 42505, 'Total unpaid in July 2026 equals ฿42,505.00', totalUnpaid);
+  assert(Math.round(totalPaid) === 48594, 'Total paid in July 2026 equals ฿48,594.00 (฿46,494 + ฿2,100 partial)', totalPaid);
+  assert(Math.round(totalUnpaid) === 40405, 'Total unpaid in July 2026 equals ฿40,405.00 (฿36,405 + ฿4,000 partial)', totalUnpaid);
 
   // Receipts count verification
   const receiptsCount = julyCycle?.bills.reduce((sum, b) => sum + b.Receipt.length, 0) || 0;

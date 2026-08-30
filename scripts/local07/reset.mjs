@@ -92,11 +92,15 @@ export async function resetLocal07Data() {
   await prisma.$transaction(async (tx) => {
     // A. Clean Dormitory-scoped tables
     if (allDormIds.length > 0) {
-      await tx.paymentUploadIntent.deleteMany({ where: { dormitoryId: { in: allDormIds } } });
       await tx.receipt.deleteMany({ where: { dormitoryId: { in: allDormIds } } });
       await tx.receiptSequence.deleteMany({ where: { dormitoryId: { in: allDormIds } } });
+      await tx.combinedPaymentGroupBillTarget.deleteMany({ where: { dormitoryId: { in: allDormIds } } });
       await tx.paymentStatusHistory.deleteMany({ where: { payment: { dormitoryId: { in: allDormIds } } } });
+      await tx.paymentEvidenceVerification.deleteMany({ where: { payment: { dormitoryId: { in: allDormIds } } } });
+      await tx.paymentAllocation.deleteMany({ where: { payment: { dormitoryId: { in: allDormIds } } } });
       await tx.payment.deleteMany({ where: { dormitoryId: { in: allDormIds } } });
+      await tx.combinedPaymentGroup.deleteMany({ where: { dormitoryId: { in: allDormIds } } });
+      await tx.paymentUploadIntent.deleteMany({ where: { dormitoryId: { in: allDormIds } } });
       await tx.billItem.deleteMany({ where: { bill: { dormitoryId: { in: allDormIds } } } });
       await tx.billStatusHistory.deleteMany({ where: { bill: { dormitoryId: { in: allDormIds } } } });
       await tx.bill.deleteMany({ where: { dormitoryId: { in: allDormIds } } });

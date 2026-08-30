@@ -1697,59 +1697,59 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
       <Modal isOpen={isReceiptOpen} onClose={() => setIsReceiptOpen(false)} title="ใบเสร็จรับเงิน" size="lg">
         {viewingReceipt && (
           <PrintView title="พิมพ์ใบเสร็จ">
-            <div className="space-y-6 text-xs text-slate-800 font-sans max-w-xl mx-auto leading-relaxed">
-              <div className="flex justify-between items-start border-b border-gray-200 pb-4">
-                <div className="flex items-center gap-2">
+            <div className="space-y-5 text-xs text-slate-900 font-sans max-w-xl mx-auto leading-relaxed">
+              <div className="flex justify-between items-start border-b border-slate-300 pb-4">
+                <div className="flex items-center gap-2.5">
                   <div className="p-2 bg-indigo-600 text-white rounded-xl shrink-0">
                     <Building className="w-5 h-5" />
                   </div>
                   <div>
-                    <h4 className="font-extrabold text-slate-900 leading-none">หอพักฮอร์สมาร์ท (HorPlus)</h4>
-                    <p className="text-[10px] text-gray-400 mt-0.5">โทร. 081-234-5678</p>
+                    <h4 className="font-extrabold text-slate-900 text-sm leading-tight">หอพักฮอร์สมาร์ท (HorPlus)</h4>
+                    <p className="text-[11px] text-slate-500 font-medium mt-0.5">โทร. 081-234-5678</p>
                   </div>
                 </div>
                 <div className="text-right">
-                  <h4 className="font-extrabold text-slate-950 uppercase leading-none">ใบเสร็จรับเงิน</h4>
-                  <p className="text-[10px] text-gray-400 mt-1">เลขที่: {viewingReceipt.receiptNumber}</p>
+                  <h4 className="font-extrabold text-slate-950 text-sm uppercase leading-tight">ใบเสร็จรับเงิน</h4>
+                  <p className="text-[11px] text-slate-600 font-semibold mt-1">เลขที่: {viewingReceipt.receiptNumber}</p>
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-4 text-[11px]">
+              <div className="grid grid-cols-2 gap-4 text-xs">
                 <div>
-                  <span className="text-gray-400">ชำระจากห้องพัก:</span>
-                  <p className="font-bold text-slate-800 mt-0.5">ห้อง {viewingReceipt.roomNumber}</p>
+                  <span className="text-slate-500 font-medium">ชำระจากห้องพัก:</span>
+                  <p className="font-bold text-slate-900 mt-0.5">ห้อง {viewingReceipt.roomNumber}</p>
                 </div>
                 <div>
-                  <span className="text-gray-400">ผู้ชำระเงิน:</span>
-                  <p className="font-bold text-slate-800 mt-0.5">{viewingReceipt.tenantName}</p>
+                  <span className="text-slate-500 font-medium">ผู้ชำระเงิน:</span>
+                  <p className="font-bold text-slate-900 mt-0.5">{viewingReceipt.tenantName}</p>
                 </div>
               </div>
 
               {/* Items Table inside Receipt */}
-              <div className="border border-slate-200 rounded-2xl overflow-hidden mt-4">
-                <table className="w-full text-left border-collapse text-[11px]">
-                  <thead className="bg-slate-50 text-slate-400 font-bold border-b border-slate-200">
+              <div className="border border-slate-300 rounded-2xl overflow-hidden mt-3">
+                <table className="w-full text-left border-collapse text-xs">
+                  <thead className="bg-slate-100/80 text-slate-700 font-extrabold border-b border-slate-300">
                     <tr>
                       <th className="p-3">รายการ</th>
                       <th className="p-3 text-right">จำนวนเงิน</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-gray-100">
+                  <tbody className="divide-y divide-slate-200">
                     {viewingReceipt.items?.map((it, idx) => (
                       <tr key={idx}>
-                        <td className="p-3 text-slate-700 font-medium">{formatItemDescription(it.description)}</td>
-                        <td className="p-3 text-right font-bold text-slate-800">{formatBahtDash(it.amount)}</td>
+                        <td className="p-3 text-slate-800 font-medium">{formatItemDescription(it.description)}</td>
+                        <td className="p-3 text-right font-bold text-slate-900">{formatBahtDash(it.amount)}</td>
                       </tr>
                     ))}
-                    <tr className="bg-slate-50/50 font-extrabold">
-                      <td className="p-3 text-right text-slate-900">รวมชำระสุทธิ:</td>
-                      <td className="p-3 text-right text-indigo-700">{formatBaht(viewingReceipt.totalAmount)}</td>
+                    <tr className="bg-slate-50 font-black">
+                      <td className="p-3 text-right text-slate-950">รวมชำระสุทธิ:</td>
+                      <td className="p-3 text-right text-indigo-900 font-black text-sm">{formatBaht(viewingReceipt.totalAmount)}</td>
                     </tr>
                   </tbody>
                 </table>
               </div>
 
-              <div className="grid grid-cols-2 gap-4 pt-6 text-[10px] text-gray-400 border-t border-dashed border-gray-200">
+              <div className="grid grid-cols-2 gap-4 pt-4 text-[11px] text-slate-600 font-medium border-t border-dashed border-slate-300">
                 <p>ช่องทางรับชำระ: {viewingReceipt.paymentMethod}</p>
                 <p className="text-right">ผู้รับเงิน / พนักงาน: {viewingReceipt.receiverName}</p>
               </div>

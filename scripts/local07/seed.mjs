@@ -2030,6 +2030,20 @@ export async function seedLocal07Data() {
   });
 
   if (bill302July) {
+    // Set Room 302 July bill to PARTIAL with ฿4,000 outstanding (฿2,100 paid previously via cash)
+    // so that the ฿6,500 combined slip deterministically allocates ฿4,000 to July (closing it) and ฿2,500 to August
+    await prisma.bill.update({
+      where: { id: bill302July.id },
+      data: {
+        paidAmount: 2100.0,
+        outstandingAmount: 4000.0,
+        status: 'partial',
+      },
+    });
+    bill302July.outstandingAmount = 4000.0;
+    bill302July.paidAmount = 2100.0;
+    bill302July.status = 'partial';
+
     // 1. Create CombinedPaymentGroup (6,500 total, UNDER_REVIEW)
     const uatSlipGroup = await prisma.combinedPaymentGroup.create({
       data: {

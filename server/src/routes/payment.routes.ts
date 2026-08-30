@@ -213,7 +213,7 @@ export function createPaymentRouter(authService: AuthenticationService) {
         return res.status(400).json({
           error: {
             code: 'GROUP_ALLOCATION_RECONCILIATION_FAILED',
-            message: 'การจัดสรรยอดเงินไม่ตรงกับยอดรวมของกลุ่มรายการ',
+            message: 'ยอดคงเหลือของบิลมีการเปลี่ยนแปลงหลังส่งสลิป กรุณาตรวจสอบรายการใหม่ก่อนอนุมัติ',
             fieldErrors: null,
             requestId,
             timestamp,

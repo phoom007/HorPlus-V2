@@ -75,6 +75,10 @@ function getDefaultThaiErrorMessage(code: DomainErrorCode, status: number): stri
       return 'มีการแนบหลักฐานการชำระเงินสำหรับบิลนี้ไปแล้ว';
     case 'PAYMENT_ALREADY_PROCESSED':
       return 'รายการชำระเงินนี้ได้รับการดำเนินการไปแล้ว';
+    case 'GROUP_ALLOCATION_RECONCILIATION_FAILED':
+      return 'ยอดคงเหลือของบิลมีการเปลี่ยนแปลงหลังส่งสลิป กรุณาตรวจสอบรายการใหม่ก่อนอนุมัติ';
+    case 'GROUP_REJECTION_REQUIRED':
+      return 'รายการนี้เป็นส่วนหนึ่งของการรวมจ่าย กรุณาปฏิเสธทั้งกลุ่มรายการ';
     case 'DEPENDENCY_UNAVAILABLE':
       return 'ระบบเซิร์ฟเวอร์ยังไม่พร้อมใช้งานชั่วคราว กรุณาลองใหม่อีกครั้ง';
     default:

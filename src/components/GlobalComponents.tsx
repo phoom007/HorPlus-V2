@@ -916,37 +916,90 @@ export const PrintView: React.FC<PrintViewProps> = ({ children, title = 'พิ�
   const contentRef = React.useRef<HTMLDivElement>(null);
 
   const handlePrint = () => {
-    // Add temporary print styles to ensure only the printable area is visible
+    if (!contentRef.current) return;
+
+    // Remove any existing print container/styles
+    const oldRoot = document.getElementById('horplus-print-root');
+    if (oldRoot) document.body.removeChild(oldRoot);
+    const oldStyle = document.getElementById('horplus-print-style');
+    if (oldStyle) document.head.removeChild(oldStyle);
+
+    // Create top-level print root attached directly to document.body
+    const printRoot = document.createElement('div');
+    printRoot.id = 'horplus-print-root';
+    printRoot.innerHTML = contentRef.current.innerHTML;
+    document.body.appendChild(printRoot);
+
+    // Add print styles to isolate horplus-print-root and ensure single A4 page formatting
     const style = document.createElement('style');
+    style.id = 'horplus-print-style';
     style.innerHTML = `
       @media print {
-        body * {
-          visibility: hidden;
+        body > *:not(#horplus-print-root) {
+          display: none !important;
         }
-        .printable-area, .printable-area * {
-          visibility: visible;
-        }
-        .printable-area {
-          position: absolute;
-          left: 0;
-          top: 0;
-          width: 100%;
+        html, body {
+          background: #ffffff !important;
+          color: #0f172a !important;
           margin: 0 !important;
           padding: 0 !important;
-          box-shadow: none !important;
+          width: 100% !important;
+          height: auto !important;
+          min-height: 0 !important;
+          overflow: visible !important;
+          -webkit-print-color-adjust: exact !important;
+          print-color-adjust: exact !important;
         }
-        @page { size: A4; margin: 1cm; }
+        #horplus-print-root {
+          display: block !important;
+          position: static !important;
+          width: 100% !important;
+          max-width: 100% !important;
+          margin: 0 auto !important;
+          padding: 0 !important;
+          background: transparent !important;
+          box-shadow: none !important;
+          border: none !important;
+          overflow: visible !important;
+          page-break-inside: avoid !important;
+          break-inside: avoid !important;
+        }
+        #horplus-print-root * {
+          -webkit-print-color-adjust: exact !important;
+          print-color-adjust: exact !important;
+        }
+        #horplus-print-root .printable-area {
+          background: transparent !important;
+          box-shadow: none !important;
+          border: none !important;
+          padding: 0 !important;
+          margin: 0 auto !important;
+          max-width: 100% !important;
+          overflow: visible !important;
+        }
+        @page {
+          size: A4 portrait;
+          margin: 12mm 15mm;
+        }
       }
     `;
     document.head.appendChild(style);
 
+    const cleanup = () => {
+      window.removeEventListener('afterprint', cleanup);
+      const root = document.getElementById('horplus-print-root');
+      if (root) document.body.removeChild(root);
+      const st = document.getElementById('horplus-print-style');
+      if (st) document.head.removeChild(st);
+    };
+
+    window.addEventListener('afterprint', cleanup);
+
     // Trigger browser print
     window.print();
 
-    // Clean up
-    setTimeout(() => {
-      document.head.removeChild(style);
-    }, 1000);
+    // Fallback cleanup in case afterprint does not fire
+    setTimeout(cleanup, 2000);
   };
 
   return (
