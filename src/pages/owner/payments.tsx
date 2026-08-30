@@ -42,6 +42,50 @@ export interface PaymentRecord {
   dormitoryId: string;
   billId: string;
   tenantId?: string | null;
+  paymentGroupId?: string | null;
+  paymentGroup?: {
+    id: string;
+    status: string;
+    totalAmount: number | string;
+    receipts?: Array<{
+      id: string;
+      receiptNumber: string;
+      totalAmount?: number | string;
+      paidAt?: string | null;
+      issuedAt?: string | null;
+      paymentMethod?: string | null;
+      receiverName?: string | null;
+      isVoided?: boolean;
+      snapshotData?: any;
+    }>;
+    billTargets?: Array<{
+      billId: string;
+      bill?: {
+        id: string;
+        billNumber: string;
+        billingCycleId?: string | null;
+      };
+    }>;
+    verification?: {
+      status?: string | null;
+      provider?: string | null;
+      claimedTransferAt?: string | null;
+      verifiedTransferAt?: string | null;
+    } | null;
+  } | null;
+  verification?: {
+    status?: string | null;
+    provider?: string | null;
+    claimedTransferAt?: string | null;
+    verifiedTransferAt?: string | null;
+  } | null;
+  allocations?: Array<{
+    id: string;
+    billId: string;
+    billItemId?: string | null;
+    allocatedAmount: number | string;
+    allocationOrder?: number;
+  }>;
   method: 'promptpay' | 'bank_transfer' | 'cash' | 'BANK_TRANSFER' | 'CASH' | 'PROMPTPAY';
   amount: number | string;
   status: 'PENDING' | 'UNDER_REVIEW' | 'APPROVED' | 'REJECTED' | 'REVERSED' | 'pending' | 'verified' | 'rejected' | 'voided';
@@ -803,9 +847,16 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
     }
   };
 
-  // 5. Open Real Receipt Modal
+  // 5. Open Real Receipt Modal (P0-D & P0-E Canonical Authority)
+  const resolveCanonicalReceipt = (payment: PaymentRecord) => {
+    if (payment.paymentGroupId && payment.paymentGroup?.receipts && payment.paymentGroup.receipts.length > 0) {
+      return payment.paymentGroup.receipts[0];
+    }
+    return payment.receipt;
+  };
+
   const handleOpenReceipt = (payment: PaymentRecord) => {
-    const rcpt = payment.receipt;
+    const rcpt = resolveCanonicalReceipt(payment);
     if (!rcpt || !rcpt.receiptNumber) {
       triggerToast('ไม่พบข้อมูลใบเสร็จรับเงิน กรุณาโหลดข้อมูลใหม่');
       return;
@@ -822,14 +873,9 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
         description: it.description,
         amount: Number(it.amount),
       }));
-    } else if (payment.bill?.items && payment.bill.items.length > 0) {
-      items = payment.bill.items.map(it => ({
-        description: it.description,
-        amount: Number(it.amount),
-      }));
     } else {
       items = [
-        { description: `ยอดชำระเงินงวด ${formatCycleThaiShort(getCycleCodeForCycleId(payment.bill?.billingCycleId))}`, amount: totalAmount }
+        { description: 'ยอดชำระตามใบเสร็จเดิม', amount: totalAmount }
       ];
     }
 

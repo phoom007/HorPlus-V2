@@ -2064,6 +2064,23 @@ export async function seedLocal07Data() {
     const julyAlloc = Math.min(4000, Number(bill302July.outstandingAmount || bill302July.totalAmount));
     const augAlloc = 6500 - julyAlloc;
 
+    // Create deterministic synthetic test slip file for Room 302 UAT
+    const uploadDirs = [
+      path.join(process.cwd(), 'server/uploads/private/fixtures/slips'),
+      path.join(process.cwd(), 'uploads/private/fixtures/slips'),
+    ];
+    for (const dir of uploadDirs) {
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      const slipPath = path.join(dir, 'local-uat-test-slip-room302.png');
+      const syntheticPng = Buffer.from(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+        'base64'
+      );
+      fs.writeFileSync(slipPath, syntheticPng);
+    }
+
     const payJuly = await prisma.payment.create({
       data: {
         dormitoryId: compDorm.id,

@@ -143,6 +143,27 @@ export function createPaymentRouter(authService: AuthenticationService) {
       });
     }
 
+    if (err?.code === 'P2002') {
+      const targetStr = JSON.stringify(err.meta?.target || '') + (err.message || '');
+      if (
+        targetStr.includes('payload_hash') ||
+        targetStr.includes('payloadHash') ||
+        targetStr.includes('file_hash') ||
+        targetStr.includes('fileHash') ||
+        targetStr.includes('idx_verification_payload_hash_unique')
+      ) {
+        return res.status(409).json({
+          error: {
+            code: 'DUPLICATE_PAYMENT_EVIDENCE',
+            message: 'มีการแนบหลักฐานการชำระเงินนี้ไปแล้ว',
+            fieldErrors: null,
+            requestId,
+            timestamp,
+          },
+        });
+      }
+    }
+
     if (err instanceof AppError) {
       return res.status(err.statusCode).json({
         error: {
@@ -450,14 +471,26 @@ export function createPaymentRouter(authService: AuthenticationService) {
       const validation = detectAndValidateImage(req.file.buffer, intent.expectedMimeType);
       const hash = crypto.createHash('sha256').update(req.file.buffer).digest('hex');
 
+      const existingVerification = await prisma.paymentEvidenceVerification.findFirst({
+        where: { payloadHash: hash }
+      });
       const existingDuplicate = await prisma.payment.findFirst({
         where: {
           fileHash: hash,
           status: { in: ['PENDING', 'UNDER_REVIEW', 'APPROVED'] }
         }
       });
-      if (existingDuplicate) {
-        return res.status(409).json({ error: 'DUPLICATE_PAYMENT_EVIDENCE' });
+      if (existingVerification || existingDuplicate) {
+        const reqId = (req.headers['x-request-id'] as string) || (req as any).id || 'req-unknown';
+        return res.status(409).json({
+          error: {
+            code: 'DUPLICATE_PAYMENT_EVIDENCE',
+            message: 'มีการแนบหลักฐานการชำระเงินนี้ไปแล้ว',
+            fieldErrors: null,
+            requestId: reqId,
+            timestamp: new Date().toISOString(),
+          },
+        });
       }
 
       const ext = validation.extension;
@@ -769,7 +802,7 @@ export function createPaymentRouter(authService: AuthenticationService) {
   });
 
   // Tenant: Create upload intent for multiple bills combined with 1 slip
-  router.post('/combined-slip-intent', requireAuth, async (req, res) => {
+  router.post('/combined-slip-intent', requireAuth, requireDormitoryWriteEntitlement, requireCsrf, async (req, res) => {
     try {
       const auth = (req as any).auth;
       const context = (req as any).dormitoryContext || (await resolveAuthoritativeDormitoryContext(req));
@@ -801,7 +834,7 @@ export function createPaymentRouter(authService: AuthenticationService) {
   });
 
   // Tenant: Submit combined slip payment referencing intent
-  router.post('/submit-combined-slip', requireAuth, requireCsrf, async (req, res) => {
+  router.post('/submit-combined-slip', requireAuth, requireDormitoryWriteEntitlement, requireCsrf, async (req, res) => {
     try {
       const auth = (req as any).auth;
       const context = (req as any).dormitoryContext || (await resolveAuthoritativeDormitoryContext(req));
@@ -824,7 +857,7 @@ export function createPaymentRouter(authService: AuthenticationService) {
         paymentDate: paymentDate ? new Date(paymentDate) : new Date(),
         amount,
         actorUserId: auth.userId,
-        idempotencyKey: req.headers['idempotency-key'] as string | undefined,
+        idempotencyKey: (req.headers['x-idempotency-key'] || req.headers['idempotency-key']) as string | undefined,
       });
 
       res.json(result);
@@ -855,7 +888,7 @@ export function createPaymentRouter(authService: AuthenticationService) {
           groupId: req.params.id,
           userId: auth.userId,
           notes: req.body?.notes,
-          idempotencyKey: req.headers['idempotency-key'] as string | undefined,
+          idempotencyKey: (req.headers['x-idempotency-key'] || req.headers['idempotency-key']) as string | undefined,
         });
 
         res.json(result);
@@ -893,7 +926,7 @@ export function createPaymentRouter(authService: AuthenticationService) {
           userId: auth.userId,
           reason: reason.trim(),
           notes: req.body?.notes,
-          idempotencyKey: req.headers['idempotency-key'] as string | undefined,
+          idempotencyKey: (req.headers['x-idempotency-key'] || req.headers['idempotency-key']) as string | undefined,
         });
 
         res.json(result);
@@ -930,7 +963,7 @@ export function createPaymentRouter(authService: AuthenticationService) {
           groupId: req.params.id,
           userId: auth.userId,
           reason: reason.trim(),
-          idempotencyKey: req.headers['idempotency-key'] as string | undefined,
+          idempotencyKey: (req.headers['x-idempotency-key'] || req.headers['idempotency-key']) as string | undefined,
         });
 
         res.json(result);

@@ -42,8 +42,8 @@ export class PaymentVerificationService {
       result: PaymentEvidenceVerificationResult;
     }
   ) {
-    if (!input.paymentId && !input.paymentGroupId) {
-      throw new Error('Either paymentId or paymentGroupId must be provided for verification record');
+    if ((input.paymentId && input.paymentGroupId) || (!input.paymentId && !input.paymentGroupId)) {
+      throw new Error('Exactly one of paymentId or paymentGroupId must be provided for verification record');
     }
 
     return await tx.paymentEvidenceVerification.create({

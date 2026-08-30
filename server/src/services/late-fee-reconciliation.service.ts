@@ -3,13 +3,18 @@
  * Canonical Late-Fee Overdue Reconciler Service (L2 Scheduled Authority)
  *
  * Responsibilities:
- * 1. Identify eligible editable UNPAID Monthly Utility bills past their effective due date.
+ * 1. Identify eligible editable UNPAID & PARTIALLY_PAID Monthly Utility bills past their effective due date.
  * 2. Process each bill in an isolated PostgreSQL transaction with row locking and idempotency.
- * 3. Generate canonical preview using the cycle's frozen BillingRateSnapshot and dueDate.
- * 4. Perform semantic financial comparison: if unchanged, execute a clean NO-OP (no writes, no version increment).
- * 5. If changed, mutate the SAME Bill in place, replace BillItems, update header amounts, increment version, and log audit event.
- * 6. Preserves paidAmount and payment history without credit invention.
- * 7. Single hourly execution registered in CleanupService; single startup catch-up execution in server boot.
+ * 3. Resolve trusted payment effective timestamp (Decision C):
+ *    - CASH: server-recorded paymentDate is authoritative and freezes late fees.
+ *    - Future verified bank transfer: verifiedTransferAt freezes late fees.
+ *    - Manual UNVERIFIED slip: untrusted -> does NOT freeze late fee accrual.
+ * 4. Perform surgical BillItem updates:
+ *    - Preserve existing non-late BillItems (RENT, WATER, ELECTRIC, etc.) and their IDs.
+ *    - Preserve PaymentAllocation.billItemId relational integrity.
+ *    - Update / insert / remove ONLY canonical late_fee BillItem(s).
+ * 5. Update Bill subtotal, totalAmount, outstandingAmount consistently.
+ * 6. Audit log event for changed bills.
  */
 
 import { PrismaClient, Prisma } from '@prisma/client';
@@ -25,10 +30,11 @@ import { PrismaTenantRepository } from '../db/repositories/tenant.repository.js'
 import {
   toDecimal,
   formatDecimal,
-  subDecimals,
   isZeroDecimal,
 } from '../utils/decimal-math.util.js';
 import { normalizeLateFeeMode } from '../utils/monthly-utility-calculator.util.js';
+import { resolveTrustedPaymentEffectiveAt } from './payment-verification.service.js';
+import { Decimal } from 'decimal.js';
 
 export interface ReconciliationDetail {
   billId: string;
@@ -49,6 +55,67 @@ export interface ReconciliationSummary {
   skipped: number;
   durationMs: number;
   details: ReconciliationDetail[];
+}
+
+/**
+ * Resolves the canonical as-of date for late-fee calculation (Decision C Authority).
+ */
+export function resolveBillLateFeeEffectiveAsOfInTx(
+  bill: {
+    status: string;
+    outstandingAmount?: Prisma.Decimal | string | number | null;
+    Payment?: Array<{
+      id: string;
+      status: string;
+      method: string;
+      paymentDate: Date;
+      verification?: {
+        status?: string | null;
+        provider?: string | null;
+        verifiedTransferAt?: Date | null;
+      } | null;
+      paymentGroup?: {
+        verification?: {
+          status?: string | null;
+          provider?: string | null;
+          verifiedTransferAt?: Date | null;
+        } | null;
+      } | null;
+    }> | null;
+  },
+  referenceTime: Date
+): Date | null {
+  const normStatus = (bill.status || '').toUpperCase();
+  const outstanding = toDecimal(bill.outstandingAmount?.toString() || '0');
+
+  if (normStatus === 'PAID' || isZeroDecimal(outstanding) || outstanding.lessThan(0)) {
+    return null; // Not eligible for additional late-fee accrual
+  }
+
+  // Look for any TRUSTED successful payment on this bill
+  const approvedPayments = (bill.Payment || []).filter((p) => p.status === 'APPROVED');
+  let earliestTrustedTime: Date | null = null;
+
+  for (const p of approvedPayments) {
+    const verification = p.verification || p.paymentGroup?.verification;
+    const trustedTime = resolveTrustedPaymentEffectiveAt({
+      method: p.method,
+      serverRecordedAt: p.paymentDate,
+      verification,
+    });
+
+    if (trustedTime) {
+      if (!earliestTrustedTime || trustedTime.getTime() < earliestTrustedTime.getTime()) {
+        earliestTrustedTime = trustedTime;
+      }
+    }
+  }
+
+  if (earliestTrustedTime) {
+    return earliestTrustedTime;
+  }
+
+  return referenceTime;
 }
 
 export class LateFeeReconciliationService {
@@ -114,10 +181,11 @@ export class LateFeeReconciliationService {
     const details: ReconciliationDetail[] = [];
 
     try {
-      // 1. Bounded candidate query: editable UNPAID Monthly Utility bills past Bill.dueDate
+      // 1. Candidate query: UNPAID and PARTIALLY_PAID Monthly Utility bills past Bill.dueDate with outstanding balance
+      const eligibleStatuses = ['unpaid', 'UNPAID', 'partially_paid', 'PARTIALLY_PAID', 'partial', 'PARTIAL'];
       const whereClause: Prisma.BillWhereInput = {
         billKind: 'MONTHLY_UTILITY',
-        status: 'unpaid',
+        status: { in: eligibleStatuses },
         dueDate: {
           lt: referenceTime,
         },
@@ -130,7 +198,7 @@ export class LateFeeReconciliationService {
       let lastId: string | undefined = undefined;
       let batchCount = 0;
       const BATCH_SIZE = 200;
-      const MAX_BATCHES_PER_RUN = 50; // Bounds single run to at most 10,000 bills
+      const MAX_BATCHES_PER_RUN = 50;
 
       while (batchCount < MAX_BATCHES_PER_RUN) {
         const candidateBills: Array<{
@@ -267,10 +335,10 @@ export class LateFeeReconciliationService {
    * Reconciles a single bill inside an atomic PostgreSQL transaction.
    * Multi-instance safe: acquires exclusive row-level lock (FOR UPDATE),
    * refetches the bill under lock, re-verifies eligibility,
-   * generates canonical preview using cycle snapshot, performs semantic comparison,
-   * and mutates only when financial truth changes.
+   * resolves trusted payment effective time (Decision C),
+   * generates canonical preview, and performs surgical BillItem updates.
    */
-  private async reconcileSingleBillInTx(
+  public async reconcileSingleBillInTx(
     billId: string,
     dormitoryId: string,
     referenceTime: Date
@@ -281,7 +349,7 @@ export class LateFeeReconciliationService {
     reason?: string;
   }> {
     return this.prisma.$transaction(async (tx) => {
-      // 1. Acquire exclusive PostgreSQL row-level lock BEFORE canonical preview calculation
+      // 1. Acquire exclusive PostgreSQL row-level lock BEFORE calculation
       await tx.$executeRaw`SELECT id FROM "bills" WHERE id = ${billId}::uuid FOR UPDATE`;
 
       // 2. Refetch bill inside transaction for fresh locked state
@@ -289,7 +357,19 @@ export class LateFeeReconciliationService {
         where: { id: billId, dormitoryId },
         include: {
           items: true,
-          Payment: true,
+          Payment: {
+            where: { status: 'APPROVED' },
+            include: {
+              verification: true,
+              paymentGroup: {
+                include: {
+                  verification: true,
+                },
+              },
+            },
+            orderBy: { paymentDate: 'asc' },
+          },
+          allocations: true,
           billingCycle: {
             include: {
               rateSnapshot: true,
@@ -302,9 +382,13 @@ export class LateFeeReconciliationService {
         return { status: 'skipped', reason: 'BILL_NOT_FOUND' };
       }
 
-      // 3. Strict eligibility validation inside lock
-      if (bill.status !== 'unpaid' || bill.billKind !== 'MONTHLY_UTILITY') {
-        return { status: 'skipped', reason: 'STATUS_NOT_UNPAID_OR_NOT_MONTHLY_UTILITY' };
+      if (bill.billKind !== 'MONTHLY_UTILITY') {
+        return { status: 'skipped', reason: 'NOT_MONTHLY_UTILITY' };
+      }
+
+      const effectiveAsOf = resolveBillLateFeeEffectiveAsOfInTx(bill, referenceTime);
+      if (!effectiveAsOf) {
+        return { status: 'skipped', reason: 'NOT_ELIGIBLE_FOR_LATE_FEE' };
       }
 
       if (!bill.dueDate) {
@@ -329,20 +413,26 @@ export class LateFeeReconciliationService {
         return { status: 'noop', reason: 'LATE_FEE_MODE_NONE_OR_ZERO' };
       }
 
-      // 3. Generate canonical preview INSIDE the transaction using frozen cycle snapshot and Bill.dueDate
+      // 3. Generate canonical preview INSIDE the transaction using effectiveAsOf and frozen rateSnapshot
       const preview = await this.billingService.generateBillPreview(
         dormitoryId,
         bill.billingCycleId,
         bill.roomId,
         tx,
         'MONTHLY_UTILITY',
-        referenceTime,
+        effectiveAsOf,
         bill.dueDate
       );
 
-      // 4. Semantic Financial Comparison (ignoring persistence-only DB IDs)
-      const isIdentical = this.compareBillFinancials(bill, preview);
-      if (isIdentical) {
+      const existingLateItems = bill.items.filter((i) => i.type === 'late_fee');
+      const currentLateFeeSum = existingLateItems.reduce(
+        (sum, it) => sum.plus(toDecimal(it.amount.toString())),
+        new Decimal(0)
+      );
+      const newLateFeeDec = toDecimal(preview.lateFeeAmount || '0.00');
+
+      // 4. Semantic check: if late fee amount is unchanged, NO-OP
+      if (currentLateFeeSum.equals(newLateFeeDec)) {
         return {
           status: 'noop',
           oldTotal: bill.totalAmount.toString(),
@@ -351,50 +441,81 @@ export class LateFeeReconciliationService {
         };
       }
 
-      // 5. Check if new total is below paidAmount
-      const paidAmountDec = toDecimal(bill.paidAmount ? bill.paidAmount.toString() : '0.00');
-      const newTotalDec = toDecimal(preview.totalAmount);
-      if (newTotalDec < paidAmountDec) {
-        logger.warn(
-          { billId: bill.id, newTotal: preview.totalAmount, paidAmount: bill.paidAmount },
-          '[LateFeeReconciliationService] Reconciled total below paid amount - skipping bill'
-        );
-        return { status: 'skipped', reason: 'RECONCILED_TOTAL_BELOW_PAID_AMOUNT' };
+      // 5. Surgical BillItem update: preserve non-late items (RENT, WATER, ELECTRIC, etc.) and PaymentAllocation links
+      const nonLateSubtotal = bill.items
+        .filter((i) => i.type !== 'late_fee')
+        .reduce((sum, it) => sum.plus(toDecimal(it.amount.toString())), new Decimal(0));
+
+      const previewLateItem = preview.items.find((i) => i.type === 'late_fee');
+      const lateFeeDescription = previewLateItem?.description || 'ค่าปรับชำระล่าช้า';
+
+      if (newLateFeeDec.isZero()) {
+        if (existingLateItems.length > 0) {
+          await tx.billItem.deleteMany({
+            where: { id: { in: existingLateItems.map((i) => i.id) } },
+          });
+        }
+      } else {
+        if (existingLateItems.length === 1) {
+          await tx.billItem.update({
+            where: { id: existingLateItems[0].id },
+            data: {
+              amount: new Prisma.Decimal(newLateFeeDec.toFixed(2)),
+              unitPrice: new Prisma.Decimal(newLateFeeDec.toFixed(2)),
+              quantity: new Prisma.Decimal('1.00'),
+              description: lateFeeDescription,
+            },
+          });
+        } else if (existingLateItems.length === 0) {
+          await tx.billItem.create({
+            data: {
+              billId: bill.id,
+              dormitoryId: bill.dormitoryId,
+              type: 'late_fee',
+              description: lateFeeDescription,
+              quantity: new Prisma.Decimal('1.00'),
+              unit: 'รายการ',
+              unitPrice: new Prisma.Decimal(newLateFeeDec.toFixed(2)),
+              amount: new Prisma.Decimal(newLateFeeDec.toFixed(2)),
+              displayOrder: 99,
+            },
+          });
+        } else {
+          // Normalize duplicate legacy late fee rows
+          const [firstLate, ...extraLates] = existingLateItems;
+          if (extraLates.length > 0) {
+            await tx.billItem.deleteMany({
+              where: { id: { in: extraLates.map((i) => i.id) } },
+            });
+          }
+          await tx.billItem.update({
+            where: { id: firstLate.id },
+            data: {
+              amount: new Prisma.Decimal(newLateFeeDec.toFixed(2)),
+              unitPrice: new Prisma.Decimal(newLateFeeDec.toFixed(2)),
+              quantity: new Prisma.Decimal('1.00'),
+              description: lateFeeDescription,
+            },
+          });
+        }
       }
 
-      // 6. Mutate the SAME bill in place:
-      // Replace BillItems
-      await tx.billItem.deleteMany({
-        where: { billId: bill.id },
-      });
+      // Update Bill header amounts consistently
+      const newTotal = nonLateSubtotal.plus(newLateFeeDec);
+      const paidAmount = toDecimal(bill.paidAmount ? bill.paidAmount.toString() : '0.00');
+      const newOutstanding = Decimal.max(newTotal.minus(paidAmount), new Decimal(0));
 
-      await tx.billItem.createMany({
-        data: preview.items.map((item) => ({
-          billId: bill.id,
-          dormitoryId: bill.dormitoryId,
-          type: item.type,
-          description: item.description,
-          quantity: item.quantity,
-          unit: item.unit,
-          unitPrice: item.unitPrice,
-          amount: item.amount,
-          metadata: item.metadata || undefined,
-        })),
-      });
-
-      // Update Bill header
-      const newOutstanding = subDecimals(newTotalDec, paidAmountDec);
       await tx.bill.update({
         where: { id: bill.id },
         data: {
-          subtotal: preview.subtotal,
-          totalAmount: preview.totalAmount,
-          outstandingAmount: formatDecimal(newOutstanding),
+          subtotal: new Prisma.Decimal(newTotal.toFixed(2)),
+          totalAmount: new Prisma.Decimal(newTotal.toFixed(2)),
+          outstandingAmount: new Prisma.Decimal(newOutstanding.toFixed(2)),
           version: { increment: 1 },
         },
       });
 
-      // 7. Audit log event
+      // 6. Audit log event
       this.auditService.log({
         dormitoryId: bill.dormitoryId,
         actorUserId: 'system',
@@ -403,76 +524,18 @@ export class LateFeeReconciliationService {
         resourceId: bill.id,
         details: {
           oldTotal: bill.totalAmount.toString(),
-          newTotal: preview.totalAmount,
-          lateFeeAmount: preview.lateFeeAmount,
-          asOfDate: referenceTime.toISOString(),
+          newTotal: formatDecimal(newTotal),
+          lateFeeAmount: formatDecimal(newLateFeeDec),
+          asOfDate: effectiveAsOf.toISOString(),
         },
       });
 
       return {
         status: 'changed',
         oldTotal: bill.totalAmount.toString(),
-        newTotal: preview.totalAmount,
+        newTotal: formatDecimal(newTotal),
       };
     });
-  }
-
-  /**
-   * Compares persisted bill items and totals against canonical preview.
-   * Compares semantic types, descriptions, quantities, unit prices, amounts,
-   * subtotal, and totalAmount, strictly ignoring database IDs.
-   */
-  private compareBillFinancials(
-    persisted: {
-      subtotal: Prisma.Decimal | string;
-      totalAmount: Prisma.Decimal | string;
-      items: Array<{
-        type: string;
-        description: string;
-        quantity: Prisma.Decimal | string;
-        unitPrice: Prisma.Decimal | string;
-        amount: Prisma.Decimal | string;
-      }>;
-    },
-    preview: BillPreviewResult
-  ): boolean {
-    const pSub = formatDecimal(persisted.subtotal.toString());
-    const prevSub = formatDecimal(preview.subtotal);
-    if (pSub !== prevSub) return false;
-
-    const pTot = formatDecimal(persisted.totalAmount.toString());
-    const prevTot = formatDecimal(preview.totalAmount);
-    if (pTot !== prevTot) return false;
-
-    if (persisted.items.length !== preview.items.length) return false;
-
-    const itemKey = (item: {
-      type: string;
-      description: string;
-      quantity: Prisma.Decimal | string;
-      unitPrice: Prisma.Decimal | string;
-      amount: Prisma.Decimal | string;
-    }) =>
-      `${item.type}_${item.description}_${formatDecimal(item.quantity.toString())}_${formatDecimal(item.unitPrice.toString())}_${formatDecimal(item.amount.toString())}`;
-
-    const sortedPersisted = persisted.items.map(itemKey).sort();
-    const sortedPreview = preview.items
-      .map((item) =>
-        itemKey({
-          type: item.type,
-          description: item.description,
-          quantity: item.quantity,
-          unitPrice: item.unitPrice,
-          amount: item.amount,
-        })
-      )
-      .sort();
-
-    for (let i = 0; i < sortedPersisted.length; i++) {
-      if (sortedPersisted[i] !== sortedPreview[i]) return false;
-    }
-
-    return true;
   }
 
   private dailyTimerId: NodeJS.Timeout | null = null;

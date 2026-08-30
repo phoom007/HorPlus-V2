@@ -153,6 +153,15 @@ export class PaymentService {
             throw new AppError('มีรายการชำระเงินที่รอตรวจสอบอยู่แล้ว', 409, 'ACTIVE_REVIEW_EXISTS');
           }
 
+          if (intent.sha256) {
+            const existingVerification = await tx.paymentEvidenceVerification.findFirst({
+              where: { payloadHash: intent.sha256 },
+            });
+            if (existingVerification) {
+              throw new AppError('มีการแนบหลักฐานการชำระเงินนี้ไปแล้ว', 409, 'DUPLICATE_PAYMENT_EVIDENCE');
+            }
+          }
+
           const submitAmount = new Decimal(input.amount);
           if (submitAmount.lessThanOrEqualTo(0)) {
             throw new AppError('ยอดเงินที่ชำระต้องมากกว่า 0', 400, 'UNSUPPORTED_AMOUNT');
@@ -486,6 +495,15 @@ export class PaymentService {
             }),
           });
 
+          if (intent.sha256) {
+            const existingVerification = await tx.paymentEvidenceVerification.findFirst({
+              where: { payloadHash: intent.sha256 },
+            });
+            if (existingVerification) {
+              throw new AppError('มีการแนบหลักฐานการชำระเงินนี้ไปแล้ว', 409, 'DUPLICATE_PAYMENT_EVIDENCE');
+            }
+          }
+
           // 2. Update CombinedPaymentGroup
           await tx.combinedPaymentGroup.update({
             where: { id: group.id },
@@ -632,7 +650,9 @@ export class PaymentService {
 
           // 4. Recompute canonical allocation plan with fresh state
           const groupTotal = new Decimal(group.totalAmount.toString());
-          const allocationPlan = computeCanonicalAllocationPlan({
+          let allocationPlan;
+          try {
+            allocationPlan = computeCanonicalAllocationPlan({
             submitAmount: groupTotal,
             targetRoomId: firstRoomId,
             targetTenantId: firstTenantId,
@@ -677,14 +697,74 @@ export class PaymentService {
               };
             }),
           });
-
-          // 5. Reconcile plan against group total and pending child payments
-          if (!allocationPlan.totalAllocated.equals(groupTotal)) {
+          } catch (err: any) {
             throw new AppError(
-              'การจัดสรรยอดเงินไม่ตรงกับยอดรวมของกลุ่มรายการ',
+              'ยอดคงเหลือของบิลมีการเปลี่ยนแปลงหลังส่งสลิป กรุณาตรวจสอบรายการใหม่ก่อนอนุมัติ',
               400,
               'GROUP_ALLOCATION_RECONCILIATION_FAILED'
             );
+          }
+
+          // 5. Strict Reconciliation Check (P0-C)
+          const pendingChildPayments = group.payments.filter(
+            (p: any) => p.status === 'PENDING' || p.status === 'UNDER_REVIEW'
+          );
+
+          const sumPendingChildAmounts = pendingChildPayments.reduce(
+            (sum: Decimal, p: any) => sum.plus(new Decimal(p.amount.toString())),
+            new Decimal(0)
+          );
+
+          // Check 1: SUM(pending child Payment.amount) == group.totalAmount
+          if (!sumPendingChildAmounts.equals(groupTotal)) {
+            throw new AppError(
+              'ยอดคงเหลือของบิลมีการเปลี่ยนแปลงหลังส่งสลิป กรุณาตรวจสอบรายการใหม่ก่อนอนุมัติ',
+              400,
+              'GROUP_ALLOCATION_RECONCILIATION_FAILED'
+            );
+          }
+
+          // Check 2: fresh totalAllocated == group.totalAmount
+          if (!allocationPlan.totalAllocated.equals(groupTotal)) {
+            throw new AppError(
+              'ยอดคงเหลือของบิลมีการเปลี่ยนแปลงหลังส่งสลิป กรุณาตรวจสอบรายการใหม่ก่อนอนุมัติ',
+              400,
+              'GROUP_ALLOCATION_RECONCILIATION_FAILED'
+            );
+          }
+
+          // Check 3: set of pending child billIds == set of fresh affected billIds
+          const pendingBillIds = [...new Set(pendingChildPayments.map((p: any) => p.billId))].sort();
+          const affectedBillIds = [...new Set(allocationPlan.affectedBills.map((b) => b.id))].sort();
+          if (
+            pendingBillIds.length !== affectedBillIds.length ||
+            !pendingBillIds.every((id, idx) => id === affectedBillIds[idx])
+          ) {
+            throw new AppError(
+              'ยอดคงเหลือของบิลมีการเปลี่ยนแปลงหลังส่งสลิป กรุณาตรวจสอบรายการใหม่ก่อนอนุมัติ',
+              400,
+              'GROUP_ALLOCATION_RECONCILIATION_FAILED'
+            );
+          }
+
+          // Check 4: For every affected Bill: pending child Payment.amount == fresh per-Bill allocatedAmount
+          for (const aff of allocationPlan.affectedBills) {
+            const childPayment = pendingChildPayments.find((p: any) => p.billId === aff.id);
+            if (!childPayment) {
+              throw new AppError(
+                'ยอดคงเหลือของบิลมีการเปลี่ยนแปลงหลังส่งสลิป กรุณาตรวจสอบรายการใหม่ก่อนอนุมัติ',
+                400,
+                'GROUP_ALLOCATION_RECONCILIATION_FAILED'
+              );
+            }
+            const childAmount = new Decimal(childPayment.amount.toString());
+            if (!childAmount.equals(aff.allocatedAmount)) {
+              throw new AppError(
+                'ยอดคงเหลือของบิลมีการเปลี่ยนแปลงหลังส่งสลิป กรุณาตรวจสอบรายการใหม่ก่อนอนุมัติ',
+                400,
+                'GROUP_ALLOCATION_RECONCILIATION_FAILED'
+              );
+            }
           }
 
           const now = new Date();
@@ -712,7 +792,6 @@ export class PaymentService {
                 where: { id: payment.id },
                 data: {
                   status: 'APPROVED',
-                  amount: new Prisma.Decimal(aff.allocatedAmount.toFixed(2)),
                   reviewedByUserId: safeUserId,
                   reviewedAt: now,
                 },

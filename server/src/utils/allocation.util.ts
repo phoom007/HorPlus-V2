@@ -131,7 +131,7 @@ export function computeCanonicalAllocationPlan(params: {
   // 1. Strict Scope Validation: Filter and verify all candidate bills belong to target room and tenant
   const scopeBills = params.eligibleBills.filter((bill) => {
     const isSameRoom = bill.roomId === params.targetRoomId;
-    const isSameTenant = !params.targetTenantId || !bill.tenantId || bill.tenantId === params.targetTenantId;
+    const isSameTenant = params.targetTenantId ? bill.tenantId === params.targetTenantId : true;
     const isNotPaid = bill.status !== 'PAID' && bill.status !== 'paid' && bill.status !== 'cancelled' && bill.status !== 'void';
     const hasOutstanding = new Decimal(bill.outstandingAmount?.toString() || '0').greaterThan(0);
     return isSameRoom && isSameTenant && isNotPaid && hasOutstanding;
