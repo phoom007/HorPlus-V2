@@ -133,6 +133,8 @@ model Dormitory {
   tenantRegistrationInvites  TenantRegistrationInvite[]
   tenantRegistrationIntents  TenantRegistrationIntent[]
   paymentAllocations         PaymentAllocation[]
+  combinedPaymentGroupBillTargets CombinedPaymentGroupBillTarget[]
+  paymentEvidenceVerifications PaymentEvidenceVerification[]
 
   @@map("dormitories")
 }
@@ -943,6 +945,7 @@ model Bill {
   Receipt               Receipt[]
   paymentUploadIntents  PaymentUploadIntent[]
   allocations           PaymentAllocation[]
+  paymentGroupBillTargets CombinedPaymentGroupBillTarget[]
 
   @@unique([dormitoryId, billNumber], name: "dormitory_bill_number_unique")
   @@index([provisionalRentalTermId])
@@ -1150,6 +1153,7 @@ model Payment {
   statusHistories PaymentStatusHistory[]
   receipt         Receipt?
   allocations     PaymentAllocation[]
+  verification    PaymentEvidenceVerification?
 
   @@unique([idempotencyKey], name: "payment_idempotency_key_unique")
   @@map("payments")
@@ -1267,6 +1271,8 @@ model CombinedPaymentGroup {
   bills                Bill[]
   allocations          PaymentAllocation[]
   receipts             Receipt[]
+  billTargets          CombinedPaymentGroupBillTarget[]
+  verification         PaymentEvidenceVerification?
 
   @@map("combined_payment_groups")
 }
@@ -2050,4 +2056,46 @@ model PaymentAllocation {
   @@index([dormitoryId, paymentGroupId], name: "idx_allocation_dorm_group")
   @@index([dormitoryId, paymentId], name: "idx_allocation_dorm_payment")
   @@map("payment_allocations")
+}
+
+model CombinedPaymentGroupBillTarget {
+  id             String               @id @default(uuid()) @db.Uuid
+  dormitoryId    String               @map("dormitory_id") @db.Uuid
+  paymentGroupId String               @map("payment_group_id") @db.Uuid
+  billId         String               @map("bill_id") @db.Uuid
+  targetOrder    Int                  @default(0) @map("target_order")
+  createdAt      DateTime             @default(now()) @map("created_at") @db.Timestamptz()
+
+  dormitory      Dormitory            @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
+  paymentGroup   CombinedPaymentGroup @relation(fields: [paymentGroupId], references: [id], onDelete: Cascade)
+  bill           Bill                 @relation(fields: [billId], references: [id], onDelete: Cascade)
+
+  @@unique([paymentGroupId, billId], name: "cpg_target_group_bill_unique")
+  @@index([dormitoryId, paymentGroupId], name: "idx_cpg_target_dorm_group")
+  @@index([dormitoryId, billId], name: "idx_cpg_target_dorm_bill")
+  @@map("combined_payment_group_bill_targets")
+}
+
+model PaymentEvidenceVerification {
+  id                 String                @id @default(uuid()) @db.Uuid
+  dormitoryId        String                @map("dormitory_id") @db.Uuid
+  paymentId          String?               @unique @map("payment_id") @db.Uuid
+  paymentGroupId     String?               @unique @map("payment_group_id") @db.Uuid
+  provider           String                @default("NONE") @db.VarChar(50)
+  status             String                @default("UNVERIFIED") @db.VarChar(50)
+  claimedTransferAt  DateTime?             @map("claimed_transfer_at") @db.Timestamptz()
+  verifiedTransferAt DateTime?             @map("verified_transfer_at") @db.Timestamptz()
+  verifiedAmount     Decimal?              @map("verified_amount") @db.Decimal(12, 2)
+  providerReference  String?               @map("provider_reference") @db.VarChar(255)
+  payloadHash        String?               @map("payload_hash") @db.VarChar(255)
+  verifiedAt         DateTime?             @map("verified_at") @db.Timestamptz()
+  createdAt          DateTime              @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt          DateTime              @updatedAt @map("updated_at") @db.Timestamptz()
+
+  dormitory          Dormitory             @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
+  payment            Payment?              @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  paymentGroup       CombinedPaymentGroup? @relation(fields: [paymentGroupId], references: [id], onDelete: Cascade)
+
+  @@index([dormitoryId, status], name: "idx_verification_dorm_status")
+  @@map("payment_evidence_verifications")
 }

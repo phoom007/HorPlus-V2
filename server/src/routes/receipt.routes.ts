@@ -1,9 +1,9 @@
 import { Router, Request, Response } from 'express';
 import { receiptService } from '../services/receipt.service.js';
 import { AuthenticationService } from '../services/auth.service.js';
-import { PrismaClient } from '@prisma/client';
+import { getPrismaClient } from '../db/prisma.js';
 
-const prisma = new PrismaClient();
+const prisma = getPrismaClient();
 
 export function createReceiptRouter(authService: AuthenticationService) {
   const router = Router();
@@ -12,8 +12,10 @@ export function createReceiptRouter(authService: AuthenticationService) {
   // Helper to ensure tenant authorization
   const ensureTenant = async (req: Request, res: Response, dormitoryId: string) => {
     const auth = (req as any).auth;
-    const membership = auth.memberships.find((m: any) => 
-      m.dormitoryId === dormitoryId && (m.role === 'tenant' || m.roleCode?.toLowerCase() === 'tenant' || m.roleId === 'role-tenant')
+    const membership = auth?.memberships?.find((m: any) => 
+      m.dormitoryId === dormitoryId && (
+        m.role === 'tenant' || m.roleCode?.toLowerCase() === 'tenant' || m.roleId === 'role-tenant'
+      )
     );
     if (!membership) return null;
     const tenant = await prisma.tenant.findFirst({ where: { linkedUserId: auth.userId, dormitoryId } });
@@ -23,7 +25,7 @@ export function createReceiptRouter(authService: AuthenticationService) {
   // Helper to ensure owner/manager authorization
   const ensureOwnerOrManager = (req: Request, res: Response, dormitoryId: string) => {
     const auth = (req as any).auth;
-    return auth.memberships.find((m: any) => 
+    return auth?.memberships?.find((m: any) => 
       m.dormitoryId === dormitoryId && (
         m.role === 'owner' || m.role === 'manager' ||
         m.roleCode?.toLowerCase() === 'owner' || m.roleCode?.toLowerCase() === 'manager' ||
@@ -50,7 +52,6 @@ export function createReceiptRouter(authService: AuthenticationService) {
         authorized = true;
       } else {
         const tenant = await ensureTenant(req, res, dormitoryId);
-        // Tenant can only view if the receipt belongs to their bill
         if (tenant) {
           if (receiptRecord.billId) {
             const bill = await prisma.bill.findUnique({ where: { id: receiptRecord.billId } });
@@ -62,8 +63,11 @@ export function createReceiptRouter(authService: AuthenticationService) {
               }
             }
           } else if (receiptRecord.paymentGroupId) {
-            const groupBills = await prisma.bill.findMany({ where: { paymentGroupId: receiptRecord.paymentGroupId } });
-            if (groupBills.some(b => b.tenantId === tenant.id)) {
+            const targets = await prisma.combinedPaymentGroupBillTarget.findMany({
+              where: { paymentGroupId: receiptRecord.paymentGroupId },
+              include: { bill: true },
+            });
+            if (targets.some(t => t.bill.tenantId === tenant.id)) {
               authorized = true;
             }
           }
@@ -80,7 +84,6 @@ export function createReceiptRouter(authService: AuthenticationService) {
       res.status(404).json({ error: err.message });
     }
   });
-
 
   const handleReceiptHtml = async (req: Request, res: Response) => {
     try {
@@ -109,8 +112,11 @@ export function createReceiptRouter(authService: AuthenticationService) {
               }
             }
           } else if (receiptRecord.paymentGroupId) {
-            const groupBills = await prisma.bill.findMany({ where: { paymentGroupId: receiptRecord.paymentGroupId } });
-            if (groupBills.some(b => b.tenantId === tenant.id)) {
+            const targets = await prisma.combinedPaymentGroupBillTarget.findMany({
+              where: { paymentGroupId: receiptRecord.paymentGroupId },
+              include: { bill: true },
+            });
+            if (targets.some(t => t.bill.tenantId === tenant.id)) {
               authorized = true;
             }
           }
@@ -134,6 +140,10 @@ export function createReceiptRouter(authService: AuthenticationService) {
           .replace(/"/g, '&quot;')
           .replace(/'/g, '&#039;');
       };
+
+      const items = (data.items && Array.isArray(data.items) && data.items.length > 0)
+        ? data.items
+        : [{ description: 'ยอดชำระตามใบเสร็จเดิม', amount: data.total || '0.00', quantity: 1 }];
 
       const html = `
 <!DOCTYPE html>
@@ -198,7 +208,7 @@ export function createReceiptRouter(authService: AuthenticationService) {
       </tr>
     </thead>
     <tbody>
-      ${(data.items || []).map((i: any, idx: number) => `
+      ${items.map((i: any, idx: number) => `
         <tr>
           <td>${idx + 1}</td>
           <td>${escapeHTML(i.description)}</td>

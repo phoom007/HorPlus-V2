@@ -158,6 +158,76 @@ export function createPaymentRouter(authService: AuthenticationService) {
     const rawCode = err.code || (typeof err.message === 'string' ? err.message : '');
 
     switch (rawCode) {
+      case 'GROUP_REVERSAL_REQUIRED':
+        return res.status(400).json({
+          error: {
+            code: 'GROUP_REVERSAL_REQUIRED',
+            message: 'ไม่อนุญาตให้ยกเลิกรายการย่อยของการรวมจ่าย กรุณายกเลิกทั้งกลุ่มรายการ',
+            fieldErrors: null,
+            requestId,
+            timestamp,
+          },
+        });
+      case 'GROUP_APPROVAL_REQUIRED':
+        return res.status(400).json({
+          error: {
+            code: 'GROUP_APPROVAL_REQUIRED',
+            message: 'รายการนี้เป็นส่วนหนึ่งของการรวมจ่าย กรุณาอนุมัติทั้งกลุ่มรายการ',
+            fieldErrors: null,
+            requestId,
+            timestamp,
+          },
+        });
+      case 'GROUP_REJECTION_REQUIRED':
+        return res.status(400).json({
+          error: {
+            code: 'GROUP_REJECTION_REQUIRED',
+            message: 'รายการนี้เป็นส่วนหนึ่งของการรวมจ่าย กรุณาปฏิเสธทั้งกลุ่มรายการ',
+            fieldErrors: null,
+            requestId,
+            timestamp,
+          },
+        });
+      case 'GROUP_ALLOCATION_RECONCILIATION_FAILED':
+        return res.status(400).json({
+          error: {
+            code: 'GROUP_ALLOCATION_RECONCILIATION_FAILED',
+            message: 'การจัดสรรยอดเงินไม่ตรงกับยอดรวมของกลุ่มรายการ',
+            fieldErrors: null,
+            requestId,
+            timestamp,
+          },
+        });
+      case 'COMBINED_GROUP_NOT_FOUND':
+        return res.status(404).json({
+          error: {
+            code: 'COMBINED_GROUP_NOT_FOUND',
+            message: 'ไม่พบกลุ่มรายการชำระเงิน',
+            fieldErrors: null,
+            requestId,
+            timestamp,
+          },
+        });
+      case 'INVALID_GROUP_STATE':
+        return res.status(400).json({
+          error: {
+            code: 'INVALID_GROUP_STATE',
+            message: 'สถานะกลุ่มรายการไม่ถูกต้องสำหรับการดำเนินการ',
+            fieldErrors: null,
+            requestId,
+            timestamp,
+          },
+        });
+      case 'INVALID_STATE':
+        return res.status(400).json({
+          error: {
+            code: 'INVALID_STATE',
+            message: 'สถานะรายการไม่ถูกต้องสำหรับการดำเนินการ',
+            fieldErrors: null,
+            requestId,
+            timestamp,
+          },
+        });
       case 'UNSUPPORTED_AMOUNT':
         return res.status(400).json({
           error: {
@@ -436,7 +506,6 @@ export function createPaymentRouter(authService: AuthenticationService) {
 
       const payment = await paymentService.submitSlip({
         dormitoryId,
-        billId: data.billId,
         tenantId: tenant.id,
         amount: data.amount,
         paymentDate: data.paymentDate,
@@ -451,7 +520,7 @@ export function createPaymentRouter(authService: AuthenticationService) {
     }
   });
 
-  // Owner: Record Cash
+  // Owner: Record Cash (Strictly Single-Bill)
   router.post('/cash', requireAuth, requireDormitoryPermission('payment:write'), requireDormitoryWriteEntitlement, requireCsrf, async (req, res) => {
     try {
       const auth = (req as any).auth;
@@ -497,47 +566,6 @@ export function createPaymentRouter(authService: AuthenticationService) {
       });
 
       res.json(payment);
-    } catch (err: any) {
-      handlePaymentError(res, req, err);
-    }
-  });
-
-  // Owner: Record Cash Payment for Multiple Bills Atomically
-  router.post('/combined-cash', requireAuth, requireDormitoryPermission('payment:write'), requireDormitoryWriteEntitlement, requireCsrf, async (req, res) => {
-    try {
-      const auth = (req as any).auth;
-      const context = (req as any).dormitoryContext || (await resolveAuthoritativeDormitoryContext(req));
-      const dormitoryId = context.dormitoryId;
-
-      if (!ensureOwnerOrManager(req, res, dormitoryId)) {
-        return res.status(403).json({
-          error: {
-            code: 'FORBIDDEN',
-            message: 'ไม่มีสิทธิ์บันทึกการรับเงินสด',
-            requestId: (req.headers['x-request-id'] as string) || (req as any).id || 'req-unknown',
-            timestamp: new Date().toISOString(),
-          },
-        });
-      }
-
-      const schema = z.object({
-        billIds: z.array(z.string().uuid()).min(1, 'ต้องระบุรายการบิลอย่างน้อย 1 รายการ'),
-        amount: z.string().optional(),
-        notes: z.string().optional(),
-      });
-      const data = schema.parse(req.body);
-      const idempotencyKey = (req.headers['x-idempotency-key'] || req.headers['idempotency-key']) as string | undefined;
-
-      const result = await paymentService.recordCombinedCash({
-        dormitoryId,
-        billIds: data.billIds,
-        amount: data.amount,
-        userId: auth.userId,
-        notes: data.notes,
-        idempotencyKey,
-      });
-
-      res.json(result);
     } catch (err: any) {
       handlePaymentError(res, req, err);
     }
@@ -715,8 +743,21 @@ export function createPaymentRouter(authService: AuthenticationService) {
             include: {
               allocations: true,
               receipts: true,
+              billTargets: {
+                include: {
+                  bill: {
+                    include: {
+                      billingCycle: true,
+                      room: true,
+                      tenant: true,
+                    },
+                  },
+                },
+              },
+              verification: true,
             },
           },
+          verification: true,
           statusHistories: { orderBy: { effectiveAt: 'desc' } }
         },
         orderBy: { createdAt: 'desc' }
@@ -792,29 +833,112 @@ export function createPaymentRouter(authService: AuthenticationService) {
     }
   });
 
-  // Owner: Approve combined payment group atomically
-  router.post('/combined-groups/:id/approve', requireAuth, requireCsrf, async (req, res) => {
-    try {
-      const auth = (req as any).auth;
-      const context = (req as any).dormitoryContext || (await resolveAuthoritativeDormitoryContext(req));
-      const dormitoryId = context.dormitoryId;
+    // Owner: Approve combined payment group atomically
+  router.post(
+    '/combined-groups/:id/approve',
+    requireAuth,
+    requireCsrf,
+    requireDormitoryPermission('payment:write'),
+    requireDormitoryWriteEntitlement,
+    async (req, res) => {
+      try {
+        const auth = (req as any).auth;
+        const context = (req as any).dormitoryContext || (await resolveAuthoritativeDormitoryContext(req));
+        const dormitoryId = context.dormitoryId;
 
-      if (!ensureOwnerOrManager(req, res, dormitoryId)) {
-        return res.status(403).json({ error: 'Forbidden' });
+        if (!ensureOwnerOrManager(req, res, dormitoryId)) {
+          return res.status(403).json({ error: 'Forbidden' });
+        }
+
+        const result = await paymentService.approvePaymentGroup({
+          dormitoryId,
+          groupId: req.params.id,
+          userId: auth.userId,
+          notes: req.body?.notes,
+          idempotencyKey: req.headers['idempotency-key'] as string | undefined,
+        });
+
+        res.json(result);
+      } catch (err: any) {
+        handlePaymentError(res, req, err);
       }
-
-      const result = await paymentService.approvePaymentGroup({
-        dormitoryId,
-        groupId: req.params.id,
-        userId: auth.userId,
-        notes: req.body?.notes,
-      });
-
-      res.json(result);
-    } catch (err: any) {
-      handlePaymentError(res, req, err);
     }
-  });
+  );
+
+  // Owner: Reject combined payment group atomically
+  router.post(
+    '/combined-groups/:id/reject',
+    requireAuth,
+    requireCsrf,
+    requireDormitoryPermission('payment:write'),
+    requireDormitoryWriteEntitlement,
+    async (req, res) => {
+      try {
+        const auth = (req as any).auth;
+        const context = (req as any).dormitoryContext || (await resolveAuthoritativeDormitoryContext(req));
+        const dormitoryId = context.dormitoryId;
+
+        if (!ensureOwnerOrManager(req, res, dormitoryId)) {
+          return res.status(403).json({ error: 'Forbidden' });
+        }
+
+        const reason = req.body?.reason;
+        if (!reason || typeof reason !== 'string' || !reason.trim()) {
+          return res.status(400).json({ error: 'เหตุผลในการปฏิเสธมีความจำเป็น' });
+        }
+
+        const result = await paymentService.rejectPaymentGroup({
+          dormitoryId,
+          groupId: req.params.id,
+          userId: auth.userId,
+          reason: reason.trim(),
+          notes: req.body?.notes,
+          idempotencyKey: req.headers['idempotency-key'] as string | undefined,
+        });
+
+        res.json(result);
+      } catch (err: any) {
+        handlePaymentError(res, req, err);
+      }
+    }
+  );
+
+  // Owner: Reverse combined payment group atomically
+  router.post(
+    '/combined-groups/:id/reverse',
+    requireAuth,
+    requireCsrf,
+    requireDormitoryPermission('payment:write'),
+    requireDormitoryWriteEntitlement,
+    async (req, res) => {
+      try {
+        const auth = (req as any).auth;
+        const context = (req as any).dormitoryContext || (await resolveAuthoritativeDormitoryContext(req));
+        const dormitoryId = context.dormitoryId;
+
+        if (!ensureOwnerOrManager(req, res, dormitoryId)) {
+          return res.status(403).json({ error: 'Forbidden' });
+        }
+
+        const reason = req.body?.reason;
+        if (!reason || typeof reason !== 'string' || !reason.trim()) {
+          return res.status(400).json({ error: 'เหตุผลในการยกเลิกมีความจำเป็น' });
+        }
+
+        const result = await paymentService.reversePaymentGroup({
+          dormitoryId,
+          groupId: req.params.id,
+          userId: auth.userId,
+          reason: reason.trim(),
+          idempotencyKey: req.headers['idempotency-key'] as string | undefined,
+        });
+
+        res.json(result);
+      } catch (err: any) {
+        handlePaymentError(res, req, err);
+      }
+    }
+  );
 
   return router;
 }

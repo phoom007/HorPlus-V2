@@ -1980,6 +1980,135 @@ export async function seedLocal07Data() {
     });
   }
 
+  // =========================================================================
+  // R3.8c DETERMINISTIC UAT FIXTURE — MANUAL-UNVERIFIED COMBINED SLIP (Room 302)
+  // Tenant: ธนากร สุขใจ (Room 302)
+  // July 2026 Monthly Bill: ฿4,000 unpaid
+  // August 2026 Monthly Bill: ฿5,000 unpaid
+  // Combined Slip: ฿6,500 submitted for review (July: ฿4,000, August: ฿2,500)
+  // Verification: UNVERIFIED, provider: NONE, claimedTransferAt: 2026-08-28 14:30
+  // =========================================================================
+  const bill302Aug = await prisma.bill.create({
+    data: {
+      dormitoryId: compDorm.id,
+      billingCycleId: cycleAug.id,
+      roomId: createdRooms['302'].id,
+      tenantId: createdTenants['302'].id,
+      contractId: createdContracts['302']?.id || null,
+      billNumber: 'INV-202608-302-R',
+      billKind: 'RENT',
+      billingDate: new Date('2026-08-25'),
+      dueDate: new Date('2026-09-05'),
+      subtotal: 5000.0,
+      totalAmount: 5000.0,
+      paidAmount: 0.0,
+      outstandingAmount: 5000.0,
+      status: 'unpaid',
+    },
+  });
+  await prisma.billItem.create({
+    data: {
+      dormitoryId: compDorm.id,
+      billId: bill302Aug.id,
+      type: 'rent',
+      description: 'ค่าเช่าห้องพัก 302 (ส.ค. 2569)',
+      quantity: 1,
+      unitPrice: 5000,
+      amount: 5000,
+    },
+  });
+
+  // Find July bill for Room 302
+  const bill302July = await prisma.bill.findFirst({
+    where: {
+      dormitoryId: compDorm.id,
+      roomId: createdRooms['302'].id,
+      billingCycleId: cycleJuly.id,
+    },
+  });
+
+  if (bill302July) {
+    // 1. Create CombinedPaymentGroup (6,500 total, UNDER_REVIEW)
+    const uatSlipGroup = await prisma.combinedPaymentGroup.create({
+      data: {
+        dormitoryId: compDorm.id,
+        tenantId: createdTenants['302'].id,
+        totalAmount: 6500.0,
+        method: 'BANK_TRANSFER',
+        status: 'UNDER_REVIEW',
+        paymentDate: new Date('2026-08-28T14:30:00Z'),
+        notes: 'LOCAL UAT TEST SLIP — NOT REAL (โอนชำระ ก.ค. + ส.ค.)',
+      },
+    });
+
+    // 2. Create GroupBillTargets
+    await prisma.combinedPaymentGroupBillTarget.create({
+      data: {
+        dormitoryId: compDorm.id,
+        paymentGroupId: uatSlipGroup.id,
+        billId: bill302July.id,
+        targetOrder: 1,
+      },
+    });
+    await prisma.combinedPaymentGroupBillTarget.create({
+      data: {
+        dormitoryId: compDorm.id,
+        paymentGroupId: uatSlipGroup.id,
+        billId: bill302Aug.id,
+        targetOrder: 2,
+      },
+    });
+
+    // 3. Create Child Payments (SUM == 6,500)
+    // July allocation: ฿4,000 (or up to July outstanding)
+    const julyAlloc = Math.min(4000, Number(bill302July.outstandingAmount || bill302July.totalAmount));
+    const augAlloc = 6500 - julyAlloc;
+
+    const payJuly = await prisma.payment.create({
+      data: {
+        dormitoryId: compDorm.id,
+        billId: bill302July.id,
+        tenantId: createdTenants['302'].id,
+        paymentGroupId: uatSlipGroup.id,
+        method: 'BANK_TRANSFER',
+        amount: julyAlloc,
+        status: 'UNDER_REVIEW',
+        paymentDate: new Date('2026-08-28T14:30:00Z'),
+        evidenceUrl: 'fixtures/slips/local-uat-test-slip-room302.png',
+        fileHash: 'local-uat-fake-hash-room302-july',
+      },
+    });
+
+    const payAug = await prisma.payment.create({
+      data: {
+        dormitoryId: compDorm.id,
+        billId: bill302Aug.id,
+        tenantId: createdTenants['302'].id,
+        paymentGroupId: uatSlipGroup.id,
+        method: 'BANK_TRANSFER',
+        amount: augAlloc,
+        status: 'UNDER_REVIEW',
+        paymentDate: new Date('2026-08-28T14:30:00Z'),
+        evidenceUrl: 'fixtures/slips/local-uat-test-slip-room302.png',
+        fileHash: 'local-uat-fake-hash-room302-aug',
+      },
+    });
+
+    // 4. Create PaymentEvidenceVerification (UNVERIFIED, provider: NONE, verifiedTransferAt: NULL)
+    await prisma.paymentEvidenceVerification.create({
+      data: {
+        dormitoryId: compDorm.id,
+        paymentGroupId: uatSlipGroup.id,
+        provider: 'NONE',
+        status: 'UNVERIFIED',
+        claimedTransferAt: new Date('2026-08-28T14:30:00Z'),
+        verifiedTransferAt: null,
+        verifiedAmount: null,
+        providerReference: null,
+      },
+    });
+  }
+
   // Seed sample Tenant Registration Request (Pending) with acceptance snapshot & signature
   const room102 = await prisma.room.findFirst({
     where: { dormitoryId: compDorm.id, roomNumber: '102' },

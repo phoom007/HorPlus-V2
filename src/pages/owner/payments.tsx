@@ -379,19 +379,106 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
     return cycle?.cycleCode || '';
   };
 
+  // Evidence Slip URL resolver
+  const getSlipEvidenceUrl = (payment: PaymentRecord): string => {
+    if (payment.evidenceUrl) {
+      return `/api/v1/payments/${payment.id}/evidence`;
+    }
+    return '';
+  };
+
   /* -------------------------------------------------------------------------
    * Tab Filter Projections
    * ------------------------------------------------------------------------- */
 
-  // Tab 1: Checking (รอตรวจสอบ / รอตรวจสลิป) -> ALL BILLING CYCLES (No header cycle filter!)
-  const checkingPayments = useMemo(() => {
-    return paymentsData
+    // Tab 1: Checking (รอตรวจสอบ / รอตรวจสลิป) -> ALL BILLING CYCLES (Grouped Combined Slips as 1 item)
+  const checkingReviewItems = useMemo(() => {
+    const pendingList = paymentsData
       .filter(p => {
         const s = (p.status || '').toUpperCase();
         return s === 'PENDING' || s === 'UNDER_REVIEW';
       })
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-  }, [paymentsData]);
+
+    const groupsMap = new Map<string, {
+      id: string;
+      isGroup: boolean;
+      groupId?: string;
+      paymentId?: string;
+      roomNum: string;
+      tenantName: string;
+      totalAmount: number;
+      claimedTransferAt?: string | null;
+      createdAt: string;
+      slipUrl?: string | null;
+      affectedOrigins: Array<{ billId: string; billNumber: string; cycleLabel: string; amount: number; bill?: any }>;
+      payments: PaymentRecord[];
+    }>();
+
+    for (const p of pendingList) {
+      if (p.paymentGroupId) {
+        if (!groupsMap.has(p.paymentGroupId)) {
+          const groupTotal = Number(p.paymentGroup?.totalAmount || p.amount || 0);
+          const roomNum = getRoomNum(p.bill?.roomId || (p.bill as any)?.room?.id);
+          const tenantName = p.bill?.tenant?.displayName || getTenantName(p.tenantId || p.bill?.tenantId);
+          const slipUrl = getSlipEvidenceUrl(p);
+
+          groupsMap.set(p.paymentGroupId, {
+            id: p.paymentGroupId,
+            isGroup: true,
+            groupId: p.paymentGroupId,
+            roomNum,
+            tenantName,
+            totalAmount: groupTotal,
+            claimedTransferAt: (p.paymentGroup as any)?.verification?.claimedTransferAt || p.paymentDate,
+            createdAt: p.createdAt,
+            slipUrl,
+            affectedOrigins: [],
+            payments: [],
+          });
+        }
+        const g = groupsMap.get(p.paymentGroupId)!;
+        g.payments.push(p);
+        const cycleCode = getCycleCodeForCycleId(p.bill?.billingCycleId);
+        g.affectedOrigins.push({
+          billId: p.billId,
+          billNumber: p.bill?.billNumber || p.billId,
+          cycleLabel: formatCycleThaiShort(cycleCode),
+          amount: Number(p.amount || 0),
+          bill: p.bill,
+        });
+      } else {
+        const roomNum = getRoomNum(p.bill?.roomId || (p.bill as any)?.room?.id);
+        const tenantName = p.bill?.tenant?.displayName || getTenantName(p.tenantId || p.bill?.tenantId);
+        const slipUrl = getSlipEvidenceUrl(p);
+        const cycleCode = getCycleCodeForCycleId(p.bill?.billingCycleId);
+
+        groupsMap.set(p.id, {
+          id: p.id,
+          isGroup: false,
+          paymentId: p.id,
+          roomNum,
+          tenantName,
+          totalAmount: Number(p.amount || p.bill?.totalAmount || 0),
+          claimedTransferAt: (p as any).verification?.claimedTransferAt || p.paymentDate,
+          createdAt: p.createdAt,
+          slipUrl,
+          affectedOrigins: [
+            {
+              billId: p.billId,
+              billNumber: p.bill?.billNumber || p.billId,
+              cycleLabel: formatCycleThaiShort(cycleCode),
+              amount: Number(p.amount || 0),
+              bill: p.bill,
+            },
+          ],
+          payments: [p],
+        });
+      }
+    }
+
+    return Array.from(groupsMap.values());
+  }, [paymentsData, rooms, tenants, billingCycles]);
 
   // Tab 2: Cash (บันทึกเงินสด / ยังไม่ชำระ) -> Strictly Selected Header Cycle ONLY (Fail Closed on missing cycle authority)
   const cashPendingBills = useMemo(() => {
@@ -506,16 +593,16 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
     onUpdateBills();
   };
 
-  // 1. Approve Slip Payment (Stable Idempotency Key)
-  const handleConfirmApprovePayment = async (payment: PaymentRecord) => {
+    // 1. Approve Slip Payment / Group (Stable Idempotency Key)
+  const handleConfirmApprove = async (item: { isGroup: boolean; groupId?: string; paymentId?: string; roomNum: string }) => {
     if (!dormitoryId) return;
-    const roomNum = getRoomNum(payment.bill?.roomId || payment.bill?.room?.id);
-    const opId = `approve:${payment.id}`;
+    const opId = item.isGroup ? `approve-group:${item.groupId}` : `approve:${item.paymentId}`;
+    const endpoint = item.isGroup ? `/payments/combined-groups/${item.groupId}/approve` : `/payments/${item.paymentId}/approve`;
     const idempotencyKey = getIdempotencyKey(opId);
     try {
       await httpRequest(
         'POST',
-        `/payments/${payment.id}/approve`,
+        endpoint,
         {},
         {
           headers: {
@@ -527,67 +614,58 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
 
       clearIdempotencyKey(opId);
       invalidateFinancialCaches();
-      onAddLog('อนุมัติสลิปโอนเงิน', `ยืนยันความถูกต้องสลิปและปรับปรุงสถานะห้อง ${roomNum} ชำระแล้ว`, 'Payment', payment.id);
-      triggerToast(`อนุมัติสลิปโอนเงิน ห้อง ${roomNum} เรียบร้อยแล้ว`);
+      onAddLog('อนุมัติสลิปโอนเงิน', `ยืนยันความถูกต้องสลิปและปรับปรุงสถานะห้อง ${item.roomNum} ชำระแล้ว`, 'Payment', item.groupId || item.paymentId);
+      triggerToast(`อนุมัติสลิปโอนเงิน ห้อง ${item.roomNum} เรียบร้อยแล้ว`);
     } catch (err: any) {
       console.error('Failed to approve payment:', err);
       triggerToast(`เกิดข้อผิดพลาดในการอนุมัติสลิป: ${err.message || 'กรุณาลองใหม่อีกครั้ง'}`);
     }
   };
 
-  const startApproveWithCountdown = (payment: PaymentRecord) => {
-    if (approveTimersRef.current[payment.id]) {
-      clearInterval(approveTimersRef.current[payment.id]);
-      delete approveTimersRef.current[payment.id];
+  const startApproveCountdown = (item: { id: string; isGroup: boolean; groupId?: string; paymentId?: string; roomNum: string }) => {
+    if (approveTimersRef.current[item.id]) {
+      clearInterval(approveTimersRef.current[item.id]);
+      delete approveTimersRef.current[item.id];
     }
 
-    setPendingApproveMap(prev => ({ ...prev, [payment.id]: 5 }));
+    setPendingApproveMap(prev => ({ ...prev, [item.id]: 5 }));
     let currentCount = 5;
 
     const timer = setInterval(() => {
       currentCount -= 1;
       if (currentCount <= 0) {
-        if (approveTimersRef.current[payment.id]) {
-          clearInterval(approveTimersRef.current[payment.id]);
-          delete approveTimersRef.current[payment.id];
+        if (approveTimersRef.current[item.id]) {
+          clearInterval(approveTimersRef.current[item.id]);
+          delete approveTimersRef.current[item.id];
         }
         setPendingApproveMap(prev => {
           const next = { ...prev };
-          delete next[payment.id];
+          delete next[item.id];
           return next;
         });
-        handleConfirmApprovePayment(payment);
+        handleConfirmApprove(item);
       } else {
-        setPendingApproveMap(prev => ({ ...prev, [payment.id]: currentCount }));
+        setPendingApproveMap(prev => ({ ...prev, [item.id]: currentCount }));
       }
     }, 1000);
 
-    approveTimersRef.current[payment.id] = timer;
+    approveTimersRef.current[item.id] = timer;
   };
 
-  const cancelPendingApprove = (paymentId: string) => {
-    if (approveTimersRef.current[paymentId]) {
-      clearInterval(approveTimersRef.current[paymentId]);
-      delete approveTimersRef.current[paymentId];
-    }
-    setPendingApproveMap(prev => {
-      const next = { ...prev };
-      delete next[paymentId];
-      return next;
-    });
-  };
-
-  // 2. Reject Slip Payment
-  const handleRejectPayment = async () => {
+  // 2. Reject Slip Payment / Group
+  const handleRejectPaymentOrGroup = async () => {
     if (!dormitoryId || !rejectPaymentTarget) return;
     const reasonText = rejectReason === 'อื่นๆ' ? rejectNote : rejectReason;
-    const roomNum = getRoomNum(rejectPaymentTarget.bill?.roomId || rejectPaymentTarget.bill?.room?.id);
-    const opId = `reject:${rejectPaymentTarget.id}:${reasonText}`;
+    const isGroup = !!(rejectPaymentTarget as any).isGroup || !!rejectPaymentTarget.paymentGroupId;
+    const targetId = (rejectPaymentTarget as any).groupId || rejectPaymentTarget.paymentGroupId || rejectPaymentTarget.id;
+    const roomNum = getRoomNum(rejectPaymentTarget.bill?.roomId || (rejectPaymentTarget as any).roomNum);
+    const opId = isGroup ? `reject-group:${targetId}:${reasonText}` : `reject:${targetId}:${reasonText}`;
+    const endpoint = isGroup ? `/payments/combined-groups/${targetId}/reject` : `/payments/${targetId}/reject`;
 
     try {
       await httpRequest(
         'POST',
-        `/payments/${rejectPaymentTarget.id}/reject`,
+        endpoint,
         { reason: reasonText },
         {
           headers: {
@@ -599,7 +677,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
 
       clearIdempotencyKey(opId);
       invalidateFinancialCaches();
-      onAddLog('ปฏิเสธสลิปโอนเงิน', `ปฏิเสธสลิปเนื่องจาก: ${reasonText} ห้อง ${roomNum}`, 'Payment', rejectPaymentTarget.id);
+      onAddLog('ปฏิเสธสลิปโอนเงิน', `ปฏิเสธสลิปเนื่องจาก: ${reasonText} ห้อง ${roomNum}`, 'Payment', targetId);
       setIsRejectOpen(false);
       setRejectPaymentTarget(null);
       triggerToast(`ปฏิเสธสลิปโอนเงิน ห้อง ${roomNum} เรียบร้อยแล้ว`);
@@ -771,14 +849,6 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
     setIsReceiptOpen(true);
   };
 
-  // Evidence Slip URL resolver
-  const getSlipEvidenceUrl = (payment: PaymentRecord): string => {
-    if (payment.evidenceUrl) {
-      return `/api/v1/payments/${payment.id}/evidence`;
-    }
-    return '';
-  };
-
   return (
     <div className="space-y-6">
       {/* Floating Success Toast Portal */}
@@ -827,7 +897,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
               }`}
             >
               <Clock className="w-4 h-4 text-amber-500 animate-pulse shrink-0" />
-              <span className="truncate">รอตรวจสลิป ({checkingPayments.length})</span>
+              <span className="truncate">รอตรวจสลิป ({checkingReviewItems.length})</span>
             </button>
 
             {/* Tab 2: ยังไม่ชำระ / บันทึกเงินสด (cash) -> SELECTED CYCLE ONLY */}
@@ -900,126 +970,147 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
         </div>
       </div>
 
-      {/* =========================================================================
+            {/* =========================================================================
        * TAB 1: รอตรวจสลิป (Checking Tab - ALL CYCLES)
        * ========================================================================= */}
       {activeTab === 'checking' && (
         <div className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-4">
-            {filterPaymentsByQuery(checkingPayments).map(p => {
-              const roomNum = getRoomNum(p.bill?.roomId || p.bill?.room?.id);
-              const tenantName = p.bill?.tenant?.displayName || getTenantName(p.tenantId || p.bill?.tenantId);
-              const slipUrl = getSlipEvidenceUrl(p);
-              const cycleCode = getCycleCodeForCycleId(p.bill?.billingCycleId);
-              const cycleLabel = formatCycleThaiShort(cycleCode);
-              const amount = Number(p.amount || p.bill?.totalAmount || 0);
-
-              return (
-                <div key={p.id} className="bg-white rounded-3xl border border-amber-200 shadow-2xs hover:shadow-md transition-all p-5 flex flex-col justify-between space-y-4">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xl font-black text-slate-900">ห้อง {roomNum}</span>
-                    <div className="flex items-center gap-1.5">
-                      <span className="px-2.5 py-0.5 bg-indigo-50 text-indigo-700 border border-indigo-100 font-bold rounded-full text-[10px]">
-                        {cycleCode ? `งวด ${cycleLabel}` : 'ไม่พบข้อมูลงวดบิล'}
-                      </span>
-                      <span className="px-3 py-1 bg-amber-50 text-amber-800 border border-amber-200 font-extrabold rounded-full text-[11px] flex items-center gap-1 animate-pulse">
-                        <Clock className="w-3.5 h-3.5 text-amber-600" />
-                        รอตรวจสลิป
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="text-xs space-y-1">
-                    <p className="font-bold text-slate-800 flex items-center gap-1.5">
-                      <User className="w-3.5 h-3.5 text-slate-400" />
-                      {tenantName}
-                    </p>
-                    <p className="text-[11px] text-slate-400">
-                      ยื่นตรวจเมื่อ: {formatThaiDate(p.createdAt)}
-                    </p>
-                  </div>
-
-                  {slipUrl ? (
-                    <div
-                      onClick={() => setViewingSlipUrl(slipUrl)}
-                      className="relative bg-slate-50 border border-slate-200 rounded-2xl h-36 flex items-center justify-center p-2 cursor-pointer hover:border-indigo-400 transition-all group overflow-hidden"
-                    >
-                      <img
-                        src={slipUrl}
-                        alt="สลิปโอนเงิน"
-                        className="max-h-full max-w-full object-contain rounded-xl group-hover:scale-105 transition-transform"
-                      />
-                      <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1 text-white text-xs font-bold rounded-2xl">
-                        <Eye className="w-4 h-4" />
-                        ดูรายละเอียด
+            {checkingReviewItems
+              .filter(item => {
+                if (!searchQuery?.trim()) return true;
+                const q = searchQuery.toLowerCase().trim();
+                return item.roomNum.toLowerCase().includes(q) || item.tenantName.toLowerCase().includes(q);
+              })
+              .map(item => {
+                return (
+                  <div key={item.id} className="bg-white rounded-3xl border border-amber-200 shadow-2xs hover:shadow-md transition-all p-5 flex flex-col justify-between space-y-4">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xl font-black text-slate-900">ห้อง {item.roomNum}</span>
+                      <div className="flex items-center gap-1.5">
+                        {item.isGroup ? (
+                          <span className="px-2.5 py-0.5 bg-purple-50 text-purple-700 border border-purple-200 font-bold rounded-full text-[10px]">
+                            รวม {item.affectedOrigins.length} บิล
+                          </span>
+                        ) : (
+                          <span className="px-2.5 py-0.5 bg-indigo-50 text-indigo-700 border border-indigo-100 font-bold rounded-full text-[10px]">
+                            {item.affectedOrigins[0]?.cycleLabel ? `งวด ${item.affectedOrigins[0].cycleLabel}` : 'ไม่พบข้อมูลงวดบิล'}
+                          </span>
+                        )}
+                        <span className="px-3 py-1 bg-amber-50 text-amber-800 border border-amber-200 font-extrabold rounded-full text-[11px] flex items-center gap-1 animate-pulse">
+                          <Clock className="w-3.5 h-3.5 text-amber-600" />
+                          รอตรวจสลิป
+                        </span>
                       </div>
                     </div>
-                  ) : (
-                    <div className="bg-slate-50 border border-dashed border-slate-200 rounded-2xl h-24 flex items-center justify-center text-slate-400 text-xs font-semibold">
-                      ไม่มีไฟล์สลิปแนบ
-                    </div>
-                  )}
 
-                  <div className="flex items-baseline justify-between pt-1 border-t border-slate-100">
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-xs text-slate-400 font-bold">ยอดรอตรวจสอบ</span>
-                      {p.bill && (
+                    <div className="text-xs space-y-1">
+                      <p className="font-bold text-slate-800 flex items-center gap-1.5">
+                        <User className="w-3.5 h-3.5 text-slate-400" />
+                        {item.tenantName}
+                      </p>
+                      <div className="flex items-center gap-1 text-[11px] text-amber-700 font-medium bg-amber-50/60 px-2 py-0.5 rounded-md border border-amber-100/80">
+                        <AlertCircle className="w-3 h-3 text-amber-600 shrink-0" />
+                        <span>ยังไม่ได้ตรวจสอบเวลาการโอนจากระบบธนาคาร</span>
+                      </div>
+                      <p className="text-[11px] text-slate-400">
+                        ยื่นตรวจเมื่อ: {formatThaiDate(item.createdAt)}
+                      </p>
+                    </div>
+
+                    {item.isGroup && item.affectedOrigins.length > 0 && (
+                      <div className="bg-slate-50/80 p-2.5 rounded-xl border border-slate-100 space-y-1 text-[11px]">
+                        <span className="font-bold text-slate-500 block text-[10px]">การจัดสรรตามบิล:</span>
+                        {item.affectedOrigins.map((orig, oIdx) => (
+                          <div key={oIdx} className="flex justify-between items-center text-slate-700">
+                            <span className="truncate pr-1">{orig.cycleLabel ? `งวด ${orig.cycleLabel}` : orig.billNumber}</span>
+                            <span className="font-bold shrink-0">{formatBaht(orig.amount)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {item.slipUrl ? (
+                      <div
+                        onClick={() => setViewingSlipUrl(item.slipUrl!)}
+                        className="relative bg-slate-50 border border-slate-200 rounded-2xl h-36 flex items-center justify-center p-2 cursor-pointer hover:border-indigo-400 transition-all group overflow-hidden"
+                      >
+                        <img
+                          src={item.slipUrl}
+                          alt="สลิปโอนเงิน"
+                          className="max-h-full max-w-full object-contain rounded-xl group-hover:scale-105 transition-transform"
+                        />
+                        <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1 text-white text-xs font-bold rounded-2xl">
+                          <Eye className="w-4 h-4" />
+                          ดูรายละเอียด
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="bg-slate-50 border border-dashed border-slate-200 rounded-2xl h-24 flex items-center justify-center text-slate-400 text-xs font-semibold">
+                        ไม่มีไฟล์สลิปแนบ
+                      </div>
+                    )}
+
+                    <div className="flex items-baseline justify-between pt-1 border-t border-slate-100">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs text-slate-400 font-bold">ยอดรอตรวจสอบ</span>
+                        {item.affectedOrigins[0]?.bill && (
+                          <button
+                            type="button"
+                            onClick={() => setViewingBillDetail({ bill: item.affectedOrigins[0].bill, tenantName: item.tenantName, roomNum: item.roomNum })}
+                            className="text-[10px] text-indigo-600 hover:underline font-semibold cursor-pointer"
+                          >
+                            (ดูรายการ)
+                          </button>
+                        )}
+                      </div>
+                      <span className="text-lg font-black text-indigo-600">{formatBaht(item.totalAmount)}</span>
+                    </div>
+
+                    {pendingApproveMap[item.id] !== undefined ? (
+                      <div className="bg-amber-50 border border-amber-300 p-2.5 rounded-2xl flex items-center justify-between gap-2 text-amber-900 shadow-2xs animate-in fade-in">
+                        <div className="flex items-center gap-1.5 text-[11px] font-bold">
+                          <RotateCw className="w-3.5 h-3.5 animate-spin text-amber-600 shrink-0" />
+                          <span>กำลังอนุมัติ ({pendingApproveMap[item.id]}s)</span>
+                        </div>
                         <button
                           type="button"
-                          onClick={() => setViewingBillDetail({ bill: p.bill, tenantName, roomNum })}
-                          className="text-[10px] text-indigo-600 hover:underline font-semibold cursor-pointer"
+                          onClick={() => cancelPendingApprove(item.id)}
+                          className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-[10px] rounded-lg shadow-xs transition-all cursor-pointer shrink-0 flex items-center gap-0.5"
                         >
-                          (ดูรายการ)
+                          <X className="w-3 h-3" />
+                          ยกเลิก
                         </button>
-                      )}
-                    </div>
-                    <span className="text-lg font-black text-indigo-600">{formatBaht(amount)}</span>
-                  </div>
-
-                  {pendingApproveMap[p.id] !== undefined ? (
-                    <div className="bg-amber-50 border border-amber-300 p-2.5 rounded-2xl flex items-center justify-between gap-2 text-amber-900 shadow-2xs animate-in fade-in">
-                      <div className="flex items-center gap-1.5 text-[11px] font-bold">
-                        <RotateCw className="w-3.5 h-3.5 animate-spin text-amber-600 shrink-0" />
-                        <span>กำลังอนุมัติ ({pendingApproveMap[p.id]}s)</span>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => cancelPendingApprove(p.id)}
-                        className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-[10px] rounded-lg shadow-xs transition-all cursor-pointer shrink-0 flex items-center gap-0.5"
-                      >
-                        <X className="w-3 h-3" />
-                        ยกเลิก
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="grid grid-cols-2 gap-2 pt-1">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setRejectPaymentTarget(p);
-                          setIsRejectOpen(true);
-                        }}
-                        className="py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-xs rounded-xl flex items-center justify-center gap-1 transition-all cursor-pointer border border-rose-200/60"
-                      >
-                        <X className="w-4 h-4 text-rose-600" />
-                        ปฏิเสธ
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => startApproveWithCountdown(p)}
-                        className="py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-1 shadow-xs transition-all cursor-pointer"
-                      >
-                        <Check className="w-4 h-4" />
-                        ยอมรับ
-                      </button>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+                    ) : (
+                      <div className="grid grid-cols-2 gap-2 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setRejectPaymentTarget(item.payments[0] || (item as any));
+                            setIsRejectOpen(true);
+                          }}
+                          className="py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-xs rounded-xl flex items-center justify-center gap-1 transition-all cursor-pointer border border-rose-200/60"
+                        >
+                          <X className="w-4 h-4 text-rose-600" />
+                          ปฏิเสธ
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => startApproveCountdown(item)}
+                          className="py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-1 shadow-xs transition-all cursor-pointer"
+                        >
+                          <Check className="w-4 h-4" />
+                          ยอมรับ
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
           </div>
 
-          {filterPaymentsByQuery(checkingPayments).length === 0 && (
+          {checkingReviewItems.length === 0 && (
             <div className="bg-white p-12 rounded-3xl border border-slate-100 text-center text-slate-400 font-bold text-xs">
               ไม่มีสลิปรอตรวจสอบในขณะนี้
             </div>
@@ -1435,7 +1526,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
               ยกเลิก
             </button>
             <button
-              onClick={handleRejectPayment}
+              onClick={handleRejectPaymentOrGroup}
               className="px-5 py-2 text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white rounded-xl"
             >
               ปฏิเสธและส่งคืนบิล

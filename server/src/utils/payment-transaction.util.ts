@@ -1,6 +1,6 @@
 /**
  * @license Apache-2.0
- * OWNER R3.8b — In-Transaction Cash Settlement & Canonical Receipt Authority
+ * OWNER R3.8c — In-Transaction Cash Settlement, Group Receipts & Canonical Receipt Authority
  */
 
 import { Prisma } from '@prisma/client';
@@ -18,9 +18,8 @@ export interface RecordCashPaymentInTxInput {
 }
 
 /**
- * Canonical in-transaction cash settlement authority.
- * Creates CombinedPaymentGroup, Payment, PaymentAllocation, PaymentStatusHistory,
- * BillStatusHistory, updates Bill to PAID or PARTIALLY_PAID, and generates Receipt.
+ * Canonical in-transaction cash settlement authority (STRICTLY SINGLE-BILL).
+ * Settle ONLY the selected Bill. NEVER auto-allocate to older/newer/deposit bills.
  */
 export async function recordCashPaymentInTx(
   tx: any,
@@ -31,7 +30,7 @@ export async function recordCashPaymentInTx(
     await tx.$executeRaw`SELECT "id" FROM "bills" WHERE "id" = ${input.billId}::uuid FOR UPDATE`;
   }
 
-  // 2. Re-read locked Bill with active payments and line items
+  // 2. Re-read locked Bill with active payments, line items, and existing allocations
   const bill = await tx.bill.findUnique({
     where: { id: input.billId },
     include: {
@@ -67,7 +66,7 @@ export async function recordCashPaymentInTx(
     throw new AppError('บิลนี้ได้รับการชำระเงินครบแล้ว', 400, 'ALREADY_PAID');
   }
 
-  // Active Payment Guard: only block if there is a PENDING or UNDER_REVIEW submission
+  // Active Payment Guard: block if there is an active PENDING or UNDER_REVIEW submission
   const hasActivePendingPayment = bill.Payment?.some(
     (p: any) => p.status === 'PENDING' || p.status === 'UNDER_REVIEW'
   );
@@ -101,6 +100,16 @@ export async function recordCashPaymentInTx(
     },
   });
 
+  // Create bill target
+  await tx.combinedPaymentGroupBillTarget.create({
+    data: {
+      dormitoryId: input.dormitoryId,
+      paymentGroupId: group.id,
+      billId: bill.id,
+      targetOrder: 1,
+    },
+  });
+
   // 5. Create Payment record linked to group
   const payment = await tx.payment.create({
     data: {
@@ -129,7 +138,14 @@ export async function recordCashPaymentInTx(
     },
   });
 
-  // 6. Compute item-level allocations
+  // 6. Check legacy unallocated paid baseline (Room 104 case)
+  const existingAllocationsSum = (bill.allocations || []).reduce(
+    (sum: Decimal, a: any) => sum.plus(new Decimal(a.allocatedAmount.toString())),
+    new Decimal(0)
+  );
+  const legacyUnallocatedPaidAmount = Decimal.max(existingPaidAmount.minus(existingAllocationsSum), new Decimal(0));
+
+  // Compute canonical allocation plan for this single bill
   const allocationPlan = computeCanonicalAllocationPlan({
     submitAmount,
     targetRoomId: bill.roomId,
@@ -148,6 +164,7 @@ export async function recordCashPaymentInTx(
         totalAmount,
         paidAmount: existingPaidAmount,
         outstandingAmount: currentOutstanding,
+        legacyUnallocatedPaidAmount,
         billingCycleId: bill.billingCycleId,
         billingCycle: bill.billingCycle,
         items: (bill.items || []).map((it: any) => {
@@ -208,7 +225,6 @@ export async function recordCashPaymentInTx(
       paidAt: newStatus === 'PAID' ? now : (bill.paidAt || now),
       paidAmount: new Prisma.Decimal(newPaidAmount.toFixed(2)),
       outstandingAmount: new Prisma.Decimal(newOutstandingAmount.toFixed(2)),
-      paymentGroupId: group.id,
     },
   });
 
@@ -317,7 +333,6 @@ export async function generateReceiptInTx(
     ];
   }
 
-  // Resolve receiver display name from user if available
   let receiverDisplayName = 'ฝ่ายการเงิน หอพัก HorPlus';
   if (userId) {
     const user = await tx.user.findUnique({ where: { id: userId }, select: { name: true } });
@@ -345,6 +360,88 @@ export async function generateReceiptInTx(
       paymentId: paymentId || undefined,
       paymentGroupId: paymentGroupId || undefined,
       billId: billId || undefined,
+      receiptNumber,
+      snapshotData,
+      issuedByUserId: userId || null,
+      issuedAt: today,
+    },
+  });
+
+  return receipt;
+}
+
+/**
+ * Dedicated Group Receipt Generation: Exactly 1 Receipt per Combined Monetary Event.
+ * Invariant: SUM(snapshot.items.amount) == snapshot.total == CombinedPaymentGroup.totalAmount.
+ */
+export async function generateGroupReceiptInTx(params: {
+  tx: any;
+  dormitoryId: string;
+  paymentGroupId: string;
+  totalAmount: Decimal;
+  receiptItems: Array<{ description: string; amount: string }>;
+  userId?: string | null;
+  roomNumber?: string;
+  tenantName?: string;
+  paymentMethod?: string;
+  paymentDate?: Date;
+}) {
+  const { tx, dormitoryId, paymentGroupId, totalAmount, receiptItems, userId } = params;
+  const today = new Date();
+  const yearMonth = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, '0')}`;
+
+  const seq = await tx.receiptSequence.upsert({
+    where: {
+      dormitory_receipt_seq_unique: {
+        dormitoryId,
+        yearMonth,
+      },
+    },
+    create: {
+      dormitoryId,
+      yearMonth,
+      lastValue: 1,
+    },
+    update: {
+      lastValue: { increment: 1 },
+    },
+  });
+
+  const rawRoomNumber = params.roomNumber || 'GEN';
+  const normalizedRoom = rawRoomNumber.replace(/[^a-zA-Z0-9]/g, '').toUpperCase() || 'GEN';
+  const sequenceStr = String(seq.lastValue).padStart(4, '0');
+  const receiptNumber = `RC-${yearMonth}-${normalizedRoom}-${sequenceStr}`;
+
+  let receiverDisplayName = 'ฝ่ายการเงิน หอพัก HorPlus';
+  if (userId) {
+    const user = await tx.user.findUnique({ where: { id: userId }, select: { name: true } });
+    if (user?.name) {
+      receiverDisplayName = user.name;
+    }
+  }
+
+  const dorm = await tx.dormitory.findUnique({ where: { id: dormitoryId }, select: { name: true } });
+
+  const snapshotData = {
+    receiptNumber,
+    billNumber: null,
+    total: totalAmount.toFixed(2),
+    items: receiptItems,
+    roomNumber: params.roomNumber || 'GEN',
+    tenantName: params.tenantName || 'ผู้เช่า',
+    dormitoryName: dorm?.name || 'หอพัก HorPlus',
+    paymentMethod: params.paymentMethod || 'BANK_TRANSFER',
+    paymentDate: (params.paymentDate || today).toISOString(),
+    receiverName: receiverDisplayName,
+    isCombinedReceipt: true,
+  };
+
+  const receipt = await tx.receipt.create({
+    data: {
+      dormitoryId,
+      paymentGroupId,
+      paymentId: null,
+      billId: null,
       receiptNumber,
       snapshotData,
       issuedByUserId: userId || null,

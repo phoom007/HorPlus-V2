@@ -1,6 +1,6 @@
 /**
  * @license Apache-2.0
- * OWNER R3.8b — Canonical Financial Allocation Engine
+ * OWNER R3.8c — Canonical Financial Allocation Engine
  *
  * Responsibilities:
  * 1. Scope isolation: Restrict allocations strictly to SAME dormitory, SAME room, SAME tenant.
@@ -8,6 +8,8 @@
  * 3. Item ordering: RENT -> WATER -> ELECTRIC -> COMMON -> INTERNET -> PARKING -> OTHER -> LATE FEE.
  * 4. Overpayment check: Fail closed if submitAmount > totalEligibleOutstanding.
  * 5. Deterministic relational allocation plan computation.
+ * 6. Legacy unallocated paid baseline protection (Room 104 case): if legacy unallocated paid amount > 0,
+ *    allocate at bill level (billItemId = null) without guessing item distributions.
  */
 
 import { Decimal } from 'decimal.js';
@@ -36,6 +38,7 @@ export interface EligibleBill {
   totalAmount: string | number | Decimal;
   paidAmount: string | number | Decimal;
   outstandingAmount: string | number | Decimal;
+  legacyUnallocatedPaidAmount?: string | number | Decimal;
   billingCycleId?: string | null;
   billingCycle?: {
     id: string;
@@ -201,8 +204,13 @@ export function computeCanonicalAllocationPlan(params: {
 
     let remainingForThisBill = allocateToThisBill;
 
-    // If bill has items, allocate across items in strict priority order
-    if (bill.items && bill.items.length > 0) {
+    // Check legacy unallocated paid amount (Room 104 case):
+    // If there is an existing paidAmount with no historical allocation rows, item allocation is ambiguous.
+    // Allocate at bill level (billItemId = null) with truthful description.
+    const legacyUnallocated = new Decimal(bill.legacyUnallocatedPaidAmount?.toString() || '0');
+    const hasLegacyUnallocated = legacyUnallocated.greaterThan(0);
+
+    if (!hasLegacyUnallocated && bill.items && bill.items.length > 0) {
       const sortedItems = [...bill.items].sort((x, y) => {
         const pX = getItemPriority(x.type);
         const pY = getItemPriority(y.type);
@@ -235,7 +243,6 @@ export function computeCanonicalAllocationPlan(params: {
         }
       }
 
-      // If there was any residual (e.g. legacy mismatch between items and total), allocate to bill
       if (remainingForThisBill.greaterThan(0)) {
         allocations.push({
           billId: bill.id,
@@ -246,13 +253,17 @@ export function computeCanonicalAllocationPlan(params: {
         });
       }
     } else {
-      // Bill-level allocation without item breakdown
+      // Bill-level allocation without item guessing
+      const desc = hasLegacyUnallocated
+        ? `ชำระยอดคงเหลือบิล ${bill.billNumber}`
+        : `ชำระยอดบิล ${bill.billNumber}`;
+
       allocations.push({
         billId: bill.id,
         billItemId: null,
         allocatedAmount: allocateToThisBill,
         allocationOrder: currentOrder++,
-        description: `ชำระยอดบิล ${bill.billNumber}`,
+        description: desc,
       });
     }
 

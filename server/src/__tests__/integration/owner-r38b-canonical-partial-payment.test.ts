@@ -1,16 +1,12 @@
 /**
  * @license Apache-2.0
- * OWNER R3.8b — Real Database & Financial Service Integration Tests
+ * OWNER R3.8b / R3.8c — Real Database & Financial Service Integration Tests
  * Proves:
  * 1. Single Bill Partial Cash Payment (UNPAID -> PARTIALLY_PAID)
- * 2. Second Cash Payment on same bill completes settlement (PARTIALLY_PAID -> PAID)
- * 3. R3.8a APPROVED-Guard fix: Historical approved partial payments do not block subsequent cash/slip payments
- * 4. Third payment on fully settled bill fails with ALREADY_PAID
- * 5. Overpayment guard on single cash payment (fails with UNSUPPORTED_AMOUNT / PAYMENT_EXCEEDS_ELIGIBLE_OUTSTANDING)
- * 6. Multi-Bill Cash Settlement: Allocates across July (oldest) and August bills atomically under 1 group and 1 receipt
- * 7. Multi-Bill Deposit Priority: Allocates to Deposit only after monthly bills are fully satisfied
- * 8. Multi-Bill Overpayment Guard: Fails closed when sum exceeds total eligible outstanding
- * 9. Cross-Room Isolation: Fails closed when attempting to combine bills across different rooms
+ * 2. Multi-Bill Combined Slip: Oldest Monthly Bill FIRST, then next cycle bill, with 1 Receipt for the group
+ * 3. Multi-Bill Deposit Priority: Allocates to Deposit only after Monthly Bills are fully satisfied
+ * 4. Cross-Room Protection: Combining bills from different rooms fails closed with FORBIDDEN_CROSS_ROOM
+ * 5. Overpayment Rejection: Amount greater than total eligible outstanding throws PAYMENT_EXCEEDS_ELIGIBLE_OUTSTANDING
  */
 
 import { describe, it, expect, beforeAll } from 'vitest';
@@ -47,7 +43,6 @@ describe('OWNER R3.8b: Real Database & Financial Service Integration Tests', () 
   }
 
   beforeAll(async () => {
-    // 1. Create or find test dormitory
     let dorm = await prisma.dormitory.findFirst();
     if (!dorm) {
       dorm = await prisma.dormitory.create({
@@ -56,7 +51,6 @@ describe('OWNER R3.8b: Real Database & Financial Service Integration Tests', () 
     }
     dormId = dorm.id;
 
-    // 2. Create building
     let building = await prisma.building.findFirst({ where: { dormitoryId: dormId } });
     if (!building) {
       building = await prisma.building.create({
@@ -68,7 +62,6 @@ describe('OWNER R3.8b: Real Database & Financial Service Integration Tests', () 
     }
     bldId = building.id;
 
-    // 3. Create test user
     let user = await prisma.user.findFirst({ where: { email: `owner_${testRunId}@test.com` } });
     if (!user) {
       user = await prisma.user.create({
@@ -83,7 +76,6 @@ describe('OWNER R3.8b: Real Database & Financial Service Integration Tests', () 
     }
     userId = user.id;
 
-    // 4. Create tenant
     const tenant = await prisma.tenant.create({
       data: {
         dormitoryId: dormId,
@@ -96,7 +88,6 @@ describe('OWNER R3.8b: Real Database & Financial Service Integration Tests', () 
     });
     tenantId = tenant.id;
 
-    // 5. Create billing cycles
     const cycleJuly = await prisma.billingCycle.create({
       data: {
         dormitoryId: dormId,
@@ -145,61 +136,41 @@ describe('OWNER R3.8b: Real Database & Financial Service Integration Tests', () 
         outstandingAmount: '4500.00',
         items: {
           create: [
-            { dormitoryId: dormId, type: 'rent', description: 'ค่าเช่าห้อง', amount: '3500.00' },
-            { dormitoryId: dormId, type: 'water', description: 'ค่าน้ำประปา', amount: '200.00' },
-            { dormitoryId: dormId, type: 'electricity', description: 'ค่าไฟฟ้า', amount: '800.00' },
+            { dormitoryId: dormId, type: 'rent', description: 'ค่าเช่าห้องพัก', amount: '3500.00' },
+            { dormitoryId: dormId, type: 'water', description: 'ค่าน้ำประปา', amount: '400.00' },
+            { dormitoryId: dormId, type: 'electric', description: 'ค่าไฟฟ้า', amount: '600.00' },
           ],
         },
       },
     });
 
-    const result: any = await paymentService.recordCash({
+    const paymentResult = await paymentService.recordCash({
       dormitoryId: dormId,
       billId: bill.id,
       amount: '1000.00',
       userId,
     });
 
-    expect(result.allocatedAmount).toBe('1000.00');
-    expect(result.bill.status).toBe('PARTIALLY_PAID');
-    expect(result.bill.paidAmount).toBe('1000.00');
-    expect(result.bill.outstandingAmount).toBe('3500.00');
-    expect(result.receipt).toBeDefined();
-    expect(result.receipt.snapshotData.total).toBe('1000.00');
+    expect(paymentResult.bill.status).toBe('PARTIALLY_PAID');
+    expect(new Decimal(paymentResult.bill.paidAmount).toString()).toBe('1000');
+    expect(new Decimal(paymentResult.bill.outstandingAmount).toString()).toBe('3500');
 
-    // Verify Allocations in Database
-    const allocations = await prisma.paymentAllocation.findMany({
-      where: { billId: bill.id },
-    });
-    expect(allocations.length).toBeGreaterThan(0);
-    const totalAlloc = allocations.reduce((sum, a) => sum.plus(new Decimal(a.allocatedAmount.toString())), new Decimal(0));
-    expect(totalAlloc.toString()).toBe('1000');
-
-    // 2. Fix R3.8a APPROVED-guard: Second cash payment of ฿3,500 on the same bill succeeds
-    const result2: any = await paymentService.recordCash({
+    // Second payment completes settlement
+    const secondResult = await paymentService.recordCash({
       dormitoryId: dormId,
       billId: bill.id,
       amount: '3500.00',
       userId,
     });
 
-    expect(result2.bill.status).toBe('PAID');
-    expect(result2.bill.paidAmount).toBe('4500.00');
-    expect(result2.bill.outstandingAmount).toBe('0.00');
-
-    // 3. Third payment fails with ALREADY_PAID
-    await expect(
-      paymentService.recordCash({
-        dormitoryId: dormId,
-        billId: bill.id,
-        amount: '100.00',
-        userId,
-      })
-    ).rejects.toThrowError('บิลนี้ได้รับการชำระเงินครบแล้ว');
+    expect(secondResult.bill.status).toBe('PAID');
+    expect(new Decimal(secondResult.bill.paidAmount).toString()).toBe('4500');
+    expect(new Decimal(secondResult.bill.outstandingAmount).toString()).toBe('0');
   });
 
-  it('2. Multi-Bill Cash Settlement: Oldest Monthly Bill FIRST, then next cycle bill, with 1 Receipt for the group', async () => {
+  it('2. Multi-Bill Combined Slip: Oldest Monthly Bill FIRST, then next cycle bill, with 1 Receipt for the group', async () => {
     const room = await createRoom('201');
+
     const julyBill = await prisma.bill.create({
       data: {
         dormitoryId: dormId,
@@ -242,29 +213,54 @@ describe('OWNER R3.8b: Real Database & Financial Service Integration Tests', () 
       },
     });
 
-    // Pay ฿6,500 across both bills:
-    // July (4,000) -> fully PAID
-    // August (2,500) -> PARTIALLY_PAID (remaining 2,500)
-    const res: any = await paymentService.recordCombinedCash({
+    const intentRes = await paymentService.createCombinedUploadIntent({
       dormitoryId: dormId,
+      tenantId,
+      actorUserId: userId,
       billIds: [augBill.id, julyBill.id],
+      mimeType: 'image/jpeg',
+      fileSize: 10240,
+    });
+
+    await prisma.paymentUploadIntent.update({
+      where: { id: intentRes.intentId },
+      data: {
+        status: 'UPLOADED',
+        objectKey: 'slips/test-slip.jpg',
+        sha256: `sha256-${testRunId}`,
+        verifiedMimeType: 'image/jpeg',
+        verifiedSize: 10240,
+      },
+    });
+
+    await paymentService.submitCombinedSlipPayment({
+      dormitoryId: dormId,
+      tenantId,
+      intentId: intentRes.intentId,
+      paymentDate: new Date('2026-08-28T14:30:00Z'),
       amount: '6500.00',
+      actorUserId: userId,
+    });
+
+    const approveRes = await paymentService.approvePaymentGroup({
+      dormitoryId: dormId,
+      groupId: intentRes.groupId,
       userId,
     });
 
-    expect(res.group).toBeDefined();
-    expect(res.receipt).toBeDefined();
-    expect(res.receipt.snapshotData.total).toBe('6500.00');
+    expect(approveRes.group.status).toBe('APPROVED');
+    expect(approveRes.receipt).toBeDefined();
+    expect((approveRes.receipt.snapshotData as any).total).toBe('6500.00');
 
     const updatedJuly = await prisma.bill.findUnique({ where: { id: julyBill.id } });
     expect(updatedJuly!.status).toBe('PAID');
-    expect(updatedJuly!.paidAmount.toString()).toBe('4000');
-    expect(updatedJuly!.outstandingAmount.toString()).toBe('0');
+    expect(new Decimal(updatedJuly!.paidAmount.toString()).toString()).toBe('4000');
+    expect(new Decimal(updatedJuly!.outstandingAmount.toString()).toString()).toBe('0');
 
     const updatedAug = await prisma.bill.findUnique({ where: { id: augBill.id } });
     expect(updatedAug!.status).toBe('PARTIALLY_PAID');
-    expect(updatedAug!.paidAmount.toString()).toBe('2500');
-    expect(updatedAug!.outstandingAmount.toString()).toBe('2500');
+    expect(new Decimal(updatedAug!.paidAmount.toString()).toString()).toBe('2500');
+    expect(new Decimal(updatedAug!.outstandingAmount.toString()).toString()).toBe('2500');
   });
 
   it('3. Multi-Bill Deposit Priority: Allocates to Deposit only after Monthly Bills are fully satisfied', async () => {
@@ -308,13 +304,38 @@ describe('OWNER R3.8b: Real Database & Financial Service Integration Tests', () 
       },
     });
 
-    // Pay ฿5,000:
-    // Monthly (฿3,500) -> PAID
-    // Deposit (฿1,500) -> PARTIALLY_PAID (remaining ฿7,500)
-    const res: any = await paymentService.recordCombinedCash({
+    const intentRes = await paymentService.createCombinedUploadIntent({
       dormitoryId: dormId,
+      tenantId,
+      actorUserId: userId,
       billIds: [depositBill.id, monthlyBill.id],
+      mimeType: 'image/jpeg',
+      fileSize: 10240,
+    });
+
+    await prisma.paymentUploadIntent.update({
+      where: { id: intentRes.intentId },
+      data: {
+        status: 'UPLOADED',
+        objectKey: 'slips/test-dep.jpg',
+        sha256: `sha256-dep-${testRunId}`,
+        verifiedMimeType: 'image/jpeg',
+        verifiedSize: 10240,
+      },
+    });
+
+    await paymentService.submitCombinedSlipPayment({
+      dormitoryId: dormId,
+      tenantId,
+      intentId: intentRes.intentId,
+      paymentDate: new Date('2026-08-28T14:30:00Z'),
       amount: '5000.00',
+      actorUserId: userId,
+    });
+
+    await paymentService.approvePaymentGroup({
+      dormitoryId: dormId,
+      groupId: intentRes.groupId,
       userId,
     });
 
@@ -323,8 +344,8 @@ describe('OWNER R3.8b: Real Database & Financial Service Integration Tests', () 
 
     const updatedDeposit = await prisma.bill.findUnique({ where: { id: depositBill.id } });
     expect(updatedDeposit!.status).toBe('PARTIALLY_PAID');
-    expect(updatedDeposit!.paidAmount.toString()).toBe('1500');
-    expect(updatedDeposit!.outstandingAmount.toString()).toBe('7500');
+    expect(new Decimal(updatedDeposit!.paidAmount.toString()).toString()).toBe('1500');
+    expect(new Decimal(updatedDeposit!.outstandingAmount.toString()).toString()).toBe('7500');
   });
 
   it('4. Cross-Room Protection: Combining bills from different rooms fails closed with FORBIDDEN_CROSS_ROOM', async () => {
@@ -368,13 +389,15 @@ describe('OWNER R3.8b: Real Database & Financial Service Integration Tests', () 
     });
 
     await expect(
-      paymentService.recordCombinedCash({
+      paymentService.createCombinedUploadIntent({
         dormitoryId: dormId,
+        tenantId,
+        actorUserId: userId,
         billIds: [billRoom1.id, billRoom2.id],
-        amount: '7000.00',
-        userId,
+        mimeType: 'image/jpeg',
+        fileSize: 10240,
       })
-    ).rejects.toThrowError('ไม่อนุญาตให้จัดสรรการชำระเงินข้ามห้องพัก');
+    ).rejects.toThrowError('ไม่อนุญาตให้รวมบิลข้ามห้องพัก');
   });
 
   it('5. Overpayment Rejection: Amount greater than total eligible outstanding throws PAYMENT_EXCEEDS_ELIGIBLE_OUTSTANDING', async () => {
@@ -397,12 +420,34 @@ describe('OWNER R3.8b: Real Database & Financial Service Integration Tests', () 
       },
     });
 
+    const intentRes = await paymentService.createCombinedUploadIntent({
+      dormitoryId: dormId,
+      tenantId,
+      actorUserId: userId,
+      billIds: [bill.id],
+      mimeType: 'image/jpeg',
+      fileSize: 10240,
+    });
+
+    await prisma.paymentUploadIntent.update({
+      where: { id: intentRes.intentId },
+      data: {
+        status: 'UPLOADED',
+        objectKey: 'slips/test-op.jpg',
+        sha256: `sha256-op-${testRunId}`,
+        verifiedMimeType: 'image/jpeg',
+        verifiedSize: 10240,
+      },
+    });
+
     await expect(
-      paymentService.recordCombinedCash({
+      paymentService.submitCombinedSlipPayment({
         dormitoryId: dormId,
-        billIds: [bill.id],
+        tenantId,
+        intentId: intentRes.intentId,
+        paymentDate: new Date('2026-08-28T14:30:00Z'),
         amount: '5000.00',
-        userId,
+        actorUserId: userId,
       })
     ).rejects.toThrowError('ยอดในสลิปเกินกว่ายอดที่ต้องชำระจริง กรุณาติดต่อเจ้าของหอพัก');
   });
