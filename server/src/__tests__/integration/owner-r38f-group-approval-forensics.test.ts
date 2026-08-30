@@ -93,6 +93,26 @@ describe('OWNER R3.8f: Group Payment Approval Forensics & Direct-Consumer Integr
       },
     });
 
+    await prisma.dormitoryBillingSettings.create({
+      data: {
+        dormitoryId: dormId,
+        waterBillingType: 'per_unit',
+        waterRate: 18.0,
+        electricityBillingType: 'per_unit',
+        electricityRate: 7.0,
+        commonFee: 200.0,
+        commonFeeMode: 'per_room',
+        internetFee: 150.0,
+        internetFeeMode: 'per_room',
+        parkingRate: 300.0,
+        parkingFeeMode: 'per_room',
+        dueDay: 5,
+        gracePeriodDays: 2,
+        lateFeeType: 'fixed',
+        lateFeeValue: 100.0,
+      },
+    });
+
     // Roles & Owner User
     const ownerRole = (await prisma.role.findFirst({ where: { code: 'owner' } })) ||
       (await prisma.role.create({ data: { code: 'owner', name: 'Owner', permissions: [] } }));
@@ -192,6 +212,27 @@ describe('OWNER R3.8f: Group Payment Approval Forensics & Direct-Consumer Integr
       },
     });
     cycleAugId = cycleAug.id;
+
+    await prisma.billingRateSnapshot.create({
+      data: {
+        dormitoryId: dormId,
+        billingCycleId: cycleAugId,
+        waterBillingType: 'per_unit',
+        waterRate: '18.00',
+        electricityBillingType: 'per_unit',
+        electricityRate: '7.00',
+        commonFeeMode: 'per_room',
+        commonFee: '200.00',
+        internetFeeMode: 'per_room',
+        internetFee: '150.00',
+        parkingFeeMode: 'per_room',
+        parkingFee: '300.00',
+        lateFeeType: 'fixed',
+        lateFeeValue: '100.00',
+        source: 'MANUAL_OVERRIDE',
+        updatedByUserId: ownerUserId,
+      },
+    });
   });
 
   it('CASE 1: Re-computed allocation mismatch returns 400 GROUP_ALLOCATION_RECONCILIATION_FAILED with safe Thai message', async () => {
@@ -667,5 +708,31 @@ describe('OWNER R3.8f: Group Payment Approval Forensics & Direct-Consumer Integr
     // Total Monetary Evidence: 2100 (prior) + 6500 (group) = 8600.00
     const totalApprovedPaymentsSum = [priorPayment.amount, payJuly.amount, payAug.amount].reduce((s, a) => s + Number(a), 0);
     expect(totalApprovedPaymentsSum).toBe(8600.0);
+
+    // 8. Downstream Meter Preview Context & Charge Components Projection
+    const meterPreviewRes = await request(app)
+      .get(`/api/v1/meters/workspace/preview-context?billingCycleId=${cycleAugId}`)
+      .set('Cookie', [`horplus_session=${ownerSessionToken}`, `horplus_csrf=${ownerCsrfToken}`])
+      .set('x-csrf-token', ownerCsrfToken)
+      .set('x-dormitory-id', dormId);
+
+    expect(meterPreviewRes.status).toBe(200);
+    const roomCtx = meterPreviewRes.body.data.rooms.find((r: any) => r.roomId === room.id);
+    expect(roomCtx).toBeDefined();
+
+    // August Bill component amount MUST be 2,500.00 (the outstanding balance still due), NOT 5,000.00
+    expect(roomCtx.chargeComponents.length).toBeGreaterThanOrEqual(1);
+    const comp = roomCtx.chargeComponents[0];
+    expect(comp.amount).toBe('2500.00');
+    expect(comp.status).toBe('UNPAID');
+
+    // Operational amountDue must match outstanding balance
+    expect(roomCtx.amountDue).toBe('2500.00');
+
+    // Collectible components sum matches amountDue exactly
+    const collectibleSum = roomCtx.chargeComponents
+      .filter((c: any) => c.includedInAmountDue)
+      .reduce((sum: number, c: any) => sum + parseFloat(c.amount), 0);
+    expect(collectibleSum).toBe(2500.0);
   });
 });

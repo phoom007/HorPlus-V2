@@ -1669,10 +1669,24 @@ export class MeterService {
         label = 'บิลรายเดือน';
       }
 
+      // Authoritative collectible outstanding resolution (Option B - Compact Outstanding Presentation)
+      const billOutstandingDec = (() => {
+        if (isPaid) return toDecimal('0.00');
+        if (bill.outstandingAmount !== undefined && bill.outstandingAmount !== null) {
+          return toDecimal(bill.outstandingAmount.toString());
+        }
+        const totalDec = toDecimal(bill.totalAmount ? bill.totalAmount.toString() : '0.00');
+        const paidDec = toDecimal(bill.paidAmount ? bill.paidAmount.toString() : '0.00');
+        const diffDec = subDecimals(totalDec, paidDec);
+        return compareDecimals(diffDec, toDecimal('0.00')) > 0 ? diffDec : toDecimal('0.00');
+      })();
+
+      const compAmount = isPaid ? billTotal : billOutstandingDec;
+
       components.push({
         type: billType,
         label,
-        amount: formatDecimal(billTotal),
+        amount: formatDecimal(compAmount),
         status: isPaid ? 'PAID' : 'UNPAID',
         paidAt: bill.paidAt ? bill.paidAt.toISOString() : null,
         occurredInDisplayedPeriod: true,
@@ -2373,7 +2387,16 @@ export class MeterService {
         for (const bill of roomBills) {
           const isPaid = bill.status === 'paid' || bill.status === 'PAID';
           const isUnpaid = !isPaid;
-          const billOutstanding = toDecimal((bill.outstandingAmount ?? (isPaid ? '0.00' : bill.totalAmount)).toString());
+          const billOutstanding = (() => {
+            if (isPaid) return toDecimal('0.00');
+            if (bill.outstandingAmount !== undefined && bill.outstandingAmount !== null) {
+              return toDecimal(bill.outstandingAmount.toString());
+            }
+            const totalDec = toDecimal(bill.totalAmount ? bill.totalAmount.toString() : '0.00');
+            const paidDec = toDecimal(bill.paidAmount ? bill.paidAmount.toString() : '0.00');
+            const diffDec = subDecimals(totalDec, paidDec);
+            return compareDecimals(diffDec, toDecimal('0.00')) > 0 ? diffDec : toDecimal('0.00');
+          })();
 
           if (isUnpaid) {
             amountDueDec = addDecimals(amountDueDec, billOutstanding);

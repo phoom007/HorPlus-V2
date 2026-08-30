@@ -1081,4 +1081,183 @@ describe('LOCAL-07 Shared Canonical Monthly Utility Calculation Authority', () =
       expect(lateFeeItem?.amount).toBe('150.00');
     });
   });
+
+  describe('OWNER R3.8fR5-C.6 — Cross-View Outstanding Balance Consistency (Cases A–F)', () => {
+    it('CASE A: Fully unpaid modern Rent bill projects full totalAmount as collectible component', () => {
+      const components = MeterService.decomposeBillToChargeComponents({
+        bill: {
+          billKind: 'RENT',
+          totalAmount: '5000.00',
+          paidAmount: '0.00',
+          outstandingAmount: '5000.00',
+          status: 'UNPAID',
+          items: [{ type: 'rent', description: 'ค่าเช่า', amount: '5000.00' }],
+        },
+      });
+
+      expect(components).toHaveLength(1);
+      expect(components[0].type).toBe('rent');
+      expect(components[0].label).toBe('ค่าเช่า (เดือน)');
+      expect(components[0].amount).toBe('5000.00');
+      expect(components[0].status).toBe('UNPAID');
+      expect(components[0].includedInAmountDue).toBe(true);
+    });
+
+    it('CASE B: Single partial modern Rent bill projects authoritative remaining outstanding balance (฿3,000 NOT ฿5,000)', () => {
+      const components = MeterService.decomposeBillToChargeComponents({
+        bill: {
+          billKind: 'RENT',
+          totalAmount: '5000.00',
+          paidAmount: '2000.00',
+          outstandingAmount: '3000.00',
+          status: 'PARTIALLY_PAID',
+          items: [{ type: 'rent', description: 'ค่าเช่า', amount: '5000.00' }],
+        },
+      });
+
+      expect(components).toHaveLength(1);
+      expect(components[0].type).toBe('rent');
+      expect(components[0].label).toBe('ค่าเช่า (เดือน)');
+      expect(components[0].amount).toBe('3000.00');
+      expect(components[0].status).toBe('UNPAID');
+      expect(components[0].includedInAmountDue).toBe(true);
+    });
+
+    it('CASE C: Room 302 Combined Payment Pattern (Rent ฿2,500 + Utility ฿1,550 -> ฿4,050 total due)', () => {
+      const rentComponents = MeterService.decomposeBillToChargeComponents({
+        bill: {
+          billKind: 'RENT',
+          totalAmount: '5000.00',
+          paidAmount: '2500.00',
+          outstandingAmount: '2500.00',
+          status: 'PARTIALLY_PAID',
+          items: [{ type: 'rent', description: 'ค่าเช่า ส.ค.', amount: '5000.00' }],
+        },
+      });
+
+      const utilityComponents = MeterService.decomposeBillToChargeComponents({
+        bill: {
+          billKind: 'MONTHLY_UTILITY',
+          totalAmount: '1550.00',
+          paidAmount: '0.00',
+          outstandingAmount: '1550.00',
+          status: 'UNPAID',
+          items: [
+            { type: 'water', description: 'ค่าน้ำ', amount: '270.00' },
+            { type: 'electric', description: 'ค่าไฟ', amount: '630.00' },
+            { type: 'common', description: 'ส่วนกลาง', amount: '200.00' },
+            { type: 'internet', description: 'อินเทอร์เน็ต', amount: '150.00' },
+            { type: 'parking', description: 'ที่จอดรถ', amount: '300.00' },
+          ],
+        },
+      });
+
+      expect(rentComponents[0].amount).toBe('2500.00');
+      expect(utilityComponents[0].amount).toBe('1550.00');
+
+      const allComponents = [...rentComponents, ...utilityComponents];
+      const collectibleSum = allComponents
+        .filter(c => c.includedInAmountDue)
+        .reduce((sum, c) => sum + parseFloat(c.amount), 0);
+
+      expect(collectibleSum).toBe(4050.0);
+    });
+
+    it('CASE D: Fully paid bill contributes 0 to collectible debt and marks component as PAID', () => {
+      const components = MeterService.decomposeBillToChargeComponents({
+        bill: {
+          billKind: 'RENT',
+          totalAmount: '5000.00',
+          paidAmount: '5000.00',
+          outstandingAmount: '0.00',
+          status: 'PAID',
+          paidAt: new Date('2026-08-28T14:30:00Z'),
+          items: [{ type: 'rent', description: 'ค่าเช่า', amount: '5000.00' }],
+        },
+      });
+
+      expect(components).toHaveLength(1);
+      expect(components[0].status).toBe('PAID');
+      expect(components[0].amount).toBe('5000.00'); // Settled total preserved for history
+      expect(components[0].includedInAmountDue).toBe(false); // Contributes 0 to collectible debt
+    });
+
+    it('CASE E: Previous-cycle settled debt (July) does NOT leak into current cycle collectible amount', () => {
+      const julyComponents = MeterService.decomposeBillToChargeComponents({
+        bill: {
+          billNumber: 'INV-202607-302',
+          billKind: 'MONTHLY_UTILITY',
+          totalAmount: '6100.00',
+          paidAmount: '6100.00',
+          outstandingAmount: '0.00',
+          status: 'PAID',
+          paidAt: new Date('2026-08-28T14:30:00Z'),
+          items: [{ type: 'rent', description: 'ค่าเช่า ก.ค.', amount: '6100.00' }],
+        },
+      });
+
+      const augRentComponents = MeterService.decomposeBillToChargeComponents({
+        bill: {
+          billNumber: 'INV-202608-302-R',
+          billKind: 'RENT',
+          totalAmount: '5000.00',
+          paidAmount: '2500.00',
+          outstandingAmount: '2500.00',
+          status: 'PARTIALLY_PAID',
+          items: [{ type: 'rent', description: 'ค่าเช่า ส.ค.', amount: '5000.00' }],
+        },
+      });
+
+      const all = [...julyComponents, ...augRentComponents];
+      const currentCollectibleDue = all
+        .filter(c => c.includedInAmountDue)
+        .reduce((sum, c) => sum + parseFloat(c.amount), 0);
+
+      expect(julyComponents[0].includedInAmountDue).toBe(false);
+      expect(augRentComponents[0].includedInAmountDue).toBe(true);
+      expect(currentCollectibleDue).toBe(2500.0);
+    });
+
+    it('Fallback resolution: derives outstanding from totalAmount - paidAmount when outstandingAmount is null', () => {
+      const components = MeterService.decomposeBillToChargeComponents({
+        bill: {
+          billKind: 'RENT',
+          totalAmount: '5000.00',
+          paidAmount: '1500.00',
+          outstandingAmount: null, // Test fallback
+          status: 'PARTIALLY_PAID',
+          items: [{ type: 'rent', description: 'ค่าเช่า', amount: '5000.00' }],
+        },
+      });
+
+      expect(components[0].amount).toBe('3500.00');
+      expect(components[0].includedInAmountDue).toBe(true);
+    });
+
+    it('LEGACY_COMBINED Safety: fully unpaid historical bill maintains immutable item decomposition', () => {
+      const components = MeterService.decomposeBillToChargeComponents({
+        bill: {
+          billNumber: 'INV-202606-LEGACY',
+          billKind: 'LEGACY_COMBINED',
+          totalAmount: '5450.00',
+          paidAmount: '0.00',
+          outstandingAmount: '5450.00',
+          status: 'UNPAID',
+          items: [
+            { id: '1', type: 'rent', description: 'ค่าเช่าห้องพัก 101', amount: '4500.00' },
+            { id: '2', type: 'water', description: 'ค่าน้ำ (10 หน่วย @ ฿18)', amount: '180.00' },
+            { id: '3', type: 'electric', description: 'ค่าไฟฟ้า (60 หน่วย @ ฿7)', amount: '420.00' },
+            { id: '4', type: 'common', description: 'ค่าส่วนกลาง', amount: '200.00' },
+            { id: '5', type: 'internet', description: 'ค่าอินเทอร์เน็ต', amount: '150.00' },
+          ],
+        },
+      });
+
+      expect(components).toHaveLength(2);
+      expect(components[0].amount).toBe('4500.00'); // Rent
+      expect(components[1].amount).toBe('950.00');  // Utility
+      const sum = components.filter(c => c.includedInAmountDue).reduce((s, c) => s + parseFloat(c.amount), 0);
+      expect(sum).toBe(5450.0);
+    });
+  });
 });
