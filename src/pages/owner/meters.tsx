@@ -2185,8 +2185,9 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     }
     
     const rawDirtyRows: any[] = [];
+    const previewRoomsList = previewContext?.rooms || [];
     for (const r of meterRows) {
-        const roomCtx = roomContextMap.get(r.roomId);
+        const roomCtx = previewRoomsList.find((ctx: any) => ctx.roomId === r.roomId);
         if (roomCtx?.billingSource === 'DAILY_STAY' || roomCtx?.isDailyUnpaid) {
           continue;
         }
@@ -2429,8 +2430,9 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         if (saveSuccessTimeoutRef.current) clearTimeout(saveSuccessTimeoutRef.current);
         saveSuccessTimeoutRef.current = setTimeout(() => setSaveSuccess(false), 3000);
 
-        if (Array.isArray(res.savedRows) && res.savedRows.length > 0) {
-          const versionMap = new Map(res.savedRows.map((s: any) => [s.roomId, s.version]));
+        const savedRows = (res as any)?.savedRows || (res as any)?.data?.savedRows;
+        if (Array.isArray(savedRows) && savedRows.length > 0) {
+          const versionMap = new Map(savedRows.map((s: any) => [s.roomId, s.version]));
           setMeterRows(prev => prev.map(row => {
             const v = versionMap.get(row.roomId);
             return v !== undefined ? { ...row, snapshotVersion: v } : row;

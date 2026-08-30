@@ -542,9 +542,9 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
         const resolvedCycleId = resolveRecordBillingCycleId(b.billingCycleId, b.cycleId, billingCycles);
         if (!resolvedCycleId || !effectiveCycleId || resolvedCycleId !== effectiveCycleId) return false;
 
-        // Unpaid or Overdue status
-        const isPaid = (b.status || '').toLowerCase() === 'paid';
-        if (isPaid) return false;
+        // Unpaid or Overdue status (strictly exclude PAID, CANCELLED, VOID, VOIDED)
+        const normStatus = (b.status || '').toUpperCase();
+        if (normStatus === 'PAID' || normStatus === 'CANCELLED' || normStatus === 'VOID' || normStatus === 'VOIDED') return false;
 
         const outstanding = Number(b.outstandingAmount ?? b.totalAmount ?? 0);
         if (outstanding <= 0) return false;

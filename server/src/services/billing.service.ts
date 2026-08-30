@@ -1012,4 +1012,129 @@ export class BillingService {
   }> {
     return this.billRepo.getSummary(dormitoryId, billingCycleId);
   }
+
+  public async resolveBillDirectRecalculationEligibilityInTx(
+    dormitoryId: string,
+    billId: string,
+    tx?: any
+  ): Promise<BillRecalculationEligibilityResult> {
+    return resolveBillDirectRecalculationEligibilityInTx(dormitoryId, billId, tx);
+  }
+}
+
+export interface BillRecalculationEligibilityResult {
+  eligible: boolean;
+  code?: string;
+  message?: string;
+  bill?: any;
+}
+
+/**
+ * Canonical Bill Recalculation Eligibility Guard (Owner Decisions 1A & 2A Authority).
+ * Inspects full relational graph to guarantee that issued bills with any financial evidence
+ * cannot be recalculated directly from meter workspace.
+ */
+export async function resolveBillDirectRecalculationEligibilityInTx(
+  dormitoryId: string,
+  billId: string,
+  tx?: any
+): Promise<BillRecalculationEligibilityResult> {
+  const prisma = tx || getPrismaClient();
+
+  const bill = await prisma.bill.findFirst({
+    where: { id: billId, dormitoryId },
+    include: {
+      Payment: true,
+      allocations: true,
+      Receipt: true,
+      paymentGroupBillTargets: {
+        include: { paymentGroup: true },
+      },
+      paymentUploadIntents: true,
+    },
+  });
+
+  if (!bill) {
+    return {
+      eligible: false,
+      code: 'BILL_NOT_FOUND',
+      message: 'ไม่พบบิลที่ต้องการคำนวณใหม่',
+    };
+  }
+
+  if (bill.billKind !== 'MONTHLY_UTILITY') {
+    return {
+      eligible: false,
+      code: 'INVALID_BILL_KIND_FOR_METER_SYNC',
+      message: 'สามารถปรับยอดได้เฉพาะบิลค่าใช้จ่ายรายเดือน (MONTHLY_UTILITY) เท่านั้น',
+      bill,
+    };
+  }
+
+  const rawStatus = (bill.status || '').toUpperCase();
+  if (['CANCELLED', 'VOID', 'VOIDED'].includes(rawStatus)) {
+    return {
+      eligible: false,
+      code: 'BILL_CANCELLED',
+      message: 'บิลนี้ถูกยกเลิกแล้ว ไม่สามารถแก้ไขได้',
+      bill,
+    };
+  }
+
+  // Financial Evidence Check
+  const paidAmountNum = Number(bill.paidAmount || 0);
+  const isPaidOrPartial = ['PAID', 'PARTIALLY_PAID', 'REFUNDED', 'REVERSED'].includes(rawStatus) || paidAmountNum > 0;
+
+  const hasApprovedOrReviewPayment = (bill.Payment || []).some((p: any) => {
+    const st = (p.status || '').toUpperCase();
+    return ['APPROVED', 'VERIFIED', 'UNDER_REVIEW', 'PENDING'].includes(st);
+  });
+
+  const hasPaymentAllocations = (bill.allocations || []).some((a: any) => Number(a.allocatedAmount || 0) > 0);
+
+  const hasApprovedOrReviewGroup = (bill.paymentGroupBillTargets || []).some((t: any) => {
+    const st = (t.paymentGroup?.status || '').toUpperCase();
+    return ['APPROVED', 'PARTIALLY_APPROVED', 'UNDER_REVIEW', 'PENDING'].includes(st);
+  });
+
+  const hasReceipts = (bill.Receipt || []).some((r: any) => {
+    const st = (r.status || '').toUpperCase();
+    return st !== 'CANCELLED' && st !== 'VOID';
+  });
+
+  const hasActiveUploadIntent = (bill.paymentUploadIntents || []).some((u: any) => {
+    const st = (u.status || '').toUpperCase();
+    return ['PENDING', 'SUBMITTED', 'UNDER_REVIEW'].includes(st);
+  });
+
+  if (
+    isPaidOrPartial ||
+    hasApprovedOrReviewPayment ||
+    hasPaymentAllocations ||
+    hasApprovedOrReviewGroup ||
+    hasReceipts ||
+    hasActiveUploadIntent
+  ) {
+    return {
+      eligible: false,
+      code: 'BILL_HAS_FINANCIAL_EVIDENCE',
+      message: 'บิลนี้มีรายการชำระเงินหรือสลิปที่เกี่ยวข้องแล้ว\nไม่สามารถแก้ยอดโดยตรงได้',
+      bill,
+    };
+  }
+
+  // Allowed editable statuses: UNPAID, OVERDUE, DRAFT, PUBLISHED
+  if (!['UNPAID', 'OVERDUE', 'DRAFT', 'PUBLISHED'].includes(rawStatus)) {
+    return {
+      eligible: false,
+      code: 'BILL_STATUS_NOT_ELIGIBLE',
+      message: 'สถานะของบิลไม่อนุญาตให้แก้ไขยอดโดยตรง',
+      bill,
+    };
+  }
+
+  return {
+    eligible: true,
+    bill,
+  };
 }

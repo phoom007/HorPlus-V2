@@ -239,4 +239,52 @@ describe('OWNER R3.8f — Receipt Print Proof & DOM Cloning', () => {
 
     window.print = originalPrint;
   });
+
+  it('R3.8fR4 Print Lifecycle: print root PERSISTS beyond 2000ms/5000ms and is ONLY removed on afterprint', () => {
+    vi.useFakeTimers();
+    const originalPrint = window.print;
+    window.print = vi.fn();
+
+    render(
+      <PrintView title="พิมพ์ใบเสร็จ">
+        <div data-testid="room302-combined-receipt">
+          <h4>หอพักทดสอบ Comprehensive (HorPlus)</h4>
+          <p>ห้อง: 302</p>
+          <p>ก.ค. 2569: ฿4,000.00</p>
+          <p>ส.ค. 2569: ฿2,500.00</p>
+          <p>รวมชำระสุทธิ: ฿6,500.00</p>
+        </div>
+      </PrintView>
+    );
+
+    const printButton = screen.getByRole('button', { name: /พิมพ์ใบเสร็จ/i });
+    fireEvent.click(printButton);
+
+    expect(window.print).toHaveBeenCalledTimes(1);
+
+    // Advance timers past old 2000ms timeout
+    vi.advanceTimersByTime(2500);
+    let printRoot = document.getElementById('horplus-print-root');
+    expect(printRoot).not.toBeNull();
+    expect(printRoot?.textContent).toContain('302');
+    expect(printRoot?.textContent).toContain('฿6,500.00');
+
+    // Advance timers past 5000ms
+    vi.advanceTimersByTime(3000);
+    printRoot = document.getElementById('horplus-print-root');
+    expect(printRoot).not.toBeNull();
+    expect(printRoot?.textContent).toContain('฿6,500.00');
+
+    // Dispatch afterprint event
+    window.dispatchEvent(new Event('afterprint'));
+
+    // Now verify print root is removed cleanly
+    printRoot = document.getElementById('horplus-print-root');
+    expect(printRoot).toBeNull();
+    const printStyle = document.getElementById('horplus-print-style');
+    expect(printStyle).toBeNull();
+
+    window.print = originalPrint;
+    vi.useRealTimers();
+  });
 });

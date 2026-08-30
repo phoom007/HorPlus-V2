@@ -14,6 +14,7 @@ import { billingOrchestrationService } from './billing-orchestration.service.js'
 import { ENTITLEMENT_ROOM_LIMITS } from './entitlement.service.js';
 import { subscriptionEntitlementService } from './subscription-entitlement.service.js';
 import { AppError } from '../types/index.js';
+import { resolveBillDirectRecalculationEligibilityInTx } from './billing.service.js';
 import { getPrismaClient } from '../db/prisma.js';
 import { toDecimal, formatDecimal, compareDecimals, divDecimals, mulDecimals, subDecimals, addDecimals, isZeroDecimal } from '../utils/decimal-math.util.js';
 import { calculateInstallmentSchedule } from '../utils/installment-calculator.util.js';
@@ -1052,15 +1053,19 @@ export class MeterService {
     userId?: string,
     tx?: any
   ): Promise<void> {
-    if (activeBill.billKind !== 'MONTHLY_UTILITY') {
-      const err = new Error('INVALID_BILL_KIND_FOR_METER_SYNC: Only MONTHLY_UTILITY bills can be synchronized from Meter Workspace');
+    const eligibility = await resolveBillDirectRecalculationEligibilityInTx(dormitoryId, activeBill.id, tx);
+    if (!eligibility.eligible) {
+      if (eligibility.code === 'BILL_HAS_FINANCIAL_EVIDENCE') {
+        throw new AppError(
+          eligibility.message || 'บิลนี้มีรายการชำระเงินหรือสลิปที่เกี่ยวข้องแล้ว\nไม่สามารถแก้ยอดโดยตรงได้',
+          409,
+          'BILL_HAS_FINANCIAL_EVIDENCE'
+        );
+      }
+      const err = new Error(eligibility.message || 'BILL_NOT_ELIGIBLE_FOR_RECALCULATION');
       (err as any).statusCode = 400;
-      (err as any).code = 'INVALID_BILL_KIND_FOR_METER_SYNC';
+      (err as any).code = eligibility.code || 'BILL_NOT_ELIGIBLE_FOR_RECALCULATION';
       throw err;
-    }
-
-    if (activeBill.status === 'paid' || activeBill.status === 'PAID') {
-      return;
     }
 
     let preview: any;
@@ -1123,23 +1128,29 @@ export class MeterService {
 
     // 2. Compute new totals
     let subtotalDec = toDecimal('0.00');
+    let fineDec = toDecimal('0.00');
     for (const item of newItems) {
-      subtotalDec = addDecimals(subtotalDec, item.amount);
+      if (item.type === 'late_fee' || item.type === 'fine') {
+        fineDec = addDecimals(fineDec, item.amount);
+      } else {
+        subtotalDec = addDecimals(subtotalDec, item.amount);
+      }
     }
     const discountDec = toDecimal(activeBill.discountAmount || '0.00');
-    const rawTotal = subDecimals(subtotalDec, discountDec);
+    const rawTotal = subDecimals(addDecimals(subtotalDec, fineDec), discountDec);
     const totalDec = compareDecimals(rawTotal, '0.00') < 0 ? toDecimal('0.00') : rawTotal;
-    const paidDec = toDecimal(activeBill.paidAmount || '0.00');
-    const outstandingDec = subDecimals(totalDec, paidDec);
-    const finalOutstanding = compareDecimals(outstandingDec, '0.00') < 0 ? toDecimal('0.00') : outstandingDec;
+    const paidDec = toDecimal('0.00');
+    const outstandingDec = totalDec;
 
-    // 3. Update Bill header
+    // 3. Update Bill header in-place (preserving id, billNumber, billingDate, dueDate, generatedAt, generatedByUserId)
     await prisma.bill.update({
       where: { id: activeBill.id },
       data: {
         subtotal: formatDecimal(subtotalDec),
+        fineAmount: formatDecimal(fineDec),
         totalAmount: formatDecimal(totalDec),
-        outstandingAmount: formatDecimal(finalOutstanding),
+        paidAmount: formatDecimal(paidDec),
+        outstandingAmount: formatDecimal(outstandingDec),
         version: { increment: 1 },
       },
     });
@@ -1148,10 +1159,15 @@ export class MeterService {
       await this.auditService.log({
         dormitoryId,
         actorUserId: userId || 'system',
-        action: 'bill.sync_on_meter_save',
+        action: 'METER_WORKSPACE_RECALCULATION',
         resourceType: 'bill',
         resourceId: activeBill.id,
-        details: { roomId, newTotal: formatDecimal(totalDec) },
+        details: {
+          roomId,
+          oldTotal: activeBill.totalAmount,
+          newTotal: formatDecimal(totalDec),
+          reason: 'METER_WORKSPACE_RECALCULATION',
+        },
       });
     }
   }
@@ -1234,12 +1250,19 @@ export class MeterService {
         if (this.billRepo) {
           activeBill = await this.billRepo.findActiveMonthlyUtilityByRoomAndCycle(dormitoryId, data.billingCycleId, row.roomId, tx);
           if (activeBill && activeBill.status !== 'cancelled' && activeBill.status !== 'void') {
-            if (activeBill.status === 'paid' || activeBill.status === 'PAID') {
-              const err = new Error('ROOM_LOCKED_PAID');
-              (err as any).statusCode = 400;
-              (err as any).code = 'ROOM_LOCKED_PAID';
-              (err as any).message = 'บิลนี้ชำระเงินแล้ว ไม่สามารถแก้ไขข้อมูลมิเตอร์ได้';
-              throw err;
+            const eligibility = await resolveBillDirectRecalculationEligibilityInTx(dormitoryId, activeBill.id, tx);
+            if (!eligibility.eligible) {
+              if (eligibility.code === 'BILL_HAS_FINANCIAL_EVIDENCE') {
+                throw new AppError(
+                  eligibility.message || 'บิลนี้มีรายการชำระเงินหรือสลิปที่เกี่ยวข้องแล้ว\nไม่สามารถแก้ยอดโดยตรงได้',
+                  409,
+                  'BILL_HAS_FINANCIAL_EVIDENCE'
+                );
+              }
+              if (eligibility.code === 'ROOM_LOCKED_PAID' || activeBill.status === 'paid' || activeBill.status === 'PAID') {
+                throw new AppError('บิลนี้ชำระเงินแล้ว ไม่สามารถแก้ไขข้อมูลมิเตอร์ได้', 400, 'ROOM_LOCKED_PAID');
+              }
+              throw new AppError(eligibility.message || 'บิลไม่สามารถแก้ไขยอดโดยตรงได้', 400, eligibility.code || 'BILL_NOT_ELIGIBLE');
             }
 
             // Strict Issued-Bill Integrity: Ensure required per_unit meter readings cannot be cleared/omitted
@@ -1387,7 +1410,16 @@ export class MeterService {
         return { action: 'cancel', cancelled: true, status: 'cancelled' };
       }
 
-      if (activeBill.status === 'paid') {
+      const eligibility = await resolveBillDirectRecalculationEligibilityInTx(dormitoryId, activeBill.id);
+      if (!eligibility.eligible && eligibility.code === 'BILL_HAS_FINANCIAL_EVIDENCE') {
+        throw new AppError(
+          eligibility.message || 'บิลนี้มีรายการชำระเงินหรือสลิปที่เกี่ยวข้องแล้ว\nไม่สามารถแก้ยอดโดยตรงได้',
+          409,
+          'BILL_HAS_FINANCIAL_EVIDENCE'
+        );
+      }
+
+      if (activeBill.status === 'paid' || activeBill.status === 'PAID') {
         const err = new Error('BILL_CANNOT_BE_CANCELLED: Paid bill cannot be cancelled from meter workspace');
         (err as any).statusCode = 400;
         (err as any).code = 'BILL_CANNOT_BE_CANCELLED';

@@ -142,12 +142,14 @@ export const GenerateBillSchema = z.object({
     )
     .optional(),
   discountAmount: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
+  billKind: z.enum(['LEGACY_COMBINED', 'MONTHLY_UTILITY', 'RENT', 'DEPOSIT']).optional(),
 });
 
 export const BulkGenerateBillSchema = z.object({
   billingCycleId: z.string().min(1, 'Billing Cycle ID จำเป็นต้องระบุ'),
   roomIds: z.array(z.string()).optional(),
   dirtyRows: z.array(SaveMeterWorkspaceRowSchema).optional(),
+  billKind: z.enum(['LEGACY_COMBINED', 'MONTHLY_UTILITY', 'RENT', 'DEPOSIT']).optional(),
 });
 
 export const CancelBillSchema = z.object({

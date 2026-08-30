@@ -309,3 +309,90 @@ During independent source review, a P0 fixture integrity blocker was identified:
   - August Bill (`INV-202608-302-R`): `UNPAID`, Outstanding `฿5,000.00`.
   - Pending Group (`฿6,500.00`): `UNDER_REVIEW`, Child Payments `UNDER_REVIEW` (July `฿4,000.00`, August `฿2,500.00`), Receipts `0`.
   - Mutated by Agent: **NO**.
+
+---
+
+## 9. R3.8fR4 — Monthly Bill Lifecycle Authority, In-Place Recalculation, Duplicate Bill Forensics & Chrome Print Closure
+
+### 9.1 Monthly Bill Lifecycle Authority (Owner Decisions 1A, 2A & 3A)
+- **Decision 3A — Save Meter != Issue Bill**:
+  - `POST /api/v1/meters/workspace/bulk` is strictly a workspace snapshot mutation.
+  - When no bill exists for a room in the billing cycle, saving meter readings, people counts, other fees, and manual adjustments persists workspace readings and snapshot records (`roomBillingCycleSnapshot`) but creates **0 bills**.
+  - Tenant visibility remains **"ยังไม่ออกบิล"** (no canonical monthly bill is visible to tenant).
+  - An issued monthly bill is only created via explicit bill issuance (`POST /api/v1/bills/generate`, `POST /api/v1/bills/generate/bulk`, or meter toggle switch `action: 'issue'`).
+- **Decision 1A — Issued but Financially Untouched Bill In-Place Recalculation**:
+  - If a canonical `MONTHLY_UTILITY` bill already exists for the room + cycle and has **0 financial evidence** (`paidAmount = 0`, status `unpaid` or `overdue`, zero approved/pending payments, zero allocations, zero receipts, zero active upload intents), saving modified meter workspace inputs **recalculates the SAME Bill in place**.
+  - **Preserved Invariants**:
+    - `Bill.id` (unchanged)
+    - `Bill.billNumber` (unchanged)
+    - `Bill.billingDate` (original issue date preserved)
+    - `Bill.dueDate` (original due date preserved; for `OVERDUE` bills, late fee is reconciled consistently against original due date without resetting or backdating)
+    - `Bill.generatedAt` & `Bill.generatedByUserId` (preserved)
+    - `Bill.billingCycleId`, `Bill.roomId`, `Bill.tenantId`, `Bill.contractId` (preserved)
+  - **Mutations Applied**:
+    - Bill items replaced with newly computed items from canonical `generateBillPreview` authority.
+    - `subtotal`, `fineAmount`, `totalAmount`, `outstandingAmount` updated (`paidAmount` remains `0.00`).
+    - `Bill.version` incremented atomically.
+    - Audit log entry emitted: `action: 'METER_WORKSPACE_RECALCULATION'` with `oldTotal` and `newTotal`.
+- **Decision 2A — Financial Evidence Guard (Fail Closed)**:
+  - Implemented `resolveBillDirectRecalculationEligibilityInTx` to inspect the full relational graph within the active database transaction:
+    - `bill.paidAmount > 0`
+    - Status in `PAID`, `PARTIALLY_PAID`, `REFUNDED`, `REVERSED`
+    - Any `Payment` with status `APPROVED`, `VERIFIED`, `UNDER_REVIEW`, `PENDING`
+    - Any `PaymentAllocation` with `allocatedAmount > 0`
+    - Any `CombinedPaymentGroup` with status `APPROVED`, `PARTIALLY_APPROVED`, `UNDER_REVIEW`, `PENDING`
+    - Any active `Receipt` (status not `CANCELLED` or `VOID`)
+    - Any active `PaymentUploadIntent`
+  - If financial evidence exists, direct meter recalculation and meter switch cancellation fail closed with HTTP 409:
+    - Code: `BILL_HAS_FINANCIAL_EVIDENCE`
+    - Message: `บิลนี้มีรายการชำระเงินหรือสลิปที่เกี่ยวข้องแล้ว\nไม่สามารถแก้ยอดโดยตรงได้`
+
+### 9.2 Database Partial Unique Index Migration
+- **Migration**: `server/prisma/migrations/20260830180000_owner_r38fr4_active_monthly_utility_unique/migration.sql`
+- **SQL DDL**:
+  ```sql
+  CREATE UNIQUE INDEX IF NOT EXISTS "bills_active_monthly_utility_unique"
+  ON "bills" ("dormitory_id", "billing_cycle_id", "room_id")
+  WHERE "bill_kind" = 'MONTHLY_UTILITY'
+    AND LOWER("status") NOT IN ('cancelled', 'void', 'voided');
+  ```
+- **Database Forensics**: Verified across the entire database with `HAVING count(*) > 1` on active `(dormitory_id, billing_cycle_id, room_id, bill_kind)`. Result: **0 duplicates found**. Migration deployed successfully with zero schema conflicts.
+
+### 9.3 Room 101 Duplicate Bill Forensics & Payments Tab Card Authority
+- **UAT Runtime Forensics (Pre-Refresh State)**:
+  - `Bill A` (`d08b39ba-935d-451f-89c2-5f5b5fc6c3ed`): `INV-202608-101`, `MONTHLY_UTILITY`, `status: cancelled`, Total `฿1,268.00`, Paid `฿0.00`, Outstanding `฿1,268.00`. Cancelled at `2026-08-30T08:24:19.935Z`.
+  - `Bill B` (`7d0b6b37-e367-4dba-b54a-b2769a91f103`): `INV-2026-08-0001`, `MONTHLY_UTILITY`, `status: PAID`, Total `฿1,286.00`, Paid `฿1,286.00`, Outstanding `฿0.00`, 1 approved Cash payment (`฿1,286.00`), Receipt `RC-202608-101-0005`. Created at `2026-08-30T08:24:21.499Z`.
+  - **Duplicate Classification**: **Class A (same MONTHLY_UTILITY duplicate)** resulting from manual UAT workflow where an older bill was cancelled and replaced by a new bill.
+- **Frontend Payments Card Root Cause**:
+  - In `src/pages/owner/payments.tsx`, `unpaidBills` filter evaluated:
+    `const isPaid = (b.status || '').toLowerCase() === 'paid'; if (isPaid) return false;`
+  - It failed to exclude bills with `status: 'cancelled'` or `status: 'void'`. Because Bill A was `cancelled` but retained its original `outstandingAmount: 1268.00`, it erroneously rendered as an unpaid card alongside other cards.
+- **Resolution**:
+  - Updated `src/pages/owner/payments.tsx` `unpaidBills` filter to strictly exclude `['PAID', 'CANCELLED', 'VOID', 'VOIDED']`.
+  - Non-utility bills (`RENT`, `DEPOSIT`) with active unpaid status continue to display distinct cards with their full canonical identity.
+
+### 9.4 Chrome Blank Print Preview Final Closure
+- **Root Cause**:
+  - In `src/components/GlobalComponents.tsx`, `handlePrint` attached an `afterprint` cleanup listener but also started a fixed fallback timer: `setTimeout(cleanup, 2000)`.
+  - In Google Chrome, when the system Print Preview dialog opens, the rendering engine continues to hold references to `#horplus-print-root` in the parent document. The 2-second timeout unconditionally removed `#horplus-print-root` from the DOM while Print Preview was still evaluating, resulting in a blank 1-page preview.
+- **Resolution**:
+  - Removed `setTimeout(cleanup, 2000)` from `handlePrint`.
+  - Print root cleanup is now governed exclusively by the browser `afterprint` event listener.
+  - If `afterprint` does not fire, the print root safely remains attached in the DOM without causing memory leaks or UI corruption (as subsequent print calls clean up existing print roots idempotently).
+- **Automated Lifecycle Test Verification**:
+  - Added unit test in `src/tests/owner-r38f-quickadd-and-print.test.tsx` utilizing Vitest fake timers:
+    - Asserts `#horplus-print-root` persists at `t = 2,500 ms` and `t = 5,500 ms`.
+    - Asserts `#horplus-print-root` and `#horplus-print-style` are removed immediately when `window.dispatchEvent(new Event('afterprint'))` fires.
+
+### 9.5 Verification & Test Matrix Results
+| Suite / Command | Scope | Result |
+| :--- | :--- | :---: |
+| `git -c core.whitespace=cr-at-eol diff --check` | Whitespace & CR/LF hygiene | **PASS (0 errors)** |
+| `npm run lint` | TypeScript type-checking (`tsc --noEmit`) | **PASS (0 errors)** |
+| `npm --prefix server run build` | Backend TypeScript build | **PASS (0 errors)** |
+| `npm run build` | Frontend Vite production build | **PASS (0 errors)** |
+| `npx vitest run src/tests/owner-r38f-quickadd-and-print.test.tsx` | QuickAdd & Print Lifecycle (fake timers > 5s) | **PASS (6/6 tests)** |
+| `cd server && npx vitest run src/__tests__/integration/owner-r38fr4-monthly-bill-lifecycle.test.ts` | Complete R3.8fR4 Lifecycle & In-Place Recalculation | **PASS (8/8 tests)** |
+| `cd server && npx vitest run src/__tests__/integration/owner-r38f-group-approval-forensics.test.ts` | Group Payment Approval & Actor Authority | **PASS (2/2 tests)** |
+| `cd server && npx vitest run src/__tests__/integration/owner-r38fr3-cors-mutation.test.ts` | CORS Preflight & Loopback Mutation Authority | **PASS (6/6 tests)** |
+| `npm run uat:verify` | LOCAL-07 Sandbox Financial Oracle Integrity | **PASS (0 failures)** |

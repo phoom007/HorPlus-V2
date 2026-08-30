@@ -998,9 +998,6 @@ export const PrintView: React.FC<PrintViewProps> = ({ children, title = 'พิ�
 
     // Trigger browser print
     window.print();
-
-    // Fallback cleanup in case afterprint does not fire
-    setTimeout(cleanup, 2000);
   };
 
   return (
