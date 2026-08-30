@@ -931,7 +931,7 @@ describe('LOCAL-07 Shared Canonical Monthly Utility Calculation Authority', () =
             { id: '2', type: 'water', description: 'ค่าน้ำ (10 หน่วย @ ฿18)', amount: '180.00' },
             { id: '3', type: 'electric', description: 'ค่าไฟฟ้า (60 หน่วย @ ฿7)', amount: '420.00' },
             { id: '4', type: 'common', description: 'ค่าส่วนกลาง', amount: '200.00' },
-            { id: '5', type: 'internet', description: 'ค่าบริการอินเทอร์เน็ตความเร็วสูง', amount: '150.00' },
+            { id: '5', type: 'internet', description: 'ค่าอินเทอร์เน็ต', amount: '150.00' },
           ],
         },
       });

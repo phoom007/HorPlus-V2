@@ -194,7 +194,12 @@ export function formatCycleThaiShort(cycleStr?: string): string {
 
 export function formatItemDescription(desc?: string): string {
   if (!desc) return '';
-  return desc.replace(/ค่าไฟฟ้า\s*\([^)]*\)/, 'ค่าไฟฟ้า').replace(/ค่าน้ำ\s*\([^)]*\)/, 'ค่าน้ำประปา');
+  const str = desc.trim();
+  if (str.includes('อินเทอร์เน็ต') || str.includes('อินเตอร์เน็ต')) {
+    const match = str.match(/\(([^)]+)\)/);
+    return match ? `ค่าอินเทอร์เน็ต (${match[1]})` : 'ค่าอินเทอร์เน็ต';
+  }
+  return str.replace(/ค่าไฟฟ้า\s*\([^)]*\)/, 'ค่าไฟฟ้า').replace(/ค่าน้ำ\s*\([^)]*\)/, 'ค่าน้ำประปา');
 }
 
 export function formatBahtDash(amount: number | string | undefined): string {

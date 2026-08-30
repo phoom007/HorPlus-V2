@@ -1423,7 +1423,7 @@ export async function seedLocal07Data() {
     ];
 
     if (bf.internet > 0) {
-      items.push({ type: 'internet', description: 'ค่าบริการอินเทอร์เน็ตความเร็วสูง', quantity: 1, unitPrice: bf.internet, amount: bf.internet });
+      items.push({ type: 'internet', description: 'ค่าอินเทอร์เน็ต', quantity: 1, unitPrice: bf.internet, amount: bf.internet });
     }
     if (bf.parking > 0) {
       items.push({ type: 'parking', description: 'ค่าที่จอดรถยนต์', quantity: 1, unitPrice: bf.parking, amount: bf.parking });
@@ -1725,7 +1725,7 @@ export async function seedLocal07Data() {
     { type: 'water', description: 'ค่าน้ำ (11 หน่วย @ ฿18)', quantity: 11, unitPrice: 18, amount: 198 },
     { type: 'electric', description: 'ค่าไฟฟ้า (60 หน่วย @ ฿7)', quantity: 60, unitPrice: 7, amount: 420 },
     { type: 'common', description: 'ค่าส่วนกลาง', quantity: 1, unitPrice: 200, amount: 200 },
-    { type: 'internet', description: 'ค่าบริการอินเทอร์เน็ตความเร็วสูง', quantity: 1, unitPrice: 150, amount: 150 },
+    { type: 'internet', description: 'ค่าอินเทอร์เน็ต', quantity: 1, unitPrice: 150, amount: 150 },
     { type: 'parking', description: 'ค่าที่จอดรถ', quantity: 1, unitPrice: 300, amount: 300 },
   ];
   for (const it of bill101AugItems) {

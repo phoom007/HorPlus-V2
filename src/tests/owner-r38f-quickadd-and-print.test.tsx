@@ -12,6 +12,8 @@ import { render, screen, fireEvent, cleanup } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import { QuickAddTenantModal } from '../components/QuickAddTenantModal';
 import { PrintView } from '../components/GlobalComponents';
+import { formatItemDescription as canonicalFormatItemDescription } from '../types';
+import { formatItemDescription as paymentsFormatItemDescription } from '../pages/owner/payments';
 
 describe('OWNER R3.8f — QuickAdd Money Type Integrity & Live Preview', () => {
   afterEach(() => {
@@ -307,6 +309,66 @@ describe('OWNER R3.8f — Receipt Print Proof & DOM Cloning', () => {
     const printStyle = document.getElementById('horplus-print-style');
     expect(printStyle).toBeNull();
 
+    window.print = originalPrint;
+  });
+});
+
+describe('OWNER R3.8fR5-B — Internet Terminology Normalization (ค่าอินเทอร์เน็ต)', () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it('normalizes legacy and variant internet fee descriptions to canonical "ค่าอินเทอร์เน็ต"', () => {
+    // Canonical formatItemDescription
+    expect(canonicalFormatItemDescription('ค่าบริการอินเทอร์เน็ตความเร็วสูง')).toBe('ค่าอินเทอร์เน็ต');
+    expect(canonicalFormatItemDescription('ค่าบริการอินเทอร์เน็ต')).toBe('ค่าอินเทอร์เน็ต');
+    expect(canonicalFormatItemDescription('ค่าอินเทอร์เน็ต')).toBe('ค่าอินเทอร์เน็ต');
+    expect(canonicalFormatItemDescription('ค่าบริการอินเทอร์เน็ต (3 คน)')).toBe('ค่าอินเทอร์เน็ต (3 คน)');
+    expect(canonicalFormatItemDescription('ค่าอินเทอร์เน็ต (2 คน)')).toBe('ค่าอินเทอร์เน็ต (2 คน)');
+    expect(canonicalFormatItemDescription('อินเตอร์เน็ต')).toBe('ค่าอินเทอร์เน็ต');
+
+    // Payments formatItemDescription
+    expect(paymentsFormatItemDescription('ค่าบริการอินเทอร์เน็ตความเร็วสูง')).toBe('ค่าอินเทอร์เน็ต');
+    expect(paymentsFormatItemDescription('ค่าบริการอินเทอร์เน็ต')).toBe('ค่าอินเทอร์เน็ต');
+    expect(paymentsFormatItemDescription('ค่าอินเทอร์เน็ต')).toBe('ค่าอินเทอร์เน็ต');
+    expect(paymentsFormatItemDescription('ค่าบริการอินเทอร์เน็ต (3 คน)')).toBe('ค่าอินเทอร์เน็ต (3 คน)');
+    expect(paymentsFormatItemDescription('ค่าอินเทอร์เน็ต (2 คน)')).toBe('ค่าอินเทอร์เน็ต (2 คน)');
+    expect(paymentsFormatItemDescription('อินเตอร์เน็ต')).toBe('ค่าอินเทอร์เน็ต');
+  });
+
+  it('renders "ค่าอินเทอร์เน็ต" on printed receipt without old "ค่าบริการอินเทอร์เน็ตความเร็วสูง"', () => {
+    const originalPrint = window.print;
+    window.print = vi.fn();
+
+    render(
+      <PrintView title="พิมพ์ใบเสร็จ">
+        <div data-testid="receipt-with-internet">
+          <h4>ใบเสร็จรับเงิน</h4>
+          <p>เลขที่: RC-202608-101-0001</p>
+          <p>ห้อง: 101</p>
+          <table>
+            <tbody>
+              <tr>
+                <td>{paymentsFormatItemDescription('ค่าบริการอินเทอร์เน็ตความเร็วสูง')}</td>
+                <td>฿150.00</td>
+              </tr>
+            </tbody>
+          </table>
+          <p>รวมชำระสุทธิ: ฿150.00</p>
+        </div>
+      </PrintView>
+    );
+
+    const printButton = screen.getByRole('button', { name: /พิมพ์ใบเสร็จ/i });
+    fireEvent.click(printButton);
+
+    const printRoot = document.getElementById('horplus-print-root');
+    expect(printRoot).not.toBeNull();
+    expect(printRoot?.textContent).toContain('ค่าอินเทอร์เน็ต');
+    expect(printRoot?.textContent).not.toContain('ค่าบริการอินเทอร์เน็ตความเร็วสูง');
+    expect(printRoot?.textContent).toContain('฿150.00');
+
+    window.dispatchEvent(new Event('afterprint'));
     window.print = originalPrint;
   });
 });

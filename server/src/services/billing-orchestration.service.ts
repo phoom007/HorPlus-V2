@@ -378,13 +378,13 @@ export class BillingOrchestrationService {
             unitPrice = toDecimal('0.00');
             updatedQuantity = toDecimal(1);
             updatedAmount = toDecimal('0.00');
-            updatedDesc = 'ค่าบริการอินเทอร์เน็ต';
+            updatedDesc = 'ค่าอินเทอร์เน็ต';
             updatedMeta = { ...updatedMeta, mode: 'free' };
           } else {
             isPerPerson = false;
             updatedQuantity = toDecimal(1);
             updatedAmount = unitPrice;
-            updatedDesc = 'ค่าบริการอินเทอร์เน็ต';
+            updatedDesc = 'ค่าอินเทอร์เน็ต';
             updatedMeta = { ...updatedMeta, mode: 'room' };
           }
         } else if (item.type === 'parking') {
@@ -424,7 +424,7 @@ export class BillingOrchestrationService {
         } else if (item.type === 'common_fee') {
           updatedDesc = `ค่าส่วนกลาง (${newPeopleCount} คน)`;
         } else if (item.type === 'internet') {
-          updatedDesc = `ค่าบริการอินเทอร์เน็ต (${newPeopleCount} คน)`;
+          updatedDesc = `ค่าอินเทอร์เน็ต (${newPeopleCount} คน)`;
         } else if (item.type === 'parking') {
           updatedDesc = `ค่าที่จอดรถ (${newPeopleCount} คน)`;
         } else if (item.description.match(/\(\d+\s*คน\)/)) {

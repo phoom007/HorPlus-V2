@@ -1484,7 +1484,7 @@ describe('LOCAL-06 — Co-Occupant / People-Count / Auto-Bill Recalculation & Ou
           dormitoryId: dormId,
           billId: bill.id,
           type: 'internet',
-          description: 'ค่าบริการอินเทอร์เน็ต (1 คน)',
+          description: 'ค่าอินเทอร์เน็ต (1 คน)',
           quantity: 1,
           unit: 'person',
           unitPrice: 300,
@@ -1551,7 +1551,7 @@ describe('LOCAL-06 — Co-Occupant / People-Count / Auto-Bill Recalculation & Ou
     const internetItem = billAfterAdd?.items.find((i) => i.type === 'internet');
     expect(Number(internetItem?.quantity)).toBe(2);
     expect(Number(internetItem?.amount)).toBe(600);
-    expect(internetItem?.description).toBe('ค่าบริการอินเทอร์เน็ต (2 คน)');
+    expect(internetItem?.description).toBe('ค่าอินเทอร์เน็ต (2 คน)');
 
     const parkingItem = billAfterAdd?.items.find((i) => i.type === 'parking');
     expect(Number(parkingItem?.quantity)).toBe(2);

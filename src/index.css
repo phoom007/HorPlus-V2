@@ -81,7 +81,7 @@ input[type="number"] {
 
 /* Print styles for window.print() */
 @media print {
-  .print\\:hidden {
+  .print\:hidden {
     display: none !important;
   }
 }
