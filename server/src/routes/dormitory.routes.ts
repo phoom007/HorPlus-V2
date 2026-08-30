@@ -18,6 +18,7 @@ import {
   OnboardingPaymentInputSchema,
   PaymentSettingsInputSchema,
 } from '../types/onboarding-validation.js';
+import { validateCanonicalUtilityTiers } from '../utils/utility-tier-validator.util.js';
 
 import multer from 'multer';
 const upload = multer({ limits: { fileSize: 5 * 1024 * 1024 } });
@@ -186,8 +187,10 @@ export function createDormitoryRouter(
       dueDay: settings.dueDay,
       waterBillingType: settings.waterBillingType,
       waterRate: String(settings.waterRate),
+      waterTierRates: settings.waterTierRates ?? null,
       electricityBillingType: settings.electricityBillingType,
       electricityRate: String(settings.electricityRate),
+      electricityTierRates: settings.electricityTierRates ?? null,
       commonFee: String(settings.commonFee),
       internetFee: String(settings.internetFee),
       lateFeeType: settings.lateFeeType,
@@ -218,12 +221,41 @@ export function createDormitoryRouter(
     }
 
     const dormitoryId = req.params.dormitoryId;
+    const prisma = getPrismaClient();
+
     let current = await billingRepo.findByDormitoryId(dormitoryId);
+    if (!current && prisma?.dormitoryBillingSettings) {
+      current = await prisma.dormitoryBillingSettings.findUnique({ where: { dormitoryId } });
+    }
     if (!current) {
       current = await billingRepo.create({ dormitoryId });
     }
 
-    const updated = await billingRepo.update(dormitoryId, parsed.data as any);
+    const updatePayload: any = { ...parsed.data };
+    if (parsed.data.waterTierRates !== undefined) {
+      if (parsed.data.waterTierRates) {
+        updatePayload.waterTierRates = validateCanonicalUtilityTiers(parsed.data.waterTierRates);
+      } else {
+        updatePayload.waterTierRates = null;
+      }
+    }
+    if (parsed.data.electricityTierRates !== undefined) {
+      if (parsed.data.electricityTierRates) {
+        updatePayload.electricityTierRates = validateCanonicalUtilityTiers(parsed.data.electricityTierRates);
+      } else {
+        updatePayload.electricityTierRates = null;
+      }
+    }
+
+    let updated: any;
+    if (prisma?.dormitoryBillingSettings) {
+      updated = await prisma.dormitoryBillingSettings.update({
+        where: { dormitoryId },
+        data: updatePayload,
+      });
+    } else {
+      updated = await billingRepo.update(dormitoryId, updatePayload as any);
+    }
     res.json({ data: updated });
   });
 

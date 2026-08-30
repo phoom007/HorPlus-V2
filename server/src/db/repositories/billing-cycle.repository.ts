@@ -25,8 +25,10 @@ export interface BillingRateSnapshotEntity {
   billingCycleId: string;
   waterBillingType: string;
   waterRate: string;
+  waterTierRates?: any;
   electricityBillingType: string;
   electricityRate: string;
+  electricityTierRates?: any;
   commonFee: string;
   commonFeeMode: string;
   internetFee: string;
@@ -62,8 +64,10 @@ export interface CreateRateSnapshotData {
   billingCycleId: string;
   waterBillingType?: string;
   waterRate?: string;
+  waterTierRates?: any;
   electricityBillingType?: string;
   electricityRate?: string;
+  electricityTierRates?: any;
   commonFee?: string;
   commonFeeMode?: string;
   internetFee?: string;
@@ -83,8 +87,10 @@ export interface CreateRateSnapshotData {
 export interface UpdateRateSnapshotData {
   waterBillingType?: string;
   waterRate?: string;
+  waterTierRates?: any;
   electricityBillingType?: string;
   electricityRate?: string;
+  electricityTierRates?: any;
   commonFee?: string;
   commonFeeMode?: string;
   internetFee?: string;
@@ -300,8 +306,10 @@ export class InMemoryBillingCycleRepository implements IBillingCycleRepository {
       billingCycleId: data.billingCycleId,
       waterBillingType: data.waterBillingType || 'per_unit',
       waterRate: data.waterRate || '0.00',
+      waterTierRates: data.waterTierRates || null,
       electricityBillingType: data.electricityBillingType || 'per_unit',
       electricityRate: data.electricityRate || '0.00',
+      electricityTierRates: data.electricityTierRates || null,
       commonFee: data.commonFee || '0.00',
       commonFeeMode: data.commonFeeMode || 'none',
       internetFee: data.internetFee || '0.00',
@@ -400,8 +408,10 @@ export class PrismaBillingCycleRepository implements IBillingCycleRepository {
       billingCycleId: s.billingCycleId,
       waterBillingType: s.waterBillingType,
       waterRate: fmt(s.waterRate, '0.00'),
+      waterTierRates: s.waterTierRates || null,
       electricityBillingType: s.electricityBillingType,
       electricityRate: fmt(s.electricityRate, '0.00'),
+      electricityTierRates: s.electricityTierRates || null,
       commonFee: fmt(s.commonFee, '0.00'),
       commonFeeMode: s.commonFeeMode || 'none',
       internetFee: fmt(s.internetFee, '0.00'),
@@ -587,8 +597,10 @@ export class PrismaBillingCycleRepository implements IBillingCycleRepository {
         billingCycleId: data.billingCycleId,
         waterBillingType: data.waterBillingType!,
         waterRate: data.waterRate!,
+        waterTierRates: data.waterTierRates || null,
         electricityBillingType: data.electricityBillingType!,
         electricityRate: data.electricityRate!,
+        electricityTierRates: data.electricityTierRates || null,
         commonFee: data.commonFee!,
         commonFeeMode: data.commonFeeMode!,
         internetFee: data.internetFee!,
@@ -620,8 +632,10 @@ export class PrismaBillingCycleRepository implements IBillingCycleRepository {
     };
     if (data.waterBillingType !== undefined) updateData.waterBillingType = data.waterBillingType;
     if (data.waterRate !== undefined) updateData.waterRate = data.waterRate;
+    if (data.waterTierRates !== undefined) updateData.waterTierRates = data.waterTierRates;
     if (data.electricityBillingType !== undefined) updateData.electricityBillingType = data.electricityBillingType;
     if (data.electricityRate !== undefined) updateData.electricityRate = data.electricityRate;
+    if (data.electricityTierRates !== undefined) updateData.electricityTierRates = data.electricityTierRates;
     if (data.commonFee !== undefined) updateData.commonFee = data.commonFee;
     if (data.commonFeeMode !== undefined) updateData.commonFeeMode = data.commonFeeMode;
     if (data.internetFee !== undefined) updateData.internetFee = data.internetFee;

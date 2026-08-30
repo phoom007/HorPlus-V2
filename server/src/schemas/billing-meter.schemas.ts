@@ -11,8 +11,10 @@ export const CreateBillingCycleSchema = z.object({
     .object({
       waterBillingType: z.string().optional(),
       waterRate: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
+      waterTierRates: z.array(z.object({ upTo: z.string().nullable().optional(), rate: z.string() })).nullable().optional(),
       electricityBillingType: z.string().optional(),
       electricityRate: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
+      electricityTierRates: z.array(z.object({ upTo: z.string().nullable().optional(), rate: z.string() })).nullable().optional(),
       commonFee: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
       commonFeeMode: z.string().optional(),
       internetFee: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),

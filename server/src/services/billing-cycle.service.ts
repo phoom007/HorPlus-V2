@@ -21,6 +21,7 @@ import {
 import { AuditService } from './audit.service.js';
 import { currentCycleResolverService } from './current-cycle-resolver.js';
 import { normalizeUtilityBillingMode } from '../utils/billing-mode-normalizer.util.js';
+import { validateCanonicalUtilityTiers } from '../utils/utility-tier-validator.util.js';
 import {
   currentBusinessDateInBangkok,
   toBangkokDateString,
@@ -39,8 +40,10 @@ export interface CreateBillingCycleDto {
   rateSnapshot?: {
     waterBillingType?: string;
     waterRate?: number | string;
+    waterTierRates?: any;
     electricityBillingType?: string;
     electricityRate?: number | string;
+    electricityTierRates?: any;
     commonFee?: number | string;
     commonFeeMode?: string;
     internetFee?: number | string;
@@ -58,8 +61,10 @@ export interface UpdateCycleRateSnapshotDto {
   expectedVersion: number;
   waterBillingType?: string;
   waterRate?: string;
+  waterTierRates?: any;
   electricityBillingType?: string;
   electricityRate?: string;
+  electricityTierRates?: any;
   commonFee?: string;
   commonFeeMode?: string;
   internetFee?: string;
@@ -235,11 +240,22 @@ export class BillingCycleService {
         let snapshotData: any;
         if (precedingCycle?.rateSnapshot) {
           const pSnap = precedingCycle.rateSnapshot;
+          const waterBillingType = normalizeUtilityBillingMode(pSnap.waterBillingType);
+          const waterTierRates = waterBillingType === 'tiered' && pSnap.waterTierRates
+            ? validateCanonicalUtilityTiers(pSnap.waterTierRates)
+            : null;
+          const electricityBillingType = normalizeUtilityBillingMode(pSnap.electricityBillingType);
+          const electricityTierRates = electricityBillingType === 'tiered' && pSnap.electricityTierRates
+            ? validateCanonicalUtilityTiers(pSnap.electricityTierRates)
+            : null;
+
           snapshotData = {
-            waterBillingType: normalizeUtilityBillingMode(pSnap.waterBillingType),
+            waterBillingType,
             waterRate: pSnap.waterRate,
-            electricityBillingType: normalizeUtilityBillingMode(pSnap.electricityBillingType),
+            waterTierRates,
+            electricityBillingType,
             electricityRate: pSnap.electricityRate,
+            electricityTierRates,
             commonFee: pSnap.commonFee,
             commonFeeMode: pSnap.commonFeeMode,
             internetFee: pSnap.internetFee,
@@ -256,11 +272,22 @@ export class BillingCycleService {
             version: 1,
           };
         } else {
+          const waterBillingType = normalizeUtilityBillingMode(settings.waterBillingType);
+          const waterTierRates = waterBillingType === 'tiered' && (settings as any).waterTierRates
+            ? validateCanonicalUtilityTiers((settings as any).waterTierRates)
+            : null;
+          const electricityBillingType = normalizeUtilityBillingMode(settings.electricityBillingType);
+          const electricityTierRates = electricityBillingType === 'tiered' && (settings as any).electricityTierRates
+            ? validateCanonicalUtilityTiers((settings as any).electricityTierRates)
+            : null;
+
           snapshotData = {
-            waterBillingType: normalizeUtilityBillingMode(settings.waterBillingType),
+            waterBillingType,
             waterRate: new Prisma.Decimal(settings.waterRate || '0.00').toFixed(2),
-            electricityBillingType: normalizeUtilityBillingMode(settings.electricityBillingType),
+            waterTierRates,
+            electricityBillingType,
             electricityRate: new Prisma.Decimal(settings.electricityRate || '0.00').toFixed(2),
+            electricityTierRates,
             commonFee: new Prisma.Decimal(settings.commonFee || '0.00').toFixed(2),
             commonFeeMode: settings.commonFeeMode || 'room',
             internetFee: new Prisma.Decimal(settings.internetFee || '0.00').toFixed(2),
@@ -338,8 +365,10 @@ export class BillingCycleService {
           billingCycleId: result.rateSnapshot.billingCycleId,
           waterBillingType: result.rateSnapshot.waterBillingType,
           waterRate: new Prisma.Decimal(result.rateSnapshot.waterRate).toFixed(2),
+          waterTierRates: result.rateSnapshot.waterTierRates ?? null,
           electricityBillingType: result.rateSnapshot.electricityBillingType,
           electricityRate: new Prisma.Decimal(result.rateSnapshot.electricityRate).toFixed(2),
+          electricityTierRates: result.rateSnapshot.electricityTierRates ?? null,
           commonFee: new Prisma.Decimal(result.rateSnapshot.commonFee).toFixed(2),
           commonFeeMode: result.rateSnapshot.commonFeeMode,
           internetFee: new Prisma.Decimal(result.rateSnapshot.internetFee).toFixed(2),
@@ -659,9 +688,29 @@ export class BillingCycleService {
 
     const waterType = normalizeUtilityBillingMode(data.waterBillingType || rateSnapshot.waterBillingType);
     const waterRate = data.waterRate !== undefined ? cleanDec(data.waterRate, 'waterRate') : rateSnapshot.waterRate;
+    let waterTierRates: any = undefined;
+    if (waterType === 'tiered') {
+      if (data.waterTierRates !== undefined) {
+        waterTierRates = data.waterTierRates ? validateCanonicalUtilityTiers(data.waterTierRates) : null;
+      } else if (rateSnapshot.waterTierRates) {
+        waterTierRates = validateCanonicalUtilityTiers(rateSnapshot.waterTierRates);
+      }
+    } else {
+      waterTierRates = null;
+    }
 
     const electricityType = normalizeUtilityBillingMode(data.electricityBillingType || rateSnapshot.electricityBillingType);
     const electricityRate = data.electricityRate !== undefined ? cleanDec(data.electricityRate, 'electricityRate') : rateSnapshot.electricityRate;
+    let electricityTierRates: any = undefined;
+    if (electricityType === 'tiered') {
+      if (data.electricityTierRates !== undefined) {
+        electricityTierRates = data.electricityTierRates ? validateCanonicalUtilityTiers(data.electricityTierRates) : null;
+      } else if (rateSnapshot.electricityTierRates) {
+        electricityTierRates = validateCanonicalUtilityTiers(rateSnapshot.electricityTierRates);
+      }
+    } else {
+      electricityTierRates = null;
+    }
 
     const lateType = data.lateFeeType || rateSnapshot.lateFeeType;
     const lateValue = lateType === 'none'
@@ -671,8 +720,10 @@ export class BillingCycleService {
     const effectiveUpdate = {
       waterBillingType: waterType,
       waterRate,
+      waterTierRates,
       electricityBillingType: electricityType,
       electricityRate,
+      electricityTierRates,
       commonFee,
       commonFeeMode: commonMode,
       internetFee,
@@ -842,8 +893,10 @@ export class BillingCycleService {
       billingCycleId: txResult.updatedSnapshot.billingCycleId,
       waterBillingType: txResult.updatedSnapshot.waterBillingType,
       waterRate: new Prisma.Decimal(txResult.updatedSnapshot.waterRate).toFixed(2),
+      waterTierRates: txResult.updatedSnapshot.waterTierRates ?? null,
       electricityBillingType: txResult.updatedSnapshot.electricityBillingType,
       electricityRate: new Prisma.Decimal(txResult.updatedSnapshot.electricityRate).toFixed(2),
+      electricityTierRates: txResult.updatedSnapshot.electricityTierRates ?? null,
       commonFee: new Prisma.Decimal(txResult.updatedSnapshot.commonFee).toFixed(2),
       commonFeeMode: txResult.updatedSnapshot.commonFeeMode,
       internetFee: new Prisma.Decimal(txResult.updatedSnapshot.internetFee).toFixed(2),

@@ -33,10 +33,12 @@ export const UpdateCycleRateSnapshotSchema = z
       .number({ required_error: 'expectedVersion is required' })
       .int({ message: 'expectedVersion must be an integer' })
       .positive({ message: 'expectedVersion must be a positive integer' }),
-    waterBillingType: z.enum(['per_unit', 'per_person']).optional(),
+    waterBillingType: z.enum(['per_unit', 'per_person', 'fixed', 'tiered']).optional(),
     waterRate: decimalMoneyStringSchema.optional(),
-    electricityBillingType: z.enum(['per_unit', 'per_person']).optional(),
+    waterTierRates: z.array(z.object({ upTo: z.string().nullable().optional(), rate: z.string() })).nullable().optional(),
+    electricityBillingType: z.enum(['per_unit', 'per_person', 'fixed', 'tiered']).optional(),
     electricityRate: decimalMoneyStringSchema.optional(),
+    electricityTierRates: z.array(z.object({ upTo: z.string().nullable().optional(), rate: z.string() })).nullable().optional(),
     commonFeeMode: z.enum(['per_room', 'per_person', 'free']).optional(),
     commonFee: decimalMoneyStringSchema.optional(),
     internetFeeMode: z.enum(['per_room', 'per_person', 'free']).optional(),

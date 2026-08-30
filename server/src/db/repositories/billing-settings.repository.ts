@@ -5,8 +5,10 @@ export interface BillingSettingsEntity {
   dueDay: number;
   waterBillingType: string;
   waterRate: string; // Decimal string
+  waterTierRates?: any;
   electricityBillingType: string;
   electricityRate: string; // Decimal string
+  electricityTierRates?: any;
   commonFee: string; // Decimal string
   internetFee: string; // Decimal string
   lateFeeType: string;
@@ -30,8 +32,10 @@ export interface CreateBillingSettingsData {
   dueDay?: number;
   waterBillingType?: string;
   waterRate?: string;
+  waterTierRates?: any;
   electricityBillingType?: string;
   electricityRate?: string;
+  electricityTierRates?: any;
   commonFee?: string;
   internetFee?: string;
   lateFeeType?: string;
@@ -100,8 +104,10 @@ export class InMemoryBillingSettingsRepository implements IBillingSettingsReposi
       dueDay: data.dueDay ?? 5,
       waterBillingType: data.waterBillingType || 'per_unit',
       waterRate: data.waterRate || '18.00',
+      waterTierRates: data.waterTierRates ?? null,
       electricityBillingType: data.electricityBillingType || 'per_unit',
       electricityRate: data.electricityRate || '7.00',
+      electricityTierRates: data.electricityTierRates ?? null,
       commonFee: data.commonFee || '0.00',
       internetFee: data.internetFee || '0.00',
       lateFeeType: data.lateFeeType || 'fixed',
