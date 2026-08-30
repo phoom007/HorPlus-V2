@@ -222,12 +222,8 @@ export function createDormitoryRouter(
     }
 
     const dormitoryId = req.params.dormitoryId;
-    const prisma = getPrismaClient();
 
     let current = await billingRepo.findByDormitoryId(dormitoryId);
-    if (!current && prisma?.dormitoryBillingSettings) {
-      current = await prisma.dormitoryBillingSettings.findUnique({ where: { dormitoryId } });
-    }
     if (!current) {
       current = await billingRepo.create({ dormitoryId });
     }
@@ -286,15 +282,7 @@ export function createDormitoryRouter(
         electricityTierRates: effectiveElectricityTierRates,
       };
 
-      let updated: any;
-      if (prisma?.dormitoryBillingSettings) {
-        updated = await prisma.dormitoryBillingSettings.update({
-          where: { dormitoryId },
-          data: updatePayload,
-        });
-      } else {
-        updated = await billingRepo.update(dormitoryId, updatePayload as any);
-      }
+      const updated = await billingRepo.update(dormitoryId, updatePayload as any);
       res.json({ data: updated });
     } catch (err: any) {
       return res.status(err.statusCode || 400).json({

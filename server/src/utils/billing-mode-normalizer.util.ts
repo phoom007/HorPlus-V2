@@ -31,6 +31,9 @@ export function normalizeUtilityBillingMode(raw: unknown): CanonicalUtilityBilli
     case 'fixed':
     case 'room':
     case 'per_room':
+    case 'flat':
+    case 'flat_rate':
+    case 'fixed_monthly':
       return 'fixed';
     case 'tiered':
       return 'tiered';

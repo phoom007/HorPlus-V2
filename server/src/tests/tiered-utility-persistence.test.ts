@@ -1,9 +1,11 @@
 /**
  * @license Apache-2.0
- * OWNER R3.9-B.1: Tiered Utility Persistence, Snapshot, and Validation Authority Tests
+ * OWNER R3.9-B.2: Tiered Utility Persistence, Snapshot, Validation Authority, and Legacy Mode Compatibility Tests
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+import express from 'express';
+import request from 'supertest';
 import {
   validateCanonicalUtilityTiers,
   validateUtilityTierModeConfiguration,
@@ -12,8 +14,14 @@ import {
 import { normalizeUtilityBillingMode } from '../utils/billing-mode-normalizer.util.js';
 import { InMemoryBillingSettingsRepository } from '../db/repositories/billing-settings.repository.js';
 import { InMemoryBillingCycleRepository } from '../db/repositories/billing-cycle.repository.js';
+import { InMemoryDormitoryRepository } from '../db/repositories/dormitory.repository.js';
+import { InMemorySubscriptionRepository } from '../db/repositories/subscription.repository.js';
+import { InMemoryPlanRepository } from '../db/repositories/plan.repository.js';
+import { SensitiveFieldService } from '../services/sensitive-field.service.js';
+import { subscriptionEntitlementService } from '../services/subscription-entitlement.service.js';
+import { createDormitoryRouter } from '../routes/dormitory.routes.js';
 
-describe('OWNER R3.9-B.1 — Canonical Utility Tier Validation Authority', () => {
+describe('OWNER R3.9-B.2 — Canonical Utility Tier Validation Authority', () => {
   describe('Valid Tier Configurations & Exact Normalization', () => {
     it('validates and formats a standard 3-tier progressive configuration (Water preset: 10@18, 20@20, ∞@22)', () => {
       const input = [
@@ -208,20 +216,45 @@ describe('OWNER R3.9-B.1 — Canonical Utility Tier Validation Authority', () =>
     });
   });
 
-  describe('Billing Mode Normalizer Authority', () => {
-    it('normalizes "tiered" and its casing variants to canonical "tiered"', () => {
-      expect(normalizeUtilityBillingMode('tiered')).toBe('tiered');
-      expect(normalizeUtilityBillingMode('TIERED')).toBe('tiered');
-      expect(normalizeUtilityBillingMode(' Tiered ')).toBe('tiered');
+  describe('Billing Mode Normalizer Authority & Legacy Aliases (Section 8 Cases 1-3, 8)', () => {
+    it('Case 1: normalizes legacy alias "flat" to canonical "fixed"', () => {
+      expect(normalizeUtilityBillingMode('flat')).toBe('fixed');
+      expect(normalizeUtilityBillingMode('FLAT')).toBe('fixed');
+      expect(normalizeUtilityBillingMode(' Flat ')).toBe('fixed');
     });
 
-    it('preserves other canonical modes', () => {
+    it('Case 2: normalizes legacy alias "flat_rate" to canonical "fixed"', () => {
+      expect(normalizeUtilityBillingMode('flat_rate')).toBe('fixed');
+      expect(normalizeUtilityBillingMode('flat-rate')).toBe('fixed');
+      expect(normalizeUtilityBillingMode('flat rate')).toBe('fixed');
+    });
+
+    it('Case 3: normalizes legacy alias "fixed_monthly" to canonical "fixed"', () => {
+      expect(normalizeUtilityBillingMode('fixed_monthly')).toBe('fixed');
+      expect(normalizeUtilityBillingMode('fixed-monthly')).toBe('fixed');
+      expect(normalizeUtilityBillingMode('fixed monthly')).toBe('fixed');
+    });
+
+    it('normalizes standard "fixed", "room", and "per_room" to canonical "fixed"', () => {
+      expect(normalizeUtilityBillingMode('fixed')).toBe('fixed');
+      expect(normalizeUtilityBillingMode('room')).toBe('fixed');
+      expect(normalizeUtilityBillingMode('per_room')).toBe('fixed');
+      expect(normalizeUtilityBillingMode('per-room')).toBe('fixed');
+    });
+
+    it('normalizes "per_unit", "unit", "per_person", "person", "tiered"', () => {
       expect(normalizeUtilityBillingMode('per_unit')).toBe('per_unit');
       expect(normalizeUtilityBillingMode('unit')).toBe('per_unit');
       expect(normalizeUtilityBillingMode('per_person')).toBe('per_person');
       expect(normalizeUtilityBillingMode('person')).toBe('per_person');
-      expect(normalizeUtilityBillingMode('fixed')).toBe('fixed');
-      expect(normalizeUtilityBillingMode('room')).toBe('fixed');
+      expect(normalizeUtilityBillingMode('tiered')).toBe('tiered');
+      expect(normalizeUtilityBillingMode('TIERED')).toBe('tiered');
+    });
+
+    it('Case 8: rejects unknown billing modes (fail-closed)', () => {
+      expect(() => normalizeUtilityBillingMode('unknown_mode')).toThrow('INVALID_BILLING_MODE');
+      expect(() => normalizeUtilityBillingMode('custom')).toThrow('INVALID_BILLING_MODE');
+      expect(() => normalizeUtilityBillingMode(null)).toThrow('INVALID_BILLING_MODE');
     });
   });
 
@@ -257,7 +290,7 @@ describe('OWNER R3.9-B.1 — Canonical Utility Tier Validation Authority', () =>
     });
   });
 
-  describe('Effective State Persistence & Inactive Retention (Cases A, B, C, D, H)', () => {
+  describe('Effective State Persistence & Inactive Retention', () => {
     it('Case A: per_unit/null -> switch to tiered without tiers -> REJECT', () => {
       const currentMode = 'per_unit';
       const currentTiers = null;
@@ -287,7 +320,6 @@ describe('OWNER R3.9-B.1 — Canonical Utility Tier Validation Authority', () =>
         waterTierRates: validTiers,
       });
 
-      // Patch unrelated field
       const current = await repo.findByDormitoryId(dormId);
       const patch = { commonFee: '150.00' };
 
@@ -331,7 +363,6 @@ describe('OWNER R3.9-B.1 — Canonical Utility Tier Validation Authority', () =>
         { upTo: null, rate: '22.00' },
       ];
 
-      // Settings has per_unit but retains inactive waterTierRates
       await repo.create({
         dormitoryId: dormId,
         waterBillingType: 'per_unit',
@@ -383,7 +414,6 @@ describe('OWNER R3.9-B.1 — Canonical Utility Tier Validation Authority', () =>
       });
       expect(snap.waterTierRates).toEqual([{ upTo: null, rate: '18.00' }]);
 
-      // Update snapshot mode to per_unit
       const patch = { waterBillingType: 'per_unit', waterRate: '18.00' };
       const effectiveMode = normalizeUtilityBillingMode(patch.waterBillingType);
       const effectiveTiers = validateUtilityTierModeConfiguration({
@@ -402,50 +432,192 @@ describe('OWNER R3.9-B.1 — Canonical Utility Tier Validation Authority', () =>
     });
   });
 
-  describe('Snapshot Creation & Inheritance Fail-Closed Checks (Cases E, F, G)', () => {
-    it('Case E: snapshot creation with tiered mode but null settings tiers -> REJECT', () => {
-      const settings = {
-        waterBillingType: 'tiered',
-        waterTierRates: null,
+  describe('Real Path Route Integration: PATCH /api/v1/dormitories/:dormitoryId/billing-settings (Section 8 Cases 4, 5, 6, 7)', () => {
+    const TEST_DORM_ID = '11111111-1111-4111-8111-111111111111';
+    const TEST_USER_ID = '22222222-2222-4222-8222-222222222222';
+
+    function setupTestExpressApp() {
+      const app = express();
+      app.use(express.json());
+
+      // Bypass subscription entitlement in test
+      vi.spyOn(subscriptionEntitlementService, 'assertDormitoryWritable').mockResolvedValue(undefined as any);
+
+      // Simulate authenticated owner session context
+      app.use((req: any, _res, next) => {
+        req.cookies = req.cookies || {};
+        req.cookies['horplus_session'] = 'valid-test-session';
+        req.cookies['horplus_csrf'] = 'valid-csrf-token';
+        req.headers['authorization'] = 'Bearer valid-test-session';
+        next();
+      });
+
+      const authService: any = {
+        validateSession: async () => ({
+          user: { id: TEST_USER_ID, role: 'OWNER' },
+          session: { id: 'sess-01', userId: TEST_USER_ID, tokenVersion: 1 },
+          memberships: [
+            { id: 'mem-01', dormitoryId: TEST_DORM_ID, userId: TEST_USER_ID, roleCode: 'OWNER', status: 'active' },
+          ],
+          rawSessionId: 'sess-01',
+        }),
+        verifyCsrf: () => true,
       };
 
-      const waterBillingType = normalizeUtilityBillingMode(settings.waterBillingType);
-      expect(() => validateUtilityTierModeConfiguration({
-        mode: waterBillingType,
-        tiers: settings.waterTierRates,
-        utilityName: 'Water',
-      })).toThrow("INVALID_TIER_CONFIGURATION: Water billing mode is 'tiered' but no tier configuration was provided");
-    });
+      const dormitoryRepo = new InMemoryDormitoryRepository();
+      const billingRepo = new InMemoryBillingSettingsRepository();
+      const subRepo = new InMemorySubscriptionRepository();
+      const planRepo = new InMemoryPlanRepository();
+      const sensitiveFieldService = new SensitiveFieldService('12345678901234567890123456789012');
 
-    it('Case F: snapshot inheritance from corrupt preceding snapshot (tiered + null tiers) -> REJECT', () => {
-      const corruptPrecedingSnapshot = {
-        waterBillingType: 'tiered',
-        waterTierRates: null,
+      const membershipRepo: any = {
+        findByUserAndDormitory: async () => ({
+          id: 'mem-01',
+          dormitoryId: TEST_DORM_ID,
+          userId: TEST_USER_ID,
+          roleCode: 'OWNER',
+          status: 'active',
+        }),
+        findByDormitoryAndUser: async () => ({
+          id: 'mem-01',
+          dormitoryId: TEST_DORM_ID,
+          userId: TEST_USER_ID,
+          roleCode: 'OWNER',
+          status: 'active',
+        }),
+        findActiveByDormitoryAndUser: async () => ({
+          id: 'mem-01',
+          dormitoryId: TEST_DORM_ID,
+          userId: TEST_USER_ID,
+          roleCode: 'OWNER',
+          status: 'active',
+        }),
       };
 
-      const waterBillingType = normalizeUtilityBillingMode(corruptPrecedingSnapshot.waterBillingType);
-      expect(() => validateUtilityTierModeConfiguration({
-        mode: waterBillingType,
-        tiers: corruptPrecedingSnapshot.waterTierRates,
-        utilityName: "Water (inherited from cycle '2026-07')",
-      })).toThrow("INVALID_TIER_CONFIGURATION: Water (inherited from cycle '2026-07') billing mode is 'tiered' but no tier configuration was provided");
+      const roleRepo: any = {
+        findByCode: async () => ({
+          id: 'role-owner',
+          code: 'OWNER',
+          name: 'Owner',
+          permissions: { '*': ['*'] },
+        }),
+      };
+
+      const router = createDormitoryRouter(
+        authService,
+        dormitoryRepo,
+        billingRepo,
+        subRepo,
+        planRepo,
+        sensitiveFieldService,
+        membershipRepo,
+        roleRepo
+      );
+
+      app.use('/api/v1/dormitories', router);
+
+      return { app, billingRepo, dormitoryRepo };
+    }
+
+    it('Case 4: existing "flat" + unrelated Settings patch -> accepted with canonical "fixed" via real Express route', async () => {
+      const { app, billingRepo } = setupTestExpressApp();
+      const dormId = TEST_DORM_ID;
+
+      // Seed database with legacy alias "flat"
+      await billingRepo.create({
+        dormitoryId: dormId,
+        waterBillingType: 'flat',
+        waterRate: '100.00',
+        electricityBillingType: 'per_unit',
+        electricityRate: '7.00',
+      });
+
+      // Send real HTTP PATCH request with unrelated field
+      const res = await request(app)
+        .patch(`/api/v1/dormitories/${dormId}/billing-settings`)
+        .set('x-dormitory-id', dormId)
+        .set('x-csrf-token', 'valid-csrf-token')
+        .send({ commonFee: '200.00' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.waterBillingType).toBe('fixed'); // Correctly normalized to canonical 'fixed'
+      expect(res.body.data.commonFee).toBe('200.00');
+      expect(res.body.data.waterTierRates).toBeNull();
     });
 
-    it('Case G: snapshot manual update flat -> tiered without providing tier rates -> REJECT', () => {
-      const currentSnapshot = {
+    it('Case 5: existing "fixed_monthly" + unrelated Settings patch -> accepted with canonical "fixed" via real Express route', async () => {
+      const { app, billingRepo } = setupTestExpressApp();
+      const dormId = TEST_DORM_ID;
+
+      // Seed database with legacy alias "fixed_monthly"
+      await billingRepo.create({
+        dormitoryId: dormId,
+        waterBillingType: 'fixed_monthly',
+        waterRate: '150.00',
+        electricityBillingType: 'per_unit',
+        electricityRate: '7.00',
+      });
+
+      const res = await request(app)
+        .patch(`/api/v1/dormitories/${dormId}/billing-settings`)
+        .set('x-dormitory-id', dormId)
+        .set('x-csrf-token', 'valid-csrf-token')
+        .send({ lateFeeValue: '100.00' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.waterBillingType).toBe('fixed');
+      expect(res.body.data.lateFeeValue).toBe('100.00');
+    });
+
+    it('Case 6: candidate tiered + missing tiers -> rejected with 400 INVALID_TIER_CONFIGURATION via real Express route', async () => {
+      const { app, billingRepo } = setupTestExpressApp();
+      const dormId = TEST_DORM_ID;
+
+      await billingRepo.create({
+        dormitoryId: dormId,
         waterBillingType: 'per_unit',
-        waterTierRates: null,
-      };
-      const patch = { waterBillingType: 'tiered' };
+        waterRate: '18.00',
+      });
 
-      const effectiveMode = normalizeUtilityBillingMode(patch.waterBillingType);
-      const candidateTiers = (patch as any).waterTierRates !== undefined ? (patch as any).waterTierRates : currentSnapshot.waterTierRates;
+      const res = await request(app)
+        .patch(`/api/v1/dormitories/${dormId}/billing-settings`)
+        .set('x-dormitory-id', dormId)
+        .set('x-csrf-token', 'valid-csrf-token')
+        .send({ waterBillingType: 'tiered' }); // Missing tiers
 
-      expect(() => validateUtilityTierModeConfiguration({
-        mode: effectiveMode,
-        tiers: candidateTiers,
-        utilityName: 'Water',
-      })).toThrow("INVALID_TIER_CONFIGURATION: Water billing mode is 'tiered' but no tier configuration was provided");
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('INVALID_TIER_CONFIGURATION');
+      expect(res.body.error.message).toContain("Water billing mode is 'tiered' but no tier configuration was provided");
+    });
+
+    it('Case 7: candidate tiered + valid tiers -> accepted with 200 and persisted tiers via real Express route', async () => {
+      const { app, billingRepo } = setupTestExpressApp();
+      const dormId = TEST_DORM_ID;
+
+      await billingRepo.create({
+        dormitoryId: dormId,
+        waterBillingType: 'per_unit',
+        waterRate: '18.00',
+      });
+
+      const validTiers = [
+        { upTo: '10.00', rate: '18.00' },
+        { upTo: '20.00', rate: '20.00' },
+        { upTo: null, rate: '22.00' },
+      ];
+
+      const res = await request(app)
+        .patch(`/api/v1/dormitories/${dormId}/billing-settings`)
+        .set('x-dormitory-id', dormId)
+        .set('x-csrf-token', 'valid-csrf-token')
+        .send({
+          waterBillingType: 'tiered',
+          waterTierRates: validTiers,
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.waterBillingType).toBe('tiered');
+      expect(res.body.data.waterTierRates).toEqual(validTiers);
     });
   });
 });
