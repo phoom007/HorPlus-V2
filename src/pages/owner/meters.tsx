@@ -209,21 +209,23 @@ export function buildRowsFromWorkspace(params: {
     const rawWaterBaseline = r.initialWaterMeter !== undefined && r.initialWaterMeter !== null && String(r.initialWaterMeter).trim() !== '' ? String(r.initialWaterMeter) : (r as any).initialWaterReading !== undefined && (r as any).initialWaterReading !== null && String((r as any).initialWaterReading).trim() !== '' ? String((r as any).initialWaterReading) : '';
     const rawElecBaseline = r.initialElectricMeter !== undefined && r.initialElectricMeter !== null && String(r.initialElectricMeter).trim() !== '' ? String(r.initialElectricMeter) : (r as any).initialElectricityReading !== undefined && (r as any).initialElectricityReading !== null && String((r as any).initialElectricityReading).trim() !== '' ? String((r as any).initialElectricityReading) : '';
 
+    const isWaterBaselineNonzero = rawWaterBaseline !== '' && Number(rawWaterBaseline) !== 0;
     const waterPrev = roomReadings.waterPrev !== undefined && roomReadings.waterPrev !== null && String(roomReadings.waterPrev).trim() !== ''
       ? formatMeterReadingDisplay(roomReadings.waterPrev)
-      : (rawWaterBaseline ? formatMeterReadingDisplay(rawWaterBaseline) : '');
+      : (isWaterBaselineNonzero ? formatMeterReadingDisplay(rawWaterBaseline) : '');
     const waterCurr = roomReadings.waterCurr !== undefined && roomReadings.waterCurr !== null && String(roomReadings.waterCurr).trim() !== ''
       ? formatMeterReadingDisplay(roomReadings.waterCurr)
       : '';
 
+    const isElecBaselineNonzero = rawElecBaseline !== '' && Number(rawElecBaseline) !== 0;
     const elecPrev = roomReadings.elecPrev !== undefined && roomReadings.elecPrev !== null && String(roomReadings.elecPrev).trim() !== ''
       ? formatMeterReadingDisplay(roomReadings.elecPrev)
-      : (rawElecBaseline ? formatMeterReadingDisplay(rawElecBaseline) : '');
+      : (isElecBaselineNonzero ? formatMeterReadingDisplay(rawElecBaseline) : '');
     const elecCurr = roomReadings.elecCurr !== undefined && roomReadings.elecCurr !== null && String(roomReadings.elecCurr).trim() !== ''
       ? formatMeterReadingDisplay(roomReadings.elecCurr)
       : '';
 
-    const tenantDefaultPeople = cycleTenant ? (1 + (cycleTenant.coOccupants?.length || 0)) : 0;
+    const tenantDefaultPeople = cycleTenant ? (1 + (cycleTenant.coOccupants?.length || 0)) : 1;
     const snap = snapshotMap[r.id];
     const rowPeople = snap?.peopleCount !== undefined ? Math.max(0, snap.peopleCount) : tenantDefaultPeople;
 

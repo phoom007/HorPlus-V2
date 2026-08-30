@@ -1,10 +1,11 @@
 /**
  * @license Apache-2.0
- * OWNER R3.9-C.3.1: Onboarding Contract Closure & Zero Meter Baseline Authority Tests
+ * OWNER R3.9-C.3.2: First-Cycle Meter Workspace Authority Closure & Blank First Readings
  */
 
 import { describe, it, expect, vi } from 'vitest';
 import { Prisma } from '@prisma/client';
+import * as prismaModule from '../db/prisma.js';
 import {
   OnboardingBillingInputSchema,
   OnboardingRoomInputSchema,
@@ -28,8 +29,9 @@ import {
   validateCanonicalUtilityTiers,
   validateUtilityTierModeConfiguration,
 } from '../utils/utility-tier-validator.util.js';
+import { calculateProgressiveTieredCharge } from '../utils/progressive-tier-calculator.util.js';
 
-describe('OWNER R3.9-C.3.1: Onboarding Contract Closure & Zero Meter Baseline Authority', () => {
+describe('OWNER R3.9-C.3.2: First-Cycle Meter Workspace Authority Closure & Blank First Readings', () => {
   const validWaterTiers: CanonicalTierRecord[] = [
     { upTo: '10.00', rate: '3.40' },
     { upTo: '20.00', rate: '4.25' },
@@ -90,7 +92,6 @@ describe('OWNER R3.9-C.3.1: Onboarding Contract Closure & Zero Meter Baseline Au
         packageIntentId: '11111111-1111-4111-8111-111111111111',
       });
 
-      // Typecheck assignability proof:
       const serviceBillingParams: CompleteOwnerOnboardingParams['billing'] = parsed.billing;
       expect(serviceBillingParams?.waterTierRates).toEqual(validWaterTiers);
       expect(serviceBillingParams?.electricityTierRates).toEqual(validElecTiers);
@@ -130,19 +131,15 @@ describe('OWNER R3.9-C.3.1: Onboarding Contract Closure & Zero Meter Baseline Au
     });
 
     it('Rejects nonzero custom starting readings (1, 100, 100.25, -1)', () => {
-      // 1
       expect(() => OnboardingRoomInputSchema.parse({ ...baseRoom, initialWaterReading: 1 })).toThrow();
       expect(() => OnboardingRoomInputSchema.parse({ ...baseRoom, initialElectricityReading: 1 })).toThrow();
 
-      // 100
       expect(() => OnboardingRoomInputSchema.parse({ ...baseRoom, initialWaterReading: 100 })).toThrow();
       expect(() => OnboardingRoomInputSchema.parse({ ...baseRoom, initialElectricityReading: 100 })).toThrow();
 
-      // 100.25
       expect(() => OnboardingRoomInputSchema.parse({ ...baseRoom, initialWaterReading: 100.25 })).toThrow();
       expect(() => OnboardingRoomInputSchema.parse({ ...baseRoom, initialElectricityReading: 100.25 })).toThrow();
 
-      // -1
       expect(() => OnboardingRoomInputSchema.parse({ ...baseRoom, initialWaterReading: -1 })).toThrow();
       expect(() => OnboardingRoomInputSchema.parse({ ...baseRoom, initialElectricityReading: -1 })).toThrow();
     });
@@ -301,7 +298,7 @@ describe('OWNER R3.9-C.3.1: Onboarding Contract Closure & Zero Meter Baseline Au
       return { service, mockTx, capturedSettings, getUpsertCount: () => upsertCallCount };
     }
 
-    it('Test 16 & 17: Finalizing onboarding with Tiered Water and Electricity persists canonical tier JSON', async () => {
+    it('Finalizing onboarding with Tiered Water and Electricity persists canonical tier JSON', async () => {
       const { service, capturedSettings } = createMockPrismaHarness();
 
       await service.completeOwnerOnboarding({
@@ -319,23 +316,20 @@ describe('OWNER R3.9-C.3.1: Onboarding Contract Closure & Zero Meter Baseline Au
         },
       });
 
-      // Verify create block has exact canonical JSON
       expect(capturedSettings.create.waterBillingType).toBe('tiered');
       expect(capturedSettings.create.waterTierRates).toEqual(validWaterTiers);
       expect(capturedSettings.create.electricityBillingType).toBe('tiered');
       expect(capturedSettings.create.electricityTierRates).toEqual(validElecTiers);
 
-      // Verify update block has exact canonical JSON
       expect(capturedSettings.update.waterBillingType).toBe('tiered');
       expect(capturedSettings.update.waterTierRates).toEqual(validWaterTiers);
       expect(capturedSettings.update.electricityBillingType).toBe('tiered');
       expect(capturedSettings.update.electricityTierRates).toEqual(validElecTiers);
     });
 
-    it('Test 18: Finalizing onboarding with Tiered mode but null/empty tiers fails closed with INVALID_TIER_CONFIGURATION', async () => {
+    it('Finalizing onboarding with Tiered mode but null/empty tiers fails closed with INVALID_TIER_CONFIGURATION', async () => {
       const { service } = createMockPrismaHarness();
 
-      // Water tiered with null tiers
       await expect(
         service.completeOwnerOnboarding({
           userId: 'user-001',
@@ -351,7 +345,6 @@ describe('OWNER R3.9-C.3.1: Onboarding Contract Closure & Zero Meter Baseline Au
         })
       ).rejects.toThrow("INVALID_TIER_CONFIGURATION: Water billing mode is 'tiered' but no tier configuration was provided");
 
-      // Water tiered with empty array
       await expect(
         service.completeOwnerOnboarding({
           userId: 'user-001',
@@ -367,7 +360,6 @@ describe('OWNER R3.9-C.3.1: Onboarding Contract Closure & Zero Meter Baseline Au
         })
       ).rejects.toThrow("INVALID_TIER_CONFIGURATION: Water billing mode is 'tiered' but no tier configuration was provided");
 
-      // Electricity tiered with null tiers
       await expect(
         service.completeOwnerOnboarding({
           userId: 'user-001',
@@ -386,7 +378,7 @@ describe('OWNER R3.9-C.3.1: Onboarding Contract Closure & Zero Meter Baseline Au
       ).rejects.toThrow("INVALID_TIER_CONFIGURATION: Electricity billing mode is 'tiered' but no tier configuration was provided");
     });
 
-    it('Test 19: Non-tiered onboarding with no tiers stores Prisma.DbNull', async () => {
+    it('Non-tiered onboarding with no tiers stores Prisma.DbNull', async () => {
       const { service, capturedSettings } = createMockPrismaHarness();
 
       await service.completeOwnerOnboarding({
@@ -410,7 +402,7 @@ describe('OWNER R3.9-C.3.1: Onboarding Contract Closure & Zero Meter Baseline Au
       expect(capturedSettings.create.electricityTierRates).toBe(Prisma.DbNull);
     });
 
-    it('Test 19 & Inactive Config: Non-tiered onboarding with explicit inactive tiers preserves them in settings', async () => {
+    it('Non-tiered onboarding with explicit inactive tiers preserves them in settings', async () => {
       const { service, capturedSettings } = createMockPrismaHarness();
 
       await service.completeOwnerOnboarding({
@@ -423,7 +415,7 @@ describe('OWNER R3.9-C.3.1: Onboarding Contract Closure & Zero Meter Baseline Au
           dueDay: 5,
           waterBillingType: 'per_unit',
           waterRate: '18.00',
-          waterTierRates: validWaterTiers, // explicit inactive tiers
+          waterTierRates: validWaterTiers,
           electricityBillingType: 'per_unit',
           electricityRate: '7.00',
         },
@@ -431,7 +423,6 @@ describe('OWNER R3.9-C.3.1: Onboarding Contract Closure & Zero Meter Baseline Au
 
       expect(capturedSettings.create.waterBillingType).toBe('per_unit');
       expect(capturedSettings.create.waterRate).toBe('18.00');
-      // Inactive tiers preserved
       expect(capturedSettings.create.waterTierRates).toEqual(validWaterTiers);
     });
   });
@@ -447,7 +438,6 @@ describe('OWNER R3.9-C.3.1: Onboarding Contract Closure & Zero Meter Baseline Au
         electricityTierRates: validElecTiers,
       };
 
-      // Snapshot creation for Water
       const frozenWaterTiers = validateUtilityTierModeConfiguration({
         mode: onboardingSettings.waterBillingType as any,
         tiers: onboardingSettings.waterTierRates,
@@ -455,7 +445,6 @@ describe('OWNER R3.9-C.3.1: Onboarding Contract Closure & Zero Meter Baseline Au
       });
       expect(frozenWaterTiers).toEqual(validWaterTiers);
 
-      // Snapshot creation for Electricity
       const frozenElecTiers = validateUtilityTierModeConfiguration({
         mode: onboardingSettings.electricityBillingType as any,
         tiers: onboardingSettings.electricityTierRates,
@@ -465,9 +454,10 @@ describe('OWNER R3.9-C.3.1: Onboarding Contract Closure & Zero Meter Baseline Au
     });
   });
 
-  describe('6. Meter Workspace First Reading Follow-Through (Section 9 & 16)', () => {
+  describe('6. First-Cycle Meter Workspace Authority & Blank Readings (Sections 27–33)', () => {
     const DORM_ID = 'e0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11';
     const CYCLE_ID = 'e1eebc99-9c0b-4ef8-bb6d-6bb9bd380a22';
+    const CYCLE_2_ID = 'e1eebc99-9c0b-4ef8-bb6d-6bb9bd380a99';
     const ROOM_ID = 'e2eebc99-9c0b-4ef8-bb6d-6bb9bd380a33';
     const BLD_ID = 'e3eebc99-9c0b-4ef8-bb6d-6bb9bd380a44';
 
@@ -482,6 +472,41 @@ describe('OWNER R3.9-C.3.1: Onboarding Contract Closure & Zero Meter Baseline Au
       });
       vi.spyOn(subscriptionEntitlementService, 'assertRoomOperationalEntitlement').mockResolvedValue(undefined);
 
+      const snapshots = new Map<string, any>();
+      const mockPrismaClient: any = {
+        roomBillingCycleSnapshot: {
+          findUnique: vi.fn(async ({ where }: any) => {
+            const key = `${where.dormitory_billing_cycle_room_unique.dormitoryId}_${where.dormitory_billing_cycle_room_unique.billingCycleId}_${where.dormitory_billing_cycle_room_unique.roomId}`;
+            return snapshots.get(key) || null;
+          }),
+          create: vi.fn(async ({ data }: any) => {
+            const key = `${data.dormitoryId}_${data.billingCycleId}_${data.roomId}`;
+            const snap = { id: `snap-${Date.now()}`, ...data, version: 1 };
+            snapshots.set(key, snap);
+            return snap;
+          }),
+          updateMany: vi.fn(async ({ where, data }: any) => {
+            for (const [k, v] of snapshots.entries()) {
+              if (v.id === where.id && v.version === where.version) {
+                const updated = { ...v, ...data, version: v.version + 1 };
+                snapshots.set(k, updated);
+                return { count: 1 };
+              }
+            }
+            return { count: 0 };
+          }),
+        },
+        billingCycle: {
+          findFirst: vi.fn().mockResolvedValue(null),
+          findMany: vi.fn().mockResolvedValue([]),
+        },
+        meterReading: {
+          findMany: vi.fn().mockResolvedValue([]),
+        },
+      };
+
+      vi.spyOn(prismaModule, 'getPrismaClient').mockReturnValue(mockPrismaClient);
+
       const meterRepo = new InMemoryMeterRepository();
       const billingCycleRepo = new InMemoryBillingCycleRepository();
       const roomRepo = new InMemoryRoomRepository();
@@ -489,13 +514,12 @@ describe('OWNER R3.9-C.3.1: Onboarding Contract Closure & Zero Meter Baseline Au
 
       const meterService = new MeterService(meterRepo, billingCycleRepo, roomRepo, billRepo);
 
-      return { meterService, meterRepo, billingCycleRepo, roomRepo, billRepo };
+      return { meterService, meterRepo, billingCycleRepo, roomRepo, billRepo, snapshots };
     }
 
-    it('New room with baseline 0 calculates exact usage on first Meter Workspace reading (e.g. curr = 125 -> usage = 125)', async () => {
-      const { meterService, meterRepo, billingCycleRepo, roomRepo } = setupMeterWorkspaceHarness();
+    it('Test 27: Initial Read Model — Technical room zero reports previous as null (blank UX semantic)', async () => {
+      const { meterService, roomRepo, billingCycleRepo } = setupMeterWorkspaceHarness();
 
-      // 1. Create Room with initial readings = 0 (created during onboarding)
       await roomRepo.create(DORM_ID, {
         id: ROOM_ID,
         roomNumber: '101',
@@ -504,11 +528,37 @@ describe('OWNER R3.9-C.3.1: Onboarding Contract Closure & Zero Meter Baseline Au
         initialElectricityReading: 0,
       } as any);
 
-      // 2. Create BillingCycle with per_unit rates
       await billingCycleRepo.create(DORM_ID, {
         id: CYCLE_ID,
         cycleCode: '2026-08',
-        name: 'August 2026',
+        periodStart: new Date('2026-08-01T00:00:00.000Z'),
+        periodEnd: new Date('2026-08-31T23:59:59.999Z'),
+        billingDate: new Date('2026-08-31T00:00:00.000Z'),
+        dueDate: new Date('2026-09-05T00:00:00.000Z'),
+        status: 'draft',
+      });
+
+      // Assert resolveAuthoritativePreviousReading returns null (not "0")
+      const waterBaseline = await meterService.resolveAuthoritativePreviousReading(DORM_ID, CYCLE_ID, ROOM_ID, 'water');
+      const elecBaseline = await meterService.resolveAuthoritativePreviousReading(DORM_ID, CYCLE_ID, ROOM_ID, 'electricity');
+      expect(waterBaseline).toBeNull();
+      expect(elecBaseline).toBeNull();
+    });
+
+    it('Test 28: First Save — Owner manually enters first previous and current readings (100 -> 125 & 2350 -> 2480)', async () => {
+      const { meterService, meterRepo, billingCycleRepo, roomRepo } = setupMeterWorkspaceHarness();
+
+      await roomRepo.create(DORM_ID, {
+        id: ROOM_ID,
+        roomNumber: '101',
+        buildingId: BLD_ID,
+        initialWaterReading: 0,
+        initialElectricityReading: 0,
+      } as any);
+
+      await billingCycleRepo.create(DORM_ID, {
+        id: CYCLE_ID,
+        cycleCode: '2026-08',
         periodStart: new Date('2026-08-01T00:00:00.000Z'),
         periodEnd: new Date('2026-08-31T23:59:59.999Z'),
         billingDate: new Date('2026-08-31T00:00:00.000Z'),
@@ -525,43 +575,246 @@ describe('OWNER R3.9-C.3.1: Onboarding Contract Closure & Zero Meter Baseline Au
         source: 'CYCLE_INIT',
       });
 
-      // 3. Save first meter readings in Meter Workspace (waterCurr = '125', elecCurr = '250', previous = '0')
+      // Owner enters first-cycle manual readings: water 100->125, elec 2350->2480, people 1
+      await meterService.saveBulkMeterWorkspace(DORM_ID, {
+        billingCycleId: CYCLE_ID,
+        rows: [
+          {
+            roomId: ROOM_ID,
+            waterPrev: '100',
+            waterCurr: '125',
+            elecPrev: '2350',
+            elecCurr: '2480',
+            peopleCount: 1,
+          },
+        ],
+      });
+
+      const waterReading = await meterRepo.findReadingByCycleRoomAndType(DORM_ID, CYCLE_ID, ROOM_ID, 'water');
+      expect(waterReading).toBeDefined();
+      expect(waterReading?.previousReading).toBe('100');
+      expect(waterReading?.currentReading).toBe('125');
+      expect(waterReading?.usageUnits).toBe('25');
+
+      const elecReading = await meterRepo.findReadingByCycleRoomAndType(DORM_ID, CYCLE_ID, ROOM_ID, 'electricity');
+      expect(elecReading).toBeDefined();
+      expect(elecReading?.previousReading).toBe('2350');
+      expect(elecReading?.currentReading).toBe('2480');
+      expect(elecReading?.usageUnits).toBe('130');
+
+      // Auto-created devices must have initialReading = entered previous
+      const waterDevice = await meterRepo.findDeviceByRoomAndType(DORM_ID, ROOM_ID, 'water');
+      expect(waterDevice?.initialReading).toBe('100');
+
+      const elecDevice = await meterRepo.findDeviceByRoomAndType(DORM_ID, ROOM_ID, 'electricity');
+      expect(elecDevice?.initialReading).toBe('2350');
+    });
+
+    it('Test 29: Missing First Previous — Saving current reading without previous throws MISSING_PREVIOUS_METER_READING', async () => {
+      const { meterService, billingCycleRepo, roomRepo } = setupMeterWorkspaceHarness();
+
+      await roomRepo.create(DORM_ID, {
+        id: ROOM_ID,
+        roomNumber: '101',
+        buildingId: BLD_ID,
+        initialWaterReading: 0,
+        initialElectricityReading: 0,
+      } as any);
+
+      await billingCycleRepo.create(DORM_ID, {
+        id: CYCLE_ID,
+        cycleCode: '2026-08',
+        periodStart: new Date('2026-08-01T00:00:00.000Z'),
+        periodEnd: new Date('2026-08-31T23:59:59.999Z'),
+      } as any);
+
+      await billingCycleRepo.createRateSnapshot(DORM_ID, {
+        billingCycleId: CYCLE_ID,
+        waterBillingType: 'per_unit',
+        waterRate: '18.00',
+        electricityBillingType: 'per_unit',
+        electricityRate: '7.00',
+        source: 'CYCLE_INIT',
+      });
+
+      // Saving waterCurr without waterPrev on a room with no history must fail
+      await expect(
+        meterService.saveBulkMeterWorkspace(DORM_ID, {
+          billingCycleId: CYCLE_ID,
+          rows: [
+            {
+              roomId: ROOM_ID,
+              waterCurr: '125',
+            },
+          ],
+        })
+      ).rejects.toThrow('กรุณาระบุค่ามิเตอร์น้ำเดิมสำหรับห้องนี้');
+    });
+
+    it('Test 30: Explicit Owner Zero — Owner explicitly entering previous = 0 is valid operational baseline', async () => {
+      const { meterService, meterRepo, billingCycleRepo, roomRepo } = setupMeterWorkspaceHarness();
+
+      await roomRepo.create(DORM_ID, {
+        id: ROOM_ID,
+        roomNumber: '101',
+        buildingId: BLD_ID,
+        initialWaterReading: 0,
+      } as any);
+
+      await billingCycleRepo.create(DORM_ID, {
+        id: CYCLE_ID,
+        cycleCode: '2026-08',
+        periodStart: new Date('2026-08-01T00:00:00.000Z'),
+        periodEnd: new Date('2026-08-31T23:59:59.999Z'),
+      } as any);
+
+      await billingCycleRepo.createRateSnapshot(DORM_ID, {
+        billingCycleId: CYCLE_ID,
+        waterBillingType: 'per_unit',
+        waterRate: '18.00',
+        source: 'CYCLE_INIT',
+      });
+
+      // Owner explicitly enters waterPrev = 0, waterCurr = 15
       await meterService.saveBulkMeterWorkspace(DORM_ID, {
         billingCycleId: CYCLE_ID,
         rows: [
           {
             roomId: ROOM_ID,
             waterPrev: '0',
-            waterCurr: '125',
-            elecPrev: '0',
-            elecCurr: '250',
+            waterCurr: '15',
           },
         ],
       });
 
-      // 4. Verify persisted readings: previous = 0, current = 125, usage = 125
       const waterReading = await meterRepo.findReadingByCycleRoomAndType(DORM_ID, CYCLE_ID, ROOM_ID, 'water');
-      expect(waterReading).toBeDefined();
       expect(waterReading?.previousReading).toBe('0');
-      expect(waterReading?.currentReading).toBe('125');
-      expect(waterReading?.usageUnits).toBe('125');
-
-      const elecReading = await meterRepo.findReadingByCycleRoomAndType(DORM_ID, CYCLE_ID, ROOM_ID, 'electricity');
-      expect(elecReading).toBeDefined();
-      expect(elecReading?.previousReading).toBe('0');
-      expect(elecReading?.currentReading).toBe('250');
-      expect(elecReading?.usageUnits).toBe('250');
+      expect(waterReading?.currentReading).toBe('15');
+      expect(waterReading?.usageUnits).toBe('15');
     });
 
-    it('Tiered Water mode with baseline 0 and first reading 15 calculates usage 15 and progressive charge 55.25 THB', async () => {
+    it('Test 31: Next Cycle — Cycle 2 resolves previous = 125 from Cycle 1, and rejects conflicting client previous = 100', async () => {
       const { meterService, meterRepo, billingCycleRepo, roomRepo } = setupMeterWorkspaceHarness();
 
-      // Create room with default 0
+      await roomRepo.create(DORM_ID, {
+        id: ROOM_ID,
+        roomNumber: '101',
+        buildingId: BLD_ID,
+        initialWaterReading: 0,
+      } as any);
+
+      // Cycle 1: Aug 2026
+      await billingCycleRepo.create(DORM_ID, {
+        id: CYCLE_ID,
+        cycleCode: '2026-08',
+        periodStart: new Date('2026-08-01T00:00:00.000Z'),
+        periodEnd: new Date('2026-08-31T23:59:59.999Z'),
+      } as any);
+
+      await billingCycleRepo.createRateSnapshot(DORM_ID, {
+        billingCycleId: CYCLE_ID,
+        waterBillingType: 'per_unit',
+        waterRate: '18.00',
+        source: 'CYCLE_INIT',
+      });
+
+      // Cycle 1 reading saved: 100 -> 125
+      await meterService.saveBulkMeterWorkspace(DORM_ID, {
+        billingCycleId: CYCLE_ID,
+        rows: [{ roomId: ROOM_ID, waterPrev: '100', waterCurr: '125' }],
+      });
+
+      // Cycle 2: Sep 2026
+      await billingCycleRepo.create(DORM_ID, {
+        id: CYCLE_2_ID,
+        cycleCode: '2026-09',
+        periodStart: new Date('2026-09-01T00:00:00.000Z'),
+        periodEnd: new Date('2026-09-30T23:59:59.999Z'),
+      } as any);
+
+      await billingCycleRepo.createRateSnapshot(DORM_ID, {
+        billingCycleId: CYCLE_2_ID,
+        waterBillingType: 'per_unit',
+        waterRate: '18.00',
+        source: 'CYCLE_INIT',
+      });
+
+      // Cycle 2 baseline resolved from Cycle 1 current reading
+      const cycle2Baseline = await meterService.resolveAuthoritativePreviousReading(DORM_ID, CYCLE_2_ID, ROOM_ID, 'water');
+      expect(cycle2Baseline).toBe('125');
+
+      // Cycle 2 save with new current = 150 (previous omitted -> automatically uses 125)
+      await meterService.saveBulkMeterWorkspace(DORM_ID, {
+        billingCycleId: CYCLE_2_ID,
+        rows: [{ roomId: ROOM_ID, waterCurr: '150' }],
+      });
+
+      const cycle2Reading = await meterRepo.findReadingByCycleRoomAndType(DORM_ID, CYCLE_2_ID, ROOM_ID, 'water');
+      expect(cycle2Reading?.previousReading).toBe('125');
+      expect(cycle2Reading?.currentReading).toBe('150');
+      expect(cycle2Reading?.usageUnits).toBe('25');
+
+      // If client attempts to send conflicting waterPrev = 100 for Cycle 2, rejects with PREVIOUS_READING_CONFLICT
+      await expect(
+        meterService.saveBulkMeterWorkspace(DORM_ID, {
+          billingCycleId: CYCLE_2_ID,
+          rows: [{ roomId: ROOM_ID, waterPrev: '100', waterCurr: '160' }],
+        })
+      ).rejects.toThrow('PREVIOUS_READING_CONFLICT');
+    });
+
+    it('Test 32: People Count Default and Preservation — Default 1 on first cycle, preserves explicit 0 or 3', async () => {
+      const { meterService, billingCycleRepo, roomRepo } = setupMeterWorkspaceHarness();
+
+      await roomRepo.create(DORM_ID, {
+        id: ROOM_ID,
+        roomNumber: '101',
+        buildingId: BLD_ID,
+      } as any);
+
+      await billingCycleRepo.create(DORM_ID, {
+        id: CYCLE_ID,
+        cycleCode: '2026-08',
+        periodStart: new Date('2026-08-01T00:00:00.000Z'),
+        periodEnd: new Date('2026-08-31T23:59:59.999Z'),
+      } as any);
+
+      await billingCycleRepo.createRateSnapshot(DORM_ID, {
+        billingCycleId: CYCLE_ID,
+        waterBillingType: 'per_unit',
+        waterRate: '18.00',
+        source: 'CYCLE_INIT',
+      });
+
+      // 1. Default peopleCount when undefined in first workspace save -> 1
+      const metaDefault = await meterService.saveBulkMeterWorkspace(DORM_ID, {
+        billingCycleId: CYCLE_ID,
+        rows: [{ roomId: ROOM_ID, waterPrev: '100', waterCurr: '120' }],
+      });
+      expect(metaDefault.savedRows[0].peopleCount).toBe(1);
+
+      // 2. Explicit peopleCount = 0 -> preserved as 0
+      const metaZero = await meterService.saveBulkMeterWorkspace(DORM_ID, {
+        billingCycleId: CYCLE_ID,
+        rows: [{ roomId: ROOM_ID, peopleCount: 0 }],
+      });
+      expect(metaZero.savedRows[0].peopleCount).toBe(0);
+
+      // 3. Explicit peopleCount = 3 -> preserved as 3
+      const metaThree = await meterService.saveBulkMeterWorkspace(DORM_ID, {
+        billingCycleId: CYCLE_ID,
+        rows: [{ roomId: ROOM_ID, peopleCount: 3 }],
+      });
+      expect(metaThree.savedRows[0].peopleCount).toBe(3);
+    });
+
+    it('Test 33: Tiered Progressive Calculation Proof — First cycle 100->115 computes usage 15 and 55.25 THB', async () => {
+      const { meterService, meterRepo, billingCycleRepo, roomRepo } = setupMeterWorkspaceHarness();
+
       await roomRepo.create(DORM_ID, {
         id: ROOM_ID,
         roomNumber: '102',
         buildingId: BLD_ID,
-        initialWaterReading: 0,
       } as any);
 
       await billingCycleRepo.create(DORM_ID, {
@@ -578,22 +831,28 @@ describe('OWNER R3.9-C.3.1: Onboarding Contract Closure & Zero Meter Baseline Au
         source: 'CYCLE_INIT',
       });
 
-      // Save reading in workspace: waterPrev = '0', waterCurr = '15'
+      // Save reading in workspace: waterPrev = '100', waterCurr = '115'
       await meterService.saveBulkMeterWorkspace(DORM_ID, {
         billingCycleId: CYCLE_ID,
-        rows: [
-          {
-            roomId: ROOM_ID,
-            waterPrev: '0',
-            waterCurr: '15',
-          },
-        ],
+        rows: [{ roomId: ROOM_ID, waterPrev: '100', waterCurr: '115' }],
       });
 
+      // MeterService proves usage 15
       const waterReading = await meterRepo.findReadingByCycleRoomAndType(DORM_ID, CYCLE_ID, ROOM_ID, 'water');
-      expect(waterReading?.previousReading).toBe('0');
-      expect(waterReading?.currentReading).toBe('15');
+      expect(waterReading?.previousReading).toBe('100');
+      expect(waterReading?.currentReading).toBe('115');
       expect(waterReading?.usageUnits).toBe('15');
+
+      // Canonical progressive calculator proves amount 55.25 THB
+      const calcResult = calculateProgressiveTieredCharge({
+        usageUnits: 15,
+        tiers: validWaterTiers,
+      });
+      expect(calcResult.totalAmount).toBe('55.25');
+      expect(calcResult.tierBreakdown).toEqual([
+        { lowerExclusive: '0.00', upperInclusive: '10.00', billedUnits: '10.00', rate: '3.40', amount: '34.00' },
+        { lowerExclusive: '10.00', upperInclusive: '20.00', billedUnits: '5.00', rate: '4.25', amount: '21.25' },
+      ]);
     });
   });
 });

@@ -289,20 +289,28 @@ export class MeterService {
       return parseAuthoritativeMeterReading(device.initialReading, 'meter device initial reading');
     }
 
-    // 4. Room initial meter value
+    // 4. Room initial meter value (Legacy Nonzero Baseline Only)
     const room = await this.roomRepo.findById(roomId, dormitoryId);
     if (room) {
       const roomObj = room as any;
       if (meterType === 'water') {
         const val = room.initialWaterReading ?? roomObj.initialWaterMeter;
         if (val !== undefined && val !== null && String(val).trim() !== '') {
-          return parseAuthoritativeMeterReading(val, 'room initial reading');
+          const parsed = parseAuthoritativeMeterReading(val, 'room initial reading');
+          // LOCKED POLICY R3.9-C.3.2: Technical room zero (0 / 0.00) is a storage placeholder, NOT an operational baseline.
+          if (Number(parsed) !== 0) {
+            return parsed;
+          }
         }
       }
       if (meterType === 'electricity') {
         const val = room.initialElectricityReading ?? roomObj.initialElectricMeter;
         if (val !== undefined && val !== null && String(val).trim() !== '') {
-          return parseAuthoritativeMeterReading(val, 'room initial reading');
+          const parsed = parseAuthoritativeMeterReading(val, 'room initial reading');
+          // LOCKED POLICY R3.9-C.3.2: Technical room zero (0 / 0.00) is a storage placeholder, NOT an operational baseline.
+          if (Number(parsed) !== 0) {
+            return parsed;
+          }
         }
       }
     }
@@ -621,6 +629,14 @@ export class MeterService {
     ) {
       if (waterMode === 'per_unit' || waterMode === 'tiered') {
         let authPrev: string | null = null;
+        const serverAuthPrev = await this.resolveAuthoritativePreviousReading(
+          dormitoryId,
+          billingCycleId,
+          row.roomId,
+          'water',
+          tx
+        );
+
         if (row.waterPrev !== undefined && row.waterPrev !== null && String(row.waterPrev).trim() !== '') {
           const parsed = parseMeterIntegerReading(row.waterPrev);
           if (!parsed.isValid) {
@@ -629,7 +645,14 @@ export class MeterService {
             (err as any).code = 'INVALID_METER_READING';
             throw err;
           }
-          authPrev = String(parsed.value);
+          const suppliedPrev = String(parsed.value);
+          if (serverAuthPrev !== null && !firstCycle && suppliedPrev !== serverAuthPrev) {
+            const err = new Error(`PREVIOUS_READING_CONFLICT: ค่ามิเตอร์น้ำเดิมที่ส่งมา (${suppliedPrev}) ไม่ตรงกับฐานข้อมูล (${serverAuthPrev})`);
+            (err as any).statusCode = 400;
+            (err as any).code = 'PREVIOUS_READING_CONFLICT';
+            throw err;
+          }
+          authPrev = suppliedPrev;
         } else {
           const existingReading = await this.meterRepo.findReadingByCycleRoomAndType(
             dormitoryId,
@@ -641,13 +664,7 @@ export class MeterService {
           if (existingReading && existingReading.previousReading !== undefined && existingReading.previousReading !== null) {
             authPrev = String(existingReading.previousReading).replace(/\.00$/, '');
           } else {
-            authPrev = await this.resolveAuthoritativePreviousReading(
-              dormitoryId,
-              billingCycleId,
-              row.roomId,
-              'water',
-              tx
-            );
+            authPrev = serverAuthPrev;
           }
         }
 
@@ -763,6 +780,14 @@ export class MeterService {
     ) {
       if (elecMode === 'per_unit' || elecMode === 'tiered') {
         let authPrev: string | null = null;
+        const serverAuthPrev = await this.resolveAuthoritativePreviousReading(
+          dormitoryId,
+          billingCycleId,
+          row.roomId,
+          'electricity',
+          tx
+        );
+
         if (row.elecPrev !== undefined && row.elecPrev !== null && String(row.elecPrev).trim() !== '') {
           const parsed = parseMeterIntegerReading(row.elecPrev);
           if (!parsed.isValid) {
@@ -771,7 +796,14 @@ export class MeterService {
             (err as any).code = 'INVALID_METER_READING';
             throw err;
           }
-          authPrev = String(parsed.value);
+          const suppliedPrev = String(parsed.value);
+          if (serverAuthPrev !== null && !firstCycle && suppliedPrev !== serverAuthPrev) {
+            const err = new Error(`PREVIOUS_READING_CONFLICT: ค่ามิเตอร์ไฟฟ้าเดิมที่ส่งมา (${suppliedPrev}) ไม่ตรงกับฐานข้อมูล (${serverAuthPrev})`);
+            (err as any).statusCode = 400;
+            (err as any).code = 'PREVIOUS_READING_CONFLICT';
+            throw err;
+          }
+          authPrev = suppliedPrev;
         } else {
           const existingReading = await this.meterRepo.findReadingByCycleRoomAndType(
             dormitoryId,
@@ -783,13 +815,7 @@ export class MeterService {
           if (existingReading && existingReading.previousReading !== undefined && existingReading.previousReading !== null) {
             authPrev = String(existingReading.previousReading).replace(/\.00$/, '');
           } else {
-            authPrev = await this.resolveAuthoritativePreviousReading(
-              dormitoryId,
-              billingCycleId,
-              row.roomId,
-              'electricity',
-              tx
-            );
+            authPrev = serverAuthPrev;
           }
         }
 
@@ -996,7 +1022,7 @@ export class MeterService {
               dormitoryId,
               billingCycleId,
               roomId: row.roomId,
-              peopleCount: row.peopleCount !== undefined ? Math.max(0, row.peopleCount) : 0,
+              peopleCount: row.peopleCount !== undefined ? Math.max(0, row.peopleCount) : 1,
               manualOutstandingAmount: row.manualOutstandingAmount !== undefined ? toDecimal(String(row.manualOutstandingAmount)) : toDecimal('0.00'),
               otherFees: cleanOtherFees,
               source: 'MANUAL',
@@ -1038,7 +1064,7 @@ export class MeterService {
     return {
       roomId: row.roomId,
       version: existingSnap?.version ?? 1,
-      peopleCount: existingSnap?.peopleCount ?? (row.peopleCount !== undefined ? Math.max(0, row.peopleCount) : 0),
+      peopleCount: existingSnap?.peopleCount ?? (row.peopleCount !== undefined ? Math.max(0, row.peopleCount) : 1),
       manualOutstandingAmount: existingSnap ? formatDecimal(toDecimal(String(existingSnap.manualOutstandingAmount))) : '0.00',
       otherFees: existingSnap && Array.isArray(existingSnap.otherFees) ? (existingSnap.otherFees as any[]) : [],
     };
@@ -2461,7 +2487,7 @@ export class MeterService {
                 previousReading: elecReading.previousReading != null ? elecReading.previousReading.toString() : undefined,
                 currentReading: elecReading.currentReading != null ? elecReading.currentReading.toString() : undefined,
               } : null,
-              peopleCount: snapshotPeopleCount ?? currentHouseholdPeopleCount ?? 0,
+              peopleCount: snapshotPeopleCount ?? (currentHouseholdPeopleCount > 0 ? currentHouseholdPeopleCount : 1),
               parkingQuantity,
               manualOutstanding: snapshotManualOutstanding ?? '0.00',
               otherFees: snapshotOtherFees ?? [],
@@ -2920,7 +2946,7 @@ export class MeterService {
       const prevWater = readingMap[room.id]?.waterCurr || null;
       const prevElec = readingMap[room.id]?.elecCurr || null;
       const prevPeople = prevSnapshotMap.has(room.id) ? prevSnapshotMap.get(room.id)! : null;
-      const householdCount = householdMap.get(room.id) ?? 0;
+      const householdCount = householdMap.get(room.id) ?? (prevPeople !== null ? prevPeople : 1);
 
       return {
         roomId: room.id,
