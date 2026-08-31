@@ -1,6 +1,6 @@
 /**
  * @license Apache-2.0
- * OWNER R3.9-E.1B.2.1: Frontend Tiered Bill & Receipt Presentation Test Suite
+ * OWNER R3.9-E.1B.2.2: Frontend Tiered Bill & Receipt Presentation Test Suite
  */
 
 import React from 'react';
@@ -21,7 +21,7 @@ import { filterNonZeroBillItems, isNonZeroAmount, formatBillingQuantity } from '
 import { formatBaht } from '../components/GlobalComponents';
 import { buildViewingReceipt } from '../pages/owner/payments';
 
-describe('OWNER R3.9-E.1B.2.1 — Strict Tiered Bill & Receipt Presentation Suite', () => {
+describe('OWNER R3.9-E.1B.2.2 — Strict Tiered Bill & Receipt Presentation Suite', () => {
   afterEach(() => {
     cleanup();
   });
@@ -69,19 +69,23 @@ describe('OWNER R3.9-E.1B.2.1 — Strict Tiered Bill & Receipt Presentation Suit
   };
 
   // =========================================================================
-  // 1. Strict Decimal & Integer Validator Helpers (Section 2, 6, 8)
+  // 1. Strict Decimal & Integer Validator Helpers (Section 2, 6, 8, 15)
   // =========================================================================
   describe('1. Strict Decimal & Integer Validators', () => {
-    it('isCanonicalWholeUnitDisplay validates whole unit numbers/strings and rejects fractions/symbols', () => {
+    it('isCanonicalWholeUnitDisplay validates whole unit numbers/strings and rejects fractions/symbols/empty', () => {
       expect(isCanonicalWholeUnitDisplay('0')).toBe(true);
+      expect(isCanonicalWholeUnitDisplay('0.0')).toBe(true);
       expect(isCanonicalWholeUnitDisplay('0.00')).toBe(true);
       expect(isCanonicalWholeUnitDisplay('10')).toBe(true);
+      expect(isCanonicalWholeUnitDisplay('10.0')).toBe(true);
       expect(isCanonicalWholeUnitDisplay('10.00')).toBe(true);
       expect(isCanonicalWholeUnitDisplay('150.00')).toBe(true);
       expect(isCanonicalWholeUnitDisplay(130)).toBe(true);
       expect(isCanonicalWholeUnitDisplay(0)).toBe(true);
 
       // Invalids
+      expect(isCanonicalWholeUnitDisplay('')).toBe(false);
+      expect(isCanonicalWholeUnitDisplay('   ')).toBe(false);
       expect(isCanonicalWholeUnitDisplay('abc')).toBe(false);
       expect(isCanonicalWholeUnitDisplay('10.50')).toBe(false);
       expect(isCanonicalWholeUnitDisplay('5.50')).toBe(false);
@@ -93,7 +97,7 @@ describe('OWNER R3.9-E.1B.2.1 — Strict Tiered Bill & Receipt Presentation Suit
       expect(isCanonicalWholeUnitDisplay(undefined)).toBe(false);
     });
 
-    it('isCanonicalPositiveMoneyDisplay validates positive money and rejects negatives/garbage', () => {
+    it('isCanonicalPositiveMoneyDisplay validates positive money and rejects negatives/garbage/empty', () => {
       expect(isCanonicalPositiveMoneyDisplay('3.40')).toBe(true);
       expect(isCanonicalPositiveMoneyDisplay('0.00')).toBe(true);
       expect(isCanonicalPositiveMoneyDisplay('15.00')).toBe(true);
@@ -101,6 +105,7 @@ describe('OWNER R3.9-E.1B.2.1 — Strict Tiered Bill & Receipt Presentation Suit
       expect(isCanonicalPositiveMoneyDisplay(3.4)).toBe(true);
 
       // Invalids
+      expect(isCanonicalPositiveMoneyDisplay('')).toBe(false);
       expect(isCanonicalPositiveMoneyDisplay('-1.00')).toBe(false);
       expect(isCanonicalPositiveMoneyDisplay('abc')).toBe(false);
       expect(isCanonicalPositiveMoneyDisplay('bad')).toBe(false);
@@ -110,77 +115,98 @@ describe('OWNER R3.9-E.1B.2.1 — Strict Tiered Bill & Receipt Presentation Suit
   });
 
   // =========================================================================
-  // 2. Strict Metadata Guard & Fail-Closed Behavior (Section 2, 3, 4, 7, 8)
+  // 2. Strict Unbounded Contract & Sequence Safety (Section 2, 3, 4, 7, 8, 9, 10, 11, 12, 13)
   // =========================================================================
-  describe('2. Strict Metadata Guard & Fail-Closed Behavior', () => {
-    it('isValidTieredBillItemMetadata validates correct schema and rejects malformed objects', () => {
-      expect(isValidTieredBillItemMetadata(tieredWaterMetadata)).toBe(true);
-      expect(isValidTieredBillItemMetadata(tieredElectricityMetadata)).toBe(true);
-
-      // Malformed cases
-      expect(isValidTieredBillItemMetadata(null)).toBe(false);
-      expect(isValidTieredBillItemMetadata(undefined)).toBe(false);
-      expect(isValidTieredBillItemMetadata({})).toBe(false);
-      expect(isValidTieredBillItemMetadata({ mode: 'fixed' })).toBe(false);
-      expect(isValidTieredBillItemMetadata({ mode: 'tiered', tierBreakdown: [] })).toBe(false);
-      expect(isValidTieredBillItemMetadata({ mode: 'tiered', tierBreakdown: 'not-array' })).toBe(false);
-    });
-
-    it('Section 7: rejects corrupt numeric metadata and renders nothing in TierBreakdownView', () => {
-      const corruptMetadata = {
+  describe('2. Strict Unbounded Contract & Sequence Safety', () => {
+    it('Section 9: missing upperInclusive property is REJECTED without rendering fabricated "21 หน่วยขึ้นไป"', () => {
+      const missingUpperMetadata = {
         mode: 'tiered',
         tierBreakdown: [
           {
-            lowerExclusive: 'abc',
-            upperInclusive: 'xyz',
-            billedUnits: 'oops',
-            rate: 'bad',
-            amount: 'wrong',
+            lowerExclusive: '20.00',
+            billedUnits: '5.00',
+            rate: '5.00',
+            amount: '25.00',
+            // upperInclusive is MISSING!
           },
         ],
       };
 
-      expect(isValidTieredBillItemMetadata(corruptMetadata)).toBe(false);
+      expect(isValidTieredBillItemMetadata(missingUpperMetadata)).toBe(false);
 
-      const { container } = render(<TierBreakdownView metadata={corruptMetadata} unit="unit" />);
+      const { container } = render(<TierBreakdownView metadata={missingUpperMetadata} unit="unit" />);
       expect(container.firstChild).toBeNull();
+      expect(container.textContent).not.toContain('21 หน่วยขึ้นไป');
       expect(container.textContent).not.toContain('NaN');
-      expect(container.textContent).not.toContain('Infinity');
-      expect(container.textContent).not.toContain('1 หน่วยขึ้นไป');
 
       // Parent rate label returns fallback
-      expect(formatTierRateLabel('0.00', 'unit', corruptMetadata)).toBe('คิดตามขั้นบันได');
+      expect(formatTierRateLabel('0.00', 'unit', missingUpperMetadata)).toBe('คิดตามขั้นบันได');
     });
 
-    it('Section 8: rejects fractional tier boundaries (e.g. 10.50) without truncation or fabrication', () => {
-      const fractionalRangeMetadata = {
+    it('Section 10: empty string upperInclusive ("") is REJECTED and does NOT mean infinity', () => {
+      const emptyUpperMetadata = {
+        mode: 'tiered',
+        tierBreakdown: [
+          {
+            lowerExclusive: '20.00',
+            upperInclusive: '',
+            billedUnits: '5.00',
+            rate: '5.00',
+            amount: '25.00',
+          },
+        ],
+      };
+
+      expect(isValidTieredBillItemMetadata(emptyUpperMetadata)).toBe(false);
+
+      const { container } = render(<TierBreakdownView metadata={emptyUpperMetadata} unit="unit" />);
+      expect(container.firstChild).toBeNull();
+      expect(container.textContent).not.toContain('21 หน่วยขึ้นไป');
+    });
+
+    it('Section 11: explicit upperInclusive === null is VALID for unbounded final tier ("21 หน่วยขึ้นไป")', () => {
+      const explicitNullMetadata = {
         mode: 'tiered',
         tierBreakdown: [
           {
             lowerExclusive: '0.00',
-            upperInclusive: '10.50',
-            billedUnits: '10.00',
-            rate: '3.40',
-            amount: '34.00',
+            upperInclusive: '20.00',
+            billedUnits: '20.00',
+            rate: '3.50',
+            amount: '70.00',
+          },
+          {
+            lowerExclusive: '20.00',
+            upperInclusive: null, // EXPLICIT NULL
+            billedUnits: '5.00',
+            rate: '5.00',
+            amount: '25.00',
           },
         ],
       };
 
-      expect(isValidTieredBillItemMetadata(fractionalRangeMetadata)).toBe(false);
+      expect(isValidTieredBillItemMetadata(explicitNullMetadata)).toBe(true);
 
-      const { container } = render(<TierBreakdownView metadata={fractionalRangeMetadata} unit="unit" />);
-      expect(container.firstChild).toBeNull();
-      expect(container.textContent).not.toContain('1–10');
-      expect(container.textContent).not.toContain('1–11');
+      render(<TierBreakdownView metadata={explicitNullMetadata} unit="unit" />);
+      expect(screen.getByText('• 1–20 หน่วย')).toBeInTheDocument();
+      expect(screen.getByText('• 21 หน่วยขึ้นไป')).toBeInTheDocument();
+      expect(screen.getByText('5 × 5.00 = 25.00 บาท')).toBeInTheDocument();
     });
 
-    it('Section 3: rejects inverted range relation (upperInclusive <= lowerExclusive)', () => {
-      const invertedRangeMetadata = {
+    it('Section 12: unbounded row followed by another row is REJECTED', () => {
+      const unboundedNotLastMetadata = {
         mode: 'tiered',
         tierBreakdown: [
           {
+            lowerExclusive: '0.00',
+            upperInclusive: null, // UNBOUNDED ROW NOT LAST!
+            billedUnits: '10.00',
+            rate: '3.40',
+            amount: '34.00',
+          },
+          {
             lowerExclusive: '10.00',
-            upperInclusive: '5.00',
+            upperInclusive: '20.00',
             billedUnits: '5.00',
             rate: '4.25',
             amount: '21.25',
@@ -188,19 +214,63 @@ describe('OWNER R3.9-E.1B.2.1 — Strict Tiered Bill & Receipt Presentation Suit
         ],
       };
 
-      expect(isValidTieredBillItemMetadata(invertedRangeMetadata)).toBe(false);
+      expect(isValidTieredBillItemMetadata(unboundedNotLastMetadata)).toBe(false);
+
+      const { container } = render(<TierBreakdownView metadata={unboundedNotLastMetadata} unit="unit" />);
+      expect(container.firstChild).toBeNull();
     });
 
-    it('formatTierRange correctly formats progressive intervals into human Thai ranges (Section 7)', () => {
+    it('Section 13: rejects gap in sequence (0->10 then 15->20)', () => {
+      const gapMetadata = {
+        mode: 'tiered',
+        tierBreakdown: [
+          { lowerExclusive: '0.00', upperInclusive: '10.00', billedUnits: '10.00', rate: '3.40', amount: '34.00' },
+          { lowerExclusive: '15.00', upperInclusive: '20.00', billedUnits: '5.00', rate: '4.25', amount: '21.25' },
+        ],
+      };
+
+      expect(isValidTieredBillItemMetadata(gapMetadata)).toBe(false);
+    });
+
+    it('Section 13: rejects overlap in sequence (0->10 then 5->20)', () => {
+      const overlapMetadata = {
+        mode: 'tiered',
+        tierBreakdown: [
+          { lowerExclusive: '0.00', upperInclusive: '10.00', billedUnits: '10.00', rate: '3.40', amount: '34.00' },
+          { lowerExclusive: '5.00', upperInclusive: '20.00', billedUnits: '5.00', rate: '4.25', amount: '21.25' },
+        ],
+      };
+
+      expect(isValidTieredBillItemMetadata(overlapMetadata)).toBe(false);
+    });
+
+    it('Section 13: contiguous sequence is VALID (0->10, 10->20, 20->null)', () => {
+      const contiguousMetadata = {
+        mode: 'tiered',
+        tierBreakdown: [
+          { lowerExclusive: '0.00', upperInclusive: '10.00', billedUnits: '10.00', rate: '3.40', amount: '34.00' },
+          { lowerExclusive: '10.00', upperInclusive: '20.00', billedUnits: '10.00', rate: '4.00', amount: '40.00' },
+          { lowerExclusive: '20.00', upperInclusive: null, billedUnits: '5.00', rate: '5.00', amount: '25.00' },
+        ],
+      };
+
+      expect(isValidTieredBillItemMetadata(contiguousMetadata)).toBe(true);
+    });
+
+    it('Section 6: formatTierRange only produces "<start> หน่วยขึ้นไป" when upperInclusive === null', () => {
       expect(formatTierRange('0.00', '10.00')).toBe('1–10 หน่วย');
       expect(formatTierRange('10.00', '20.00')).toBe('11–20 หน่วย');
       expect(formatTierRange('20.00', null)).toBe('21 หน่วยขึ้นไป');
-      expect(formatTierRange('0.00', '50.00')).toBe('1–50 หน่วย');
-      expect(formatTierRange('50.00', '150.00')).toBe('51–150 หน่วย');
-      expect(formatTierRange('150.00', '')).toBe('151 หน่วยขึ้นไป');
+
+      // Fail-closed for undefined / empty / invalid
+      expect(formatTierRange('20.00', undefined)).toBe('- หน่วย');
+      expect(formatTierRange('20.00', '')).toBe('- หน่วย');
+      expect(formatTierRange('20.00', '   ')).toBe('- หน่วย');
+      expect(formatTierRange('20.00', 'abc')).toBe('- หน่วย');
+      expect(formatTierRange('20.00', '10.00')).toBe('- หน่วย'); // inverted
     });
 
-    it('formatTierUsage formats integer units without floating-point fraction (Section 9)', () => {
+    it('formatTierUsage formats integer units without floating-point fraction', () => {
       expect(formatTierUsage('15.00')).toBe('15 หน่วย');
       expect(formatTierUsage(130)).toBe('130 หน่วย');
       expect(formatTierUsage('10.00')).toBe('10 หน่วย');
@@ -208,7 +278,7 @@ describe('OWNER R3.9-E.1B.2.1 — Strict Tiered Bill & Receipt Presentation Suit
       expect(formatTierUsage('bad')).toBe('- หน่วย');
     });
 
-    it('formatTierRateLabel shows "คิดตามขั้นบันได" and never "0.00 บาท/หน่วย" for tiered items (Section 6)', () => {
+    it('formatTierRateLabel shows "คิดตามขั้นบันได" and never "0.00 บาท/หน่วย" for tiered items', () => {
       expect(formatTierRateLabel('0.00', 'unit', tieredWaterMetadata)).toBe('คิดตามขั้นบันได');
       expect(formatTierRateLabel(0, 'unit', { mode: 'tiered', tierBreakdown: 'malformed' })).toBe('คิดตามขั้นบันได');
 
@@ -223,10 +293,10 @@ describe('OWNER R3.9-E.1B.2.1 — Strict Tiered Bill & Receipt Presentation Suit
   });
 
   // =========================================================================
-  // 3. Real Production buildViewingReceipt Integration Proof (Section 16, 17, 18)
+  // 3. Real Production buildViewingReceipt Integration Proof
   // =========================================================================
   describe('3. Production buildViewingReceipt Integration Proof', () => {
-    it('Section 17: Single snapshot-first integration — snapshot tier rates win over conflicting live bill rates', () => {
+    it('Single snapshot-first integration — snapshot tier rates win over conflicting live bill rates', () => {
       const paymentFixture = {
         id: 'pay-1',
         dormitoryId: 'dorm-100',
@@ -311,7 +381,7 @@ describe('OWNER R3.9-E.1B.2.1 — Strict Tiered Bill & Receipt Presentation Suit
       expect(container.textContent).not.toContain('99.00');
     });
 
-    it('Section 18: Combined snapshot-first integration — snapshot billGroups win over live bills', () => {
+    it('Combined snapshot-first integration — snapshot billGroups win over live bills', () => {
       const paymentGroupFixture = {
         id: 'pay-grp-1',
         dormitoryId: 'dorm-100',
@@ -388,7 +458,7 @@ describe('OWNER R3.9-E.1B.2.1 — Strict Tiered Bill & Receipt Presentation Suit
       expect(elecItem.metadata).toEqual(tieredElectricityMetadata);
     });
 
-    it('Section 11 & 12: Legacy single receipt with missing/empty items falls back safely', () => {
+    it('Legacy single receipt with missing/empty items falls back safely', () => {
       const legacyPayment = {
         id: 'pay-legacy',
         dormitoryId: 'dorm-100',
@@ -414,10 +484,10 @@ describe('OWNER R3.9-E.1B.2.1 — Strict Tiered Bill & Receipt Presentation Suit
   });
 
   // =========================================================================
-  // 4. Bill Detail Presentation Integration (Section 19, 28, 29)
+  // 4. Bill Detail Presentation Integration
   // =========================================================================
   describe('4. Bill Detail Table Presentation', () => {
-    it('Section 19 & 28: Bill Detail renders Water Tier row with "คิดตามขั้นบันได", nested breakdown, and NO "0.00 บาท/หน่วย"', () => {
+    it('Bill Detail renders Water Tier row with "คิดตามขั้นบันได", nested breakdown, and NO "0.00 บาท/หน่วย"', () => {
       const billItem = {
         id: 'item-water-1',
         type: 'water',
@@ -461,7 +531,7 @@ describe('OWNER R3.9-E.1B.2.1 — Strict Tiered Bill & Receipt Presentation Suit
       expect(container.textContent).not.toContain('15 × 0.00');
     });
 
-    it('Section 29: Bill Detail renders Electricity Tier row correctly', () => {
+    it('Bill Detail renders Electricity Tier row correctly', () => {
       const billItem = {
         id: 'item-elec-1',
         type: 'electricity',
@@ -504,7 +574,7 @@ describe('OWNER R3.9-E.1B.2.1 — Strict Tiered Bill & Receipt Presentation Suit
   });
 
   // =========================================================================
-  // 5. Zero-Line Suppression Policy (Section 20 & 35)
+  // 5. Zero-Line Suppression Policy
   // =========================================================================
   describe('5. Zero-Line Suppression Policy', () => {
     it('isNonZeroAmount and filterNonZeroBillItems hide 0.00 lines while preserving negative and positive amounts', () => {

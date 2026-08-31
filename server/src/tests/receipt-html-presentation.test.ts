@@ -1,6 +1,6 @@
 /**
  * @license Apache-2.0
- * OWNER R3.9-E.1B.2.1: Backend Receipt HTML Presentation Test Suite
+ * OWNER R3.9-E.1B.2.2: Backend Receipt HTML Presentation Test Suite
  */
 
 import { describe, it, expect } from 'vitest';
@@ -18,7 +18,7 @@ import {
   renderReceiptHtml,
 } from '../utils/receipt-html.util.js';
 
-describe('OWNER R3.9-E.1B.2.1 — Backend Receipt HTML Presentation Authority', () => {
+describe('OWNER R3.9-E.1B.2.2 — Backend Receipt HTML Presentation Authority', () => {
   const tieredWaterMetadata = {
     mode: 'tiered',
     usageUnits: '15.00',
@@ -65,14 +65,18 @@ describe('OWNER R3.9-E.1B.2.1 — Backend Receipt HTML Presentation Authority', 
   // 1. Strict Decimal & Integer Validators
   // =========================================================================
   describe('1. Strict Decimal & Integer Validators', () => {
-    it('isCanonicalWholeUnitDisplay validates whole unit numbers/strings and rejects fractions/symbols', () => {
+    it('isCanonicalWholeUnitDisplay validates whole unit numbers/strings and rejects fractions/symbols/empty', () => {
       expect(isCanonicalWholeUnitDisplay('0')).toBe(true);
+      expect(isCanonicalWholeUnitDisplay('0.0')).toBe(true);
       expect(isCanonicalWholeUnitDisplay('0.00')).toBe(true);
       expect(isCanonicalWholeUnitDisplay('10')).toBe(true);
+      expect(isCanonicalWholeUnitDisplay('10.0')).toBe(true);
       expect(isCanonicalWholeUnitDisplay('10.00')).toBe(true);
       expect(isCanonicalWholeUnitDisplay('150.00')).toBe(true);
       expect(isCanonicalWholeUnitDisplay(130)).toBe(true);
 
+      expect(isCanonicalWholeUnitDisplay('')).toBe(false);
+      expect(isCanonicalWholeUnitDisplay('   ')).toBe(false);
       expect(isCanonicalWholeUnitDisplay('abc')).toBe(false);
       expect(isCanonicalWholeUnitDisplay('10.50')).toBe(false);
       expect(isCanonicalWholeUnitDisplay('5.50')).toBe(false);
@@ -82,11 +86,12 @@ describe('OWNER R3.9-E.1B.2.1 — Backend Receipt HTML Presentation Authority', 
       expect(isCanonicalWholeUnitDisplay(NaN)).toBe(false);
     });
 
-    it('isCanonicalPositiveMoneyDisplay validates positive money and rejects negatives/garbage', () => {
+    it('isCanonicalPositiveMoneyDisplay validates positive money and rejects negatives/garbage/empty', () => {
       expect(isCanonicalPositiveMoneyDisplay('3.40')).toBe(true);
       expect(isCanonicalPositiveMoneyDisplay('0.00')).toBe(true);
       expect(isCanonicalPositiveMoneyDisplay('15.00')).toBe(true);
 
+      expect(isCanonicalPositiveMoneyDisplay('')).toBe(false);
       expect(isCanonicalPositiveMoneyDisplay('-1.00')).toBe(false);
       expect(isCanonicalPositiveMoneyDisplay('abc')).toBe(false);
       expect(isCanonicalPositiveMoneyDisplay('bad')).toBe(false);
@@ -94,37 +99,98 @@ describe('OWNER R3.9-E.1B.2.1 — Backend Receipt HTML Presentation Authority', 
   });
 
   // =========================================================================
-  // 2. Strict Metadata Guard & Fail-Closed Behavior (Section 9, 10, 22 A & B)
+  // 2. Strict Metadata Guard & Fail-Closed Behavior
   // =========================================================================
   describe('2. Strict Metadata Guard & Fail-Closed HTML Presentation', () => {
     it('isValidTierMetadata validates correct schema and rejects corrupt/fractional items', () => {
       expect(isValidTierMetadata(tieredWaterMetadata)).toBe(true);
       expect(isValidTierMetadata(tieredElecMetadata)).toBe(true);
 
-      // Corrupt numeric strings
+      // Missing upperInclusive
       expect(isValidTierMetadata({
         mode: 'tiered',
-        tierBreakdown: [{ lowerExclusive: 'abc', upperInclusive: 'xyz', billedUnits: 'oops', rate: 'bad', amount: 'wrong' }],
+        tierBreakdown: [{ lowerExclusive: '20.00', billedUnits: '5.00', rate: '5.00', amount: '25.00' }],
       })).toBe(false);
 
-      // Fractional range
+      // Empty string upperInclusive
       expect(isValidTierMetadata({
         mode: 'tiered',
-        tierBreakdown: [{ lowerExclusive: '0.00', upperInclusive: '10.50', billedUnits: '10.00', rate: '3.40', amount: '34.00' }],
+        tierBreakdown: [{ lowerExclusive: '20.00', upperInclusive: '', billedUnits: '5.00', rate: '5.00', amount: '25.00' }],
       })).toBe(false);
 
-      // Inverted range
+      // Explicit null is valid
       expect(isValidTierMetadata({
         mode: 'tiered',
-        tierBreakdown: [{ lowerExclusive: '10.00', upperInclusive: '5.00', billedUnits: '5.00', rate: '4.25', amount: '21.25' }],
+        tierBreakdown: [{ lowerExclusive: '20.00', upperInclusive: null, billedUnits: '5.00', rate: '5.00', amount: '25.00' }],
+      })).toBe(true);
+
+      // Unbounded not last
+      expect(isValidTierMetadata({
+        mode: 'tiered',
+        tierBreakdown: [
+          { lowerExclusive: '0.00', upperInclusive: null, billedUnits: '10.00', rate: '3.40', amount: '34.00' },
+          { lowerExclusive: '10.00', upperInclusive: '20.00', billedUnits: '5.00', rate: '4.25', amount: '21.25' },
+        ],
+      })).toBe(false);
+
+      // Gap in sequence
+      expect(isValidTierMetadata({
+        mode: 'tiered',
+        tierBreakdown: [
+          { lowerExclusive: '0.00', upperInclusive: '10.00', billedUnits: '10.00', rate: '3.40', amount: '34.00' },
+          { lowerExclusive: '15.00', upperInclusive: '20.00', billedUnits: '5.00', rate: '4.25', amount: '21.25' },
+        ],
+      })).toBe(false);
+
+      // Overlap in sequence
+      expect(isValidTierMetadata({
+        mode: 'tiered',
+        tierBreakdown: [
+          { lowerExclusive: '0.00', upperInclusive: '10.00', billedUnits: '10.00', rate: '3.40', amount: '34.00' },
+          { lowerExclusive: '5.00', upperInclusive: '20.00', billedUnits: '5.00', rate: '4.25', amount: '21.25' },
+        ],
       })).toBe(false);
     });
 
-    it('Section 10 & 22A: Malformed metadata renders "คิดตามขั้นบันได", authoritative amount, and NO NaN or nested rows', () => {
+    it('Section 14: Missing upperInclusive renders "คิดตามขั้นบันได", authoritative amount, and NO nested rows', () => {
       const receiptRecord = {
-        receiptNumber: 'RC-202608-MALFORMED',
+        receiptNumber: 'RC-202608-MISSING-UPPER',
         snapshotData: {
-          receiptNumber: 'RC-202608-MALFORMED',
+          receiptNumber: 'RC-202608-MISSING-UPPER',
+          total: '25.00',
+          items: [
+            {
+              description: 'ค่าน้ำประปา',
+              quantity: '5.00',
+              unit: 'unit',
+              unitPrice: '0.00',
+              amount: '25.00',
+              metadata: {
+                mode: 'tiered',
+                tierBreakdown: [
+                  { lowerExclusive: '20.00', billedUnits: '5.00', rate: '5.00', amount: '25.00' },
+                ],
+              },
+            },
+          ],
+        },
+      };
+
+      const html = renderReceiptHtml(receiptRecord);
+      expect(html).toContain('ค่าน้ำประปา');
+      expect(html).toContain('คิดตามขั้นบันได');
+      expect(html).toContain('25.00');
+      expect(html).not.toContain('•'); // No nested breakdown rows
+      expect(html).not.toContain('21 หน่วยขึ้นไป');
+      expect(html).not.toContain('NaN');
+      expect(html).not.toContain('Infinity');
+    });
+
+    it('Section 14: Sequence gap metadata fails closed without nested rows', () => {
+      const receiptRecord = {
+        receiptNumber: 'RC-202608-GAP',
+        snapshotData: {
+          receiptNumber: 'RC-202608-GAP',
           total: '55.25',
           items: [
             {
@@ -136,7 +202,8 @@ describe('OWNER R3.9-E.1B.2.1 — Backend Receipt HTML Presentation Authority', 
               metadata: {
                 mode: 'tiered',
                 tierBreakdown: [
-                  { lowerExclusive: 'abc', upperInclusive: 'xyz', billedUnits: 'oops', rate: 'bad', amount: 'wrong' },
+                  { lowerExclusive: '0.00', upperInclusive: '10.00', billedUnits: '10.00', rate: '3.40', amount: '34.00' },
+                  { lowerExclusive: '15.00', upperInclusive: '20.00', billedUnits: '5.00', rate: '4.25', amount: '21.25' },
                 ],
               },
             },
@@ -148,50 +215,23 @@ describe('OWNER R3.9-E.1B.2.1 — Backend Receipt HTML Presentation Authority', 
       expect(html).toContain('ค่าน้ำประปา');
       expect(html).toContain('คิดตามขั้นบันได');
       expect(html).toContain('55.25');
-      expect(html).not.toContain('•'); // No nested breakdown rows
-      expect(html).not.toContain('NaN');
-      expect(html).not.toContain('Infinity');
-      expect(html).not.toContain('1 หน่วยขึ้นไป');
+      expect(html).not.toContain('•');
     });
 
-    it('Section 22B: Fractional range metadata fails closed without nested rows or fabrication', () => {
-      const receiptRecord = {
-        receiptNumber: 'RC-202608-FRACTIONAL',
-        snapshotData: {
-          receiptNumber: 'RC-202608-FRACTIONAL',
-          total: '34.00',
-          items: [
-            {
-              description: 'ค่าน้ำประปา',
-              quantity: '10.00',
-              unit: 'unit',
-              unitPrice: '0.00',
-              amount: '34.00',
-              metadata: {
-                mode: 'tiered',
-                tierBreakdown: [
-                  { lowerExclusive: '0.00', upperInclusive: '10.50', billedUnits: '10.00', rate: '3.40', amount: '34.00' },
-                ],
-              },
-            },
-          ],
-        },
-      };
-
-      const html = renderReceiptHtml(receiptRecord);
-      expect(html).toContain('ค่าน้ำประปา');
-      expect(html).toContain('คิดตามขั้นบันได');
-      expect(html).toContain('34.00');
-      expect(html).not.toContain('•');
-      expect(html).not.toContain('1–10');
+    it('formatTierRange only produces "<start> หน่วยขึ้นไป" on explicit null', () => {
+      expect(formatTierRange('0.00', '10.00')).toBe('1–10 หน่วย');
+      expect(formatTierRange('20.00', null)).toBe('21 หน่วยขึ้นไป');
+      expect(formatTierRange('20.00', undefined)).toBe('- หน่วย');
+      expect(formatTierRange('20.00', '')).toBe('- หน่วย');
+      expect(formatTierRange('20.00', 'abc')).toBe('- หน่วย');
     });
   });
 
   // =========================================================================
-  // 3. Single Receipt HTML Presentation & Quantity Formatting (Section 14 & 22E)
+  // 3. Single Receipt HTML Presentation & Quantity Formatting
   // =========================================================================
   describe('3. Single Receipt Presentation & Thai Quantity Formatting', () => {
-    it('Section 14 & 22E: Formats quantities with Thai units (15.00 unit -> "15 หน่วย", 130.00 unit -> "130 หน่วย")', () => {
+    it('Formats quantities with Thai units (15.00 unit -> "15 หน่วย", 130.00 unit -> "130 หน่วย")', () => {
       expect(formatQuantityHtml('15.00', 'unit')).toBe('15 หน่วย');
       expect(formatQuantityHtml(130, 'unit')).toBe('130 หน่วย');
       expect(formatQuantityHtml('1.00', 'month')).toBe('1 เดือน');
@@ -258,10 +298,10 @@ describe('OWNER R3.9-E.1B.2.1 — Backend Receipt HTML Presentation Authority', 
   });
 
   // =========================================================================
-  // 4. Legacy Single Receipt Fallbacks (Section 11, 12, 22 C & D)
+  // 4. Legacy Single Receipt Fallbacks
   // =========================================================================
   describe('4. Legacy Single Receipt Fallbacks', () => {
-    it('Section 11 & 22C: missing items fallback renders "ยอดชำระตามใบเสร็จเดิม" and total', () => {
+    it('missing items fallback renders "ยอดชำระตามใบเสร็จเดิม" and total', () => {
       const receiptRecord = {
         receiptNumber: 'RC-LEGACY-MISSING',
         snapshotData: {
@@ -278,7 +318,7 @@ describe('OWNER R3.9-E.1B.2.1 — Backend Receipt HTML Presentation Authority', 
       expect(html).toContain('3500.00');
     });
 
-    it('Section 12 & 22D: empty items array fallback renders "ยอดชำระตามใบเสร็จเดิม" and total', () => {
+    it('empty items array fallback renders "ยอดชำระตามใบเสร็จเดิม" and total', () => {
       const receiptRecord = {
         receiptNumber: 'RC-LEGACY-EMPTY',
         snapshotData: {
@@ -297,10 +337,10 @@ describe('OWNER R3.9-E.1B.2.1 — Backend Receipt HTML Presentation Authority', 
   });
 
   // =========================================================================
-  // 5. Combined Receipt HTML Presentation (Section 22F)
+  // 5. Combined Receipt HTML Presentation
   // =========================================================================
   describe('5. Combined Receipt HTML Presentation', () => {
-    it('Section 22F: Combined receipt HTML renders immutable billGroups, gross items, tier breakdown, and allocated amount', () => {
+    it('Combined receipt HTML renders immutable billGroups, gross items, tier breakdown, and allocated amount', () => {
       const receiptRecord = {
         receiptNumber: 'RC-202608-201-0002',
         isVoided: false,
@@ -390,10 +430,10 @@ describe('OWNER R3.9-E.1B.2.1 — Backend Receipt HTML Presentation Authority', 
   });
 
   // =========================================================================
-  // 6. Zero-Line Filtering Policy (Section 22G & 35)
+  // 6. Zero-Line Filtering Policy
   // =========================================================================
   describe('6. Zero-Line Filtering Policy', () => {
-    it('Section 22G: HTML renderer filters out 0.00 items while showing non-zero items (positive, negative, and 0.01)', () => {
+    it('HTML renderer filters out 0.00 items while showing non-zero items (positive, negative, and 0.01)', () => {
       const receiptRecord = {
         receiptNumber: 'RC-202608-ZERO',
         snapshotData: {
