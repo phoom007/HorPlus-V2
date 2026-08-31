@@ -66,6 +66,7 @@ import {
 } from '../components/GlobalComponents';
 
 import { Tenant, Room, Bill, Contract, MaintenanceRequest as RepairRequest, Announcement, Dormitory, BillItem, Building, formatItemDescription } from '../types';
+import { TierBreakdownView } from '../components/bills/TierBreakdownView';
 import { httpRequest } from '../data/httpClient';
 
 const getBankBadgeInfo = (bankName: string) => {
@@ -1713,9 +1714,14 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                             {/* Collapsible item details */}
                             <div className="border-t border-slate-100 pt-4 space-y-2.5 text-[10px]">
                               {filterNonZeroBillItems(activeUnpaidBill.items).map((item) => (
-                                <div key={item.id} className="flex justify-between items-center text-slate-600">
-                                  <span>{formatItemDescription(item.description)}</span>
-                                  <span className="font-extrabold text-slate-800">฿ {item.amount.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                <div key={item.id || item.description} className="text-slate-600">
+                                  <div className="flex justify-between items-center">
+                                    <span>{formatItemDescription(item.description)}</span>
+                                    <span className="font-extrabold text-slate-800">
+                                      ฿ {Number(item.amount).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                    </span>
+                                  </div>
+                                  <TierBreakdownView metadata={item.metadata} unit={item.unit} />
                                 </div>
                               ))}
 

@@ -306,11 +306,33 @@ export interface MeterReading {
 
 export type BillStatus = 'draft' | 'pending' | 'checking' | 'paid' | 'overdue' | 'rejected' | 'cancelled';
 
+export interface CanonicalTierBreakdownItem {
+  lowerExclusive: string;
+  upperInclusive: string | null;
+  billedUnits: string;
+  rate: string;
+  amount: string;
+}
+
+export interface CanonicalTieredBillItemMetadata {
+  mode?: string;
+  usageUnits?: string;
+  tierBreakdown?: CanonicalTierBreakdownItem[];
+  [key: string]: unknown;
+}
+
 export interface BillItem {
-  id: string;
+  id?: string;
+  type?: string;
+  code?: string | null;
   description: string;
-  amount: number;
-  category: 'rent' | 'water' | 'electricity' | 'parking' | 'fine' | 'other' | 'discount';
+  quantity?: number | string | null;
+  unit?: string | null;
+  unitPrice?: number | string | null;
+  amount: number | string;
+  category?: 'rent' | 'water' | 'electricity' | 'parking' | 'fine' | 'other' | 'discount' | string;
+  metadata?: CanonicalTieredBillItemMetadata | null | Record<string, any>;
+  displayOrder?: number;
 }
 
 export interface Bill {

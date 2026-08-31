@@ -19,6 +19,8 @@ import {
 } from 'lucide-react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Modal, formatBaht, formatThaiDate, formatCycleCode, PrintView, formatBillingQuantity, formatBillingRate, resolveBillingDisplayUnit, isNonZeroAmount, filterNonZeroBillItems } from '../../components/GlobalComponents';
+import { TierBreakdownView } from '../../components/bills/TierBreakdownView';
+import { formatTierRateLabel } from '../../utils/billPresentation';
 import { LineNotificationModal, LineIcon } from '../../components/LineNotificationModal';
 import { Bill, Tenant, Room } from '../../types';
 import { queryKeys } from '../../lib/queryClient';
@@ -380,6 +382,8 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
         unit?: string | null;
         unitPrice?: number | string | null;
         amount: number;
+        metadata?: any;
+        type?: string;
       }>;
     }>;
     cycleLabel?: string;
@@ -391,6 +395,8 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
       unit?: string | null;
       unitPrice?: number | string | null;
       amount: number;
+      metadata?: any;
+      type?: string;
     }>;
   } | null>(null);
 
@@ -970,68 +976,122 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
 
     const targets = payment.paymentGroup?.billTargets || [];
     const groupPayments = (payment.paymentGroup as any)?.payments || [];
-    const isMultiBill = targets.length > 1 || groupPayments.length > 1;
+    const isMultiBill =
+      targets.length > 1 ||
+      groupPayments.length > 1 ||
+      snap.isCombinedReceipt === true ||
+      (Array.isArray(snap.billGroups) && snap.billGroups.length > 0);
 
     if (isMultiBill) {
-      const targetBillIds = [...new Set([
-        ...targets.map((t: any) => t.billId),
-        ...groupPayments.map((p: any) => p.billId),
-      ])].filter(Boolean);
+      let billGroups: any[] = [];
 
-      const billGroups = targetBillIds.map((bId: string) => {
-        const foundBill: any =
-          targets.find((t: any) => t.billId === bId)?.bill ||
-          groupPayments.find((p: any) => p.billId === bId)?.bill ||
-          (payment.bill?.id === bId ? payment.bill : null) ||
-          bills.find(b => b.id === bId);
+      // A. Immutable Snapshot-First Authority: Consume snapshotData.billGroups if present
+      if (Array.isArray(snap.billGroups) && snap.billGroups.length > 0) {
+        billGroups = snap.billGroups.map((g: any) => {
+          const cycleCode = g.cycleCode || '';
+          const cycleFormatted = cycleCode ? formatCycleCode(cycleCode) : '';
+          const cycleLabel = cycleFormatted
+            ? `รอบบิล ${cycleFormatted}`
+            : g.billKind === 'DEPOSIT'
+            ? 'เงินประกันสัญญาเช่า'
+            : 'บิลค่าใช้จ่าย';
 
-        const cycleCode = foundBill?.billingCycle?.cycleCode || (foundBill?.billingCycleId ? getCycleCodeForCycleId(foundBill.billingCycleId) : '');
-        const cycleFormatted = cycleCode ? formatCycleCode(cycleCode) : '';
-        const cycleLabel = cycleFormatted ? `รอบบิล ${cycleFormatted}` : (foundBill?.billKind === 'DEPOSIT' ? 'เงินประกันสัญญาเช่า' : 'บิลค่าใช้จ่าย');
+          const billTotal = Number(g.billTotal || 0);
+          const allocatedAmount = Number(g.allocatedAmount || billTotal);
 
-        const billTotal = Number(foundBill?.totalAmount || 0);
+          const nonZeroItems = filterNonZeroBillItems(g.items);
+          const items = nonZeroItems.length > 0
+            ? nonZeroItems.map((it: any) => ({
+                description: it.description || it.type || '-',
+                quantity: it.quantity,
+                unit: resolveBillingDisplayUnit({ unit: it.unit, type: it.type }),
+                unitPrice: it.unitPrice,
+                amount: Number(it.amount),
+                metadata: it.metadata,
+                type: it.type,
+              }))
+            : [
+                {
+                  description: `${cycleLabel} (${g.billNumber || g.billId})`,
+                  amount: billTotal || allocatedAmount,
+                },
+              ];
 
-        const groupAllocations = payment.paymentGroup?.allocations || [];
-        const billAllocSum = groupAllocations
-          .filter((a: any) => a.billId === bId)
-          .reduce((sum: number, a: any) => sum + Number(a.allocatedAmount || 0), 0);
+          return {
+            billId: g.billId,
+            billNumber: g.billNumber || g.billId,
+            cycleLabel,
+            billTotal: billTotal || allocatedAmount,
+            allocatedAmount,
+            items,
+          };
+        });
+      } else {
+        // B. Legacy Fallback: Reconstruct from live targets / groupPayments for old receipts
+        const targetBillIds = [...new Set([
+          ...targets.map((t: any) => t.billId),
+          ...groupPayments.map((p: any) => p.billId),
+        ])].filter(Boolean);
 
-        const childPayAmount = Number(groupPayments.find((p: any) => p.billId === bId)?.amount || 0);
-        const allocatedAmount = billAllocSum > 0 ? billAllocSum : (childPayAmount > 0 ? childPayAmount : billTotal);
+        billGroups = targetBillIds.map((bId: string) => {
+          const foundBill: any =
+            targets.find((t: any) => t.billId === bId)?.bill ||
+            groupPayments.find((p: any) => p.billId === bId)?.bill ||
+            (payment.bill?.id === bId ? payment.bill : null) ||
+            bills.find(b => b.id === bId);
 
-        let items: Array<{
-          description: string;
-          quantity?: number | string | null;
-          unit?: string | null;
-          unitPrice?: number | string | null;
-          amount: number;
-        }> = [];
+          const cycleCode = foundBill?.billingCycle?.cycleCode || (foundBill?.billingCycleId ? getCycleCodeForCycleId(foundBill.billingCycleId) : '');
+          const cycleFormatted = cycleCode ? formatCycleCode(cycleCode) : '';
+          const cycleLabel = cycleFormatted ? `รอบบิล ${cycleFormatted}` : (foundBill?.billKind === 'DEPOSIT' ? 'เงินประกันสัญญาเช่า' : 'บิลค่าใช้จ่าย');
 
-        if (foundBill?.items && foundBill.items.length > 0) {
-          const nonZeroItems = filterNonZeroBillItems(foundBill.items);
-          items = nonZeroItems.map((it: any) => ({
-            description: it.description || it.type || '-',
-            quantity: it.quantity,
-            unit: resolveBillingDisplayUnit({ unit: it.unit, type: it.type }),
-            unitPrice: it.unitPrice,
-            amount: Number(it.amount),
-          }));
-        } else {
-          items = [{
-            description: `${cycleLabel} (${foundBill?.billNumber || bId})`,
-            amount: billTotal || allocatedAmount,
-          }];
-        }
+          const billTotal = Number(foundBill?.totalAmount || 0);
 
-        return {
-          billId: bId,
-          billNumber: foundBill?.billNumber || bId,
-          cycleLabel,
-          billTotal: billTotal || allocatedAmount,
-          allocatedAmount,
-          items,
-        };
-      });
+          const groupAllocations = payment.paymentGroup?.allocations || [];
+          const billAllocSum = groupAllocations
+            .filter((a: any) => a.billId === bId)
+            .reduce((sum: number, a: any) => sum + Number(a.allocatedAmount || 0), 0);
+
+          const childPayAmount = Number(groupPayments.find((p: any) => p.billId === bId)?.amount || 0);
+          const allocatedAmount = billAllocSum > 0 ? billAllocSum : (childPayAmount > 0 ? childPayAmount : billTotal);
+
+          let items: Array<{
+            description: string;
+            quantity?: number | string | null;
+            unit?: string | null;
+            unitPrice?: number | string | null;
+            amount: number;
+            metadata?: any;
+            type?: string;
+          }> = [];
+
+          if (foundBill?.items && foundBill.items.length > 0) {
+            const nonZeroItems = filterNonZeroBillItems(foundBill.items);
+            items = nonZeroItems.map((it: any) => ({
+              description: it.description || it.type || '-',
+              quantity: it.quantity,
+              unit: resolveBillingDisplayUnit({ unit: it.unit, type: it.type }),
+              unitPrice: it.unitPrice,
+              amount: Number(it.amount),
+              metadata: it.metadata,
+              type: it.type,
+            }));
+          } else {
+            items = [{
+              description: `${cycleLabel} (${foundBill?.billNumber || bId})`,
+              amount: billTotal || allocatedAmount,
+            }];
+          }
+
+          return {
+            billId: bId,
+            billNumber: foundBill?.billNumber || bId,
+            cycleLabel,
+            billTotal: billTotal || allocatedAmount,
+            allocatedAmount,
+            items,
+          };
+        });
+      }
 
       setViewingReceipt({
         receiptNumber: snap.receiptNumber || rcpt.receiptNumber,
@@ -1056,8 +1116,8 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
     const cycleFormatted = cycleCode ? formatCycleCode(cycleCode) : '';
     const cycleLabel = cycleFormatted ? `รอบบิล ${cycleFormatted}` : (targetBill?.billKind === 'DEPOSIT' ? 'เงินประกันสัญญาเช่า' : '');
 
-    const billTotal = Number(targetBill?.totalAmount || totalAmount);
-    const allocatedAmount = totalAmount;
+    const billTotal = snap.billTotal !== undefined ? Number(snap.billTotal) : Number(targetBill?.totalAmount || totalAmount);
+    const allocatedAmount = snap.allocatedAmount !== undefined ? Number(snap.allocatedAmount) : (snap.receivedAmount !== undefined ? Number(snap.receivedAmount) : totalAmount);
 
     let items: Array<{
       description: string;
@@ -1065,17 +1125,21 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
       unit?: string | null;
       unitPrice?: number | string | null;
       amount: number;
+      metadata?: any;
+      type?: string;
     }> = [];
 
-    if (Array.isArray(snap.items)) {
+    if (Array.isArray(snap.items) && snap.items.length > 0) {
       const nonZeroSnap = filterNonZeroBillItems(snap.items);
       if (nonZeroSnap.length > 0) {
         items = nonZeroSnap.map((it: any) => ({
-          description: it.description,
+          description: it.description || it.type || '-',
           quantity: it.quantity,
           unit: resolveBillingDisplayUnit({ unit: it.unit, type: it.type }),
           unitPrice: it.unitPrice,
           amount: Number(it.amount),
+          metadata: it.metadata,
+          type: it.type,
         }));
       } else {
         items = [
@@ -1091,6 +1155,8 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
           unit: resolveBillingDisplayUnit({ unit: it.unit, type: it.type }),
           unitPrice: it.unitPrice,
           amount: Number(it.amount),
+          metadata: it.metadata,
+          type: it.type,
         }));
       } else {
         items = [
@@ -1972,10 +2038,13 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                         <tbody className="divide-y divide-slate-100">
                           {group.items.map((it, idx) => (
                             <tr key={idx}>
-                              <td className="p-2 text-slate-800 font-medium">{formatItemDescription(it.description)}</td>
-                              <td className="p-2 text-center text-slate-600 font-medium">{formatBillingQuantity(it.quantity, it.unit)}</td>
-                              <td className="p-2 text-right text-slate-600 font-medium">{formatBillingRate(it.unitPrice, it.unit)}</td>
-                              <td className="p-2 text-right font-bold text-slate-900">{formatBaht(it.amount)}</td>
+                              <td className="p-2 text-slate-800 font-medium align-top">
+                                <div>{formatItemDescription(it.description)}</div>
+                                <TierBreakdownView metadata={it.metadata} unit={it.unit} isPrint />
+                              </td>
+                              <td className="p-2 text-center text-slate-600 font-medium align-top">{formatBillingQuantity(it.quantity, it.unit)}</td>
+                              <td className="p-2 text-right text-slate-600 font-medium align-top">{formatTierRateLabel(it.unitPrice, it.unit, it.metadata)}</td>
+                              <td className="p-2 text-right font-bold text-slate-900 align-top">{formatBaht(it.amount)}</td>
                             </tr>
                           ))}
                           <tr className="bg-slate-50/50 text-slate-600 text-[11px]">
@@ -2021,10 +2090,13 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                       <tbody className="divide-y divide-slate-200">
                         {viewingReceipt.items?.map((it, idx) => (
                           <tr key={idx}>
-                            <td className="p-3 text-slate-800 font-medium">{formatItemDescription(it.description)}</td>
-                            <td className="p-3 text-center text-slate-600 font-medium">{formatBillingQuantity(it.quantity, it.unit)}</td>
-                            <td className="p-3 text-right text-slate-600 font-medium">{formatBillingRate(it.unitPrice, it.unit)}</td>
-                            <td className="p-3 text-right font-bold text-slate-900">{formatBaht(it.amount)}</td>
+                            <td className="p-3 text-slate-800 font-medium align-top">
+                              <div>{formatItemDescription(it.description)}</div>
+                              <TierBreakdownView metadata={it.metadata} unit={it.unit} isPrint />
+                            </td>
+                            <td className="p-3 text-center text-slate-600 font-medium align-top">{formatBillingQuantity(it.quantity, it.unit)}</td>
+                            <td className="p-3 text-right text-slate-600 font-medium align-top">{formatTierRateLabel(it.unitPrice, it.unit, it.metadata)}</td>
+                            <td className="p-3 text-right font-bold text-slate-900 align-top">{formatBaht(it.amount)}</td>
                           </tr>
                         ))}
                         {viewingReceipt.billTotal !== undefined && (
@@ -2119,11 +2191,14 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                         const displayUnit = resolveBillingDisplayUnit({ unit: it.unit, type: it.type });
                         return (
                           <tr key={idx} className="hover:bg-slate-50/50">
-                            <td className="p-3 text-center text-slate-400 font-medium">{idx + 1}</td>
-                            <td className="p-3 font-semibold text-slate-800">{formatItemDescription(it.description || it.type || '-')}</td>
-                            <td className="p-3 text-center text-slate-600 font-medium">{formatBillingQuantity(it.quantity, displayUnit)}</td>
-                            <td className="p-3 text-right text-slate-600 font-medium">{formatBillingRate(it.unitPrice, displayUnit)}</td>
-                            <td className="p-3 text-right font-bold text-slate-900">{formatBaht(Number(it.amount))}</td>
+                            <td className="p-3 text-center text-slate-400 font-medium align-top">{idx + 1}</td>
+                            <td className="p-3 font-semibold text-slate-800 align-top">
+                              <div>{formatItemDescription(it.description || it.type || '-')}</div>
+                              <TierBreakdownView metadata={it.metadata} unit={displayUnit} />
+                            </td>
+                            <td className="p-3 text-center text-slate-600 font-medium align-top">{formatBillingQuantity(it.quantity, displayUnit)}</td>
+                            <td className="p-3 text-right text-slate-600 font-medium align-top">{formatTierRateLabel(it.unitPrice, displayUnit, it.metadata)}</td>
+                            <td className="p-3 text-right font-bold text-slate-900 align-top">{formatBaht(Number(it.amount))}</td>
                           </tr>
                         );
                       })
