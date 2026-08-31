@@ -31,26 +31,26 @@ describe('OWNER R3.9-D.1.7: Save-Status Context Isolation & Stale Lifecycle Clos
       expect(toCanonicalMode('TIERED', 'electricity')).toBe('tiered');
     });
 
-    it('Preserves legacy water and electricity modes and normalizes room/fixed to flat_rate', () => {
+    it('Preserves legacy water and electricity modes and normalizes room/flat/flat_rate to fixed', () => {
       expect(toCanonicalMode('unit', 'water')).toBe('per_unit');
       expect(toCanonicalMode('per_unit', 'water')).toBe('per_unit');
       expect(toCanonicalMode('person', 'water')).toBe('per_person');
       expect(toCanonicalMode('per_person', 'water')).toBe('per_person');
-      expect(toCanonicalMode('fixed', 'water')).toBe('flat_rate');
-      expect(toCanonicalMode('flat', 'water')).toBe('flat_rate');
-      expect(toCanonicalMode('flat_rate', 'water')).toBe('flat_rate');
-      expect(toCanonicalMode('room', 'water')).toBe('flat_rate');
-      expect(toCanonicalMode('per_room', 'water')).toBe('flat_rate');
+      expect(toCanonicalMode('fixed', 'water')).toBe('fixed');
+      expect(toCanonicalMode('flat', 'water')).toBe('fixed');
+      expect(toCanonicalMode('flat_rate', 'water')).toBe('fixed');
+      expect(toCanonicalMode('room', 'water')).toBe('fixed');
+      expect(toCanonicalMode('per_room', 'water')).toBe('fixed');
 
       expect(toCanonicalMode('unit', 'electricity')).toBe('per_unit');
       expect(toCanonicalMode('per_unit', 'electricity')).toBe('per_unit');
       expect(toCanonicalMode('person', 'electricity')).toBe('per_person');
       expect(toCanonicalMode('per_person', 'electricity')).toBe('per_person');
-      expect(toCanonicalMode('fixed', 'electricity')).toBe('flat_rate');
-      expect(toCanonicalMode('flat', 'electricity')).toBe('flat_rate');
-      expect(toCanonicalMode('flat_rate', 'electricity')).toBe('flat_rate');
-      expect(toCanonicalMode('room', 'electricity')).toBe('flat_rate');
-      expect(toCanonicalMode('per_room', 'electricity')).toBe('flat_rate');
+      expect(toCanonicalMode('fixed', 'electricity')).toBe('fixed');
+      expect(toCanonicalMode('flat', 'electricity')).toBe('fixed');
+      expect(toCanonicalMode('flat_rate', 'electricity')).toBe('fixed');
+      expect(toCanonicalMode('room', 'electricity')).toBe('fixed');
+      expect(toCanonicalMode('per_room', 'electricity')).toBe('fixed');
     });
   });
 
@@ -1113,7 +1113,7 @@ describe('OWNER R3.9-D.1.7: Save-Status Context Isolation & Stale Lifecycle Clos
       electricOptions.forEach((txt) => expect(txt).not.toContain('(Tiered)'));
     });
 
-    it('Water: selecting บาท/ห้อง allows setting flat rate, saves flat_rate payload, and restores on reload', async () => {
+    it('Water: selecting บาท/ห้อง allows setting flat rate, saves fixed payload, and restores on reload', async () => {
       localStorage.setItem('selected_dormitory_id', 'dorm-test-a');
       let savedPayload: any = null;
       global.fetch = vi.fn().mockImplementation((url: string, opts?: any) => {
@@ -1141,7 +1141,7 @@ describe('OWNER R3.9-D.1.7: Save-Status Context Isolation & Stale Lifecycle Clos
                   ? { ...mockRateSnapshotAug, ...savedPayload, version: 2 }
                   : {
                       ...mockRateSnapshotAug,
-                      waterBillingType: 'flat_rate',
+                      waterBillingType: 'fixed',
                       waterRate: '150.00',
                       waterTierRates: null,
                     },
@@ -1167,7 +1167,7 @@ describe('OWNER R3.9-D.1.7: Save-Status Context Isolation & Stale Lifecycle Clos
 
       await waitFor(() => {
         const select = screen.getByTestId('select-water-billing-mode') as HTMLSelectElement;
-        expect(select.value).toBe('flat_rate');
+        expect(select.value).toBe('fixed');
       });
 
       // Assert scalar input displays 150
@@ -1181,7 +1181,8 @@ describe('OWNER R3.9-D.1.7: Save-Status Context Isolation & Stale Lifecycle Clos
 
       await waitFor(() => {
         expect(savedPayload).not.toBeNull();
-        expect(savedPayload.waterBillingType).toBe('flat_rate');
+        expect(savedPayload.waterBillingType).toBe('fixed');
+        expect(savedPayload.waterBillingType).not.toBe('flat_rate');
         expect(savedPayload.waterRate).toBe('180');
         expect(savedPayload.waterTierRates).toBeNull();
       });
@@ -1198,9 +1199,101 @@ describe('OWNER R3.9-D.1.7: Save-Status Context Isolation & Stale Lifecycle Clos
 
       await waitFor(() => {
         const select = screen.getByTestId('select-water-billing-mode') as HTMLSelectElement;
-        expect(select.value).toBe('flat_rate');
+        expect(select.value).toBe('fixed');
         const input = screen.getByTestId('input-water-unit-rate') as HTMLInputElement;
         expect(input.value).toBe('180');
+      });
+    });
+
+    it('Electricity: selecting บาท/ห้อง allows setting flat rate, saves fixed payload, and restores on reload', async () => {
+      localStorage.setItem('selected_dormitory_id', 'dorm-test-a');
+      let savedPayload: any = null;
+      global.fetch = vi.fn().mockImplementation((url: string, opts?: any) => {
+        const urlStr = String(url);
+        if (opts?.method === 'PUT' && urlStr.includes('/rate-snapshot')) {
+          savedPayload = JSON.parse(opts.body);
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              data: {
+                ...mockRateSnapshotAug,
+                ...savedPayload,
+                version: (mockRateSnapshotAug.version || 1) + 1,
+              },
+            }),
+          });
+        }
+        if (urlStr.includes('/rate-snapshot')) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              data: {
+                cycle: mockCycleAug,
+                rateSnapshot: savedPayload
+                  ? { ...mockRateSnapshotAug, ...savedPayload, version: 2 }
+                  : {
+                      ...mockRateSnapshotAug,
+                      electricityBillingType: 'fixed',
+                      electricityRate: '300.00',
+                      electricityTierRates: null,
+                    },
+                isLocked: false,
+              },
+            }),
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ data: [mockCycleAug] }),
+        });
+      });
+
+      const { rerender } = render(
+        <OwnerSettings
+          onAddLog={vi.fn()}
+          onRefreshData={vi.fn()}
+          selectedCycle="2026-08"
+          availableCycles={[mockCycleAug]}
+        />
+      );
+
+      await waitFor(() => {
+        const select = screen.getByTestId('select-electric-billing-mode') as HTMLSelectElement;
+        expect(select.value).toBe('fixed');
+      });
+
+      // Assert scalar input displays 300
+      const electricInput = screen.getByTestId('input-electric-unit-rate') as HTMLInputElement;
+      expect(electricInput.value).toBe('300.00');
+      expect(electricInput.disabled).toBe(false);
+
+      // Change rate to 350 and blur
+      fireEvent.change(electricInput, { target: { value: '350' } });
+      fireEvent.blur(electricInput);
+
+      await waitFor(() => {
+        expect(savedPayload).not.toBeNull();
+        expect(savedPayload.electricityBillingType).toBe('fixed');
+        expect(savedPayload.electricityBillingType).not.toBe('flat_rate');
+        expect(savedPayload.electricityRate).toBe('350');
+        expect(savedPayload.electricityTierRates).toBeNull();
+      });
+
+      // Reload/Rerender and verify persistence
+      rerender(
+        <OwnerSettings
+          onAddLog={vi.fn()}
+          onRefreshData={vi.fn()}
+          selectedCycle="2026-08"
+          availableCycles={[mockCycleAug]}
+        />
+      );
+
+      await waitFor(() => {
+        const select = screen.getByTestId('select-electric-billing-mode') as HTMLSelectElement;
+        expect(select.value).toBe('fixed');
+        const input = screen.getByTestId('input-electric-unit-rate') as HTMLInputElement;
+        expect(input.value).toBe('350');
       });
     });
 
