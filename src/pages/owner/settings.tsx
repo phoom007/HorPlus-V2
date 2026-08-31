@@ -201,6 +201,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
   }, [selectedDormId, dorm?.id, propAvailableCycles]);
 
   const [isCycleLocked, setIsCycleLocked] = useState<boolean>(false);
+  const [isSnapshotReady, setIsSnapshotReady] = useState<boolean>(false);
   const [cycleLockReason, setCycleLockReason] = useState<string | null>(null);
   const [snapshotProvenance, setSnapshotProvenance] = useState<string>('TEMPLATE_DEFAULT');
   const [snapshotVersion, setSnapshotVersion] = useState<number>(1);
@@ -377,6 +378,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
 
             applyComposedSettingsState();
           }
+          setIsSnapshotReady(true);
         }
       }
     } catch (err) {
@@ -501,6 +503,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
       snapshotLoadedContextRef.current !== `${reqDormId}_${reqCycleCode}`
     ) {
       console.warn('Cannot save cycle rate settings: current context authority has not finished loading');
+      isUserTypingRef.current = false;
       return { ok: false, reason: 'CONTEXT_NOT_READY' };
     }
 
@@ -575,6 +578,11 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
         body: JSON.stringify(payload),
       });
 
+      // Context-stale check: verify mutation still belongs to current context BEFORE handling 409, error, or success
+      if (currentDormIdRef.current !== reqDormId || currentCycleRef.current !== reqCycleCode) {
+        return { ok: false, reason: 'STALE_CONTEXT' };
+      }
+
       if (res.status === 409) {
         setVersionConflictState({
           isOpen: true,
@@ -594,11 +602,6 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
       }
 
       const dataJson = await res.json();
-
-      // Stale in-flight snapshot mutation guard
-      if (currentDormIdRef.current !== reqDormId || currentCycleRef.current !== reqCycleCode) {
-        return { ok: true };
-      }
 
       if (dataJson?.data?.rateSnapshot) {
         const newVer = dataJson.data.rateSnapshot.version || targetExpectedVersion + 1;
@@ -775,6 +778,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
     snapshotLoadedContextRef.current = null;
     loadedSnapshotAuthorityRef.current = null;
     setCurrentCycleId('');
+    setIsSnapshotReady(false);
     setDurableWaterTierRates(null);
     setDurableElectricTierRates(null);
     setWaterTierRates(WATER_TIER_PRESET);
@@ -797,6 +801,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
       snapshotLoadedContextRef.current = null;
       loadedSnapshotAuthorityRef.current = null;
       setCurrentCycleId('');
+      setIsSnapshotReady(false);
       setTierSaveError(null);
       isUserTypingRef.current = false;
       fetchCycleRateSnapshot(selectedCycle);
@@ -1899,7 +1904,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                   <input
                     type={waterBillingMode === 'tiered' ? 'text' : 'number'}
                     required={waterBillingMode !== 'tiered'}
-                    disabled={isCycleLocked || waterBillingMode === 'tiered'}
+                    disabled={isCycleLocked || waterBillingMode === 'tiered' || !isSnapshotReady}
                     value={waterBillingMode === 'tiered' ? 'คิดตามขั้นบันได' : localWaterUnitRate}
                     onChange={(e) => {
                       if (waterBillingMode === 'tiered') return;
@@ -1930,7 +1935,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                   <label className="block font-semibold text-slate-700">รูปแบบค่าน้ำประปา</label>
                   <select
                     value={waterBillingMode}
-                    disabled={isCycleLocked}
+                    disabled={isCycleLocked || !isSnapshotReady}
                     onChange={(e) => {
                       const newMode = toCanonicalMode(e.target.value, 'water');
                       setWaterBillingMode(newMode);
@@ -1964,7 +1969,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                   <input
                     type={electricBillingMode === 'tiered' ? 'text' : 'number'}
                     required={electricBillingMode !== 'tiered'}
-                    disabled={isCycleLocked || electricBillingMode === 'tiered'}
+                    disabled={isCycleLocked || electricBillingMode === 'tiered' || !isSnapshotReady}
                     value={electricBillingMode === 'tiered' ? 'คิดตามขั้นบันได' : localElectricUnitRate}
                     onChange={(e) => {
                       if (electricBillingMode === 'tiered') return;
@@ -1995,7 +2000,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                   <label className="block font-semibold text-slate-700">รูปแบบค่าไฟฟ้า</label>
                   <select
                     value={electricBillingMode}
-                    disabled={isCycleLocked}
+                    disabled={isCycleLocked || !isSnapshotReady}
                     onChange={(e) => {
                       const newMode = toCanonicalMode(e.target.value, 'electricity');
                       setElectricBillingMode(newMode);
@@ -2042,7 +2047,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                       tiers={waterTierRates}
                       onChange={setWaterTierRates}
                       onSave={(tiers) => handleSaveTierSettings('water', tiers)}
-                      disabled={isCycleLocked}
+                      disabled={isCycleLocked || !isSnapshotReady}
                       isSaving={saveStatus === 'saving'}
                     />
                   )}
@@ -2052,7 +2057,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                       tiers={electricTierRates}
                       onChange={setElectricTierRates}
                       onSave={(tiers) => handleSaveTierSettings('electricity', tiers)}
-                      disabled={isCycleLocked}
+                      disabled={isCycleLocked || !isSnapshotReady}
                       isSaving={saveStatus === 'saving'}
                     />
                   )}
@@ -2069,7 +2074,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                   <input
                     type="number"
                     required
-                    disabled={isCycleLocked || commonFeeMode === 'free'}
+                    disabled={isCycleLocked || commonFeeMode === 'free' || !isSnapshotReady}
                     value={commonFeeMode === 'free' ? '0' : localCommonFee}
                     onChange={(e) => {
                       isUserTypingRef.current = true;
@@ -2087,7 +2092,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                   <label className="block font-semibold text-slate-700">รูปแบบค่าส่วนกลาง</label>
                   <select
                     value={commonFeeMode}
-                    disabled={isCycleLocked}
+                    disabled={isCycleLocked || !isSnapshotReady}
                     onChange={(e) => {
                       const newMode = toCanonicalMode(e.target.value, 'common');
                       setCommonFeeMode(newMode);
@@ -2114,7 +2119,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                   <input
                     type="number"
                     required
-                    disabled={isCycleLocked || internetFeeMode === 'free'}
+                    disabled={isCycleLocked || internetFeeMode === 'free' || !isSnapshotReady}
                     value={internetFeeMode === 'free' ? '0' : localInternetFee}
                     onChange={(e) => {
                       isUserTypingRef.current = true;
@@ -2132,7 +2137,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                   <label className="block font-semibold text-slate-700">รูปแบบค่าอินเทอร์เน็ต</label>
                   <select
                     value={internetFeeMode}
-                    disabled={isCycleLocked}
+                    disabled={isCycleLocked || !isSnapshotReady}
                     onChange={(e) => {
                       const newMode = toCanonicalMode(e.target.value, 'internet');
                       setInternetFeeMode(newMode);
@@ -2159,7 +2164,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                   <input
                     type="number"
                     required
-                    disabled={isCycleLocked || parkingFeeMode === 'free'}
+                    disabled={isCycleLocked || parkingFeeMode === 'free' || !isSnapshotReady}
                     value={parkingFeeMode === 'free' ? '0' : localParkingFee}
                     onChange={(e) => {
                       isUserTypingRef.current = true;
@@ -2289,7 +2294,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                       <input
                         type="number"
                         required
-                        disabled={isCycleLocked || lateFeeType === 'none'}
+                        disabled={isCycleLocked || lateFeeType === 'none' || !isSnapshotReady}
                         value={lateFeeType === 'none' ? '0.00' : localLateFee}
                         onChange={(e) => {
                           isUserTypingRef.current = true;
