@@ -377,8 +377,8 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
             }
 
             applyComposedSettingsState();
+            setIsSnapshotReady(true);
           }
-          setIsSnapshotReady(true);
         }
       }
     } catch (err) {
@@ -467,6 +467,9 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
 
       const snapshotRes = await handleSaveCycleRateSettings(overrides);
       if (!snapshotRes.ok) {
+        if (snapshotRes.reason === 'STALE_CONTEXT' || snapshotRes.reason === 'CONTEXT_NOT_READY') {
+          return;
+        }
         if (snapshotRes.reason !== 'VERSION_CONFLICT') {
           const userMsg = snapshotRes.error?.message || 'บันทึกอัตราขั้นบันไดสำหรับรอบบิลไม่สำเร็จ กรุณาลองใหม่';
           setTierSaveError(userMsg);
@@ -493,6 +496,10 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
 
     const reqDormId = dormId;
     const reqCycleCode = targetCycleCode;
+
+    const isMutationContextCurrent = () =>
+      currentDormIdRef.current === reqDormId &&
+      currentCycleRef.current === reqCycleCode;
 
     // Central cycle-write guard: Fail closed unless snapshot authority is loaded for exact current context
     const loadedAuth = loadedSnapshotAuthorityRef.current;
@@ -578,8 +585,8 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
         body: JSON.stringify(payload),
       });
 
-      // Context-stale check: verify mutation still belongs to current context BEFORE handling 409, error, or success
-      if (currentDormIdRef.current !== reqDormId || currentCycleRef.current !== reqCycleCode) {
+      // 1. Pre-error/pre-body context check
+      if (!isMutationContextCurrent()) {
         return { ok: false, reason: 'STALE_CONTEXT' };
       }
 
@@ -596,12 +603,21 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
 
       if (!res.ok) {
         const errJson = await res.json().catch(() => ({}));
+        // Post-error-body stale check
+        if (!isMutationContextCurrent()) {
+          return { ok: false, reason: 'STALE_CONTEXT' };
+        }
         const msg = errJson?.error?.message || 'บันทึกการตั้งค่ารอบบิลไม่สำเร็จ';
         setSaveStatus('idle');
         return { ok: false, reason: 'ERROR', error: new Error(msg) };
       }
 
       const dataJson = await res.json();
+
+      // Post-success-body stale check
+      if (!isMutationContextCurrent()) {
+        return { ok: false, reason: 'STALE_CONTEXT' };
+      }
 
       if (dataJson?.data?.rateSnapshot) {
         const newVer = dataJson.data.rateSnapshot.version || targetExpectedVersion + 1;
@@ -627,6 +643,9 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
 
       return { ok: true };
     } catch (err: any) {
+      if (!isMutationContextCurrent()) {
+        return { ok: false, reason: 'STALE_CONTEXT' };
+      }
       console.error('Error saving cycle rate settings:', err);
       setSaveStatus('idle');
       return { ok: false, reason: 'ERROR', error: err };
@@ -2182,7 +2201,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                   <label className="block font-semibold text-slate-700">รูปแบบค่าจอดรถ</label>
                   <select
                     value={parkingFeeMode || 'per_room'}
-                    disabled={isCycleLocked}
+                    disabled={isCycleLocked || !isSnapshotReady}
                     onChange={(e) => {
                       const newMode = toCanonicalMode(e.target.value, 'parking');
                       setParkingFeeMode(newMode);
@@ -2254,7 +2273,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                       </label>
                       <select
                         value={lateFeeType || 'none'}
-                        disabled={isCycleLocked}
+                        disabled={isCycleLocked || !isSnapshotReady}
                         onChange={(e) => {
                           const newType = toCanonicalMode(e.target.value, 'late');
                           setLateFeeType(newType);
