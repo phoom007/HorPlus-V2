@@ -313,7 +313,7 @@ export const TieredRateEditor: React.FC<TieredRateEditorProps> = ({
     >
       {/* Header */}
       <div className="flex items-center justify-between mb-3 gap-2">
-        <div className="flex items-center gap-2 min-w-0">
+        <div className="flex items-center gap-1.5 min-w-0">
           {theme.headerIcon}
           <h4 className="text-xs font-bold text-slate-800 dark:text-slate-100 whitespace-nowrap">{theme.title}</h4>
         </div>
@@ -321,11 +321,11 @@ export const TieredRateEditor: React.FC<TieredRateEditorProps> = ({
           type="button"
           onClick={handleResetPreset}
           disabled={disabled}
-          className="flex items-center gap-1 text-[11px] font-medium text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 transition-colors whitespace-nowrap shrink-0 disabled:opacity-40"
+          className="flex items-center gap-1 text-[11px] font-medium text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 transition-colors whitespace-nowrap shrink-0 disabled:opacity-40 cursor-pointer"
           data-testid={`btn-reset-preset-${utilityType}`}
           title="คืนค่าเป็นตัวอย่างเริ่มต้น (บันทึกเมื่อพร้อม)"
         >
-          <RotateCcw className="w-3 h-3" />
+          <RotateCcw className="w-3 h-3 shrink-0" />
           <span className="whitespace-nowrap">คืนค่าเริ่มต้น</span>
         </button>
       </div>
@@ -422,7 +422,7 @@ export const TieredRateEditor: React.FC<TieredRateEditorProps> = ({
                         type="button"
                         onClick={() => handleRemoveTier(idx)}
                         disabled={disabled}
-                        className="p-1 rounded-lg text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 transition-colors disabled:opacity-30"
+                        className="p-1 rounded-lg text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 transition-colors disabled:opacity-30 cursor-pointer"
                         data-testid={`btn-remove-tier-${utilityType}-${idx}`}
                         title="ลบขั้นนี้"
                       >
@@ -438,17 +438,17 @@ export const TieredRateEditor: React.FC<TieredRateEditorProps> = ({
       </div>
 
       {/* Footer controls: Add Tier & Save Button */}
-      <div className="mt-3 pt-3 border-t border-slate-200/80 dark:border-slate-800 flex items-center justify-between gap-3 flex-wrap">
+      <div className="mt-3 pt-3 border-t border-slate-200/80 dark:border-slate-800 flex items-center justify-between gap-2">
         {tiers.length < 5 ? (
           <button
             type="button"
             onClick={handleAddTier}
             disabled={disabled}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-dashed border-slate-300 dark:border-slate-700 hover:border-slate-400 text-slate-600 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-800 transition-all text-xs font-medium whitespace-nowrap disabled:opacity-40"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-dashed border-slate-300 dark:border-slate-700 hover:border-slate-400 text-slate-600 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-800 transition-all text-xs font-medium whitespace-nowrap shrink-0 disabled:opacity-40 cursor-pointer"
             data-testid={`btn-add-tier-${utilityType}`}
           >
-            <Plus className="w-3.5 h-3.5" />
-            <span className="whitespace-nowrap">เพิ่มขั้นอัตรา</span>
+            <Plus className="w-3.5 h-3.5 shrink-0" />
+            <span className="whitespace-nowrap">เพิ่มขั้น</span>
           </button>
         ) : (
           <div />
@@ -459,10 +459,10 @@ export const TieredRateEditor: React.FC<TieredRateEditorProps> = ({
             type="button"
             onClick={handleSave}
             disabled={disabled || isSaving}
-            className={`px-3.5 py-1.5 rounded-xl ${theme.accentBtn} text-xs font-semibold transition-all shadow-sm whitespace-nowrap disabled:opacity-50`}
+            className={`px-3.5 py-1.5 rounded-xl ${theme.accentBtn} text-xs font-semibold transition-all shadow-sm whitespace-nowrap shrink-0 disabled:opacity-50 cursor-pointer`}
             data-testid={`btn-save-tiers-${utilityType}`}
           >
-            <span className="whitespace-nowrap">{isSaving ? 'กำลังบันทึก...' : 'บันทึกอัตราขั้นบันได'}</span>
+            <span className="whitespace-nowrap">{isSaving ? 'กำลังบันทึก...' : 'บันทึกอัตรา'}</span>
           </button>
         )}
       </div>

@@ -31,19 +31,26 @@ describe('OWNER R3.9-D.1.7: Save-Status Context Isolation & Stale Lifecycle Clos
       expect(toCanonicalMode('TIERED', 'electricity')).toBe('tiered');
     });
 
-    it('Preserves legacy water and electricity modes', () => {
+    it('Preserves legacy water and electricity modes and normalizes room/fixed to flat_rate', () => {
       expect(toCanonicalMode('unit', 'water')).toBe('per_unit');
       expect(toCanonicalMode('per_unit', 'water')).toBe('per_unit');
       expect(toCanonicalMode('person', 'water')).toBe('per_person');
       expect(toCanonicalMode('per_person', 'water')).toBe('per_person');
-      expect(toCanonicalMode('fixed', 'water')).toBe('fixed');
-      expect(toCanonicalMode('flat', 'water')).toBe('fixed');
+      expect(toCanonicalMode('fixed', 'water')).toBe('flat_rate');
+      expect(toCanonicalMode('flat', 'water')).toBe('flat_rate');
+      expect(toCanonicalMode('flat_rate', 'water')).toBe('flat_rate');
+      expect(toCanonicalMode('room', 'water')).toBe('flat_rate');
+      expect(toCanonicalMode('per_room', 'water')).toBe('flat_rate');
 
       expect(toCanonicalMode('unit', 'electricity')).toBe('per_unit');
       expect(toCanonicalMode('per_unit', 'electricity')).toBe('per_unit');
       expect(toCanonicalMode('person', 'electricity')).toBe('per_person');
       expect(toCanonicalMode('per_person', 'electricity')).toBe('per_person');
-      expect(toCanonicalMode('fixed', 'electricity')).toBe('fixed');
+      expect(toCanonicalMode('fixed', 'electricity')).toBe('flat_rate');
+      expect(toCanonicalMode('flat', 'electricity')).toBe('flat_rate');
+      expect(toCanonicalMode('flat_rate', 'electricity')).toBe('flat_rate');
+      expect(toCanonicalMode('room', 'electricity')).toBe('flat_rate');
+      expect(toCanonicalMode('per_room', 'electricity')).toBe('flat_rate');
     });
   });
 
@@ -1039,6 +1046,217 @@ describe('OWNER R3.9-D.1.7: Save-Status Context Isolation & Stale Lifecycle Clos
 
       fireEvent.change(screen.getByTestId('select-water-billing-mode'), { target: { value: 'tiered' } });
       expect((screen.getByTestId('input-tier-rate-water-0') as HTMLInputElement).value).toBe('18');
+    });
+  });
+
+  describe('9. Settings Billing Modes Parity, Exact Order & Flat Rate Persistence (Round 1.2)', () => {
+    const mockCycleAug = { id: 'cycle-2026-08', cycleCode: '2026-08', status: 'active' };
+    const mockRateSnapshotAug = {
+      version: 1,
+      waterBillingType: 'per_unit',
+      waterRate: '18.00',
+      electricityBillingType: 'per_unit',
+      electricityRate: '7.00',
+      waterTierRates: null,
+      electricityTierRates: null,
+    };
+
+    it('Water and Electricity selectors have exactly 4 options in exact locked order without "(Tiered)"', async () => {
+      localStorage.setItem('selected_dormitory_id', 'dorm-test-a');
+      global.fetch = vi.fn().mockImplementation((url: string) => {
+        const urlStr = String(url);
+        if (urlStr.includes('/rate-snapshot')) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              data: {
+                cycle: mockCycleAug,
+                rateSnapshot: mockRateSnapshotAug,
+                isLocked: false,
+              },
+            }),
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ data: [mockCycleAug] }),
+        });
+      });
+
+      render(
+        <OwnerSettings
+          onAddLog={vi.fn()}
+          onRefreshData={vi.fn()}
+          selectedCycle="2026-08"
+          availableCycles={[mockCycleAug]}
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId('select-water-billing-mode')).toBeDefined();
+        expect(screen.getByTestId('select-electric-billing-mode')).toBeDefined();
+      });
+
+      const waterSelect = screen.getByTestId('select-water-billing-mode') as HTMLSelectElement;
+      const electricSelect = screen.getByTestId('select-electric-billing-mode') as HTMLSelectElement;
+
+      const waterOptions = Array.from(waterSelect.options).map((o) => o.textContent?.trim());
+      const electricOptions = Array.from(electricSelect.options).map((o) => o.textContent?.trim());
+
+      const expectedOptions = ['บาท/หน่วย', 'บาท/คน', 'บาท/ห้อง', 'คิดตามขั้นบันได'];
+
+      expect(waterOptions).toEqual(expectedOptions);
+      expect(electricOptions).toEqual(expectedOptions);
+
+      // Verify (Tiered) is nowhere in the option texts
+      waterOptions.forEach((txt) => expect(txt).not.toContain('(Tiered)'));
+      electricOptions.forEach((txt) => expect(txt).not.toContain('(Tiered)'));
+    });
+
+    it('Water: selecting บาท/ห้อง allows setting flat rate, saves flat_rate payload, and restores on reload', async () => {
+      localStorage.setItem('selected_dormitory_id', 'dorm-test-a');
+      let savedPayload: any = null;
+      global.fetch = vi.fn().mockImplementation((url: string, opts?: any) => {
+        const urlStr = String(url);
+        if (opts?.method === 'PUT' && urlStr.includes('/rate-snapshot')) {
+          savedPayload = JSON.parse(opts.body);
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              data: {
+                ...mockRateSnapshotAug,
+                ...savedPayload,
+                version: (mockRateSnapshotAug.version || 1) + 1,
+              },
+            }),
+          });
+        }
+        if (urlStr.includes('/rate-snapshot')) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              data: {
+                cycle: mockCycleAug,
+                rateSnapshot: savedPayload
+                  ? { ...mockRateSnapshotAug, ...savedPayload, version: 2 }
+                  : {
+                      ...mockRateSnapshotAug,
+                      waterBillingType: 'flat_rate',
+                      waterRate: '150.00',
+                      waterTierRates: null,
+                    },
+                isLocked: false,
+              },
+            }),
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ data: [mockCycleAug] }),
+        });
+      });
+
+      const { rerender } = render(
+        <OwnerSettings
+          onAddLog={vi.fn()}
+          onRefreshData={vi.fn()}
+          selectedCycle="2026-08"
+          availableCycles={[mockCycleAug]}
+        />
+      );
+
+      await waitFor(() => {
+        const select = screen.getByTestId('select-water-billing-mode') as HTMLSelectElement;
+        expect(select.value).toBe('flat_rate');
+      });
+
+      // Assert scalar input displays 150
+      const waterInput = screen.getByTestId('input-water-unit-rate') as HTMLInputElement;
+      expect(waterInput.value).toBe('150.00');
+      expect(waterInput.disabled).toBe(false);
+
+      // Change rate to 180 and blur
+      fireEvent.change(waterInput, { target: { value: '180' } });
+      fireEvent.blur(waterInput);
+
+      await waitFor(() => {
+        expect(savedPayload).not.toBeNull();
+        expect(savedPayload.waterBillingType).toBe('flat_rate');
+        expect(savedPayload.waterRate).toBe('180');
+        expect(savedPayload.waterTierRates).toBeNull();
+      });
+
+      // Reload/Rerender and verify persistence
+      rerender(
+        <OwnerSettings
+          onAddLog={vi.fn()}
+          onRefreshData={vi.fn()}
+          selectedCycle="2026-08"
+          availableCycles={[mockCycleAug]}
+        />
+      );
+
+      await waitFor(() => {
+        const select = screen.getByTestId('select-water-billing-mode') as HTMLSelectElement;
+        expect(select.value).toBe('flat_rate');
+        const input = screen.getByTestId('input-water-unit-rate') as HTMLInputElement;
+        expect(input.value).toBe('180');
+      });
+    });
+
+    it('TieredRateEditor in Settings displays "เพิ่มขั้น" and "บันทึกอัตรา" on one line', () => {
+      const tiers: CanonicalTierRecord[] = [
+        { upTo: '10.00', rate: '18.00' },
+        { upTo: null, rate: '22.00' },
+      ];
+
+      render(
+        <TieredRateEditor
+          utilityType="water"
+          tiers={tiers}
+          onChange={vi.fn()}
+          onSave={vi.fn()}
+        />
+      );
+
+      // Assert shortened button copy
+      const addBtn = screen.getByTestId('btn-add-tier-water');
+      expect(addBtn.textContent).toContain('เพิ่มขั้น');
+      expect(addBtn.textContent).not.toContain('เพิ่มขั้นอัตรา');
+
+      const saveBtn = screen.getByTestId('btn-save-tiers-water');
+      expect(saveBtn.textContent).toContain('บันทึกอัตรา');
+      expect(saveBtn.textContent).not.toContain('บันทึกอัตราขั้นบันได');
+
+      // Table headers
+      expect(screen.getByText('ขั้นที่')).toBeDefined();
+      expect(screen.getByText('ตั้งแต่')).toBeDefined();
+      expect(screen.getByText('ถึง')).toBeDefined();
+      expect(screen.getByText('อัตรา (บาท/หน่วย)')).toBeDefined();
+
+      // Reset preset button
+      expect(screen.getByTestId('btn-reset-preset-water').textContent).toContain('คืนค่าเริ่มต้น');
+    });
+
+    it('TieredRateEditor in Register mode (no onSave) shows "เพิ่มขั้น" and NO Save button', () => {
+      const tiers: CanonicalTierRecord[] = [
+        { upTo: '10.00', rate: '18.00' },
+        { upTo: null, rate: '22.00' },
+      ];
+
+      render(
+        <TieredRateEditor
+          utilityType="electricity"
+          tiers={tiers}
+          onChange={vi.fn()}
+        />
+      );
+
+      const addBtn = screen.getByTestId('btn-add-tier-electricity');
+      expect(addBtn.textContent).toContain('เพิ่มขั้น');
+
+      expect(screen.queryByTestId('btn-save-tiers-electricity')).toBeNull();
+      expect(screen.queryByText(/บันทึกอัตรา/)).toBeNull();
     });
   });
 });

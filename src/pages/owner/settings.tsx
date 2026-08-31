@@ -123,7 +123,7 @@ export const toCanonicalMode = (mode: string | undefined, type: 'water' | 'elect
     if (m === 'tiered') return 'tiered';
     if (m === 'unit' || m === 'per_unit') return 'per_unit';
     if (m === 'person' || m === 'per_person') return 'per_person';
-    if (m === 'fixed' || m === 'flat') return 'fixed';
+    if (m === 'fixed' || m === 'flat' || m === 'flat_rate' || m === 'room' || m === 'per_room' || m === 'fixed_monthly') return 'flat_rate';
     return 'per_unit';
   }
   if (type === 'common' || type === 'internet') {
@@ -1983,7 +1983,8 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                   >
                     <option value="per_unit">บาท/หน่วย</option>
                     <option value="per_person">บาท/คน</option>
-                    <option value="tiered">คิดตามขั้นบันได (Tiered)</option>
+                    <option value="flat_rate">บาท/ห้อง</option>
+                    <option value="tiered">คิดตามขั้นบันได</option>
                   </select>
                 </div>
               </div>
@@ -2048,7 +2049,8 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                   >
                     <option value="per_unit">บาท/หน่วย</option>
                     <option value="per_person">บาท/คน</option>
-                    <option value="tiered">คิดตามขั้นบันได (Tiered)</option>
+                    <option value="flat_rate">บาท/ห้อง</option>
+                    <option value="tiered">คิดตามขั้นบันได</option>
                   </select>
                 </div>
               </div>

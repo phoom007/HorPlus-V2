@@ -2503,12 +2503,12 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
 
               {/* Per-Building Security Deposits (Three rental modes) */}
               <div className="bg-white p-3.5 sm:p-4 rounded-xl border border-slate-200/90 space-y-3">
-                <div className="flex items-center justify-between pb-2 border-b border-slate-100">
-                  <label className="block text-xs font-black text-slate-800 flex items-center gap-1.5">
+                <div className="flex items-center justify-between pb-2 border-b border-slate-100 gap-2">
+                  <label className="block text-xs font-black text-slate-800 flex items-center gap-1.5 min-w-0">
                     <ShieldCheck className="w-4 h-4 text-blue-600 shrink-0" />
-                    เงินประกันตามประเภทการเช่า (บาท) <span className="text-rose-500">*</span>
+                    <span>เงินประกันตามประเภทการเช่า (บาท) <span className="text-rose-500">*</span></span>
                   </label>
-                  <span className="text-[10px] font-black text-blue-700 bg-blue-50 border border-blue-100 px-2 py-0.5 rounded-md">
+                  <span className="text-[10px] font-black text-blue-700 bg-blue-50 border border-blue-100 px-2 py-0.5 rounded-md whitespace-nowrap shrink-0">
                     ตั้งค่าตามตึก
                   </span>
                 </div>
@@ -2627,11 +2627,11 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
 
               <div className="p-4 bg-amber-50/60 rounded-2xl border border-amber-200/80 space-y-3">
                 <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex items-center gap-1.5 min-w-0">
                     <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
                     <label className="block text-xs font-black text-amber-950">อัตราค่าปรับเมื่อเกินวันกำหนดชำระ</label>
                   </div>
-                  <span className="text-[10px] font-bold text-amber-700 bg-amber-100/80 px-2 py-0.5 rounded-md">
+                  <span className="text-[10px] font-bold text-amber-700 bg-amber-100/80 px-2 py-0.5 rounded-md whitespace-nowrap shrink-0">
                     ค่าปรับ
                   </span>
                 </div>

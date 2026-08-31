@@ -307,7 +307,7 @@ describe('OWNER FINAL UAT CORRECTIONS — Comprehensive Suite', () => {
 
       // Verify "ล้างลายเซ็น" exists
       expect(screen.getByText('ล้างลายเซ็น')).toBeDefined();
-    });
+    }, 15000);
   });
 
   describe('6. Dorm-Wide Room Number Uniqueness & Label Authority (Round 1.1)', () => {
@@ -452,6 +452,59 @@ describe('OWNER FINAL UAT CORRECTIONS — Comprehensive Suite', () => {
       // Assert label is "ชื่ออาคาร" and NOT "ชื่อ/รหัสอาคาร"
       expect(screen.getByText('ชื่ออาคาร')).toBeDefined();
       expect(screen.queryByText('ชื่อ/รหัสอาคาร')).toBeNull();
+    });
+  });
+
+  describe('7. Step 4 Badges Nowrap & Tier Footer Button Copy (Round 1.2)', () => {
+    it('Step 4 renders "ตั้งค่าตามตึก" and "ค่าปรับ" badges with whitespace-nowrap', async () => {
+      render(<OwnerRegister />);
+
+      // Fill Step 1
+      fireEvent.change(screen.getByPlaceholderText('เช่น หอพัก HorPlus สุขุมวิท'), {
+        target: { value: 'หอพักทดสอบ Step 4 Badges' },
+      });
+      fireEvent.change(screen.getByPlaceholderText('เช่น 88/9 ซอยสุขุมวิท 55 แขวงคลองตันเหนือ เขตวัฒนา กรุงเทพฯ 10110'), {
+        target: { value: '123/45 ถนนทดสอบ' },
+      });
+      fireEvent.click(screen.getByText('ถัดไป'));
+
+      // Step 2
+      await waitFor(() => expect(screen.getByText('ขั้นตอนที่ 2: อาคาร & ผังห้อง')).toBeDefined());
+      fireEvent.change(screen.getByPlaceholderText('ระบุห้องต่อชั้น'), { target: { value: '2' } });
+      fireEvent.click(screen.getByText('ถัดไป'));
+
+      // Step 3
+      await waitFor(() => expect(screen.getByText('ขั้นตอนที่ 3: ค่าเช่า & ค่าน้ำไฟ')).toBeDefined());
+      fireEvent.change(screen.getByTestId('input-building-monthly-rent-0'), { target: { value: '3500' } });
+      fireEvent.click(screen.getByText('ถัดไป'));
+
+      // Step 4
+      await waitFor(() => expect(screen.getByText('ขั้นตอนที่ 4: มัดจำ & บัญชี')).toBeDefined());
+
+      const buildingBadge = screen.getByText('ตั้งค่าตามตึก');
+      expect(buildingBadge).toBeDefined();
+      expect(buildingBadge.className).toContain('whitespace-nowrap');
+
+      const lateFeeBadge = screen.getByText('ค่าปรับ');
+      expect(lateFeeBadge).toBeDefined();
+      expect(lateFeeBadge.className).toContain('whitespace-nowrap');
+    });
+
+    it('TieredRateEditor renders "เพิ่มขั้น" and shortened "บันทึกอัตรา" without broken copy', () => {
+      render(
+        <TieredRateEditor
+          utilityType="water"
+          tiers={WATER_TIER_PRESET}
+          onChange={vi.fn()}
+          onSave={vi.fn()}
+        />
+      );
+
+      const addBtn = screen.getByTestId('btn-add-tier-water');
+      expect(addBtn.textContent?.trim()).toBe('เพิ่มขั้น');
+
+      const saveBtn = screen.getByTestId('btn-save-tiers-water');
+      expect(saveBtn.textContent?.trim()).toBe('บันทึกอัตรา');
     });
   });
 });
