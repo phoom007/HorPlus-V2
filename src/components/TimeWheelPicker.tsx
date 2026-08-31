@@ -66,9 +66,7 @@ export const TimeWheelPicker: React.FC<TimeWheelPickerProps> = ({
           const idx = items.indexOf(target);
           if (idx >= 0) {
             const el = listEl.children[idx] as HTMLElement;
-            if (typeof el?.scrollIntoView === 'function') {
-              el.scrollIntoView({ block: 'center', behavior: 'instant' as any });
-            }
+            el?.scrollIntoView({ block: 'center', behavior: 'instant' as any });
           }
         };
 
@@ -154,15 +152,11 @@ export const TimeWheelPicker: React.FC<TimeWheelPickerProps> = ({
     const hourIndex = HOURS.indexOf(h);
     if (hourListRef.current && hourIndex >= 0) {
       const el = hourListRef.current.children[hourIndex] as HTMLElement;
-      if (typeof el?.scrollIntoView === 'function') {
-        el.scrollIntoView({ block: 'center', behavior: 'smooth' });
-      }
+      el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
     }
     if (hourListRefMobile.current && hourIndex >= 0) {
       const el = hourListRefMobile.current.children[hourIndex] as HTMLElement;
-      if (typeof el?.scrollIntoView === 'function') {
-        el.scrollIntoView({ block: 'center', behavior: 'smooth' });
-      }
+      el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
     }
   };
 
@@ -171,15 +165,11 @@ export const TimeWheelPicker: React.FC<TimeWheelPickerProps> = ({
     const minuteIndex = MINUTES.indexOf(m);
     if (minuteListRef.current && minuteIndex >= 0) {
       const el = minuteListRef.current.children[minuteIndex] as HTMLElement;
-      if (typeof el?.scrollIntoView === 'function') {
-        el.scrollIntoView({ block: 'center', behavior: 'smooth' });
-      }
+      el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
     }
     if (minuteListRefMobile.current && minuteIndex >= 0) {
       const el = minuteListRefMobile.current.children[minuteIndex] as HTMLElement;
-      if (typeof el?.scrollIntoView === 'function') {
-        el.scrollIntoView({ block: 'center', behavior: 'smooth' });
-      }
+      el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
     }
   };
 

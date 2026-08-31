@@ -6,7 +6,7 @@
  * 1. ZERO floating-point operations. All financial amounts calculated in exact integer satangs (BigInt).
  * 2. Exact two-decimal canonical strings ("0.00", "3500.00", "4200.50").
  * 3. 100% Mathematical Parity with server BillingService.generateBillPreview & decimal-math.util.
- * 4. Meter usage preserves exact 2-decimal fractional units without integer rounding (e.g. 105.75 - 100.25 = 5.50).
+ * 4. Meter reading and usage domain is whole integer units (0..99999). Rates and financial products preserve exact 2-decimal satang precision.
  */
 
 export function isMeterBasedUtilityMode(mode?: string | null): boolean {
@@ -140,7 +140,7 @@ export function validateCanonicalUtilityTiersLocal(input: unknown): {
     }
 
     const rateStr = String(rawRate).trim();
-    if (!/^\d+(\.\d{1,2})?$/.test(rateStr)) {
+    if (!/^\d{1,10}(\.\d{1,2})?$/.test(rateStr)) {
       return { isValid: false, tiers: [], errorMessage: `INVALID_TIER_CONFIGURATION: Invalid rate '${rateStr}'` };
     }
     const rateSatang = parseSatang(rateStr);
@@ -150,21 +150,25 @@ export function validateCanonicalUtilityTiersLocal(input: unknown): {
 
     let upToStr: string | null = null;
     if (isLast) {
-      if (rawUpTo !== null && rawUpTo !== undefined && String(rawUpTo).trim() !== '') {
+      const isNullish = rawUpTo === null || rawUpTo === undefined || rawUpTo === '' || rawUpTo === 'null';
+      if (!isNullish) {
         return { isValid: false, tiers: [], errorMessage: 'INVALID_TIER_CONFIGURATION: Final tier upTo must be null' };
       }
       upToStr = null;
     } else {
-      if (rawUpTo === null || rawUpTo === undefined || String(rawUpTo).trim() === '') {
+      if (rawUpTo === null || rawUpTo === undefined || rawUpTo === '' || rawUpTo === 'null') {
         return { isValid: false, tiers: [], errorMessage: 'INVALID_TIER_CONFIGURATION: Intermediate tier upTo is required' };
       }
       const uStr = String(rawUpTo).trim();
-      if (!/^\d+(\.\d{1,2})?$/.test(uStr)) {
+      if (!/^\d{1,10}(\.\d{1,2})?$/.test(uStr)) {
         return { isValid: false, tiers: [], errorMessage: `INVALID_TIER_CONFIGURATION: Invalid upTo '${uStr}'` };
       }
       const upToSatang = parseSatang(uStr);
       if (upToSatang <= 0n) {
         return { isValid: false, tiers: [], errorMessage: 'INVALID_TIER_CONFIGURATION: upTo must be positive' };
+      }
+      if (upToSatang % 100n !== 0n) {
+        return { isValid: false, tiers: [], errorMessage: `INVALID_TIER_CONFIGURATION: Tier at index ${i} upTo boundary '${uStr}' must represent a whole positive integer unit threshold (fractional boundaries are not permitted)` };
       }
       if (upToSatang <= prevUpToSatang) {
         return { isValid: false, tiers: [], errorMessage: 'INVALID_TIER_CONFIGURATION: upTo values must be strictly ascending' };
@@ -201,26 +205,57 @@ export function calculateProgressiveTieredChargeLocal(input: {
   const rawUsage = input.usageUnits;
   let usageInt: bigint;
   if (typeof rawUsage === 'bigint') {
-    usageInt = rawUsage;
-  } else {
-    const str = String(rawUsage ?? '').trim();
-    if (!/^\d+(\.\d{1,2})?$/.test(str)) {
+    if (rawUsage < 0n) {
       return {
         isValid: false,
-        errorMessage: 'INVALID_USAGE: Usage must be non-negative integer',
+        errorMessage: 'INVALID_USAGE: Usage cannot be negative',
         totalAmountSatang: 0n,
         totalAmount: '0.00',
         usageUnits: '0.00',
         tierBreakdown: [],
       };
     }
-    usageInt = BigInt(Math.floor(Number(str)));
-  }
-
-  if (usageInt < 0n) {
+    usageInt = rawUsage;
+  } else if (typeof rawUsage === 'number') {
+    if (isNaN(rawUsage) || !Number.isFinite(rawUsage) || rawUsage < 0 || !Number.isInteger(rawUsage)) {
+      return {
+        isValid: false,
+        errorMessage: 'INVALID_USAGE: Usage must be a whole non-negative integer unit',
+        totalAmountSatang: 0n,
+        totalAmount: '0.00',
+        usageUnits: '0.00',
+        tierBreakdown: [],
+      };
+    }
+    usageInt = BigInt(rawUsage);
+  } else if (typeof rawUsage === 'string') {
+    const str = rawUsage.trim();
+    if (!/^\d+(\.\d{1,2})?$/.test(str)) {
+      return {
+        isValid: false,
+        errorMessage: 'INVALID_USAGE: Usage must be a whole non-negative integer unit',
+        totalAmountSatang: 0n,
+        totalAmount: '0.00',
+        usageUnits: '0.00',
+        tierBreakdown: [],
+      };
+    }
+    const scaled = parseScaled2(str);
+    if (scaled < 0n || scaled % 100n !== 0n) {
+      return {
+        isValid: false,
+        errorMessage: 'INVALID_USAGE: Usage must be a whole non-negative integer unit',
+        totalAmountSatang: 0n,
+        totalAmount: '0.00',
+        usageUnits: '0.00',
+        tierBreakdown: [],
+      };
+    }
+    usageInt = scaled / 100n;
+  } else {
     return {
       isValid: false,
-      errorMessage: 'INVALID_USAGE: Usage cannot be negative',
+      errorMessage: 'INVALID_USAGE: Usage must be a whole non-negative integer unit',
       totalAmountSatang: 0n,
       totalAmount: '0.00',
       usageUnits: '0.00',
@@ -253,7 +288,18 @@ export function calculateProgressiveTieredChargeLocal(input: {
     let upperInclusiveStr: string | null = null;
 
     if (!isLast && tier.upTo !== null) {
-      const upToUnits = parseScaled2(tier.upTo) / 100n;
+      const upToSatang = parseSatang(tier.upTo);
+      if (upToSatang % 100n !== 0n) {
+        return {
+          isValid: false,
+          errorMessage: 'INVALID_TIER_CONFIGURATION: upTo must be a whole integer',
+          totalAmountSatang: 0n,
+          totalAmount: '0.00',
+          usageUnits: '0.00',
+          tierBreakdown: [],
+        };
+      }
+      const upToUnits = upToSatang / 100n;
       upperInclusiveStr = `${upToUnits}.00`;
       const capacity = upToUnits - prevBound;
       billedUnits = remaining > capacity ? capacity : remaining;
@@ -281,7 +327,8 @@ export function calculateProgressiveTieredChargeLocal(input: {
     }
 
     if (!isLast && tier.upTo !== null) {
-      prevBound = parseScaled2(tier.upTo) / 100n;
+      const upToSatang = parseSatang(tier.upTo);
+      prevBound = upToSatang / 100n;
     }
   }
 

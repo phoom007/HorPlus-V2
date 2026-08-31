@@ -51,6 +51,8 @@ import {
   RoomPreviewContext,
   parseScaled2,
   formatScaled2,
+  parseSatang,
+  formatSatang,
   formatMoneyDisplay,
 } from '../../utils/meterBillingCalculator';
 import { isCycleInRollingThreeMonthWindow, toBangkokDateString, normalizeBangkokDate, formatShortThaiBuddhistDate } from '../../utils/calendarDate';
@@ -354,18 +356,51 @@ export function formatComponentDetailAmount(amt: number | string): string {
   return num.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+export function isRowDraftDirty(row?: any, originalRow?: any): boolean {
+  if (!row) return false;
+  if (originalRow) {
+    return (
+      String(row.waterCurr ?? '') !== String(originalRow.waterCurr ?? '') ||
+      String(row.waterPrev ?? '') !== String(originalRow.waterPrev ?? '') ||
+      String(row.elecCurr ?? '') !== String(originalRow.elecCurr ?? '') ||
+      String(row.elecPrev ?? '') !== String(originalRow.elecPrev ?? '') ||
+      String(row.peopleCount ?? '') !== String(originalRow.peopleCount ?? '') ||
+      String(row.overdueAmount ?? '') !== String(originalRow.overdueAmount ?? '') ||
+      JSON.stringify(row.otherFees || []) !== JSON.stringify(originalRow.otherFees || [])
+    );
+  }
+  return (
+    (row.waterCurr !== undefined && row.waterCurr !== '') ||
+    (row.elecCurr !== undefined && row.elecCurr !== '') ||
+    (row.waterPrev !== undefined && row.waterPrev !== '') ||
+    (row.elecPrev !== undefined && row.elecPrev !== '')
+  );
+}
+
 export function getOwnerFinancialBreakdown(
   roomCtxOrRow: any,
-  roomCtxIfSecond?: any,
-  _rateSnapshot?: any,
-  _bills?: any,
-  _selectedBillingCycleId?: any
+  rowOrRoomCtx?: any,
+  rateSnapshotParam?: any,
+  originalRowParam?: any
 ): OwnerFinancialBreakdown {
-  const roomCtx = (roomCtxIfSecond && (roomCtxIfSecond.chargeComponents || roomCtxIfSecond.amountDue !== undefined || roomCtxIfSecond.roomId))
-    ? roomCtxIfSecond
-    : roomCtxOrRow;
+  let roomCtx: any = null;
+  let row: any = null;
+  let rateSnapshot: any = rateSnapshotParam;
+  let originalRow: any = originalRowParam;
 
-  const amountDue = roomCtx?.amountDue ?? '0.00';
+  if (roomCtxOrRow && (roomCtxOrRow.chargeComponents || roomCtxOrRow.amountDue !== undefined || roomCtxOrRow.roomId || roomCtxOrRow.billingSource)) {
+    roomCtx = roomCtxOrRow;
+    row = rowOrRoomCtx;
+  } else if (rowOrRoomCtx && (rowOrRoomCtx.chargeComponents || rowOrRoomCtx.amountDue !== undefined || rowOrRoomCtx.roomId || rowOrRoomCtx.billingSource)) {
+    roomCtx = rowOrRoomCtx;
+    row = roomCtxOrRow;
+  } else {
+    roomCtx = roomCtxOrRow;
+  }
+
+  const effectiveRateSnapshot = rateSnapshot || roomCtx?.rateSnapshot;
+
+  const rawAmountDue = roomCtx?.amountDue ?? '0.00';
   const components: TopLevelFinancialComponent[] = (roomCtx?.chargeComponents || []).map((c: any) => {
     const rawAmt = c.amount ?? '0.00';
     const status = (c.status || 'UNPAID') as TopLevelFinancialComponent['status'];
@@ -388,9 +423,68 @@ export function getOwnerFinancialBreakdown(
     };
   });
 
+  // Precedence Rules A, B, C:
+  // A. Issued/persisted financial Bill: SERVER persisted BillItem wins.
+  // B. Unissued server PREVIEW + NO unsaved row changes: SERVER preview displayed.
+  // C. Unissued server PREVIEW + current row has unsaved changes: LOCAL exact preview overlay.
+  const overallStatus = (roomCtx?.overallFinancialStatus as string) || (roomCtx?.billStatus as string) || row?.billStatus || 'draft';
+  const muStatus = (roomCtx?.monthlyUtilityBillStatus as string) || (row as any)?.monthlyUtilityBillStatus || row?.billStatus || 'draft';
+  const isMuPaid = Boolean(roomCtx?.isMonthlyUtilityPaid || (row as any)?.isMonthlyUtilityPaid || muStatus === 'paid');
+  const isMuIssued = (muStatus !== 'draft' && muStatus !== 'cancelled') || isMuPaid;
+  const isDailyContext = roomCtx?.billingSource === 'DAILY_STAY';
+  const hasNoServerComponents = components.length === 0 && Boolean(row && (row.waterCurr !== '' || row.elecCurr !== ''));
+  const isDirty = isRowDraftDirty(row, originalRow);
+
+  if (!isMuIssued && !isDailyContext && row && (isDirty || hasNoServerComponents)) {
+    const localPreview = calculateMeterRowPreview(roomCtx, effectiveRateSnapshot, row);
+
+    const monthlyIdx = components.findIndex(c => c.type === 'monthly_utility' || c.type === 'legacy_combined');
+    const previewAmountNum = parseFloat(localPreview.totalAmount) || 0;
+    const previewFormatted = formatMoneyDisplay(localPreview.totalAmount);
+    const previewStatus: TopLevelFinancialComponent['status'] = localPreview.status === 'INVALID' ? 'INVALID' : 'PREVIEW';
+    const previewTitle = localPreview.status === 'INVALID' ? (localPreview.errorMessage || 'รูปแบบการคิดค่าบริการไม่ถูกต้อง') : 'ยังไม่ออกบิล (พรีวิว)';
+
+    if (monthlyIdx >= 0) {
+      components[monthlyIdx] = {
+        ...components[monthlyIdx],
+        amount: previewAmountNum,
+        formattedAmount: previewFormatted,
+        status: previewStatus,
+        title: previewTitle,
+        errorMessage: localPreview.errorMessage,
+      };
+    } else {
+      components.push({
+        type: 'monthly_utility',
+        label: 'บิลรายเดือน',
+        amount: previewAmountNum,
+        formattedAmount: previewFormatted,
+        status: previewStatus,
+        title: previewTitle,
+        errorMessage: localPreview.errorMessage,
+        lineItems: [],
+      });
+    }
+
+    // Recompute total operational amountDue using exact Satang arithmetic
+    let totalSatang = 0n;
+    for (const c of components) {
+      if (c.status !== 'PAID') {
+        totalSatang += parseSatang(c.formattedAmount);
+      }
+    }
+    const finalAmountStr = formatSatang(totalSatang);
+
+    return {
+      operationalAmount: parseFloat(finalAmountStr) || 0,
+      formattedAmount: formatMoneyDisplay(finalAmountStr),
+      components,
+    };
+  }
+
   return {
-    operationalAmount: typeof amountDue === 'number' ? amountDue : parseFloat(String(amountDue).replace(/,/g, '')) || 0,
-    formattedAmount: formatMoneyDisplay(amountDue),
+    operationalAmount: typeof rawAmountDue === 'number' ? rawAmountDue : parseFloat(String(rawAmountDue).replace(/,/g, '')) || 0,
+    formattedAmount: formatMoneyDisplay(rawAmountDue),
     components,
   };
 }
@@ -3114,7 +3208,8 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                       {/* Calculated Total & Financial Breakdown */}
                       <td className="p-4 text-right">
                         {(() => {
-                          const breakdown = getOwnerFinancialBreakdown(roomCtx);
+                          const orig = (originalRowsRef.current || []).find((o) => o.roomId === row.roomId);
+                          const breakdown = getOwnerFinancialBreakdown(roomCtx, row, rateSnapshot, orig);
                           const amountDue = breakdown.formattedAmount;
                           const chargeComponents = breakdown.components;
                           const isExpanded = Boolean(expandedBreakdowns[row.roomId]);
@@ -3493,6 +3588,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                   key={row.roomId}
                   row={row}
                   idx={idx}
+                  originalRow={(originalRowsRef.current || []).find(r => r.roomId === row.roomId)}
                   room={rooms.find(r => r.id === row.roomId)}
                   roomCtx={previewContext?.rooms?.find((r: any) => r.roomId === row.roomId)}
                   rateSnapshot={rateSnapshot}

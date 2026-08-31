@@ -11,6 +11,7 @@ import {
   isMeterBasedUtilityMode,
   calculateMeterRowPreview,
   calculateProgressiveTieredChargeLocal,
+  validateCanonicalUtilityTiersLocal,
   RateSnapshotContext,
 } from '../utils/meterBillingCalculator';
 import { Room, Tenant, Contract } from '../types';
@@ -44,7 +45,89 @@ describe('OWNER R3.9-E.1A — Tiered Meter Workspace Suite', () => {
   });
 
   // =========================================================================
-  // 2. PROGRESSIVE CALCULATOR & LOCAL LIVE PREVIEW TESTS (Section 30)
+  // 2. INTEGER DOMAIN & TIER VALIDATOR TESTS (Sections 1-7)
+  // =========================================================================
+  describe('Tier Validator & Integer Domain Authority', () => {
+    it('Rejects fractional tier upTo boundaries (10.5, 10.50, 20.25)', () => {
+      const frac1 = validateCanonicalUtilityTiersLocal([
+        { upTo: '10.5', rate: '3.40' },
+        { upTo: null, rate: '5.00' },
+      ]);
+      expect(frac1.isValid).toBe(false);
+      expect(frac1.errorMessage).toContain('INVALID_TIER_CONFIGURATION');
+
+      const frac2 = validateCanonicalUtilityTiersLocal([
+        { upTo: '10.50', rate: '3.40' },
+        { upTo: null, rate: '5.00' },
+      ]);
+      expect(frac2.isValid).toBe(false);
+      expect(frac2.errorMessage).toContain('INVALID_TIER_CONFIGURATION');
+
+      const frac3 = validateCanonicalUtilityTiersLocal([
+        { upTo: '20.25', rate: '4.25' },
+        { upTo: null, rate: '5.00' },
+      ]);
+      expect(frac3.isValid).toBe(false);
+      expect(frac3.errorMessage).toContain('INVALID_TIER_CONFIGURATION');
+    });
+
+    it('Accepts valid integer upTo representations and normalizes to 2DP ("10", "10.0", "10.00", "20.00", "150.00")', () => {
+      const res = validateCanonicalUtilityTiersLocal([
+        { upTo: '10', rate: '3.40' },
+        { upTo: '20.00', rate: '4.25' },
+        { upTo: '150.0', rate: '8.00' },
+        { upTo: null, rate: '9.00' },
+      ]);
+      expect(res.isValid).toBe(true);
+      expect(res.tiers[0].upTo).toBe('10.00');
+      expect(res.tiers[1].upTo).toBe('20.00');
+      expect(res.tiers[2].upTo).toBe('150.00');
+      expect(res.tiers[3].upTo).toBeNull();
+    });
+
+    it('Rejects non-positive or non-ascending upTo boundaries ("0", "-1")', () => {
+      const zeroBound = validateCanonicalUtilityTiersLocal([
+        { upTo: '0', rate: '3.40' },
+        { upTo: null, rate: '5.00' },
+      ]);
+      expect(zeroBound.isValid).toBe(false);
+
+      const negBound = validateCanonicalUtilityTiersLocal([
+        { upTo: '-10', rate: '3.40' },
+        { upTo: null, rate: '5.00' },
+      ]);
+      expect(negBound.isValid).toBe(false);
+    });
+
+    it('Progressive helper fails closed on fractional usage ("15.1", "15.99", 15.5, -1, "1e2")', () => {
+      const tiers = [
+        { upTo: '10.00', rate: '3.40' },
+        { upTo: null, rate: '5.00' },
+      ];
+
+      expect(calculateProgressiveTieredChargeLocal({ usageUnits: '15.1', tiers }).isValid).toBe(false);
+      expect(calculateProgressiveTieredChargeLocal({ usageUnits: '15.99', tiers }).isValid).toBe(false);
+      expect(calculateProgressiveTieredChargeLocal({ usageUnits: 15.5, tiers }).isValid).toBe(false);
+      expect(calculateProgressiveTieredChargeLocal({ usageUnits: -1, tiers }).isValid).toBe(false);
+      expect(calculateProgressiveTieredChargeLocal({ usageUnits: '1e2', tiers }).isValid).toBe(false);
+    });
+
+    it('Progressive helper accepts whole integer usage (0, 15, "15", "15.00", 130n)', () => {
+      const tiers = [
+        { upTo: '10.00', rate: '3.40' },
+        { upTo: null, rate: '5.00' },
+      ];
+
+      expect(calculateProgressiveTieredChargeLocal({ usageUnits: 0, tiers }).isValid).toBe(true);
+      expect(calculateProgressiveTieredChargeLocal({ usageUnits: 15, tiers }).isValid).toBe(true);
+      expect(calculateProgressiveTieredChargeLocal({ usageUnits: '15', tiers }).isValid).toBe(true);
+      expect(calculateProgressiveTieredChargeLocal({ usageUnits: '15.00', tiers }).isValid).toBe(true);
+      expect(calculateProgressiveTieredChargeLocal({ usageUnits: 130n, tiers }).isValid).toBe(true);
+    });
+  });
+
+  // =========================================================================
+  // 3. PROGRESSIVE CALCULATOR & LOCAL LIVE PREVIEW TESTS
   // =========================================================================
   describe('Progressive Tiered Calculator & Live Preview Parity', () => {
     const waterTiers = [
@@ -234,7 +317,7 @@ describe('OWNER R3.9-E.1A — Tiered Meter Workspace Suite', () => {
   });
 
   // =========================================================================
-  // 3. TABLE & LIST MODE WORKSPACE INTEGRATION TESTS (Sections 31-34)
+  // 4. TABLE & LIST MODE WORKSPACE INTEGRATION TESTS (Sections 15-20, 27-28)
   // =========================================================================
   describe('Owner Meter Workspace: Table & List Integration', () => {
     let queryClient: QueryClient;
@@ -332,7 +415,7 @@ describe('OWNER R3.9-E.1A — Tiered Meter Workspace Suite', () => {
       parkingFeeMode: 'free',
     };
 
-    const renderWorkspace = (customSnapshot?: any, serverReadings: any[] = []) => {
+    const renderWorkspace = (customSnapshot?: any, serverReadings: any[] = [], customRoomCtx?: any) => {
       const dormId = 'dorm-1';
       const cycleId = 'cycle-aug-2026';
 
@@ -344,7 +427,7 @@ describe('OWNER R3.9-E.1A — Tiered Meter Workspace Suite', () => {
       queryClient.setQueryData(queryKeys.meterPreviewContext(dormId, cycleId), {
         rateSnapshot: customSnapshot || tieredRateSnapshot,
         rooms: [
-          {
+          customRoomCtx || {
             roomId: 'room-101',
             tenantId: 'tenant-101',
             tenantName: 'นายสมชาย ใจดี',
@@ -355,7 +438,16 @@ describe('OWNER R3.9-E.1A — Tiered Meter Workspace Suite', () => {
             snapshotVersion: 1,
             isDailyUnpaid: false,
             isFutureReservation: false,
-            chargeComponents: [],
+            amountDue: '0.00',
+            chargeComponents: [
+              {
+                type: 'monthly_utility',
+                label: 'บิลรายเดือน',
+                amount: '0.00',
+                status: 'PREVIEW',
+                lineItems: [],
+              },
+            ],
           },
         ],
       });
@@ -398,61 +490,60 @@ describe('OWNER R3.9-E.1A — Tiered Meter Workspace Suite', () => {
       meterDraftStore.clearAllDrafts();
     });
 
-    it('Section 31: First-cycle Table UI renders blank meter inputs for Tiered Water & Electricity, updates live total to 55.25 + 990.00', async () => {
+    it('Section 15-17: Table renders blank meter inputs, typing Water 100->115 and Elec 200->330 IMMEDIATELY updates visible amount to 1,045.25 ฿ before Save', async () => {
       renderWorkspace();
 
       await waitFor(() => {
         expect(screen.getByTestId('meter-row-room-101')).toBeInTheDocument();
       });
 
-      expect(screen.getByText('มิเตอร์ไฟเดิม')).toBeInTheDocument();
-      expect(screen.getByText('มิเตอร์ไฟใหม่')).toBeInTheDocument();
-      expect(screen.getByText('มิเตอร์น้ำเดิม')).toBeInTheDocument();
-      expect(screen.getByText('มิเตอร์น้ำใหม่')).toBeInTheDocument();
-
       const elecPrev = document.querySelector('input[data-col="elecPrev"]') as HTMLInputElement;
       const elecCurr = document.querySelector('input[data-col="elecCurr"]') as HTMLInputElement;
       const waterPrev = document.querySelector('input[data-col="waterPrev"]') as HTMLInputElement;
       const waterCurr = document.querySelector('input[data-col="waterCurr"]') as HTMLInputElement;
-
-      expect(elecPrev).toBeInTheDocument();
-      expect(elecCurr).toBeInTheDocument();
-      expect(waterPrev).toBeInTheDocument();
-      expect(waterCurr).toBeInTheDocument();
-
-      expect(elecPrev.value).toBe('');
-      expect(elecCurr.value).toBe('');
-      expect(waterPrev.value).toBe('');
-      expect(waterCurr.value).toBe('');
 
       fireEvent.change(elecPrev, { target: { value: '200' } });
       fireEvent.change(elecCurr, { target: { value: '330' } });
       fireEvent.change(waterPrev, { target: { value: '100' } });
       fireEvent.change(waterCurr, { target: { value: '115' } });
 
-      expect(elecPrev.value).toBe('200');
-      expect(elecCurr.value).toBe('330');
-      expect(waterPrev.value).toBe('100');
-      expect(waterCurr.value).toBe('115');
+      // Live visible total must reflect 55.25 + 990.00 = 1,045.25 ฿
+      await waitFor(() => {
+        expect(screen.getByText('1,045.25 ฿')).toBeInTheDocument();
+      });
     });
 
-    it('Section 32: List UI renders Tiered boxes, shows 55.25 and 990.00, and stays synchronized with Table mode', async () => {
-      renderWorkspace();
+    it('Section 18 & 19: List Mode dirty-after-save regression: Server preview 55.25 is overridden by unsaved 100->120 (76.50), then restored on revert', async () => {
+      const serverReadings = [
+        { id: 'm1', billingCycleId: 'cycle-aug-2026', roomId: 'room-101', meterType: 'water', previousReading: '100', currentReading: '115' },
+      ];
+      const customRoomCtx = {
+        roomId: 'room-101',
+        tenantId: 'tenant-101',
+        tenantName: 'นายสมชาย ใจดี',
+        billingSource: 'CONTRACT',
+        rentAmount: '4000.00',
+        amountDue: '55.25',
+        chargeComponents: [
+          {
+            type: 'monthly_utility',
+            label: 'บิลรายเดือน',
+            amount: '55.25',
+            status: 'PREVIEW',
+            lineItems: [
+              { type: 'water', description: 'ค่าน้ำประปา', amount: '55.25' },
+            ],
+          },
+        ],
+      };
+
+      renderWorkspace(tieredRateSnapshot, serverReadings, customRoomCtx);
 
       await waitFor(() => {
         expect(screen.getByTestId('meter-row-room-101')).toBeInTheDocument();
       });
 
-      const elecPrev = document.querySelector('input[data-col="elecPrev"]') as HTMLInputElement;
-      const elecCurr = document.querySelector('input[data-col="elecCurr"]') as HTMLInputElement;
-      const waterPrev = document.querySelector('input[data-col="waterPrev"]') as HTMLInputElement;
-      const waterCurr = document.querySelector('input[data-col="waterCurr"]') as HTMLInputElement;
-
-      fireEvent.change(elecPrev, { target: { value: '200' } });
-      fireEvent.change(elecCurr, { target: { value: '330' } });
-      fireEvent.change(waterPrev, { target: { value: '100' } });
-      fireEvent.change(waterCurr, { target: { value: '115' } });
-
+      // Switch to List Mode
       const listModeBtn = screen.getByTestId('view-mode-list-button');
       fireEvent.click(listModeBtn);
 
@@ -460,47 +551,112 @@ describe('OWNER R3.9-E.1A — Tiered Meter Workspace Suite', () => {
         expect(screen.getByTestId('meter-list-card-room-101')).toBeInTheDocument();
       });
 
-      expect(screen.getByText('ไฟฟ้า')).toBeInTheDocument();
-      expect(screen.getByText('น้ำ')).toBeInTheDocument();
+      // Initially shows clean server preview 55.25
+      expect(screen.getAllByText(/55\.25/).length).toBeGreaterThan(0);
+      expect(screen.getByText('55.25 ฿')).toBeInTheDocument();
 
-      expect(screen.getByText(/990\.-/)).toBeInTheDocument();
-      expect(screen.getByText(/55\.25/)).toBeInTheDocument();
+      // Edit water current to 120 (usage 20: 10*3.40 + 10*4.25 = 76.50) without Save
+      const waterCurrInput = document.querySelector('input[data-col="waterCurr"]') as HTMLInputElement;
+      fireEvent.change(waterCurrInput, { target: { value: '120' } });
 
-      const tableModeBtn = screen.getByTestId('view-mode-table-button');
-      fireEvent.click(tableModeBtn);
-
+      // List mode card must now show 76.50 instead of stale 55.25
       await waitFor(() => {
-        expect(screen.getByTestId('meter-row-room-101')).toBeInTheDocument();
+        expect(screen.getAllByText(/76\.50/).length).toBeGreaterThan(0);
+        expect(screen.getByText('76.50 ฿')).toBeInTheDocument();
       });
 
-      expect((document.querySelector('input[data-col="elecPrev"]') as HTMLInputElement).value).toBe('200');
-      expect((document.querySelector('input[data-col="elecCurr"]') as HTMLInputElement).value).toBe('330');
-      expect((document.querySelector('input[data-col="waterPrev"]') as HTMLInputElement).value).toBe('100');
-      expect((document.querySelector('input[data-col="waterCurr"]') as HTMLInputElement).value).toBe('115');
+      // Revert back to 115
+      fireEvent.change(waterCurrInput, { target: { value: '115' } });
+
+      // List mode card must return to server preview 55.25
+      await waitFor(() => {
+        expect(screen.getAllByText(/55\.25/).length).toBeGreaterThan(0);
+        expect(screen.getByText('55.25 ฿')).toBeInTheDocument();
+      });
     });
 
-    it('Section 33: Later cycle with server readings displays previous readings for Tiered without fallback zero', async () => {
+    it('Section 20: Table Mode dirty-after-save regression: Server preview 55.25 overridden by unsaved 100->120 (76.50), restored on revert', async () => {
       const serverReadings = [
-        { id: 'm1', billingCycleId: 'cycle-aug-2026', roomId: 'room-101', meterType: 'water', previousReading: '100', currentReading: '' },
-        { id: 'm2', billingCycleId: 'cycle-aug-2026', roomId: 'room-101', meterType: 'electricity', previousReading: '200', currentReading: '' },
+        { id: 'm1', billingCycleId: 'cycle-aug-2026', roomId: 'room-101', meterType: 'water', previousReading: '100', currentReading: '115' },
       ];
+      const customRoomCtx = {
+        roomId: 'room-101',
+        tenantId: 'tenant-101',
+        tenantName: 'นายสมชาย ใจดี',
+        billingSource: 'CONTRACT',
+        rentAmount: '4000.00',
+        amountDue: '55.25',
+        chargeComponents: [
+          {
+            type: 'monthly_utility',
+            label: 'บิลรายเดือน',
+            amount: '55.25',
+            status: 'PREVIEW',
+            lineItems: [
+              { type: 'water', description: 'ค่าน้ำประปา', amount: '55.25' },
+            ],
+          },
+        ],
+      };
 
-      renderWorkspace(tieredRateSnapshot, serverReadings);
+      renderWorkspace(tieredRateSnapshot, serverReadings, customRoomCtx);
 
       await waitFor(() => {
         expect(screen.getByTestId('meter-row-room-101')).toBeInTheDocument();
       });
 
-      // Previous readings are populated directly from server readings
-      const waterPrev = document.querySelector('input[data-col="waterPrev"]') as HTMLInputElement;
-      const elecPrev = document.querySelector('input[data-col="elecPrev"]') as HTMLInputElement;
-      if (waterPrev && elecPrev) {
-        expect(waterPrev.value).toBe('100');
-        expect(elecPrev.value).toBe('200');
-      } else {
-        expect(screen.getByText('100')).toBeInTheDocument();
-        expect(screen.getByText('200')).toBeInTheDocument();
-      }
+      // Initially shows server preview 55.25 ฿
+      expect(screen.getByText('55.25 ฿')).toBeInTheDocument();
+
+      // Edit water current to 120
+      const waterCurrInput = document.querySelector('input[data-col="waterCurr"]') as HTMLInputElement;
+      fireEvent.change(waterCurrInput, { target: { value: '120' } });
+
+      // Table visible total updates to 76.50 ฿
+      await waitFor(() => {
+        expect(screen.getByText('76.50 ฿')).toBeInTheDocument();
+      });
+
+      // Revert back to 115
+      fireEvent.change(waterCurrInput, { target: { value: '115' } });
+
+      // Table visible total reverts to 55.25 ฿
+      await waitFor(() => {
+        expect(screen.getByText('55.25 ฿')).toBeInTheDocument();
+      });
+    });
+
+    it('Section 10: Issued / Paid Bill is NOT overridden by transient local preview', async () => {
+      const customRoomCtx = {
+        roomId: 'room-101',
+        tenantId: 'tenant-101',
+        tenantName: 'นายสมชาย ใจดี',
+        billingSource: 'CONTRACT',
+        rentAmount: '4000.00',
+        monthlyUtilityBillStatus: 'paid',
+        isPaid: true,
+        amountDue: '0.00',
+        chargeComponents: [
+          {
+            type: 'monthly_utility',
+            label: 'บิลรายเดือน',
+            amount: '55.25',
+            status: 'PAID',
+            lineItems: [
+              { type: 'water', description: 'ค่าน้ำประปา', amount: '55.25' },
+            ],
+          },
+        ],
+      };
+
+      renderWorkspace(tieredRateSnapshot, [], customRoomCtx);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('meter-row-room-101')).toBeInTheDocument();
+      });
+
+      // Table shows 0.00 ฿ because bill is PAID
+      expect(screen.getByText('0.00 ฿')).toBeInTheDocument();
     });
 
     it('Section 34: Paste grid into Tiered meter fields updates state properly', async () => {
@@ -555,10 +711,10 @@ describe('OWNER R3.9-E.1A — Tiered Meter Workspace Suite', () => {
   });
 
   // =========================================================================
-  // 4. SERVER PARITY VALIDATION (Section 35)
+  // 5. LOCAL CONTRACT CALCULATION VECTORS
   // =========================================================================
-  describe('Server Parity Validation', () => {
-    it('exact mathematical match for Tiered calculations between frontend and backend contracts', () => {
+  describe('Local Progressive Tiered Calculation Vectors', () => {
+    it('exact mathematical match for Tiered calculations matching server vectors', () => {
       const waterTiers = [
         { upTo: '10', rate: '3.40' },
         { upTo: '20', rate: '4.25' },

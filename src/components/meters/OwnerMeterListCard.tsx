@@ -34,6 +34,7 @@ import {
   getOwnerFinancialBreakdown,
   resolveOwnerMeterDisplayStatus,
   resolveFinancialComponentTone,
+  isRowDraftDirty,
 } from '../../pages/owner/meters';
 import {
   Room,
@@ -58,6 +59,7 @@ import {
 export interface OwnerMeterListCardProps {
   row: MeterRowState;
   idx: number;
+  originalRow?: MeterRowState;
   room?: Room;
   roomCtx?: any;
   tenant?: Tenant;
@@ -123,6 +125,7 @@ export function getComponentItemIcon(label: string, type?: string) {
 export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
   row,
   idx,
+  originalRow,
   room,
   roomCtx,
   tenant,
@@ -190,7 +193,7 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
     roomCtx?.isFutureReservation
   );
 
-  const breakdown = getOwnerFinancialBreakdown(roomCtx);
+  const breakdown = getOwnerFinancialBreakdown(roomCtx, row, rateSnapshot, originalRow);
   const amountDue = breakdown.formattedAmount;
   const chargeComponents = breakdown.components;
 
@@ -221,8 +224,13 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
   const elecItem = backendLineItems.find((it: any) => it.type === 'electricity' || (it.description && it.description.includes('ค่าไฟ')));
   const waterItem = backendLineItems.find((it: any) => it.type === 'water' || (it.description && it.description.includes('ค่าน้ำ')));
 
+  const isMuIssued = monthlyComp && monthlyComp.status !== 'PREVIEW' && monthlyComp.status !== 'INVALID';
+  const isRowDirty = isRowDraftDirty(row, originalRow);
+
   let elecCostText = '-';
-  if (elecItem && elecItem.amount !== undefined && elecItem.amount !== null) {
+  if (isMuIssued && elecItem && elecItem.amount !== undefined && elecItem.amount !== null) {
+    elecCostText = formatComponentDetailAmount(elecItem.amount);
+  } else if (!isRowDirty && elecItem && elecItem.amount !== undefined && elecItem.amount !== null) {
     elecCostText = formatComponentDetailAmount(elecItem.amount);
   } else if (elecUnits >= 0 && row.elecCurr !== '') {
     const rates = rateSnapshot || roomCtx?.rateSnapshot;
@@ -241,10 +249,14 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
         elecCostText = formatComponentDetailAmount(elecUnits * elecRate);
       }
     }
+  } else if (elecItem && elecItem.amount !== undefined && elecItem.amount !== null) {
+    elecCostText = formatComponentDetailAmount(elecItem.amount);
   }
 
   let waterCostText = '-';
-  if (waterItem && waterItem.amount !== undefined && waterItem.amount !== null) {
+  if (isMuIssued && waterItem && waterItem.amount !== undefined && waterItem.amount !== null) {
+    waterCostText = formatComponentDetailAmount(waterItem.amount);
+  } else if (!isRowDirty && waterItem && waterItem.amount !== undefined && waterItem.amount !== null) {
     waterCostText = formatComponentDetailAmount(waterItem.amount);
   } else if (waterUnits >= 0 && row.waterCurr !== '') {
     const rates = rateSnapshot || roomCtx?.rateSnapshot;
@@ -264,6 +276,8 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
         waterCostText = formatComponentDetailAmount(cost);
       }
     }
+  } else if (waterItem && waterItem.amount !== undefined && waterItem.amount !== null) {
+    waterCostText = formatComponentDetailAmount(waterItem.amount);
   }
 
   // Canonical Rent Component Selection (PO Strict Type Requirement)

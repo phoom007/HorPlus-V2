@@ -22,6 +22,9 @@ describe('LOCAL-07 Source-Reviewed Meter Workspace Correction Suite', () => {
       },
     });
     vi.clearAllMocks();
+    if (typeof window !== 'undefined' && window.HTMLElement) {
+      window.HTMLElement.prototype.scrollIntoView = vi.fn();
+    }
     global.fetch = vi.fn().mockImplementation(async (url: any) => {
       const urlStr = String(url);
       if (urlStr.includes('/billing-cycles')) {
