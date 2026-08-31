@@ -528,6 +528,9 @@ describe('OWNER R3.9-C.3.2: First-Cycle Meter Workspace Authority Closure & Blan
         tenantVehicle: {
           findMany: vi.fn().mockResolvedValue([]),
         },
+        tenantCoOccupant: {
+          findMany: vi.fn().mockResolvedValue([]),
+        },
         bill: {
           findMany: vi.fn().mockResolvedValue([]),
         },
@@ -545,7 +548,7 @@ describe('OWNER R3.9-C.3.2: First-Cycle Meter Workspace Authority Closure & Blan
 
       const meterService = new MeterService(meterRepo, billingCycleRepo, roomRepo, billRepo);
 
-      return { meterService, meterRepo, billingCycleRepo, roomRepo, billRepo, snapshots };
+      return { meterService, meterRepo, billingCycleRepo, roomRepo, billRepo, snapshots, mockPrismaClient };
     }
 
     it('Test 27: Initial Read Model — Technical room zero reports previous as null (blank UX semantic)', async () => {
@@ -886,8 +889,8 @@ describe('OWNER R3.9-C.3.2: First-Cycle Meter Workspace Authority Closure & Blan
       ]);
     });
 
-    it('Test 34: R3.9-C.3.3 Financial Preview First Cycle People Authority — Uses 1 when no snapshot, then updates to 3 upon save', async () => {
-      const { meterService, billingCycleRepo, roomRepo, snapshots } = setupMeterWorkspaceHarness();
+    it('Test 34: R3.9-C.3.3.1 Financial Preview First Cycle People Authority — Household 3 defaults to 100 THB (effective 1), updates to 300 THB on save=3, and 0 THB on save=0', async () => {
+      const { meterService, billingCycleRepo, roomRepo, mockPrismaClient } = setupMeterWorkspaceHarness();
 
       await roomRepo.create(DORM_ID, {
         id: ROOM_ID,
@@ -911,15 +914,49 @@ describe('OWNER R3.9-C.3.2: First-Cycle Meter Workspace Authority Closure & Blan
         billingCycleId: CYCLE_ID,
         waterBillingType: 'per_person',
         waterRate: '100.00',
-        electricityBillingType: 'per_unit',
-        electricityRate: '7.00',
+        electricityBillingType: 'fixed',
+        electricityRate: '0.00',
         source: 'CYCLE_INIT',
       });
 
-      // 1. Initial preview before save: no snapshot -> effective people = 1 -> water total = 100.00
+      // Establish real household count = 3: 1 Tenant + 2 Co-occupants
+      const TENANT_ID = 't-tenant-101';
+      mockPrismaClient.contract.findMany.mockResolvedValue([
+        {
+          id: 'contract-101',
+          dormitoryId: DORM_ID,
+          roomId: ROOM_ID,
+          tenantId: TENANT_ID,
+          status: 'active',
+          startDate: new Date('2026-08-01T00:00:00.000Z'),
+          endDate: new Date('2026-08-31T23:59:59.999Z'),
+          rentAmount: '3000.00',
+          tenant: { id: TENANT_ID, status: 'active', displayName: 'Somchai Jaidee' },
+        },
+      ]);
+      mockPrismaClient.tenantCoOccupant.findMany.mockResolvedValue([
+        { id: 'co-1', tenantId: TENANT_ID, status: 'active' },
+        { id: 'co-2', tenantId: TENANT_ID, status: 'active' },
+      ]);
+
+      // 1. Initial preview before save:
+      // - actual household metadata = 3
+      // - no saved snapshot (snapshotPeopleCount = null)
+      // - first-cycle policy forces effective calculation people = 1
+      // - water amount = 1 * 100.00 = 100.00 THB (NOT 300.00 THB!)
       const preview1 = await meterService.getMeterBillingPreviewContext(DORM_ID, CYCLE_ID);
       const roomPreview1 = preview1.rooms.find((r) => r.roomId === ROOM_ID);
       expect(roomPreview1).toBeDefined();
+      expect(roomPreview1?.currentHouseholdPeopleCount).toBe(3);
+      expect(roomPreview1?.snapshotPeopleCount).toBeNull();
+
+      const monthlyComp1 = roomPreview1?.chargeComponents.find((c) => c.type === 'monthly_utility');
+      expect(monthlyComp1).toBeDefined();
+      const waterLine1 = monthlyComp1?.lineItems.find((l: any) => l.type === 'water');
+      expect(waterLine1).toBeDefined();
+      expect(waterLine1?.quantity).toBe('1.00');
+      expect(waterLine1?.unitPrice).toBe('100.00');
+      expect(waterLine1?.amount).toBe('100.00'); // Authoritative proof: 100.00 THB, not 300.00 THB
 
       // 2. Owner explicitly edits and saves peopleCount = 3
       await meterService.saveBulkMeterWorkspace(DORM_ID, {
@@ -927,10 +964,143 @@ describe('OWNER R3.9-C.3.2: First-Cycle Meter Workspace Authority Closure & Blan
         rows: [{ roomId: ROOM_ID, peopleCount: 3 }],
       });
 
-      // 3. Preview after save: snapshot people = 3 -> effective people = 3 -> water total reflects 300.00
+      // 3. Preview after save:
+      // - snapshotPeopleCount = 3
+      // - water amount = 3 * 100.00 = 300.00 THB
       const preview2 = await meterService.getMeterBillingPreviewContext(DORM_ID, CYCLE_ID);
       const roomPreview2 = preview2.rooms.find((r) => r.roomId === ROOM_ID);
       expect(roomPreview2?.snapshotPeopleCount).toBe(3);
+
+      const monthlyComp2 = roomPreview2?.chargeComponents.find((c) => c.type === 'monthly_utility');
+      const waterLine2 = monthlyComp2?.lineItems.find((l: any) => l.type === 'water');
+      expect(waterLine2?.quantity).toBe('3.00');
+      expect(waterLine2?.amount).toBe('300.00'); // Authoritative proof: 300.00 THB
+
+      // 4. Saved zero regression: Owner explicitly saves peopleCount = 0
+      await meterService.saveBulkMeterWorkspace(DORM_ID, {
+        billingCycleId: CYCLE_ID,
+        rows: [{ roomId: ROOM_ID, peopleCount: 0 }],
+      });
+
+      const preview3 = await meterService.getMeterBillingPreviewContext(DORM_ID, CYCLE_ID);
+      const roomPreview3 = preview3.rooms.find((r) => r.roomId === ROOM_ID);
+      expect(roomPreview3?.snapshotPeopleCount).toBe(0);
+
+      const monthlyComp3 = roomPreview3?.chargeComponents.find((c) => c.type === 'monthly_utility');
+      expect(monthlyComp3?.amount).toBe('0.00'); // Authoritative proof: 0.00 THB total
+    });
+
+    it('Test 35: R3.9-C.3.3.1 Later-Cycle Financial Preview Uses Actual Household Count (3) When No Snapshot Exists', async () => {
+      const { meterService, billingCycleRepo, roomRepo, mockPrismaClient } = setupMeterWorkspaceHarness();
+
+      await roomRepo.create(DORM_ID, {
+        id: ROOM_ID,
+        roomNumber: '101',
+        buildingId: BLD_ID,
+        monthlyRent: 3000,
+      } as any);
+
+      // Create First Cycle (2026-08)
+      await billingCycleRepo.create(DORM_ID, {
+        id: 'cycle-first',
+        cycleCode: '2026-08',
+        periodStart: new Date('2026-08-01T00:00:00.000Z'),
+        periodEnd: new Date('2026-08-31T23:59:59.999Z'),
+        billingDate: new Date('2026-08-31T00:00:00.000Z'),
+        dueDate: new Date('2026-09-05T00:00:00.000Z'),
+        status: 'draft',
+      });
+
+      // Create Later Cycle (2026-09)
+      const CYCLE_2_ID = 'cycle-second';
+      await billingCycleRepo.create(DORM_ID, {
+        id: CYCLE_2_ID,
+        cycleCode: '2026-09',
+        periodStart: new Date('2026-09-01T00:00:00.000Z'),
+        periodEnd: new Date('2026-09-30T23:59:59.999Z'),
+        billingDate: new Date('2026-09-30T00:00:00.000Z'),
+        dueDate: new Date('2026-10-05T00:00:00.000Z'),
+        status: 'draft',
+      });
+
+      await billingCycleRepo.createRateSnapshot(DORM_ID, {
+        billingCycleId: CYCLE_2_ID,
+        waterBillingType: 'per_person',
+        waterRate: '100.00',
+        electricityBillingType: 'fixed',
+        electricityRate: '0.00',
+        source: 'CYCLE_INIT',
+      });
+
+      const TENANT_ID = 't-tenant-101';
+      mockPrismaClient.contract.findMany.mockResolvedValue([
+        {
+          id: 'contract-101',
+          dormitoryId: DORM_ID,
+          roomId: ROOM_ID,
+          tenantId: TENANT_ID,
+          status: 'active',
+          startDate: new Date('2026-09-01T00:00:00.000Z'),
+          endDate: new Date('2026-09-30T23:59:59.999Z'),
+          rentAmount: '3000.00',
+          tenant: { id: TENANT_ID, status: 'active', displayName: 'Somchai Jaidee' },
+        },
+      ]);
+      mockPrismaClient.tenantCoOccupant.findMany.mockResolvedValue([
+        { id: 'co-1', tenantId: TENANT_ID, status: 'active' },
+        { id: 'co-2', tenantId: TENANT_ID, status: 'active' },
+      ]);
+
+      // Later cycle without snapshot: uses actual household count = 3 (1 tenant + 2 co-occupants)
+      const previewLater = await meterService.getMeterBillingPreviewContext(DORM_ID, CYCLE_2_ID);
+      const roomPreviewLater = previewLater.rooms.find((r) => r.roomId === ROOM_ID);
+      expect(roomPreviewLater).toBeDefined();
+      expect(roomPreviewLater?.currentHouseholdPeopleCount).toBe(3);
+      expect(roomPreviewLater?.snapshotPeopleCount).toBeNull();
+
+      const monthlyComp = roomPreviewLater?.chargeComponents.find((c) => c.type === 'monthly_utility');
+      const waterLine = monthlyComp?.lineItems.find((l: any) => l.type === 'water');
+      expect(waterLine?.quantity).toBe('3.00'); // Uses later-cycle household authority 3
+      expect(waterLine?.amount).toBe('300.00'); // 3 * 100.00 = 300.00 THB (NOT 100.00 THB!)
+    });
+
+    it('Test 36: R3.9-C.3.3.1 Deterministic Earliest-Cycle Lookup Across >20 Billing Cycles', async () => {
+      const { meterService, billingCycleRepo } = setupMeterWorkspaceHarness();
+
+      // Create 25 billing cycles: 2024-01 through 2026-01
+      const cycleIds: string[] = [];
+      for (let i = 1; i <= 25; i++) {
+        const year = 2024 + Math.floor((i - 1) / 12);
+        const month = ((i - 1) % 12) + 1;
+        const cycleCode = `${year}-${String(month).padStart(2, '0')}`;
+        const id = `cycle-${cycleCode}`;
+        cycleIds.push(id);
+
+        const periodStart = new Date(Date.UTC(year, month - 1, 1));
+        const periodEnd = new Date(Date.UTC(year, month, 0, 23, 59, 59, 999));
+
+        await billingCycleRepo.create(DORM_ID, {
+          id,
+          cycleCode,
+          periodStart,
+          periodEnd,
+          billingDate: periodEnd,
+          dueDate: new Date(Date.UTC(year, month, 5)),
+          status: 'draft',
+        });
+      }
+
+      // 1. True earliest cycle is 2024-01 (index 0)
+      const isFirstOfTrueFirst = await (meterService as any).resolveIsFirstBillingCycle(DORM_ID, cycleIds[0]);
+      expect(isFirstOfTrueFirst).toBe(true);
+
+      // 2. 21st cycle is 2025-09 (index 20) -> must be false
+      const isFirstOfCycle21 = await (meterService as any).resolveIsFirstBillingCycle(DORM_ID, cycleIds[20]);
+      expect(isFirstOfCycle21).toBe(false);
+
+      // 3. 25th / latest cycle is 2026-01 (index 24) -> must be false
+      const isFirstOfCycle25 = await (meterService as any).resolveIsFirstBillingCycle(DORM_ID, cycleIds[24]);
+      expect(isFirstOfCycle25).toBe(false);
     });
   });
 });

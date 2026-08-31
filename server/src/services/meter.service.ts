@@ -586,6 +586,17 @@ export class MeterService {
     return updated;
   }
 
+  private async resolveIsFirstBillingCycle(dormitoryId: string, billingCycleId: string): Promise<boolean> {
+    const result = await this.billingCycleRepo.findAll(dormitoryId, {
+      page: 1,
+      pageSize: 1,
+      sortBy: 'periodStart',
+      sortDirection: 'asc',
+    });
+    const earliest = result.items?.[0];
+    return earliest ? earliest.id === billingCycleId : false;
+  }
+
   public async saveSingleRoomWorkspaceInTx(
     dormitoryId: string,
     billingCycleId: string,
@@ -615,11 +626,7 @@ export class MeterService {
 
     let firstCycle = isFirstCycle;
     if (firstCycle === undefined) {
-      const earliest = await client.billingCycle.findFirst({
-        where: { dormitoryId },
-        orderBy: { periodStart: 'asc' },
-      });
-      firstCycle = earliest ? earliest.id === billingCycleId : false;
+      firstCycle = await this.resolveIsFirstBillingCycle(dormitoryId, billingCycleId);
     }
 
     // 1. Water reading if entered and per_unit
@@ -1220,10 +1227,7 @@ export class MeterService {
     }
 
     const rateSnapshot = await this.billingCycleRepo.findRateSnapshot(data.billingCycleId, dormitoryId);
-    const allCyclesRes = await this.billingCycleRepo.findAll(dormitoryId);
-    const allCycles = Array.isArray(allCyclesRes) ? allCyclesRes : (allCyclesRes?.items || []);
-    const earliest = allCycles.slice().sort((a, b) => new Date(a.periodStart).getTime() - new Date(b.periodStart).getTime())[0];
-    const isFirstCycle = earliest ? earliest.id === data.billingCycleId : false;
+    const isFirstCycle = await this.resolveIsFirstBillingCycle(dormitoryId, data.billingCycleId);
 
     return this.meterRepo.withTransaction(async (tx) => {
       let snapshot = rateSnapshot;
@@ -1824,10 +1828,7 @@ export class MeterService {
     });
     const rooms = roomsResult.items || [];
 
-    const allCyclesRes = await this.billingCycleRepo.findAll(dormitoryId);
-    const allCycles = Array.isArray(allCyclesRes) ? allCyclesRes : (allCyclesRes?.items || []);
-    const earliestCycle = allCycles.slice().sort((a, b) => new Date(a.periodStart).getTime() - new Date(b.periodStart).getTime())[0];
-    const isFirstCycle = earliestCycle ? earliestCycle.id === billingCycleId : true;
+    const isFirstCycle = await this.resolveIsFirstBillingCycle(dormitoryId, billingCycleId);
 
     const [cYear, cMonth] = cycle.cycleCode.split('-').map(Number);
     const cycleStartStr = `${cYear}-${String(cMonth).padStart(2, '0')}-01`;

@@ -234,8 +234,10 @@ export class InMemoryBillingCycleRepository implements IBillingCycleRepository {
     const sortBy = filter.sortBy || 'createdAt';
     const direction = filter.sortDirection === 'desc' ? -1 : 1;
     list.sort((a: any, b: any) => {
-      const valA = a[sortBy] ?? '';
-      const valB = b[sortBy] ?? '';
+      let valA = a[sortBy] ?? '';
+      let valB = b[sortBy] ?? '';
+      if (valA instanceof Date) valA = valA.getTime();
+      if (valB instanceof Date) valB = valB.getTime();
       if (valA < valB) return -1 * direction;
       if (valA > valB) return 1 * direction;
       return 0;
