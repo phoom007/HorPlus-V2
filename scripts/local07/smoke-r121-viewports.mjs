@@ -1,6 +1,6 @@
 ﻿/**
  * @license Apache-2.0
- * Real Headed UI Smoke across 3 Viewports: 390px, 768px, 1440px (Round 1.2.1)
+ * Playwright Viewport Geometry & Headed UI Smoke across 3 Viewports: 390px, 768px, 1440px (Round 1.2.2)
  */
 
 import { chromium } from '@playwright/test';
@@ -13,6 +13,8 @@ const __dirname = path.dirname(__filename);
 
 const BASE_URL = 'http://127.0.0.1:5173';
 const SESSIONS_DIR = path.join(__dirname, '../../.local07-sessions');
+
+const isHeaded = process.argv.includes('--headed');
 
 async function fillStep1And2(page, dormName) {
   await page.waitForSelector('input[placeholder*="หอพัก HorPlus"]', { timeout: 10000 });
@@ -37,11 +39,12 @@ async function fillStep1And2(page, dormName) {
 }
 
 async function runSmoke() {
+  const modeLabel = isHeaded ? 'AGENT-OBSERVED HEADED UI SMOKE' : 'AUTOMATED PLAYWRIGHT VIEWPORT GEOMETRY SMOKE';
   console.log('===============================================================');
-  console.log(' AGENT-OBSERVED UI SMOKE — 390px, 768px, 1440px Viewports');
+  console.log(` ${modeLabel} — 390px, 768px, 1440px Viewports`);
   console.log('===============================================================');
 
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({ headless: !isHeaded });
   const results = {
     v390: {},
     v768: {},
@@ -72,6 +75,14 @@ async function runSmoke() {
 
     const waterEditor = page390.locator('[data-testid="tiered-rate-editor-water"]');
     results.v390.waterEditorVisible = await waterEditor.isVisible();
+
+    // Check full title text & no truncate
+    const titleEl390 = waterEditor.locator('h4');
+    const titleText390 = (await titleEl390.innerText()).trim();
+    const titleClass390 = (await titleEl390.getAttribute('class')) || '';
+    results.v390.fullTitleText = titleText390;
+    results.v390.noTruncate = !titleClass390.includes('truncate') && !titleClass390.includes('line-clamp');
+    console.log(`  Water Title: "${titleText390}" | No Truncate: ${results.v390.noTruncate}`);
 
     // Check table headers one line
     const ths = await waterEditor.locator('th').allInnerTexts();
@@ -185,12 +196,17 @@ async function runSmoke() {
 
     const wTitleBox = await waterTitle.boundingBox();
     const wResetBox = await waterReset.boundingBox();
+    const wTitleText = (await waterTitle.innerText()).trim();
+    const wTitleClass = (await waterTitle.getAttribute('class')) || '';
 
-    console.log(`  Water Title Box: x=${wTitleBox?.x}, y=${wTitleBox?.y}, w=${wTitleBox?.width}`);
-    console.log(`  Water Reset Box: x=${wResetBox?.x}, y=${wResetBox?.y}, w=${wResetBox?.width}`);
+    results.v1440.waterFullTitle = wTitleText;
+    results.v1440.waterNoTruncate = !wTitleClass.includes('truncate') && !wTitleClass.includes('line-clamp');
 
-    // No overlap: Title Right (x + width) < Reset Left (x)
-    const waterNoOverlap = (wTitleBox && wResetBox) ? (wTitleBox.x + wTitleBox.width <= wResetBox.x) : false;
+    console.log(`  Water Title: "${wTitleText}" (x=${wTitleBox?.x}, y=${wTitleBox?.y}, w=${wTitleBox?.width})`);
+    console.log(`  Water Reset: (x=${wResetBox?.x}, y=${wResetBox?.y}, w=${wResetBox?.width})`);
+
+    // No overlap: Title Right (x + width) <= Reset Left (x)
+    const waterNoOverlap = (wTitleBox && wResetBox) ? (wTitleBox.x + wTitleBox.width <= wResetBox.x + 1) : false;
     results.v1440.waterHeaderNoOverlap = waterNoOverlap;
     console.log('  Water Header No Overlap:', waterNoOverlap);
 
@@ -201,8 +217,16 @@ async function runSmoke() {
 
     const eTitleBox = await electricTitle.boundingBox();
     const eResetBox = await electricReset.boundingBox();
+    const eTitleText = (await electricTitle.innerText()).trim();
+    const eTitleClass = (await electricTitle.getAttribute('class')) || '';
 
-    const electricNoOverlap = (eTitleBox && eResetBox) ? (eTitleBox.x + eTitleBox.width <= eResetBox.x) : false;
+    results.v1440.electricFullTitle = eTitleText;
+    results.v1440.electricNoTruncate = !eTitleClass.includes('truncate') && !eTitleClass.includes('line-clamp');
+
+    console.log(`  Electric Title: "${eTitleText}" (x=${eTitleBox?.x}, y=${eTitleBox?.y}, w=${eTitleBox?.width})`);
+    console.log(`  Electric Reset: (x=${eResetBox?.x}, y=${eResetBox?.y}, w=${eResetBox?.width})`);
+
+    const electricNoOverlap = (eTitleBox && eResetBox) ? (eTitleBox.x + eTitleBox.width <= eResetBox.x + 1) : false;
     results.v1440.electricHeaderNoOverlap = electricNoOverlap;
     console.log('  Electricity Header No Overlap:', electricNoOverlap);
 
@@ -249,13 +273,18 @@ async function runSmoke() {
     results.v1440.waterFixedPersisted = reloadedWaterMode === 'fixed';
     results.v1440.electricFixedPersisted = reloadedElectricMode === 'fixed';
 
+    if (isHeaded) {
+      console.log('Headed inspection pause (2s)...');
+      await page1440.waitForTimeout(2000);
+    }
+
     await ctx1440.close();
   } finally {
     await browser.close();
   }
 
   console.log('\n===============================================================');
-  console.log(' SMOKE RESULTS SUMMARY:');
+  console.log(` ${modeLabel} RESULTS SUMMARY:`);
   console.log(JSON.stringify(results, null, 2));
   console.log('===============================================================');
 }

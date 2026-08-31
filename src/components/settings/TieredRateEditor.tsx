@@ -312,16 +312,18 @@ export const TieredRateEditor: React.FC<TieredRateEditorProps> = ({
       data-testid={`tiered-rate-editor-${utilityType}`}
     >
       {/* Header */}
-      <div className="flex items-center justify-between mb-3 gap-2">
-        <div className="flex items-center gap-1.5 min-w-0 flex-1">
-          {theme.headerIcon}
-          <h4 className="text-xs font-bold text-slate-800 dark:text-slate-100 min-w-0 truncate" title={theme.title}>{theme.title}</h4>
+      <div className="flex items-start justify-between mb-3 gap-2">
+        <div className="flex items-start gap-1.5 min-w-0 flex-1">
+          <div className="shrink-0 mt-0.5">{theme.headerIcon}</div>
+          <h4 className="text-xs font-bold text-slate-800 dark:text-slate-100 leading-snug tracking-tight">
+            {theme.title}
+          </h4>
         </div>
         <button
           type="button"
           onClick={handleResetPreset}
           disabled={disabled}
-          className="flex items-center gap-1 text-[11px] font-medium text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 transition-colors whitespace-nowrap shrink-0 disabled:opacity-40 cursor-pointer"
+          className="flex items-center gap-1 text-[11px] font-medium text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 transition-colors whitespace-nowrap shrink-0 disabled:opacity-40 cursor-pointer pt-0.5"
           data-testid={`btn-reset-preset-${utilityType}`}
           title="คืนค่าเป็นตัวอย่างเริ่มต้น (บันทึกเมื่อพร้อม)"
         >

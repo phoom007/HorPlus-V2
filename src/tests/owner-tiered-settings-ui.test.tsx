@@ -1351,5 +1351,42 @@ describe('OWNER R3.9-D.1.7: Save-Status Context Isolation & Stale Lifecycle Clos
       expect(screen.queryByTestId('btn-save-tiers-electricity')).toBeNull();
       expect(screen.queryByText(/บันทึกอัตรา/)).toBeNull();
     });
+
+    it('TieredRateEditor in Settings displays full titles without truncate or text-hiding classes', () => {
+      const tiers: CanonicalTierRecord[] = [
+        { upTo: '10.00', rate: '18.00' },
+        { upTo: null, rate: '22.00' },
+      ];
+
+      const { rerender } = render(
+        <TieredRateEditor
+          utilityType="water"
+          tiers={tiers}
+          onChange={vi.fn()}
+          onSave={vi.fn()}
+        />
+      );
+
+      const waterTitle = screen.getByText('อัตราค่าน้ำประปาแบบขั้นบันได');
+      expect(waterTitle).toBeDefined();
+      expect(waterTitle.className).not.toContain('truncate');
+      expect(waterTitle.className).not.toContain('line-clamp');
+      expect(waterTitle.className).not.toContain('overflow-hidden');
+
+      rerender(
+        <TieredRateEditor
+          utilityType="electricity"
+          tiers={tiers}
+          onChange={vi.fn()}
+          onSave={vi.fn()}
+        />
+      );
+
+      const electricTitle = screen.getByText('อัตราค่าไฟฟ้าแบบขั้นบันได');
+      expect(electricTitle).toBeDefined();
+      expect(electricTitle.className).not.toContain('truncate');
+      expect(electricTitle.className).not.toContain('line-clamp');
+      expect(electricTitle.className).not.toContain('overflow-hidden');
+    });
   });
 });
