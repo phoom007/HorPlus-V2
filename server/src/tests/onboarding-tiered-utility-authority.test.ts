@@ -7,6 +7,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { Prisma } from '@prisma/client';
 import * as prismaModule from '../db/prisma.js';
 import {
+  OnboardingBuildingInputSchema,
   OnboardingBillingInputSchema,
   OnboardingRoomInputSchema,
   CompleteOnboardingInputSchema,
@@ -1135,6 +1136,175 @@ describe('OWNER R3.9-C.3.2: First-Cycle Meter Workspace Authority Closure & Blan
       expect(lastCallArgs[1]?.pageSize).toBe(1);
       expect(lastCallArgs[1]?.sortBy).toBe('periodStart');
       expect(lastCallArgs[1]?.sortDirection).toBe('asc');
+    });
+  });
+
+  describe('10. Three Building-Level Deposit Modes & Room Propagation', () => {
+    it('OnboardingBuildingInputSchema and OnboardingRoomInputSchema validate termDeposit, monthlyDeposit, dailyDeposit', () => {
+      const bld = {
+        id: 'b-1',
+        name: 'อาคาร B',
+        termDeposit: 5000,
+        monthlyDeposit: 3000,
+        dailyDeposit: 500,
+      };
+      const room = {
+        buildingId: 'b-1',
+        roomNumber: 'B101',
+        termDeposit: 5000,
+        monthlyDeposit: 3000,
+        dailyDeposit: 500,
+        monthlyRent: 3500,
+      };
+
+      const parsedBld = OnboardingBuildingInputSchema.parse(bld);
+      expect(parsedBld.termDeposit).toBe(5000);
+      expect(parsedBld.monthlyDeposit).toBe(3000);
+      expect(parsedBld.dailyDeposit).toBe(500);
+
+      const parsedRoom = OnboardingRoomInputSchema.parse(room);
+      expect(parsedRoom.termDeposit).toBe(5000);
+      expect(parsedRoom.monthlyDeposit).toBe(3000);
+      expect(parsedRoom.dailyDeposit).toBe(500);
+    });
+
+    it('DormitoryProvisioningService propagates distinct three-mode deposits to rooms per building without leakage', async () => {
+      vi.spyOn(referralService, 'settleReferralOnboarding').mockResolvedValue(undefined as any);
+      const upsertedRooms: any[] = [];
+
+      const mockTx: any = {
+        $executeRaw: vi.fn().mockResolvedValue(1),
+        onboardingDraft: {
+          findUnique: vi.fn().mockResolvedValue({
+            provisionalDormitoryId: 'dorm-prov-001',
+            finalizedAt: null,
+          }),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+        dormitory: {
+          findUnique: vi.fn().mockResolvedValue({
+            id: 'dorm-prov-001',
+            createdByUserId: 'user-001',
+            status: 'setup_pending',
+          }),
+          update: vi.fn().mockResolvedValue({
+            id: 'dorm-prov-001',
+            name: 'Dorm Multi-Deposit',
+            status: 'active',
+          }),
+        },
+        ownerSignature: {
+          findFirst: vi.fn().mockResolvedValue({ id: 'sig-001', isCurrent: true }),
+        },
+        dormitoryLineConfig: {
+          findUnique: vi.fn().mockResolvedValue(null),
+        },
+        subscriptionPackageIntent: {
+          findUnique: vi.fn().mockResolvedValue({
+            id: 'intent-001',
+            userId: 'user-001',
+            dormitoryId: 'dorm-prov-001',
+            checkoutVersion: 2,
+            status: 'PENDING_PAYMENT',
+            finalPayableAmount: new Prisma.Decimal(100),
+            package: { planCode: 'PAID', plan: { code: 'PAID' } },
+          }),
+          update: vi.fn().mockResolvedValue({ id: 'intent-001', status: 'SUCCEEDED' }),
+          updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+        },
+        subscriptionPlan: {
+          findUnique: vi.fn().mockResolvedValue({ id: 'plan-paid', code: 'PAID' }),
+        },
+        dormitorySubscription: {
+          findUnique: vi.fn().mockResolvedValue(null),
+          create: vi.fn().mockResolvedValue({ id: 'sub-001', status: 'ACTIVE' }),
+          upsert: vi.fn().mockResolvedValue({ id: 'sub-001', status: 'ACTIVE' }),
+        },
+        role: {
+          findFirst: vi.fn().mockResolvedValue({ id: 'role-owner', code: 'OWNER' }),
+        },
+        dormitoryMember: {
+          upsert: vi.fn().mockResolvedValue({ id: 'mem-001' }),
+        },
+        dormitoryPropertyDefaults: {
+          upsert: vi.fn().mockResolvedValue({}),
+        },
+        dormitoryBillingSettings: {
+          upsert: vi.fn().mockResolvedValue({ id: 'bset-001' }),
+        },
+        building: {
+          create: vi.fn((args) => Promise.resolve({ id: args.data.id || 'bld-id', ...args.data })),
+          upsert: vi.fn((args) => Promise.resolve({ id: args.create?.id || 'bld-id', ...args.create })),
+        },
+        room: {
+          upsert: vi.fn((args) => {
+            upsertedRooms.push(args.create);
+            return Promise.resolve({ id: `rm-${upsertedRooms.length}`, ...args.create });
+          }),
+        },
+      };
+
+      const mockPrisma: any = {
+        $transaction: vi.fn(async (cb) => cb(mockTx)),
+      };
+
+      const service = new DormitoryProvisioningService(mockPrisma as any);
+
+      await service.completeOwnerOnboarding({
+        userId: 'user-001',
+        idempotencyKey: 'idemp-dep-test',
+        provisionalDormitoryId: 'dorm-prov-001',
+        packageIntentId: 'intent-001',
+        dormitory: { name: 'Dorm Multi-Deposit', estimatedRoomCount: 4 },
+        billing: { dueDay: 5 },
+        buildings: [
+          {
+            id: 'bld-A',
+            name: 'อาคาร A',
+            floorsCount: 1,
+            termDeposit: 5000,
+            monthlyDeposit: 3000,
+            dailyDeposit: 500,
+          },
+          {
+            id: 'bld-B',
+            name: 'อาคาร B',
+            floorsCount: 1,
+            termDeposit: 8000,
+            monthlyDeposit: 4000,
+            dailyDeposit: 800,
+          },
+        ],
+        rooms: [
+          { buildingId: 'bld-A', roomNumber: 'A101', floor: 1, monthlyRent: 3500 },
+          { buildingId: 'bld-A', roomNumber: 'A102', floor: 1, monthlyRent: 3500 },
+          { buildingId: 'bld-B', roomNumber: 'B101', floor: 1, monthlyRent: 4500 },
+          { buildingId: 'bld-B', roomNumber: 'B102', floor: 1, monthlyRent: 4500 },
+        ],
+      });
+
+      expect(upsertedRooms).toHaveLength(4);
+
+      const a101 = upsertedRooms.find((r) => r.roomNumber === 'A101');
+      const a102 = upsertedRooms.find((r) => r.roomNumber === 'A102');
+      const b101 = upsertedRooms.find((r) => r.roomNumber === 'B101');
+      const b102 = upsertedRooms.find((r) => r.roomNumber === 'B102');
+
+      expect(a101.termDeposit).toBe('5000');
+      expect(a101.monthlyDeposit).toBe('3000');
+      expect(a101.dailyDeposit).toBe('500');
+
+      expect(a102.termDeposit).toBe('5000');
+      expect(a102.monthlyDeposit).toBe('3000');
+      expect(a102.dailyDeposit).toBe('500');
+
+      expect(b101.termDeposit).toBe('8000');
+      expect(b101.monthlyDeposit).toBe('4000');
+      expect(b101.dailyDeposit).toBe('800');
+
+      expect(b102.termDeposit).toBe('8000');
+      expect(b102.monthlyDeposit).toBe('4000');
+      expect(b102.dailyDeposit).toBe('800');
     });
   });
 });

@@ -27,6 +27,70 @@ export const normalizeToCanonicalDecimal = (val: string | number | null | undefi
   return `${intPart}.${paddedDec}`;
 };
 
+export const formatUpToDisplay = (upTo: string | number | null | undefined): string => {
+  if (upTo === null || upTo === undefined) return '';
+  const s = String(upTo).trim();
+  if (!s) return '';
+  const num = Number(s);
+  if (isNaN(num)) return s;
+  return String(Math.floor(num));
+};
+
+export const formatRateDisplay = (rate: string | number | null | undefined): string => {
+  if (rate === null || rate === undefined) return '';
+  const s = String(rate).trim();
+  if (!s) return '';
+  if (/^\d+\.00$/.test(s)) {
+    return s.slice(0, -3);
+  }
+  if (/^\d+\.0$/.test(s)) {
+    return s.slice(0, -2);
+  }
+  return s;
+};
+
+export const normalizeDisplayUpTo = (val: string): string => {
+  const trimmed = val.trim();
+  if (!trimmed) return '';
+  const num = Number(trimmed);
+  if (isNaN(num) || num <= 0 || !/^\d+$/.test(trimmed)) return trimmed;
+  return String(Math.floor(num));
+};
+
+export const normalizeDisplayRate = (val: string): string => {
+  const trimmed = val.trim();
+  if (!trimmed) return '';
+  if (!/^\d+(\.\d{1,2})?$/.test(trimmed)) return trimmed;
+  if (/^0\d+/.test(trimmed)) {
+    const parts = trimmed.split('.');
+    const intPart = String(parseInt(parts[0], 10));
+    return parts.length > 1 ? `${intPart}.${parts[1]}` : intPart;
+  }
+  return trimmed;
+};
+
+export const validateCanonicalTiers = (tiers: CanonicalTierRecord[]): boolean => {
+  if (!Array.isArray(tiers) || tiers.length < 1 || tiers.length > 5) return false;
+  let lastBound = 0;
+  for (let i = 0; i < tiers.length - 1; i++) {
+    const upToStr = tiers[i].upTo;
+    if (!upToStr || !/^\d+(\.0+)?$/.test(String(upToStr).trim())) return false;
+    const upToNum = Number(upToStr);
+    if (isNaN(upToNum) || upToNum <= lastBound) return false;
+    lastBound = upToNum;
+  }
+  const lastTier = tiers[tiers.length - 1];
+  if (lastTier.upTo !== null && lastTier.upTo !== undefined && String(lastTier.upTo).trim() !== '') {
+    return false;
+  }
+  const ratePattern = /^\d+(\.\d{1,2})?$/;
+  for (let i = 0; i < tiers.length; i++) {
+    const rateStr = String(tiers[i].rate ?? '').trim();
+    if (!ratePattern.test(rateStr)) return false;
+  }
+  return true;
+};
+
 export const normalizeCanonicalTiers = (rawTiers: CanonicalTierRecord[]): CanonicalTierRecord[] => {
   return rawTiers.map((t, idx) => {
     const isLast = idx === rawTiers.length - 1;
@@ -80,23 +144,52 @@ export const TieredRateEditor: React.FC<TieredRateEditorProps> = ({
 
   const handleRateChange = (index: number, value: string) => {
     setLocalError(null);
+    // Reject invalid chars (letters, negative, scientific notation)
+    if (value !== '' && !/^\d*(\.\d{0,2})?$/.test(value)) {
+      setLocalError('อัตราต้องเป็นตัวเลขทศนิยมไม่เกิน 2 ตำแหน่งและไม่ติดลบ');
+      return;
+    }
     const updated = tiers.map((t, i) => (i === index ? { ...t, rate: value } : t));
     onChange(updated);
+  };
+
+  const handleRateBlur = (index: number, value: string) => {
+    if (value === '') return;
+    const normalized = normalizeDisplayRate(value);
+    if (normalized !== value) {
+      const updated = tiers.map((t, i) => (i === index ? { ...t, rate: normalized } : t));
+      onChange(updated);
+    }
   };
 
   const handleUpToChange = (index: number, value: string) => {
     setLocalError(null);
     const fromVal = getFromValue(index);
 
-    // Strict positive integer boundary check
-    if (value !== '' && (!/^\d+$/.test(value) || Number(value) <= 0)) {
+    // Reject non-integer / negative / scientific notation / letters / decimals
+    if (value !== '' && !/^\d+$/.test(value)) {
       setLocalError('หน่วยสูงสุดต้องเป็นจำนวนเต็มบวกเท่านั้น');
-    } else if (value !== '' && Number(value) < fromVal) {
+      return;
+    }
+    if (value !== '' && Number(value) <= 0) {
+      setLocalError('หน่วยสูงสุดต้องเป็นจำนวนเต็มบวกเท่านั้น');
+      return;
+    }
+    if (value !== '' && Number(value) < fromVal) {
       setLocalError(`หน่วยสูงสุดต้องมากกว่าจุดเริ่มต้น (${fromVal})`);
     }
 
     const updated = tiers.map((t, i) => (i === index ? { ...t, upTo: value } : t));
     onChange(updated);
+  };
+
+  const handleUpToBlur = (index: number, value: string) => {
+    if (value === '') return;
+    const normalized = normalizeDisplayUpTo(value);
+    if (normalized !== value) {
+      const updated = tiers.map((t, i) => (i === index ? { ...t, upTo: normalized } : t));
+      onChange(updated);
+    }
   };
 
   const handleAddTier = () => {
@@ -175,8 +268,6 @@ export const TieredRateEditor: React.FC<TieredRateEditorProps> = ({
     }
 
     // Validate rates: non-negative <= 2 decimal places, no scientific notation, no NaN, no blank
-    // Valid: 0, 0.00, 3, 3.4, 3.40, 4.25
-    // Invalid: -1, 3.456, 1e2, 1E2, NaN, blank
     const ratePattern = /^\d+(\.\d{1,2})?$/;
     for (let i = 0; i < tiers.length; i++) {
       const rateStr = String(tiers[i].rate ?? '').trim();
@@ -221,21 +312,21 @@ export const TieredRateEditor: React.FC<TieredRateEditorProps> = ({
       data-testid={`tiered-rate-editor-${utilityType}`}
     >
       {/* Header */}
-      <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-2">
+      <div className="flex items-center justify-between mb-3 gap-2">
+        <div className="flex items-center gap-2 min-w-0">
           {theme.headerIcon}
-          <h4 className="text-xs font-bold text-slate-800 dark:text-slate-100">{theme.title}</h4>
+          <h4 className="text-xs font-bold text-slate-800 dark:text-slate-100 whitespace-nowrap">{theme.title}</h4>
         </div>
         <button
           type="button"
           onClick={handleResetPreset}
           disabled={disabled}
-          className="flex items-center gap-1 text-[11px] font-medium text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 transition-colors disabled:opacity-40"
+          className="flex items-center gap-1 text-[11px] font-medium text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 transition-colors whitespace-nowrap shrink-0 disabled:opacity-40"
           data-testid={`btn-reset-preset-${utilityType}`}
           title="คืนค่าเป็นตัวอย่างเริ่มต้น (บันทึกเมื่อพร้อม)"
         >
           <RotateCcw className="w-3 h-3" />
-          <span>คืนค่าเริ่มต้น</span>
+          <span className="whitespace-nowrap">คืนค่าเริ่มต้น</span>
         </button>
       </div>
 
@@ -247,16 +338,16 @@ export const TieredRateEditor: React.FC<TieredRateEditorProps> = ({
         </div>
       )}
 
-      {/* Tier Table */}
+      {/* Tier Table (Responsive container with stable min-width for columns) */}
       <div className="overflow-x-auto">
-        <table className="w-full text-xs text-left">
+        <table className="w-full min-w-[340px] text-xs text-left">
           <thead>
             <tr className="text-slate-500 dark:text-slate-400 border-b border-slate-200/80 dark:border-slate-800">
-              <th className="py-2 px-1 font-semibold w-12 text-center">ขั้นที่</th>
-              <th className="py-2 px-1 font-semibold">ตั้งแต่</th>
-              <th className="py-2 px-1 font-semibold">ถึง</th>
-              <th className="py-2 px-1 font-semibold">อัตรา (บาท/หน่วย)</th>
-              <th className="py-2 px-1 font-semibold w-10 text-center"></th>
+              <th className="py-2 px-1 font-semibold w-12 text-center whitespace-nowrap">ขั้นที่</th>
+              <th className="py-2 px-1 font-semibold whitespace-nowrap">ตั้งแต่</th>
+              <th className="py-2 px-1 font-semibold whitespace-nowrap">ถึง</th>
+              <th className="py-2 px-1 font-semibold whitespace-nowrap">อัตรา (บาท/หน่วย)</th>
+              <th className="py-2 px-1 font-semibold w-10 text-center whitespace-nowrap"></th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -267,12 +358,12 @@ export const TieredRateEditor: React.FC<TieredRateEditorProps> = ({
               return (
                 <tr key={idx} className="group" data-testid={`tier-row-${utilityType}-${idx}`}>
                   {/* Step index */}
-                  <td className="py-2 px-1 text-center font-bold text-slate-700 dark:text-slate-300">
+                  <td className="py-2 px-1 text-center font-bold text-slate-700 dark:text-slate-300 whitespace-nowrap">
                     {idx + 1}
                   </td>
 
                   {/* From value (derived / read-only) */}
-                  <td className="py-2 px-1">
+                  <td className="py-2 px-1 whitespace-nowrap">
                     <span
                       className="inline-block px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium"
                       data-testid={`tier-from-${utilityType}-${idx}`}
@@ -282,10 +373,10 @@ export const TieredRateEditor: React.FC<TieredRateEditorProps> = ({
                   </td>
 
                   {/* Up to value */}
-                  <td className="py-2 px-1">
+                  <td className="py-2 px-1 whitespace-nowrap">
                     {isFinal ? (
                       <span
-                        className={`inline-block px-2.5 py-1 rounded-lg ${theme.badge} font-semibold`}
+                        className={`inline-block px-2.5 py-1 rounded-lg ${theme.badge} font-semibold whitespace-nowrap`}
                         data-testid={`tier-upto-${utilityType}-${idx}`}
                       >
                         ไม่จำกัด
@@ -293,37 +384,39 @@ export const TieredRateEditor: React.FC<TieredRateEditorProps> = ({
                     ) : (
                       <div className="flex items-center gap-1">
                         <input
-                          type="number"
-                          step="1"
-                          min={fromVal}
+                          type="text"
+                          inputMode="numeric"
                           disabled={disabled}
-                          value={tier.upTo ?? ''}
+                          value={formatUpToDisplay(tier.upTo)}
                           onChange={(e) => handleUpToChange(idx, e.target.value)}
+                          onBlur={(e) => handleUpToBlur(idx, e.target.value)}
                           className="w-20 px-2 py-1 border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 font-medium focus:outline-none focus:ring-1 focus:ring-indigo-500 text-xs disabled:opacity-50"
                           data-testid={`input-tier-upto-${utilityType}-${idx}`}
                         />
-                        <span className="text-slate-400 dark:text-slate-500 text-[11px]">หน่วย</span>
+                        <span className="text-slate-400 dark:text-slate-500 text-[11px] whitespace-nowrap">หน่วย</span>
                       </div>
                     )}
                   </td>
 
                   {/* Rate value */}
-                  <td className="py-2 px-1">
+                  <td className="py-2 px-1 whitespace-nowrap">
                     <div className="flex items-center gap-1">
                       <input
                         type="text"
+                        inputMode="decimal"
                         disabled={disabled}
-                        value={tier.rate}
+                        value={formatRateDisplay(tier.rate)}
                         onChange={(e) => handleRateChange(idx, e.target.value)}
+                        onBlur={(e) => handleRateBlur(idx, e.target.value)}
                         className="w-24 px-2 py-1 border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 font-bold focus:outline-none focus:ring-1 focus:ring-indigo-500 text-xs disabled:opacity-50"
                         data-testid={`input-tier-rate-${utilityType}-${idx}`}
                       />
-                      <span className="text-slate-400 dark:text-slate-500 text-[11px]">฿</span>
+                      <span className="text-slate-400 dark:text-slate-500 text-[11px] whitespace-nowrap">฿</span>
                     </div>
                   </td>
 
                   {/* Delete action */}
-                  <td className="py-2 px-1 text-center">
+                  <td className="py-2 px-1 text-center whitespace-nowrap">
                     {tiers.length > 1 && (
                       <button
                         type="button"
@@ -345,17 +438,17 @@ export const TieredRateEditor: React.FC<TieredRateEditorProps> = ({
       </div>
 
       {/* Footer controls: Add Tier & Save Button */}
-      <div className="mt-3 pt-3 border-t border-slate-200/80 dark:border-slate-800 flex items-center justify-between gap-3">
+      <div className="mt-3 pt-3 border-t border-slate-200/80 dark:border-slate-800 flex items-center justify-between gap-3 flex-wrap">
         {tiers.length < 5 ? (
           <button
             type="button"
             onClick={handleAddTier}
             disabled={disabled}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-dashed border-slate-300 dark:border-slate-700 hover:border-slate-400 text-slate-600 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-800 transition-all text-xs font-medium disabled:opacity-40"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-dashed border-slate-300 dark:border-slate-700 hover:border-slate-400 text-slate-600 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-800 transition-all text-xs font-medium whitespace-nowrap disabled:opacity-40"
             data-testid={`btn-add-tier-${utilityType}`}
           >
             <Plus className="w-3.5 h-3.5" />
-            <span>เพิ่มขั้นอัตรา</span>
+            <span className="whitespace-nowrap">เพิ่มขั้นอัตรา</span>
           </button>
         ) : (
           <div />
@@ -366,13 +459,14 @@ export const TieredRateEditor: React.FC<TieredRateEditorProps> = ({
             type="button"
             onClick={handleSave}
             disabled={disabled || isSaving}
-            className={`px-3.5 py-1.5 rounded-xl ${theme.accentBtn} text-xs font-semibold transition-all shadow-sm disabled:opacity-50`}
+            className={`px-3.5 py-1.5 rounded-xl ${theme.accentBtn} text-xs font-semibold transition-all shadow-sm whitespace-nowrap disabled:opacity-50`}
             data-testid={`btn-save-tiers-${utilityType}`}
           >
-            {isSaving ? 'กำลังบันทึก...' : 'บันทึกอัตราขั้นบันได'}
+            <span className="whitespace-nowrap">{isSaving ? 'กำลังบันทึก...' : 'บันทึกอัตราขั้นบันได'}</span>
           </button>
         )}
       </div>
     </div>
   );
 };
+

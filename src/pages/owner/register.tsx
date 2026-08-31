@@ -3,24 +3,36 @@ export function mapRegistrationBuildingForFinalize(
   idx: number,
   fallbackDeposit?: number | string
 ) {
-  const normalizedPrefix = (b.roomPrefix ? b.roomPrefix.trim() : '').toUpperCase();
+  const bName = (b.name && b.name.trim()) ? b.name.trim() : '';
+  const rawPrefix = (b.roomPrefix ? b.roomPrefix.trim() : '');
+  const effectiveName = bName || (rawPrefix ? `อาคาร ${rawPrefix}` : `อาคาร ${idx + 1}`);
+  const effectivePrefix = bName || rawPrefix || null;
+  const fallback = Number(fallbackDeposit) || 0;
+
+  const termDep = b.termDeposit !== undefined && b.termDeposit !== '' ? (Number(b.termDeposit) || 0) : (b.securityDeposit !== undefined && b.securityDeposit !== '' ? (Number(b.securityDeposit) || 0) : fallback);
+  const monthlyDep = b.monthlyDeposit !== undefined && b.monthlyDeposit !== '' ? (Number(b.monthlyDeposit) || 0) : (b.securityDeposit !== undefined && b.securityDeposit !== '' ? (Number(b.securityDeposit) || 0) : fallback);
+  const dailyDep = b.dailyDeposit !== undefined && b.dailyDeposit !== '' ? (Number(b.dailyDeposit) || 0) : (b.securityDeposit !== undefined && b.securityDeposit !== '' ? (Number(b.securityDeposit) || 0) : fallback);
+
   return {
     id: b.id || `bld-${idx + 1}`,
-    name: (b.name && b.name.trim()) ? b.name.trim() : (normalizedPrefix ? `อาคาร ${normalizedPrefix}` : `อาคาร ${idx + 1}`),
-    code: normalizedPrefix || null,
+    name: effectiveName,
+    code: effectivePrefix,
     floorsCount: Number(b.totalFloors) || 1,
     roomsPerFloor: b.roomsPerFloor !== '' ? Number(b.roomsPerFloor) : null,
-    roomPrefix: normalizedPrefix || null,
+    roomPrefix: effectivePrefix,
     hasElevator: b.hasElevator ?? false,
     numberingPattern: b.formatPattern || null,
-    description: `อาคาร ${(b.name && b.name.trim()) ? b.name.trim() : (normalizedPrefix ? normalizedPrefix : idx + 1)}`,
+    description: `อาคาร ${effectiveName}`,
     monthlyRent: Number(b.rentRates?.monthly) || 0,
     dailyRent: b.rentRates?.daily ? Number(b.rentRates.daily) : null,
     termRent: b.rentRates?.term ? Number(b.rentRates.term) : null,
     termMonths: Number(b.rentRates?.termMonths) || 4,
     maxInstallmentMonths: Number(b.rentRates?.maxInstallmentMonths) || 2,
-    depositAmount: b.securityDeposit !== undefined && b.securityDeposit !== '' ? (Number(b.securityDeposit) || 0) : (Number(fallbackDeposit) || 0),
-    securityDeposit: b.securityDeposit !== undefined && b.securityDeposit !== '' ? (Number(b.securityDeposit) || 0) : (Number(fallbackDeposit) || 0),
+    termDeposit: termDep,
+    monthlyDeposit: monthlyDep,
+    dailyDeposit: dailyDep,
+    depositAmount: monthlyDep,
+    securityDeposit: monthlyDep,
     maximumOccupants: Number(b.rentRates?.maxOccupants) || 2,
   };
 }
@@ -31,6 +43,8 @@ import {
   WATER_TIER_PRESET,
   ELECTRICITY_TIER_PRESET,
   CanonicalTierRecord,
+  validateCanonicalTiers,
+  normalizeCanonicalTiers,
 } from '../../components/settings/TieredRateEditor';
 
 export const mapRegisterUtilityMode = (mode: string): string => {
@@ -218,9 +232,10 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
 
   // Helper to generate room numbers list
   const getGeneratedRooms = (b: {
+    name?: string;
     totalFloors: number | string;
     roomsPerFloor: number | string;
-    roomPrefix: string;
+    roomPrefix?: string;
     formatPattern: string;
     mode: 'auto' | 'manual';
     customRooms?: string[];
@@ -238,7 +253,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
     }
 
     const rooms: string[] = [];
-    const prefix = b.roomPrefix ? b.roomPrefix.trim().toUpperCase() : '';
+    const prefix = (b.name && b.name.trim()) ? b.name.trim() : (b.roomPrefix ? b.roomPrefix.trim() : '');
     const maxFloors = Number(b.totalFloors) || 0;
     const maxRooms = Number(b.roomsPerFloor) || 0;
 
@@ -248,19 +263,19 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
         let roomNum = '';
 
         switch (b.formatPattern) {
-          case 'prefix_floor_room': // A101
+          case 'prefix_floor_room': // A101 / สมบูรณ์101
             roomNum = `${prefix}${floor}${rmStr}`;
             break;
           case 'floor_room': // 101
             roomNum = `${floor}${rmStr}`;
             break;
-          case 'prefix_floor_slash_room': // A1/1
+          case 'prefix_floor_slash_room': // A1/1 / สมบูรณ์1/1
             roomNum = `${prefix}${floor}/${rm}`;
             break;
           case 'floor_slash_room': // 1/1
             roomNum = `${floor}/${rm}`;
             break;
-          case 'prefix_dash_floor_room': // A-101
+          case 'prefix_dash_floor_room': // A-101 / สมบูรณ์-101
             roomNum = `${prefix ? prefix + '-' : ''}${floor}${rmStr}`;
             break;
           default:
@@ -294,6 +309,9 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
           formatPattern: 'prefix_floor_room',
           mode: 'auto' as 'auto' | 'manual',
           customRooms: [] as string[],
+          termDeposit: 0 as number | string,
+          monthlyDeposit: 0 as number | string,
+          dailyDeposit: 0 as number | string,
           securityDeposit: 0 as number | string,
           rentRates: {
             monthly: 0 as number | string,
@@ -434,14 +452,22 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
         if (draft.formData) {
           const restoredBuildings = Array.isArray(draft.formData.buildings)
             ? draft.formData.buildings.map((b: any) => {
+              const rawName = (typeof b.name === 'string' ? b.name : '').trim();
               const rawPrefix = (typeof b.roomPrefix === 'string' ? b.roomPrefix : '').trim();
-              const pfx = rawPrefix.toUpperCase();
+              const effectiveName = rawName || rawPrefix || '';
+              const legacyDep = b.securityDeposit !== undefined && b.securityDeposit !== '' ? b.securityDeposit : (draft.formData?.deposits?.securityDeposit ?? 0);
+              const termDep = b.termDeposit !== undefined && b.termDeposit !== '' ? b.termDeposit : legacyDep;
+              const monthlyDep = b.monthlyDeposit !== undefined && b.monthlyDeposit !== '' ? b.monthlyDeposit : legacyDep;
+              const dailyDep = b.dailyDeposit !== undefined && b.dailyDeposit !== '' ? b.dailyDeposit : legacyDep;
+
               return {
                 ...b,
-                roomPrefix: pfx,
-                name: (b.name && b.name.trim() && b.name.trim() !== 'อาคาร ')
-                  ? b.name.trim()
-                  : (b.name || ''),
+                name: effectiveName,
+                roomPrefix: rawPrefix,
+                termDeposit: termDep,
+                monthlyDeposit: monthlyDep,
+                dailyDeposit: dailyDep,
+                securityDeposit: monthlyDep,
               };
             })
             : undefined;
@@ -453,9 +479,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
               ...prev.utilities,
               ...(draft.formData.utilities || {}),
               waterTierRates: draft.formData.utilities?.waterTierRates || prev.utilities.waterTierRates,
-              waterTierReviewed: Boolean(draft.formData.utilities?.waterTierReviewed),
               electricityTierRates: draft.formData.utilities?.electricityTierRates || prev.utilities.electricityTierRates,
-              electricityTierReviewed: Boolean(draft.formData.utilities?.electricityTierReviewed),
             },
             ...(restoredBuildings ? { buildings: restoredBuildings } : {}),
             // Never restore sensitive channelSecret
@@ -646,7 +670,6 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
   // Signature Canvas Drawing
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [isDrawing, setIsDrawing] = useState(false);
-  const [signatureSavedToast, setSignatureSavedToast] = useState<string | null>(null);
   const [webhookCopied, setWebhookCopied] = useState(false);
 
   // Restore signature to canvas if returning to step 5
@@ -704,28 +727,6 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
     }
   };
 
-  const handleSaveSignature = async () => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const dataUrl = canvas.toDataURL('image/png');
-    setFormData(prev => ({ ...prev, ownerSignatureUrl: dataUrl }));
-    setSignatureSavedToast('บันทึกลายเซ็นเรียบร้อยแล้ว!');
-    setTimeout(() => setSignatureSavedToast(null), 3000);
-
-    try {
-      const provDormId = await ensureProvisionalDormitoryId();
-      if (provDormId) {
-        const uploadRes = await onboardingClient.uploadSignature(provDormId, dataUrl);
-        const safeRef = uploadRes?.data?.url || uploadRes?.url || uploadRes?.data?.objectKey || uploadRes?.objectKey;
-        if (safeRef) {
-          setFormData(prev => ({ ...prev, ownerSignatureUrl: safeRef }));
-        }
-      }
-    } catch (err) {
-      console.warn('Pre-uploading signature failed (will retry at finalization):', err);
-    }
-  };
-
   const clearCanvas = () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -733,7 +734,6 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
     if (!ctx) return;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     setFormData(prev => ({ ...prev, ownerSignatureUrl: '' }));
-    setSignatureSavedToast(null);
   };
 
   const handleCheckReferral = async () => {
@@ -998,8 +998,9 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
     if (stepNum === 3) {
       // Check utilities rates
       if (formData.utilities.waterBillingMode === 'tiered') {
-        if (!formData.utilities.waterTierReviewed) {
-          return { valid: false, error: 'กรุณาตรวจสอบและบันทึกอัตราค่าน้ำแบบขั้นบันได' };
+        const wTiers = formData.utilities.waterTierRates || WATER_TIER_PRESET;
+        if (!validateCanonicalTiers(wTiers)) {
+          return { valid: false, error: 'กรุณากรอกอัตราค่าน้ำแบบขั้นบันไดให้ถูกต้อง' };
         }
       } else {
         if (isNaN(Number(formData.utilities.waterRate)) || Number(formData.utilities.waterRate) < 0) {
@@ -1008,8 +1009,9 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
       }
 
       if (formData.utilities.electricBillingMode === 'tiered') {
-        if (!formData.utilities.electricityTierReviewed) {
-          return { valid: false, error: 'กรุณาตรวจสอบและบันทึกอัตราค่าไฟฟ้าแบบขั้นบันได' };
+        const eTiers = formData.utilities.electricityTierRates || ELECTRICITY_TIER_PRESET;
+        if (!validateCanonicalTiers(eTiers)) {
+          return { valid: false, error: 'กรุณากรอกอัตราค่าไฟฟ้าแบบขั้นบันไดให้ถูกต้อง' };
         }
       } else {
         if (isNaN(Number(formData.utilities.electricRate)) || Number(formData.utilities.electricRate) < 0) {
@@ -1057,13 +1059,24 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
     }
 
     if (stepNum === 4) {
-      // Check security deposit per building (0 is explicitly valid)
+      // Check rental-mode deposits per building (0 is explicitly valid)
       for (let i = 0; i < formData.buildings.length; i++) {
         const b = formData.buildings[i];
         const bLabel = (b.name && b.name.trim()) ? formatBuildingDisplayName(b.name) : (b.roomPrefix ? `อาคาร ${b.roomPrefix}` : `อาคารที่ ${i + 1}`);
-        const deposit = (b.securityDeposit !== undefined && b.securityDeposit !== '') ? b.securityDeposit : formData.deposits.securityDeposit;
-        if (deposit === undefined || deposit === '' || isNaN(Number(deposit)) || Number(deposit) < 0) {
-          return { valid: false, error: `กรุณากรอก "ค่าประกันความเสียหาย" ของ ${bLabel} ให้ถูกต้อง` };
+
+        const termDep = b.termDeposit !== undefined && b.termDeposit !== '' ? b.termDeposit : (b.securityDeposit !== undefined && b.securityDeposit !== '' ? b.securityDeposit : formData.deposits.securityDeposit);
+        if (termDep === undefined || termDep === '' || isNaN(Number(termDep)) || Number(termDep) < 0) {
+          return { valid: false, error: `กรุณากรอก "ค่าประกันรายเทอม" ของ ${bLabel} ให้ถูกต้อง (ต้องเป็นตัวเลข >= 0)` };
+        }
+
+        const monthlyDep = b.monthlyDeposit !== undefined && b.monthlyDeposit !== '' ? b.monthlyDeposit : (b.securityDeposit !== undefined && b.securityDeposit !== '' ? b.securityDeposit : formData.deposits.securityDeposit);
+        if (monthlyDep === undefined || monthlyDep === '' || isNaN(Number(monthlyDep)) || Number(monthlyDep) < 0) {
+          return { valid: false, error: `กรุณากรอก "ค่าประกันรายเดือน" ของ ${bLabel} ให้ถูกต้อง (ต้องเป็นตัวเลข >= 0)` };
+        }
+
+        const dailyDep = b.dailyDeposit !== undefined && b.dailyDeposit !== '' ? b.dailyDeposit : (b.securityDeposit !== undefined && b.securityDeposit !== '' ? b.securityDeposit : formData.deposits.securityDeposit);
+        if (dailyDep === undefined || dailyDep === '' || isNaN(Number(dailyDep)) || Number(dailyDep) < 0) {
+          return { valid: false, error: `กรุณากรอก "ค่าประกันรายวัน" ของ ${bLabel} ให้ถูกต้อง (ต้องเป็นตัวเลข >= 0)` };
         }
       }
 
@@ -1213,7 +1226,11 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
       formData.buildings.forEach((b) => {
         const roomNumbers = getGeneratedRooms(b);
         const rentRates = b.rentRates || { monthly: 0, term: 0, daily: 0, termMonths: 4, maxInstallmentMonths: 2, maxOccupants: 2 };
-        const secDep = b.securityDeposit !== undefined && b.securityDeposit !== '' ? b.securityDeposit : (formData.deposits.securityDeposit ?? 0);
+        const fallback = Number(formData.deposits.securityDeposit) || 0;
+        const legacyDep = b.securityDeposit !== undefined && b.securityDeposit !== '' ? (Number(b.securityDeposit) || 0) : fallback;
+        const termDep = b.termDeposit !== undefined && b.termDeposit !== '' ? (Number(b.termDeposit) || 0) : legacyDep;
+        const monthlyDep = b.monthlyDeposit !== undefined && b.monthlyDeposit !== '' ? (Number(b.monthlyDeposit) || 0) : legacyDep;
+        const dailyDep = b.dailyDeposit !== undefined && b.dailyDeposit !== '' ? (Number(b.dailyDeposit) || 0) : legacyDep;
 
         roomNumbers.forEach((rNum) => {
           const digitsOnly = rNum.replace(/\D/g, '');
@@ -1226,7 +1243,11 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
             dailyRent: rentRates.daily ? Number(rentRates.daily) : null,
             termRent: rentRates.term ? Number(rentRates.term) : null,
             termMonths: Number(rentRates.termMonths) || 4,
-            depositAmount: Number(secDep) || 0,
+            termDeposit: termDep,
+            monthlyDeposit: monthlyDep,
+            dailyDeposit: dailyDep,
+            depositAmount: monthlyDep,
+            securityDeposit: monthlyDep,
             maximumOccupants: Number(rentRates.maxOccupants) || 2,
             status: 'vacant',
           });
@@ -1240,13 +1261,26 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
       const waterBillingType = mapRegisterUtilityMode(formData.utilities.waterBillingMode);
       const elecBillingType = mapRegisterUtilityMode(formData.utilities.electricBillingMode);
 
-      const waterTierRates = formData.utilities.waterTierReviewed
-        ? formData.utilities.waterTierRates
-        : null;
+      const isCustomizedWater = Boolean(
+        formData.utilities.waterTierRates &&
+        JSON.stringify(formData.utilities.waterTierRates) !== JSON.stringify(WATER_TIER_PRESET)
+      );
 
-      const electricityTierRates = formData.utilities.electricityTierReviewed
-        ? formData.utilities.electricityTierRates
-        : null;
+      const isCustomizedElec = Boolean(
+        formData.utilities.electricityTierRates &&
+        JSON.stringify(formData.utilities.electricityTierRates) !== JSON.stringify(ELECTRICITY_TIER_PRESET)
+      );
+
+      const rawWaterTiers = formData.utilities.waterBillingMode === 'tiered'
+        ? (formData.utilities.waterTierRates || WATER_TIER_PRESET)
+        : (isCustomizedWater ? formData.utilities.waterTierRates : null);
+
+      const rawElecTiers = formData.utilities.electricBillingMode === 'tiered'
+        ? (formData.utilities.electricityTierRates || ELECTRICITY_TIER_PRESET)
+        : (isCustomizedElec ? formData.utilities.electricityTierRates : null);
+
+      const waterTierRates = rawWaterTiers ? normalizeCanonicalTiers(rawWaterTiers) : null;
+      const electricityTierRates = rawElecTiers ? normalizeCanonicalTiers(rawElecTiers) : null;
 
       const rawPP = formData.paymentAccount.promptPayId ? formData.paymentAccount.promptPayId.replace(/\D/g, '') : null;
       const ppType = rawPP ? (rawPP.length === 13 ? 'national_id' : 'mobile_phone') : null;
@@ -1652,7 +1686,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                   {/* AUTO GENERATE MODE */}
                   {b.mode === 'auto' && (
                     <div className="space-y-4">
-                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
                         <div>
                           <label className="block text-xs font-bold text-slate-700 mb-1">ชื่ออาคาร</label>
                           <input
@@ -1665,22 +1699,6 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                             }}
                             placeholder="เช่น สมบูรณ์, อาคาร A"
                             className="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:border-blue-500 outline-none font-bold text-slate-800"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="block text-xs font-bold text-slate-700 mb-1">รหัสตึก / คำนำหน้าเลขห้อง (ไม่บังคับ)</label>
-                          <input
-                            type="text"
-                            value={b.roomPrefix || ''}
-                            onChange={(e) => {
-                              const val = e.target.value.toUpperCase();
-                              const updated = [...formData.buildings];
-                              updated[idx].roomPrefix = val;
-                              setFormData({ ...formData, buildings: updated });
-                            }}
-                            placeholder="เช่น A, B (เว้นว่างได้)"
-                            className="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:border-blue-500 outline-none font-bold uppercase text-slate-800"
                           />
                         </div>
 
@@ -1748,7 +1766,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                         <div>
                           <label className="block text-xs font-bold text-slate-700 mb-1">รูปแบบเลขห้อง</label>
                           {(() => {
-                            const pfx = b.roomPrefix ? b.roomPrefix.trim().toUpperCase() : 'A';
+                            const pfx = (b.name && b.name.trim()) ? b.name.trim() : (b.roomPrefix ? b.roomPrefix.trim() : 'A');
                             return (
                               <select
                                 value={b.formatPattern || 'prefix_floor_room'}
@@ -2246,26 +2264,10 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                             utilities: {
                               ...prev.utilities,
                               waterTierRates: tiers,
-                              waterTierReviewed: false,
-                            }
-                          }));
-                        }}
-                        onSave={(tiers) => {
-                          setFormData(prev => ({
-                            ...prev,
-                            utilities: {
-                              ...prev.utilities,
-                              waterTierRates: tiers,
-                              waterTierReviewed: true,
                             }
                           }));
                         }}
                       />
-                      {formData.utilities.waterTierReviewed && (
-                        <p className="text-[11px] text-emerald-600 font-bold px-2 flex items-center gap-1">
-                          <CheckCircle2 className="w-3.5 h-3.5" /> บันทึกการตรวจสอบค่าน้ำแบบขั้นบันไดเรียบร้อย
-                        </p>
-                      )}
                     </div>
                   )}
 
@@ -2280,26 +2282,10 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                             utilities: {
                               ...prev.utilities,
                               electricityTierRates: tiers,
-                              electricityTierReviewed: false,
-                            }
-                          }));
-                        }}
-                        onSave={(tiers) => {
-                          setFormData(prev => ({
-                            ...prev,
-                            utilities: {
-                              ...prev.utilities,
-                              electricityTierRates: tiers,
-                              electricityTierReviewed: true,
                             }
                           }));
                         }}
                       />
-                      {formData.utilities.electricityTierReviewed && (
-                        <p className="text-[11px] text-emerald-600 font-bold px-2 flex items-center gap-1">
-                          <CheckCircle2 className="w-3.5 h-3.5" /> บันทึกการตรวจสอบค่าไฟฟ้าแบบขั้นบันไดเรียบร้อย
-                        </p>
-                      )}
                     </div>
                   )}
                 </div>
@@ -2483,41 +2469,97 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                 <AlertCircle className="w-4 h-4 text-amber-600" /> เงินมัดจำ / ประกัน & กฎการปรับ
               </h4>
 
-              {/* Per-Building Security Deposit */}
-              <div className="bg-white p-3.5 sm:p-4 rounded-xl border border-slate-200/90 space-y-2.5">
+              {/* Per-Building Security Deposits (Three rental modes) */}
+              <div className="bg-white p-3.5 sm:p-4 rounded-xl border border-slate-200/90 space-y-3">
                 <div className="flex items-center justify-between pb-2 border-b border-slate-100">
                   <label className="block text-xs font-black text-slate-800 flex items-center gap-1.5">
                     <ShieldCheck className="w-4 h-4 text-blue-600 shrink-0" />
-                    ค่าประกัน (บาท) <span className="text-rose-500">*</span>
+                    เงินประกันตามประเภทการเช่า (บาท) <span className="text-rose-500">*</span>
                   </label>
                   <span className="text-[10px] font-black text-blue-700 bg-blue-50 border border-blue-100 px-2 py-0.5 rounded-md">
                     ตั้งค่าตามตึก
                   </span>
                 </div>
 
-                <div className="space-y-2">
+                <div className="space-y-3">
                   {formData.buildings.map((b, bIdx) => {
-                    const depositVal = b.securityDeposit !== undefined ? b.securityDeposit : (formData.deposits.securityDeposit ?? 0);
+                    const bLabel = (b.name && b.name.trim()) ? formatBuildingDisplayName(b.name) : (b.roomPrefix ? `อาคาร ${b.roomPrefix}` : `อาคารที่ ${bIdx + 1}`);
+                    const legacyDep = b.securityDeposit !== undefined ? b.securityDeposit : (formData.deposits.securityDeposit ?? 0);
+                    const termVal = b.termDeposit !== undefined ? b.termDeposit : legacyDep;
+                    const monthlyVal = b.monthlyDeposit !== undefined ? b.monthlyDeposit : legacyDep;
+                    const dailyVal = b.dailyDeposit !== undefined ? b.dailyDeposit : legacyDep;
+
                     return (
-                      <div key={b.id} className="flex items-center justify-between gap-3 bg-slate-50/80 p-2.5 rounded-xl border border-slate-200/80">
-                        <span className="text-xs font-extrabold text-slate-800 shrink-0 flex items-center gap-1.5">
-                          <Building2 className="w-3.5 h-3.5 text-blue-600" />
-                          {(b.name && b.name.trim()) ? formatBuildingDisplayName(b.name) : (b.roomPrefix ? `อาคาร ${b.roomPrefix}` : `อาคารที่ ${bIdx + 1}`)}
-                        </span>
-                        <div className="flex items-center gap-2 max-w-[180px] w-full">
-                          <input
-                            type="text"
-                            inputMode="decimal"
-                            value={depositVal}
-                            onChange={(e) => {
-                              const norm = normalizeNumericInput(e.target.value, true);
-                              const updated = [...formData.buildings];
-                              updated[bIdx].securityDeposit = norm;
-                              setFormData({ ...formData, buildings: updated });
-                            }}
-                            className="w-full px-3 py-1.5 text-xs bg-white border border-slate-200 rounded-lg focus:border-blue-500 outline-none font-black text-slate-800 text-right"
-                          />
-                          <span className="text-xs font-bold text-slate-500 shrink-0">บาท</span>
+                      <div key={b.id} className="bg-slate-50/80 p-3 rounded-xl border border-slate-200/80 space-y-2" data-testid={`building-deposits-${bIdx}`}>
+                        <div className="flex items-center gap-1.5 text-xs font-extrabold text-slate-800 border-b border-slate-200/60 pb-1.5">
+                          <Building2 className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                          <span>{bLabel}</span>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
+                          {/* Term Deposit */}
+                          <div>
+                            <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                              ค่าประกันรายเทอม (บาท)
+                            </label>
+                            <input
+                              type="text"
+                              inputMode="decimal"
+                              value={termVal}
+                              onChange={(e) => {
+                                const norm = normalizeNumericInput(e.target.value, true);
+                                const updated = [...formData.buildings];
+                                updated[bIdx].termDeposit = norm;
+                                setFormData({ ...formData, buildings: updated });
+                              }}
+                              className="w-full px-3 py-1.5 text-xs bg-white border border-slate-200 rounded-lg focus:border-blue-500 outline-none font-black text-slate-800 text-right"
+                              data-testid={`input-term-deposit-${bIdx}`}
+                              placeholder="0"
+                            />
+                          </div>
+
+                          {/* Monthly Deposit */}
+                          <div>
+                            <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                              ค่าประกันรายเดือน (บาท)
+                            </label>
+                            <input
+                              type="text"
+                              inputMode="decimal"
+                              value={monthlyVal}
+                              onChange={(e) => {
+                                const norm = normalizeNumericInput(e.target.value, true);
+                                const updated = [...formData.buildings];
+                                updated[bIdx].monthlyDeposit = norm;
+                                updated[bIdx].securityDeposit = norm;
+                                setFormData({ ...formData, buildings: updated });
+                              }}
+                              className="w-full px-3 py-1.5 text-xs bg-white border border-slate-200 rounded-lg focus:border-blue-500 outline-none font-black text-slate-800 text-right"
+                              data-testid={`input-monthly-deposit-${bIdx}`}
+                              placeholder="0"
+                            />
+                          </div>
+
+                          {/* Daily Deposit */}
+                          <div>
+                            <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                              ค่าประกันรายวัน (บาท)
+                            </label>
+                            <input
+                              type="text"
+                              inputMode="decimal"
+                              value={dailyVal}
+                              onChange={(e) => {
+                                const norm = normalizeNumericInput(e.target.value, true);
+                                const updated = [...formData.buildings];
+                                updated[bIdx].dailyDeposit = norm;
+                                setFormData({ ...formData, buildings: updated });
+                              }}
+                              className="w-full px-3 py-1.5 text-xs bg-white border border-slate-200 rounded-lg focus:border-blue-500 outline-none font-black text-slate-800 text-right"
+                              data-testid={`input-daily-deposit-${bIdx}`}
+                              placeholder="0"
+                            />
+                          </div>
                         </div>
                       </div>
                     );
@@ -2853,12 +2895,6 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                   </button>
                 </div>
 
-                {signatureSavedToast && (
-                  <div className="text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-xl px-2.5 py-1 text-center animate-in fade-in">
-                    {signatureSavedToast}
-                  </div>
-                )}
-
                 <div className="bg-white border border-slate-200 rounded-2xl p-2.5 space-y-2 relative overflow-hidden shadow-3xs">
                   <canvas
                     ref={canvasRef}
@@ -2876,16 +2912,6 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
 
                   <div className="flex items-center justify-between gap-2 pt-1 border-t border-slate-100 flex-wrap">
                     <p className="text-[10px] text-slate-400 font-medium">ใช้นิ้วหรือเมาส์วาดลายเซ็นในกรอบด้านบน</p>
-                    <div className="flex items-center gap-2 ml-auto">
-                      <button
-                        type="button"
-                        onClick={handleSaveSignature}
-                        className="text-[11px] font-black text-emerald-700 bg-emerald-100 hover:bg-emerald-200 border border-emerald-300 px-3.5 py-1 rounded-xl transition-all cursor-pointer flex items-center gap-1.5 shadow-2xs"
-                      >
-                        <Save className="w-3.5 h-3.5" />
-                        <span>บันทึก</span>
-                      </button>
-                    </div>
                   </div>
                 </div>
               </div>

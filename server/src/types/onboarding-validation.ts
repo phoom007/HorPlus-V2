@@ -210,6 +210,9 @@ export const OnboardingBuildingInputSchema = z.object({
   maximumOccupants: z.coerce.number().int().min(1).optional().nullable().default(2),
   depositAmount: z.coerce.number().min(0).optional().nullable(),
   securityDeposit: z.coerce.number().min(0).optional().nullable(),
+  termDeposit: z.coerce.number().min(0).optional().nullable(),
+  monthlyDeposit: z.coerce.number().min(0).optional().nullable(),
+  dailyDeposit: z.coerce.number().min(0).optional().nullable(),
 }).strict();
 
 export const OnboardingRoomInputSchema = z.object({
@@ -221,6 +224,10 @@ export const OnboardingRoomInputSchema = z.object({
   termRent: z.coerce.number().min(0).optional().nullable(),
   termMonths: z.coerce.number().int().min(1).optional().nullable().default(4),
   depositAmount: z.coerce.number().min(0).optional().nullable(),
+  securityDeposit: z.coerce.number().min(0).optional().nullable(),
+  termDeposit: z.coerce.number().min(0).optional().nullable(),
+  monthlyDeposit: z.coerce.number().min(0).optional().nullable(),
+  dailyDeposit: z.coerce.number().min(0).optional().nullable(),
   depositInheritsBuildingDefault: z.boolean().optional().default(true),
   parkingFee: z.coerce.number().min(0).default(0),
   maximumOccupants: z.coerce.number().int().min(1).optional().nullable().default(2),

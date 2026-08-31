@@ -218,7 +218,7 @@ export function formatBuildingDisplayName(
     if (/^(อาคาร|ตึก|building)\s*/i.test(name)) {
       return name;
     }
-    return `อาคาร${name}`;
+    return `อาคาร ${name}`;
   }
 
   if (code) {

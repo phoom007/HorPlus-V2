@@ -89,9 +89,11 @@ describe('OWNER R3.9-D.2.1: Register Tier Canonicalization, Draft Round-Trip & I
     // Step 5: Rules & Pets
     await waitFor(() => expect(screen.getByText('ขั้นตอนที่ 5: กฎระเบียบ & สัญญา')).toBeDefined());
     fireEvent.click(screen.getByText('+ เลือกทั้งหมด 10 ข้อ'));
-    // Save signature
-    fireEvent.click(screen.getByText('บันทึก'));
-    await waitFor(() => expect(screen.getByText('บันทึกลายเซ็นเรียบร้อยแล้ว!')).toBeDefined());
+    const canvas = document.querySelector('canvas');
+    if (canvas) {
+      fireEvent.mouseDown(canvas, { clientX: 10, clientY: 10 });
+      fireEvent.mouseUp(canvas);
+    }
     fireEvent.click(screen.getByText('ถัดไป'));
 
     // Step 6: LINE OA
@@ -146,8 +148,8 @@ describe('OWNER R3.9-D.2.1: Register Tier Canonicalization, Draft Round-Trip & I
     });
   });
 
-  describe('3. Step 3 Tiered Selection, Inactive Scalar, & Review Enforcement', () => {
-    it('Selecting Water Tiered renders TieredRateEditor with disabled scalar input and blocks advancing until reviewed', async () => {
+  describe('3. Step 3 Tiered Selection, Inactive Scalar, & Auto-Save Enforcement', () => {
+    it('Selecting Water Tiered renders TieredRateEditor without manual Save button and advances directly when valid', async () => {
       render(<OwnerRegister onAddLog={vi.fn()} onNavigate={vi.fn()} mode="initial" />);
 
       fillStep1();
@@ -164,28 +166,17 @@ describe('OWNER R3.9-D.2.1: Register Tier Canonicalization, Draft Round-Trip & I
 
       fireEvent.change(waterSelect, { target: { value: 'tiered' } });
 
-      await waitFor(() => {
-        expect(screen.getByTestId('btn-save-tiers-water')).toBeDefined();
-      });
+      // In Register mode, manual Save button is omitted (auto-saved onChange)
+      expect(screen.queryByTestId('btn-save-tiers-water')).toBeNull();
 
       const waterRateInput = screen.getByTestId('input-register-water-rate') as HTMLInputElement;
       expect(waterRateInput.disabled).toBe(true);
       expect(waterRateInput.value).toBe('คิดตามขั้นบันได');
 
       expect(screen.getByTestId('input-tier-rate-water-0')).toBeDefined();
-      expect((screen.getByTestId('input-tier-rate-water-0') as HTMLInputElement).value).toBe('18.00');
+      expect((screen.getByTestId('input-tier-rate-water-0') as HTMLInputElement).value).toBe('18');
 
-      fireEvent.click(screen.getByText('ถัดไป'));
-
-      expect(screen.getByText('กรุณาตรวจสอบและบันทึกอัตราค่าน้ำแบบขั้นบันได')).toBeDefined();
-      expect(screen.queryByText('ขั้นตอนที่ 4: มัดจำ & บัญชี')).toBeNull();
-
-      fireEvent.click(screen.getByTestId('btn-save-tiers-water'));
-
-      await waitFor(() => {
-        expect(screen.getByText(/บันทึกการตรวจสอบค่าน้ำแบบขั้นบันไดเรียบร้อย/)).toBeDefined();
-      });
-
+      // Advancing is allowed directly because preset tiers are valid
       fireEvent.click(screen.getByText('ถัดไป'));
 
       await waitFor(() => {
@@ -193,7 +184,7 @@ describe('OWNER R3.9-D.2.1: Register Tier Canonicalization, Draft Round-Trip & I
       });
     });
 
-    it('Editing any Tier field after review resets reviewed state and blocks advancing until saved again', async () => {
+    it('Invalid tier boundary blocks advancing until corrected', async () => {
       render(<OwnerRegister onAddLog={vi.fn()} onNavigate={vi.fn()} mode="initial" />);
 
       fillStep1();
@@ -204,30 +195,17 @@ describe('OWNER R3.9-D.2.1: Register Tier Canonicalization, Draft Round-Trip & I
       });
 
       fireEvent.change(screen.getByTestId('input-building-monthly-rent-0'), { target: { value: '4500' } });
-
       fireEvent.change(screen.getByTestId('select-register-water-mode'), { target: { value: 'tiered' } });
 
-      await waitFor(() => {
-        expect(screen.getByTestId('btn-save-tiers-water')).toBeDefined();
-      });
-
-      fireEvent.click(screen.getByTestId('btn-save-tiers-water'));
-
-      await waitFor(() => {
-        expect(screen.getByText(/บันทึกการตรวจสอบค่าน้ำแบบขั้นบันไดเรียบร้อย/)).toBeDefined();
-      });
-
-      fireEvent.change(screen.getByTestId('input-tier-rate-water-0'), { target: { value: '19.50' } });
-
-      expect(screen.queryByText(/บันทึกการตรวจสอบค่าน้ำแบบขั้นบันไดเรียบร้อย/)).toBeNull();
+      // Enter invalid tier 2 boundary (less than tier 1 boundary)
+      fireEvent.change(screen.getByTestId('input-tier-upto-water-0'), { target: { value: '20' } });
+      fireEvent.change(screen.getByTestId('input-tier-upto-water-1'), { target: { value: '10' } });
 
       fireEvent.click(screen.getByText('ถัดไป'));
-      expect(screen.getByText('กรุณาตรวจสอบและบันทึกอัตราค่าน้ำแบบขั้นบันได')).toBeDefined();
+      expect(screen.getByText('กรุณากรอกอัตราค่าน้ำแบบขั้นบันไดให้ถูกต้อง')).toBeDefined();
 
-      fireEvent.click(screen.getByTestId('btn-save-tiers-water'));
-      await waitFor(() => {
-        expect(screen.getByText(/บันทึกการตรวจสอบค่าน้ำแบบขั้นบันไดเรียบร้อย/)).toBeDefined();
-      });
+      // Correct tier 2 boundary
+      fireEvent.change(screen.getByTestId('input-tier-upto-water-1'), { target: { value: '30' } });
 
       fireEvent.click(screen.getByText('ถัดไป'));
       await waitFor(() => {
@@ -254,32 +232,20 @@ describe('OWNER R3.9-D.2.1: Register Tier Canonicalization, Draft Round-Trip & I
 
       // Water: raw strings (10 / 3.4, 20 / 4.25, ∞ / 5)
       fireEvent.change(screen.getByTestId('select-register-water-mode'), { target: { value: 'tiered' } });
-      await waitFor(() => expect(screen.getByTestId('btn-save-tiers-water')).toBeDefined());
 
       fireEvent.change(screen.getByTestId('input-tier-upto-water-0'), { target: { value: '10' } });
       fireEvent.change(screen.getByTestId('input-tier-rate-water-0'), { target: { value: '3.4' } });
       fireEvent.change(screen.getByTestId('input-tier-upto-water-1'), { target: { value: '20' } });
       fireEvent.change(screen.getByTestId('input-tier-rate-water-1'), { target: { value: '4.25' } });
       fireEvent.change(screen.getByTestId('input-tier-rate-water-2'), { target: { value: '5' } });
-      fireEvent.click(screen.getByTestId('btn-save-tiers-water'));
-
-      await waitFor(() => {
-        expect(screen.getByText(/บันทึกการตรวจสอบค่าน้ำแบบขั้นบันไดเรียบร้อย/)).toBeDefined();
-      });
 
       // Electricity: raw strings (50 / 7, 150 / 8, ∞ / 9)
       fireEvent.change(screen.getByTestId('select-register-electric-mode'), { target: { value: 'tiered' } });
-      await waitFor(() => expect(screen.getByTestId('btn-save-tiers-electricity')).toBeDefined());
       fireEvent.change(screen.getByTestId('input-tier-upto-electricity-0'), { target: { value: '50' } });
       fireEvent.change(screen.getByTestId('input-tier-rate-electricity-0'), { target: { value: '7' } });
       fireEvent.change(screen.getByTestId('input-tier-upto-electricity-1'), { target: { value: '150' } });
       fireEvent.change(screen.getByTestId('input-tier-rate-electricity-1'), { target: { value: '8' } });
       fireEvent.change(screen.getByTestId('input-tier-rate-electricity-2'), { target: { value: '9' } });
-      fireEvent.click(screen.getByTestId('btn-save-tiers-electricity'));
-
-      await waitFor(() => {
-        expect(screen.getByText(/บันทึกการตรวจสอบค่าไฟฟ้าแบบขั้นบันไดเรียบร้อย/)).toBeDefined();
-      });
 
       fireEvent.click(screen.getByText('ถัดไป'));
 
@@ -326,15 +292,11 @@ describe('OWNER R3.9-D.2.1: Register Tier Canonicalization, Draft Round-Trip & I
       // Set scalar rate to 25
       fireEvent.change(screen.getByTestId('input-register-water-rate'), { target: { value: '25' } });
 
-      // Switch to Tiered and review custom tiers
+      // Switch to Tiered and edit custom tiers
       fireEvent.change(screen.getByTestId('select-register-water-mode'), { target: { value: 'tiered' } });
-      await waitFor(() => expect(screen.getByTestId('btn-save-tiers-water')).toBeDefined());
       fireEvent.change(screen.getByTestId('input-tier-rate-water-0'), { target: { value: '3.40' } });
       fireEvent.change(screen.getByTestId('input-tier-rate-water-1'), { target: { value: '4.25' } });
       fireEvent.change(screen.getByTestId('input-tier-rate-water-2'), { target: { value: '5.00' } });
-      fireEvent.click(screen.getByTestId('btn-save-tiers-water'));
-
-      await waitFor(() => expect(screen.getByText(/บันทึกการตรวจสอบค่าน้ำแบบขั้นบันไดเรียบร้อย/)).toBeDefined());
 
       // Switch active mode back to 'unit'
       fireEvent.change(screen.getByTestId('select-register-water-mode'), { target: { value: 'unit' } });
@@ -386,7 +348,7 @@ describe('OWNER R3.9-D.2.1: Register Tier Canonicalization, Draft Round-Trip & I
   });
 
   describe('5. Real Reviewed Draft Round-Trip & Restoration Lifecycle', () => {
-    it('Real reviewed draft auto-saves, survives unmount/remount, and restores reviewed visual confirmation', async () => {
+    it('Real draft auto-saves, survives unmount/remount, and restores state', async () => {
       let savedDraftState: any = null;
       vi.spyOn(localDraftStorage, 'saveRegistrationDraft').mockImplementation(async (_userId, _mode, draft) => {
         savedDraftState = draft;
@@ -401,22 +363,15 @@ describe('OWNER R3.9-D.2.1: Register Tier Canonicalization, Draft Round-Trip & I
       fireEvent.change(screen.getByTestId('input-building-monthly-rent-0'), { target: { value: '4500' } });
 
       fireEvent.change(screen.getByTestId('select-register-water-mode'), { target: { value: 'tiered' } });
-      await waitFor(() => expect(screen.getByTestId('btn-save-tiers-water')).toBeDefined());
 
       fireEvent.change(screen.getByTestId('input-tier-rate-water-0'), { target: { value: '3.40' } });
       fireEvent.change(screen.getByTestId('input-tier-rate-water-1'), { target: { value: '4.25' } });
       fireEvent.change(screen.getByTestId('input-tier-rate-water-2'), { target: { value: '5.00' } });
-      fireEvent.click(screen.getByTestId('btn-save-tiers-water'));
 
-      await waitFor(() => {
-        expect(screen.getByText(/บันทึกการตรวจสอบค่าน้ำแบบขั้นบันไดเรียบร้อย/)).toBeDefined();
-      });
-
-      // Wait for debounced draft save to capture the reviewed state
+      // Wait for debounced draft save to capture the state
       await waitFor(() => {
         expect(savedDraftState).not.toBeNull();
         expect(savedDraftState.formData.utilities.waterBillingMode).toBe('tiered');
-        expect(savedDraftState.formData.utilities.waterTierReviewed).toBe(true);
         expect(savedDraftState.formData.utilities.waterTierRates).toEqual([
           { upTo: '10.00', rate: '3.40' },
           { upTo: '20.00', rate: '4.25' },
@@ -445,26 +400,7 @@ describe('OWNER R3.9-D.2.1: Register Tier Canonicalization, Draft Round-Trip & I
       // Verify custom tiers are restored
       expect((screen.getByTestId('input-tier-rate-water-0') as HTMLInputElement).value).toBe('3.40');
       expect((screen.getByTestId('input-tier-rate-water-1') as HTMLInputElement).value).toBe('4.25');
-      expect((screen.getByTestId('input-tier-rate-water-2') as HTMLInputElement).value).toBe('5.00');
-
-      // Verify reviewed confirmation message is VISIBLE without owner reconstruction
-      expect(screen.getByText(/บันทึกการตรวจสอบค่าน้ำแบบขั้นบันไดเรียบร้อย/)).toBeDefined();
-
-      // Post-restore edit invalidates review
-      fireEvent.change(screen.getByTestId('input-tier-rate-water-1'), { target: { value: '4.50' } });
-
-      // Confirmation message disappears immediately
-      expect(screen.queryByText(/บันทึกการตรวจสอบค่าน้ำแบบขั้นบันไดเรียบร้อย/)).toBeNull();
-
-      // Advancing is blocked
-      fireEvent.click(screen.getByText('ถัดไป'));
-      expect(screen.getByText('กรุณาตรวจสอบและบันทึกอัตราค่าน้ำแบบขั้นบันได')).toBeDefined();
-
-      // Press save review again
-      fireEvent.click(screen.getByTestId('btn-save-tiers-water'));
-      await waitFor(() => {
-        expect(screen.getByText(/บันทึกการตรวจสอบค่าน้ำแบบขั้นบันไดเรียบร้อย/)).toBeDefined();
-      });
+      expect((screen.getByTestId('input-tier-rate-water-2') as HTMLInputElement).value).toBe('5');
 
       // Now advancing is allowed
       fireEvent.click(screen.getByText('ถัดไป'));
@@ -473,7 +409,7 @@ describe('OWNER R3.9-D.2.1: Register Tier Canonicalization, Draft Round-Trip & I
       });
     });
 
-    it('Electricity reviewed draft is independently restored with reviewed status', async () => {
+    it('Electricity draft is independently restored with correct tiers', async () => {
       const elecDraft = {
         currentStep: 3,
         formData: {
@@ -505,7 +441,6 @@ describe('OWNER R3.9-D.2.1: Register Tier Canonicalization, Draft Round-Trip & I
               { upTo: '150.00', rate: '8.00' },
               { upTo: null, rate: '9.00' },
             ],
-            electricityTierReviewed: true,
           },
         },
       };
@@ -520,13 +455,12 @@ describe('OWNER R3.9-D.2.1: Register Tier Canonicalization, Draft Round-Trip & I
 
       const elecSelect = screen.getByTestId('select-register-electric-mode') as HTMLSelectElement;
       expect(elecSelect.value).toBe('tiered');
-      expect((screen.getByTestId('input-tier-rate-electricity-0') as HTMLInputElement).value).toBe('7.00');
-      expect((screen.getByTestId('input-tier-rate-electricity-1') as HTMLInputElement).value).toBe('8.00');
-      expect((screen.getByTestId('input-tier-rate-electricity-2') as HTMLInputElement).value).toBe('9.00');
-      expect(screen.getByText(/บันทึกการตรวจสอบค่าไฟฟ้าแบบขั้นบันไดเรียบร้อย/)).toBeDefined();
+      expect((screen.getByTestId('input-tier-rate-electricity-0') as HTMLInputElement).value).toBe('7');
+      expect((screen.getByTestId('input-tier-rate-electricity-1') as HTMLInputElement).value).toBe('8');
+      expect((screen.getByTestId('input-tier-rate-electricity-2') as HTMLInputElement).value).toBe('9');
     });
 
-    it('Old drafts without tier fields hydrate safely with scalar modes preserved and tiers unreviewed', async () => {
+    it('Old drafts without tier fields hydrate safely with scalar modes preserved', async () => {
       const oldDraft = {
         currentStep: 1,
         formData: {

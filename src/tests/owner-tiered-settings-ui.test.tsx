@@ -55,7 +55,7 @@ describe('OWNER R3.9-D.1.7: Save-Status Context Isolation & Stale Lifecycle Clos
       expect(screen.getByTestId('tier-row-water-0')).toBeDefined();
       expect(screen.getByTestId('tier-from-water-0').textContent).toBe('1');
       expect(screen.getByTestId('tier-upto-water-0').textContent).toBe('ไม่จำกัด');
-      expect((screen.getByTestId('input-tier-rate-water-0') as HTMLInputElement).value).toBe('20.00');
+      expect((screen.getByTestId('input-tier-rate-water-0') as HTMLInputElement).value).toBe('20');
     });
 
     it('Accepts up to 5 Tiers & NO "สูงสุด 5 ขั้น" text is shown', () => {
@@ -957,7 +957,7 @@ describe('OWNER R3.9-D.1.7: Save-Status Context Isolation & Stale Lifecycle Clos
 
       expect((screen.getByTestId('input-tier-rate-water-0') as HTMLInputElement).value).toBe('3.40');
       expect((screen.getByTestId('input-tier-rate-water-1') as HTMLInputElement).value).toBe('4.25');
-      expect((screen.getByTestId('input-tier-rate-water-2') as HTMLInputElement).value).toBe('5.00');
+      expect((screen.getByTestId('input-tier-rate-water-2') as HTMLInputElement).value).toBe('5');
     });
 
     it('Cross-Dorm Isolation: Dorm A tiers do NOT leak into Dorm B', async () => {
@@ -1038,7 +1038,7 @@ describe('OWNER R3.9-D.1.7: Save-Status Context Isolation & Stale Lifecycle Clos
       });
 
       fireEvent.change(screen.getByTestId('select-water-billing-mode'), { target: { value: 'tiered' } });
-      expect((screen.getByTestId('input-tier-rate-water-0') as HTMLInputElement).value).toBe('18.00');
+      expect((screen.getByTestId('input-tier-rate-water-0') as HTMLInputElement).value).toBe('18');
     });
   });
 });

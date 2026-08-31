@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 /**
  * @license Apache-2.0
  * OWNER R3.9-E.1B.2.3: Frontend Tiered Bill & Receipt Presentation Test Suite
