@@ -8,6 +8,15 @@
 
 import { Room, RoomStatus } from '../types';
 
+/**
+ * Normalizes a room identifier by removing all whitespace and standardizing casing (NFC, uppercase, no whitespace/underscore).
+ * Canonical parity with backend normalization.
+ */
+export function normalizeRoomIdentifier(identifier: string): string {
+  if (!identifier) return '';
+  return identifier.normalize('NFC').replace(/[\s_]+/g, '').toUpperCase();
+}
+
 export interface AuthoritativeRoomDto {
   id: string;
   dormitoryId: string;

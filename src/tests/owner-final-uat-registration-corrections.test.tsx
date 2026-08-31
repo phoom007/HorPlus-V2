@@ -1,4 +1,4 @@
-﻿// @vitest-environment jsdom
+// @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import React from 'react';
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react';
@@ -307,6 +307,151 @@ describe('OWNER FINAL UAT CORRECTIONS — Comprehensive Suite', () => {
 
       // Verify "ล้างลายเซ็น" exists
       expect(screen.getByText('ล้างลายเซ็น')).toBeDefined();
+    });
+  });
+
+  describe('6. Dorm-Wide Room Number Uniqueness & Label Authority (Round 1.1)', () => {
+    it('blocks Step 2 when two buildings generate duplicate room numbers (e.g. 101 vs 101 in floor_room format)', async () => {
+      render(<OwnerRegister />);
+
+      // Fill Step 1
+      fireEvent.change(screen.getByPlaceholderText('เช่น หอพัก HorPlus สุขุมวิท'), {
+        target: { value: 'หอพักทดสอบ ห้องซ้ำ' },
+      });
+      fireEvent.change(screen.getByPlaceholderText('เช่น 88/9 ซอยสุขุมวิท 55 แขวงคลองตันเหนือ เขตวัฒนา กรุงเทพฯ 10110'), {
+        target: { value: '123/45 ถนนทดสอบ' },
+      });
+      fireEvent.click(screen.getByText('ถัดไป'));
+
+      // Step 2: Configure Building 1
+      await waitFor(() => expect(screen.getByText('ขั้นตอนที่ 2: อาคาร & ผังห้อง')).toBeDefined());
+      const nameInput1 = screen.getByPlaceholderText('เช่น สมบูรณ์, อาคาร A');
+      fireEvent.change(nameInput1, { target: { value: 'A' } });
+      fireEvent.change(screen.getByPlaceholderText('ระบุห้องต่อชั้น'), { target: { value: '2' } });
+
+      // Add Building 2
+      fireEvent.click(screen.getByText('เพิ่มอาคารใหม่'));
+
+      // Configure all buildings with roomsPerFloor = 2 and floor_room format
+      const nameInputs = screen.getAllByPlaceholderText('เช่น สมบูรณ์, อาคาร A');
+      fireEvent.change(nameInputs[0], { target: { value: 'สมบูรณ์' } });
+
+      const roomsPerFloorInputs = screen.getAllByPlaceholderText('ระบุห้องต่อชั้น');
+      roomsPerFloorInputs.forEach((inp) => fireEvent.change(inp, { target: { value: '2' } }));
+
+      const formatSelects = screen.getAllByRole('combobox');
+      formatSelects.forEach((sel) => fireEvent.change(sel, { target: { value: 'floor_room' } }));
+
+      // Attempt to advance to Step 3
+      fireEvent.click(screen.getByText('ถัดไป'));
+
+      // Must be blocked with clear duplicate error message
+      await waitFor(() => {
+        expect(screen.getByText(/เลขห้อง "101" ซ้ำกับอาคารอื่น/)).toBeDefined();
+      });
+
+      // Assert we remain on Step 2
+      expect(screen.getByText('ขั้นตอนที่ 2: อาคาร & ผังห้อง')).toBeDefined();
+    });
+
+    it('allows different room numbers across buildings using building-name prefix (A101 vs สมบูรณ์101)', async () => {
+      render(<OwnerRegister />);
+
+      // Fill Step 1
+      fireEvent.change(screen.getByPlaceholderText('เช่น หอพัก HorPlus สุขุมวิท'), {
+        target: { value: 'หอพักทดสอบ คำนำหน้าตึก' },
+      });
+      fireEvent.change(screen.getByPlaceholderText('เช่น 88/9 ซอยสุขุมวิท 55 แขวงคลองตันเหนือ เขตวัฒนา กรุงเทพฯ 10110'), {
+        target: { value: '123/45 ถนนทดสอบ' },
+      });
+      fireEvent.click(screen.getByText('ถัดไป'));
+
+      // Step 2: Building 1 (A101, A102)
+      await waitFor(() => expect(screen.getByText('ขั้นตอนที่ 2: อาคาร & ผังห้อง')).toBeDefined());
+      const nameInputsInitial = screen.getAllByPlaceholderText('เช่น สมบูรณ์, อาคาร A');
+      fireEvent.change(nameInputsInitial[0], { target: { value: 'A' } });
+      fireEvent.change(screen.getByPlaceholderText('ระบุห้องต่อชั้น'), { target: { value: '2' } });
+
+      // Add Building 2 (สมบูรณ์101, สมบูรณ์102)
+      fireEvent.click(screen.getByText('เพิ่มอาคารใหม่'));
+      const updatedNameInputs = screen.getAllByPlaceholderText('เช่น สมบูรณ์, อาคาร A');
+      fireEvent.change(updatedNameInputs[0], { target: { value: 'สมบูรณ์' } });
+      const roomsPerFloorInputs = screen.getAllByPlaceholderText('ระบุห้องต่อชั้น');
+      roomsPerFloorInputs.forEach((inp) => fireEvent.change(inp, { target: { value: '2' } }));
+
+      // Click Next -> No duplicates -> Advances to Step 3
+      fireEvent.click(screen.getByText('ถัดไป'));
+
+      await waitFor(() => {
+        expect(screen.getByText('ขั้นตอนที่ 3: ค่าเช่า & ค่าน้ำไฟ')).toBeDefined();
+      });
+    });
+
+    it('blocks manual room duplicates across buildings and case-normalized duplicates (A101 vs a101)', async () => {
+      render(<OwnerRegister />);
+
+      // Fill Step 1
+      fireEvent.change(screen.getByPlaceholderText('เช่น หอพัก HorPlus สุขุมวิท'), {
+        target: { value: 'หอพักทดสอบ Manual Duplicate' },
+      });
+      fireEvent.change(screen.getByPlaceholderText('เช่น 88/9 ซอยสุขุมวิท 55 แขวงคลองตันเหนือ เขตวัฒนา กรุงเทพฯ 10110'), {
+        target: { value: '123/45 ถนนทดสอบ' },
+      });
+      fireEvent.click(screen.getByText('ถัดไป'));
+
+      // Step 2: Building 1 in Manual mode
+      await waitFor(() => expect(screen.getByText('ขั้นตอนที่ 2: อาคาร & ผังห้อง')).toBeDefined());
+      fireEvent.click(screen.getByText('เขียนเลขห้องเอง'));
+
+      // Add room "A101" to Building 1
+      const manualInput1 = screen.getByPlaceholderText('เช่น A101, A102, A1/1, 101, 102');
+      fireEvent.change(manualInput1, { target: { value: 'A101' } });
+      fireEvent.click(screen.getByText('+ เพิ่มเลขห้อง'));
+
+      // Add Building 2
+      fireEvent.click(screen.getByText('เพิ่มอาคารใหม่'));
+
+      // Switch Building 2 (now at index 0) to manual mode
+      const manualModeButtons = screen.getAllByText('เขียนเลขห้องเอง');
+      fireEvent.click(manualModeButtons[0]);
+
+      // Add room "a101" (lowercase) to Building 2
+      await waitFor(() => {
+        const manualInputs = screen.getAllByPlaceholderText('เช่น A101, A102, A1/1, 101, 102');
+        expect(manualInputs.length).toBeGreaterThanOrEqual(1);
+      });
+      const manualInputs = screen.getAllByPlaceholderText('เช่น A101, A102, A1/1, 101, 102');
+      fireEvent.change(manualInputs[0], { target: { value: 'a101' } });
+      const addRoomButtons = screen.getAllByText('+ เพิ่มเลขห้อง');
+      fireEvent.click(addRoomButtons[0]);
+
+      // Attempt to advance -> Must be blocked because canonical normalization treats A101 == a101
+      fireEvent.click(screen.getByText('ถัดไป'));
+
+      await waitFor(() => {
+        expect(screen.getByText(/ซ้ำกับอาคารอื่น/)).toBeDefined();
+      });
+      expect(screen.getByText('ขั้นตอนที่ 2: อาคาร & ผังห้อง')).toBeDefined();
+    });
+
+    it('verifies manual room mode uses "ชื่ออาคาร" label without "ชื่อ/รหัสอาคาร"', async () => {
+      render(<OwnerRegister />);
+
+      // Advance to Step 2
+      fireEvent.change(screen.getByPlaceholderText('เช่น หอพัก HorPlus สุขุมวิท'), {
+        target: { value: 'หอพักทดสอบ ป้ายชื่อ' },
+      });
+      fireEvent.change(screen.getByPlaceholderText('เช่น 88/9 ซอยสุขุมวิท 55 แขวงคลองตันเหนือ เขตวัฒนา กรุงเทพฯ 10110'), {
+        target: { value: '123/45 ถนนทดสอบ' },
+      });
+      fireEvent.click(screen.getByText('ถัดไป'));
+
+      await waitFor(() => expect(screen.getByText('ขั้นตอนที่ 2: อาคาร & ผังห้อง')).toBeDefined());
+      fireEvent.click(screen.getByText('เขียนเลขห้องเอง'));
+
+      // Assert label is "ชื่ออาคาร" and NOT "ชื่อ/รหัสอาคาร"
+      expect(screen.getByText('ชื่ออาคาร')).toBeDefined();
+      expect(screen.queryByText('ชื่อ/รหัสอาคาร')).toBeNull();
     });
   });
 });

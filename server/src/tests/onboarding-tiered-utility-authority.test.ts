@@ -1237,6 +1237,7 @@ describe('OWNER R3.9-C.3.2: First-Cycle Meter Workspace Authority Closure & Blan
           upsert: vi.fn((args) => Promise.resolve({ id: args.create?.id || 'bld-id', ...args.create })),
         },
         room: {
+          findUnique: vi.fn().mockResolvedValue(null),
           upsert: vi.fn((args) => {
             upsertedRooms.push(args.create);
             return Promise.resolve({ id: `rm-${upsertedRooms.length}`, ...args.create });
@@ -1305,6 +1306,219 @@ describe('OWNER R3.9-C.3.2: First-Cycle Meter Workspace Authority Closure & Blan
       expect(b102.termDeposit).toBe('8000');
       expect(b102.monthlyDeposit).toBe('4000');
       expect(b102.dailyDeposit).toBe('800');
+    });
+  });
+
+  describe('11. Dorm-Wide Room Number Uniqueness & Cross-Building Collision Defense (Round 1.1)', () => {
+    it('CompleteOnboardingInputSchema rejects duplicate normalized room numbers across buildings (101 vs 101 or A101 vs a101)', () => {
+      const validBase = {
+        dormitory: { name: 'Dorm Test' },
+        billing: { dueDay: 5 },
+        packageIntentId: 'a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d',
+        planCode: 'FREE',
+      };
+
+      // Duplicate 101 vs 101 in different buildings
+      const dupNumeric = {
+        ...validBase,
+        buildings: [
+          { id: 'bld-A', name: 'อาคาร A', floorsCount: 1 },
+          { id: 'bld-B', name: 'อาคาร B', floorsCount: 1 },
+        ],
+        rooms: [
+          { buildingId: 'bld-A', roomNumber: '101' },
+          { buildingId: 'bld-B', roomNumber: '101' },
+        ],
+      };
+
+      expect(() => CompleteOnboardingInputSchema.parse(dupNumeric)).toThrow(/ซ้ำกับอาคารอื่น/);
+
+      // Case-normalized duplicate A101 vs a101
+      const dupCase = {
+        ...validBase,
+        buildings: [
+          { id: 'bld-A', name: 'อาคาร A', floorsCount: 1 },
+          { id: 'bld-B', name: 'อาคาร B', floorsCount: 1 },
+        ],
+        rooms: [
+          { buildingId: 'bld-A', roomNumber: 'A101' },
+          { buildingId: 'bld-B', roomNumber: 'a101' },
+        ],
+      };
+
+      expect(() => CompleteOnboardingInputSchema.parse(dupCase)).toThrow(/ซ้ำกับอาคารอื่น/);
+
+      // Distinct rooms A101 vs สมบูรณ์101 -> Valid
+      const distinct = {
+        ...validBase,
+        buildings: [
+          { id: 'bld-A', name: 'อาคาร A', floorsCount: 1 },
+          { id: 'bld-B', name: 'อาคาร สมบูรณ์', floorsCount: 1 },
+        ],
+        rooms: [
+          { buildingId: 'bld-A', roomNumber: 'A101' },
+          { buildingId: 'bld-B', roomNumber: 'สมบูรณ์101' },
+        ],
+      };
+
+      const parsed = CompleteOnboardingInputSchema.parse(distinct);
+      expect(parsed.rooms).toHaveLength(2);
+      expect(parsed.rooms?.[1].roomNumber).toBe('สมบูรณ์101');
+    });
+
+    it('completeOwnerOnboarding fails closed with ROOM_NUMBER_ALREADY_EXISTS when existing room belongs to another building', async () => {
+      vi.spyOn(referralService, 'settleReferralOnboarding').mockResolvedValue(undefined as any);
+
+      // Existing Room 101 belongs to bld-existing-A
+      const mockTx: any = {
+        $executeRaw: vi.fn().mockResolvedValue(1),
+        onboardingDraft: {
+          findUnique: vi.fn().mockResolvedValue({ provisionalDormitoryId: 'dorm-prov-001', finalizedAt: null }),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+        dormitory: {
+          findUnique: vi.fn().mockResolvedValue({ id: 'dorm-prov-001', createdByUserId: 'user-001', status: 'setup_pending' }),
+          update: vi.fn().mockResolvedValue({ id: 'dorm-prov-001', name: 'Dorm Conflict', status: 'active' }),
+        },
+        ownerSignature: { findFirst: vi.fn().mockResolvedValue({ id: 'sig-001', isCurrent: true }) },
+        dormitoryLineConfig: { findUnique: vi.fn().mockResolvedValue(null) },
+        subscriptionPackageIntent: {
+          findUnique: vi.fn().mockResolvedValue({
+            id: 'intent-001',
+            userId: 'user-001',
+            dormitoryId: 'dorm-prov-001',
+            checkoutVersion: 2,
+            status: 'PENDING_PAYMENT',
+            finalPayableAmount: new Prisma.Decimal(100),
+            package: { planCode: 'PAID', plan: { code: 'PAID' } },
+          }),
+          update: vi.fn().mockResolvedValue({ id: 'intent-001', status: 'SUCCEEDED' }),
+          updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+        },
+        subscriptionPlan: { findUnique: vi.fn().mockResolvedValue({ id: 'plan-paid', code: 'PAID' }) },
+        dormitorySubscription: {
+          findUnique: vi.fn().mockResolvedValue(null),
+          create: vi.fn().mockResolvedValue({ id: 'sub-001', status: 'ACTIVE' }),
+          upsert: vi.fn().mockResolvedValue({ id: 'sub-001', status: 'ACTIVE' }),
+        },
+        role: { findFirst: vi.fn().mockResolvedValue({ id: 'role-owner', code: 'OWNER' }) },
+        dormitoryMember: { upsert: vi.fn().mockResolvedValue({ id: 'mem-001' }) },
+        dormitoryPropertyDefaults: { upsert: vi.fn().mockResolvedValue({}) },
+        dormitoryBillingSettings: { upsert: vi.fn().mockResolvedValue({ id: 'bset-001' }) },
+        building: {
+          create: vi.fn((args) => Promise.resolve({ id: 'bld-new-B', ...args.data })),
+          upsert: vi.fn((args) => Promise.resolve({ id: 'bld-new-B', ...args.create })),
+        },
+        room: {
+          findUnique: vi.fn().mockResolvedValue({
+            id: 'room-101-existing',
+            buildingId: 'bld-existing-A', // Belongs to a different building!
+            roomNumber: '101',
+            normalizedRoomNumber: '101',
+          }),
+          upsert: vi.fn(),
+        },
+      };
+
+      const mockPrisma: any = {
+        $transaction: vi.fn(async (cb) => cb(mockTx)),
+      };
+
+      const service = new DormitoryProvisioningService(mockPrisma as any);
+
+      await expect(
+        service.completeOwnerOnboarding({
+          userId: 'user-001',
+          idempotencyKey: 'idemp-conflict-test',
+          provisionalDormitoryId: 'dorm-prov-001',
+          packageIntentId: 'intent-001',
+          dormitory: { name: 'Dorm Conflict', estimatedRoomCount: 1 },
+          billing: { dueDay: 5 },
+          buildings: [{ id: 'bld-B', name: 'อาคาร B', floorsCount: 1 }],
+          rooms: [{ buildingId: 'bld-B', roomNumber: '101', floor: 1 }],
+        })
+      ).rejects.toThrow(/ซ้ำกับอาคารอื่น/);
+
+      // Verify room upsert was NEVER called -> Room was NOT moved to bld-new-B
+      expect(mockTx.room.upsert).not.toHaveBeenCalled();
+    });
+
+    it('allows same-building idempotent retry without collision error', async () => {
+      vi.spyOn(referralService, 'settleReferralOnboarding').mockResolvedValue(undefined as any);
+      const upsertedRooms: any[] = [];
+
+      const mockTx: any = {
+        $executeRaw: vi.fn().mockResolvedValue(1),
+        onboardingDraft: {
+          findUnique: vi.fn().mockResolvedValue({ provisionalDormitoryId: 'dorm-prov-001', finalizedAt: null }),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+        dormitory: {
+          findUnique: vi.fn().mockResolvedValue({ id: 'dorm-prov-001', createdByUserId: 'user-001', status: 'setup_pending' }),
+          update: vi.fn().mockResolvedValue({ id: 'dorm-prov-001', name: 'Dorm Retry', status: 'active' }),
+        },
+        ownerSignature: { findFirst: vi.fn().mockResolvedValue({ id: 'sig-001', isCurrent: true }) },
+        dormitoryLineConfig: { findUnique: vi.fn().mockResolvedValue(null) },
+        subscriptionPackageIntent: {
+          findUnique: vi.fn().mockResolvedValue({
+            id: 'intent-001',
+            userId: 'user-001',
+            dormitoryId: 'dorm-prov-001',
+            checkoutVersion: 2,
+            status: 'PENDING_PAYMENT',
+            finalPayableAmount: new Prisma.Decimal(100),
+            package: { planCode: 'PAID', plan: { code: 'PAID' } },
+          }),
+          update: vi.fn().mockResolvedValue({ id: 'intent-001', status: 'SUCCEEDED' }),
+          updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+        },
+        subscriptionPlan: { findUnique: vi.fn().mockResolvedValue({ id: 'plan-paid', code: 'PAID' }) },
+        dormitorySubscription: {
+          findUnique: vi.fn().mockResolvedValue(null),
+          create: vi.fn().mockResolvedValue({ id: 'sub-001', status: 'ACTIVE' }),
+          upsert: vi.fn().mockResolvedValue({ id: 'sub-001', status: 'ACTIVE' }),
+        },
+        role: { findFirst: vi.fn().mockResolvedValue({ id: 'role-owner', code: 'OWNER' }) },
+        dormitoryMember: { upsert: vi.fn().mockResolvedValue({ id: 'mem-001' }) },
+        dormitoryPropertyDefaults: { upsert: vi.fn().mockResolvedValue({}) },
+        dormitoryBillingSettings: { upsert: vi.fn().mockResolvedValue({ id: 'bset-001' }) },
+        building: {
+          create: vi.fn((args) => Promise.resolve({ id: 'bld-same-A', ...args.data })),
+          upsert: vi.fn((args) => Promise.resolve({ id: 'bld-same-A', ...args.create })),
+        },
+        room: {
+          findUnique: vi.fn().mockResolvedValue({
+            id: 'room-101-existing',
+            buildingId: 'bld-same-A', // Same building!
+            roomNumber: '101',
+            normalizedRoomNumber: '101',
+          }),
+          upsert: vi.fn((args) => {
+            upsertedRooms.push(args.create);
+            return Promise.resolve({ id: 'room-101-existing', ...args.create });
+          }),
+        },
+      };
+
+      const mockPrisma: any = {
+        $transaction: vi.fn(async (cb) => cb(mockTx)),
+      };
+
+      const service = new DormitoryProvisioningService(mockPrisma as any);
+
+      await service.completeOwnerOnboarding({
+        userId: 'user-001',
+        idempotencyKey: 'idemp-same-bld-test',
+        provisionalDormitoryId: 'dorm-prov-001',
+        packageIntentId: 'intent-001',
+        dormitory: { name: 'Dorm Retry', estimatedRoomCount: 1 },
+        billing: { dueDay: 5 },
+        buildings: [{ id: 'bld-A', name: 'อาคาร A', floorsCount: 1 }],
+        rooms: [{ buildingId: 'bld-A', roomNumber: '101', floor: 1, monthlyRent: 3500 }],
+      });
+
+      expect(upsertedRooms).toHaveLength(1);
+      expect(upsertedRooms[0].roomNumber).toBe('101');
     });
   });
 });

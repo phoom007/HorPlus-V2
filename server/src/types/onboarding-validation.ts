@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { normalizeRoomIdentifier } from '../utils/normalization.js';
 
 export const OnboardingDormitoryInputSchema = z.object({
   name: z.string().trim().min(1, 'กรุณาระบุชื่อหอพัก').max(255, 'ชื่อหอพักยาวเกินไป'),
@@ -261,6 +262,24 @@ export const CompleteOnboardingInputSchema = z.object({
   signatureSaved: z.boolean().optional(),
   signatureObjectKey: z.string().optional(),
   ownerSignatureUrl: z.string().optional(),
+}).superRefine((data, ctx) => {
+  if (data.rooms && data.rooms.length > 0) {
+    const seen = new Set<string>();
+    for (let i = 0; i < data.rooms.length; i++) {
+      const r = data.rooms[i];
+      const norm = normalizeRoomIdentifier(r.roomNumber);
+      if (norm) {
+        if (seen.has(norm)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['rooms', i, 'roomNumber'],
+            message: `เลขห้อง "${r.roomNumber}" ซ้ำกับอาคารอื่น กรุณาเปลี่ยนเลขห้องหรือเลือกรูปแบบเลขห้องอื่น`,
+          });
+        }
+        seen.add(norm);
+      }
+    }
+  }
 });
 
 export const OnboardingDraftInputSchema = z.object({

@@ -823,6 +823,23 @@ export class DormitoryProvisioningService {
         },
       });
 
+      // Preflight validation: Reject duplicate normalized room numbers across buildings in payload
+      if (rooms && rooms.length > 0) {
+        const seenInPayload = new Map<string, string>();
+        for (const r of rooms) {
+          const norm = normalizeRoomIdentifier(r.roomNumber);
+          if (!norm) continue;
+          if (seenInPayload.has(norm)) {
+            throw new AppError(
+              `เลขห้อง "${r.roomNumber}" ซ้ำกับอาคารอื่น กรุณาเปลี่ยนเลขห้องหรือเลือกรูปแบบเลขห้องอื่น`,
+              409,
+              'ROOM_NUMBER_ALREADY_EXISTS'
+            );
+          }
+          seenInPayload.set(norm, r.roomNumber);
+        }
+      }
+
       // Save Buildings and Rooms if provided (idempotent upsert)
       if (buildings && buildings.length > 0) {
         for (const b of buildings) {
@@ -884,6 +901,25 @@ export class DormitoryProvisioningService {
           const matchingRooms = (rooms || []).filter((r) => r.buildingId === b.id);
           for (const r of matchingRooms) {
             const normalizedRoomNumber = normalizeRoomIdentifier(r.roomNumber);
+
+            // Preflight database collision check: Room must NOT exist under another Building
+            const existingRoom = await tx.room.findUnique({
+              where: {
+                dormitoryId_normalizedRoomNumber: {
+                  dormitoryId: dormId,
+                  normalizedRoomNumber,
+                },
+              },
+              select: { id: true, buildingId: true, roomNumber: true },
+            });
+
+            if (existingRoom && existingRoom.buildingId !== createdBld.id) {
+              throw new AppError(
+                `เลขห้อง "${r.roomNumber}" ซ้ำกับอาคารอื่น กรุณาเปลี่ยนเลขห้องหรือเลือกรูปแบบเลขห้องอื่น`,
+                409,
+                'ROOM_NUMBER_ALREADY_EXISTS'
+              );
+            }
             const rMonthlyStr = (r.monthlyRent !== undefined && r.monthlyRent !== null) ? String(r.monthlyRent) : (bMonthlyStr || '0');
             const rDailyStr = (r.dailyRent !== undefined && r.dailyRent !== null) ? String(r.dailyRent) : bDailyStr;
             const rTermStr = (r.termRent !== undefined && r.termRent !== null) ? String(r.termRent) : bTermStr;

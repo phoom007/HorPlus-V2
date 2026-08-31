@@ -38,6 +38,7 @@ export function mapRegistrationBuildingForFinalize(
 }
 
 import { formatBuildingDisplayName } from '../../lib/roomRentalSummary';
+import { normalizeRoomIdentifier } from '../../lib/roomNormalizer';
 import {
   TieredRateEditor,
   WATER_TIER_PRESET,
@@ -993,6 +994,25 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
       if (totalRooms > 150) {
         return { valid: false, error: 'หนึ่งหอพักสามารถสร้างห้องได้สูงสุด 150 ห้อง' };
       }
+
+      // Dorm-wide room uniqueness check across all buildings
+      const seenRooms = new Map<string, { roomNumber: string; buildingName: string }>();
+      for (let i = 0; i < formData.buildings.length; i++) {
+        const b = formData.buildings[i];
+        const bLabel = (b.name && b.name.trim()) ? formatBuildingDisplayName(b.name) : (b.roomPrefix ? `อาคาร ${b.roomPrefix}` : `อาคารที่ ${i + 1}`);
+        const rooms = getGeneratedRooms(b);
+        for (const rNum of rooms) {
+          const norm = normalizeRoomIdentifier(rNum);
+          if (!norm) continue;
+          if (seenRooms.has(norm)) {
+            return {
+              valid: false,
+              error: `เลขห้อง "${rNum}" ซ้ำกับอาคารอื่น กรุณาเปลี่ยนเลขห้องหรือเลือกรูปแบบเลขห้องอื่น`,
+            };
+          }
+          seenRooms.set(norm, { roomNumber: rNum, buildingName: bLabel });
+        }
+      }
     }
 
     if (stepNum === 3) {
@@ -1256,6 +1276,16 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
 
       if (mappedBuildings.length === 0 || mappedRooms.length === 0) {
         throw new Error('กรุณาระบุข้อมูลอาคารและห้องพักอย่างน้อย 1 ห้อง');
+      }
+
+      // Preflight dorm-wide duplicate room check
+      const seenFinalizeRooms = new Set<string>();
+      for (const room of mappedRooms) {
+        const norm = normalizeRoomIdentifier(room.roomNumber);
+        if (seenFinalizeRooms.has(norm)) {
+          throw new Error(`เลขห้อง "${room.roomNumber}" ซ้ำกับอาคารอื่น กรุณาเปลี่ยนเลขห้องหรือเลือกรูปแบบเลขห้องอื่น`);
+        }
+        seenFinalizeRooms.add(norm);
       }
 
       const waterBillingType = mapRegisterUtilityMode(formData.utilities.waterBillingMode);
@@ -1585,6 +1615,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
             </div>
             <button
               onClick={handleAddBuilding}
+              data-testid="btn-add-building"
               className="px-3.5 py-2 bg-blue-50 hover:bg-blue-100 text-blue-600 rounded-2xl text-xs font-extrabold transition-all flex items-center gap-1.5 cursor-pointer shrink-0"
             >
               <Plus className="w-4 h-4" />
@@ -1656,6 +1687,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                         </button>
                         <button
                           type="button"
+                          data-testid={`btn-building-manual-mode-${idx}`}
                           onClick={() => {
                             const updated = [...formData.buildings];
                             updated[idx].mode = 'manual';
@@ -1795,7 +1827,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                     <div className="space-y-3 bg-white p-4 rounded-2xl border border-slate-200/80">
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pb-2 border-b border-slate-100">
                         <div>
-                          <label className="block text-xs font-bold text-slate-700 mb-1">ชื่อ/รหัสอาคาร</label>
+                          <label className="block text-xs font-bold text-slate-700 mb-1">ชื่ออาคาร</label>
                           <input
                             type="text"
                             value={b.name || ''}
