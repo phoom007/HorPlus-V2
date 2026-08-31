@@ -43,7 +43,16 @@ import { queryKeys, STALE_TIMES } from '../../lib/queryClient';
 import { meterDraftStore, deriveMeterDraftPatches } from '../../lib/meterDraftStore';
 import { OwnerMeterListCard } from '../../components/meters/OwnerMeterListCard';
 import { MeterOtherFeesModal } from '../../components/meters/MeterOtherFeesModal';
-import { calculateMeterRowPreview, calculateMeterUsageUnits, RoomPreviewContext, parseScaled2, formatScaled2, formatMoneyDisplay } from '../../utils/meterBillingCalculator';
+import {
+  calculateMeterRowPreview,
+  calculateMeterUsageUnits,
+  isMeterBasedUtilityMode,
+  calculateProgressiveTieredChargeLocal,
+  RoomPreviewContext,
+  parseScaled2,
+  formatScaled2,
+  formatMoneyDisplay,
+} from '../../utils/meterBillingCalculator';
 import { isCycleInRollingThreeMonthWindow, toBangkokDateString, normalizeBangkokDate, formatShortThaiBuddhistDate } from '../../utils/calendarDate';
 import { Room, Building, QuickAddRoomContext, Bill, BillItem, Tenant, Contract, BillStatus, calculateRoomRentForCycle } from '../../types';
 import { getDataProvider } from '../../data/dataProvider';
@@ -1052,8 +1061,8 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
 
   // Authoritative billing mode derived strictly from rateSnapshot (fail-closed, no default assumption)
   const isRateSnapshotReady = Boolean(previewContextQuery.isSuccess && rateSnapshot);
-  const isWaterUnit = isRateSnapshotReady ? (rateSnapshot.waterBillingType === 'per_unit') : false;
-  const isElecUnit = isRateSnapshotReady ? (rateSnapshot.electricityBillingType === 'per_unit') : false;
+  const isWaterUnit = isRateSnapshotReady ? isMeterBasedUtilityMode(rateSnapshot.waterBillingType) : false;
+  const isElecUnit = isRateSnapshotReady ? isMeterBasedUtilityMode(rateSnapshot.electricityBillingType) : false;
 
   const isMeterWorkspaceReady = Boolean(meterWorkspaceQuery.isSuccess);
   const isSelectedCycleAuthorityReady = Boolean(
@@ -1233,32 +1242,44 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     if (bill && Array.isArray(bill.items)) {
       const waterItem = bill.items.find(item => item.category === 'water' || (item as any).type === 'water');
       if (waterItem) {
-        const match = waterItem.description?.match(/\(([\d.]+)\s*หน่วย\)/);
-        if (match) {
-          waterCurr = waterPrev + Number(match[1]);
+        if ((waterItem as any).metadata?.currentReading !== undefined && (waterItem as any).metadata?.currentReading !== null) {
+          waterCurr = Number((waterItem as any).metadata.currentReading);
         } else {
-          const isUnit = rateSnapshot ? (rateSnapshot.waterBillingType === 'per_unit') : false;
-          if (isUnit) {
-            const rate = rateSnapshot?.waterRate ? Number(rateSnapshot.waterRate) : 0;
-            waterCurr = rate > 0 ? (waterPrev + Number(waterItem.amount) / rate) : waterPrev;
+          const match = waterItem.description?.match(/\(([\d.]+)\s*หน่วย\)/) || waterItem.description?.match(/\(([\d.]+)\s*-\s*([\d.]+)\)/);
+          if (match && match[2]) {
+            waterCurr = Number(match[2]);
+          } else if (match && match[1]) {
+            waterCurr = waterPrev + Number(match[1]);
           } else {
-            waterCurr = waterPrev;
+            const isUnit = rateSnapshot ? isMeterBasedUtilityMode(rateSnapshot.waterBillingType) : false;
+            if (isUnit) {
+              const rate = rateSnapshot?.waterRate ? Number(rateSnapshot.waterRate) : 0;
+              waterCurr = rate > 0 ? (waterPrev + Number(waterItem.amount) / rate) : waterPrev;
+            } else {
+              waterCurr = waterPrev;
+            }
           }
         }
       }
 
       const elecItem = bill.items.find(item => item.category === 'electricity' || (item as any).type === 'electricity');
       if (elecItem) {
-        const match = elecItem.description?.match(/\(([\d.]+)\s*หน่วย\)/);
-        if (match) {
-          elecCurr = elecPrev + Number(match[1]);
+        if ((elecItem as any).metadata?.currentReading !== undefined && (elecItem as any).metadata?.currentReading !== null) {
+          elecCurr = Number((elecItem as any).metadata.currentReading);
         } else {
-          const isUnit = rateSnapshot ? (rateSnapshot.electricityBillingType === 'per_unit') : false;
-          if (isUnit) {
-            const rate = rateSnapshot?.electricityRate ? Number(rateSnapshot.electricityRate) : 0;
-            elecCurr = rate > 0 ? (elecPrev + Number(elecItem.amount) / rate) : elecPrev;
+          const match = elecItem.description?.match(/\(([\d.]+)\s*หน่วย\)/) || elecItem.description?.match(/\(([\d.]+)\s*-\s*([\d.]+)\)/);
+          if (match && match[2]) {
+            elecCurr = Number(match[2]);
+          } else if (match && match[1]) {
+            elecCurr = elecPrev + Number(match[1]);
           } else {
-            elecCurr = elecPrev;
+            const isUnit = rateSnapshot ? isMeterBasedUtilityMode(rateSnapshot.electricityBillingType) : false;
+            if (isUnit) {
+              const rate = rateSnapshot?.electricityRate ? Number(rateSnapshot.electricityRate) : 0;
+              elecCurr = rate > 0 ? (elecPrev + Number(elecItem.amount) / rate) : elecPrev;
+            } else {
+              elecCurr = elecPrev;
+            }
           }
         }
       }
@@ -1559,10 +1580,21 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     const wPrev = Number(row.waterPrev) || 0;
     const units = row.isReplaced ? wCurr : Math.max(0, wCurr - wPrev);
 
-    if (mode === 'per_unit' || mode === 'unit') {
+    if (mode === 'tiered') {
+      if (row.waterPrev === '' || row.waterCurr === '') return 0;
+      const usageRes = calculateMeterUsageUnits(row.waterPrev, row.waterCurr);
+      if (!usageRes.isValid) return 0;
+      const prog = calculateProgressiveTieredChargeLocal({
+        usageUnits: usageRes.usageUnits,
+        tiers: rateSnapshot?.waterTierRates,
+      });
+      return prog.isValid ? Number(prog.totalAmount) : 0;
+    } else if (mode === 'per_unit' || mode === 'unit') {
       return units * rate;
     } else if (mode === 'per_person' || mode === 'person') {
       return (Number(row.peopleCount) || 0) * rate;
+    } else if (mode === 'free' || mode === 'none') {
+      return 0;
     } else {
       return rate;
     }
@@ -1575,10 +1607,21 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     const ePrev = Number(row.elecPrev) || 0;
     const units = row.isReplaced ? eCurr : Math.max(0, eCurr - ePrev);
 
-    if (mode === 'per_unit' || mode === 'unit') {
+    if (mode === 'tiered') {
+      if (row.elecPrev === '' || row.elecCurr === '') return 0;
+      const usageRes = calculateMeterUsageUnits(row.elecPrev, row.elecCurr);
+      if (!usageRes.isValid) return 0;
+      const prog = calculateProgressiveTieredChargeLocal({
+        usageUnits: usageRes.usageUnits,
+        tiers: rateSnapshot?.electricityTierRates,
+      });
+      return prog.isValid ? Number(prog.totalAmount) : 0;
+    } else if (mode === 'per_unit' || mode === 'unit') {
       return units * rate;
     } else if (mode === 'per_person' || mode === 'person') {
       return (Number(row.peopleCount) || 0) * rate;
+    } else if (mode === 'free' || mode === 'none') {
+      return 0;
     } else {
       return rate;
     }

@@ -46,6 +46,7 @@ import {
 import {
   calculateMeterUsageUnits,
   calculateMeterRowPreview,
+  calculateProgressiveTieredChargeLocal,
   formatMoneyDisplay,
 } from '../../utils/meterBillingCalculator';
 import {
@@ -225,9 +226,20 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
     elecCostText = formatComponentDetailAmount(elecItem.amount);
   } else if (elecUnits >= 0 && row.elecCurr !== '') {
     const rates = rateSnapshot || roomCtx?.rateSnapshot;
-    const elecRate = Number(rates?.electricityRate ?? 0);
-    if (elecRate > 0) {
-      elecCostText = formatComponentDetailAmount(elecUnits * elecRate);
+    const rawElecMode = rates?.electricityBillingType;
+    if (rawElecMode === 'tiered') {
+      const prog = calculateProgressiveTieredChargeLocal({
+        usageUnits: elecUnits,
+        tiers: rates?.electricityTierRates,
+      });
+      if (prog.isValid) {
+        elecCostText = formatComponentDetailAmount(prog.totalAmount);
+      }
+    } else {
+      const elecRate = Number(rates?.electricityRate ?? 0);
+      if (elecRate > 0) {
+        elecCostText = formatComponentDetailAmount(elecUnits * elecRate);
+      }
     }
   }
 
@@ -236,11 +248,21 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
     waterCostText = formatComponentDetailAmount(waterItem.amount);
   } else if (waterUnits >= 0 && row.waterCurr !== '') {
     const rates = rateSnapshot || roomCtx?.rateSnapshot;
-    const waterRate = Number(rates?.waterRate ?? 0);
     const waterBillingType = rates?.waterBillingType ?? 'per_unit';
-    if (waterRate > 0) {
-      const cost = waterBillingType === 'per_person' ? peopleCountVal * waterRate : waterUnits * waterRate;
-      waterCostText = formatComponentDetailAmount(cost);
+    if (waterBillingType === 'tiered') {
+      const prog = calculateProgressiveTieredChargeLocal({
+        usageUnits: waterUnits,
+        tiers: rates?.waterTierRates,
+      });
+      if (prog.isValid) {
+        waterCostText = formatComponentDetailAmount(prog.totalAmount);
+      }
+    } else {
+      const waterRate = Number(rates?.waterRate ?? 0);
+      if (waterRate > 0) {
+        const cost = waterBillingType === 'per_person' ? peopleCountVal * waterRate : waterUnits * waterRate;
+        waterCostText = formatComponentDetailAmount(cost);
+      }
     }
   }
 

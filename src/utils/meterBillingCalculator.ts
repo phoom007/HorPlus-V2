@@ -9,16 +9,46 @@
  * 4. Meter usage preserves exact 2-decimal fractional units without integer rounding (e.g. 105.75 - 100.25 = 5.50).
  */
 
+export function isMeterBasedUtilityMode(mode?: string | null): boolean {
+  if (!mode) return false;
+  const m = String(mode).trim().toLowerCase();
+  return m === 'per_unit' || m === 'unit' || m === 'tiered';
+}
+
+export interface CanonicalTierRecord {
+  upTo: string | null;
+  rate: string;
+}
+
+export interface CanonicalTierBreakdown {
+  lowerExclusive: string;
+  upperInclusive: string | null;
+  billedUnits: string;
+  rate: string;
+  amount: string;
+}
+
+export interface ProgressiveTierResult {
+  isValid: boolean;
+  errorMessage?: string;
+  totalAmountSatang: bigint;
+  totalAmount: string;
+  usageUnits: string;
+  tierBreakdown: CanonicalTierBreakdown[];
+}
+
 export interface RateSnapshotContext {
-  waterBillingType?: 'per_unit' | 'per_person' | 'fixed' | 'per_room' | 'room' | 'person';
+  waterBillingType?: 'per_unit' | 'per_person' | 'fixed' | 'per_room' | 'room' | 'person' | 'tiered' | string;
   waterRate?: string | number;
-  electricityBillingType?: 'per_unit' | 'per_person' | 'fixed' | 'per_room' | 'room' | 'person';
+  waterTierRates?: Array<CanonicalTierRecord> | null;
+  electricityBillingType?: 'per_unit' | 'per_person' | 'fixed' | 'per_room' | 'room' | 'person' | 'tiered' | string;
   electricityRate?: string | number;
-  commonFeeMode?: 'per_room' | 'per_person' | 'free' | 'room' | 'person' | 'none';
+  electricityTierRates?: Array<CanonicalTierRecord> | null;
+  commonFeeMode?: 'per_room' | 'per_person' | 'free' | 'room' | 'person' | 'none' | string;
   commonFee?: string | number;
-  internetFeeMode?: 'per_room' | 'per_person' | 'free' | 'room' | 'person' | 'none';
+  internetFeeMode?: 'per_room' | 'per_person' | 'free' | 'room' | 'person' | 'none' | string;
   internetFee?: string | number;
-  parkingFeeMode?: 'per_room' | 'per_person' | 'per_vehicle' | 'free' | 'room' | 'person' | 'vehicle' | 'none';
+  parkingFeeMode?: 'per_room' | 'per_person' | 'per_vehicle' | 'free' | 'room' | 'person' | 'vehicle' | 'none' | string;
   parkingFee?: string | number;
 }
 
@@ -66,9 +96,11 @@ export interface CalculatedMeterPreview {
   waterAmount: string;
   waterUsage: string;
   waterStatus: MeterCalculationStatus;
+  waterTierBreakdown?: CanonicalTierBreakdown[];
   elecAmount: string;
   elecUsage: string;
   elecStatus: MeterCalculationStatus;
+  elecTierBreakdown?: CanonicalTierBreakdown[];
   commonAmount: string;
   internetAmount: string;
   parkingAmount: string;
@@ -76,6 +108,190 @@ export interface CalculatedMeterPreview {
   overdueAmount: string;
   totalAmount: string;
   formattedTotal: string;
+}
+
+export function validateCanonicalUtilityTiersLocal(input: unknown): {
+  isValid: boolean;
+  tiers: CanonicalTierRecord[];
+  errorMessage?: string;
+} {
+  if (!Array.isArray(input)) {
+    return { isValid: false, tiers: [], errorMessage: 'INVALID_TIER_CONFIGURATION: Tier configuration must be an array' };
+  }
+  if (input.length === 0 || input.length > 5) {
+    return { isValid: false, tiers: [], errorMessage: 'INVALID_TIER_CONFIGURATION: Tiers count must be between 1 and 5' };
+  }
+
+  const normalizedTiers: CanonicalTierRecord[] = [];
+  let prevUpToSatang = 0n;
+
+  for (let i = 0; i < input.length; i++) {
+    const raw = input[i];
+    if (!raw || typeof raw !== 'object') {
+      return { isValid: false, tiers: [], errorMessage: 'INVALID_TIER_CONFIGURATION: Malformed tier record' };
+    }
+
+    const isLast = i === input.length - 1;
+    const rawRate = raw.rate;
+    const rawUpTo = raw.upTo;
+
+    if (rawRate === undefined || rawRate === null || String(rawRate).trim() === '') {
+      return { isValid: false, tiers: [], errorMessage: 'INVALID_TIER_CONFIGURATION: Rate is required' };
+    }
+
+    const rateStr = String(rawRate).trim();
+    if (!/^\d+(\.\d{1,2})?$/.test(rateStr)) {
+      return { isValid: false, tiers: [], errorMessage: `INVALID_TIER_CONFIGURATION: Invalid rate '${rateStr}'` };
+    }
+    const rateSatang = parseSatang(rateStr);
+    if (rateSatang < 0n) {
+      return { isValid: false, tiers: [], errorMessage: 'INVALID_TIER_CONFIGURATION: Rate cannot be negative' };
+    }
+
+    let upToStr: string | null = null;
+    if (isLast) {
+      if (rawUpTo !== null && rawUpTo !== undefined && String(rawUpTo).trim() !== '') {
+        return { isValid: false, tiers: [], errorMessage: 'INVALID_TIER_CONFIGURATION: Final tier upTo must be null' };
+      }
+      upToStr = null;
+    } else {
+      if (rawUpTo === null || rawUpTo === undefined || String(rawUpTo).trim() === '') {
+        return { isValid: false, tiers: [], errorMessage: 'INVALID_TIER_CONFIGURATION: Intermediate tier upTo is required' };
+      }
+      const uStr = String(rawUpTo).trim();
+      if (!/^\d+(\.\d{1,2})?$/.test(uStr)) {
+        return { isValid: false, tiers: [], errorMessage: `INVALID_TIER_CONFIGURATION: Invalid upTo '${uStr}'` };
+      }
+      const upToSatang = parseSatang(uStr);
+      if (upToSatang <= 0n) {
+        return { isValid: false, tiers: [], errorMessage: 'INVALID_TIER_CONFIGURATION: upTo must be positive' };
+      }
+      if (upToSatang <= prevUpToSatang) {
+        return { isValid: false, tiers: [], errorMessage: 'INVALID_TIER_CONFIGURATION: upTo values must be strictly ascending' };
+      }
+      prevUpToSatang = upToSatang;
+      upToStr = formatSatang(upToSatang);
+    }
+
+    normalizedTiers.push({
+      upTo: upToStr,
+      rate: formatSatang(rateSatang),
+    });
+  }
+
+  return { isValid: true, tiers: normalizedTiers };
+}
+
+export function calculateProgressiveTieredChargeLocal(input: {
+  usageUnits: number | string | bigint;
+  tiers?: CanonicalTierRecord[] | null;
+}): ProgressiveTierResult {
+  const tierVal = validateCanonicalUtilityTiersLocal(input.tiers);
+  if (!tierVal.isValid) {
+    return {
+      isValid: false,
+      errorMessage: tierVal.errorMessage,
+      totalAmountSatang: 0n,
+      totalAmount: '0.00',
+      usageUnits: '0.00',
+      tierBreakdown: [],
+    };
+  }
+
+  const rawUsage = input.usageUnits;
+  let usageInt: bigint;
+  if (typeof rawUsage === 'bigint') {
+    usageInt = rawUsage;
+  } else {
+    const str = String(rawUsage ?? '').trim();
+    if (!/^\d+(\.\d{1,2})?$/.test(str)) {
+      return {
+        isValid: false,
+        errorMessage: 'INVALID_USAGE: Usage must be non-negative integer',
+        totalAmountSatang: 0n,
+        totalAmount: '0.00',
+        usageUnits: '0.00',
+        tierBreakdown: [],
+      };
+    }
+    usageInt = BigInt(Math.floor(Number(str)));
+  }
+
+  if (usageInt < 0n) {
+    return {
+      isValid: false,
+      errorMessage: 'INVALID_USAGE: Usage cannot be negative',
+      totalAmountSatang: 0n,
+      totalAmount: '0.00',
+      usageUnits: '0.00',
+      tierBreakdown: [],
+    };
+  }
+
+  const usageUnitsStr = `${usageInt}.00`;
+  if (usageInt === 0n) {
+    return {
+      isValid: true,
+      totalAmountSatang: 0n,
+      totalAmount: '0.00',
+      usageUnits: '0.00',
+      tierBreakdown: [],
+    };
+  }
+
+  let remaining = usageInt;
+  let prevBound = 0n;
+  let totalSatang = 0n;
+  const breakdown: CanonicalTierBreakdown[] = [];
+
+  for (let i = 0; i < tierVal.tiers.length; i++) {
+    if (remaining <= 0n) break;
+    const tier = tierVal.tiers[i];
+    const isLast = i === tierVal.tiers.length - 1;
+
+    let billedUnits: bigint;
+    let upperInclusiveStr: string | null = null;
+
+    if (!isLast && tier.upTo !== null) {
+      const upToUnits = parseScaled2(tier.upTo) / 100n;
+      upperInclusiveStr = `${upToUnits}.00`;
+      const capacity = upToUnits - prevBound;
+      billedUnits = remaining > capacity ? capacity : remaining;
+    } else {
+      upperInclusiveStr = null;
+      billedUnits = remaining;
+    }
+
+    if (billedUnits > 0n) {
+      const rateSatang = parseSatang(tier.rate);
+      const billedUnitsStr = `${billedUnits}.00`;
+      // Round-Half-Up per tier product to 2 DP
+      const tierAmountSatang = multiplyMoneyByQuantity(rateSatang, billedUnitsStr);
+      totalSatang += tierAmountSatang;
+
+      breakdown.push({
+        lowerExclusive: `${prevBound}.00`,
+        upperInclusive: upperInclusiveStr,
+        billedUnits: billedUnitsStr,
+        rate: formatSatang(rateSatang),
+        amount: formatSatang(tierAmountSatang),
+      });
+
+      remaining -= billedUnits;
+    }
+
+    if (!isLast && tier.upTo !== null) {
+      prevBound = parseScaled2(tier.upTo) / 100n;
+    }
+  }
+
+  return {
+    isValid: true,
+    totalAmountSatang: totalSatang,
+    totalAmount: formatSatang(totalSatang),
+    usageUnits: usageUnitsStr,
+    tierBreakdown: breakdown,
+  };
 }
 
 /**
@@ -202,6 +418,7 @@ export function calculateMeterRowPreview(
   let waterUsageScaled = 0n;
   let waterAmountSatang = 0n;
   let waterStatus: MeterCalculationStatus = 'VALID';
+  let waterTierBreakdown: CanonicalTierBreakdown[] | undefined = undefined;
 
   if (!rates || !rawWaterMode) {
     // Rates not loaded / not ready -> NOT_READY (no default assumption)
@@ -220,7 +437,7 @@ export function calculateMeterRowPreview(
     waterStatus = 'VALID';
     waterAmountSatang = 0n;
     waterUsageScaled = 0n;
-  } else if (rawWaterMode === 'per_unit') {
+  } else if (rawWaterMode === 'per_unit' || rawWaterMode === 'unit') {
     waterStatus = 'VALID';
     // per_unit: calculate usage units with 4/5-digit rollover support
     if (rawWaterPrev !== '' && rawWaterCurr !== '') {
@@ -239,6 +456,34 @@ export function calculateMeterRowPreview(
         waterAmountSatang = multiplyMoneyByQuantity(waterRateSatang, usageStr);
       }
     }
+  } else if (rawWaterMode === 'tiered') {
+    if (rawWaterPrev === '' || rawWaterCurr === '') {
+      waterStatus = 'NOT_READY';
+      waterUsageScaled = 0n;
+      waterAmountSatang = 0n;
+    } else {
+      const usageRes = calculateMeterUsageUnits(rawWaterPrev, rawWaterCurr);
+      if (!usageRes.isValid) {
+        waterStatus = 'INVALID';
+        waterUsageScaled = 0n;
+        waterAmountSatang = 0n;
+      } else {
+        const progRes = calculateProgressiveTieredChargeLocal({
+          usageUnits: usageRes.usageUnits,
+          tiers: rates.waterTierRates,
+        });
+        if (!progRes.isValid) {
+          waterStatus = 'INVALID';
+          waterUsageScaled = 0n;
+          waterAmountSatang = 0n;
+        } else {
+          waterStatus = 'VALID';
+          waterUsageScaled = BigInt(usageRes.usageUnits) * 100n;
+          waterAmountSatang = progRes.totalAmountSatang;
+          waterTierBreakdown = progRes.tierBreakdown;
+        }
+      }
+    }
   } else {
     // Unsupported/unknown present mode -> INVALID (fail closed, never assume per_unit)
     waterStatus = 'INVALID';
@@ -252,6 +497,7 @@ export function calculateMeterRowPreview(
   let elecUsageScaled = 0n;
   let elecAmountSatang = 0n;
   let elecStatus: MeterCalculationStatus = 'VALID';
+  let elecTierBreakdown: CanonicalTierBreakdown[] | undefined = undefined;
 
   if (!rates || !rawElecMode) {
     // Rates not loaded / not ready -> NOT_READY (no default assumption)
@@ -270,7 +516,7 @@ export function calculateMeterRowPreview(
     elecStatus = 'VALID';
     elecAmountSatang = 0n;
     elecUsageScaled = 0n;
-  } else if (rawElecMode === 'per_unit') {
+  } else if (rawElecMode === 'per_unit' || rawElecMode === 'unit') {
     elecStatus = 'VALID';
     // per_unit: calculate usage units with 4/5-digit rollover support
     if (rawElecPrev !== '' && rawElecCurr !== '') {
@@ -287,6 +533,34 @@ export function calculateMeterRowPreview(
       if (elecUsageScaled > 0n) {
         const usageStr = formatScaled2(elecUsageScaled);
         elecAmountSatang = multiplyMoneyByQuantity(elecRateSatang, usageStr);
+      }
+    }
+  } else if (rawElecMode === 'tiered') {
+    if (rawElecPrev === '' || rawElecCurr === '') {
+      elecStatus = 'NOT_READY';
+      elecUsageScaled = 0n;
+      elecAmountSatang = 0n;
+    } else {
+      const usageRes = calculateMeterUsageUnits(rawElecPrev, rawElecCurr);
+      if (!usageRes.isValid) {
+        elecStatus = 'INVALID';
+        elecUsageScaled = 0n;
+        elecAmountSatang = 0n;
+      } else {
+        const progRes = calculateProgressiveTieredChargeLocal({
+          usageUnits: usageRes.usageUnits,
+          tiers: rates.electricityTierRates,
+        });
+        if (!progRes.isValid) {
+          elecStatus = 'INVALID';
+          elecUsageScaled = 0n;
+          elecAmountSatang = 0n;
+        } else {
+          elecStatus = 'VALID';
+          elecUsageScaled = BigInt(usageRes.usageUnits) * 100n;
+          elecAmountSatang = progRes.totalAmountSatang;
+          elecTierBreakdown = progRes.tierBreakdown;
+        }
       }
     }
   } else {
@@ -385,9 +659,11 @@ export function calculateMeterRowPreview(
       waterAmount: '0.00',
       waterUsage: formatScaled2(waterUsageScaled),
       waterStatus,
+      waterTierBreakdown,
       elecAmount: '0.00',
       elecUsage: formatScaled2(elecUsageScaled),
       elecStatus,
+      elecTierBreakdown,
       commonAmount: '0.00',
       internetAmount: '0.00',
       parkingAmount: '0.00',
@@ -419,9 +695,11 @@ export function calculateMeterRowPreview(
     waterAmount: waterStatus === 'INVALID' ? 'INVALID' : formatSatang(waterAmountSatang),
     waterUsage: formatScaled2(waterUsageScaled),
     waterStatus,
+    waterTierBreakdown,
     elecAmount: elecStatus === 'INVALID' ? 'INVALID' : formatSatang(elecAmountSatang),
     elecUsage: formatScaled2(elecUsageScaled),
     elecStatus,
+    elecTierBreakdown,
     commonAmount: formatSatang(commonAmountSatang),
     internetAmount: formatSatang(internetAmountSatang),
     parkingAmount: formatSatang(parkingAmountSatang),
