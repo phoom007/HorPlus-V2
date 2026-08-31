@@ -804,6 +804,11 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
     setElectricTierRates(ELECTRICITY_TIER_PRESET);
     setTierSaveError(null);
     isUserTypingRef.current = false;
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+      saveTimeoutRef.current = null;
+    }
+    setSaveStatus('idle');
 
     fetchDormitoryProfile();
     fetchDormitoryDefaults();
@@ -823,6 +828,11 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
       setIsSnapshotReady(false);
       setTierSaveError(null);
       isUserTypingRef.current = false;
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+        saveTimeoutRef.current = null;
+      }
+      setSaveStatus('idle');
       fetchCycleRateSnapshot(selectedCycle);
     }
   }, [selectedCycle, selectedDormId]);
