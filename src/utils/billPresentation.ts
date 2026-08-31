@@ -1,6 +1,6 @@
 /**
  * @license Apache-2.0
- * OWNER R3.9-E.1B.2: Shared Bill & Tier Presentation Utilities
+ * OWNER R3.9-E.1B.2.1: Shared Bill & Tier Presentation Utilities
  */
 
 import {
@@ -11,8 +11,65 @@ import {
 } from '../types';
 
 /**
- * Type guard validating that a bill item metadata object represents a valid, displayable Tiered utility.
- * Fails closed if metadata is missing, malformed, or has empty breakdown.
+ * Checks whether a value is a valid canonical whole unit integer decimal string or integer number.
+ * Examples valid: "0", "0.00", "10", "10.00", "150.00", 0, 10, 150
+ * Examples invalid: "abc", "10.50", "5.50", "-1", "1e2", Infinity, NaN, null, undefined
+ */
+export function isCanonicalWholeUnitDisplay(val: unknown): boolean {
+  if (val === null || val === undefined) return false;
+  if (typeof val === 'number') {
+    return Number.isFinite(val) && val >= 0 && Number.isInteger(val);
+  }
+  if (typeof val === 'string') {
+    const str = val.trim();
+    if (!/^\d+(\.0+)?$/.test(str)) return false;
+    const num = Number(str);
+    return Number.isFinite(num) && num >= 0 && Number.isInteger(num);
+  }
+  return false;
+}
+
+/**
+ * Checks whether a value is a valid canonical money decimal string (max 2DP) or finite number.
+ * Examples valid: "34.00", "55.25", "-10.00", "0.00", 34, 55.25
+ * Examples invalid: "abc", "wrong", "1e2", Infinity, NaN, null, undefined
+ */
+export function isCanonicalMoneyDisplay(val: unknown): boolean {
+  if (val === null || val === undefined) return false;
+  if (typeof val === 'number') {
+    return Number.isFinite(val);
+  }
+  if (typeof val === 'string') {
+    const str = val.trim();
+    if (!/^-?\d+(\.\d{1,2})?$/.test(str)) return false;
+    const num = Number(str);
+    return Number.isFinite(num);
+  }
+  return false;
+}
+
+/**
+ * Checks whether a value is a valid non-negative canonical money decimal string (max 2DP) or finite non-negative number.
+ * Examples valid: "3.40", "0.00", "15.00", 3.4, 0
+ * Examples invalid: "-1.00", "abc", "bad", "1e2", Infinity, NaN, null, undefined
+ */
+export function isCanonicalPositiveMoneyDisplay(val: unknown): boolean {
+  if (val === null || val === undefined) return false;
+  if (typeof val === 'number') {
+    return Number.isFinite(val) && val >= 0;
+  }
+  if (typeof val === 'string') {
+    const str = val.trim();
+    if (!/^\d+(\.\d{1,2})?$/.test(str)) return false;
+    const num = Number(str);
+    return Number.isFinite(num) && num >= 0;
+  }
+  return false;
+}
+
+/**
+ * Strict type guard validating that a bill item metadata object represents a valid, displayable Tiered utility.
+ * Fails closed if metadata is missing, malformed, non-integer boundaries, fractional usage, or has empty breakdown.
  */
 export function isValidTieredBillItemMetadata(
   metadata: unknown
@@ -24,10 +81,26 @@ export function isValidTieredBillItemMetadata(
 
   for (const item of m.tierBreakdown) {
     if (!item || typeof item !== 'object') return false;
-    if (item.lowerExclusive === undefined || item.lowerExclusive === null) return false;
-    if (item.billedUnits === undefined || item.billedUnits === null) return false;
-    if (item.rate === undefined || item.rate === null) return false;
-    if (item.amount === undefined || item.amount === null) return false;
+
+    // 1. lowerExclusive: valid non-negative whole-unit integer
+    if (!isCanonicalWholeUnitDisplay(item.lowerExclusive)) return false;
+    const lowerVal = Number(item.lowerExclusive);
+
+    // 2. upperInclusive: null OR valid non-negative whole-unit integer > lowerExclusive
+    if (item.upperInclusive !== null && item.upperInclusive !== undefined && item.upperInclusive !== '') {
+      if (!isCanonicalWholeUnitDisplay(item.upperInclusive)) return false;
+      const upperVal = Number(item.upperInclusive);
+      if (upperVal <= lowerVal) return false;
+    }
+
+    // 3. billedUnits: valid non-negative whole integer usage
+    if (!isCanonicalWholeUnitDisplay(item.billedUnits)) return false;
+
+    // 4. rate: valid non-negative money decimal (max 2DP)
+    if (!isCanonicalPositiveMoneyDisplay(item.rate)) return false;
+
+    // 5. amount: valid money decimal (max 2DP)
+    if (!isCanonicalMoneyDisplay(item.amount)) return false;
   }
 
   return true;
@@ -46,14 +119,15 @@ export function formatTierRange(
   unitLabel = 'หน่วย'
 ): string {
   const lowerNum = Number(lowerExclusive);
-  const start = isNaN(lowerNum) ? 1 : Math.floor(lowerNum) + 1;
+  if (isNaN(lowerNum) || lowerNum < 0) return `- ${unitLabel}`;
+  const start = Math.floor(lowerNum) + 1;
 
   if (upperInclusive === null || upperInclusive === undefined || upperInclusive === '') {
     return `${start} ${unitLabel}ขึ้นไป`;
   }
 
   const upperNum = Number(upperInclusive);
-  if (isNaN(upperNum)) {
+  if (isNaN(upperNum) || upperNum < start) {
     return `${start} ${unitLabel}ขึ้นไป`;
   }
 
@@ -75,7 +149,7 @@ export function formatTierUsage(
   unitLabel = 'หน่วย'
 ): string {
   const val = Number(billedUnits);
-  if (isNaN(val)) return `- ${unitLabel}`;
+  if (isNaN(val) || !isCanonicalWholeUnitDisplay(billedUnits)) return `- ${unitLabel}`;
   return `${Math.round(val)} ${unitLabel}`;
 }
 

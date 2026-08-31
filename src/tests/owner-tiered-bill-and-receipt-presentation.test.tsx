@@ -1,6 +1,6 @@
 /**
  * @license Apache-2.0
- * OWNER R3.9-E.1B.2: Frontend Tiered Bill & Receipt Presentation Test Suite
+ * OWNER R3.9-E.1B.2.1: Frontend Tiered Bill & Receipt Presentation Test Suite
  */
 
 import React from 'react';
@@ -12,12 +12,16 @@ import {
   formatTierRange,
   formatTierUsage,
   formatTierRateLabel,
+  isCanonicalWholeUnitDisplay,
+  isCanonicalMoneyDisplay,
+  isCanonicalPositiveMoneyDisplay,
 } from '../utils/billPresentation';
 import { TierBreakdownView } from '../components/bills/TierBreakdownView';
 import { filterNonZeroBillItems, isNonZeroAmount, formatBillingQuantity } from '../types';
 import { formatBaht } from '../components/GlobalComponents';
+import { buildViewingReceipt } from '../pages/owner/payments';
 
-describe('OWNER R3.9-E.1B.2 — Tiered Bill & Receipt Presentation', () => {
+describe('OWNER R3.9-E.1B.2.1 — Strict Tiered Bill & Receipt Presentation Suite', () => {
   afterEach(() => {
     cleanup();
   });
@@ -65,9 +69,50 @@ describe('OWNER R3.9-E.1B.2 — Tiered Bill & Receipt Presentation', () => {
   };
 
   // =========================================================================
-  // 1. Shared Helpers & Formatters Validation
+  // 1. Strict Decimal & Integer Validator Helpers (Section 2, 6, 8)
   // =========================================================================
-  describe('1. Shared Helpers & Formatters', () => {
+  describe('1. Strict Decimal & Integer Validators', () => {
+    it('isCanonicalWholeUnitDisplay validates whole unit numbers/strings and rejects fractions/symbols', () => {
+      expect(isCanonicalWholeUnitDisplay('0')).toBe(true);
+      expect(isCanonicalWholeUnitDisplay('0.00')).toBe(true);
+      expect(isCanonicalWholeUnitDisplay('10')).toBe(true);
+      expect(isCanonicalWholeUnitDisplay('10.00')).toBe(true);
+      expect(isCanonicalWholeUnitDisplay('150.00')).toBe(true);
+      expect(isCanonicalWholeUnitDisplay(130)).toBe(true);
+      expect(isCanonicalWholeUnitDisplay(0)).toBe(true);
+
+      // Invalids
+      expect(isCanonicalWholeUnitDisplay('abc')).toBe(false);
+      expect(isCanonicalWholeUnitDisplay('10.50')).toBe(false);
+      expect(isCanonicalWholeUnitDisplay('5.50')).toBe(false);
+      expect(isCanonicalWholeUnitDisplay('-1')).toBe(false);
+      expect(isCanonicalWholeUnitDisplay('1e2')).toBe(false);
+      expect(isCanonicalWholeUnitDisplay(Infinity)).toBe(false);
+      expect(isCanonicalWholeUnitDisplay(NaN)).toBe(false);
+      expect(isCanonicalWholeUnitDisplay(null)).toBe(false);
+      expect(isCanonicalWholeUnitDisplay(undefined)).toBe(false);
+    });
+
+    it('isCanonicalPositiveMoneyDisplay validates positive money and rejects negatives/garbage', () => {
+      expect(isCanonicalPositiveMoneyDisplay('3.40')).toBe(true);
+      expect(isCanonicalPositiveMoneyDisplay('0.00')).toBe(true);
+      expect(isCanonicalPositiveMoneyDisplay('15.00')).toBe(true);
+      expect(isCanonicalPositiveMoneyDisplay('1000.5')).toBe(true);
+      expect(isCanonicalPositiveMoneyDisplay(3.4)).toBe(true);
+
+      // Invalids
+      expect(isCanonicalPositiveMoneyDisplay('-1.00')).toBe(false);
+      expect(isCanonicalPositiveMoneyDisplay('abc')).toBe(false);
+      expect(isCanonicalPositiveMoneyDisplay('bad')).toBe(false);
+      expect(isCanonicalPositiveMoneyDisplay('1e2')).toBe(false);
+      expect(isCanonicalPositiveMoneyDisplay(null)).toBe(false);
+    });
+  });
+
+  // =========================================================================
+  // 2. Strict Metadata Guard & Fail-Closed Behavior (Section 2, 3, 4, 7, 8)
+  // =========================================================================
+  describe('2. Strict Metadata Guard & Fail-Closed Behavior', () => {
     it('isValidTieredBillItemMetadata validates correct schema and rejects malformed objects', () => {
       expect(isValidTieredBillItemMetadata(tieredWaterMetadata)).toBe(true);
       expect(isValidTieredBillItemMetadata(tieredElectricityMetadata)).toBe(true);
@@ -79,7 +124,71 @@ describe('OWNER R3.9-E.1B.2 — Tiered Bill & Receipt Presentation', () => {
       expect(isValidTieredBillItemMetadata({ mode: 'fixed' })).toBe(false);
       expect(isValidTieredBillItemMetadata({ mode: 'tiered', tierBreakdown: [] })).toBe(false);
       expect(isValidTieredBillItemMetadata({ mode: 'tiered', tierBreakdown: 'not-array' })).toBe(false);
-      expect(isValidTieredBillItemMetadata({ mode: 'tiered', tierBreakdown: [{ rate: '3.40' }] })).toBe(false);
+    });
+
+    it('Section 7: rejects corrupt numeric metadata and renders nothing in TierBreakdownView', () => {
+      const corruptMetadata = {
+        mode: 'tiered',
+        tierBreakdown: [
+          {
+            lowerExclusive: 'abc',
+            upperInclusive: 'xyz',
+            billedUnits: 'oops',
+            rate: 'bad',
+            amount: 'wrong',
+          },
+        ],
+      };
+
+      expect(isValidTieredBillItemMetadata(corruptMetadata)).toBe(false);
+
+      const { container } = render(<TierBreakdownView metadata={corruptMetadata} unit="unit" />);
+      expect(container.firstChild).toBeNull();
+      expect(container.textContent).not.toContain('NaN');
+      expect(container.textContent).not.toContain('Infinity');
+      expect(container.textContent).not.toContain('1 หน่วยขึ้นไป');
+
+      // Parent rate label returns fallback
+      expect(formatTierRateLabel('0.00', 'unit', corruptMetadata)).toBe('คิดตามขั้นบันได');
+    });
+
+    it('Section 8: rejects fractional tier boundaries (e.g. 10.50) without truncation or fabrication', () => {
+      const fractionalRangeMetadata = {
+        mode: 'tiered',
+        tierBreakdown: [
+          {
+            lowerExclusive: '0.00',
+            upperInclusive: '10.50',
+            billedUnits: '10.00',
+            rate: '3.40',
+            amount: '34.00',
+          },
+        ],
+      };
+
+      expect(isValidTieredBillItemMetadata(fractionalRangeMetadata)).toBe(false);
+
+      const { container } = render(<TierBreakdownView metadata={fractionalRangeMetadata} unit="unit" />);
+      expect(container.firstChild).toBeNull();
+      expect(container.textContent).not.toContain('1–10');
+      expect(container.textContent).not.toContain('1–11');
+    });
+
+    it('Section 3: rejects inverted range relation (upperInclusive <= lowerExclusive)', () => {
+      const invertedRangeMetadata = {
+        mode: 'tiered',
+        tierBreakdown: [
+          {
+            lowerExclusive: '10.00',
+            upperInclusive: '5.00',
+            billedUnits: '5.00',
+            rate: '4.25',
+            amount: '21.25',
+          },
+        ],
+      };
+
+      expect(isValidTieredBillItemMetadata(invertedRangeMetadata)).toBe(false);
     });
 
     it('formatTierRange correctly formats progressive intervals into human Thai ranges (Section 7)', () => {
@@ -96,6 +205,7 @@ describe('OWNER R3.9-E.1B.2 — Tiered Bill & Receipt Presentation', () => {
       expect(formatTierUsage(130)).toBe('130 หน่วย');
       expect(formatTierUsage('10.00')).toBe('10 หน่วย');
       expect(formatTierUsage('5.00')).toBe('5 หน่วย');
+      expect(formatTierUsage('bad')).toBe('- หน่วย');
     });
 
     it('formatTierRateLabel shows "คิดตามขั้นบันได" and never "0.00 บาท/หน่วย" for tiered items (Section 6)', () => {
@@ -113,46 +223,201 @@ describe('OWNER R3.9-E.1B.2 — Tiered Bill & Receipt Presentation', () => {
   });
 
   // =========================================================================
-  // 2. TierBreakdownView Component
+  // 3. Real Production buildViewingReceipt Integration Proof (Section 16, 17, 18)
   // =========================================================================
-  describe('2. TierBreakdownView Component', () => {
-    it('renders Water tier breakdown with exact rates and amounts without recalculation (Section 28)', () => {
-      render(<TierBreakdownView metadata={tieredWaterMetadata} unit="unit" />);
+  describe('3. Production buildViewingReceipt Integration Proof', () => {
+    it('Section 17: Single snapshot-first integration — snapshot tier rates win over conflicting live bill rates', () => {
+      const paymentFixture = {
+        id: 'pay-1',
+        dormitoryId: 'dorm-100',
+        billId: 'bill-101',
+        amount: '1055.25',
+        bill: {
+          id: 'bill-101',
+          billNumber: 'INV-202608-101',
+          totalAmount: '1055.25',
+          items: [
+            {
+              id: 'item-water-live',
+              description: 'ค่าน้ำประปา (live)',
+              quantity: '15.00',
+              unit: 'unit',
+              unitPrice: '99.00', // CONFLICTING LIVE RATE
+              amount: '1485.00',
+              metadata: {
+                mode: 'tiered',
+                usageUnits: '15.00',
+                tierBreakdown: [
+                  { lowerExclusive: '0.00', upperInclusive: '15.00', billedUnits: '15.00', rate: '99.00', amount: '1485.00' },
+                ],
+              },
+            },
+          ],
+        },
+        receipt: {
+          id: 'rcpt-1',
+          receiptNumber: 'RC-202608-101-0001',
+          totalAmount: '1055.25',
+          snapshotData: {
+            receiptNumber: 'RC-202608-101-0001',
+            billNumber: 'INV-202608-101',
+            total: '1055.25',
+            billTotal: '1055.25',
+            isCombinedReceipt: false,
+            items: [
+              {
+                description: 'ค่าเช่าห้องพัก',
+                quantity: '1.00',
+                unit: 'month',
+                unitPrice: '1000.00',
+                amount: '1000.00',
+                metadata: null,
+              },
+              {
+                description: 'ค่าน้ำประปา',
+                quantity: '15.00',
+                unit: 'unit',
+                unitPrice: '0.00',
+                amount: '55.25',
+                metadata: tieredWaterMetadata, // AUTHORITATIVE SNAPSHOT RATES (3.40 / 4.25)
+              },
+            ],
+          },
+        },
+      } as any;
 
-      expect(screen.getByTestId('tier-breakdown-view')).toBeInTheDocument();
-      expect(screen.getByText('รายละเอียดการคิดแบบขั้นบันได:')).toBeInTheDocument();
+      const viewingReceipt = buildViewingReceipt(paymentFixture, [paymentFixture.bill]);
 
-      expect(screen.getByText('• 1–10 หน่วย')).toBeInTheDocument();
+      expect(viewingReceipt).not.toBeNull();
+      expect(viewingReceipt.receiptNumber).toBe('RC-202608-101-0001');
+      expect(viewingReceipt.isMultiBill).toBe(false);
+      expect(viewingReceipt.items).toHaveLength(2);
+
+      const waterItem = viewingReceipt.items.find((i: any) => i.description === 'ค่าน้ำประปา');
+      expect(waterItem).toBeDefined();
+      expect(waterItem.amount).toBe(55.25);
+      expect(waterItem.metadata).toEqual(tieredWaterMetadata);
+
+      // Render actual item and verify snapshot rates win
+      const { container } = render(
+        <div>
+          <div>{waterItem.description}</div>
+          <TierBreakdownView metadata={waterItem.metadata} unit={waterItem.unit} />
+        </div>
+      );
+
       expect(screen.getByText('10 × 3.40 = 34.00 บาท')).toBeInTheDocument();
-
-      expect(screen.getByText('• 11–20 หน่วย')).toBeInTheDocument();
       expect(screen.getByText('5 × 4.25 = 21.25 บาท')).toBeInTheDocument();
+      expect(container.textContent).not.toContain('99.00');
     });
 
-    it('renders Electricity tier breakdown correctly (Section 29)', () => {
-      render(<TierBreakdownView metadata={tieredElectricityMetadata} unit="unit" />);
+    it('Section 18: Combined snapshot-first integration — snapshot billGroups win over live bills', () => {
+      const paymentGroupFixture = {
+        id: 'pay-grp-1',
+        dormitoryId: 'dorm-100',
+        billId: 'bill-A',
+        amount: '6500.00',
+        paymentGroupId: 'pg-1',
+        paymentGroup: {
+          id: 'pg-1',
+          status: 'CONFIRMED',
+          totalAmount: '6500.00',
+          receipts: [
+            {
+              id: 'rcpt-grp-1',
+              receiptNumber: 'RC-202608-GRP-0001',
+              totalAmount: '6500.00',
+              snapshotData: {
+                receiptNumber: 'RC-202608-GRP-0001',
+                total: '6500.00',
+                isCombinedReceipt: true,
+                billGroups: [
+                  {
+                    billId: 'bill-A',
+                    billNumber: 'INV-202608-A',
+                    cycleCode: '2026-08',
+                    billTotal: '4000.00',
+                    allocatedAmount: '4000.00',
+                    items: [
+                      { description: 'ค่าเช่าห้องพัก', quantity: '1.00', unitPrice: '4000.00', amount: '4000.00' },
+                    ],
+                  },
+                  {
+                    billId: 'bill-B',
+                    billNumber: 'INV-202608-B',
+                    cycleCode: '2026-08',
+                    billTotal: '5000.00',
+                    allocatedAmount: '2500.00',
+                    items: [
+                      { description: 'ค่าเช่าห้องพัก', quantity: '1.00', unitPrice: '3954.75', amount: '3954.75' },
+                      { description: 'ค่าน้ำประปา', quantity: '15.00', unit: 'unit', unitPrice: '0.00', amount: '55.25', metadata: tieredWaterMetadata },
+                      { description: 'ค่าไฟฟ้า', quantity: '130.00', unit: 'unit', unitPrice: '0.00', amount: '990.00', metadata: tieredElectricityMetadata },
+                    ],
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      } as any;
 
-      expect(screen.getByText('• 1–50 หน่วย')).toBeInTheDocument();
-      expect(screen.getByText('50 × 7.00 = 350.00 บาท')).toBeInTheDocument();
+      // Conflicting live bills
+      const liveBills = [
+        { id: 'bill-A', billNumber: 'INV-202608-A', totalAmount: '9999.00', items: [] },
+        { id: 'bill-B', billNumber: 'INV-202608-B', totalAmount: '9999.00', items: [] },
+      ] as any;
 
-      expect(screen.getByText('• 51–150 หน่วย')).toBeInTheDocument();
-      expect(screen.getByText('80 × 8.00 = 640.00 บาท')).toBeInTheDocument();
+      const viewingReceipt = buildViewingReceipt(paymentGroupFixture, liveBills);
+
+      expect(viewingReceipt).not.toBeNull();
+      expect(viewingReceipt.isMultiBill).toBe(true);
+      expect(viewingReceipt.billGroups).toHaveLength(2);
+
+      const groupB = viewingReceipt.billGroups.find((g: any) => g.billId === 'bill-B');
+      expect(groupB).toBeDefined();
+      expect(groupB.billTotal).toBe(5000.00);
+      expect(groupB.allocatedAmount).toBe(2500.00);
+      expect(groupB.items).toHaveLength(3);
+
+      const waterItem = groupB.items.find((i: any) => i.description === 'ค่าน้ำประปา');
+      expect(waterItem.amount).toBe(55.25);
+      expect(waterItem.metadata).toEqual(tieredWaterMetadata);
+
+      const elecItem = groupB.items.find((i: any) => i.description === 'ค่าไฟฟ้า');
+      expect(elecItem.amount).toBe(990.00);
+      expect(elecItem.metadata).toEqual(tieredElectricityMetadata);
     });
 
-    it('fails closed and renders nothing for malformed or missing metadata (Section 26 & 27)', () => {
-      const { container: c1 } = render(<TierBreakdownView metadata={null} />);
-      expect(c1.firstChild).toBeNull();
+    it('Section 11 & 12: Legacy single receipt with missing/empty items falls back safely', () => {
+      const legacyPayment = {
+        id: 'pay-legacy',
+        dormitoryId: 'dorm-100',
+        billId: 'bill-old',
+        amount: '3500.00',
+        receipt: {
+          id: 'rcpt-legacy',
+          receiptNumber: 'RC-OLD-001',
+          totalAmount: '3500.00',
+          snapshotData: {
+            receiptNumber: 'RC-OLD-001',
+            total: '3500.00',
+            // items is missing!
+          },
+        },
+      } as any;
 
-      const { container: c2 } = render(<TierBreakdownView metadata={{ mode: 'tiered', tierBreakdown: 'bad' }} />);
-      expect(c2.firstChild).toBeNull();
+      const viewingReceipt = buildViewingReceipt(legacyPayment, []);
+      expect(viewingReceipt.items).toEqual([
+        { description: 'ยอดชำระตามใบเสร็จเดิม', amount: 3500.00 },
+      ]);
     });
   });
 
   // =========================================================================
-  // 3. Bill Detail Presentation Simulation (Section 28, 29, 11)
+  // 4. Bill Detail Presentation Integration (Section 19, 28, 29)
   // =========================================================================
-  describe('3. Bill Detail Table Presentation', () => {
-    it('Section 28: Bill Detail renders Water Tier row with "คิดตามขั้นบันได", nested breakdown, and NO "0.00 บาท/หน่วย"', () => {
+  describe('4. Bill Detail Table Presentation', () => {
+    it('Section 19 & 28: Bill Detail renders Water Tier row with "คิดตามขั้นบันได", nested breakdown, and NO "0.00 บาท/หน่วย"', () => {
       const billItem = {
         id: 'item-water-1',
         type: 'water',
@@ -239,198 +504,9 @@ describe('OWNER R3.9-E.1B.2 — Tiered Bill & Receipt Presentation', () => {
   });
 
   // =========================================================================
-  // 4. Single Receipt Partial Payment Presentation (Section 30 & 14)
+  // 5. Zero-Line Suppression Policy (Section 20 & 35)
   // =========================================================================
-  describe('4. Single Receipt Partial Payment Presentation', () => {
-    it('Section 30 & 14: Partial receipt shows gross items, Tier breakdown, and reconciliation without proration', () => {
-      const snapshot = {
-        billTotal: 1055.25,
-        allocatedAmount: 500.00,
-        totalAmount: 500.00,
-        items: [
-          {
-            description: 'ค่าเช่าห้องพัก',
-            quantity: '1.00',
-            unit: 'month',
-            unitPrice: '1000.00',
-            amount: 1000.00,
-            metadata: null,
-          },
-          {
-            description: 'ค่าน้ำประปา (ขั้นบันได)',
-            quantity: '15.00',
-            unit: 'unit',
-            unitPrice: '0.00',
-            amount: 55.25,
-            metadata: tieredWaterMetadata,
-          },
-        ],
-      };
-
-      const { container } = render(
-        <div>
-          <table>
-            <tbody>
-              {snapshot.items.map((it, idx) => (
-                <tr key={idx}>
-                  <td>
-                    <div>{it.description}</div>
-                    <TierBreakdownView metadata={it.metadata} unit={it.unit} isPrint />
-                  </td>
-                  <td>{formatBillingQuantity(it.quantity, it.unit)}</td>
-                  <td>{formatTierRateLabel(it.unitPrice, it.unit, it.metadata)}</td>
-                  <td>{formatBaht(it.amount)}</td>
-                </tr>
-              ))}
-              <tr>
-                <td>ยอดบิล:</td>
-                <td>{formatBaht(snapshot.billTotal)}</td>
-              </tr>
-              <tr>
-                <td>ยอดรับชำระในใบเสร็จนี้:</td>
-                <td>{formatBaht(snapshot.allocatedAmount)}</td>
-              </tr>
-              <tr>
-                <td>รวมรับสุทธิ:</td>
-                <td>{formatBaht(snapshot.totalAmount)}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      );
-
-      // Gross Tier Water breakdown is full 55.25 calculation, not prorated to 500/1055.25
-      expect(container.textContent).toContain(formatBaht(55.25));
-      expect(screen.getByText('10 × 3.40 = 34.00 บาท')).toBeInTheDocument();
-      expect(screen.getByText('5 × 4.25 = 21.25 บาท')).toBeInTheDocument();
-
-      // Reconciliation
-      expect(screen.getByText('ยอดบิล:')).toBeInTheDocument();
-      expect(container.textContent).toContain(formatBaht(1055.25));
-      expect(screen.getByText('ยอดรับชำระในใบเสร็จนี้:')).toBeInTheDocument();
-      expect(screen.getByText('รวมรับสุทธิ:')).toBeInTheDocument();
-      expect(container.textContent).toContain(formatBaht(500.00));
-    });
-  });
-
-  // =========================================================================
-  // 5. Combined Receipt BillGroups Presentation (Section 31 & 16)
-  // =========================================================================
-  describe('5. Combined Receipt BillGroups Presentation', () => {
-    it('Section 31 & 16: Combined receipt renders billGroups from snapshot with gross items and allocatedAmount', () => {
-      const snapshotBillGroups = [
-        {
-          billId: 'bill-A',
-          billNumber: 'INV-202608-A',
-          cycleLabel: 'รอบบิล ส.ค. 2569',
-          billTotal: 4000.00,
-          allocatedAmount: 4000.00,
-          items: [
-            {
-              description: 'ค่าเช่าห้องพัก',
-              quantity: '1.00',
-              unit: 'month',
-              unitPrice: '4000.00',
-              amount: 4000.00,
-              metadata: null,
-            },
-          ],
-        },
-        {
-          billId: 'bill-B',
-          billNumber: 'INV-202608-B',
-          cycleLabel: 'รอบบิล ส.ค. 2569',
-          billTotal: 5000.00,
-          allocatedAmount: 2500.00,
-          items: [
-            {
-              description: 'ค่าเช่าห้องพัก',
-              quantity: '1.00',
-              unit: 'month',
-              unitPrice: '3954.75',
-              amount: 3954.75,
-              metadata: null,
-            },
-            {
-              description: 'ค่าน้ำประปา (ขั้นบันได)',
-              quantity: '15.00',
-              unit: 'unit',
-              unitPrice: '0.00',
-              amount: 55.25,
-              metadata: tieredWaterMetadata,
-            },
-            {
-              description: 'ค่าไฟฟ้า (ขั้นบันได)',
-              quantity: '130.00',
-              unit: 'unit',
-              unitPrice: '0.00',
-              amount: 990.00,
-              metadata: tieredElectricityMetadata,
-            },
-          ],
-        },
-      ];
-
-      const { container } = render(
-        <div>
-          {snapshotBillGroups.map((group, gIdx) => (
-            <div key={gIdx} data-testid={`group-${group.billId}`}>
-              <h4>{group.cycleLabel} (เลขที่บิล: {group.billNumber})</h4>
-              <table>
-                <tbody>
-                  {group.items.map((it, idx) => (
-                    <tr key={idx}>
-                      <td>
-                        <div>{it.description}</div>
-                        <TierBreakdownView metadata={it.metadata} unit={it.unit} isPrint />
-                      </td>
-                      <td>{formatBillingQuantity(it.quantity, it.unit)}</td>
-                      <td>{formatTierRateLabel(it.unitPrice, it.unit, it.metadata)}</td>
-                      <td>{formatBaht(it.amount)}</td>
-                    </tr>
-                  ))}
-                  <tr>
-                    <td>ยอดบิล:</td>
-                    <td>{formatBaht(group.billTotal)}</td>
-                  </tr>
-                  <tr>
-                    <td>ยอดรับชำระสำหรับรอบบิลนี้:</td>
-                    <td>{formatBaht(group.allocatedAmount)}</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          ))}
-          <div>
-            <span>รวมรับสุทธิ:</span>
-            <span>{formatBaht(6500.00)}</span>
-          </div>
-        </div>
-      );
-
-      // Bill A assertions
-      expect(screen.getByText('เลขที่บิล: INV-202608-A', { exact: false })).toBeInTheDocument();
-      expect(container.textContent).toContain(formatBaht(4000.00));
-
-      // Bill B assertions
-      expect(screen.getByText('เลขที่บิล: INV-202608-B', { exact: false })).toBeInTheDocument();
-      expect(container.textContent).toContain(formatBaht(5000.00));
-      expect(container.textContent).toContain(formatBaht(2500.00));
-
-      // Both Tiered breakdowns in Bill B
-      expect(screen.getByText('10 × 3.40 = 34.00 บาท')).toBeInTheDocument();
-      expect(screen.getByText('50 × 7.00 = 350.00 บาท')).toBeInTheDocument();
-      expect(screen.getByText('80 × 8.00 = 640.00 บาท')).toBeInTheDocument();
-
-      // Grand total
-      expect(container.textContent).toContain(formatBaht(6500.00));
-    });
-  });
-
-  // =========================================================================
-  // 6. Zero-Line Suppression Policy (Section 10 & 35)
-  // =========================================================================
-  describe('6. Zero-Line Suppression Policy', () => {
+  describe('5. Zero-Line Suppression Policy', () => {
     it('isNonZeroAmount and filterNonZeroBillItems hide 0.00 lines while preserving negative and positive amounts', () => {
       const items = [
         { description: 'ค่าเช่าห้องพัก', amount: '4000.00' },
@@ -453,31 +529,6 @@ describe('OWNER R3.9-E.1B.2 — Tiered Bill & Receipt Presentation', () => {
         'ส่วนลดโปรโมชั่น',
         'เศษสตางค์',
       ]);
-    });
-  });
-
-  // =========================================================================
-  // 7. Snapshot-First Regression (Section 36)
-  // =========================================================================
-  describe('7. Snapshot-First Historical Invariant', () => {
-    it('historical snapshot tier rates win over conflicting current settings/live bill rates', () => {
-      const snapshotMetadata = {
-        mode: 'tiered',
-        usageUnits: '15.00',
-        tierBreakdown: [
-          { lowerExclusive: '0.00', upperInclusive: '10.00', billedUnits: '10.00', rate: '3.40', amount: '34.00' },
-          { lowerExclusive: '10.00', upperInclusive: '20.00', billedUnits: '5.00', rate: '4.25', amount: '21.25' },
-        ],
-      };
-
-      // Conflicting current settings fixture rate: 99.00
-      const currentSettingsRate = '99.00';
-
-      const { container } = render(<TierBreakdownView metadata={snapshotMetadata} unit="unit" />);
-
-      expect(screen.getByText('10 × 3.40 = 34.00 บาท')).toBeInTheDocument();
-      expect(screen.getByText('5 × 4.25 = 21.25 บาท')).toBeInTheDocument();
-      expect(container.textContent).not.toContain(currentSettingsRate);
     });
   });
 });

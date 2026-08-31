@@ -1,6 +1,6 @@
 /**
  * @license Apache-2.0
- * OWNER R3.9-E.1B.2: Backend Immutable Receipt HTML Presentation Helper
+ * OWNER R3.9-E.1B.2.1: Backend Immutable Receipt HTML Presentation Helper
  */
 
 /**
@@ -17,6 +17,63 @@ export function escapeHTML(str: any): string {
 }
 
 /**
+ * Checks whether a value is a valid canonical whole unit integer decimal string or integer number.
+ * Examples valid: "0", "0.00", "10", "10.00", "150.00", 0, 10, 150
+ * Examples invalid: "abc", "10.50", "5.50", "-1", "1e2", Infinity, NaN, null, undefined
+ */
+export function isCanonicalWholeUnitDisplay(val: unknown): boolean {
+  if (val === null || val === undefined) return false;
+  if (typeof val === 'number') {
+    return Number.isFinite(val) && val >= 0 && Number.isInteger(val);
+  }
+  if (typeof val === 'string') {
+    const str = val.trim();
+    if (!/^\d+(\.0+)?$/.test(str)) return false;
+    const num = Number(str);
+    return Number.isFinite(num) && num >= 0 && Number.isInteger(num);
+  }
+  return false;
+}
+
+/**
+ * Checks whether a value is a valid canonical money decimal string (max 2DP) or finite number.
+ * Examples valid: "34.00", "55.25", "-10.00", "0.00", 34, 55.25
+ * Examples invalid: "abc", "wrong", "1e2", Infinity, NaN, null, undefined
+ */
+export function isCanonicalMoneyDisplay(val: unknown): boolean {
+  if (val === null || val === undefined) return false;
+  if (typeof val === 'number') {
+    return Number.isFinite(val);
+  }
+  if (typeof val === 'string') {
+    const str = val.trim();
+    if (!/^-?\d+(\.\d{1,2})?$/.test(str)) return false;
+    const num = Number(str);
+    return Number.isFinite(num);
+  }
+  return false;
+}
+
+/**
+ * Checks whether a value is a valid non-negative canonical money decimal string (max 2DP) or finite non-negative number.
+ * Examples valid: "3.40", "0.00", "15.00", 3.4, 0
+ * Examples invalid: "-1.00", "abc", "bad", "1e2", Infinity, NaN, null, undefined
+ */
+export function isCanonicalPositiveMoneyDisplay(val: unknown): boolean {
+  if (val === null || val === undefined) return false;
+  if (typeof val === 'number') {
+    return Number.isFinite(val) && val >= 0;
+  }
+  if (typeof val === 'string') {
+    const str = val.trim();
+    if (!/^\d+(\.\d{1,2})?$/.test(str)) return false;
+    const num = Number(str);
+    return Number.isFinite(num) && num >= 0;
+  }
+  return false;
+}
+
+/**
  * Checks whether an amount is non-zero (suppresses 0.00 items in presentation).
  */
 export function isNonZeroAmount(amount: any): boolean {
@@ -27,7 +84,8 @@ export function isNonZeroAmount(amount: any): boolean {
 }
 
 /**
- * Type guard for valid Tiered utility metadata.
+ * Strict type guard for valid Tiered utility metadata.
+ * Fails closed if metadata is missing, malformed, non-integer boundaries, fractional usage, or has empty breakdown.
  */
 export function isValidTierMetadata(metadata: any): boolean {
   if (!metadata || typeof metadata !== 'object') return false;
@@ -36,10 +94,26 @@ export function isValidTierMetadata(metadata: any): boolean {
 
   for (const item of metadata.tierBreakdown) {
     if (!item || typeof item !== 'object') return false;
-    if (item.lowerExclusive === undefined || item.lowerExclusive === null) return false;
-    if (item.billedUnits === undefined || item.billedUnits === null) return false;
-    if (item.rate === undefined || item.rate === null) return false;
-    if (item.amount === undefined || item.amount === null) return false;
+
+    // 1. lowerExclusive: valid non-negative whole-unit integer
+    if (!isCanonicalWholeUnitDisplay(item.lowerExclusive)) return false;
+    const lowerVal = Number(item.lowerExclusive);
+
+    // 2. upperInclusive: null OR valid non-negative whole-unit integer > lowerExclusive
+    if (item.upperInclusive !== null && item.upperInclusive !== undefined && item.upperInclusive !== '') {
+      if (!isCanonicalWholeUnitDisplay(item.upperInclusive)) return false;
+      const upperVal = Number(item.upperInclusive);
+      if (upperVal <= lowerVal) return false;
+    }
+
+    // 3. billedUnits: valid non-negative whole integer usage
+    if (!isCanonicalWholeUnitDisplay(item.billedUnits)) return false;
+
+    // 4. rate: valid non-negative money decimal (max 2DP)
+    if (!isCanonicalPositiveMoneyDisplay(item.rate)) return false;
+
+    // 5. amount: valid money decimal (max 2DP)
+    if (!isCanonicalMoneyDisplay(item.amount)) return false;
   }
   return true;
 }
@@ -53,14 +127,15 @@ export function formatTierRange(
   unitLabel = 'หน่วย'
 ): string {
   const lowerNum = Number(lowerExclusive);
-  const start = isNaN(lowerNum) ? 1 : Math.floor(lowerNum) + 1;
+  if (isNaN(lowerNum) || lowerNum < 0) return `- ${unitLabel}`;
+  const start = Math.floor(lowerNum) + 1;
 
   if (upperInclusive === null || upperInclusive === undefined || upperInclusive === '') {
     return `${start} ${unitLabel}ขึ้นไป`;
   }
 
   const upperNum = Number(upperInclusive);
-  if (isNaN(upperNum)) {
+  if (isNaN(upperNum) || upperNum < start) {
     return `${start} ${unitLabel}ขึ้นไป`;
   }
 
@@ -75,7 +150,7 @@ export function formatTierRange(
  * Resolves Thai display unit string from English or Thai input.
  */
 export function resolveThaiUnit(unit?: string | null): string {
-  if (!unit) return 'หน่วย';
+  if (!unit) return '';
   const u = String(unit).trim().toLowerCase();
   if (u === 'unit') return 'หน่วย';
   if (u === 'room') return 'ห้อง';
@@ -84,6 +159,29 @@ export function resolveThaiUnit(unit?: string | null): string {
   if (u === 'day') return 'วัน';
   if (u === 'charge' || u === 'bill') return 'ครั้ง';
   return String(unit);
+}
+
+/**
+ * Formats quantity for HTML receipt table.
+ * Examples:
+ *   15.00 with 'unit' -> "15 หน่วย"
+ *   130 with 'unit' -> "130 หน่วย"
+ *   1 with 'month' -> "1 เดือน"
+ *   1 with null -> "1"
+ */
+export function formatQuantityHtml(quantity: any, unit?: any): string {
+  if (quantity === undefined || quantity === null || quantity === '') {
+    return '1';
+  }
+  const thaiUnit = resolveThaiUnit(unit);
+  const num = Number(quantity);
+  if (isNaN(num)) {
+    return String(quantity);
+  }
+  const formattedNum = Number.isInteger(num) || num === Math.floor(num)
+    ? String(Math.floor(num))
+    : num.toFixed(2);
+  return thaiUnit ? `${formattedNum} ${thaiUnit}` : formattedNum;
 }
 
 /**
@@ -112,7 +210,7 @@ export function formatRateHtml(unitPrice: any, unit: any, metadata: any): string
 export function renderTierBreakdownHtml(metadata: any, unit?: any): string {
   if (!isValidTierMetadata(metadata)) return '';
 
-  const unitLabel = resolveThaiUnit(unit);
+  const unitLabel = resolveThaiUnit(unit) || 'หน่วย';
   const rows = metadata.tierBreakdown.map((t: any) => {
     const rangeText = formatTierRange(t.lowerExclusive, t.upperInclusive, unitLabel);
     const billedUnits = Math.round(Number(t.billedUnits));
@@ -223,7 +321,7 @@ export function renderReceiptHtml(receiptRecord: any): string {
                     <div>${escapeHTML(i.description)}</div>
                     ${renderTierBreakdownHtml(i.metadata, i.unit)}
                   </td>
-                  <td class="num">${escapeHTML(i.quantity !== undefined && i.quantity !== null ? i.quantity : 1)}</td>
+                  <td class="num">${escapeHTML(formatQuantityHtml(i.quantity, i.unit))}</td>
                   <td class="num">${formatRateHtml(i.unitPrice, i.unit, i.metadata)}</td>
                   <td class="num">${escapeHTML(Number(i.amount).toFixed(2))}</td>
                 </tr>
@@ -254,18 +352,27 @@ export function renderReceiptHtml(receiptRecord: any): string {
         </tr>
       </thead>
       <tbody>
-        ${(data.items || []).filter((i: any) => isNonZeroAmount(i.amount)).map((i: any, idx: number) => `
-          <tr>
-            <td>${idx + 1}</td>
-            <td>
-              <div>${escapeHTML(i.description)}</div>
-              ${renderTierBreakdownHtml(i.metadata, i.unit)}
-            </td>
-            <td class="num">${escapeHTML(i.quantity !== undefined && i.quantity !== null ? i.quantity : 1)}</td>
-            <td class="num">${formatRateHtml(i.unitPrice, i.unit, i.metadata)}</td>
-            <td class="num">${escapeHTML(Number(i.amount).toFixed(2))}</td>
-          </tr>
-        `).join('')}
+        ${(() => {
+          const rawItems = (Array.isArray(data.items) && data.items.length > 0)
+            ? data.items.filter((i: any) => isNonZeroAmount(i.amount))
+            : [];
+          const singleItems = rawItems.length > 0
+            ? rawItems
+            : [{ description: 'ยอดชำระตามใบเสร็จเดิม', amount: data.total || '0.00', quantity: 1, unit: null, unitPrice: null }];
+
+          return singleItems.map((i: any, idx: number) => `
+            <tr>
+              <td>${idx + 1}</td>
+              <td>
+                <div>${escapeHTML(i.description)}</div>
+                ${renderTierBreakdownHtml(i.metadata, i.unit)}
+              </td>
+              <td class="num">${escapeHTML(formatQuantityHtml(i.quantity, i.unit))}</td>
+              <td class="num">${formatRateHtml(i.unitPrice, i.unit, i.metadata)}</td>
+              <td class="num">${escapeHTML(Number(i.amount).toFixed(2))}</td>
+            </tr>
+          `).join('');
+        })()}
       </tbody>
     </table>
   `}

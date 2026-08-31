@@ -270,6 +270,249 @@ export function resolveRecordBillingCycleId(
   return null;
 }
 
+/**
+ * Resolves the authoritative canonical receipt from a payment record.
+ */
+export function resolveCanonicalReceipt(payment: PaymentRecord): any {
+  if (payment.paymentGroupId && payment.paymentGroup?.receipts && payment.paymentGroup.receipts.length > 0) {
+    return payment.paymentGroup.receipts[0];
+  }
+  return payment.receipt;
+}
+
+/**
+ * Pure generator to map a payment record and historical context into the authoritative Receipt View state.
+ * Consumes immutable snapshot data first for both single and multi-bill receipts.
+ */
+export function buildViewingReceipt(
+  payment: PaymentRecord,
+  bills: Bill[] = [],
+  getCycleCodeForCycleId: (id?: string | null) => string = () => '',
+  getRoomNum: (id?: string | null) => string = (id) => id || '',
+  getTenantName: (id?: string | null) => string = (id) => id || ''
+): any {
+  const rcpt = resolveCanonicalReceipt(payment);
+  if (!rcpt || !rcpt.receiptNumber) {
+    return null;
+  }
+
+  const snap = (rcpt.snapshotData as any) || {};
+  const roomNumber = snap.roomNumber || payment.bill?.room?.roomNumber || getRoomNum(payment.bill?.roomId || payment.bill?.room?.id);
+  const tenantName = snap.tenantName || payment.bill?.tenant?.displayName || getTenantName(payment.tenantId || payment.bill?.tenantId);
+  const totalAmount = Number(snap.total || rcpt.totalAmount || payment.amount || payment.bill?.totalAmount || 0);
+
+  const targets = payment.paymentGroup?.billTargets || [];
+  const groupPayments = (payment.paymentGroup as any)?.payments || [];
+  const isMultiBill =
+    targets.length > 1 ||
+    groupPayments.length > 1 ||
+    snap.isCombinedReceipt === true ||
+    (Array.isArray(snap.billGroups) && snap.billGroups.length > 0);
+
+  if (isMultiBill) {
+    let billGroups: any[] = [];
+
+    // A. Immutable Snapshot-First Authority: Consume snapshotData.billGroups if present
+    if (Array.isArray(snap.billGroups) && snap.billGroups.length > 0) {
+      billGroups = snap.billGroups.map((g: any) => {
+        const cycleCode = g.cycleCode || '';
+        const cycleFormatted = cycleCode ? formatCycleCode(cycleCode) : '';
+        const cycleLabel = cycleFormatted
+          ? `รอบบิล ${cycleFormatted}`
+          : g.billKind === 'DEPOSIT'
+          ? 'เงินประกันสัญญาเช่า'
+          : 'บิลค่าใช้จ่าย';
+
+        const billTotal = Number(g.billTotal || 0);
+        const allocatedAmount = Number(g.allocatedAmount || billTotal);
+
+        const nonZeroItems = filterNonZeroBillItems(g.items);
+        const items = nonZeroItems.length > 0
+          ? nonZeroItems.map((it: any) => ({
+              description: it.description || it.type || '-',
+              quantity: it.quantity,
+              unit: resolveBillingDisplayUnit({ unit: it.unit, type: it.type }),
+              unitPrice: it.unitPrice,
+              amount: Number(it.amount),
+              metadata: it.metadata,
+              type: it.type,
+            }))
+          : [
+              {
+                description: `${cycleLabel} (${g.billNumber || g.billId})`,
+                amount: billTotal || allocatedAmount,
+              },
+            ];
+
+        return {
+          billId: g.billId,
+          billNumber: g.billNumber || g.billId,
+          cycleLabel,
+          billTotal: billTotal || allocatedAmount,
+          allocatedAmount,
+          items,
+        };
+      });
+    } else {
+      // B. Legacy Fallback: Reconstruct from live targets / groupPayments for old receipts
+      const targetBillIds = [...new Set([
+        ...targets.map((t: any) => t.billId),
+        ...groupPayments.map((p: any) => p.billId),
+      ])].filter(Boolean);
+
+      billGroups = targetBillIds.map((bId: string) => {
+        const foundBill: any =
+          targets.find((t: any) => t.billId === bId)?.bill ||
+          groupPayments.find((p: any) => p.billId === bId)?.bill ||
+          (payment.bill?.id === bId ? payment.bill : null) ||
+          bills.find(b => b.id === bId);
+
+        const cycleCode = foundBill?.billingCycle?.cycleCode || (foundBill?.billingCycleId ? getCycleCodeForCycleId(foundBill.billingCycleId) : '');
+        const cycleFormatted = cycleCode ? formatCycleCode(cycleCode) : '';
+        const cycleLabel = cycleFormatted ? `รอบบิล ${cycleFormatted}` : (foundBill?.billKind === 'DEPOSIT' ? 'เงินประกันสัญญาเช่า' : 'บิลค่าใช้จ่าย');
+
+        const billTotal = Number(foundBill?.totalAmount || 0);
+
+        const groupAllocations = payment.paymentGroup?.allocations || [];
+        const billAllocSum = groupAllocations
+          .filter((a: any) => a.billId === bId)
+          .reduce((sum: number, a: any) => sum + Number(a.allocatedAmount || 0), 0);
+
+        const childPayAmount = Number(groupPayments.find((p: any) => p.billId === bId)?.amount || 0);
+        const allocatedAmount = billAllocSum > 0 ? billAllocSum : (childPayAmount > 0 ? childPayAmount : billTotal);
+
+        let items: Array<{
+          description: string;
+          quantity?: number | string | null;
+          unit?: string | null;
+          unitPrice?: number | string | null;
+          amount: number;
+          metadata?: any;
+          type?: string;
+        }> = [];
+
+        if (foundBill?.items && foundBill.items.length > 0) {
+          const nonZeroItems = filterNonZeroBillItems(foundBill.items);
+          items = nonZeroItems.map((it: any) => ({
+            description: it.description || it.type || '-',
+            quantity: it.quantity,
+            unit: resolveBillingDisplayUnit({ unit: it.unit, type: it.type }),
+            unitPrice: it.unitPrice,
+            amount: Number(it.amount),
+            metadata: it.metadata,
+            type: it.type,
+          }));
+        } else {
+          items = [{
+            description: `${cycleLabel} (${foundBill?.billNumber || bId})`,
+            amount: billTotal || allocatedAmount,
+          }];
+        }
+
+        return {
+          billId: bId,
+          billNumber: foundBill?.billNumber || bId,
+          cycleLabel,
+          billTotal: billTotal || allocatedAmount,
+          allocatedAmount,
+          items,
+        };
+      });
+    }
+
+    return {
+      receiptNumber: snap.receiptNumber || rcpt.receiptNumber,
+      roomNumber,
+      tenantName,
+      totalAmount,
+      paidAt: snap.paymentDate || rcpt.issuedAt || rcpt.paidAt || payment.paymentDate || payment.createdAt,
+      paymentMethod: snap.paymentMethod
+        ? (String(snap.paymentMethod).toUpperCase() === 'CASH' ? 'เงินสดสำนักงาน' : 'แสกน PromptPay QR')
+        : ((payment.method || '').toUpperCase() === 'CASH' ? 'เงินสดสำนักงาน' : 'แสกน PromptPay QR'),
+      receiverName: rcpt.receiverName || snap.dormitoryName || 'ฝ่ายการเงิน หอพัก HorPlus',
+      isMultiBill: true,
+      billGroups,
+    };
+  }
+
+  // Single-bill receipt
+  const targetBill: any = payment.bill || bills.find(b => b.id === payment.billId) || targets[0]?.bill;
+  const cycleCode = targetBill?.billingCycle?.cycleCode || (targetBill?.billingCycleId ? getCycleCodeForCycleId(targetBill.billingCycleId) : '');
+  const cycleFormatted = cycleCode ? formatCycleCode(cycleCode) : '';
+  const cycleLabel = cycleFormatted ? `รอบบิล ${cycleFormatted}` : (targetBill?.billKind === 'DEPOSIT' ? 'เงินประกันสัญญาเช่า' : '');
+
+  const billTotal = snap.billTotal !== undefined ? Number(snap.billTotal) : Number(targetBill?.totalAmount || totalAmount);
+  const allocatedAmount = snap.allocatedAmount !== undefined ? Number(snap.allocatedAmount) : (snap.receivedAmount !== undefined ? Number(snap.receivedAmount) : totalAmount);
+
+  let items: Array<{
+    description: string;
+    quantity?: number | string | null;
+    unit?: string | null;
+    unitPrice?: number | string | null;
+    amount: number;
+    metadata?: any;
+    type?: string;
+  }> = [];
+
+  if (Array.isArray(snap.items) && snap.items.length > 0) {
+    const nonZeroSnap = filterNonZeroBillItems(snap.items);
+    if (nonZeroSnap.length > 0) {
+      items = nonZeroSnap.map((it: any) => ({
+        description: it.description || it.type || '-',
+        quantity: it.quantity,
+        unit: resolveBillingDisplayUnit({ unit: it.unit, type: it.type }),
+        unitPrice: it.unitPrice,
+        amount: Number(it.amount),
+        metadata: it.metadata,
+        type: it.type,
+      }));
+    } else {
+      items = [
+        { description: 'ยอดชำระตามใบเสร็จเดิม', amount: allocatedAmount }
+      ];
+    }
+  } else if (targetBill?.items && targetBill.items.length > 0) {
+    const nonZeroTarget = filterNonZeroBillItems(targetBill.items);
+    if (nonZeroTarget.length > 0) {
+      items = nonZeroTarget.map((it: any) => ({
+        description: it.description || it.type || '-',
+        quantity: it.quantity,
+        unit: resolveBillingDisplayUnit({ unit: it.unit, type: it.type }),
+        unitPrice: it.unitPrice,
+        amount: Number(it.amount),
+        metadata: it.metadata,
+        type: it.type,
+      }));
+    } else {
+      items = [
+        { description: 'ยอดชำระตามใบเสร็จเดิม', amount: allocatedAmount }
+      ];
+    }
+  } else {
+    items = [
+      { description: 'ยอดชำระตามใบเสร็จเดิม', amount: allocatedAmount }
+    ];
+  }
+
+  return {
+    receiptNumber: snap.receiptNumber || rcpt.receiptNumber,
+    billNumber: snap.billNumber || targetBill?.billNumber,
+    roomNumber,
+    tenantName,
+    totalAmount,
+    paidAt: snap.paymentDate || rcpt.issuedAt || rcpt.paidAt || payment.paymentDate || payment.createdAt,
+    paymentMethod: snap.paymentMethod
+      ? (String(snap.paymentMethod).toUpperCase() === 'CASH' ? 'เงินสดสำนักงาน' : 'แสกน PromptPay QR')
+      : ((payment.method || '').toUpperCase() === 'CASH' ? 'เงินสดสำนักงาน' : 'แสกน PromptPay QR'),
+    receiverName: rcpt.receiverName || snap.dormitoryName || 'ฝ่ายการเงิน หอพัก HorPlus',
+    isMultiBill: false,
+    cycleLabel,
+    billTotal,
+    allocatedAmount,
+    items,
+  };
+}
+
 /* =========================================================================
  * API Fetchers (Fail Loudly to React Query on Network/HTTP Error)
  * ========================================================================= */
@@ -955,237 +1198,20 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
   };
 
   // 5. Open Real Receipt Modal (P0-D & P0-E Canonical Authority)
-  const resolveCanonicalReceipt = (payment: PaymentRecord) => {
-    if (payment.paymentGroupId && payment.paymentGroup?.receipts && payment.paymentGroup.receipts.length > 0) {
-      return payment.paymentGroup.receipts[0];
-    }
-    return payment.receipt;
-  };
-
   const handleOpenReceipt = (payment: PaymentRecord) => {
-    const rcpt = resolveCanonicalReceipt(payment);
-    if (!rcpt || !rcpt.receiptNumber) {
+    const receiptData = buildViewingReceipt(
+      payment,
+      bills,
+      getCycleCodeForCycleId,
+      (id) => getRoomNum(id),
+      (id) => getTenantName(id)
+    );
+    if (!receiptData) {
       triggerToast('ไม่พบข้อมูลใบเสร็จรับเงิน กรุณาโหลดข้อมูลใหม่');
       return;
     }
 
-    const snap = (rcpt.snapshotData as any) || {};
-    const roomNumber = snap.roomNumber || payment.bill?.room?.roomNumber || getRoomNum(payment.bill?.roomId || payment.bill?.room?.id);
-    const tenantName = snap.tenantName || payment.bill?.tenant?.displayName || getTenantName(payment.tenantId || payment.bill?.tenantId);
-    const totalAmount = Number(snap.total || rcpt.totalAmount || payment.amount || payment.bill?.totalAmount || 0);
-
-    const targets = payment.paymentGroup?.billTargets || [];
-    const groupPayments = (payment.paymentGroup as any)?.payments || [];
-    const isMultiBill =
-      targets.length > 1 ||
-      groupPayments.length > 1 ||
-      snap.isCombinedReceipt === true ||
-      (Array.isArray(snap.billGroups) && snap.billGroups.length > 0);
-
-    if (isMultiBill) {
-      let billGroups: any[] = [];
-
-      // A. Immutable Snapshot-First Authority: Consume snapshotData.billGroups if present
-      if (Array.isArray(snap.billGroups) && snap.billGroups.length > 0) {
-        billGroups = snap.billGroups.map((g: any) => {
-          const cycleCode = g.cycleCode || '';
-          const cycleFormatted = cycleCode ? formatCycleCode(cycleCode) : '';
-          const cycleLabel = cycleFormatted
-            ? `รอบบิล ${cycleFormatted}`
-            : g.billKind === 'DEPOSIT'
-            ? 'เงินประกันสัญญาเช่า'
-            : 'บิลค่าใช้จ่าย';
-
-          const billTotal = Number(g.billTotal || 0);
-          const allocatedAmount = Number(g.allocatedAmount || billTotal);
-
-          const nonZeroItems = filterNonZeroBillItems(g.items);
-          const items = nonZeroItems.length > 0
-            ? nonZeroItems.map((it: any) => ({
-                description: it.description || it.type || '-',
-                quantity: it.quantity,
-                unit: resolveBillingDisplayUnit({ unit: it.unit, type: it.type }),
-                unitPrice: it.unitPrice,
-                amount: Number(it.amount),
-                metadata: it.metadata,
-                type: it.type,
-              }))
-            : [
-                {
-                  description: `${cycleLabel} (${g.billNumber || g.billId})`,
-                  amount: billTotal || allocatedAmount,
-                },
-              ];
-
-          return {
-            billId: g.billId,
-            billNumber: g.billNumber || g.billId,
-            cycleLabel,
-            billTotal: billTotal || allocatedAmount,
-            allocatedAmount,
-            items,
-          };
-        });
-      } else {
-        // B. Legacy Fallback: Reconstruct from live targets / groupPayments for old receipts
-        const targetBillIds = [...new Set([
-          ...targets.map((t: any) => t.billId),
-          ...groupPayments.map((p: any) => p.billId),
-        ])].filter(Boolean);
-
-        billGroups = targetBillIds.map((bId: string) => {
-          const foundBill: any =
-            targets.find((t: any) => t.billId === bId)?.bill ||
-            groupPayments.find((p: any) => p.billId === bId)?.bill ||
-            (payment.bill?.id === bId ? payment.bill : null) ||
-            bills.find(b => b.id === bId);
-
-          const cycleCode = foundBill?.billingCycle?.cycleCode || (foundBill?.billingCycleId ? getCycleCodeForCycleId(foundBill.billingCycleId) : '');
-          const cycleFormatted = cycleCode ? formatCycleCode(cycleCode) : '';
-          const cycleLabel = cycleFormatted ? `รอบบิล ${cycleFormatted}` : (foundBill?.billKind === 'DEPOSIT' ? 'เงินประกันสัญญาเช่า' : 'บิลค่าใช้จ่าย');
-
-          const billTotal = Number(foundBill?.totalAmount || 0);
-
-          const groupAllocations = payment.paymentGroup?.allocations || [];
-          const billAllocSum = groupAllocations
-            .filter((a: any) => a.billId === bId)
-            .reduce((sum: number, a: any) => sum + Number(a.allocatedAmount || 0), 0);
-
-          const childPayAmount = Number(groupPayments.find((p: any) => p.billId === bId)?.amount || 0);
-          const allocatedAmount = billAllocSum > 0 ? billAllocSum : (childPayAmount > 0 ? childPayAmount : billTotal);
-
-          let items: Array<{
-            description: string;
-            quantity?: number | string | null;
-            unit?: string | null;
-            unitPrice?: number | string | null;
-            amount: number;
-            metadata?: any;
-            type?: string;
-          }> = [];
-
-          if (foundBill?.items && foundBill.items.length > 0) {
-            const nonZeroItems = filterNonZeroBillItems(foundBill.items);
-            items = nonZeroItems.map((it: any) => ({
-              description: it.description || it.type || '-',
-              quantity: it.quantity,
-              unit: resolveBillingDisplayUnit({ unit: it.unit, type: it.type }),
-              unitPrice: it.unitPrice,
-              amount: Number(it.amount),
-              metadata: it.metadata,
-              type: it.type,
-            }));
-          } else {
-            items = [{
-              description: `${cycleLabel} (${foundBill?.billNumber || bId})`,
-              amount: billTotal || allocatedAmount,
-            }];
-          }
-
-          return {
-            billId: bId,
-            billNumber: foundBill?.billNumber || bId,
-            cycleLabel,
-            billTotal: billTotal || allocatedAmount,
-            allocatedAmount,
-            items,
-          };
-        });
-      }
-
-      setViewingReceipt({
-        receiptNumber: snap.receiptNumber || rcpt.receiptNumber,
-        roomNumber,
-        tenantName,
-        totalAmount,
-        paidAt: snap.paymentDate || rcpt.issuedAt || rcpt.paidAt || payment.paymentDate || payment.createdAt,
-        paymentMethod: snap.paymentMethod
-          ? (String(snap.paymentMethod).toUpperCase() === 'CASH' ? 'เงินสดสำนักงาน' : 'แสกน PromptPay QR')
-          : ((payment.method || '').toUpperCase() === 'CASH' ? 'เงินสดสำนักงาน' : 'แสกน PromptPay QR'),
-        receiverName: rcpt.receiverName || snap.dormitoryName || 'ฝ่ายการเงิน หอพัก HorPlus',
-        isMultiBill: true,
-        billGroups,
-      });
-      setIsReceiptOpen(true);
-      return;
-    }
-
-    // Single-bill receipt
-    const targetBill: any = payment.bill || bills.find(b => b.id === payment.billId) || targets[0]?.bill;
-    const cycleCode = targetBill?.billingCycle?.cycleCode || (targetBill?.billingCycleId ? getCycleCodeForCycleId(targetBill.billingCycleId) : '');
-    const cycleFormatted = cycleCode ? formatCycleCode(cycleCode) : '';
-    const cycleLabel = cycleFormatted ? `รอบบิล ${cycleFormatted}` : (targetBill?.billKind === 'DEPOSIT' ? 'เงินประกันสัญญาเช่า' : '');
-
-    const billTotal = snap.billTotal !== undefined ? Number(snap.billTotal) : Number(targetBill?.totalAmount || totalAmount);
-    const allocatedAmount = snap.allocatedAmount !== undefined ? Number(snap.allocatedAmount) : (snap.receivedAmount !== undefined ? Number(snap.receivedAmount) : totalAmount);
-
-    let items: Array<{
-      description: string;
-      quantity?: number | string | null;
-      unit?: string | null;
-      unitPrice?: number | string | null;
-      amount: number;
-      metadata?: any;
-      type?: string;
-    }> = [];
-
-    if (Array.isArray(snap.items) && snap.items.length > 0) {
-      const nonZeroSnap = filterNonZeroBillItems(snap.items);
-      if (nonZeroSnap.length > 0) {
-        items = nonZeroSnap.map((it: any) => ({
-          description: it.description || it.type || '-',
-          quantity: it.quantity,
-          unit: resolveBillingDisplayUnit({ unit: it.unit, type: it.type }),
-          unitPrice: it.unitPrice,
-          amount: Number(it.amount),
-          metadata: it.metadata,
-          type: it.type,
-        }));
-      } else {
-        items = [
-          { description: 'ยอดชำระตามใบเสร็จเดิม', amount: allocatedAmount }
-        ];
-      }
-    } else if (targetBill?.items && targetBill.items.length > 0) {
-      const nonZeroTarget = filterNonZeroBillItems(targetBill.items);
-      if (nonZeroTarget.length > 0) {
-        items = nonZeroTarget.map((it: any) => ({
-          description: it.description || it.type || '-',
-          quantity: it.quantity,
-          unit: resolveBillingDisplayUnit({ unit: it.unit, type: it.type }),
-          unitPrice: it.unitPrice,
-          amount: Number(it.amount),
-          metadata: it.metadata,
-          type: it.type,
-        }));
-      } else {
-        items = [
-          { description: 'ยอดชำระตามใบเสร็จเดิม', amount: allocatedAmount }
-        ];
-      }
-    } else {
-      items = [
-        { description: 'ยอดชำระตามใบเสร็จเดิม', amount: allocatedAmount }
-      ];
-    }
-
-    setViewingReceipt({
-      receiptNumber: snap.receiptNumber || rcpt.receiptNumber,
-      billNumber: snap.billNumber || targetBill?.billNumber,
-      roomNumber,
-      tenantName,
-      totalAmount,
-      paidAt: snap.paymentDate || rcpt.issuedAt || rcpt.paidAt || payment.paymentDate || payment.createdAt,
-      paymentMethod: snap.paymentMethod
-        ? (String(snap.paymentMethod).toUpperCase() === 'CASH' ? 'เงินสดสำนักงาน' : 'แสกน PromptPay QR')
-        : ((payment.method || '').toUpperCase() === 'CASH' ? 'เงินสดสำนักงาน' : 'แสกน PromptPay QR'),
-      receiverName: rcpt.receiverName || snap.dormitoryName || 'ฝ่ายการเงิน หอพัก HorPlus',
-      isMultiBill: false,
-      cycleLabel,
-      billTotal,
-      allocatedAmount,
-      items,
-    });
+    setViewingReceipt(receiptData);
     setIsReceiptOpen(true);
   };
 
