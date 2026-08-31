@@ -1220,11 +1220,9 @@ export class MeterService {
     }
 
     const rateSnapshot = await this.billingCycleRepo.findRateSnapshot(data.billingCycleId, dormitoryId);
-    const prisma = getPrismaClient();
-    const earliest = await prisma.billingCycle.findFirst({
-      where: { dormitoryId },
-      orderBy: { periodStart: 'asc' },
-    });
+    const allCyclesRes = await this.billingCycleRepo.findAll(dormitoryId);
+    const allCycles = Array.isArray(allCyclesRes) ? allCyclesRes : (allCyclesRes?.items || []);
+    const earliest = allCycles.slice().sort((a, b) => new Date(a.periodStart).getTime() - new Date(b.periodStart).getTime())[0];
     const isFirstCycle = earliest ? earliest.id === data.billingCycleId : false;
 
     return this.meterRepo.withTransaction(async (tx) => {
@@ -1825,6 +1823,11 @@ export class MeterService {
       pageSize: ENTITLEMENT_ROOM_LIMITS.PAID,
     });
     const rooms = roomsResult.items || [];
+
+    const allCyclesRes = await this.billingCycleRepo.findAll(dormitoryId);
+    const allCycles = Array.isArray(allCyclesRes) ? allCyclesRes : (allCyclesRes?.items || []);
+    const earliestCycle = allCycles.slice().sort((a, b) => new Date(a.periodStart).getTime() - new Date(b.periodStart).getTime())[0];
+    const isFirstCycle = earliestCycle ? earliestCycle.id === billingCycleId : true;
 
     const [cYear, cMonth] = cycle.cycleCode.split('-').map(Number);
     const cycleStartStr = `${cYear}-${String(cMonth).padStart(2, '0')}-01`;
@@ -2487,7 +2490,9 @@ export class MeterService {
                 previousReading: elecReading.previousReading != null ? elecReading.previousReading.toString() : undefined,
                 currentReading: elecReading.currentReading != null ? elecReading.currentReading.toString() : undefined,
               } : null,
-              peopleCount: snapshotPeopleCount ?? (currentHouseholdPeopleCount > 0 ? currentHouseholdPeopleCount : 1),
+              peopleCount: snapshotPeopleCount !== null
+                ? snapshotPeopleCount
+                : (isFirstCycle ? 1 : (currentHouseholdPeopleCount > 0 ? currentHouseholdPeopleCount : 1)),
               parkingQuantity,
               manualOutstanding: snapshotManualOutstanding ?? '0.00',
               otherFees: snapshotOtherFees ?? [],

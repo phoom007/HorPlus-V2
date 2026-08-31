@@ -163,8 +163,9 @@ export function buildRowsFromWorkspace(params: {
   selectedCycleCode?: string;
   selectedCycle?: string;
   currentDormId?: string;
+  isFirstCycle?: boolean;
 }): { rows: MeterRowState[]; originalRows: MeterRowState[] } {
-  const { workspaceData, rooms, bills, contracts = [], tenants = [], selectedBillingCycleId, selectedCycleCode, selectedCycle, currentDormId } = params;
+  const { workspaceData, rooms, bills, contracts = [], tenants = [], selectedBillingCycleId, selectedCycleCode, selectedCycle, currentDormId, isFirstCycle } = params;
   if (!workspaceData) {
     return { rows: [], originalRows: [] };
   }
@@ -227,7 +228,14 @@ export function buildRowsFromWorkspace(params: {
 
     const tenantDefaultPeople = cycleTenant ? (1 + (cycleTenant.coOccupants?.length || 0)) : 1;
     const snap = snapshotMap[r.id];
-    const rowPeople = snap?.peopleCount !== undefined ? Math.max(0, snap.peopleCount) : tenantDefaultPeople;
+    let rowPeople: number;
+    if (snap?.peopleCount !== undefined) {
+      rowPeople = Math.max(0, snap.peopleCount);
+    } else if (isFirstCycle) {
+      rowPeople = 1;
+    } else {
+      rowPeople = tenantDefaultPeople;
+    }
 
     const existingMonthlyUtilityBill = (bills || []).find(b =>
       (b.cycleId === selectedBillingCycleId || b.cycleId === selectedCycleCode || (b as any).billingCycleId === selectedBillingCycleId || (b as any).cycleMonth === selectedCycleCode) &&
@@ -1686,6 +1694,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       selectedCycleCode,
       selectedCycle,
       currentDormId,
+      isFirstCycle,
     });
 
     // Merge any locally confirmed snapshotVersions in originalRowsRef ONLY if for the SAME cycle

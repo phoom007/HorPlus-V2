@@ -522,16 +522,16 @@ export async function runVerification() {
       `Critical August Save Invariant: Room 101 bill total remains unchanged (${totalBefore} -> ${totalAfter}, delta = 0.00)`
     );
 
-    // 12b. Unissued room (e.g. Room 102 in August) saving baseline-only (blank current) succeeds
-    const room102Db = allRooms.find(r => r.roomNumber === '102');
-    if (room102Db) {
+    // 12b. Unissued room (e.g. Room 105 in August) saving baseline-only (blank current) succeeds
+    const room105Db = allRooms.find(r => r.roomNumber === '105');
+    if (room105Db) {
       const saveRes = await meterService.saveBulkMeterWorkspace(
         COMP_DORM.id,
         {
           billingCycleId: cycleAugDb.id,
           rows: [
             {
-              roomId: room102Db.id,
+              roomId: room105Db.id,
               waterPrev: 110,
               waterCurr: null,
               elecPrev: 560,
@@ -543,10 +543,10 @@ export async function runVerification() {
         billingService
       );
       assert(saveRes.savedCount === 1, 'Unissued room baseline-only save succeeds');
-      const r102Water = await prisma.meterReading.findFirst({
-        where: { roomId: room102Db.id, billingCycleId: cycleAugDb.id, meterType: 'water' },
+      const r105Water = await prisma.meterReading.findFirst({
+        where: { roomId: room105Db.id, billingCycleId: cycleAugDb.id, meterType: 'water' },
       });
-      assert(r102Water?.previousReading !== null && r102Water?.currentReading === null, 'Unissued room persists baseline and null current');
+      assert(r105Water?.previousReading !== null && r105Water?.currentReading === null, 'Unissued room persists baseline and null current');
     }
 
     // 12c. Issued room (Room 101 with INV-202608-101) clearing current reading fails closed

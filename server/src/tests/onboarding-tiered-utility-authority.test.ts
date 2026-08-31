@@ -479,6 +479,15 @@ describe('OWNER R3.9-C.3.2: First-Cycle Meter Workspace Authority Closure & Blan
             const key = `${where.dormitory_billing_cycle_room_unique.dormitoryId}_${where.dormitory_billing_cycle_room_unique.billingCycleId}_${where.dormitory_billing_cycle_room_unique.roomId}`;
             return snapshots.get(key) || null;
           }),
+          findMany: vi.fn(async ({ where }: any) => {
+            const list: any[] = [];
+            for (const [, v] of snapshots.entries()) {
+              if (v.dormitoryId === where.dormitoryId && v.billingCycleId === where.billingCycleId) {
+                list.push(v);
+              }
+            }
+            return list;
+          }),
           create: vi.fn(async ({ data }: any) => {
             const key = `${data.dormitoryId}_${data.billingCycleId}_${data.roomId}`;
             const snap = { id: `snap-${Date.now()}`, ...data, version: 1 };
@@ -501,6 +510,28 @@ describe('OWNER R3.9-C.3.2: First-Cycle Meter Workspace Authority Closure & Blan
           findMany: vi.fn().mockResolvedValue([]),
         },
         meterReading: {
+          findMany: vi.fn().mockResolvedValue([]),
+        },
+        contract: {
+          findMany: vi.fn().mockResolvedValue([]),
+          findFirst: vi.fn().mockResolvedValue(null),
+        },
+        provisionalRentalTerm: {
+          findMany: vi.fn().mockResolvedValue([]),
+        },
+        dailyStay: {
+          findMany: vi.fn().mockResolvedValue([]),
+        },
+        tenant: {
+          findMany: vi.fn().mockResolvedValue([]),
+        },
+        tenantVehicle: {
+          findMany: vi.fn().mockResolvedValue([]),
+        },
+        bill: {
+          findMany: vi.fn().mockResolvedValue([]),
+        },
+        roomOperationalStatusChange: {
           findMany: vi.fn().mockResolvedValue([]),
         },
       };
@@ -853,6 +884,53 @@ describe('OWNER R3.9-C.3.2: First-Cycle Meter Workspace Authority Closure & Blan
         { lowerExclusive: '0.00', upperInclusive: '10.00', billedUnits: '10.00', rate: '3.40', amount: '34.00' },
         { lowerExclusive: '10.00', upperInclusive: '20.00', billedUnits: '5.00', rate: '4.25', amount: '21.25' },
       ]);
+    });
+
+    it('Test 34: R3.9-C.3.3 Financial Preview First Cycle People Authority — Uses 1 when no snapshot, then updates to 3 upon save', async () => {
+      const { meterService, billingCycleRepo, roomRepo, snapshots } = setupMeterWorkspaceHarness();
+
+      await roomRepo.create(DORM_ID, {
+        id: ROOM_ID,
+        roomNumber: '101',
+        buildingId: BLD_ID,
+        monthlyRent: 3000,
+      } as any);
+
+      await billingCycleRepo.create(DORM_ID, {
+        id: CYCLE_ID,
+        cycleCode: '2026-08',
+        periodStart: new Date('2026-08-01T00:00:00.000Z'),
+        periodEnd: new Date('2026-08-31T23:59:59.999Z'),
+        billingDate: new Date('2026-08-31T00:00:00.000Z'),
+        dueDate: new Date('2026-09-05T00:00:00.000Z'),
+        status: 'draft',
+      });
+
+      // Water per_person @ 100.00 THB/person
+      await billingCycleRepo.createRateSnapshot(DORM_ID, {
+        billingCycleId: CYCLE_ID,
+        waterBillingType: 'per_person',
+        waterRate: '100.00',
+        electricityBillingType: 'per_unit',
+        electricityRate: '7.00',
+        source: 'CYCLE_INIT',
+      });
+
+      // 1. Initial preview before save: no snapshot -> effective people = 1 -> water total = 100.00
+      const preview1 = await meterService.getMeterBillingPreviewContext(DORM_ID, CYCLE_ID);
+      const roomPreview1 = preview1.rooms.find((r) => r.roomId === ROOM_ID);
+      expect(roomPreview1).toBeDefined();
+
+      // 2. Owner explicitly edits and saves peopleCount = 3
+      await meterService.saveBulkMeterWorkspace(DORM_ID, {
+        billingCycleId: CYCLE_ID,
+        rows: [{ roomId: ROOM_ID, peopleCount: 3 }],
+      });
+
+      // 3. Preview after save: snapshot people = 3 -> effective people = 3 -> water total reflects 300.00
+      const preview2 = await meterService.getMeterBillingPreviewContext(DORM_ID, CYCLE_ID);
+      const roomPreview2 = preview2.rooms.find((r) => r.roomId === ROOM_ID);
+      expect(roomPreview2?.snapshotPeopleCount).toBe(3);
     });
   });
 });

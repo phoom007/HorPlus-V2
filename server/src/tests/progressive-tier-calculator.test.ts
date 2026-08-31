@@ -4,6 +4,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
+import * as prismaModule from '../db/prisma.js';
 import { Prisma } from '@prisma/client';
 import {
   calculateProgressiveTieredCharge,
@@ -365,6 +366,15 @@ describe('OWNER R3.9-C.1: Progressive Tier Calculator & Integer Meter Domain Aut
     const ROOM_ID = 'c0eebc99-9c0b-4ef8-bb6d-6bb9bd380a33';
 
     function setupMeterService() {
+      vi.spyOn(prismaModule, 'getPrismaClient').mockReturnValue({
+        roomBillingCycleSnapshot: {
+          findUnique: vi.fn().mockResolvedValue(null),
+          findMany: vi.fn().mockResolvedValue([]),
+          create: vi.fn().mockResolvedValue({ id: 'snap-1', version: 1, peopleCount: 1 }),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+      } as any);
+
       vi.spyOn(subscriptionEntitlementService, 'resolveOperationalRoomEntitlementSet').mockResolvedValue({
         tier: 'FREE' as any,
         roomLimit: 100,
@@ -709,6 +719,15 @@ describe('OWNER R3.9-C.1: Progressive Tier Calculator & Integer Meter Domain Aut
       const tenantRepo = new InMemoryTenantRepository();
       const contractRepo = new InMemoryContractRepository();
       const meterRepo = new InMemoryMeterRepository();
+
+      vi.spyOn(prismaModule, 'getPrismaClient').mockReturnValue({
+        roomBillingCycleSnapshot: {
+          findUnique: vi.fn().mockResolvedValue(null),
+        },
+        tenantVehicle: {
+          findMany: vi.fn().mockResolvedValue([]),
+        },
+      } as any);
 
       const billingService = new BillingService(
         billRepo,
