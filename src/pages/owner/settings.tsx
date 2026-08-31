@@ -23,7 +23,8 @@ import {
   Layers,
   Copy,
   X,
-  Lock
+  Lock,
+  AlertCircle
 } from 'lucide-react';
 // Server-authoritative Settings page component
 
@@ -228,6 +229,17 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
   const [electricTierRates, setElectricTierRates] = useState<CanonicalTierRecord[]>(ELECTRICITY_TIER_PRESET);
   const [durableWaterTierRates, setDurableWaterTierRates] = useState<CanonicalTierRecord[] | null>(null);
   const [durableElectricTierRates, setDurableElectricTierRates] = useState<CanonicalTierRecord[] | null>(null);
+  const [tierSaveError, setTierSaveError] = useState<string | null>(null);
+
+  const currentDormId = selectedDormId || dorm?.id || '';
+  const currentDormIdRef = useRef(currentDormId);
+  currentDormIdRef.current = currentDormId;
+  const currentCycleRef = useRef(selectedCycle);
+  currentCycleRef.current = selectedCycle;
+
+  const defaultsLoadedDormIdRef = useRef<string | null>(null);
+  const snapshotLoadedContextRef = useRef<string | null>(null);
+
 
   useEffect(() => {
     return () => {
@@ -277,7 +289,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
       setWaterBillingMode(activeWMode);
       setElectricBillingMode(activeEMode);
 
-      // 2. Durable Inactive Tiers from DormitoryBillingSettings
+      // 2. Durable Inactive Tiers from DormitoryBillingSettings (explicit null clearing)
       const durableW = Array.isArray(defaults?.waterTierRates) && defaults.waterTierRates.length > 0
         ? defaults.waterTierRates
         : null;
@@ -285,8 +297,8 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
         ? defaults.electricityTierRates
         : null;
 
-      if (durableW) setDurableWaterTierRates(durableW);
-      if (durableE) setDurableElectricTierRates(durableE);
+      setDurableWaterTierRates(durableW);
+      setDurableElectricTierRates(durableE);
 
       // 3. Tier Draft Composition (Section 5)
       if (activeWMode === 'tiered' && Array.isArray(snapshot?.waterTierRates) && snapshot.waterTierRates.length > 0) {
@@ -308,17 +320,25 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
   };
 
   const fetchCycleRateSnapshot = async (cycleCodeOrId: string) => {
-    const dormId = selectedDormId || dorm?.id;
-    if (!dormId || !cycleCodeOrId) return;
+    const requestDormId = selectedDormId || dorm?.id || '';
+    const requestCycle = cycleCodeOrId;
+    if (!requestDormId || !requestCycle) return;
 
     try {
-      const res = await fetch(`/api/v1/billing-cycles/by-code/${cycleCodeOrId}/rate-snapshot`, {
-        headers: { 'x-dormitory-id': dormId },
+      const res = await fetch(`/api/v1/billing-cycles/by-code/${requestCycle}/rate-snapshot`, {
+        headers: { 'x-dormitory-id': requestDormId },
       });
+
+      // Stale response guard: ignore if active dorm or cycle context has changed
+      if (currentDormIdRef.current !== requestDormId || currentCycleRef.current !== requestCycle) {
+        return;
+      }
+
       if (res.ok) {
         const json = await res.json();
         if (json.data) {
           const { cycle, rateSnapshot, isLocked: locked, lockReason } = json.data;
+          snapshotLoadedContextRef.current = `${requestDormId}_${requestCycle}`;
           if (cycle?.id) setCurrentCycleId(cycle.id);
           setIsCycleLocked(Boolean(locked));
           setCycleLockReason(lockReason || null);
@@ -352,8 +372,16 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
 
   const handleSaveTierSettings = async (utilityType: 'water' | 'electricity', tiers: CanonicalTierRecord[]) => {
     const dormId = selectedDormId || dorm?.id;
-    if (!dormId || isCycleLocked) return;
+    const cycle = selectedCycle;
+    if (!dormId || !cycle || isCycleLocked) return;
 
+    // Loading / Save Guard: Fail closed if authority for current context has not completed loading
+    if (defaultsLoadedDormIdRef.current !== dormId || snapshotLoadedContextRef.current !== `${dormId}_${cycle}`) {
+      console.warn('Cannot save tier settings: current context authority has not finished loading');
+      return;
+    }
+
+    setTierSaveError(null);
     setSaveStatus('saving');
     try {
       // 1. First persist to DormitoryBillingSettings (Durable Reusable Authority)
@@ -382,6 +410,8 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
             setSaveStatus('idle');
             return;
           }
+          const userMsg = defRes.error?.message || 'บันทึกการตั้งค่าหอพักไม่สำเร็จ กรุณาลองใหม่';
+          setTierSaveError(userMsg);
           setSaveStatus('idle');
           console.error('Failed to update dormitory defaults:', defRes.error);
           return;
@@ -410,11 +440,19 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
 
       const snapshotRes = await handleSaveCycleRateSettings(overrides);
       if (!snapshotRes.ok) {
+        if (snapshotRes.reason !== 'VERSION_CONFLICT') {
+          const userMsg = snapshotRes.error?.message || 'บันทึกอัตราขั้นบันไดสำหรับรอบบิลไม่สำเร็จ กรุณาลองใหม่';
+          setTierSaveError(userMsg);
+        }
         console.warn('Snapshot update failed during tier save:', snapshotRes.reason);
         return;
       }
+
+      // Both authorities succeeded: clear any existing tier save error
+      setTierSaveError(null);
     } catch (err: any) {
       console.error('Error saving tiered settings:', err);
+      setTierSaveError('บันทึกอัตราขั้นบันไดไม่สำเร็จ กรุณาลองใหม่');
       setSaveStatus('idle');
     }
   };
@@ -575,10 +613,17 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
   };
 
   const fetchDormitoryDefaults = async () => {
+    const requestDormId = selectedDormId || dorm?.id || '';
     try {
       if (DataProvider.properties) {
         const res = await DataProvider.properties.getDormitoryDefaults();
+        // Stale response guard: ignore if active dorm context has changed
+        if (currentDormIdRef.current !== requestDormId) {
+          return;
+        }
+
         if (res.success && res.data) {
+          defaultsLoadedDormIdRef.current = requestDormId;
           const initObj: any = {};
           if (res.data.property) {
             setPropertyVersion(res.data.property.version || 1);
@@ -670,6 +715,17 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
   };
 
   useEffect(() => {
+    // Reset raw authorities and durable tier state on dormitory change
+    rawRateSnapshotRef.current = null;
+    rawDormitoryBillingRef.current = null;
+    defaultsLoadedDormIdRef.current = null;
+    snapshotLoadedContextRef.current = null;
+    setDurableWaterTierRates(null);
+    setDurableElectricTierRates(null);
+    setWaterTierRates(WATER_TIER_PRESET);
+    setElectricTierRates(ELECTRICITY_TIER_PRESET);
+    setTierSaveError(null);
+
     fetchDormitoryProfile();
     fetchDormitoryDefaults();
     fetchLineOaConfig();
@@ -681,6 +737,9 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
 
   useEffect(() => {
     if (selectedCycle) {
+      rawRateSnapshotRef.current = null;
+      snapshotLoadedContextRef.current = null;
+      setTierSaveError(null);
       fetchCycleRateSnapshot(selectedCycle);
     }
   }, [selectedCycle, selectedDormId]);
@@ -1900,6 +1959,20 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                   </select>
                 </div>
               </div>
+
+              {/* Tier Save Error Banner */}
+              {tierSaveError && (waterBillingMode === 'tiered' || electricBillingMode === 'tiered') && (
+                <div
+                  className="bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 rounded-2xl p-3 flex items-start gap-2.5 text-rose-800 dark:text-rose-200 text-xs"
+                  data-testid="tier-save-error"
+                >
+                  <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="font-bold">ข้อผิดพลาดในการบันทึกอัตราขั้นบันได</p>
+                    <p className="text-[11px] text-rose-700 dark:text-rose-300 mt-0.5">{tierSaveError}</p>
+                  </div>
+                </div>
+              )}
 
               {/* Tiered Rate Editors (Responsive 2-column on desktop / stacked on mobile) */}
               {(waterBillingMode === 'tiered' || electricBillingMode === 'tiered') && (
