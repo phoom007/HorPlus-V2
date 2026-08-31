@@ -1,6 +1,6 @@
 /**
  * @license Apache-2.0
- * OWNER R3.9-E.1B.2.2: Shared Bill & Tier Presentation Utilities
+ * OWNER R3.9-E.1B.2.3: Shared Bill & Tier Presentation Utilities
  */
 
 import {
@@ -11,22 +11,38 @@ import {
 } from '../types';
 
 /**
- * Checks whether a value is a valid canonical whole unit integer decimal string or integer number.
+ * Internal helper to parse a canonical whole-unit decimal string or integer number into BigInt.
+ * Returns null if invalid whole unit.
  * Examples valid: "0", "0.0", "0.00", "10", "10.0", "10.00", "150.00", 0, 10, 150
  * Examples invalid: "abc", "10.50", "5.50", "-1", "1e2", Infinity, NaN, null, undefined, ""
  */
-export function isCanonicalWholeUnitDisplay(val: unknown): boolean {
-  if (val === null || val === undefined) return false;
+export function parseCanonicalWholeUnitForDisplay(val: unknown): bigint | null {
+  if (val === null || val === undefined) return null;
   if (typeof val === 'number') {
-    return Number.isFinite(val) && val >= 0 && Number.isInteger(val);
+    if (Number.isFinite(val) && val >= 0 && Number.isInteger(val)) {
+      return BigInt(val);
+    }
+    return null;
   }
   if (typeof val === 'string') {
     const str = val.trim();
-    if (!str || !/^\d+(\.0{1,2})?$/.test(str)) return false;
-    const num = Number(str);
-    return Number.isFinite(num) && num >= 0 && Number.isInteger(num);
+    if (!str || !/^\d+(\.0{1,2})?$/.test(str)) return null;
+    const integerPart = str.split('.')[0];
+    try {
+      const b = BigInt(integerPart);
+      return b >= 0n ? b : null;
+    } catch {
+      return null;
+    }
   }
-  return false;
+  return null;
+}
+
+/**
+ * Checks whether a value is a valid canonical whole unit integer decimal string or integer number.
+ */
+export function isCanonicalWholeUnitDisplay(val: unknown): boolean {
+  return parseCanonicalWholeUnitForDisplay(val) !== null;
 }
 
 /**
@@ -71,13 +87,17 @@ export function isCanonicalPositiveMoneyDisplay(val: unknown): boolean {
  * Strict type guard validating that a bill item metadata object represents a valid, displayable Tiered utility.
  * Fails closed if:
  *   - metadata is missing, not object, or mode !== 'tiered'
+ *   - usageUnits is missing, non-integer, or <= 0
  *   - tierBreakdown is empty or not array
+ *   - first row lowerExclusive is not 0
  *   - upperInclusive is missing, undefined, or empty string (MUST be explicit null for unbounded)
  *   - upperInclusive === null is not the last row
- *   - lowerExclusive is non-integer or negative
  *   - non-contiguous sequence (gaps or overlaps between rows)
- *   - billedUnits is non-integer or negative
- *   - rate / amount are not valid canonical money values
+ *   - billedUnits is non-positive (0 or negative) or non-integer
+ *   - prior finite tier was not fully consumed before advancing to next tier
+ *   - final finite tier billedUnits exceeds capacity
+ *   - SUM(tierBreakdown[].billedUnits) !== metadata.usageUnits
+ *   - rate / tier row amount are not valid non-negative money values
  */
 export function isValidTieredBillItemMetadata(
   metadata: unknown
@@ -87,47 +107,72 @@ export function isValidTieredBillItemMetadata(
   if (m.mode !== 'tiered') return false;
   if (!Array.isArray(m.tierBreakdown) || m.tierBreakdown.length === 0) return false;
 
+  // 1. usageUnits must explicitly exist on metadata and be whole integer > 0
+  if (!Object.prototype.hasOwnProperty.call(m, 'usageUnits')) return false;
+  const totalUsage = parseCanonicalWholeUnitForDisplay(m.usageUnits);
+  if (totalUsage === null || totalUsage <= 0n) return false;
+
   const totalRows = m.tierBreakdown.length;
+  let sumBilledUnits = 0n;
 
   for (let idx = 0; idx < totalRows; idx++) {
     const item = m.tierBreakdown[idx];
     if (!item || typeof item !== 'object') return false;
 
-    // 1. upperInclusive MUST explicitly exist on the item
+    // 2. upperInclusive MUST explicitly exist on the item
     if (!Object.prototype.hasOwnProperty.call(item, 'upperInclusive')) return false;
 
     const upper = item.upperInclusive;
 
-    // 2. lowerExclusive: valid non-negative whole-unit integer
-    if (!isCanonicalWholeUnitDisplay(item.lowerExclusive)) return false;
-    const lowerVal = Number(item.lowerExclusive);
+    // 3. lowerExclusive: valid non-negative whole-unit integer
+    const lowerVal = parseCanonicalWholeUnitForDisplay(item.lowerExclusive);
+    if (lowerVal === null) return false;
 
-    // 3. upperInclusive: null ONLY for unbounded tier; otherwise valid whole-unit integer > lowerExclusive
+    // First row lowerExclusive MUST be zero
+    if (idx === 0 && lowerVal !== 0n) return false;
+
+    // 4. billedUnits: must be positive whole integer (billedUnits > 0)
+    const billedUnits = parseCanonicalWholeUnitForDisplay(item.billedUnits);
+    if (billedUnits === null || billedUnits <= 0n) return false;
+    sumBilledUnits += billedUnits;
+
+    // 5. rate: valid non-negative money decimal (max 2DP)
+    if (!isCanonicalPositiveMoneyDisplay(item.rate)) return false;
+
+    // 6. amount: valid non-negative money decimal (max 2DP) - no negative tier row amount
+    if (!isCanonicalPositiveMoneyDisplay(item.amount)) return false;
+
+    // 7. Sequential range integrity: each next row lowerExclusive must equal previous row upperInclusive
+    if (idx > 0) {
+      const prevUpper = m.tierBreakdown[idx - 1].upperInclusive;
+      if (prevUpper === null) return false; // previous was unbounded, no subsequent rows allowed
+      const prevUpperVal = parseCanonicalWholeUnitForDisplay(prevUpper);
+      if (prevUpperVal === null || lowerVal !== prevUpperVal) return false; // gap or overlap detected
+    }
+
+    // 8. Range capacity and unbounded rules
     if (upper === null) {
       // Unbounded row MUST be the last row
       if (idx !== totalRows - 1) return false;
     } else {
-      if (!isCanonicalWholeUnitDisplay(upper)) return false;
-      const upperVal = Number(upper);
+      const upperVal = parseCanonicalWholeUnitForDisplay(upper);
+      if (upperVal === null) return false;
       if (upperVal <= lowerVal) return false;
+
+      const capacity = upperVal - lowerVal;
+
+      if (idx < totalRows - 1) {
+        // Prior tier before entering next tier MUST be fully consumed
+        if (billedUnits !== capacity) return false;
+      } else {
+        // Last finite row: partially or fully consumed, but cannot exceed capacity
+        if (billedUnits > capacity) return false;
+      }
     }
-
-    // 4. Sequential range integrity: each next row lowerExclusive must equal previous row upperInclusive
-    if (idx > 0) {
-      const prevUpper = m.tierBreakdown[idx - 1].upperInclusive;
-      if (prevUpper === null) return false; // previous was unbounded, no subsequent rows allowed
-      if (lowerVal !== Number(prevUpper)) return false; // gap or overlap detected
-    }
-
-    // 5. billedUnits: valid non-negative whole integer usage
-    if (!isCanonicalWholeUnitDisplay(item.billedUnits)) return false;
-
-    // 6. rate: valid non-negative money decimal (max 2DP)
-    if (!isCanonicalPositiveMoneyDisplay(item.rate)) return false;
-
-    // 7. amount: valid money decimal (max 2DP)
-    if (!isCanonicalMoneyDisplay(item.amount)) return false;
   }
+
+  // 9. Total usage reconciliation: SUM(tierBreakdown[].billedUnits) == metadata.usageUnits
+  if (sumBilledUnits !== totalUsage) return false;
 
   return true;
 }
