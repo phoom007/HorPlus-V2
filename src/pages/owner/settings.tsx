@@ -250,6 +250,63 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
     onRetry?: () => void;
   } | null>(null);
 
+  const rawRateSnapshotRef = useRef<any>(null);
+  const rawDormitoryBillingRef = useRef<any>(null);
+
+  const applyComposedSettingsState = () => {
+    const snapshot = rawRateSnapshotRef.current;
+    const defaults = rawDormitoryBillingRef.current;
+
+    if (!isUserTypingRef.current) {
+      // 1. Active Mode Authority: selected snapshot takes absolute precedence
+      let activeWMode = 'per_unit';
+      let activeEMode = 'per_unit';
+
+      if (snapshot?.waterBillingType) {
+        activeWMode = toCanonicalMode(snapshot.waterBillingType, 'water');
+      } else if (defaults?.waterBillingMode || defaults?.waterBillingType) {
+        activeWMode = toCanonicalMode(defaults.waterBillingMode || defaults.waterBillingType, 'water');
+      }
+
+      if (snapshot?.electricityBillingType) {
+        activeEMode = toCanonicalMode(snapshot.electricityBillingType, 'electricity');
+      } else if (defaults?.electricBillingMode || defaults?.electricityBillingType) {
+        activeEMode = toCanonicalMode(defaults.electricBillingMode || defaults.electricityBillingType, 'electricity');
+      }
+
+      setWaterBillingMode(activeWMode);
+      setElectricBillingMode(activeEMode);
+
+      // 2. Durable Inactive Tiers from DormitoryBillingSettings
+      const durableW = Array.isArray(defaults?.waterTierRates) && defaults.waterTierRates.length > 0
+        ? defaults.waterTierRates
+        : null;
+      const durableE = Array.isArray(defaults?.electricityTierRates) && defaults.electricityTierRates.length > 0
+        ? defaults.electricityTierRates
+        : null;
+
+      if (durableW) setDurableWaterTierRates(durableW);
+      if (durableE) setDurableElectricTierRates(durableE);
+
+      // 3. Tier Draft Composition (Section 5)
+      if (activeWMode === 'tiered' && Array.isArray(snapshot?.waterTierRates) && snapshot.waterTierRates.length > 0) {
+        setWaterTierRates(snapshot.waterTierRates);
+      } else if (durableW) {
+        setWaterTierRates(durableW);
+      } else {
+        setWaterTierRates(WATER_TIER_PRESET);
+      }
+
+      if (activeEMode === 'tiered' && Array.isArray(snapshot?.electricityTierRates) && snapshot.electricityTierRates.length > 0) {
+        setElectricTierRates(snapshot.electricityTierRates);
+      } else if (durableE) {
+        setElectricTierRates(durableE);
+      } else {
+        setElectricTierRates(ELECTRICITY_TIER_PRESET);
+      }
+    }
+  };
+
   const fetchCycleRateSnapshot = async (cycleCodeOrId: string) => {
     const dormId = selectedDormId || dorm?.id;
     if (!dormId || !cycleCodeOrId) return;
@@ -269,29 +326,11 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
           if (rateSnapshot) {
             setSnapshotVersion(rateSnapshot.version || 1);
             setSnapshotProvenance(rateSnapshot.source || 'TEMPLATE_DEFAULT');
+            rawRateSnapshotRef.current = rateSnapshot;
 
             if (!isUserTypingRef.current) {
               setLocalWaterUnitRate(rateSnapshot.waterRate ?? '0.00');
-              const wMode = toCanonicalMode(rateSnapshot.waterBillingType, 'water');
-              setWaterBillingMode(wMode);
-              if (wMode === 'tiered' && Array.isArray(rateSnapshot.waterTierRates) && rateSnapshot.waterTierRates.length > 0) {
-                setWaterTierRates(rateSnapshot.waterTierRates);
-              } else if (durableWaterTierRates && durableWaterTierRates.length > 0) {
-                setWaterTierRates(durableWaterTierRates);
-              } else {
-                setWaterTierRates(WATER_TIER_PRESET);
-              }
-
               setLocalElectricUnitRate(rateSnapshot.electricityRate ?? '0.00');
-              const eMode = toCanonicalMode(rateSnapshot.electricityBillingType, 'electricity');
-              setElectricBillingMode(eMode);
-              if (eMode === 'tiered' && Array.isArray(rateSnapshot.electricityTierRates) && rateSnapshot.electricityTierRates.length > 0) {
-                setElectricTierRates(rateSnapshot.electricityTierRates);
-              } else if (durableElectricTierRates && durableElectricTierRates.length > 0) {
-                setElectricTierRates(durableElectricTierRates);
-              } else {
-                setElectricTierRates(ELECTRICITY_TIER_PRESET);
-              }
               setLocalCommonFee(rateSnapshot.commonFee ?? '0.00');
               setCommonFeeMode(toCanonicalMode(rateSnapshot.commonFeeMode, 'common'));
               setLocalInternetFee(rateSnapshot.internetFee ?? '0.00');
@@ -301,6 +340,8 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
               setLocalLateFee(rateSnapshot.lateFeeValue ?? '0.00');
               setLateFeeType(toCanonicalMode(rateSnapshot.lateFeeType, 'late'));
             }
+
+            applyComposedSettingsState();
           }
         }
       }
@@ -329,7 +370,8 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
         });
 
         if (!defRes.success) {
-          if (defRes.error?.code === 'CONFLICT' || (defRes.error as any)?.statusCode === 409) {
+          const errCode = defRes.error?.code;
+          if (errCode === 'VERSION_CONFLICT' || errCode === 'CONFLICT') {
             const conflictVer = (defRes.error?.details as any)?.currentVersion || billingVersion + 1;
             setVersionConflictState({
               isOpen: true,
@@ -340,12 +382,25 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
             setSaveStatus('idle');
             return;
           }
-          throw new Error(defRes.error?.message || 'บันทึกการตั้งค่าหอพักไม่สำเร็จ');
+          setSaveStatus('idle');
+          console.error('Failed to update dormitory defaults:', defRes.error);
+          return;
         }
 
-        if (utilityType === 'water') setDurableWaterTierRates(tiers);
-        if (utilityType === 'electricity') setDurableElectricTierRates(tiers);
-        setBillingVersion((v) => v + 1);
+        // Authoritative version sync: consume server-returned version directly
+        const serverBilling = (defRes.data as any)?.billing;
+        if (serverBilling && typeof serverBilling.version === 'number') {
+          setBillingVersion(serverBilling.version);
+          if (Array.isArray(serverBilling.waterTierRates)) {
+            setDurableWaterTierRates(serverBilling.waterTierRates);
+          }
+          if (Array.isArray(serverBilling.electricityTierRates)) {
+            setDurableElectricTierRates(serverBilling.electricityTierRates);
+          }
+        } else {
+          if (utilityType === 'water') setDurableWaterTierRates(tiers);
+          if (utilityType === 'electricity') setDurableElectricTierRates(tiers);
+        }
       }
 
       // 2. Second persist to selected BillingRateSnapshot (Active Financial Authority)
@@ -353,19 +408,23 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
         ? { waterBillingType: 'tiered', waterTierRates: tiers }
         : { electricityBillingType: 'tiered', electricityTierRates: tiers };
 
-      await handleSaveCycleRateSettings(overrides);
+      const snapshotRes = await handleSaveCycleRateSettings(overrides);
+      if (!snapshotRes.ok) {
+        console.warn('Snapshot update failed during tier save:', snapshotRes.reason);
+        return;
+      }
     } catch (err: any) {
       console.error('Error saving tiered settings:', err);
       setSaveStatus('idle');
     }
   };
 
-  const handleSaveCycleRateSettings = async (overrides?: Record<string, any>) => {
+  const handleSaveCycleRateSettings = async (overrides?: Record<string, any>): Promise<{ ok: boolean; reason?: string; error?: any }> => {
     const dormId = selectedDormId || dorm?.id;
-    if (!dormId || isCycleLocked) return;
+    if (!dormId || isCycleLocked) return { ok: false, reason: 'LOCKED_OR_NO_DORM' };
 
     const targetCycleCode = selectedCycle;
-    if (!targetCycleCode) return;
+    if (!targetCycleCode) return { ok: false, reason: 'NO_CYCLE' };
 
     setSaveStatus('saving');
     try {
@@ -443,18 +502,21 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
           onRetry: () => fetchCycleRateSnapshot(selectedCycle),
         });
         setSaveStatus('idle');
-        return;
+        return { ok: false, reason: 'VERSION_CONFLICT' };
       }
 
       if (!res.ok) {
         const errJson = await res.json().catch(() => ({}));
-        throw new Error(errJson?.error?.message || 'บันทึกการตั้งค่ารอบบิลไม่สำเร็จ');
+        const msg = errJson?.error?.message || 'บันทึกการตั้งค่ารอบบิลไม่สำเร็จ';
+        setSaveStatus('idle');
+        return { ok: false, reason: 'ERROR', error: new Error(msg) };
       }
 
       const dataJson = await res.json();
       if (dataJson?.data?.rateSnapshot) {
         setSnapshotVersion(dataJson.data.rateSnapshot.version || snapshotVersion + 1);
         setSnapshotProvenance(dataJson.data.rateSnapshot.source || 'MANUAL_OVERRIDE');
+        rawRateSnapshotRef.current = dataJson.data.rateSnapshot;
       }
 
       isUserTypingRef.current = false;
@@ -468,13 +530,16 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
         queryClient.invalidateQueries({ queryKey: queryKeys.billingCycles(dormId) });
         queryClient.invalidateQueries({ queryKey: ['meter', dormId] });
       }
+
+      return { ok: true };
     } catch (err: any) {
       console.error('Error saving cycle rate settings:', err);
       setSaveStatus('idle');
+      return { ok: false, reason: 'ERROR', error: err };
     }
   };
 
-  const [initialValues, setInitialValues] = useState<{
+    const [initialValues, setInitialValues] = useState<{
     propertyMonthlyRent?: number;
     propertyDeposit?: number;
     waterRate?: number;
@@ -553,21 +618,9 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
             if (res.data.billing.lateFeeDaily !== undefined && !isUserTypingRef.current) setLocalLateFee(Number(res.data.billing.lateFeeDaily));
             if (res.data.billing.dueDay !== undefined && !isUserTypingRef.current) setLocalDueDay(Number(res.data.billing.dueDay));
 
-            if (Array.isArray(res.data.billing.waterTierRates) && res.data.billing.waterTierRates.length > 0) {
-              setDurableWaterTierRates(res.data.billing.waterTierRates);
-              setWaterTierRates(res.data.billing.waterTierRates);
-            }
-            if (Array.isArray(res.data.billing.electricityTierRates) && res.data.billing.electricityTierRates.length > 0) {
-              setDurableElectricTierRates(res.data.billing.electricityTierRates);
-              setElectricTierRates(res.data.billing.electricityTierRates);
-            }
+            rawDormitoryBillingRef.current = res.data.billing;
+            applyComposedSettingsState();
 
-            if (res.data.billing.waterBillingMode || res.data.billing.waterBillingType) {
-              setWaterBillingMode(toCanonicalMode(res.data.billing.waterBillingMode || res.data.billing.waterBillingType, 'water'));
-            }
-            if (res.data.billing.electricBillingMode || res.data.billing.electricityBillingType) {
-              setElectricBillingMode(toCanonicalMode(res.data.billing.electricBillingMode || res.data.billing.electricityBillingType, 'electricity'));
-            }
             if (res.data.billing.commonFeeMode) setCommonFeeMode(res.data.billing.commonFeeMode);
             if (res.data.billing.internetFeeMode) setInternetFeeMode(res.data.billing.internetFeeMode);
             if (res.data.billing.parkingFeeMode) setParkingFeeMode(res.data.billing.parkingFeeMode);
