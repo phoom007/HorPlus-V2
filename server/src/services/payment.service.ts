@@ -21,6 +21,7 @@ import {
   recordCashPaymentInTx,
   generateReceiptInTx,
   generateGroupReceiptInTx,
+  GroupReceiptBillSnapshot,
 } from '../utils/payment-transaction.util.js';
 import { paymentVerificationService } from './payment-verification.service.js';
 
@@ -873,11 +874,52 @@ export class PaymentService {
             });
           }
 
-          // 8. Generate exactly ONE Group Receipt
+          // 8. Generate exactly ONE Group Receipt with rich per-bill gross items snapshot
           const roomNumber = bills[0]?.room?.roomNumber || 'GEN';
           const tenantDisplayName = group.tenant?.displayName || group.tenant?.firstName
             ? `${group.tenant.firstName || ''} ${group.tenant.lastName || ''}`.trim()
             : 'ผู้เช่า';
+
+          const billGroups: GroupReceiptBillSnapshot[] = allocationPlan.affectedBills.map((aff) => {
+            const targetBill = bills.find((b) => b.id === aff.id)!;
+            const billTotalStr = new Decimal(targetBill.totalAmount.toString()).toFixed(2);
+            const allocatedStr = aff.allocatedAmount.toFixed(2);
+
+            let items: any[] = [];
+            if (targetBill.items && targetBill.items.length > 0) {
+              items = targetBill.items.map((i: any) => ({
+                type: i.type || 'other',
+                description: i.description,
+                quantity: new Decimal((i.quantity ?? 1).toString()).toFixed(2),
+                unit: i.unit || null,
+                unitPrice: i.unitPrice ? new Decimal(i.unitPrice.toString()).toFixed(2) : '0.00',
+                amount: new Decimal(i.amount.toString()).toFixed(2),
+                metadata: i.metadata ? JSON.parse(JSON.stringify(i.metadata)) : null,
+              }));
+            } else {
+              items = [
+                {
+                  type: 'payment',
+                  description: `ชำระบิล ${targetBill.billNumber || targetBill.id}`.trim(),
+                  quantity: '1.00',
+                  unit: null,
+                  unitPrice: allocatedStr,
+                  amount: allocatedStr,
+                  metadata: null,
+                },
+              ];
+            }
+
+            return {
+              billId: targetBill.id,
+              billNumber: targetBill.billNumber || null,
+              billKind: targetBill.billKind || null,
+              cycleCode: targetBill.billingCycle?.cycleCode || null,
+              billTotal: billTotalStr,
+              allocatedAmount: allocatedStr,
+              items,
+            };
+          });
 
           const receipt = await generateGroupReceiptInTx({
             tx,
@@ -885,6 +927,7 @@ export class PaymentService {
             paymentGroupId: group.id,
             totalAmount: groupTotal,
             receiptItems: allocationPlan.receiptItems,
+            billGroups,
             userId: safeUserId,
             roomNumber,
             tenantName: tenantDisplayName,

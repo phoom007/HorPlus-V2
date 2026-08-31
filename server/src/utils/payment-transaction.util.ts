@@ -254,8 +254,27 @@ export async function recordCashPaymentInTx(
   };
 }
 
+export interface GroupReceiptBillSnapshot {
+  billId: string;
+  billNumber: string | null;
+  billKind: string | null;
+  cycleCode: string | null;
+  billTotal: string;
+  allocatedAmount: string;
+  items: Array<{
+    type: string;
+    description: string;
+    quantity: string;
+    unit: string | null;
+    unitPrice: string | null;
+    amount: string;
+    metadata: any;
+  }>;
+}
+
 /**
  * Generates sequential receipt in locked format RC-{YYYYMM}-{NORMALIZED_ROOM_NO}-{SEQUENCE}
+ * Preserves FULL historical gross BillItems and Tier metadata regardless of full or partial payment.
  */
 export async function generateReceiptInTx(
   tx: any,
@@ -290,7 +309,15 @@ export async function generateReceiptInTx(
   if (billId) {
     bill = await tx.bill.findUnique({
       where: { id: billId },
-      include: { items: true, dormitory: true, tenant: true, room: true },
+      include: {
+        items: {
+          orderBy: { displayOrder: 'asc' },
+        },
+        dormitory: true,
+        tenant: true,
+        room: true,
+        billingCycle: true,
+      },
     });
   }
 
@@ -309,26 +336,33 @@ export async function generateReceiptInTx(
   Decimal.set({ rounding: Decimal.ROUND_HALF_UP });
   const paymentAmount = customTotalAmount || (payment ? new Decimal(payment.amount.toString()) : new Decimal('0.00'));
   const billTotal = bill?.totalAmount ? new Decimal(bill.totalAmount.toString()) : paymentAmount;
-  const isPartialSettlement = !paymentAmount.equals(billTotal);
 
+  // Snapshot full historical gross BillItems whenever persisted BillItems exist
   let receiptItems: any[] = [];
-  if (!isPartialSettlement && bill?.items && bill.items.length > 0) {
+  if (bill?.items && bill.items.length > 0) {
     receiptItems = bill.items.map((i: any) => ({
+      type: i.type || 'other',
       description: i.description,
-      amount: new Decimal(i.amount.toString()).toFixed(2),
-      quantity: (i.quantity || 1).toString(),
+      quantity: new Decimal((i.quantity ?? 1).toString()).toFixed(2),
       unit: i.unit || null,
-      unitPrice: i.unitPrice ? new Decimal(i.unitPrice.toString()).toFixed(2) : null,
+      unitPrice: i.unitPrice ? new Decimal(i.unitPrice.toString()).toFixed(2) : '0.00',
+      amount: new Decimal(i.amount.toString()).toFixed(2),
+      metadata: i.metadata ? JSON.parse(JSON.stringify(i.metadata)) : null,
     }));
   } else {
+    // Safe generic fallback for legacy bills without persisted BillItems
     const billRef = bill?.billNumber || bill?.id || '';
     const isDeposit = bill?.billKind === 'DEPOSIT' || bill?.billKind === 'deposit';
     const label = isDeposit ? 'ชำระเงินประกัน' : 'ชำระยอดคงเหลือบิล';
     receiptItems = [
       {
+        type: 'payment',
         description: `${label} ${billRef}`.trim(),
+        quantity: '1.00',
+        unit: null,
+        unitPrice: paymentAmount.toFixed(2),
         amount: paymentAmount.toFixed(2),
-        quantity: '1',
+        metadata: null,
       },
     ];
   }
@@ -345,13 +379,20 @@ export async function generateReceiptInTx(
     receiptNumber,
     billNumber: bill?.billNumber || null,
     total: paymentAmount.toFixed(2),
+    receivedAmount: paymentAmount.toFixed(2),
+    billTotal: billTotal.toFixed(2),
+    allocatedAmount: paymentAmount.toFixed(2),
     items: receiptItems,
     roomNumber: bill?.room?.roomNumber || 'GEN',
     tenantName: bill?.tenant?.displayName || bill?.tenant?.firstName ? `${bill.tenant.firstName || ''} ${bill.tenant.lastName || ''}`.trim() : 'ผู้เช่า',
     dormitoryName: bill?.dormitory?.name || 'หอพัก HorPlus',
+    dormitoryTaxId: bill?.dormitory?.taxId || null,
+    dormitoryAddress: bill?.dormitory?.address || null,
+    dormitoryPhone: bill?.dormitory?.phone || null,
     paymentMethod: payment?.method || 'CASH',
     paymentDate: (payment?.paymentDate || today).toISOString(),
     receiverName: receiverDisplayName,
+    isCombinedReceipt: false,
   };
 
   const receipt = await tx.receipt.create({
@@ -372,21 +413,22 @@ export async function generateReceiptInTx(
 
 /**
  * Dedicated Group Receipt Generation: Exactly 1 Receipt per Combined Monetary Event.
- * Invariant: SUM(snapshot.items.amount) == snapshot.total == CombinedPaymentGroup.totalAmount.
+ * Preserves per-bill gross BillItems, allocated amounts, and Tier metadata in snapshotData.billGroups.
  */
 export async function generateGroupReceiptInTx(params: {
   tx: any;
   dormitoryId: string;
   paymentGroupId: string;
   totalAmount: Decimal;
-  receiptItems: Array<{ description: string; amount: string }>;
+  receiptItems?: Array<{ description: string; amount: string }>;
+  billGroups?: GroupReceiptBillSnapshot[];
   userId?: string | null;
   roomNumber?: string;
   tenantName?: string;
   paymentMethod?: string;
   paymentDate?: Date;
 }) {
-  const { tx, dormitoryId, paymentGroupId, totalAmount, receiptItems, userId } = params;
+  const { tx, dormitoryId, paymentGroupId, totalAmount, userId } = params;
   const today = new Date();
   const yearMonth = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, '0')}`;
 
@@ -420,16 +462,96 @@ export async function generateGroupReceiptInTx(params: {
     }
   }
 
-  const dorm = await tx.dormitory.findUnique({ where: { id: dormitoryId }, select: { name: true } });
+  const dorm = await tx.dormitory.findUnique({ where: { id: dormitoryId }, select: { name: true, taxId: true, address: true, phone: true } });
+
+  // Resolve authoritative billGroups: use passed parameter or atomically construct inside tx
+  let billGroups = params.billGroups;
+  if (!billGroups || billGroups.length === 0) {
+    const targets = await tx.combinedPaymentGroupBillTarget.findMany({
+      where: { paymentGroupId },
+      include: {
+        bill: {
+          include: {
+            items: { orderBy: { displayOrder: 'asc' } },
+            billingCycle: true,
+          },
+        },
+      },
+      orderBy: { targetOrder: 'asc' },
+    });
+
+    const allocations = await tx.paymentAllocation.findMany({
+      where: { paymentGroupId },
+    });
+
+    billGroups = targets.map((t: any) => {
+      const b = t.bill;
+      const billAllocations = allocations.filter((a: any) => a.billId === b.id);
+      const totalAllocForBill = billAllocations.reduce(
+        (sum: Decimal, a: any) => sum.plus(new Decimal(a.allocatedAmount.toString())),
+        new Decimal(0)
+      );
+
+      const bTotal = b.totalAmount ? new Decimal(b.totalAmount.toString()).toFixed(2) : totalAllocForBill.toFixed(2);
+      const allocatedStr = totalAllocForBill.toFixed(2);
+
+      let items: any[] = [];
+      if (b.items && b.items.length > 0) {
+        items = b.items.map((i: any) => ({
+          type: i.type || 'other',
+          description: i.description,
+          quantity: new Decimal((i.quantity ?? 1).toString()).toFixed(2),
+          unit: i.unit || null,
+          unitPrice: i.unitPrice ? new Decimal(i.unitPrice.toString()).toFixed(2) : '0.00',
+          amount: new Decimal(i.amount.toString()).toFixed(2),
+          metadata: i.metadata ? JSON.parse(JSON.stringify(i.metadata)) : null,
+        }));
+      } else {
+        items = [
+          {
+            type: 'payment',
+            description: `ชำระบิล ${b.billNumber || b.id}`.trim(),
+            quantity: '1.00',
+            unit: null,
+            unitPrice: allocatedStr,
+            amount: allocatedStr,
+            metadata: null,
+          },
+        ];
+      }
+
+      return {
+        billId: b.id,
+        billNumber: b.billNumber || null,
+        billKind: b.billKind || null,
+        cycleCode: b.billingCycle?.cycleCode || null,
+        billTotal: bTotal,
+        allocatedAmount: allocatedStr,
+        items,
+      };
+    });
+  }
+
+  // Construct legacy compatibility summary items if not explicitly provided
+  const finalBillGroups = billGroups || [];
+  const legacyReceiptItems = params.receiptItems || finalBillGroups.map((bg) => ({
+    description: `ชำระบิล ${bg.billNumber || bg.billId}`,
+    amount: bg.allocatedAmount,
+  }));
 
   const snapshotData = {
     receiptNumber,
     billNumber: null,
     total: totalAmount.toFixed(2),
-    items: receiptItems,
+    receivedAmount: totalAmount.toFixed(2),
+    items: legacyReceiptItems,
+    billGroups,
     roomNumber: params.roomNumber || 'GEN',
     tenantName: params.tenantName || 'ผู้เช่า',
     dormitoryName: dorm?.name || 'หอพัก HorPlus',
+    dormitoryTaxId: dorm?.taxId || null,
+    dormitoryAddress: dorm?.address || null,
+    dormitoryPhone: dorm?.phone || null,
     paymentMethod: params.paymentMethod || 'BANK_TRANSFER',
     paymentDate: (params.paymentDate || today).toISOString(),
     receiverName: receiverDisplayName,
