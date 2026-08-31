@@ -195,7 +195,9 @@ export const UpdateDormitoryPropertyChangesSchema = z.object({
 
 export const UpdateDormitoryBillingChangesSchema = z.object({
   waterRate: z.union([z.number(), z.string()]).optional(),
+  waterTierRates: z.array(z.object({ upTo: z.string().nullable().optional(), rate: z.string() })).nullable().optional(),
   electricityRate: z.union([z.number(), z.string()]).optional(),
+  electricityTierRates: z.array(z.object({ upTo: z.string().nullable().optional(), rate: z.string() })).nullable().optional(),
   commonFee: z.union([z.number(), z.string()]).optional(),
   internetFee: z.union([z.number(), z.string()]).optional(),
   waterBillingType: z.string().optional(),

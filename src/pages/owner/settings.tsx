@@ -226,8 +226,8 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
 
   const [waterTierRates, setWaterTierRates] = useState<CanonicalTierRecord[]>(WATER_TIER_PRESET);
   const [electricTierRates, setElectricTierRates] = useState<CanonicalTierRecord[]>(ELECTRICITY_TIER_PRESET);
-  const [inactiveWaterTierRates, setInactiveWaterTierRates] = useState<CanonicalTierRecord[] | null>(null);
-  const [inactiveElectricTierRates, setInactiveElectricTierRates] = useState<CanonicalTierRecord[] | null>(null);
+  const [durableWaterTierRates, setDurableWaterTierRates] = useState<CanonicalTierRecord[] | null>(null);
+  const [durableElectricTierRates, setDurableElectricTierRates] = useState<CanonicalTierRecord[] | null>(null);
 
   useEffect(() => {
     return () => {
@@ -274,21 +274,23 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
               setLocalWaterUnitRate(rateSnapshot.waterRate ?? '0.00');
               const wMode = toCanonicalMode(rateSnapshot.waterBillingType, 'water');
               setWaterBillingMode(wMode);
-              if (Array.isArray(rateSnapshot.waterTierRates) && rateSnapshot.waterTierRates.length > 0) {
+              if (wMode === 'tiered' && Array.isArray(rateSnapshot.waterTierRates) && rateSnapshot.waterTierRates.length > 0) {
                 setWaterTierRates(rateSnapshot.waterTierRates);
-                setInactiveWaterTierRates(rateSnapshot.waterTierRates);
-              } else if (inactiveWaterTierRates && inactiveWaterTierRates.length > 0) {
-                setWaterTierRates(inactiveWaterTierRates);
+              } else if (durableWaterTierRates && durableWaterTierRates.length > 0) {
+                setWaterTierRates(durableWaterTierRates);
+              } else {
+                setWaterTierRates(WATER_TIER_PRESET);
               }
 
               setLocalElectricUnitRate(rateSnapshot.electricityRate ?? '0.00');
               const eMode = toCanonicalMode(rateSnapshot.electricityBillingType, 'electricity');
               setElectricBillingMode(eMode);
-              if (Array.isArray(rateSnapshot.electricityTierRates) && rateSnapshot.electricityTierRates.length > 0) {
+              if (eMode === 'tiered' && Array.isArray(rateSnapshot.electricityTierRates) && rateSnapshot.electricityTierRates.length > 0) {
                 setElectricTierRates(rateSnapshot.electricityTierRates);
-                setInactiveElectricTierRates(rateSnapshot.electricityTierRates);
-              } else if (inactiveElectricTierRates && inactiveElectricTierRates.length > 0) {
-                setElectricTierRates(inactiveElectricTierRates);
+              } else if (durableElectricTierRates && durableElectricTierRates.length > 0) {
+                setElectricTierRates(durableElectricTierRates);
+              } else {
+                setElectricTierRates(ELECTRICITY_TIER_PRESET);
               }
               setLocalCommonFee(rateSnapshot.commonFee ?? '0.00');
               setCommonFeeMode(toCanonicalMode(rateSnapshot.commonFeeMode, 'common'));
@@ -304,6 +306,57 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
       }
     } catch (err) {
       console.error('Error fetching cycle rate snapshot:', err);
+    }
+  };
+
+  const handleSaveTierSettings = async (utilityType: 'water' | 'electricity', tiers: CanonicalTierRecord[]) => {
+    const dormId = selectedDormId || dorm?.id;
+    if (!dormId || isCycleLocked) return;
+
+    setSaveStatus('saving');
+    try {
+      // 1. First persist to DormitoryBillingSettings (Durable Reusable Authority)
+      if (DataProvider.properties) {
+        const billingChanges: Record<string, any> = utilityType === 'water'
+          ? { waterTierRates: tiers }
+          : { electricityTierRates: tiers };
+
+        const defRes = await DataProvider.properties.updateDormitoryDefaults({
+          billing: {
+            changes: billingChanges,
+            expectedVersion: billingVersion,
+          },
+        });
+
+        if (!defRes.success) {
+          if (defRes.error?.code === 'CONFLICT' || (defRes.error as any)?.statusCode === 409) {
+            const conflictVer = (defRes.error?.details as any)?.currentVersion || billingVersion + 1;
+            setVersionConflictState({
+              isOpen: true,
+              entityName: 'การตั้งค่าหอพัก (Dormitory Defaults)',
+              currentVersion: conflictVer,
+              onRetry: () => fetchDormitoryDefaults(),
+            });
+            setSaveStatus('idle');
+            return;
+          }
+          throw new Error(defRes.error?.message || 'บันทึกการตั้งค่าหอพักไม่สำเร็จ');
+        }
+
+        if (utilityType === 'water') setDurableWaterTierRates(tiers);
+        if (utilityType === 'electricity') setDurableElectricTierRates(tiers);
+        setBillingVersion((v) => v + 1);
+      }
+
+      // 2. Second persist to selected BillingRateSnapshot (Active Financial Authority)
+      const overrides: Record<string, any> = utilityType === 'water'
+        ? { waterBillingType: 'tiered', waterTierRates: tiers }
+        : { electricityBillingType: 'tiered', electricityTierRates: tiers };
+
+      await handleSaveCycleRateSettings(overrides);
+    } catch (err: any) {
+      console.error('Error saving tiered settings:', err);
+      setSaveStatus('idle');
     }
   };
 
@@ -354,7 +407,6 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
         const tiersToSave = overrides?.waterTierRates ?? waterTierRates;
         payload.waterTierRates = tiersToSave;
         payload.waterRate = wRate;
-        setInactiveWaterTierRates(tiersToSave);
       } else {
         payload.waterRate = wRate;
         payload.waterTierRates = null;
@@ -364,7 +416,6 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
         const tiersToSave = overrides?.electricityTierRates ?? electricTierRates;
         payload.electricityTierRates = tiersToSave;
         payload.electricityRate = eRate;
-        setInactiveElectricTierRates(tiersToSave);
       } else {
         payload.electricityRate = eRate;
         payload.electricityTierRates = null;
@@ -503,16 +554,12 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
             if (res.data.billing.dueDay !== undefined && !isUserTypingRef.current) setLocalDueDay(Number(res.data.billing.dueDay));
 
             if (Array.isArray(res.data.billing.waterTierRates) && res.data.billing.waterTierRates.length > 0) {
-              setInactiveWaterTierRates(res.data.billing.waterTierRates);
-              if (waterBillingMode === 'tiered' || res.data.billing.waterBillingType === 'tiered') {
-                setWaterTierRates(res.data.billing.waterTierRates);
-              }
+              setDurableWaterTierRates(res.data.billing.waterTierRates);
+              setWaterTierRates(res.data.billing.waterTierRates);
             }
             if (Array.isArray(res.data.billing.electricityTierRates) && res.data.billing.electricityTierRates.length > 0) {
-              setInactiveElectricTierRates(res.data.billing.electricityTierRates);
-              if (electricBillingMode === 'tiered' || res.data.billing.electricityBillingType === 'tiered') {
-                setElectricTierRates(res.data.billing.electricityTierRates);
-              }
+              setDurableElectricTierRates(res.data.billing.electricityTierRates);
+              setElectricTierRates(res.data.billing.electricityTierRates);
             }
 
             if (res.data.billing.waterBillingMode || res.data.billing.waterBillingType) {
@@ -1679,24 +1726,31 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                     อัตราค่าน้ำ (บาท) *
                   </label>
                   <input
-                    type="number"
-                    required
-                    disabled={isCycleLocked}
-                    value={localWaterUnitRate}
+                    type={waterBillingMode === 'tiered' ? 'text' : 'number'}
+                    required={waterBillingMode !== 'tiered'}
+                    disabled={isCycleLocked || waterBillingMode === 'tiered'}
+                    value={waterBillingMode === 'tiered' ? 'คิดตามขั้นบันได' : localWaterUnitRate}
                     onChange={(e) => {
+                      if (waterBillingMode === 'tiered') return;
                       isUserTypingRef.current = true;
                       setLocalWaterUnitRate(e.target.value);
                       setSaveStatus('typing');
                     }}
                     onBlur={(e) => {
+                      if (waterBillingMode === 'tiered') return;
                       handleSaveCycleRateSettings({ waterRate: e.target.value });
                     }}
                     onKeyDown={(e) => {
+                      if (waterBillingMode === 'tiered') return;
                       if (e.key === 'Enter') {
                         handleSaveCycleRateSettings({ waterRate: (e.target as HTMLInputElement).value });
                       }
                     }}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-bold focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs disabled:opacity-50 disabled:bg-slate-100"
+                    className={`w-full px-3 py-2 border border-gray-200 rounded-xl font-bold outline-none transition-all text-xs ${
+                      waterBillingMode === 'tiered'
+                        ? 'bg-slate-100 dark:bg-slate-800/60 text-slate-500 dark:text-slate-400 cursor-not-allowed border-dashed'
+                        : 'bg-white text-slate-800 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 disabled:opacity-50 disabled:bg-slate-100'
+                    }`}
                     data-testid="input-water-unit-rate"
                   />
                 </div>
@@ -1709,7 +1763,13 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                     onChange={(e) => {
                       const newMode = toCanonicalMode(e.target.value, 'water');
                       setWaterBillingMode(newMode);
-                      if (newMode !== 'tiered') {
+                      if (newMode === 'tiered') {
+                        if (durableWaterTierRates && durableWaterTierRates.length > 0) {
+                          setWaterTierRates(durableWaterTierRates);
+                        } else {
+                          setWaterTierRates(WATER_TIER_PRESET);
+                        }
+                      } else {
                         handleSaveCycleRateSettings({ waterBillingType: newMode });
                       }
                     }}
@@ -1731,17 +1791,31 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                     อัตราค่าไฟฟ้า (บาท) *
                   </label>
                   <input
-                    type="number"
-                    required
-                    disabled={isCycleLocked}
-                    value={localElectricUnitRate}
+                    type={electricBillingMode === 'tiered' ? 'text' : 'number'}
+                    required={electricBillingMode !== 'tiered'}
+                    disabled={isCycleLocked || electricBillingMode === 'tiered'}
+                    value={electricBillingMode === 'tiered' ? 'คิดตามขั้นบันได' : localElectricUnitRate}
                     onChange={(e) => {
+                      if (electricBillingMode === 'tiered') return;
                       isUserTypingRef.current = true;
                       setLocalElectricUnitRate(e.target.value);
                       setSaveStatus('typing');
                     }}
-                    onBlur={(e) => handleSaveCycleRateSettings({ electricityRate: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-bold focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs disabled:opacity-50 disabled:bg-slate-100"
+                    onBlur={(e) => {
+                      if (electricBillingMode === 'tiered') return;
+                      handleSaveCycleRateSettings({ electricityRate: e.target.value });
+                    }}
+                    onKeyDown={(e) => {
+                      if (electricBillingMode === 'tiered') return;
+                      if (e.key === 'Enter') {
+                        handleSaveCycleRateSettings({ electricityRate: (e.target as HTMLInputElement).value });
+                      }
+                    }}
+                    className={`w-full px-3 py-2 border border-gray-200 rounded-xl font-bold outline-none transition-all text-xs ${
+                      electricBillingMode === 'tiered'
+                        ? 'bg-slate-100 dark:bg-slate-800/60 text-slate-500 dark:text-slate-400 cursor-not-allowed border-dashed'
+                        : 'bg-white text-slate-800 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 disabled:opacity-50 disabled:bg-slate-100'
+                    }`}
                     data-testid="input-electric-unit-rate"
                   />
                 </div>
@@ -1754,7 +1828,13 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                     onChange={(e) => {
                       const newMode = toCanonicalMode(e.target.value, 'electricity');
                       setElectricBillingMode(newMode);
-                      if (newMode !== 'tiered') {
+                      if (newMode === 'tiered') {
+                        if (durableElectricTierRates && durableElectricTierRates.length > 0) {
+                          setElectricTierRates(durableElectricTierRates);
+                        } else {
+                          setElectricTierRates(ELECTRICITY_TIER_PRESET);
+                        }
+                      } else {
                         handleSaveCycleRateSettings({ electricityBillingType: newMode });
                       }
                     }}
@@ -1776,9 +1856,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                       utilityType="water"
                       tiers={waterTierRates}
                       onChange={setWaterTierRates}
-                      onSave={(tiers) =>
-                        handleSaveCycleRateSettings({ waterBillingType: 'tiered', waterTierRates: tiers })
-                      }
+                      onSave={(tiers) => handleSaveTierSettings('water', tiers)}
                       disabled={isCycleLocked}
                       isSaving={saveStatus === 'saving'}
                     />
@@ -1788,9 +1866,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                       utilityType="electricity"
                       tiers={electricTierRates}
                       onChange={setElectricTierRates}
-                      onSave={(tiers) =>
-                        handleSaveCycleRateSettings({ electricityBillingType: 'tiered', electricityTierRates: tiers })
-                      }
+                      onSave={(tiers) => handleSaveTierSettings('electricity', tiers)}
                       disabled={isCycleLocked}
                       isSaving={saveStatus === 'saving'}
                     />

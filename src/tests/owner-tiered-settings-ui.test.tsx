@@ -11,7 +11,7 @@ import {
 import { OwnerSettings, toCanonicalMode } from '../pages/owner/settings';
 import { ApiPropertyAdapter } from '../data/adapters/api';
 
-describe('OWNER R3.9-D.1: Tiered Rate Editor & Settings UI Suite', () => {
+describe('OWNER R3.9-D.1.1: Inactive Tier Persistence & Dual-Authority Settings Suite', () => {
   beforeEach(() => {
     cleanup();
     vi.clearAllMocks();
@@ -67,7 +67,7 @@ describe('OWNER R3.9-D.1: Tiered Rate Editor & Settings UI Suite', () => {
     });
   });
 
-  describe('2. TieredRateEditor Component Isolated Behavior', () => {
+  describe('2. TieredRateEditor Component Isolated Behavior & Validation', () => {
     it('F. Accepts and renders 1 Tier', () => {
       const tiers: CanonicalTierRecord[] = [{ upTo: null, rate: '20.00' }];
       render(<TieredRateEditor utilityType="water" tiers={tiers} onChange={vi.fn()} />);
@@ -114,7 +114,7 @@ describe('OWNER R3.9-D.1: Tiered Rate Editor & Settings UI Suite', () => {
       // Add tier button is not rendered / disabled at 5 tiers
       expect(screen.queryByTestId('btn-add-tier-water')).toBeNull();
 
-      // Section 8 Mandate: Absolutely NO user-facing explanatory copy "สูงสุด 5 ขั้น"
+      // Section 8 & 17 Mandate: Absolutely NO user-facing explanatory copy "สูงสุด 5 ขั้น"
       expect(container.textContent).not.toContain('สูงสุด 5 ขั้น');
       expect(container.textContent).not.toContain('สูงสุด 5');
     });
@@ -146,17 +146,57 @@ describe('OWNER R3.9-D.1: Tiered Rate Editor & Settings UI Suite', () => {
       expect(screen.queryByTestId('input-tier-upto-water-2')).toBeNull();
     });
 
-    it('L. Saved zero tier rate remains 0.00', () => {
-      const tiers: CanonicalTierRecord[] = [
+    it('L & Section 30: Rate syntax validation accepts 0, 0.00, 3.4, 3.40, and rejects -1, 3.456, 1e2, blank', () => {
+      const onSave = vi.fn();
+      const validTiers: CanonicalTierRecord[] = [
         { upTo: '10', rate: '0.00' },
-        { upTo: null, rate: '0.00' },
+        { upTo: null, rate: '3.40' },
       ];
-      render(<TieredRateEditor utilityType="water" tiers={tiers} onChange={vi.fn()} />);
 
-      const rate0 = screen.getByTestId('input-tier-rate-water-0') as HTMLInputElement;
-      const rate1 = screen.getByTestId('input-tier-rate-water-1') as HTMLInputElement;
-      expect(rate0.value).toBe('0.00');
-      expect(rate1.value).toBe('0.00');
+      const { rerender } = render(
+        <TieredRateEditor utilityType="water" tiers={validTiers} onChange={vi.fn()} onSave={onSave} />
+      );
+
+      // Save valid
+      fireEvent.click(screen.getByTestId('btn-save-tiers-water'));
+      expect(onSave).toHaveBeenCalledWith(validTiers);
+
+      // Invalid negative
+      onSave.mockClear();
+      const invalidNegative: CanonicalTierRecord[] = [
+        { upTo: '10', rate: '-1.00' },
+        { upTo: null, rate: '3.40' },
+      ];
+      rerender(
+        <TieredRateEditor utilityType="water" tiers={invalidNegative} onChange={vi.fn()} onSave={onSave} />
+      );
+      fireEvent.click(screen.getByTestId('btn-save-tiers-water'));
+      expect(onSave).not.toHaveBeenCalled();
+      expect(screen.getByTestId('alert-tier-error-water')).toBeDefined();
+
+      // Invalid 3 decimal places
+      onSave.mockClear();
+      const invalid3DP: CanonicalTierRecord[] = [
+        { upTo: '10', rate: '3.456' },
+        { upTo: null, rate: '3.40' },
+      ];
+      rerender(
+        <TieredRateEditor utilityType="water" tiers={invalid3DP} onChange={vi.fn()} onSave={onSave} />
+      );
+      fireEvent.click(screen.getByTestId('btn-save-tiers-water'));
+      expect(onSave).not.toHaveBeenCalled();
+
+      // Invalid scientific notation
+      onSave.mockClear();
+      const invalidSci: CanonicalTierRecord[] = [
+        { upTo: '10', rate: '1e2' },
+        { upTo: null, rate: '3.40' },
+      ];
+      rerender(
+        <TieredRateEditor utilityType="water" tiers={invalidSci} onChange={vi.fn()} onSave={onSave} />
+      );
+      fireEvent.click(screen.getByTestId('btn-save-tiers-water'));
+      expect(onSave).not.toHaveBeenCalled();
     });
 
     it('Reset button restores sample preset into draft without auto-saving', () => {
@@ -174,36 +214,81 @@ describe('OWNER R3.9-D.1: Tiered Rate Editor & Settings UI Suite', () => {
     });
   });
 
-  describe('3. Owner Settings Full Integration & Round-Trip', () => {
-    const DORM_ID = 'dorm-test-123';
-    const mockCycle = { id: 'cycle-1', cycleCode: '2026-08', status: 'active' };
+  describe('3. Stateful Dual-Authority Persistence & Real Reload Simulation', () => {
+    const DORM_ID = 'dorm-uat-comp-1';
+    const mockCycle = { id: 'cycle-2026-08', cycleCode: '2026-08', status: 'active' };
 
-    const setupMocks = (initialSnapshot: any, initialDefaults?: any) => {
-      localStorage.setItem('selected_dormitory_id', DORM_ID);
+    // Stateful Server Simulation
+    class StatefulServerSimulator {
+      public dormBillingSettings: any;
+      public cycleRateSnapshot: any;
+      public mutationCount: number = 0;
+      public conflictTrigger: boolean = false;
 
-      // Mock fetch
-      global.fetch = vi.fn().mockImplementation((url: string, opts: any) => {
-        const urlStr = String(url);
+      constructor(initialBilling: any, initialSnapshot: any) {
+        this.dormBillingSettings = {
+          version: 1,
+          waterBillingType: 'per_unit',
+          waterRate: '18.00',
+          waterTierRates: null,
+          electricityBillingType: 'per_unit',
+          electricityRate: '8.00',
+          electricityTierRates: null,
+          ...initialBilling,
+        };
+        this.cycleRateSnapshot = {
+          version: 1,
+          waterBillingType: 'per_unit',
+          waterRate: '18.00',
+          waterTierRates: null,
+          electricityBillingType: 'per_unit',
+          electricityRate: '8.00',
+          electricityTierRates: null,
+          source: 'CYCLE_INIT',
+          ...initialSnapshot,
+        };
+      }
 
-        if (urlStr.includes('/api/v1/billing-cycles') && !urlStr.includes('rate-snapshot')) {
-          return Promise.resolve({
-            ok: true,
-            json: async () => ({ data: [mockCycle] }),
-          });
-        }
+      setupMocks() {
+        localStorage.setItem('selected_dormitory_id', DORM_ID);
 
-        if (urlStr.includes('rate-snapshot')) {
-          if (opts?.method === 'PUT') {
-            const body = JSON.parse(opts.body);
+        global.fetch = vi.fn().mockImplementation((url: string, opts: any) => {
+          const urlStr = String(url);
+
+          if (urlStr.includes('/api/v1/billing-cycles') && !urlStr.includes('rate-snapshot')) {
+            return Promise.resolve({
+              ok: true,
+              json: async () => ({ data: [mockCycle] }),
+            });
+          }
+
+          if (urlStr.includes('rate-snapshot')) {
+            if (opts?.method === 'PUT') {
+              this.mutationCount++;
+              const body = JSON.parse(opts.body);
+              this.cycleRateSnapshot = {
+                ...this.cycleRateSnapshot,
+                ...body,
+                version: (this.cycleRateSnapshot.version || 1) + 1,
+              };
+              return Promise.resolve({
+                ok: true,
+                json: async () => ({
+                  data: {
+                    rateSnapshot: this.cycleRateSnapshot,
+                  },
+                }),
+              });
+            }
+
             return Promise.resolve({
               ok: true,
               json: async () => ({
                 data: {
-                  rateSnapshot: {
-                    ...initialSnapshot,
-                    ...body,
-                    version: (body.expectedVersion || 1) + 1,
-                  },
+                  cycle: mockCycle,
+                  rateSnapshot: this.cycleRateSnapshot,
+                  isLocked: false,
+                  lockReason: null,
                 },
               }),
             });
@@ -211,54 +296,57 @@ describe('OWNER R3.9-D.1: Tiered Rate Editor & Settings UI Suite', () => {
 
           return Promise.resolve({
             ok: true,
-            json: async () => ({
-              data: {
-                cycle: mockCycle,
-                rateSnapshot: initialSnapshot,
-                isLocked: false,
-                lockReason: null,
-              },
-            }),
+            json: async () => ({ data: {} }),
           });
-        }
-
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({ data: {} }),
         });
-      });
 
-      // Mock DataProvider.properties.getDormitoryDefaults
-      vi.spyOn(ApiPropertyAdapter.prototype, 'getDormitoryDefaults').mockResolvedValue({
-        success: true,
-        data: initialDefaults || {
-          property: { version: 1, defaultMonthlyRent: 3000 },
-          billing: {
-            version: 1,
-            waterRate: '18.00',
-            waterBillingType: initialSnapshot?.waterBillingType || 'per_unit',
-            waterTierRates: initialSnapshot?.waterTierRates || null,
-            electricityRate: '8.00',
-            electricityBillingType: initialSnapshot?.electricityBillingType || 'per_unit',
-            electricityTierRates: initialSnapshot?.electricityTierRates || null,
-          },
+        vi.spyOn(ApiPropertyAdapter.prototype, 'getDormitoryDefaults').mockImplementation(async () => {
+          return {
+            success: true,
+            data: {
+              property: { version: 1, defaultMonthlyRent: 3000 },
+              billing: { ...this.dormBillingSettings },
+            },
+          } as any;
+        });
+
+        vi.spyOn(ApiPropertyAdapter.prototype, 'updateDormitoryDefaults').mockImplementation(async (payload: any) => {
+          if (this.conflictTrigger) {
+            return {
+              success: false,
+              error: { code: 'CONFLICT', statusCode: 409, message: 'VERSION_CONFLICT', details: { currentVersion: this.dormBillingSettings.version + 1 } },
+            } as any;
+          }
+
+          this.mutationCount++;
+          if (payload.billing?.changes) {
+            this.dormBillingSettings = {
+              ...this.dormBillingSettings,
+              ...payload.billing.changes,
+              version: this.dormBillingSettings.version + 1,
+            };
+          }
+          return { success: true, data: {} } as any;
+        });
+      }
+    }
+
+    it('Section 23: State starts with inactive tiers in DormitoryBillingSettings -> Mode select does NOT mutate server -> Editor loads inactive tiers into draft', async () => {
+      const server = new StatefulServerSimulator(
+        {
+          waterBillingType: 'per_unit',
+          waterTierRates: [
+            { upTo: '10.00', rate: '3.40' },
+            { upTo: '20.00', rate: '4.25' },
+            { upTo: null, rate: '5.00' },
+          ],
         },
-      } as any);
-
-      vi.spyOn(ApiPropertyAdapter.prototype, 'updateDormitoryDefaults').mockResolvedValue({
-        success: true,
-        data: {},
-      } as any);
-    };
-
-    it('C. Water and Electricity mode switches operate completely independently', async () => {
-      setupMocks({
-        version: 1,
-        waterBillingType: 'per_unit',
-        waterRate: '18.00',
-        electricityBillingType: 'per_unit',
-        electricityRate: '8.00',
-      });
+        {
+          waterBillingType: 'per_unit',
+          waterTierRates: null, // Active snapshot is per_unit
+        }
+      );
+      server.setupMocks();
 
       render(
         <OwnerSettings
@@ -274,167 +362,148 @@ describe('OWNER R3.9-D.1: Tiered Rate Editor & Settings UI Suite', () => {
       });
 
       const waterSelect = screen.getByTestId('select-water-billing-mode') as HTMLSelectElement;
-      const electricSelect = screen.getByTestId('select-electric-billing-mode') as HTMLSelectElement;
-
-      // Switch Water to tiered
-      fireEvent.change(waterSelect, { target: { value: 'tiered' } });
-      expect(waterSelect.value).toBe('tiered');
-      expect(electricSelect.value).toBe('per_unit');
-
-      // Water Tiered editor is visible, Electricity Tiered editor is NOT
-      expect(screen.getByTestId('tiered-rate-editor-water')).toBeDefined();
-      expect(screen.queryByTestId('tiered-rate-editor-electricity')).toBeNull();
-    });
-
-    it('D. Loads persisted Water Tiered and renders tiers correctly', async () => {
-      const persistedTiers: CanonicalTierRecord[] = [
-        { upTo: '10.00', rate: '3.40' },
-        { upTo: '20.00', rate: '4.25' },
-        { upTo: null, rate: '5.00' },
-      ];
-
-      setupMocks({
-        version: 1,
-        waterBillingType: 'tiered',
-        waterTierRates: persistedTiers,
-        electricityBillingType: 'per_unit',
-        electricityRate: '7.00',
-      });
-
-      render(
-        <OwnerSettings
-          onAddLog={vi.fn()}
-          onRefreshData={vi.fn()}
-          selectedCycle="2026-08"
-          availableCycles={[mockCycle]}
-        />
-      );
-
-      await waitFor(() => {
-        expect(screen.getByTestId('tiered-rate-editor-water')).toBeDefined();
-      });
-
-      expect((screen.getByTestId('input-tier-rate-water-0') as HTMLInputElement).value).toBe('3.40');
-      expect((screen.getByTestId('input-tier-rate-water-1') as HTMLInputElement).value).toBe('4.25');
-      expect((screen.getByTestId('input-tier-rate-water-2') as HTMLInputElement).value).toBe('5.00');
-    });
-
-    it('E. Loads persisted Electricity Tiered and renders tiers correctly', async () => {
-      const persistedElectricTiers: CanonicalTierRecord[] = [
-        { upTo: '50.00', rate: '7.00' },
-        { upTo: '150.00', rate: '8.00' },
-        { upTo: null, rate: '9.00' },
-      ];
-
-      setupMocks({
-        version: 1,
-        waterBillingType: 'per_unit',
-        waterRate: '18.00',
-        electricityBillingType: 'tiered',
-        electricityTierRates: persistedElectricTiers,
-      });
-
-      render(
-        <OwnerSettings
-          onAddLog={vi.fn()}
-          onRefreshData={vi.fn()}
-          selectedCycle="2026-08"
-          availableCycles={[mockCycle]}
-        />
-      );
-
-      await waitFor(() => {
-        expect(screen.getByTestId('tiered-rate-editor-electricity')).toBeDefined();
-      });
-
-      expect((screen.getByTestId('input-tier-rate-electricity-0') as HTMLInputElement).value).toBe('7.00');
-      expect((screen.getByTestId('input-tier-rate-electricity-1') as HTMLInputElement).value).toBe('8.00');
-      expect((screen.getByTestId('input-tier-rate-electricity-2') as HTMLInputElement).value).toBe('9.00');
-    });
-
-    it('K & Section 31: Full Water Tiered Save, Switch to per_unit, and Switch Back Retention', async () => {
-      const initialTiers: CanonicalTierRecord[] = [
-        { upTo: '10.00', rate: '3.40' },
-        { upTo: '20.00', rate: '4.25' },
-        { upTo: null, rate: '5.00' },
-      ];
-
-      setupMocks({
-        version: 1,
-        waterBillingType: 'tiered',
-        waterTierRates: initialTiers,
-        electricityBillingType: 'per_unit',
-        electricityRate: '7.00',
-      });
-
-      render(
-        <OwnerSettings
-          onAddLog={vi.fn()}
-          onRefreshData={vi.fn()}
-          selectedCycle="2026-08"
-          availableCycles={[mockCycle]}
-        />
-      );
-
-      await waitFor(() => {
-        expect(screen.getByTestId('tiered-rate-editor-water')).toBeDefined();
-      });
-
-      // 1. Explicitly save updated tiers (3.40 / 4.25 / 5.00)
-      const saveTiersBtn = screen.getByTestId('btn-save-tiers-water');
-      fireEvent.click(saveTiersBtn);
-
-      await waitFor(() => {
-        const lastFetchCall = (global.fetch as any).mock.calls.find((call: any) =>
-          String(call[0]).includes('rate-snapshot') && call[1]?.method === 'PUT'
-        );
-        expect(lastFetchCall).toBeDefined();
-        const payload = JSON.parse(lastFetchCall[1].body);
-        expect(payload.waterBillingType).toBe('tiered');
-        expect(payload.waterTierRates).toEqual(initialTiers);
-      });
-
-      // 2. Switch Water away to per_unit
-      const waterSelect = screen.getByTestId('select-water-billing-mode') as HTMLSelectElement;
-      fireEvent.change(waterSelect, { target: { value: 'per_unit' } });
       expect(waterSelect.value).toBe('per_unit');
       expect(screen.queryByTestId('tiered-rate-editor-water')).toBeNull();
 
-      // Verify active snapshot payload for non-tiered cycle sends waterTierRates: null
-      await waitFor(() => {
-        const putCalls = (global.fetch as any).mock.calls.filter((call: any) =>
-          String(call[0]).includes('rate-snapshot') && call[1]?.method === 'PUT'
-        );
-        const latestPut = putCalls[putCalls.length - 1];
-        const payload = JSON.parse(latestPut[1].body);
-        expect(payload.waterBillingType).toBe('per_unit');
-        expect(payload.waterTierRates).toBeNull();
-      });
+      const mutationCountBefore = server.mutationCount;
 
-      // 3. Switch Water back to tiered -> Previous tier values restored in draft
+      // Switch UI to tiered WITHOUT SAVE
       fireEvent.change(waterSelect, { target: { value: 'tiered' } });
       expect(waterSelect.value).toBe('tiered');
       expect(screen.getByTestId('tiered-rate-editor-water')).toBeDefined();
 
+      // Editor loads durable inactive tiers (3.40 / 4.25 / 5.00), NOT preset (18 / 20 / 22)
+      expect((screen.getByTestId('input-tier-rate-water-0') as HTMLInputElement).value).toBe('3.40');
+      expect((screen.getByTestId('input-tier-rate-water-1') as HTMLInputElement).value).toBe('4.25');
+      expect((screen.getByTestId('input-tier-rate-water-2') as HTMLInputElement).value).toBe('5.00');
+
+      // Crucial: Selecting mode did NOT cause any network mutation!
+      expect(server.mutationCount).toBe(mutationCountBefore);
+    });
+
+    it('Section 24, 25, 26: Full Water Tiered Save -> Switch to per_unit -> Real Reload Simulation -> Switch back restores tiers', async () => {
+      // 1. Initial State: No saved tiers anywhere
+      const server = new StatefulServerSimulator(
+        { waterBillingType: 'per_unit', waterTierRates: null },
+        { waterBillingType: 'per_unit', waterTierRates: null }
+      );
+      server.setupMocks();
+
+      const { unmount } = render(
+        <OwnerSettings
+          onAddLog={vi.fn()}
+          onRefreshData={vi.fn()}
+          selectedCycle="2026-08"
+          availableCycles={[mockCycle]}
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId('select-water-billing-mode')).toBeDefined();
+      });
+
+      // Switch to Tiered in UI
+      const waterSelect = screen.getByTestId('select-water-billing-mode') as HTMLSelectElement;
+      fireEvent.change(waterSelect, { target: { value: 'tiered' } });
+
+      // Edit tiers to 3.40 / 4.25 / 5.00
+      fireEvent.change(screen.getByTestId('input-tier-rate-water-0'), { target: { value: '3.40' } });
+      fireEvent.change(screen.getByTestId('input-tier-rate-water-1'), { target: { value: '4.25' } });
+      fireEvent.change(screen.getByTestId('input-tier-rate-water-2'), { target: { value: '5.00' } });
+
+      // Explicit Save
+      const saveBtn = screen.getByTestId('btn-save-tiers-water');
+      fireEvent.click(saveBtn);
+
+      await waitFor(() => {
+        // Assert DormitoryBillingSettings persisted the tier array
+        expect(server.dormBillingSettings.waterTierRates).toEqual([
+          { upTo: '10.00', rate: '3.40' },
+          { upTo: '20.00', rate: '4.25' },
+          { upTo: null, rate: '5.00' },
+        ]);
+        // Assert selected active BillingRateSnapshot persisted tiered mode and tier array
+        expect(server.cycleRateSnapshot.waterBillingType).toBe('tiered');
+        expect(server.cycleRateSnapshot.waterTierRates).toEqual([
+          { upTo: '10.00', rate: '3.40' },
+          { upTo: '20.00', rate: '4.25' },
+          { upTo: null, rate: '5.00' },
+        ]);
+      });
+
+      // 2. Section 25: Switch Water away to per_unit
+      fireEvent.change(screen.getByTestId('select-water-billing-mode'), { target: { value: 'per_unit' } });
+
+      await waitFor(() => {
+        // Active snapshot becomes per_unit with tier array = null
+        expect(server.cycleRateSnapshot.waterBillingType).toBe('per_unit');
+        expect(server.cycleRateSnapshot.waterTierRates).toBeNull();
+        // DormitoryBillingSettings STILL PRESERVES 3.40 / 4.25 / 5.00
+        expect(server.dormBillingSettings.waterTierRates).toEqual([
+          { upTo: '10.00', rate: '3.40' },
+          { upTo: '20.00', rate: '4.25' },
+          { upTo: null, rate: '5.00' },
+        ]);
+      });
+
+      // 3. Section 26: REAL RELOAD SIMULATION
+      // Unmount the component completely and clear React state
+      unmount();
+      cleanup();
+
+      // Render fresh instance against the simulated persistent server state
+      render(
+        <OwnerSettings
+          onAddLog={vi.fn()}
+          onRefreshData={vi.fn()}
+          selectedCycle="2026-08"
+          availableCycles={[mockCycle]}
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId('select-water-billing-mode')).toBeDefined();
+      });
+
+      const reloadedWaterSelect = screen.getByTestId('select-water-billing-mode') as HTMLSelectElement;
+      expect(reloadedWaterSelect.value).toBe('per_unit');
+      expect(screen.queryByTestId('tiered-rate-editor-water')).toBeNull();
+
+      // Switch to Tiered in the fresh UI
+      fireEvent.change(reloadedWaterSelect, { target: { value: 'tiered' } });
+      expect(reloadedWaterSelect.value).toBe('tiered');
+      expect(screen.getByTestId('tiered-rate-editor-water')).toBeDefined();
+
+      // Prove that tiers 3.40 / 4.25 / 5.00 are restored from DormitoryBillingSettings
       expect((screen.getByTestId('input-tier-rate-water-0') as HTMLInputElement).value).toBe('3.40');
       expect((screen.getByTestId('input-tier-rate-water-1') as HTMLInputElement).value).toBe('4.25');
       expect((screen.getByTestId('input-tier-rate-water-2') as HTMLInputElement).value).toBe('5.00');
     });
 
-    it('Section 32: Independent Electricity Tiered Persistence & Round-Trip', async () => {
-      const initialElectricTiers: CanonicalTierRecord[] = [
-        { upTo: '50.00', rate: '7.00' },
-        { upTo: '150.00', rate: '8.00' },
-        { upTo: null, rate: '9.00' },
-      ];
-
-      setupMocks({
-        version: 1,
-        waterBillingType: 'per_unit',
-        waterRate: '18.00',
-        electricityBillingType: 'tiered',
-        electricityTierRates: initialElectricTiers,
-      });
+    it('Section 27: Independent Electricity Tiered Persistence & Round-Trip', async () => {
+      const server = new StatefulServerSimulator(
+        {
+          waterBillingType: 'tiered',
+          waterTierRates: [
+            { upTo: '10.00', rate: '3.40' },
+            { upTo: '20.00', rate: '4.25' },
+            { upTo: null, rate: '5.00' },
+          ],
+          electricityBillingType: 'per_unit',
+          electricityTierRates: null,
+        },
+        {
+          waterBillingType: 'tiered',
+          waterTierRates: [
+            { upTo: '10.00', rate: '3.40' },
+            { upTo: '20.00', rate: '4.25' },
+            { upTo: null, rate: '5.00' },
+          ],
+          electricityBillingType: 'per_unit',
+          electricityTierRates: null,
+        }
+      );
+      server.setupMocks();
 
       render(
         <OwnerSettings
@@ -446,25 +515,116 @@ describe('OWNER R3.9-D.1: Tiered Rate Editor & Settings UI Suite', () => {
       );
 
       await waitFor(() => {
-        expect(screen.getByTestId('tiered-rate-editor-electricity')).toBeDefined();
+        expect(screen.getByTestId('select-electric-billing-mode')).toBeDefined();
       });
 
-      const saveTiersBtn = screen.getByTestId('btn-save-tiers-electricity');
-      fireEvent.click(saveTiersBtn);
+      const electricSelect = screen.getByTestId('select-electric-billing-mode') as HTMLSelectElement;
+      fireEvent.change(electricSelect, { target: { value: 'tiered' } });
+
+      // Configure Electricity tiers: 50@7.00, 150@8.00, infinity@9.00
+      fireEvent.change(screen.getByTestId('input-tier-rate-electricity-0'), { target: { value: '7.00' } });
+      fireEvent.change(screen.getByTestId('input-tier-rate-electricity-1'), { target: { value: '8.00' } });
+      fireEvent.change(screen.getByTestId('input-tier-rate-electricity-2'), { target: { value: '9.00' } });
+
+      // Save Electricity tiers
+      const saveBtn = screen.getByTestId('btn-save-tiers-electricity');
+      fireEvent.click(saveBtn);
 
       await waitFor(() => {
-        const lastFetchCall = (global.fetch as any).mock.calls.find((call: any) =>
-          String(call[0]).includes('rate-snapshot') && call[1]?.method === 'PUT'
-        );
-        expect(lastFetchCall).toBeDefined();
-        const payload = JSON.parse(lastFetchCall[1].body);
-        expect(payload.electricityBillingType).toBe('tiered');
-        expect(payload.electricityTierRates).toEqual(initialElectricTiers);
+        // Assert Electricity tiers persisted
+        expect(server.dormBillingSettings.electricityTierRates).toEqual([
+          { upTo: '50.00', rate: '7.00' },
+          { upTo: '150.00', rate: '8.00' },
+          { upTo: null, rate: '9.00' },
+        ]);
+        expect(server.cycleRateSnapshot.electricityBillingType).toBe('tiered');
+        expect(server.cycleRateSnapshot.electricityTierRates).toEqual([
+          { upTo: '50.00', rate: '7.00' },
+          { upTo: '150.00', rate: '8.00' },
+          { upTo: null, rate: '9.00' },
+        ]);
+        // Water state is completely untouched and preserved
+        expect(server.dormBillingSettings.waterTierRates).toEqual([
+          { upTo: '10.00', rate: '3.40' },
+          { upTo: '20.00', rate: '4.25' },
+          { upTo: null, rate: '5.00' },
+        ]);
       });
     });
 
-    it('Locked Cycle renders Tiered editor inputs and controls as disabled', async () => {
-      localStorage.setItem('selected_dormitory_id', DORM_ID);
+    it('Section 28: No Persisted Tiers -> Selecting Tiered loads sample preset into draft without mutating network', async () => {
+      const server = new StatefulServerSimulator(
+        { waterBillingType: 'per_unit', waterTierRates: null },
+        { waterBillingType: 'per_unit', waterTierRates: null }
+      );
+      server.setupMocks();
+
+      render(
+        <OwnerSettings
+          onAddLog={vi.fn()}
+          onRefreshData={vi.fn()}
+          selectedCycle="2026-08"
+          availableCycles={[mockCycle]}
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId('select-water-billing-mode')).toBeDefined();
+      });
+
+      const mutationCountBefore = server.mutationCount;
+      const waterSelect = screen.getByTestId('select-water-billing-mode') as HTMLSelectElement;
+      fireEvent.change(waterSelect, { target: { value: 'tiered' } });
+
+      // Sample preset (18 / 20 / 22) appears in local draft
+      expect((screen.getByTestId('input-tier-rate-water-0') as HTMLInputElement).value).toBe('18.00');
+      expect((screen.getByTestId('input-tier-rate-water-1') as HTMLInputElement).value).toBe('20.00');
+      expect((screen.getByTestId('input-tier-rate-water-2') as HTMLInputElement).value).toBe('22.00');
+
+      // Zero network mutations until explicit save
+      expect(server.mutationCount).toBe(mutationCountBefore);
+    });
+
+    it('Section 29: Scalar Rate is visibly inactive / disabled during Tiered mode', async () => {
+      const server = new StatefulServerSimulator(
+        { waterBillingType: 'tiered', waterTierRates: WATER_TIER_PRESET },
+        { waterBillingType: 'tiered', waterTierRates: WATER_TIER_PRESET }
+      );
+      server.setupMocks();
+
+      render(
+        <OwnerSettings
+          onAddLog={vi.fn()}
+          onRefreshData={vi.fn()}
+          selectedCycle="2026-08"
+          availableCycles={[mockCycle]}
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId('input-water-unit-rate')).toBeDefined();
+      });
+
+      const scalarWaterInput = screen.getByTestId('input-water-unit-rate') as HTMLInputElement;
+      expect(scalarWaterInput.disabled).toBe(true);
+      expect(scalarWaterInput.value).toBe('คิดตามขั้นบันได');
+
+      const mutationCountBefore = server.mutationCount;
+      fireEvent.blur(scalarWaterInput);
+      fireEvent.keyDown(scalarWaterInput, { key: 'Enter' });
+
+      // No mutation emitted on blur/keydown
+      expect(server.mutationCount).toBe(mutationCountBefore);
+    });
+
+    it('Section 31: Locked cycle prevents any tier settings or snapshot mutation', async () => {
+      const server = new StatefulServerSimulator(
+        { waterBillingType: 'tiered', waterTierRates: WATER_TIER_PRESET },
+        { waterBillingType: 'tiered', waterTierRates: WATER_TIER_PRESET }
+      );
+      server.setupMocks();
+
+      // Override fetch to return locked cycle
       global.fetch = vi.fn().mockImplementation((url: string) => {
         const urlStr = String(url);
         if (urlStr.includes('rate-snapshot')) {
@@ -473,12 +633,7 @@ describe('OWNER R3.9-D.1: Tiered Rate Editor & Settings UI Suite', () => {
             json: async () => ({
               data: {
                 cycle: mockCycle,
-                rateSnapshot: {
-                  version: 1,
-                  waterBillingType: 'tiered',
-                  waterTierRates: WATER_TIER_PRESET,
-                  electricityBillingType: 'per_unit',
-                },
+                rateSnapshot: { ...server.cycleRateSnapshot, waterBillingType: 'tiered', waterTierRates: WATER_TIER_PRESET },
                 isLocked: true,
                 lockReason: 'Cycle locked for testing',
               },
@@ -510,6 +665,35 @@ describe('OWNER R3.9-D.1: Tiered Rate Editor & Settings UI Suite', () => {
 
       const resetBtn = screen.getByTestId('btn-reset-preset-water') as HTMLButtonElement;
       expect(resetBtn.disabled).toBe(true);
+    });
+
+    it('Section 32: Version Conflict during Dormitory Defaults tier save triggers VersionConflictModal', async () => {
+      const server = new StatefulServerSimulator(
+        { waterBillingType: 'tiered', waterTierRates: WATER_TIER_PRESET },
+        { waterBillingType: 'tiered', waterTierRates: WATER_TIER_PRESET }
+      );
+      server.conflictTrigger = true; // Simulates 409 CONFLICT on defaults update
+      server.setupMocks();
+
+      render(
+        <OwnerSettings
+          onAddLog={vi.fn()}
+          onRefreshData={vi.fn()}
+          selectedCycle="2026-08"
+          availableCycles={[mockCycle]}
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId('tiered-rate-editor-water')).toBeDefined();
+      });
+
+      const saveBtn = screen.getByTestId('btn-save-tiers-water');
+      fireEvent.click(saveBtn);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('version-conflict-modal')).toBeDefined();
+      });
     });
   });
 });

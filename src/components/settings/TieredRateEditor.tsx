@@ -66,7 +66,7 @@ export const TieredRateEditor: React.FC<TieredRateEditorProps> = ({
     setLocalError(null);
     const fromVal = getFromValue(index);
 
-    // Basic integer check
+    // Strict positive integer boundary check
     if (value !== '' && (!/^\d+$/.test(value) || Number(value) <= 0)) {
       setLocalError('หน่วยสูงสุดต้องเป็นจำนวนเต็มบวกเท่านั้น');
     } else if (value !== '' && Number(value) < fromVal) {
@@ -119,7 +119,14 @@ export const TieredRateEditor: React.FC<TieredRateEditorProps> = ({
   const handleSave = () => {
     if (disabled || isSaving || !onSave) return;
 
+    // Structural guard: 1-5 tiers
+    if (tiers.length < 1 || tiers.length > 5) {
+      setLocalError('จำนวนขั้นบันไดต้องอยู่ระหว่าง 1 ถึง 5 ขั้น');
+      return;
+    }
+
     // Validate integer boundaries
+    let lastBound = 0;
     for (let i = 0; i < tiers.length - 1; i++) {
       const upToStr = tiers[i].upTo;
       if (!upToStr || !/^\d+(\.0+)?$/.test(String(upToStr).trim())) {
@@ -132,13 +139,27 @@ export const TieredRateEditor: React.FC<TieredRateEditorProps> = ({
         setLocalError(`ขั้นที่ ${i + 1} ต้องมีหน่วยสิ้นสุดมากกว่าจุดเริ่มต้น (${fromNum})`);
         return;
       }
+      if (upToNum <= lastBound) {
+        setLocalError(`จุดสิ้นสุดของแต่ละขั้นต้องเพิ่มขึ้นตามลำดับ`);
+        return;
+      }
+      lastBound = upToNum;
     }
 
-    // Validate non-negative rates
+    // Validate final tier has upTo: null
+    if (tiers[tiers.length - 1].upTo !== null && tiers[tiers.length - 1].upTo !== undefined && String(tiers[tiers.length - 1].upTo).trim() !== '') {
+      setLocalError('ขั้นสุดท้ายต้องไม่จำกัดหน่วย');
+      return;
+    }
+
+    // Validate rates: non-negative <= 2 decimal places, no scientific notation, no NaN, no blank
+    // Valid: 0, 0.00, 3, 3.4, 3.40, 4.25
+    // Invalid: -1, 3.456, 1e2, 1E2, NaN, blank
+    const ratePattern = /^\d+(\.\d{1,2})?$/;
     for (let i = 0; i < tiers.length; i++) {
-      const rateStr = tiers[i].rate;
-      if (rateStr === '' || isNaN(Number(rateStr)) || Number(rateStr) < 0) {
-        setLocalError(`ขั้นที่ ${i + 1} ต้องระบุอัตราที่เป็นตัวเลขไม่ติดลบ`);
+      const rateStr = String(tiers[i].rate ?? '').trim();
+      if (!ratePattern.test(rateStr)) {
+        setLocalError(`ขั้นที่ ${i + 1} ต้องระบุอัตราเป็นตัวเลขทศนิยมไม่เกิน 2 ตำแหน่งและไม่ติดลบ`);
         return;
       }
     }
@@ -197,7 +218,7 @@ export const TieredRateEditor: React.FC<TieredRateEditorProps> = ({
 
       {/* Error Alert */}
       {localError && (
-        <div className="mb-3 p-2 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 rounded-xl flex items-center gap-2 text-rose-700 dark:text-rose-300 text-xs">
+        <div className="mb-3 p-2 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 rounded-xl flex items-center gap-2 text-rose-700 dark:text-rose-300 text-xs" data-testid={`alert-tier-error-${utilityType}`}>
           <AlertCircle className="w-3.5 h-3.5 shrink-0" />
           <span>{localError}</span>
         </div>
@@ -267,9 +288,7 @@ export const TieredRateEditor: React.FC<TieredRateEditorProps> = ({
                   <td className="py-2 px-1">
                     <div className="flex items-center gap-1">
                       <input
-                        type="number"
-                        step="0.01"
-                        min="0"
+                        type="text"
                         disabled={disabled}
                         value={tier.rate}
                         onChange={(e) => handleRateChange(idx, e.target.value)}

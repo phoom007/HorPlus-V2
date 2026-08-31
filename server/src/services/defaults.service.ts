@@ -4,6 +4,7 @@ import { resolveCurrentMaintenanceEligibilityByRoom } from '../utils/occupancy-i
 import { AppError } from '../types/index.js';
 import { BLOCKING_CONTRACT_STATUSES } from './blocking-contract-policy.js';
 import { normalizeUtilityBillingMode } from '../utils/billing-mode-normalizer.util.js';
+import { validateCanonicalUtilityTiers } from '../utils/utility-tier-validator.util.js';
 import {
   getContractPhysicalInterval,
   getProvisionalTermPhysicalInterval,
@@ -683,6 +684,13 @@ export class DefaultsService {
         }
       }
 
+      // Centrally validate tier configuration if provided in billing changes
+      if (payload.billing?.changes?.waterTierRates && Array.isArray(payload.billing.changes.waterTierRates)) {
+        payload.billing.changes.waterTierRates = validateCanonicalUtilityTiers(payload.billing.changes.waterTierRates);
+      }
+      if (payload.billing?.changes?.electricityTierRates && Array.isArray(payload.billing.changes.electricityTierRates)) {
+        payload.billing.changes.electricityTierRates = validateCanonicalUtilityTiers(payload.billing.changes.electricityTierRates);
+      }
       const propDiff = pickChangedFields(currentProp, payload.property?.changes);
       const billDiff = pickChangedFields(currentBill, payload.billing?.changes);
 
