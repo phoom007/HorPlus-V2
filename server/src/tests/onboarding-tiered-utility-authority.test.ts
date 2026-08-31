@@ -1064,7 +1064,7 @@ describe('OWNER R3.9-C.3.2: First-Cycle Meter Workspace Authority Closure & Blan
       expect(waterLine?.amount).toBe('300.00'); // 3 * 100.00 = 300.00 THB (NOT 100.00 THB!)
     });
 
-    it('Test 36: R3.9-C.3.3.1 Deterministic Earliest-Cycle Lookup Across >20 Billing Cycles', async () => {
+    it('Test 36: R3.9-C.3.3.2 Deterministic Earliest-Cycle Lookup Across >20 Billing Cycles & Exact Query Contract Proof', async () => {
       const { meterService, billingCycleRepo } = setupMeterWorkspaceHarness();
 
       // Create 25 billing cycles: 2024-01 through 2026-01
@@ -1090,17 +1090,51 @@ describe('OWNER R3.9-C.3.2: First-Cycle Meter Workspace Authority Closure & Blan
         });
       }
 
+      const findAllSpy = vi.spyOn(billingCycleRepo, 'findAll');
+
       // 1. True earliest cycle is 2024-01 (index 0)
       const isFirstOfTrueFirst = await (meterService as any).resolveIsFirstBillingCycle(DORM_ID, cycleIds[0]);
       expect(isFirstOfTrueFirst).toBe(true);
 
+      // Verify exact repository call contract: page=1, pageSize=1, sortBy='periodStart', sortDirection='asc'
+      expect(findAllSpy).toHaveBeenCalledWith(DORM_ID, {
+        page: 1,
+        pageSize: 1,
+        sortBy: 'periodStart',
+        sortDirection: 'asc',
+      });
+
       // 2. 21st cycle is 2025-09 (index 20) -> must be false
+      findAllSpy.mockClear();
       const isFirstOfCycle21 = await (meterService as any).resolveIsFirstBillingCycle(DORM_ID, cycleIds[20]);
       expect(isFirstOfCycle21).toBe(false);
+      expect(findAllSpy).toHaveBeenCalledWith(DORM_ID, {
+        page: 1,
+        pageSize: 1,
+        sortBy: 'periodStart',
+        sortDirection: 'asc',
+      });
 
       // 3. 25th / latest cycle is 2026-01 (index 24) -> must be false
+      findAllSpy.mockClear();
       const isFirstOfCycle25 = await (meterService as any).resolveIsFirstBillingCycle(DORM_ID, cycleIds[24]);
       expect(isFirstOfCycle25).toBe(false);
+      expect(findAllSpy).toHaveBeenCalledWith(DORM_ID, {
+        page: 1,
+        pageSize: 1,
+        sortBy: 'periodStart',
+        sortDirection: 'asc',
+      });
+
+      // 4. Negative contract proof:
+      // If implementation regresses to findAll(dormitoryId) without explicit query options,
+      // verify that spy assertion strictly catches and rejects it
+      const lastCallArgs = findAllSpy.mock.calls[0];
+      expect(lastCallArgs[1]).toBeDefined();
+      expect(lastCallArgs[1]?.page).toBe(1);
+      expect(lastCallArgs[1]?.pageSize).toBe(1);
+      expect(lastCallArgs[1]?.sortBy).toBe('periodStart');
+      expect(lastCallArgs[1]?.sortDirection).toBe('asc');
     });
   });
 });
