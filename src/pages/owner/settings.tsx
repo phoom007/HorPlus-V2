@@ -239,6 +239,12 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
 
   const defaultsLoadedDormIdRef = useRef<string | null>(null);
   const snapshotLoadedContextRef = useRef<string | null>(null);
+  const loadedSnapshotAuthorityRef = useRef<{
+    dormId: string;
+    cycleCode: string;
+    cycleId: string;
+    version: number;
+  } | null>(null);
 
 
   useEffect(() => {
@@ -329,13 +335,14 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
         headers: { 'x-dormitory-id': requestDormId },
       });
 
-      // Stale response guard: ignore if active dorm or cycle context has changed
-      if (currentDormIdRef.current !== requestDormId || currentCycleRef.current !== requestCycle) {
-        return;
-      }
-
       if (res.ok) {
         const json = await res.json();
+
+        // Stale response guard: check AFTER body parsing (res.json()) has resolved
+        if (currentDormIdRef.current !== requestDormId || currentCycleRef.current !== requestCycle) {
+          return;
+        }
+
         if (json.data) {
           const { cycle, rateSnapshot, isLocked: locked, lockReason } = json.data;
           snapshotLoadedContextRef.current = `${requestDormId}_${requestCycle}`;
@@ -344,9 +351,16 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
           setCycleLockReason(lockReason || null);
 
           if (rateSnapshot) {
-            setSnapshotVersion(rateSnapshot.version || 1);
+            const ver = rateSnapshot.version || 1;
+            setSnapshotVersion(ver);
             setSnapshotProvenance(rateSnapshot.source || 'TEMPLATE_DEFAULT');
             rawRateSnapshotRef.current = rateSnapshot;
+            loadedSnapshotAuthorityRef.current = {
+              dormId: requestDormId,
+              cycleCode: requestCycle,
+              cycleId: cycle?.id || '',
+              version: ver,
+            };
 
             if (!isUserTypingRef.current) {
               setLocalWaterUnitRate(rateSnapshot.waterRate ?? '0.00');
@@ -381,6 +395,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
       return;
     }
 
+    const requestDormId = dormId;
     setTierSaveError(null);
     setSaveStatus('saving');
     try {
@@ -396,6 +411,11 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
             expectedVersion: billingVersion,
           },
         });
+
+        // Stale in-flight dormitory mutation guard
+        if (currentDormIdRef.current !== requestDormId) {
+          return;
+        }
 
         if (!defRes.success) {
           const errCode = defRes.error?.code;
@@ -417,16 +437,21 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
           return;
         }
 
-        // Authoritative version sync: consume server-returned version directly
+        // Authoritative version sync: consume server-returned billing & synchronize raw ref
         const serverBilling = (defRes.data as any)?.billing;
         if (serverBilling && typeof serverBilling.version === 'number') {
+          rawDormitoryBillingRef.current = serverBilling;
           setBillingVersion(serverBilling.version);
-          if (Array.isArray(serverBilling.waterTierRates)) {
-            setDurableWaterTierRates(serverBilling.waterTierRates);
-          }
-          if (Array.isArray(serverBilling.electricityTierRates)) {
-            setDurableElectricTierRates(serverBilling.electricityTierRates);
-          }
+          setDurableWaterTierRates(
+            Array.isArray(serverBilling.waterTierRates) && serverBilling.waterTierRates.length > 0
+              ? serverBilling.waterTierRates
+              : null
+          );
+          setDurableElectricTierRates(
+            Array.isArray(serverBilling.electricityTierRates) && serverBilling.electricityTierRates.length > 0
+              ? serverBilling.electricityTierRates
+              : null
+          );
         } else {
           if (utilityType === 'water') setDurableWaterTierRates(tiers);
           if (utilityType === 'electricity') setDurableElectricTierRates(tiers);
@@ -464,6 +489,24 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
     const targetCycleCode = selectedCycle;
     if (!targetCycleCode) return { ok: false, reason: 'NO_CYCLE' };
 
+    const reqDormId = dormId;
+    const reqCycleCode = targetCycleCode;
+
+    // Central cycle-write guard: Fail closed unless snapshot authority is loaded for exact current context
+    const loadedAuth = loadedSnapshotAuthorityRef.current;
+    if (
+      !loadedAuth ||
+      loadedAuth.dormId !== reqDormId ||
+      loadedAuth.cycleCode !== reqCycleCode ||
+      snapshotLoadedContextRef.current !== `${reqDormId}_${reqCycleCode}`
+    ) {
+      console.warn('Cannot save cycle rate settings: current context authority has not finished loading');
+      return { ok: false, reason: 'CONTEXT_NOT_READY' };
+    }
+
+    const targetCycleId = loadedAuth.cycleId;
+    const targetExpectedVersion = loadedAuth.version;
+
     setSaveStatus('saving');
     try {
       const csrfMatch = document.cookie.match(/(?:csrf-token|horplus_csrf)=([^;]+)/);
@@ -497,7 +540,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
         parkingFeeMode: pMode,
         lateFeeType: lType,
         lateFeeValue: lValue,
-        expectedVersion: snapshotVersion,
+        expectedVersion: targetExpectedVersion,
       };
 
       if (wMode === 'tiered') {
@@ -518,15 +561,15 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
         payload.electricityTierRates = null;
       }
 
-      const endpoint = currentCycleId
-        ? `/api/v1/billing-cycles/${currentCycleId}/rate-snapshot`
-        : `/api/v1/billing-cycles/by-code/${targetCycleCode}/rate-snapshot`;
+      const endpoint = targetCycleId
+        ? `/api/v1/billing-cycles/${targetCycleId}/rate-snapshot`
+        : `/api/v1/billing-cycles/by-code/${reqCycleCode}/rate-snapshot`;
 
       const res = await fetch(endpoint, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
-          'x-dormitory-id': dormId,
+          'x-dormitory-id': reqDormId,
           ...(csrfToken ? { 'x-csrf-token': csrfToken } : {}),
         },
         body: JSON.stringify(payload),
@@ -535,9 +578,9 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
       if (res.status === 409) {
         setVersionConflictState({
           isOpen: true,
-          entityName: `การตั้งค่ารอบบิล ${selectedCycle}`,
-          currentVersion: snapshotVersion + 1,
-          onRetry: () => fetchCycleRateSnapshot(selectedCycle),
+          entityName: `การตั้งค่ารอบบิล ${reqCycleCode}`,
+          currentVersion: targetExpectedVersion + 1,
+          onRetry: () => fetchCycleRateSnapshot(reqCycleCode),
         });
         setSaveStatus('idle');
         return { ok: false, reason: 'VERSION_CONFLICT' };
@@ -551,22 +594,32 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
       }
 
       const dataJson = await res.json();
+
+      // Stale in-flight snapshot mutation guard
+      if (currentDormIdRef.current !== reqDormId || currentCycleRef.current !== reqCycleCode) {
+        return { ok: true };
+      }
+
       if (dataJson?.data?.rateSnapshot) {
-        setSnapshotVersion(dataJson.data.rateSnapshot.version || snapshotVersion + 1);
+        const newVer = dataJson.data.rateSnapshot.version || targetExpectedVersion + 1;
+        setSnapshotVersion(newVer);
         setSnapshotProvenance(dataJson.data.rateSnapshot.source || 'MANUAL_OVERRIDE');
         rawRateSnapshotRef.current = dataJson.data.rateSnapshot;
+        if (loadedSnapshotAuthorityRef.current) {
+          loadedSnapshotAuthorityRef.current.version = newVer;
+        }
       }
 
       isUserTypingRef.current = false;
       setSaveStatus('saved');
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
       saveTimeoutRef.current = setTimeout(() => setSaveStatus('idle'), 2000);
-      onAddLog('แก้ไขอัตราค่าบริการรอบบิล', `อัปเดตอัตราค่าบริการประจำเดือน ${selectedCycle} สำเร็จ`, 'SETTINGS', dormId);
+      onAddLog('แก้ไขอัตราค่าบริการรอบบิล', `อัปเดตอัตราค่าบริการประจำเดือน ${reqCycleCode} สำเร็จ`, 'SETTINGS', reqDormId);
 
       // Targeted cache invalidation to propagate updated rates to Meter workspace live
-      if (dormId) {
-        queryClient.invalidateQueries({ queryKey: queryKeys.billingCycles(dormId) });
-        queryClient.invalidateQueries({ queryKey: ['meter', dormId] });
+      if (reqDormId) {
+        queryClient.invalidateQueries({ queryKey: queryKeys.billingCycles(reqDormId) });
+        queryClient.invalidateQueries({ queryKey: ['meter', reqDormId] });
       }
 
       return { ok: true };
@@ -715,16 +768,19 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
   };
 
   useEffect(() => {
-    // Reset raw authorities and durable tier state on dormitory change
+    // Reset raw authorities, snapshot context authority, and durable tier state on dormitory change
     rawRateSnapshotRef.current = null;
     rawDormitoryBillingRef.current = null;
     defaultsLoadedDormIdRef.current = null;
     snapshotLoadedContextRef.current = null;
+    loadedSnapshotAuthorityRef.current = null;
+    setCurrentCycleId('');
     setDurableWaterTierRates(null);
     setDurableElectricTierRates(null);
     setWaterTierRates(WATER_TIER_PRESET);
     setElectricTierRates(ELECTRICITY_TIER_PRESET);
     setTierSaveError(null);
+    isUserTypingRef.current = false;
 
     fetchDormitoryProfile();
     fetchDormitoryDefaults();
@@ -739,7 +795,10 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
     if (selectedCycle) {
       rawRateSnapshotRef.current = null;
       snapshotLoadedContextRef.current = null;
+      loadedSnapshotAuthorityRef.current = null;
+      setCurrentCycleId('');
       setTierSaveError(null);
+      isUserTypingRef.current = false;
       fetchCycleRateSnapshot(selectedCycle);
     }
   }, [selectedCycle, selectedDormId]);

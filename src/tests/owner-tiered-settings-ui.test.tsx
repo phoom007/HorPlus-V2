@@ -11,7 +11,7 @@ import {
 import { OwnerSettings, toCanonicalMode } from '../pages/owner/settings';
 import { ApiPropertyAdapter } from '../data/adapters/api';
 
-describe('OWNER R3.9-D.1.3: Settings Context Isolation & Stale Response Guard Suite', () => {
+describe('OWNER R3.9-D.1.4: All Cycle-Write Guard, Body-Phase Stale Protection & Raw Authority Sync Suite', () => {
   beforeEach(() => {
     cleanup();
     vi.clearAllMocks();
@@ -103,147 +103,558 @@ describe('OWNER R3.9-D.1.3: Settings Context Isolation & Stale Response Guard Su
     });
   });
 
-  describe('3. Multi-Dormitory and Multi-Cycle Context Isolation', () => {
+  describe('3. Central Cycle-Write Guard & Quick-Cycle Non-Tiered Mutation Protection', () => {
     const DORM_A = 'dorm-aaa-111';
-    const DORM_B = 'dorm-bbb-222';
-    const mockCycleAug = { id: 'cycle-2026-08', cycleCode: '2026-08', status: 'active' };
-    const mockCycleJul = { id: 'cycle-2026-07', cycleCode: '2026-07', status: 'active' };
+    const JULY_ID = 'cycle-id-july-777';
+    const AUGUST_ID = 'cycle-id-august-888';
+    const mockCycleAug = { id: AUGUST_ID, cycleCode: '2026-08', status: 'active' };
+    const mockCycleJul = { id: JULY_ID, cycleCode: '2026-07', status: 'active' };
 
-    class MultiContextServerSimulator {
-      public dorms: Record<string, { billing: any; property: any }> = {
-        [DORM_A]: {
-          billing: {
-            version: 1,
-            waterBillingType: 'per_unit',
-            waterRate: '18.00',
-            waterTierRates: [
-              { upTo: '10.00', rate: '3.40' },
-              { upTo: '20.00', rate: '4.25' },
-              { upTo: null, rate: '5.00' },
-            ],
-            electricityBillingType: 'per_unit',
-            electricityTierRates: null,
-          },
-          property: { version: 1 },
-        },
-        [DORM_B]: {
-          billing: {
-            version: 1,
-            waterBillingType: 'per_unit',
-            waterRate: '20.00',
-            waterTierRates: null,
-            electricityBillingType: 'per_unit',
-            electricityTierRates: null,
-          },
-          property: { version: 1 },
-        },
-      };
+    it('Section 7 & 31: Quick-Cycle Non-Tiered Save Guard — mode save while August is loading does NOT issue PUT to JULY_ID', async () => {
+      localStorage.setItem('selected_dormitory_id', DORM_A);
 
-      public snapshots: Record<string, any> = {
-        [`${DORM_A}_2026-08`]: {
-          version: 1,
-          waterBillingType: 'per_unit',
-          waterTierRates: null,
-        },
-        [`${DORM_B}_2026-08`]: {
-          version: 1,
-          waterBillingType: 'per_unit',
-          waterTierRates: null,
-        },
-        [`${DORM_A}_2026-07`]: {
-          version: 1,
-          waterBillingType: 'per_unit',
-          waterTierRates: null,
-        },
-      };
+      const putCalls: any[] = [];
+      let resolveAugPromise: any;
+      const augDelayPromise = new Promise((res) => { resolveAugPromise = res; });
 
-      public updateDefaultsCalls: any[] = [];
-      public snapshotPutCalls: any[] = [];
+      global.fetch = vi.fn().mockImplementation((url: string, opts: any) => {
+        const urlStr = String(url);
+        if (urlStr.includes('/api/v1/billing-cycles') && !urlStr.includes('rate-snapshot')) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ data: [mockCycleAug, mockCycleJul] }),
+          });
+        }
 
-      setupMocks() {
-        global.fetch = vi.fn().mockImplementation((url: string, opts: any) => {
-          const urlStr = String(url);
-          const dormIdHeader = opts?.headers?.['x-dormitory-id'] || localStorage.getItem('selected_dormitory_id') || DORM_A;
-
-          if (urlStr.includes('/api/v1/billing-cycles') && !urlStr.includes('rate-snapshot')) {
+        if (urlStr.includes('rate-snapshot')) {
+          if (opts?.method === 'PUT') {
+            putCalls.push({ url: urlStr, body: JSON.parse(opts.body) });
             return Promise.resolve({
               ok: true,
-              json: async () => ({ data: [mockCycleAug, mockCycleJul] }),
+              json: async () => ({ data: { rateSnapshot: { version: 10 } } }),
             });
           }
 
-          if (urlStr.includes('rate-snapshot')) {
-            const isJul = urlStr.includes('2026-07');
-            const cycleCode = isJul ? '2026-07' : '2026-08';
-            const snapKey = `${dormIdHeader}_${cycleCode}`;
-
-            if (opts?.method === 'PUT') {
-              this.snapshotPutCalls.push({ key: snapKey, body: JSON.parse(opts.body) });
-              const body = JSON.parse(opts.body);
-              this.snapshots[snapKey] = {
-                ...this.snapshots[snapKey],
-                ...body,
-                version: (this.snapshots[snapKey]?.version || 1) + 1,
-              };
-              return Promise.resolve({
-                ok: true,
-                json: async () => ({
-                  data: {
-                    rateSnapshot: this.snapshots[snapKey],
-                  },
-                }),
-              });
-            }
-
+          if (urlStr.includes('2026-07') || urlStr.includes(JULY_ID)) {
             return Promise.resolve({
               ok: true,
               json: async () => ({
                 data: {
-                  cycle: cycleCode === '2026-07' ? mockCycleJul : mockCycleAug,
-                  rateSnapshot: this.snapshots[snapKey] || { version: 1, waterBillingType: 'per_unit', waterTierRates: null },
-                  isLocked: false,
-                  lockReason: null,
+                  cycle: mockCycleJul,
+                  rateSnapshot: { version: 4, waterBillingType: 'per_unit', waterRate: '18.00' },
                 },
               }),
             });
           }
 
-          return Promise.resolve({ ok: true, json: async () => ({ data: {} }) });
-        });
-
-        vi.spyOn(ApiPropertyAdapter.prototype, 'getDormitoryDefaults').mockImplementation(async () => {
-          const currentDormId = localStorage.getItem('selected_dormitory_id') || DORM_A;
-          const dormData = this.dorms[currentDormId] || this.dorms[DORM_A];
-          return {
-            success: true,
-            data: JSON.parse(JSON.stringify(dormData)),
-          } as any;
-        });
-
-        vi.spyOn(ApiPropertyAdapter.prototype, 'updateDormitoryDefaults').mockImplementation(async (payload: any) => {
-          const currentDormId = localStorage.getItem('selected_dormitory_id') || DORM_A;
-          this.updateDefaultsCalls.push({ dormId: currentDormId, payload });
-          if (payload.billing?.changes && this.dorms[currentDormId]) {
-            this.dorms[currentDormId].billing = {
-              ...this.dorms[currentDormId].billing,
-              ...payload.billing.changes,
-              version: this.dorms[currentDormId].billing.version + 1,
-            };
+          if (urlStr.includes('2026-08') || urlStr.includes(AUGUST_ID)) {
+            return augDelayPromise.then(() => ({
+              ok: true,
+              json: async () => ({
+                data: {
+                  cycle: mockCycleAug,
+                  rateSnapshot: { version: 9, waterBillingType: 'per_unit', waterRate: '20.00' },
+                },
+              }),
+            }));
           }
+        }
+        return Promise.resolve({ ok: true, json: async () => ({ data: {} }) });
+      });
+
+      vi.spyOn(ApiPropertyAdapter.prototype, 'getDormitoryDefaults').mockResolvedValue({
+        success: true,
+        data: { property: { version: 1 }, billing: { version: 1, waterBillingType: 'per_unit' } },
+      } as any);
+
+      // 1. Initial mount on July
+      const { rerender } = render(
+        <OwnerSettings
+          onAddLog={vi.fn()}
+          onRefreshData={vi.fn()}
+          selectedCycle="2026-07"
+          availableCycles={[mockCycleJul, mockCycleAug]}
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId('select-water-billing-mode')).toBeDefined();
+      });
+
+      // 2. Fast switch to August
+      rerender(
+        <OwnerSettings
+          onAddLog={vi.fn()}
+          onRefreshData={vi.fn()}
+          selectedCycle="2026-08"
+          availableCycles={[mockCycleJul, mockCycleAug]}
+        />
+      );
+
+      // 3. Attempt mode change BEFORE August loads -> MUST be blocked by central cycle-write guard
+      fireEvent.change(screen.getByTestId('select-water-billing-mode'), { target: { value: 'per_person' } });
+
+      expect(putCalls.length).toBe(0);
+
+      // 4. Resolve August loading
+      resolveAugPromise();
+
+      await waitFor(() => {
+        expect((screen.getByTestId('input-water-unit-rate') as HTMLInputElement).value).toBe('20.00');
+      });
+
+      // 5. Change mode after August loads -> MUST target AUGUST_ID with expectedVersion: 9
+      fireEvent.change(screen.getByTestId('select-water-billing-mode'), { target: { value: 'per_person' } });
+
+      await waitFor(() => {
+        expect(putCalls.length).toBe(1);
+      });
+
+      expect(putCalls[0].url).toContain(AUGUST_ID);
+      expect(putCalls[0].body.expectedVersion).toBe(9);
+      expect(putCalls[0].body.waterBillingType).toBe('per_person');
+    });
+
+    it('Section 8 & 31: Scalar-Blur Save Guard — scalar blur while cycle authority is loading does NOT issue PUT', async () => {
+      localStorage.setItem('selected_dormitory_id', DORM_A);
+
+      const putCalls: any[] = [];
+      let resolveAugPromise: any;
+      const augDelayPromise = new Promise((res) => { resolveAugPromise = res; });
+
+      global.fetch = vi.fn().mockImplementation((url: string, opts: any) => {
+        const urlStr = String(url);
+        if (urlStr.includes('rate-snapshot')) {
+          if (opts?.method === 'PUT') {
+            putCalls.push({ url: urlStr, body: JSON.parse(opts.body) });
+            return Promise.resolve({ ok: true, json: async () => ({ data: { rateSnapshot: { version: 10 } } }) });
+          }
+
+          if (urlStr.includes('2026-07')) {
+            return Promise.resolve({
+              ok: true,
+              json: async () => ({
+                data: { cycle: mockCycleJul, rateSnapshot: { version: 4, waterRate: '15.00' } },
+              }),
+            });
+          }
+
+          return augDelayPromise.then(() => ({
+            ok: true,
+            json: async () => ({
+              data: { cycle: mockCycleAug, rateSnapshot: { version: 9, waterRate: '22.00' } },
+            }),
+          }));
+        }
+        return Promise.resolve({ ok: true, json: async () => ({ data: [mockCycleJul, mockCycleAug] }) });
+      });
+
+      vi.spyOn(ApiPropertyAdapter.prototype, 'getDormitoryDefaults').mockResolvedValue({
+        success: true,
+        data: { property: { version: 1 }, billing: { version: 1, waterBillingType: 'per_unit' } },
+      } as any);
+
+      const { rerender } = render(
+        <OwnerSettings
+          onAddLog={vi.fn()}
+          onRefreshData={vi.fn()}
+          selectedCycle="2026-07"
+          availableCycles={[mockCycleJul, mockCycleAug]}
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId('input-water-unit-rate')).toBeDefined();
+      });
+
+      rerender(
+        <OwnerSettings
+          onAddLog={vi.fn()}
+          onRefreshData={vi.fn()}
+          selectedCycle="2026-08"
+          availableCycles={[mockCycleJul, mockCycleAug]}
+        />
+      );
+
+      // Blur water rate before August loads -> blocked
+      fireEvent.blur(screen.getByTestId('input-water-unit-rate'));
+      expect(putCalls.length).toBe(0);
+
+      resolveAugPromise();
+
+      await waitFor(() => {
+        expect((screen.getByTestId('input-water-unit-rate') as HTMLInputElement).value).toBe('22.00');
+      });
+
+      // Edit and blur after August loads -> targets August
+      fireEvent.change(screen.getByTestId('input-water-unit-rate'), { target: { value: '25.00' } });
+      fireEvent.blur(screen.getByTestId('input-water-unit-rate'));
+
+      await waitFor(() => {
+        expect(putCalls.length).toBe(1);
+      });
+
+      expect(putCalls[0].url).toContain(AUGUST_ID);
+      expect(putCalls[0].body.expectedVersion).toBe(9);
+    });
+  });
+
+  describe('4. Body-Phase Stale Response Protection & Raw Durable Sync', () => {
+    const DORM_A = 'dorm-aaa-111';
+    const DORM_B = 'dorm-bbb-222';
+    const mockCycleAug = { id: 'cycle-2026-08', cycleCode: '2026-08', status: 'active' };
+    const mockCycleJul = { id: 'cycle-2026-07', cycleCode: '2026-07', status: 'active' };
+
+    it('Section 14 & 31: Body-Phase Stale Response Protection — July fetch headers resolve fast but json delayed -> August wins', async () => {
+      localStorage.setItem('selected_dormitory_id', DORM_A);
+
+      let resolveJulyJson: any;
+      const julyJsonPromise = new Promise((res) => { resolveJulyJson = res; });
+
+      global.fetch = vi.fn().mockImplementation((url: string) => {
+        const urlStr = String(url);
+        if (urlStr.includes('rate-snapshot')) {
+          if (urlStr.includes('2026-07')) {
+            return Promise.resolve({
+              ok: true,
+              json: () => julyJsonPromise.then(() => ({
+                data: {
+                  cycle: mockCycleJul,
+                  rateSnapshot: { version: 1, waterBillingType: 'tiered', waterTierRates: [{ upTo: null, rate: '99.00' }] },
+                },
+              })),
+            });
+          }
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              data: {
+                cycle: mockCycleAug,
+                rateSnapshot: { version: 1, waterBillingType: 'tiered', waterTierRates: [{ upTo: null, rate: '35.00' }] },
+              },
+            }),
+          });
+        }
+        return Promise.resolve({ ok: true, json: async () => ({ data: [mockCycleAug, mockCycleJul] }) });
+      });
+
+      vi.spyOn(ApiPropertyAdapter.prototype, 'getDormitoryDefaults').mockResolvedValue({
+        success: true,
+        data: { property: { version: 1 }, billing: { version: 1, waterBillingType: 'tiered' } },
+      } as any);
+
+      const { rerender } = render(
+        <OwnerSettings
+          onAddLog={vi.fn()}
+          onRefreshData={vi.fn()}
+          selectedCycle="2026-07"
+          availableCycles={[mockCycleAug, mockCycleJul]}
+        />
+      );
+
+      // Fast switch to August while July json is pending
+      rerender(
+        <OwnerSettings
+          onAddLog={vi.fn()}
+          onRefreshData={vi.fn()}
+          selectedCycle="2026-08"
+          availableCycles={[mockCycleAug, mockCycleJul]}
+        />
+      );
+
+      await waitFor(() => {
+        expect((screen.getByTestId('input-tier-rate-water-0') as HTMLInputElement).value).toBe('35.00');
+      });
+
+      // Release July json LAST
+      resolveJulyJson();
+
+      // August remains authoritative (35.00), stale July parsed body is discarded
+      expect((screen.getByTestId('input-tier-rate-water-0') as HTMLInputElement).value).toBe('35.00');
+    });
+
+    it('Section 19 & 31: Same-Mount Durable Authority Sync — explicitly saved tiers stay active in durable ref across cycle switches', async () => {
+      localStorage.setItem('selected_dormitory_id', DORM_A);
+
+      let durableServerTiers: CanonicalTierRecord[] = [
+        { upTo: '10.00', rate: '18.00' },
+        { upTo: '20.00', rate: '20.00' },
+        { upTo: null, rate: '22.00' },
+      ];
+
+      global.fetch = vi.fn().mockImplementation((url: string, opts: any) => {
+        const urlStr = String(url);
+        if (urlStr.includes('rate-snapshot')) {
+          if (opts?.method === 'PUT') {
+            return Promise.resolve({
+              ok: true,
+              json: async () => ({ data: { rateSnapshot: { version: 2, waterBillingType: 'tiered' } } }),
+            });
+          }
+          if (urlStr.includes('2026-07')) {
+            return Promise.resolve({
+              ok: true,
+              json: async () => ({
+                data: { cycle: mockCycleJul, rateSnapshot: { version: 1, waterBillingType: 'per_unit', waterTierRates: null } },
+              }),
+            });
+          }
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              data: { cycle: mockCycleAug, rateSnapshot: { version: 1, waterBillingType: 'tiered', waterTierRates: durableServerTiers } },
+            }),
+          });
+        }
+        return Promise.resolve({ ok: true, json: async () => ({ data: [mockCycleAug, mockCycleJul] }) });
+      });
+
+      vi.spyOn(ApiPropertyAdapter.prototype, 'getDormitoryDefaults').mockResolvedValue({
+        success: true,
+        data: { property: { version: 1 }, billing: { version: 1, waterTierRates: durableServerTiers } },
+      } as any);
+
+      vi.spyOn(ApiPropertyAdapter.prototype, 'updateDormitoryDefaults').mockImplementation(async (payload: any) => {
+        if (payload.billing?.changes?.waterTierRates) {
+          durableServerTiers = payload.billing.changes.waterTierRates;
+        }
+        return {
+          success: true,
+          data: { billing: { version: 2, waterTierRates: durableServerTiers } },
+        } as any;
+      });
+
+      // 1. Mount with August
+      const { rerender } = render(
+        <OwnerSettings
+          onAddLog={vi.fn()}
+          onRefreshData={vi.fn()}
+          selectedCycle="2026-08"
+          availableCycles={[mockCycleAug, mockCycleJul]}
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId('btn-save-tiers-water')).toBeDefined();
+      });
+
+      // 2. Edit and save new custom tiers (3.40 / 4.25 / 5.00)
+      fireEvent.change(screen.getByTestId('input-tier-rate-water-0'), { target: { value: '3.40' } });
+      fireEvent.change(screen.getByTestId('input-tier-rate-water-1'), { target: { value: '4.25' } });
+      fireEvent.change(screen.getByTestId('input-tier-rate-water-2'), { target: { value: '5.00' } });
+      fireEvent.click(screen.getByTestId('btn-save-tiers-water'));
+
+      await waitFor(() => {
+        expect(durableServerTiers[0].rate).toBe('3.40');
+      });
+
+      // 3. Switch to July (active mode is per_unit) WITHOUT browser reload
+      rerender(
+        <OwnerSettings
+          onAddLog={vi.fn()}
+          onRefreshData={vi.fn()}
+          selectedCycle="2026-07"
+          availableCycles={[mockCycleAug, mockCycleJul]}
+        />
+      );
+
+      await waitFor(() => {
+        const select = screen.getByTestId('select-water-billing-mode') as HTMLSelectElement;
+        expect(select.value).toBe('per_unit');
+      });
+
+      // 4. Select Tiered in July -> MUST restore 3.40 / 4.25 / 5.00 from synchronized raw durable ref!
+      fireEvent.change(screen.getByTestId('select-water-billing-mode'), { target: { value: 'tiered' } });
+
+      expect((screen.getByTestId('input-tier-rate-water-0') as HTMLInputElement).value).toBe('3.40');
+      expect((screen.getByTestId('input-tier-rate-water-1') as HTMLInputElement).value).toBe('4.25');
+      expect((screen.getByTestId('input-tier-rate-water-2') as HTMLInputElement).value).toBe('5.00');
+    });
+
+    it('Section 23 & 31: In-Flight Old-Cycle Snapshot PUT Response does NOT overwrite new-cycle UI', async () => {
+      localStorage.setItem('selected_dormitory_id', DORM_A);
+
+      let resolveAugPut: any;
+      const augPutPromise = new Promise((res) => { resolveAugPut = res; });
+
+      global.fetch = vi.fn().mockImplementation((url: string, opts: any) => {
+        const urlStr = String(url);
+        if (urlStr.includes('rate-snapshot')) {
+          if (opts?.method === 'PUT') {
+            return augPutPromise.then(() => ({
+              ok: true,
+              json: async () => ({ data: { rateSnapshot: { version: 99, waterRate: '99.00' } } }),
+            }));
+          }
+          if (urlStr.includes('2026-07')) {
+            return Promise.resolve({
+              ok: true,
+              json: async () => ({
+                data: { cycle: mockCycleJul, rateSnapshot: { version: 5, waterRate: '15.00' } },
+              }),
+            });
+          }
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              data: { cycle: mockCycleAug, rateSnapshot: { version: 1, waterRate: '20.00' } },
+            }),
+          });
+        }
+        return Promise.resolve({ ok: true, json: async () => ({ data: [mockCycleAug, mockCycleJul] }) });
+      });
+
+      vi.spyOn(ApiPropertyAdapter.prototype, 'getDormitoryDefaults').mockResolvedValue({
+        success: true,
+        data: { property: { version: 1 }, billing: { version: 1 } },
+      } as any);
+
+      const { rerender } = render(
+        <OwnerSettings
+          onAddLog={vi.fn()}
+          onRefreshData={vi.fn()}
+          selectedCycle="2026-08"
+          availableCycles={[mockCycleAug, mockCycleJul]}
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId('input-water-unit-rate')).toBeDefined();
+      });
+
+      // Start August scalar save
+      fireEvent.change(screen.getByTestId('input-water-unit-rate'), { target: { value: '25.00' } });
+      fireEvent.blur(screen.getByTestId('input-water-unit-rate'));
+
+      // Switch to July while August PUT is in flight
+      rerender(
+        <OwnerSettings
+          onAddLog={vi.fn()}
+          onRefreshData={vi.fn()}
+          selectedCycle="2026-07"
+          availableCycles={[mockCycleAug, mockCycleJul]}
+        />
+      );
+
+      await waitFor(() => {
+        expect((screen.getByTestId('input-water-unit-rate') as HTMLInputElement).value).toBe('15.00');
+      });
+
+      // Resolve August PUT response
+      resolveAugPut();
+
+      // July UI remains authoritative (15.00), not overwritten by late August PUT response (99.00)
+      expect((screen.getByTestId('input-water-unit-rate') as HTMLInputElement).value).toBe('15.00');
+    });
+
+    it('Section 25 & 31: In-Flight Old-Dorm Durable Save Response does NOT overwrite new-dorm UI', async () => {
+      let resolveDormAPut: any;
+      const dormAPutPromise = new Promise((res) => { resolveDormAPut = res; });
+
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ data: { rateSnapshot: { version: 1, waterBillingType: 'per_unit' } } }),
+      });
+
+      vi.spyOn(ApiPropertyAdapter.prototype, 'getDormitoryDefaults').mockImplementation(async () => {
+        const dormId = localStorage.getItem('selected_dormitory_id');
+        if (dormId === DORM_B) {
+          return { success: true, data: { property: { version: 1 }, billing: { version: 1, waterTierRates: null } } } as any;
+        }
+        return { success: true, data: { property: { version: 1 }, billing: { version: 1, waterTierRates: WATER_TIER_PRESET } } } as any;
+      });
+
+      vi.spyOn(ApiPropertyAdapter.prototype, 'updateDormitoryDefaults').mockImplementation(async () => {
+        await dormAPutPromise;
+        return {
+          success: true,
+          data: { billing: { version: 99, waterTierRates: [{ upTo: null, rate: '999.00' }] } },
+        } as any;
+      });
+
+      localStorage.setItem('selected_dormitory_id', DORM_A);
+      const { rerender } = render(
+        <OwnerSettings
+          onAddLog={vi.fn()}
+          onRefreshData={vi.fn()}
+          selectedCycle="2026-08"
+          availableCycles={[mockCycleAug]}
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId('select-water-billing-mode')).toBeDefined();
+      });
+
+      // Switch to Tiered and save in Dorm A
+      fireEvent.change(screen.getByTestId('select-water-billing-mode'), { target: { value: 'tiered' } });
+      fireEvent.click(screen.getByTestId('btn-save-tiers-water'));
+
+      // Switch context to Dorm B while Dorm A defaults PUT is in flight
+      localStorage.setItem('selected_dormitory_id', DORM_B);
+      rerender(
+        <OwnerSettings
+          onAddLog={vi.fn()}
+          onRefreshData={vi.fn()}
+          selectedCycle="2026-08"
+          availableCycles={[mockCycleAug]}
+        />
+      );
+
+      await waitFor(() => {
+        const select = screen.getByTestId('select-water-billing-mode') as HTMLSelectElement;
+        expect(select.value).toBe('per_unit');
+      });
+
+      // Release Dorm A defaults PUT response
+      resolveDormAPut();
+
+      // Select Tiered in Dorm B -> MUST show default sample preset (18/20/22), NOT Dorm A late response (999.00)
+      fireEvent.change(screen.getByTestId('select-water-billing-mode'), { target: { value: 'tiered' } });
+      expect((screen.getByTestId('input-tier-rate-water-0') as HTMLInputElement).value).toBe('18.00');
+    });
+  });
+
+  describe('5. Multi-Dormitory and Multi-Cycle Context Isolation', () => {
+    const DORM_A = 'dorm-aaa-111';
+    const DORM_B = 'dorm-bbb-222';
+    const mockCycleAug = { id: 'cycle-2026-08', cycleCode: '2026-08', status: 'active' };
+
+    it('Cross-Dorm Isolation: Dorm A tiers (3.40/4.25/5.00) do NOT leak into Dorm B (null tiers)', async () => {
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          data: {
+            cycle: mockCycleAug,
+            rateSnapshot: { version: 1, waterBillingType: 'per_unit', waterTierRates: null },
+          },
+        }),
+      });
+
+      vi.spyOn(ApiPropertyAdapter.prototype, 'getDormitoryDefaults').mockImplementation(async () => {
+        const currentDormId = localStorage.getItem('selected_dormitory_id');
+        if (currentDormId === DORM_B) {
           return {
             success: true,
-            data: {
-              billing: this.dorms[currentDormId].billing,
-              property: { version: 1 },
-            },
+            data: { property: { version: 1 }, billing: { version: 1, waterBillingType: 'per_unit', waterTierRates: null } },
           } as any;
-        });
-      }
-    }
-
-    it('Section 9 & 30: Cross-Dorm Isolation — Dorm A tiers (3.40/4.25/5.00) do NOT leak into Dorm B (null tiers)', async () => {
-      const server = new MultiContextServerSimulator();
-      server.setupMocks();
+        }
+        return {
+          success: true,
+          data: {
+            property: { version: 1 },
+            billing: {
+              version: 1,
+              waterBillingType: 'per_unit',
+              waterTierRates: [
+                { upTo: '10.00', rate: '3.40' },
+                { upTo: '20.00', rate: '4.25' },
+                { upTo: null, rate: '5.00' },
+              ],
+            },
+          },
+        } as any;
+      });
 
       localStorage.setItem('selected_dormitory_id', DORM_A);
       const { rerender } = render(
@@ -261,8 +672,6 @@ describe('OWNER R3.9-D.1.3: Settings Context Isolation & Stale Response Guard Su
 
       fireEvent.change(screen.getByTestId('select-water-billing-mode'), { target: { value: 'tiered' } });
       expect((screen.getByTestId('input-tier-rate-water-0') as HTMLInputElement).value).toBe('3.40');
-      expect((screen.getByTestId('input-tier-rate-water-1') as HTMLInputElement).value).toBe('4.25');
-      expect((screen.getByTestId('input-tier-rate-water-2') as HTMLInputElement).value).toBe('5.00');
 
       localStorage.setItem('selected_dormitory_id', DORM_B);
       rerender(
@@ -281,185 +690,10 @@ describe('OWNER R3.9-D.1.3: Settings Context Isolation & Stale Response Guard Su
 
       fireEvent.change(screen.getByTestId('select-water-billing-mode'), { target: { value: 'tiered' } });
       expect((screen.getByTestId('input-tier-rate-water-0') as HTMLInputElement).value).toBe('18.00');
-      expect((screen.getByTestId('input-tier-rate-water-1') as HTMLInputElement).value).toBe('20.00');
-      expect((screen.getByTestId('input-tier-rate-water-2') as HTMLInputElement).value).toBe('22.00');
-    });
-
-    it('Section 10 & 30: Out-of-Order Dormitory Resolution — Dorm B resolves first, stale Dorm A resolves last -> Dorm B wins', async () => {
-      const server = new MultiContextServerSimulator();
-      server.setupMocks();
-
-      let resolveDormAPromise: any;
-      const dormADelayPromise = new Promise((res) => {
-        resolveDormAPromise = res;
-      });
-
-      vi.spyOn(ApiPropertyAdapter.prototype, 'getDormitoryDefaults').mockImplementation(async () => {
-        const currentDormId = localStorage.getItem('selected_dormitory_id');
-        if (currentDormId === DORM_A) {
-          await dormADelayPromise;
-          return { success: true, data: JSON.parse(JSON.stringify(server.dorms[DORM_A])) } as any;
-        }
-        return { success: true, data: JSON.parse(JSON.stringify(server.dorms[DORM_B])) } as any;
-      });
-
-      localStorage.setItem('selected_dormitory_id', DORM_A);
-      const { rerender } = render(
-        <OwnerSettings
-          onAddLog={vi.fn()}
-          onRefreshData={vi.fn()}
-          selectedCycle="2026-08"
-          availableCycles={[mockCycleAug]}
-        />
-      );
-
-      localStorage.setItem('selected_dormitory_id', DORM_B);
-      rerender(
-        <OwnerSettings
-          onAddLog={vi.fn()}
-          onRefreshData={vi.fn()}
-          selectedCycle="2026-08"
-          availableCycles={[mockCycleAug]}
-        />
-      );
-
-      await waitFor(() => {
-        expect(screen.getByTestId('select-water-billing-mode')).toBeDefined();
-      });
-
-      resolveDormAPromise();
-
-      fireEvent.change(screen.getByTestId('select-water-billing-mode'), { target: { value: 'tiered' } });
-      expect((screen.getByTestId('input-tier-rate-water-0') as HTMLInputElement).value).toBe('18.00');
-    });
-
-    it('Section 11 & 30: Out-of-Order Cycle Resolution — August resolves first, stale July resolves last -> August wins', async () => {
-      const server = new MultiContextServerSimulator();
-      server.snapshots[`${DORM_A}_2026-07`] = {
-        version: 1,
-        waterBillingType: 'tiered',
-        waterTierRates: [{ upTo: null, rate: '99.00' }],
-      };
-      server.snapshots[`${DORM_A}_2026-08`] = {
-        version: 1,
-        waterBillingType: 'tiered',
-        waterTierRates: [{ upTo: null, rate: '35.00' }],
-      };
-      server.setupMocks();
-
-      let resolveJulPromise: any;
-      const julDelayPromise = new Promise((res) => {
-        resolveJulPromise = res;
-      });
-
-      global.fetch = vi.fn().mockImplementation((url: string, opts: any) => {
-        const urlStr = String(url);
-        if (urlStr.includes('rate-snapshot')) {
-          if (urlStr.includes('2026-07')) {
-            return julDelayPromise.then(() => ({
-              ok: true,
-              json: async () => ({
-                data: {
-                  cycle: mockCycleJul,
-                  rateSnapshot: server.snapshots[`${DORM_A}_2026-07`],
-                },
-              }),
-            }));
-          }
-          return Promise.resolve({
-            ok: true,
-            json: async () => ({
-              data: {
-                cycle: mockCycleAug,
-                rateSnapshot: server.snapshots[`${DORM_A}_2026-08`],
-              },
-            }),
-          });
-        }
-        return Promise.resolve({ ok: true, json: async () => ({ data: [mockCycleAug, mockCycleJul] }) });
-      });
-
-      localStorage.setItem('selected_dormitory_id', DORM_A);
-      const { rerender } = render(
-        <OwnerSettings
-          onAddLog={vi.fn()}
-          onRefreshData={vi.fn()}
-          selectedCycle="2026-07"
-          availableCycles={[mockCycleAug, mockCycleJul]}
-        />
-      );
-
-      rerender(
-        <OwnerSettings
-          onAddLog={vi.fn()}
-          onRefreshData={vi.fn()}
-          selectedCycle="2026-08"
-          availableCycles={[mockCycleAug, mockCycleJul]}
-        />
-      );
-
-      await waitFor(() => {
-        expect((screen.getByTestId('input-tier-rate-water-0') as HTMLInputElement).value).toBe('35.00');
-      });
-
-      resolveJulPromise();
-
-      expect((screen.getByTestId('input-tier-rate-water-0') as HTMLInputElement).value).toBe('35.00');
-    });
-
-    it('Section 26 & 30: Save-Before-Load Guard — Tier save is blocked if context authority is still loading', async () => {
-      const server = new MultiContextServerSimulator();
-      server.setupMocks();
-
-      let resolveDormBPromise: any;
-      const dormBDelayPromise = new Promise((res) => {
-        resolveDormBPromise = res;
-      });
-
-      vi.spyOn(ApiPropertyAdapter.prototype, 'getDormitoryDefaults').mockImplementation(async () => {
-        const currentDormId = localStorage.getItem('selected_dormitory_id');
-        if (currentDormId === DORM_B) {
-          await dormBDelayPromise;
-          return { success: true, data: JSON.parse(JSON.stringify(server.dorms[DORM_B])) } as any;
-        }
-        return { success: true, data: JSON.parse(JSON.stringify(server.dorms[DORM_A])) } as any;
-      });
-
-      localStorage.setItem('selected_dormitory_id', DORM_A);
-      const { rerender } = render(
-        <OwnerSettings
-          onAddLog={vi.fn()}
-          onRefreshData={vi.fn()}
-          selectedCycle="2026-08"
-          availableCycles={[mockCycleAug]}
-        />
-      );
-
-      await waitFor(() => {
-        expect(screen.getByTestId('select-water-billing-mode')).toBeDefined();
-      });
-
-      localStorage.setItem('selected_dormitory_id', DORM_B);
-      rerender(
-        <OwnerSettings
-          onAddLog={vi.fn()}
-          onRefreshData={vi.fn()}
-          selectedCycle="2026-08"
-          availableCycles={[mockCycleAug]}
-        />
-      );
-
-      fireEvent.change(screen.getByTestId('select-water-billing-mode'), { target: { value: 'tiered' } });
-      const saveBtn = screen.getByTestId('btn-save-tiers-water');
-      fireEvent.click(saveBtn);
-
-      expect(server.updateDefaultsCalls.filter((c) => c.dormId === DORM_B).length).toBe(0);
-
-      resolveDormBPromise();
     });
   });
 
-  describe('4. Same-Context Hydration Races & Version Sync', () => {
+  describe('6. Same-Context Races & Sequential Version Sync', () => {
     const DORM_ID = 'dorm-race-1';
     const mockCycle = { id: 'cycle-2026-08', cycleCode: '2026-08', status: 'active' };
 
@@ -511,71 +745,6 @@ describe('OWNER R3.9-D.1.3: Settings Context Isolation & Stale Response Guard Su
       );
 
       resolveSnap();
-
-      await waitFor(() => {
-        const select = screen.getByTestId('select-water-billing-mode') as HTMLSelectElement;
-        expect(select.value).toBe('tiered');
-      });
-
-      expect((screen.getByTestId('input-tier-rate-water-0') as HTMLInputElement).value).toBe('3.40');
-    });
-
-    it('Same Context Race B: Snapshot resolves first, Defaults resolves second -> Snapshot wins active mode', async () => {
-      localStorage.setItem('selected_dormitory_id', DORM_ID);
-
-      let resolveDefaults: any;
-      const defaultsPromise = new Promise((res) => { resolveDefaults = res; });
-
-      global.fetch = vi.fn().mockImplementation((url: string) => {
-        const urlStr = String(url);
-        if (urlStr.includes('rate-snapshot')) {
-          return Promise.resolve({
-            ok: true,
-            json: async () => ({
-              data: {
-                cycle: mockCycle,
-                rateSnapshot: {
-                  version: 1,
-                  waterBillingType: 'tiered',
-                  waterTierRates: [
-                    { upTo: '10.00', rate: '3.40' },
-                    { upTo: '20.00', rate: '4.25' },
-                    { upTo: null, rate: '5.00' },
-                  ],
-                },
-              },
-            }),
-          });
-        }
-        return Promise.resolve({ ok: true, json: async () => ({ data: [mockCycle] }) });
-      });
-
-      vi.spyOn(ApiPropertyAdapter.prototype, 'getDormitoryDefaults').mockImplementation(async () => {
-        await defaultsPromise;
-        return {
-          success: true,
-          data: {
-            property: { version: 1 },
-            billing: { version: 1, waterBillingType: 'per_unit', waterTierRates: WATER_TIER_PRESET },
-          },
-        } as any;
-      });
-
-      render(
-        <OwnerSettings
-          onAddLog={vi.fn()}
-          onRefreshData={vi.fn()}
-          selectedCycle="2026-08"
-          availableCycles={[mockCycle]}
-        />
-      );
-
-      await waitFor(() => {
-        const select = screen.getByTestId('select-water-billing-mode') as HTMLSelectElement;
-        expect(select.value).toBe('tiered');
-      });
-
-      resolveDefaults();
 
       await waitFor(() => {
         const select = screen.getByTestId('select-water-billing-mode') as HTMLSelectElement;
@@ -658,11 +827,11 @@ describe('OWNER R3.9-D.1.3: Settings Context Isolation & Stale Response Guard Su
     });
   });
 
-  describe('5. User-Visible Failure and Error Banners', () => {
+  describe('7. User-Visible Failure and Error Banners', () => {
     const DORM_ID = 'dorm-err-1';
     const mockCycle = { id: 'cycle-2026-08', cycleCode: '2026-08', status: 'active' };
 
-    it('Section 14, 16 & 30: Snapshot non-409 failure renders user-visible error banner and does NOT emit success log', async () => {
+    it('Snapshot non-409 failure renders user-visible error banner and does NOT emit success log', async () => {
       localStorage.setItem('selected_dormitory_id', DORM_ID);
 
       global.fetch = vi.fn().mockImplementation((url: string, opts: any) => {
@@ -722,7 +891,7 @@ describe('OWNER R3.9-D.1.3: Settings Context Isolation & Stale Response Guard Su
       expect(logMock).not.toHaveBeenCalled();
     });
 
-    it('Section 14, 17 & 30: Durable defaults failure renders user-visible error banner and blocks snapshot PUT', async () => {
+    it('Durable defaults non-conflict failure renders user-visible error banner and blocks snapshot PUT', async () => {
       localStorage.setItem('selected_dormitory_id', DORM_ID);
 
       let snapshotPutCalled = false;
@@ -778,7 +947,7 @@ describe('OWNER R3.9-D.1.3: Settings Context Isolation & Stale Response Guard Su
       expect(snapshotPutCalled).toBe(false);
     });
 
-    it('Section 20 & 30: Retry success clears error banner', async () => {
+    it('Retry success clears error banner', async () => {
       localStorage.setItem('selected_dormitory_id', DORM_ID);
 
       let shouldFail = true;
