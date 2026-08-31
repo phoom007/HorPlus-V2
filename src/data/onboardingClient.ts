@@ -28,8 +28,16 @@ export interface CompleteOnboardingPayload {
     dueDay?: number;
     waterBillingType?: string;
     waterRate?: string;
+    waterTierRates?: Array<{
+      upTo: string | null;
+      rate: string;
+    }> | null;
     electricityBillingType?: string;
     electricityRate?: string;
+    electricityTierRates?: Array<{
+      upTo: string | null;
+      rate: string;
+    }> | null;
     commonFee?: string;
     commonFeeMode?: string;
     internetFee?: string;

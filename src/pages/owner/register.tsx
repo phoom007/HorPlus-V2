@@ -26,6 +26,27 @@ export function mapRegistrationBuildingForFinalize(
 }
 
 import { formatBuildingDisplayName } from '../../lib/roomRentalSummary';
+import {
+  TieredRateEditor,
+  WATER_TIER_PRESET,
+  ELECTRICITY_TIER_PRESET,
+  CanonicalTierRecord,
+} from '../../components/settings/TieredRateEditor';
+
+export const mapRegisterUtilityMode = (mode: string): string => {
+  switch (mode) {
+    case 'unit':
+      return 'per_unit';
+    case 'person':
+      return 'per_person';
+    case 'room':
+      return 'flat_rate';
+    case 'tiered':
+      return 'tiered';
+    default:
+      return 'flat_rate';
+  }
+};
 import React, { useState, useRef } from 'react';
 import {
   Building2,
@@ -287,11 +308,15 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
 
       // 3. Utilities & Service Rates (Approved Step 3 defaults)
       utilities: {
-        waterBillingMode: 'person', // 'unit' | 'person' | 'room' (default: person)
+        waterBillingMode: 'person', // 'unit' | 'person' | 'room' | 'tiered' (default: person)
         waterRate: 0 as number | string,
+        waterTierRates: WATER_TIER_PRESET as CanonicalTierRecord[],
+        waterTierReviewed: false,
 
-        electricBillingMode: 'unit', // 'unit' | 'person' | 'room' (default: unit)
+        electricBillingMode: 'unit', // 'unit' | 'person' | 'room' | 'tiered' (default: unit)
         electricRate: 0 as number | string,
+        electricityTierRates: ELECTRICITY_TIER_PRESET as CanonicalTierRecord[],
+        electricityTierReviewed: false,
 
         commonFeeMode: 'room', // 'room' | 'person' (default: room)
         commonFeeRate: 0 as number | string,
@@ -424,6 +449,14 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
           setFormData(prev => ({
             ...prev,
             ...draft.formData,
+            utilities: {
+              ...prev.utilities,
+              ...(draft.formData.utilities || {}),
+              waterTierRates: draft.formData.utilities?.waterTierRates || prev.utilities.waterTierRates,
+              waterTierReviewed: Boolean(draft.formData.utilities?.waterTierReviewed),
+              electricityTierRates: draft.formData.utilities?.electricityTierRates || prev.utilities.electricityTierRates,
+              electricityTierReviewed: Boolean(draft.formData.utilities?.electricityTierReviewed),
+            },
             ...(restoredBuildings ? { buildings: restoredBuildings } : {}),
             // Never restore sensitive channelSecret
             lineOA: {
@@ -964,11 +997,24 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
 
     if (stepNum === 3) {
       // Check utilities rates
-      if (isNaN(formData.utilities.waterRate) || formData.utilities.waterRate < 0) {
-        return { valid: false, error: 'กรุณากรอก "ค่าน้ำ" ให้ถูกต้อง (ต้องเป็นตัวเลข >= 0)' };
+      if (formData.utilities.waterBillingMode === 'tiered') {
+        if (!formData.utilities.waterTierReviewed) {
+          return { valid: false, error: 'กรุณาตรวจสอบและบันทึกอัตราค่าน้ำแบบขั้นบันได' };
+        }
+      } else {
+        if (isNaN(Number(formData.utilities.waterRate)) || Number(formData.utilities.waterRate) < 0) {
+          return { valid: false, error: 'กรุณากรอก "ค่าน้ำ" ให้ถูกต้อง (ต้องเป็นตัวเลข >= 0)' };
+        }
       }
-      if (isNaN(formData.utilities.electricRate) || formData.utilities.electricRate < 0) {
-        return { valid: false, error: 'กรุณากรอก "ค่าไฟฟ้า" ให้ถูกต้อง (ต้องเป็นตัวเลข >= 0)' };
+
+      if (formData.utilities.electricBillingMode === 'tiered') {
+        if (!formData.utilities.electricityTierReviewed) {
+          return { valid: false, error: 'กรุณาตรวจสอบและบันทึกอัตราค่าไฟฟ้าแบบขั้นบันได' };
+        }
+      } else {
+        if (isNaN(Number(formData.utilities.electricRate)) || Number(formData.utilities.electricRate) < 0) {
+          return { valid: false, error: 'กรุณากรอก "ค่าไฟฟ้า" ให้ถูกต้อง (ต้องเป็นตัวเลข >= 0)' };
+        }
       }
       if (formData.utilities.commonFeeMode !== 'free' && formData.utilities.commonFeeMode !== 'none') {
         if (isNaN(formData.utilities.commonFeeRate) || formData.utilities.commonFeeRate < 0) {
@@ -1191,8 +1237,16 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
         throw new Error('กรุณาระบุข้อมูลอาคารและห้องพักอย่างน้อย 1 ห้อง');
       }
 
-      const waterBillingType = formData.utilities.waterBillingMode === 'unit' ? 'per_unit' : (formData.utilities.waterBillingMode === 'person' ? 'per_person' : 'flat_rate');
-      const elecBillingType = formData.utilities.electricBillingMode === 'unit' ? 'per_unit' : (formData.utilities.electricBillingMode === 'person' ? 'per_person' : 'flat_rate');
+      const waterBillingType = mapRegisterUtilityMode(formData.utilities.waterBillingMode);
+      const elecBillingType = mapRegisterUtilityMode(formData.utilities.electricBillingMode);
+
+      const waterTierRates = formData.utilities.waterTierReviewed
+        ? formData.utilities.waterTierRates
+        : null;
+
+      const electricityTierRates = formData.utilities.electricityTierReviewed
+        ? formData.utilities.electricityTierRates
+        : null;
 
       const rawPP = formData.paymentAccount.promptPayId ? formData.paymentAccount.promptPayId.replace(/\D/g, '') : null;
       const ppType = rawPP ? (rawPP.length === 13 ? 'national_id' : 'mobile_phone') : null;
@@ -1230,8 +1284,10 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
           dueDay: Number(formData.deposits.dueDateDay),
           waterBillingType,
           waterRate: String(formData.utilities.waterRate ?? 0),
+          waterTierRates: waterTierRates || null,
           electricityBillingType: elecBillingType,
           electricityRate: String(formData.utilities.electricRate ?? 0),
+          electricityTierRates: electricityTierRates || null,
           commonFee: String(formData.utilities.commonFeeRate ?? 0),
           commonFeeMode: formData.utilities.commonFeeMode || 'none',
           internetFee: String(formData.utilities.internetRate ?? 0),
@@ -1981,24 +2037,28 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                     <input
                       type="text"
                       inputMode="decimal"
-                      value={formData.utilities.waterRate}
+                      data-testid="input-register-water-rate"
+                      disabled={formData.utilities.waterBillingMode === 'tiered'}
+                      value={formData.utilities.waterBillingMode === 'tiered' ? 'คิดตามขั้นบันได' : formData.utilities.waterRate}
                       onChange={(e) => {
                         const norm = normalizeNumericInput(e.target.value, true);
-                        setFormData({ ...formData, utilities: { ...formData.utilities, waterRate: norm } });
+                        setFormData(prev => ({ ...prev, utilities: { ...prev.utilities, waterRate: norm } }));
                       }}
-                      className="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl font-black text-slate-800 outline-none"
+                      className="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl font-black text-slate-800 outline-none disabled:opacity-75 disabled:bg-slate-100 disabled:text-slate-500"
                     />
                   </div>
                   <div>
                     <span className="text-[10px] text-slate-400 font-bold block mb-1">รูปแบบการคิด</span>
                     <select
+                      data-testid="select-register-water-mode"
                       value={formData.utilities.waterBillingMode}
-                      onChange={(e) => setFormData({ ...formData, utilities: { ...formData.utilities, waterBillingMode: e.target.value } })}
-                      className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-700 outline-none"
+                      onChange={(e) => setFormData(prev => ({ ...prev, utilities: { ...prev.utilities, waterBillingMode: e.target.value } }))}
+                      className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-700 outline-none cursor-pointer"
                     >
                       <option value="unit">บาท/หน่วย</option>
                       <option value="person">บาท/คน</option>
                       <option value="room">บาท/ห้อง</option>
+                      <option value="tiered">คิดตามขั้นบันได</option>
                     </select>
                   </div>
                 </div>
@@ -2013,24 +2073,28 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                     <input
                       type="text"
                       inputMode="decimal"
-                      value={formData.utilities.electricRate}
+                      data-testid="input-register-electric-rate"
+                      disabled={formData.utilities.electricBillingMode === 'tiered'}
+                      value={formData.utilities.electricBillingMode === 'tiered' ? 'คิดตามขั้นบันได' : formData.utilities.electricRate}
                       onChange={(e) => {
                         const norm = normalizeNumericInput(e.target.value, true);
-                        setFormData({ ...formData, utilities: { ...formData.utilities, electricRate: norm } });
+                        setFormData(prev => ({ ...prev, utilities: { ...prev.utilities, electricRate: norm } }));
                       }}
-                      className="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl font-black text-slate-800 outline-none"
+                      className="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl font-black text-slate-800 outline-none disabled:opacity-75 disabled:bg-slate-100 disabled:text-slate-500"
                     />
                   </div>
                   <div>
                     <span className="text-[10px] text-slate-400 font-bold block mb-1">รูปแบบการคิด</span>
                     <select
+                      data-testid="select-register-electric-mode"
                       value={formData.utilities.electricBillingMode}
-                      onChange={(e) => setFormData({ ...formData, utilities: { ...formData.utilities, electricBillingMode: e.target.value } })}
-                      className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-700 outline-none"
+                      onChange={(e) => setFormData(prev => ({ ...prev, utilities: { ...prev.utilities, electricBillingMode: e.target.value } }))}
+                      className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-700 outline-none cursor-pointer"
                     >
                       <option value="unit">บาท/หน่วย</option>
                       <option value="person">บาท/คน</option>
                       <option value="room">บาท/ห้อง</option>
+                      <option value="tiered">คิดตามขั้นบันได</option>
                     </select>
                   </div>
                 </div>
@@ -2167,6 +2231,79 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                   </div>
                 </div>
               </div>
+
+              {/* Responsive Tiered Rates Editors */}
+              {(formData.utilities.waterBillingMode === 'tiered' || formData.utilities.electricBillingMode === 'tiered') && (
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 pt-2">
+                  {formData.utilities.waterBillingMode === 'tiered' && (
+                    <div className="space-y-1">
+                      <TieredRateEditor
+                        utilityType="water"
+                        tiers={formData.utilities.waterTierRates || WATER_TIER_PRESET}
+                        onChange={(tiers) => {
+                          setFormData(prev => ({
+                            ...prev,
+                            utilities: {
+                              ...prev.utilities,
+                              waterTierRates: tiers,
+                              waterTierReviewed: false,
+                            }
+                          }));
+                        }}
+                        onSave={(tiers) => {
+                          setFormData(prev => ({
+                            ...prev,
+                            utilities: {
+                              ...prev.utilities,
+                              waterTierRates: tiers,
+                              waterTierReviewed: true,
+                            }
+                          }));
+                        }}
+                      />
+                      {formData.utilities.waterTierReviewed && (
+                        <p className="text-[11px] text-emerald-600 font-bold px-2 flex items-center gap-1">
+                          <CheckCircle2 className="w-3.5 h-3.5" /> บันทึกการตรวจสอบค่าน้ำแบบขั้นบันไดเรียบร้อย
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  {formData.utilities.electricBillingMode === 'tiered' && (
+                    <div className="space-y-1">
+                      <TieredRateEditor
+                        utilityType="electricity"
+                        tiers={formData.utilities.electricityTierRates || ELECTRICITY_TIER_PRESET}
+                        onChange={(tiers) => {
+                          setFormData(prev => ({
+                            ...prev,
+                            utilities: {
+                              ...prev.utilities,
+                              electricityTierRates: tiers,
+                              electricityTierReviewed: false,
+                            }
+                          }));
+                        }}
+                        onSave={(tiers) => {
+                          setFormData(prev => ({
+                            ...prev,
+                            utilities: {
+                              ...prev.utilities,
+                              electricityTierRates: tiers,
+                              electricityTierReviewed: true,
+                            }
+                          }));
+                        }}
+                      />
+                      {formData.utilities.electricityTierReviewed && (
+                        <p className="text-[11px] text-emerald-600 font-bold px-2 flex items-center gap-1">
+                          <CheckCircle2 className="w-3.5 h-3.5" /> บันทึกการตรวจสอบค่าไฟฟ้าแบบขั้นบันไดเรียบร้อย
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Rent Rates Per Building (Adjustable per building per user request) */}
@@ -2206,6 +2343,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                             <label className="block text-xs font-bold text-slate-700 mb-1">ค่าเช่ารายเดือน (บาท/เดือน)</label>
                             <input
                               type="text"
+                              data-testid={`input-building-monthly-rent-${bIdx}`}
                               inputMode="decimal"
                               value={rentRates.monthly}
                               onChange={(e) => {
@@ -2513,8 +2651,9 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                       ธนาคารที่รับโอน <span className="text-rose-500">*</span>
                     </label>
                     <select
+                      data-testid="select-payment-bank-name"
                       value={formData.paymentAccount.bankName}
-                      onChange={(e) => setFormData({ ...formData, paymentAccount: { ...formData.paymentAccount, bankName: e.target.value } })}
+                      onChange={(e) => setFormData(prev => ({ ...prev, paymentAccount: { ...prev.paymentAccount, bankName: e.target.value } }))}
                       className="w-full px-3.5 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:border-blue-500 outline-none font-bold text-slate-800 cursor-pointer"
                     >
                       <option value="">-- เลือกธนาคาร --</option>
@@ -2528,9 +2667,10 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                     <label className="block text-xs font-bold text-slate-700 mb-1">เลขที่บัญชีธนาคาร <span className="text-rose-500">*</span> </label>
                     <input
                       type="text"
+                      data-testid="input-payment-account-number"
                       disabled={!formData.paymentAccount.bankName}
                       value={formData.paymentAccount.accountNumber}
-                      onChange={(e) => setFormData({ ...formData, paymentAccount: { ...formData.paymentAccount, accountNumber: formatBankAccount(e.target.value) } })}
+                      onChange={(e) => setFormData(prev => ({ ...prev, paymentAccount: { ...prev.paymentAccount, accountNumber: formatBankAccount(e.target.value) } }))}
                       placeholder={formData.paymentAccount.bankName ? "XXX-X-XXXXX-X" : "กรุณาเลือกธนาคารก่อน"}
                       className={`w-full px-3.5 py-2 text-xs border rounded-xl outline-none font-bold transition-all ${formData.paymentAccount.bankName
                         ? 'bg-white border-slate-200 focus:border-blue-500 text-slate-800'
@@ -2546,15 +2686,16 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                   </label>
                   <input
                     type="text"
+                    data-testid="input-payment-account-name"
                     value={formData.paymentAccount.bankAccountName || formData.paymentAccount.accountName || ''}
-                    onChange={(e) => setFormData({
-                      ...formData,
+                    onChange={(e) => setFormData(prev => ({
+                      ...prev,
                       paymentAccount: {
-                        ...formData.paymentAccount,
+                        ...prev.paymentAccount,
                         accountName: e.target.value,
                         bankAccountName: e.target.value
                       }
-                    })}
+                    }))}
                     placeholder="เช่น นาย สมศักดิ์ วงศ์สว่าง (บัญชีธนาคาร)"
                     className="w-full px-3.5 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:border-blue-500 outline-none font-bold text-slate-800"
                   />
