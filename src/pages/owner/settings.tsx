@@ -39,6 +39,12 @@ import { getDormitoryProfile, updateDormitoryProfile, UpdateDormitoryProfilePayl
 import { OwnerLineOaPage } from './line-oa';
 import { queryClient, queryKeys } from '../../lib/queryClient';
 import { Dormitory, CycleRates } from '../../types';
+import {
+  TieredRateEditor,
+  CanonicalTierRecord,
+  WATER_TIER_PRESET,
+  ELECTRICITY_TIER_PRESET,
+} from '../../components/settings/TieredRateEditor';
 
 interface OwnerSettingsProps {
   onAddLog: (action: string, details: string, type: string, id: string) => void;
@@ -105,7 +111,7 @@ const formatBankAccount = (val: string) => {
   return `${digits.slice(0, 3)}-${digits.slice(3, 4)}-${digits.slice(4, 9)}-${digits.slice(9)}`;
 };
 
-const toCanonicalMode = (mode: string | undefined, type: 'water' | 'electricity' | 'common' | 'internet' | 'parking' | 'late'): string => {
+export const toCanonicalMode = (mode: string | undefined, type: 'water' | 'electricity' | 'common' | 'internet' | 'parking' | 'late'): string => {
   if (!mode) {
     if (type === 'water' || type === 'electricity') return 'per_unit';
     if (type === 'common' || type === 'internet' || type === 'parking') return 'per_room';
@@ -113,8 +119,10 @@ const toCanonicalMode = (mode: string | undefined, type: 'water' | 'electricity'
   }
   const m = String(mode).toLowerCase();
   if (type === 'water' || type === 'electricity') {
+    if (m === 'tiered') return 'tiered';
     if (m === 'unit' || m === 'per_unit') return 'per_unit';
     if (m === 'person' || m === 'per_person') return 'per_person';
+    if (m === 'fixed' || m === 'flat') return 'fixed';
     return 'per_unit';
   }
   if (type === 'common' || type === 'internet') {
@@ -216,6 +224,11 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
   const [lateFeeType, setLateFeeType] = useState<string>('none');
   const [isLateFeeSectionExpanded, setIsLateFeeSectionExpanded] = useState<boolean>(false);
 
+  const [waterTierRates, setWaterTierRates] = useState<CanonicalTierRecord[]>(WATER_TIER_PRESET);
+  const [electricTierRates, setElectricTierRates] = useState<CanonicalTierRecord[]>(ELECTRICITY_TIER_PRESET);
+  const [inactiveWaterTierRates, setInactiveWaterTierRates] = useState<CanonicalTierRecord[] | null>(null);
+  const [inactiveElectricTierRates, setInactiveElectricTierRates] = useState<CanonicalTierRecord[] | null>(null);
+
   useEffect(() => {
     return () => {
       if (saveTimeoutRef.current) {
@@ -259,9 +272,24 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
 
             if (!isUserTypingRef.current) {
               setLocalWaterUnitRate(rateSnapshot.waterRate ?? '0.00');
-              setWaterBillingMode(toCanonicalMode(rateSnapshot.waterBillingType, 'water'));
+              const wMode = toCanonicalMode(rateSnapshot.waterBillingType, 'water');
+              setWaterBillingMode(wMode);
+              if (Array.isArray(rateSnapshot.waterTierRates) && rateSnapshot.waterTierRates.length > 0) {
+                setWaterTierRates(rateSnapshot.waterTierRates);
+                setInactiveWaterTierRates(rateSnapshot.waterTierRates);
+              } else if (inactiveWaterTierRates && inactiveWaterTierRates.length > 0) {
+                setWaterTierRates(inactiveWaterTierRates);
+              }
+
               setLocalElectricUnitRate(rateSnapshot.electricityRate ?? '0.00');
-              setElectricBillingMode(toCanonicalMode(rateSnapshot.electricityBillingType, 'electricity'));
+              const eMode = toCanonicalMode(rateSnapshot.electricityBillingType, 'electricity');
+              setElectricBillingMode(eMode);
+              if (Array.isArray(rateSnapshot.electricityTierRates) && rateSnapshot.electricityTierRates.length > 0) {
+                setElectricTierRates(rateSnapshot.electricityTierRates);
+                setInactiveElectricTierRates(rateSnapshot.electricityTierRates);
+              } else if (inactiveElectricTierRates && inactiveElectricTierRates.length > 0) {
+                setElectricTierRates(inactiveElectricTierRates);
+              }
               setLocalCommonFee(rateSnapshot.commonFee ?? '0.00');
               setCommonFeeMode(toCanonicalMode(rateSnapshot.commonFeeMode, 'common'));
               setLocalInternetFee(rateSnapshot.internetFee ?? '0.00');
@@ -308,11 +336,9 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
       const lType = toCanonicalMode(overrides?.lateFeeType ?? lateFeeType, 'late');
       const lValue = lType === 'none' ? '0.00' : toNormalizedDecimalString(overrides?.lateFeeValue ?? localLateFee);
 
-      const payload = {
+      const payload: any = {
         waterBillingType: wMode,
-        waterRate: wRate,
         electricityBillingType: eMode,
-        electricityRate: eRate,
         commonFee: cFee,
         commonFeeMode: cMode,
         internetFee: iFee,
@@ -323,6 +349,26 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
         lateFeeValue: lValue,
         expectedVersion: snapshotVersion,
       };
+
+      if (wMode === 'tiered') {
+        const tiersToSave = overrides?.waterTierRates ?? waterTierRates;
+        payload.waterTierRates = tiersToSave;
+        payload.waterRate = wRate;
+        setInactiveWaterTierRates(tiersToSave);
+      } else {
+        payload.waterRate = wRate;
+        payload.waterTierRates = null;
+      }
+
+      if (eMode === 'tiered') {
+        const tiersToSave = overrides?.electricityTierRates ?? electricTierRates;
+        payload.electricityTierRates = tiersToSave;
+        payload.electricityRate = eRate;
+        setInactiveElectricTierRates(tiersToSave);
+      } else {
+        payload.electricityRate = eRate;
+        payload.electricityTierRates = null;
+      }
 
       const endpoint = currentCycleId
         ? `/api/v1/billing-cycles/${currentCycleId}/rate-snapshot`
@@ -456,11 +502,24 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
             if (res.data.billing.lateFeeDaily !== undefined && !isUserTypingRef.current) setLocalLateFee(Number(res.data.billing.lateFeeDaily));
             if (res.data.billing.dueDay !== undefined && !isUserTypingRef.current) setLocalDueDay(Number(res.data.billing.dueDay));
 
+            if (Array.isArray(res.data.billing.waterTierRates) && res.data.billing.waterTierRates.length > 0) {
+              setInactiveWaterTierRates(res.data.billing.waterTierRates);
+              if (waterBillingMode === 'tiered' || res.data.billing.waterBillingType === 'tiered') {
+                setWaterTierRates(res.data.billing.waterTierRates);
+              }
+            }
+            if (Array.isArray(res.data.billing.electricityTierRates) && res.data.billing.electricityTierRates.length > 0) {
+              setInactiveElectricTierRates(res.data.billing.electricityTierRates);
+              if (electricBillingMode === 'tiered' || res.data.billing.electricityBillingType === 'tiered') {
+                setElectricTierRates(res.data.billing.electricityTierRates);
+              }
+            }
+
             if (res.data.billing.waterBillingMode || res.data.billing.waterBillingType) {
-              setWaterBillingMode(res.data.billing.waterBillingMode || res.data.billing.waterBillingType);
+              setWaterBillingMode(toCanonicalMode(res.data.billing.waterBillingMode || res.data.billing.waterBillingType, 'water'));
             }
             if (res.data.billing.electricBillingMode || res.data.billing.electricityBillingType) {
-              setElectricBillingMode(res.data.billing.electricBillingMode || res.data.billing.electricityBillingType);
+              setElectricBillingMode(toCanonicalMode(res.data.billing.electricBillingMode || res.data.billing.electricityBillingType, 'electricity'));
             }
             if (res.data.billing.commonFeeMode) setCommonFeeMode(res.data.billing.commonFeeMode);
             if (res.data.billing.internetFeeMode) setInternetFeeMode(res.data.billing.internetFeeMode);
@@ -1650,13 +1709,16 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                     onChange={(e) => {
                       const newMode = toCanonicalMode(e.target.value, 'water');
                       setWaterBillingMode(newMode);
-                      handleSaveCycleRateSettings({ waterBillingType: newMode });
+                      if (newMode !== 'tiered') {
+                        handleSaveCycleRateSettings({ waterBillingType: newMode });
+                      }
                     }}
                     className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-medium focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs disabled:opacity-50 disabled:bg-slate-100"
                     data-testid="select-water-billing-mode"
                   >
                     <option value="per_unit">บาท/หน่วย</option>
                     <option value="per_person">บาท/คน</option>
+                    <option value="tiered">คิดตามขั้นบันได (Tiered)</option>
                   </select>
                 </div>
               </div>
@@ -1692,16 +1754,49 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                     onChange={(e) => {
                       const newMode = toCanonicalMode(e.target.value, 'electricity');
                       setElectricBillingMode(newMode);
-                      handleSaveCycleRateSettings({ electricityBillingType: newMode });
+                      if (newMode !== 'tiered') {
+                        handleSaveCycleRateSettings({ electricityBillingType: newMode });
+                      }
                     }}
                     className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-800 font-medium focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-xs disabled:opacity-50 disabled:bg-slate-100"
                     data-testid="select-electric-billing-mode"
                   >
                     <option value="per_unit">บาท/หน่วย</option>
                     <option value="per_person">บาท/คน</option>
+                    <option value="tiered">คิดตามขั้นบันได (Tiered)</option>
                   </select>
                 </div>
               </div>
+
+              {/* Tiered Rate Editors (Responsive 2-column on desktop / stacked on mobile) */}
+              {(waterBillingMode === 'tiered' || electricBillingMode === 'tiered') && (
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 pt-1 pb-2">
+                  {waterBillingMode === 'tiered' && (
+                    <TieredRateEditor
+                      utilityType="water"
+                      tiers={waterTierRates}
+                      onChange={setWaterTierRates}
+                      onSave={(tiers) =>
+                        handleSaveCycleRateSettings({ waterBillingType: 'tiered', waterTierRates: tiers })
+                      }
+                      disabled={isCycleLocked}
+                      isSaving={saveStatus === 'saving'}
+                    />
+                  )}
+                  {electricBillingMode === 'tiered' && (
+                    <TieredRateEditor
+                      utilityType="electricity"
+                      tiers={electricTierRates}
+                      onChange={setElectricTierRates}
+                      onSave={(tiers) =>
+                        handleSaveCycleRateSettings({ electricityBillingType: 'tiered', electricityTierRates: tiers })
+                      }
+                      disabled={isCycleLocked}
+                      isSaving={saveStatus === 'saving'}
+                    />
+                  )}
+                </div>
+              )}
 
               {/* Common Fee Settings */}
               <div className="grid grid-cols-2 gap-4 text-xs">

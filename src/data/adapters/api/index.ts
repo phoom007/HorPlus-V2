@@ -1340,9 +1340,11 @@ export class ApiPropertyAdapter implements PropertyDataSource {
       const canonicalBillingMap: Record<string, string> = {
         waterUnitRate: 'waterRate',
         waterRate: 'waterRate',
+        waterTierRates: 'waterTierRates',
         electricUnitRate: 'electricityRate',
         electricRate: 'electricityRate',
         electricityRate: 'electricityRate',
+        electricityTierRates: 'electricityTierRates',
         waterBillingMode: 'waterBillingType',
         waterBillingType: 'waterBillingType',
         electricBillingMode: 'electricityBillingType',
