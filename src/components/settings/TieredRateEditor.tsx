@@ -17,6 +17,28 @@ export const WATER_TIER_PRESET: CanonicalTierRecord[] = [
   { upTo: null, rate: '22.00' },
 ];
 
+export const normalizeToCanonicalDecimal = (val: string | number | null | undefined): string => {
+  const str = String(val ?? '').trim();
+  if (!str) return '0.00';
+  const parts = str.split('.');
+  const intPart = parts[0] || '0';
+  const decPart = parts.length > 1 ? parts[1] : '';
+  const paddedDec = (decPart + '00').slice(0, 2);
+  return `${intPart}.${paddedDec}`;
+};
+
+export const normalizeCanonicalTiers = (rawTiers: CanonicalTierRecord[]): CanonicalTierRecord[] => {
+  return rawTiers.map((t, idx) => {
+    const isLast = idx === rawTiers.length - 1;
+    let upTo: string | null = null;
+    if (!isLast && t.upTo !== null && t.upTo !== undefined && String(t.upTo).trim() !== '') {
+      upTo = normalizeToCanonicalDecimal(t.upTo);
+    }
+    const rate = normalizeToCanonicalDecimal(t.rate);
+    return { upTo, rate };
+  });
+};
+
 export const ELECTRICITY_TIER_PRESET: CanonicalTierRecord[] = [
   { upTo: '50.00', rate: '7.00' },
   { upTo: '150.00', rate: '8.00' },
@@ -164,7 +186,8 @@ export const TieredRateEditor: React.FC<TieredRateEditorProps> = ({
       }
     }
 
-    onSave(tiers);
+    const canonicalTiers = normalizeCanonicalTiers(tiers);
+    onSave(canonicalTiers);
   };
 
   // Visual Theme mapping

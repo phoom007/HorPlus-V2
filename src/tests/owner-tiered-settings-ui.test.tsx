@@ -87,7 +87,10 @@ describe('OWNER R3.9-D.1.7: Save-Status Context Isolation & Stale Lifecycle Clos
       );
 
       fireEvent.click(screen.getByTestId('btn-save-tiers-water'));
-      expect(onSave).toHaveBeenCalledWith(validTiers);
+      expect(onSave).toHaveBeenCalledWith([
+        { upTo: '10.00', rate: '0.00' },
+        { upTo: null, rate: '3.40' },
+      ]);
 
       onSave.mockClear();
       const invalidNegative: CanonicalTierRecord[] = [
