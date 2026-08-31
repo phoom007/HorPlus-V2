@@ -273,6 +273,69 @@ export interface GroupReceiptBillSnapshot {
 }
 
 /**
+ * Maps and deterministically orders persisted BillItems (displayOrder ASC) for immutable receipt snapshotting.
+ */
+export function mapBillItemsToSnapshot(items: any[] | undefined | null) {
+  if (!items || items.length === 0) return [];
+
+  const sorted = [...items].sort((a, b) => {
+    const orderA = typeof a.displayOrder === 'number' ? a.displayOrder : 0;
+    const orderB = typeof b.displayOrder === 'number' ? b.displayOrder : 0;
+    return orderA - orderB;
+  });
+
+  return sorted.map((i: any) => ({
+    type: i.type || 'other',
+    description: i.description,
+    quantity: new Decimal((i.quantity ?? 1).toString()).toFixed(2),
+    unit: i.unit || null,
+    unitPrice: i.unitPrice ? new Decimal(i.unitPrice.toString()).toFixed(2) : '0.00',
+    amount: new Decimal(i.amount.toString()).toFixed(2),
+    metadata: i.metadata ? JSON.parse(JSON.stringify(i.metadata)) : null,
+  }));
+}
+
+/**
+ * Builds an authoritative GroupReceiptBillSnapshot from a target bill and allocated amount.
+ */
+export function buildBillGroupSnapshot(
+  targetBill: any,
+  allocatedAmount: Decimal | string | number
+): GroupReceiptBillSnapshot {
+  const billTotalStr = targetBill.totalAmount !== undefined && targetBill.totalAmount !== null
+    ? new Decimal(targetBill.totalAmount.toString()).toFixed(2)
+    : new Decimal(allocatedAmount.toString()).toFixed(2);
+  const allocatedStr = new Decimal(allocatedAmount.toString()).toFixed(2);
+
+  let items: any[] = [];
+  if (targetBill.items && targetBill.items.length > 0) {
+    items = mapBillItemsToSnapshot(targetBill.items);
+  } else {
+    items = [
+      {
+        type: 'payment',
+        description: `ชำระบิล ${targetBill.billNumber || targetBill.id}`.trim(),
+        quantity: '1.00',
+        unit: null,
+        unitPrice: allocatedStr,
+        amount: allocatedStr,
+        metadata: null,
+      },
+    ];
+  }
+
+  return {
+    billId: targetBill.id,
+    billNumber: targetBill.billNumber || null,
+    billKind: targetBill.billKind || null,
+    cycleCode: targetBill.billingCycle?.cycleCode || null,
+    billTotal: billTotalStr,
+    allocatedAmount: allocatedStr,
+    items,
+  };
+}
+
+/**
  * Generates sequential receipt in locked format RC-{YYYYMM}-{NORMALIZED_ROOM_NO}-{SEQUENCE}
  * Preserves FULL historical gross BillItems and Tier metadata regardless of full or partial payment.
  */
@@ -340,15 +403,7 @@ export async function generateReceiptInTx(
   // Snapshot full historical gross BillItems whenever persisted BillItems exist
   let receiptItems: any[] = [];
   if (bill?.items && bill.items.length > 0) {
-    receiptItems = bill.items.map((i: any) => ({
-      type: i.type || 'other',
-      description: i.description,
-      quantity: new Decimal((i.quantity ?? 1).toString()).toFixed(2),
-      unit: i.unit || null,
-      unitPrice: i.unitPrice ? new Decimal(i.unitPrice.toString()).toFixed(2) : '0.00',
-      amount: new Decimal(i.amount.toString()).toFixed(2),
-      metadata: i.metadata ? JSON.parse(JSON.stringify(i.metadata)) : null,
-    }));
+    receiptItems = mapBillItemsToSnapshot(bill.items);
   } else {
     // Safe generic fallback for legacy bills without persisted BillItems
     const billRef = bill?.billNumber || bill?.id || '';
@@ -414,6 +469,7 @@ export async function generateReceiptInTx(
 /**
  * Dedicated Group Receipt Generation: Exactly 1 Receipt per Combined Monetary Event.
  * Preserves per-bill gross BillItems, allocated amounts, and Tier metadata in snapshotData.billGroups.
+ * Enforces SUM(billGroups[].allocatedAmount) == totalAmount invariant before creation.
  */
 export async function generateGroupReceiptInTx(params: {
   tx: any;
@@ -492,48 +548,28 @@ export async function generateGroupReceiptInTx(params: {
         new Decimal(0)
       );
 
-      const bTotal = b.totalAmount ? new Decimal(b.totalAmount.toString()).toFixed(2) : totalAllocForBill.toFixed(2);
-      const allocatedStr = totalAllocForBill.toFixed(2);
-
-      let items: any[] = [];
-      if (b.items && b.items.length > 0) {
-        items = b.items.map((i: any) => ({
-          type: i.type || 'other',
-          description: i.description,
-          quantity: new Decimal((i.quantity ?? 1).toString()).toFixed(2),
-          unit: i.unit || null,
-          unitPrice: i.unitPrice ? new Decimal(i.unitPrice.toString()).toFixed(2) : '0.00',
-          amount: new Decimal(i.amount.toString()).toFixed(2),
-          metadata: i.metadata ? JSON.parse(JSON.stringify(i.metadata)) : null,
-        }));
-      } else {
-        items = [
-          {
-            type: 'payment',
-            description: `ชำระบิล ${b.billNumber || b.id}`.trim(),
-            quantity: '1.00',
-            unit: null,
-            unitPrice: allocatedStr,
-            amount: allocatedStr,
-            metadata: null,
-          },
-        ];
-      }
-
-      return {
-        billId: b.id,
-        billNumber: b.billNumber || null,
-        billKind: b.billKind || null,
-        cycleCode: b.billingCycle?.cycleCode || null,
-        billTotal: bTotal,
-        allocatedAmount: allocatedStr,
-        items,
-      };
+      return buildBillGroupSnapshot(b, totalAllocForBill);
     });
   }
 
-  // Construct legacy compatibility summary items if not explicitly provided
   const finalBillGroups = billGroups || [];
+
+  // Group Receipt Boundary Invariant: SUM(allocatedAmount) MUST equal totalAmount
+  Decimal.set({ rounding: Decimal.ROUND_HALF_UP });
+  const sumAllocated = finalBillGroups.reduce(
+    (sum: Decimal, bg) => sum.plus(new Decimal(bg.allocatedAmount.toString())),
+    new Decimal(0)
+  );
+
+  if (!sumAllocated.equals(totalAmount)) {
+    throw new AppError(
+      `ยอดรวมจัดสรรของบิล (${sumAllocated.toFixed(2)}) ไม่ตรงกับยอดเงินที่รับชำระ (${totalAmount.toFixed(2)})`,
+      400,
+      'GROUP_RECEIPT_ALLOCATION_MISMATCH'
+    );
+  }
+
+  // Construct legacy compatibility summary items if not explicitly provided
   const legacyReceiptItems = params.receiptItems || finalBillGroups.map((bg) => ({
     description: `ชำระบิล ${bg.billNumber || bg.billId}`,
     amount: bg.allocatedAmount,
