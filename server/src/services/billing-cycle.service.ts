@@ -622,10 +622,7 @@ export class BillingCycleService {
           dormitoryId,
           billingCycleId: cycle.id,
           status: { notIn: ['draft', 'cancelled', 'voided', 'withdrawn', 'superseded'] },
-          OR: [
-            { billKind: { in: UTILITY_RATE_CONSUMING_BILL_KINDS as any } },
-            { billKind: null },
-          ],
+          billKind: { in: [...UTILITY_RATE_CONSUMING_BILL_KINDS] },
         },
       });
 
@@ -747,10 +744,7 @@ export class BillingCycleService {
           dormitoryId,
           billingCycleId: cycle.id,
           status: { notIn: ['draft', 'cancelled', 'voided', 'withdrawn', 'superseded'] },
-          OR: [
-            { billKind: { in: UTILITY_RATE_CONSUMING_BILL_KINDS as any } },
-            { billKind: null },
-          ],
+          billKind: { in: [...UTILITY_RATE_CONSUMING_BILL_KINDS] },
         },
       });
       if (nonUnissuedCount > 0) {
@@ -795,10 +789,7 @@ export class BillingCycleService {
           billingCycleId: cycle.id,
           status: { notIn: ['paid', 'partially_paid', 'cancelled', 'voided', 'withdrawn', 'superseded'] },
           cancelledAt: null,
-          OR: [
-            { billKind: { in: UTILITY_RATE_CONSUMING_BILL_KINDS as any } },
-            { billKind: null },
-          ],
+          billKind: { in: [...UTILITY_RATE_CONSUMING_BILL_KINDS] },
         },
         include: { room: true },
       });
@@ -859,10 +850,7 @@ export class BillingCycleService {
             dormitoryId,
             billingCycleId: fc.id,
             status: 'paid',
-            OR: [
-              { billKind: { in: UTILITY_RATE_CONSUMING_BILL_KINDS as any } },
-              { billKind: null },
-            ],
+            billKind: { in: [...UTILITY_RATE_CONSUMING_BILL_KINDS] },
           },
         });
         if (fc.status === 'locked' || fc.status === 'completed' || fcPaidCount > 0) {
