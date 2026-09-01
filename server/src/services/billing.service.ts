@@ -5,12 +5,13 @@ import {
   BillItemEntity,
   BillFilterQuery,
   CreateBillItemData,
+  PrismaBillRepository,
 } from '../db/repositories/bill.repository.js';
-import { IBillingCycleRepository } from '../db/repositories/billing-cycle.repository.js';
-import { IMeterRepository } from '../db/repositories/meter.repository.js';
-import { IContractRepository } from '../db/repositories/contract.repository.js';
-import { IRoomRepository } from '../db/repositories/room.repository.js';
-import { ITenantRepository } from '../db/repositories/tenant.repository.js';
+import { IBillingCycleRepository, PrismaBillingCycleRepository } from '../db/repositories/billing-cycle.repository.js';
+import { IMeterRepository, PrismaMeterRepository } from '../db/repositories/meter.repository.js';
+import { IContractRepository, PrismaContractRepository } from '../db/repositories/contract.repository.js';
+import { IRoomRepository, PrismaRoomRepository } from '../db/repositories/room.repository.js';
+import { ITenantRepository, PrismaTenantRepository } from '../db/repositories/tenant.repository.js';
 import { AuditService } from './audit.service.js';
 import { billingOrchestrationService } from './billing-orchestration.service.js';
 import { resolveProvisionalBillingSource as sharedResolveProvisionalBillingSource } from './provisional-billing-source.service.js';
@@ -1202,3 +1203,13 @@ export async function resolveBillDirectRecalculationEligibilityInTx(
     bill,
   };
 }
+
+const defaultPrisma = getPrismaClient();
+export const billingService = new BillingService(
+  new PrismaBillRepository(defaultPrisma),
+  new PrismaBillingCycleRepository(defaultPrisma),
+  new PrismaMeterRepository(defaultPrisma),
+  new PrismaContractRepository(defaultPrisma),
+  new PrismaRoomRepository(defaultPrisma),
+  new PrismaTenantRepository(defaultPrisma)
+);

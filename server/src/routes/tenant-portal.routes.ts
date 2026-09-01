@@ -50,7 +50,7 @@ async function resolveTenantContext(req: Request): Promise<TenantContextResult> 
   }
 
   const tenant = await prisma.tenant.findFirst({
-    where: { userId, dormitoryId: membership.dormitoryId }
+    where: { linkedUserId: userId, dormitoryId: membership.dormitoryId }
   });
 
   if (!tenant) {

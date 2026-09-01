@@ -1,103 +1,234 @@
 ﻿/**
  * @license Apache-2.0
  * Round 2 Phase C: Recurring Rent Bill Production & Idempotency Tests
+ * Directly tests production BillingService logic with mocked repositories
  */
-import { describe, it, expect, vi } from 'vitest';
-import { calculateInstallmentSchedule } from '../../utils/installment-calculator.util.js';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { Prisma } from '@prisma/client';
+import { BillingService } from '../../services/billing.service.js';
+import { subscriptionEntitlementService } from '../../services/subscription-entitlement.service.js';
+import { billingOrchestrationService } from '../../services/billing-orchestration.service.js';
+import * as prismaModule from '../../db/prisma.js';
 
-describe('Round 2 Phase C: Recurring Rent Generation Logic', () => {
-  it('1. Monthly agreement generates distinct RENT bills across Sep, Oct, Nov', () => {
-    const monthlyTerm = {
-      id: 'term-m-1',
-      rentalType: 'MONTHLY',
-      startDate: '2026-09-01',
-      durationMonths: 3,
-      unitRentAmount: '4500.00',
+describe('Round 2 Phase C: Recurring Rent Generation (Production Path)', () => {
+  const DORM_ID = '11111111-1111-4111-8111-111111111111';
+  const ROOM_ID = '22222222-2222-4222-8222-222222222222';
+  const TENANT_ID = '33333333-3333-4333-8333-333333333333';
+  const CYCLE_OCT_ID = '44444444-4444-4444-8444-444444444444';
+  const CYCLE_NOV_ID = '55555555-5555-4555-8555-555555555555';
+  const CYCLE_SEP_ID = '66666666-6666-4666-8666-666666666666';
+
+  let billingService: BillingService;
+  let mockBillRepo: any;
+  let mockBillingCycleRepo: any;
+  let mockMeterRepo: any;
+  let mockContractRepo: any;
+  let mockRoomRepo: any;
+  let mockTenantRepo: any;
+
+  beforeEach(() => {
+    vi.spyOn(subscriptionEntitlementService, 'assertRoomOperationalEntitlement').mockResolvedValue(undefined as any);
+    vi.spyOn(subscriptionEntitlementService, 'resolveOperationalRoomEntitlementSet').mockResolvedValue({
+      operationalRoomIds: new Set([ROOM_ID]),
+      lockedRoomIds: new Set(),
+      dormitoryStatus: 'active',
+      planCode: 'PRO',
+      roomLimit: 100,
+      totalRooms: 1,
+    } as any);
+    vi.spyOn(billingOrchestrationService, 'resolveCyclePeopleCount').mockResolvedValue(1);
+
+    const mockPrisma = {
+      dormitoryBillingSettings: {
+        findUnique: vi.fn().mockResolvedValue({ dueDay: 5 }),
+      },
+      provisionalRentalTerm: {
+        findFirst: vi.fn().mockResolvedValue(null),
+      },
+      contractSnapshot: {
+        findUnique: vi.fn().mockResolvedValue(null),
+      },
+      roomBillingCycleSnapshot: {
+        findUnique: vi.fn().mockResolvedValue(null),
+      },
+      bill: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        count: vi.fn().mockResolvedValue(0),
+      },
     };
+    vi.spyOn(prismaModule, 'getPrismaClient').mockReturnValue(mockPrisma as any);
 
-    const cycles = [
-      { id: 'c-sep', cycleCode: '2026-09', periodStart: '2026-09-01' },
-      { id: 'c-oct', cycleCode: '2026-10', periodStart: '2026-10-01' },
-      { id: 'c-nov', cycleCode: '2026-11', periodStart: '2026-11-01' },
-    ];
-
-    const generatedRentBills = cycles.map((cycle) => {
-      return {
-        billingCycleId: cycle.id,
-        cycleCode: cycle.cycleCode,
-        billKind: 'RENT',
-        amount: Number(monthlyTerm.unitRentAmount),
-        description: 'ค่าเช่าห้องพัก',
-      };
-    });
-
-    expect(generatedRentBills.length).toBe(3);
-    expect(generatedRentBills[0].cycleCode).toBe('2026-09');
-    expect(generatedRentBills[1].cycleCode).toBe('2026-10');
-    expect(generatedRentBills[2].cycleCode).toBe('2026-11');
-    expect(generatedRentBills.every((b) => b.amount === 4500)).toBe(true);
-  });
-
-  it('2. Term agreement with 2 installments generates rent in Sep & Oct only, Nov has no installment', () => {
-    const termAgreement = {
-      id: 'term-t-1',
-      rentalType: 'TERM',
-      startDate: '2026-09-01',
-      totalRentAmount: 9000,
-      termInstallmentCount: 2,
-    };
-
-    const schedule = calculateInstallmentSchedule(termAgreement.totalRentAmount, termAgreement.termInstallmentCount);
-    expect(schedule.length).toBe(2);
-
-    const cycles = [
-      { cycleCode: '2026-09', periodStart: '2026-09-01', cycleOffset: 0 },
-      { cycleCode: '2026-10', periodStart: '2026-10-01', cycleOffset: 1 },
-      { cycleCode: '2026-11', periodStart: '2026-11-01', cycleOffset: 2 },
-    ];
-
-    const cycleResults = cycles.map((cycle) => {
-      if (cycle.cycleOffset >= 0 && cycle.cycleOffset < schedule.length) {
-        const item = schedule[cycle.cycleOffset];
-        return {
-          eligible: true,
-          billKind: 'RENT',
-          amount: item.amount,
-          description: item.description,
+    mockBillRepo = {
+      executeRawLock: vi.fn().mockResolvedValue(undefined),
+      withTransaction: vi.fn().mockImplementation(async (cb) => cb(mockPrisma)),
+      findByCycleAndRoom: vi.fn().mockResolvedValue(null),
+      create: vi.fn().mockImplementation(async (dormId, billData, items) => {
+        const createdBill = {
+          id: `bill-${billData.billKind.toLowerCase()}-created`,
+          ...billData,
         };
-      }
-      return { eligible: false, reason: 'NO_INSTALLMENT_FOR_CYCLE' };
-    });
-
-    expect(cycleResults[0].eligible).toBe(true);
-    expect(cycleResults[0].amount).toBe(4500);
-    expect(cycleResults[1].eligible).toBe(true);
-    expect(cycleResults[1].amount).toBe(4500);
-    expect(cycleResults[2].eligible).toBe(false);
-    expect(cycleResults[2].reason).toBe('NO_INSTALLMENT_FOR_CYCLE');
-  });
-
-  it('3. Pre-existing Rent Bill in cycle prevents duplicate creation', () => {
-    const existingBills = new Map<string, boolean>();
-    existingBills.set('room-1:c-sep:RENT', true);
-
-    const checkShouldGenerate = (roomId: string, cycleId: string, kind: string) => {
-      const key = `${roomId}:${cycleId}:${kind}`;
-      if (existingBills.has(key)) {
-        return { created: false, reason: 'BILL_ALREADY_EXISTS' };
-      }
-      existingBills.set(key, true);
-      return { created: true };
+        const createdItems = items.map((it: any, idx: number) => ({ id: `item-${idx}`, ...it }));
+        return {
+          bill: createdBill,
+          items: createdItems,
+        };
+      }),
+      getBillItems: vi.fn().mockResolvedValue([]),
     };
 
-    const firstRun = checkShouldGenerate('room-1', 'c-sep', 'RENT');
-    expect(firstRun.created).toBe(false);
-    expect(firstRun.reason).toBe('BILL_ALREADY_EXISTS');
+    mockBillingCycleRepo = {
+      findById: vi.fn().mockImplementation(async (id) => {
+        if (id === CYCLE_OCT_ID) {
+          return {
+            id: CYCLE_OCT_ID,
+            cycleCode: '2026-10',
+            periodStart: new Date('2026-10-01'),
+            periodEnd: new Date('2026-10-31'),
+            billingDate: new Date('2026-10-01'),
+            dueDate: new Date('2026-10-05'),
+            status: 'draft',
+          };
+        }
+        if (id === CYCLE_NOV_ID) {
+          return {
+            id: CYCLE_NOV_ID,
+            cycleCode: '2026-11',
+            periodStart: new Date('2026-11-01'),
+            periodEnd: new Date('2026-11-30'),
+            billingDate: new Date('2026-11-01'),
+            dueDate: new Date('2026-11-05'),
+            status: 'draft',
+          };
+        }
+        return {
+          id,
+          cycleCode: '2026-09',
+          periodStart: new Date('2026-09-01'),
+          periodEnd: new Date('2026-09-30'),
+          billingDate: new Date('2026-09-01'),
+          dueDate: new Date('2026-09-05'),
+          status: 'draft',
+        };
+      }),
+      findRateSnapshot: vi.fn().mockResolvedValue({
+        id: 'snap-1',
+        waterBillingType: 'fixed',
+        waterRate: new Prisma.Decimal('100.00'),
+        electricityBillingType: 'per_unit',
+        electricityRate: new Prisma.Decimal('8.00'),
+      }),
+      update: vi.fn().mockResolvedValue({}),
+    };
 
-    const octRun = checkShouldGenerate('room-1', 'c-oct', 'RENT');
-    expect(octRun.created).toBe(true);
+    mockMeterRepo = {
+      withTransaction: vi.fn().mockImplementation(async (cb) => cb(mockPrisma)),
+      executeRawLock: vi.fn().mockResolvedValue(undefined),
+    };
 
-    const octDuplicateRun = checkShouldGenerate('room-1', 'c-oct', 'RENT');
-    expect(octDuplicateRun.created).toBe(false);
+    mockContractRepo = {
+      findActiveContractsForRoom: vi.fn().mockResolvedValue([]),
+    };
+
+    mockRoomRepo = {
+      findById: vi.fn().mockResolvedValue({ id: ROOM_ID, roomNumber: '101' }),
+      findAll: vi.fn().mockResolvedValue({ items: [{ id: ROOM_ID }] }),
+    };
+
+    mockTenantRepo = {
+      findById: vi.fn().mockResolvedValue({ id: TENANT_ID, name: 'Somchai' }),
+    };
+
+    billingService = new BillingService(
+      mockBillRepo,
+      mockBillingCycleRepo,
+      mockMeterRepo,
+      mockContractRepo,
+      mockRoomRepo,
+      mockTenantRepo
+    );
+  });
+
+  it('1. Monthly agreement: early generation on 2026-09-15 for October cycle has billingDate=2026-10-01 and dueDate=2026-10-05', async () => {
+    vi.spyOn(billingService as any, 'resolveProvisionalBillingSource').mockResolvedValue({
+      id: 'prov-monthly-1',
+      tenantId: TENANT_ID,
+      rentalType: 'MONTHLY',
+      startDate: new Date('2026-09-01'),
+      durationMonths: 6,
+      unitRentAmount: new Prisma.Decimal('4500.00'),
+    });
+
+    const earlyIssuanceDate = new Date('2026-09-15T10:00:00.000Z');
+
+    const result = await billingService.generateBill(
+      DORM_ID,
+      {
+        billingCycleId: CYCLE_OCT_ID,
+        roomId: ROOM_ID,
+        billKind: 'RENT',
+      },
+      'owner-user-1',
+      earlyIssuanceDate
+    );
+
+    expect(result.created).toBe(true);
+    expect(result.bill.billKind).toBe('RENT');
+    // billingDate must be October 1st, NOT September 15th
+    expect(result.bill.billingDate.toISOString().slice(0, 10)).toBe('2026-10-01');
+    // dueDate must be October 5th
+    expect(result.bill.dueDate.toISOString().slice(0, 10)).toBe('2026-10-05');
+    expect(Number(result.bill.totalAmount)).toBe(4500);
+    expect(result.items[0].description).toBe('ค่าเช่าห้องพัก');
+  });
+
+  it('2. TERM agreement: 2-installment agreement (Sep, Oct) generates installment 1 in Sep, 2 in Oct, and Nov is excluded with NO_RENT_DUE_FOR_CYCLE', async () => {
+    vi.spyOn(billingService as any, 'resolveProvisionalBillingSource').mockResolvedValue({
+      id: 'prov-term-1',
+      tenantId: TENANT_ID,
+      rentalType: 'TERM',
+      startDate: new Date('2026-09-01'),
+      durationMonths: 2,
+      totalRentAmount: new Prisma.Decimal('9000.00'),
+      termInstallmentCount: 2,
+    });
+
+    // October generation (Installment 2)
+    const octRes = await billingService.bulkGenerateBills(DORM_ID, CYCLE_OCT_ID, [ROOM_ID], 'owner-1', undefined, 'RENT');
+    expect(octRes.generatedCount).toBe(1);
+    expect(octRes.bills[0].billKind).toBe('RENT');
+
+    // Reset bill repo call history
+    mockBillRepo.create.mockClear();
+
+    // November generation (No installment scheduled)
+    const novRes = await billingService.bulkGenerateBills(DORM_ID, CYCLE_NOV_ID, [ROOM_ID], 'owner-1', undefined, 'RENT');
+    expect(novRes.generatedCount).toBe(0);
+    expect(novRes.excluded.length).toBe(1);
+    expect(novRes.excluded[0].reason).toBe('NO_RENT_DUE_FOR_CYCLE');
+    // Crucial: BillRepo.create must NOT have been called for November
+    expect(mockBillRepo.create).not.toHaveBeenCalled();
+  });
+
+  it('3. Pre-existing RENT bill in cycle prevents duplicate creation and excludes with BILL_ALREADY_EXISTS', async () => {
+    vi.spyOn(billingService as any, 'resolveProvisionalBillingSource').mockResolvedValue({
+      id: 'prov-monthly-1',
+      tenantId: TENANT_ID,
+      rentalType: 'MONTHLY',
+      startDate: new Date('2026-09-01'),
+      durationMonths: 6,
+      unitRentAmount: new Prisma.Decimal('4500.00'),
+    });
+
+    mockBillRepo.findByCycleAndRoom.mockResolvedValueOnce({
+      id: 'bill-existing-rent',
+      billKind: 'RENT',
+      billNumber: 'BILL-202609-001',
+    });
+
+    const res = await billingService.bulkGenerateBills(DORM_ID, CYCLE_SEP_ID, [ROOM_ID], 'owner-1', undefined, 'RENT');
+    expect(res.generatedCount).toBe(0);
+    expect(res.excluded.length).toBe(1);
+    expect(res.excluded[0].reason).toBe('BILL_ALREADY_EXISTS');
+    expect(mockBillRepo.create).not.toHaveBeenCalled();
   });
 });

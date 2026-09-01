@@ -1,155 +1,111 @@
 ﻿/**
  * @license Apache-2.0
- * Round 2 Phase B: Settled Other-Fee Immutability & Conflict Rejection Tests
+ * Round 2 Phase B: Settled Other-Fee Immutability & Status Recalculation Tests
+ * Directly tests the production engine: syncDailyStayOtherFeesInTx
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { Prisma } from '@prisma/client';
-import { formatDecimal } from '../../utils/decimal-math.util.js';
+import { syncDailyStayOtherFeesInTx } from '../../utils/daily-other-fee-sync.util.js';
 
-describe('Round 2 Phase B: Settled Daily Other-Fee Immutability', () => {
-  function syncDailyOtherFees(
-    existingItems: Array<{ id: string; itemType: string; description: string; amount: any; status: string }>,
-    cleanOtherFees: Array<{ description: string; amount: any }>
-  ) {
-    const settledOtherFees = existingItems.filter(
-      (it) => it.itemType === 'OTHER_FEE' && (it.status === 'SETTLED' || it.status === 'DECLARED_PAID')
-    );
-
-    if (settledOtherFees.length > 0) {
-      const availableCleanFees = cleanOtherFees.map((f) => ({
-        description: f.description,
-        amountDec: new Prisma.Decimal(formatDecimal(f.amount)),
-        matched: false,
-      }));
-
-      for (const settled of settledOtherFees) {
-        const settledAmtDec = new Prisma.Decimal(formatDecimal(settled.amount));
-        const exactMatch = availableCleanFees.find(
-          (cf) => !cf.matched && cf.description === settled.description && cf.amountDec.equals(settledAmtDec)
-        );
-
-        if (exactMatch) {
-          exactMatch.matched = true;
-        } else {
-          const changedFee = availableCleanFees.find((cf) => cf.description === settled.description);
-          if (changedFee) {
-            const err = new Error(`ไม่สามารถแก้ไขรายการค่าใช้จ่าย "${settled.description}" ที่ชำระเงินแล้วได้`);
-            (err as any).statusCode = 409;
-            (err as any).code = 'DAILY_OTHER_FEE_ALREADY_SETTLED';
-            throw err;
-          }
-          const err = new Error(`ไม่สามารถลบรายการค่าใช้จ่าย "${settled.description}" ที่ชำระเงินแล้วได้`);
-          (err as any).statusCode = 409;
-          (err as any).code = 'DAILY_OTHER_FEE_ALREADY_SETTLED';
-          throw err;
-        }
-      }
-    }
-
-    const remainingItems = existingItems.filter((it) => it.itemType !== 'OTHER_FEE' || it.status !== 'OUTSTANDING');
-    const matchedSettledIds = new Set<string>();
-    const createdItems: any[] = [];
-
-    for (const fee of cleanOtherFees) {
-      const feeAmtDec = new Prisma.Decimal(formatDecimal(fee.amount));
-      const matchingSettled = settledOtherFees.find(
-        (s) =>
-          !matchedSettledIds.has(s.id) &&
-          s.description === fee.description &&
-          new Prisma.Decimal(formatDecimal(s.amount)).equals(feeAmtDec)
-      );
-
-      if (matchingSettled) {
-        matchedSettledIds.add(matchingSettled.id);
-      } else {
-        createdItems.push({
-          id: `new-${createdItems.length + 1}`,
-          itemType: 'OTHER_FEE',
-          description: fee.description,
-          amount: feeAmtDec,
-          status: 'OUTSTANDING',
-        });
-      }
-    }
-
-    const allItems = [...remainingItems, ...createdItems];
-    let totalAgreed = new Prisma.Decimal('0.00');
-    let totalPaid = new Prisma.Decimal('0.00');
-
-    for (const it of allItems) {
-      const itAmt = new Prisma.Decimal(formatDecimal(it.amount));
-      totalAgreed = totalAgreed.plus(itAmt);
-      if (it.status === 'SETTLED' || it.status === 'DECLARED_PAID') {
-        totalPaid = totalPaid.plus(itAmt);
-      }
-    }
+describe('Round 2 Phase B: Settled Daily Other-Fee Immutability (Production Path)', () => {
+  function createMockClient(initialItems: any[]) {
+    let items = [...initialItems];
+    let updatedInvoice: any = null;
 
     return {
-      items: allItems,
-      totalAgreed: totalAgreed.toFixed(2),
-      outstanding: totalAgreed.minus(totalPaid).toFixed(2),
+      client: {
+        dailyStayInvoiceItem: {
+          findMany: vi.fn().mockImplementation(async ({ where }) => {
+            return items.filter((i) => i.invoiceId === where.invoiceId);
+          }),
+          deleteMany: vi.fn().mockImplementation(async ({ where }) => {
+            items = items.filter((i) => !(i.invoiceId === where.invoiceId && i.itemType === where.itemType && i.status === where.status));
+            return { count: 1 };
+          }),
+          createMany: vi.fn().mockImplementation(async ({ data }) => {
+            const created = data.map((d: any, idx: number) => ({ id: `new-item-${idx + 1}`, ...d }));
+            items.push(...created);
+            return { count: created.length };
+          }),
+        },
+        dailyStayInvoice: {
+          update: vi.fn().mockImplementation(async ({ where, data }) => {
+            updatedInvoice = { id: where.id, ...data };
+            return updatedInvoice;
+          }),
+        },
+      },
+      getItems: () => items,
+      getUpdatedInvoice: () => updatedInvoice,
     };
   }
 
-  it('1. rejects mutation when user attempts to change amount of settled fee (50 -> 80)', () => {
-    const existing = [
-      { id: '1', itemType: 'DAILY_RENT', description: 'ค่าเช่ารายวัน', amount: '500.00', status: 'OUTSTANDING' },
-      { id: '2', itemType: 'OTHER_FEE', description: 'ค่าล้างแอร์', amount: '50.00', status: 'SETTLED' },
-    ];
+  it('A. fully PAID invoice: editing settled fee from 50 to 80 is BLOCKED (409)', async () => {
+    const mock = createMockClient([
+      { id: '1', invoiceId: 'inv-1', itemType: 'DAILY_RENT', description: 'ค่าเช่ารายวัน', amount: new Prisma.Decimal('500.00'), status: 'SETTLED' },
+      { id: '2', invoiceId: 'inv-1', itemType: 'OTHER_FEE', description: 'ค่าล้างแอร์', amount: new Prisma.Decimal('50.00'), status: 'SETTLED' },
+    ]);
 
-    expect(() => {
-      syncDailyOtherFees(existing, [{ description: 'ค่าล้างแอร์', amount: '80.00' }]);
-    }).toThrowError(/ไม่สามารถแก้ไขรายการค่าใช้จ่าย "ค่าล้างแอร์" ที่ชำระเงินแล้วได้/);
+    await expect(
+      syncDailyStayOtherFeesInTx(mock.client, 'inv-1', 'PAID', [{ description: 'ค่าล้างแอร์', amount: '80.00' }])
+    ).rejects.toThrowError(/ไม่สามารถแก้ไขรายการค่าใช้จ่าย "ค่าล้างแอร์" ที่ชำระเงินแล้วได้/);
   });
 
-  it('2. rejects deletion when user attempts to remove settled fee row', () => {
-    const existing = [
-      { id: '1', itemType: 'DAILY_RENT', description: 'ค่าเช่ารายวัน', amount: '500.00', status: 'OUTSTANDING' },
-      { id: '2', itemType: 'OTHER_FEE', description: 'ค่าล้างแอร์', amount: '50.00', status: 'SETTLED' },
-    ];
+  it('B. fully PAID invoice: deleting settled fee is BLOCKED (409)', async () => {
+    const mock = createMockClient([
+      { id: '1', invoiceId: 'inv-1', itemType: 'DAILY_RENT', description: 'ค่าเช่ารายวัน', amount: new Prisma.Decimal('500.00'), status: 'SETTLED' },
+      { id: '2', invoiceId: 'inv-1', itemType: 'OTHER_FEE', description: 'ค่าล้างแอร์', amount: new Prisma.Decimal('50.00'), status: 'SETTLED' },
+    ]);
 
-    expect(() => {
-      syncDailyOtherFees(existing, []);
-    }).toThrowError(/ไม่สามารถลบรายการค่าใช้จ่าย "ค่าล้างแอร์" ที่ชำระเงินแล้วได้/);
+    await expect(
+      syncDailyStayOtherFeesInTx(mock.client, 'inv-1', 'PAID', [])
+    ).rejects.toThrowError(/ไม่สามารถลบรายการค่าใช้จ่าย "ค่าล้างแอร์" ที่ชำระเงินแล้วได้/);
   });
 
-  it('3. allows unchanged save with settled fee without creating duplicate', () => {
-    const existing = [
-      { id: '1', itemType: 'DAILY_RENT', description: 'ค่าเช่ารายวัน', amount: '500.00', status: 'OUTSTANDING' },
-      { id: '2', itemType: 'OTHER_FEE', description: 'ค่าล้างแอร์', amount: '50.00', status: 'SETTLED' },
-    ];
+  it('C. fully PAID invoice: saving unchanged fee is PASS and idempotent', async () => {
+    const mock = createMockClient([
+      { id: '1', invoiceId: 'inv-1', itemType: 'DAILY_RENT', description: 'ค่าเช่ารายวัน', amount: new Prisma.Decimal('500.00'), status: 'SETTLED' },
+      { id: '2', invoiceId: 'inv-1', itemType: 'OTHER_FEE', description: 'ค่าล้างแอร์', amount: new Prisma.Decimal('50.00'), status: 'SETTLED' },
+    ]);
 
-    const result = syncDailyOtherFees(existing, [{ description: 'ค่าล้างแอร์', amount: '50.00' }]);
-    expect(result.totalAgreed).toBe('550.00');
-    expect(result.outstanding).toBe('500.00');
-    expect(result.items.filter((it) => it.itemType === 'OTHER_FEE').length).toBe(1);
+    const result = await syncDailyStayOtherFeesInTx(mock.client, 'inv-1', 'PAID', [{ description: 'ค่าล้างแอร์', amount: '50.00' }]);
+    expect(result.status).toBe('PAID');
+    expect(result.totalAgreed.toFixed(2)).toBe('550.00');
+    expect(result.outstanding.toFixed(2)).toBe('0.00');
+    expect(mock.getItems().length).toBe(2);
   });
 
-  it('4. updates unpaid fee cleanly (50 -> 80 yielding 580 total)', () => {
-    const existing = [
-      { id: '1', itemType: 'DAILY_RENT', description: 'ค่าเช่ารายวัน', amount: '500.00', status: 'OUTSTANDING' },
-      { id: '2', itemType: 'OTHER_FEE', description: 'ค่าล้างแอร์', amount: '50.00', status: 'OUTSTANDING' },
-    ];
+  it('D. fully PAID invoice: adding new distinct fee updates status to PARTIALLY_PAID and outstanding to 30', async () => {
+    const mock = createMockClient([
+      { id: '1', invoiceId: 'inv-1', itemType: 'DAILY_RENT', description: 'ค่าเช่ารายวัน', amount: new Prisma.Decimal('500.00'), status: 'SETTLED' },
+      { id: '2', invoiceId: 'inv-1', itemType: 'OTHER_FEE', description: 'ค่าล้างแอร์', amount: new Prisma.Decimal('50.00'), status: 'SETTLED' },
+    ]);
 
-    const result = syncDailyOtherFees(existing, [{ description: 'ค่าล้างแอร์', amount: '80.00' }]);
-    expect(result.totalAgreed).toBe('580.00');
-    expect(result.outstanding).toBe('580.00');
-    expect(result.items.filter((it) => it.itemType === 'OTHER_FEE').length).toBe(1);
-    expect(result.items.find((it) => it.itemType === 'OTHER_FEE')?.amount.toString()).toBe('80');
-  });
-
-  it('5. allows adding new distinct fee alongside settled fee', () => {
-    const existing = [
-      { id: '1', itemType: 'DAILY_RENT', description: 'ค่าเช่ารายวัน', amount: '500.00', status: 'OUTSTANDING' },
-      { id: '2', itemType: 'OTHER_FEE', description: 'ค่าล้างแอร์', amount: '50.00', status: 'SETTLED' },
-    ];
-
-    const result = syncDailyOtherFees(existing, [
+    const result = await syncDailyStayOtherFeesInTx(mock.client, 'inv-1', 'PAID', [
       { description: 'ค่าล้างแอร์', amount: '50.00' },
       { description: 'ค่ากุญแจเพิ่ม', amount: '30.00' },
     ]);
-    expect(result.totalAgreed).toBe('580.00');
-    expect(result.outstanding).toBe('530.00');
-    expect(result.items.filter((it) => it.itemType === 'OTHER_FEE').length).toBe(2);
+
+    expect(result.status).toBe('PARTIALLY_PAID');
+    expect(result.totalAgreed.toFixed(2)).toBe('580.00');
+    expect(result.totalPaid.toFixed(2)).toBe('550.00');
+    expect(result.outstanding.toFixed(2)).toBe('30.00');
+    expect(mock.getItems().filter((i) => i.itemType === 'OTHER_FEE').length).toBe(2);
+    expect(mock.getItems().find((i) => i.description === 'ค่ากุญแจเพิ่ม')?.status).toBe('OUTSTANDING');
+  });
+
+  it('E. unpaid invoice: editing other fee from 50 to 80 updates total cleanly to 580', async () => {
+    const mock = createMockClient([
+      { id: '1', invoiceId: 'inv-1', itemType: 'DAILY_RENT', description: 'ค่าเช่ารายวัน', amount: new Prisma.Decimal('500.00'), status: 'OUTSTANDING' },
+      { id: '2', invoiceId: 'inv-1', itemType: 'OTHER_FEE', description: 'ค่าล้างแอร์', amount: new Prisma.Decimal('50.00'), status: 'OUTSTANDING' },
+    ]);
+
+    const result = await syncDailyStayOtherFeesInTx(mock.client, 'inv-1', 'ISSUED', [{ description: 'ค่าล้างแอร์', amount: '80.00' }]);
+
+    expect(result.status).toBe('ISSUED');
+    expect(result.totalAgreed.toFixed(2)).toBe('580.00');
+    expect(result.outstanding.toFixed(2)).toBe('580.00');
+    expect(mock.getItems().filter((i) => i.itemType === 'OTHER_FEE').length).toBe(1);
+    expect(mock.getItems().find((i) => i.description === 'ค่าล้างแอร์')?.amount.toString()).toBe('80');
   });
 });
