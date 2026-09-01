@@ -127,6 +127,26 @@ export class RoomBillingStateService {
       };
     }
 
+    // Authoritative current financial obligation ordering:
+    // 1. billingCycle.periodStart DESC
+    // 2. billingDate DESC
+    // 3. createdAt DESC
+    visibleBills.sort((a, b) => {
+      const aPeriodStart = a.billingCycle?.periodStart ? new Date(a.billingCycle.periodStart).getTime() : 0;
+      const bPeriodStart = b.billingCycle?.periodStart ? new Date(b.billingCycle.periodStart).getTime() : 0;
+      if (aPeriodStart !== bPeriodStart) {
+        return bPeriodStart - aPeriodStart;
+      }
+      const aBillingDate = a.billingDate ? new Date(a.billingDate).getTime() : 0;
+      const bBillingDate = b.billingDate ? new Date(b.billingDate).getTime() : 0;
+      if (aBillingDate !== bBillingDate) {
+        return bBillingDate - aBillingDate;
+      }
+      const aCreatedAt = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const bCreatedAt = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      return bCreatedAt - aCreatedAt;
+    });
+
     const latestBill = visibleBills[0];
 
     if (latestBill.status === 'checking') {

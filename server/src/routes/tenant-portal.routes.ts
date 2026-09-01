@@ -43,10 +43,12 @@ async function resolveTenantContext(req: Request): Promise<TenantContextResult> 
     include: { role: true }
   });
 
-  const membership = allMemberships.find((m) => m.role?.code === 'TENANT') || allMemberships[0];
+  const membership = allMemberships.find(m => 
+    !m.role || (m.role.code || '').toUpperCase() === 'TENANT'
+  );
 
   if (!membership) {
-    return { error: { code: 'FORBIDDEN', message: 'Forbidden: You do not have access to tenant portal', statusCode: 403 } };
+    return { error: { code: 'FORBIDDEN', message: 'Not a tenant', statusCode: 403 } };
   }
 
   const tenant = await prisma.tenant.findFirst({
@@ -54,16 +56,11 @@ async function resolveTenantContext(req: Request): Promise<TenantContextResult> 
   });
 
   if (!tenant) {
-    return { error: { code: 'TENANT_NOT_FOUND', message: 'ไม่พบข้อมูลผู้เช่าสำหรับบัญชีนี้', statusCode: 404 } };
+    return { error: { code: 'FORBIDDEN', message: 'Tenant record not found', statusCode: 403 } };
   }
 
   const contract = await prisma.contract.findFirst({
-    where: {
-      tenantId: tenant.id,
-      dormitoryId: membership.dormitoryId,
-      status: { in: ['ACTIVE', 'active'] }
-    },
-    orderBy: { createdAt: 'desc' }
+    where: { tenantId: tenant.id, status: 'active' }
   });
 
   return {
