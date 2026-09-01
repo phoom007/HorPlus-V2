@@ -605,12 +605,10 @@ export class BillingService {
     let dueDate: Date;
 
     if (billKind === 'RENT') {
-      billingDate = data.billingDate ? new Date(data.billingDate) : new Date(cycle.periodStart);
-      dueDate = data.dueDate
-        ? new Date(data.dueDate)
-        : cycle.dueDate
-          ? new Date(cycle.dueDate)
-          : resolveBillDueDate(new Date(cycle.periodStart), settings.dueDay);
+      billingDate = new Date(cycle.periodStart);
+      dueDate = cycle.dueDate
+        ? new Date(cycle.dueDate)
+        : resolveBillDueDate(new Date(cycle.periodStart), settings.dueDay);
     } else {
       billingDate = data.billingDate ? new Date(data.billingDate) : resolveBillIssueDate(issuanceNow);
       dueDate = data.dueDate ? new Date(data.dueDate) : resolveBillDueDate(issuanceNow, settings.dueDay);
@@ -927,8 +925,8 @@ export class BillingService {
       }
     }
 
-    // Update cycle status to generated if at least one bill generated
-    if (cycle.status === 'draft' && generatedBills.length > 0) {
+    // Update cycle status to generated if at least one bill generated (RENT alone does not activate operational cycle)
+    if (cycle.status === 'draft' && generatedBills.length > 0 && targetBillKind !== 'RENT') {
       await this.billingCycleRepo.update(billingCycleId, dormitoryId, {
         status: 'generated',
         generatedAt: issuanceNow,
@@ -957,10 +955,27 @@ export class BillingService {
     const prisma = getPrismaClient();
     let totalGenerated = 0;
     try {
+      const { billingCycleService } = await import('./billing-cycle.service.js');
+      const { getTenantRentCutoffDate } = await import('../utils/tenant-visibility.util.js');
+
+      const activeDorms = await prisma.dormitory.findMany({
+        where: { status: 'active' },
+        select: { id: true },
+      });
+
+      for (const dorm of activeDorms) {
+        try {
+          await billingCycleService.ensureRollingBillingCycles(dorm.id);
+        } catch (err: any) {
+          // continue for other dorms
+        }
+      }
+
+      const cutoff = getTenantRentCutoffDate(asOfDate);
       const cycles = await prisma.billingCycle.findMany({
         where: {
           status: { notIn: ['completed', 'locked'] },
-          periodStart: { lte: asOfDate },
+          periodStart: { lte: cutoff },
         },
         select: { id: true, dormitoryId: true },
       });

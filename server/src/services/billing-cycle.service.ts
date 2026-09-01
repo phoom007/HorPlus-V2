@@ -1071,3 +1071,8 @@ export class BillingCycleService {
     return res.items;
   }
 }
+
+const defaultPrisma = getPrismaClient();
+export const billingCycleService = new BillingCycleService(
+  new PrismaBillingCycleRepository(defaultPrisma)
+);
