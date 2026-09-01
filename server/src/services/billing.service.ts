@@ -191,6 +191,89 @@ export class BillingService {
     });
   }
 
+  /**
+   * Authoritatively resolves the active billing agreement (Contract or ProvisionalRentalTerm) for a room in a cycle.
+   *
+   * Priority 1: Eligible active Contract (status active, deletedAt null, overlapping cycle: startDate <= periodEnd && endDate >= periodStart)
+   * Priority 2: Eligible active ProvisionalRentalTerm (status ACTIVE, deletedAt null, overlapping cycle: startDate <= periodEnd && endDate >= periodStart)
+   *
+   * Rejections:
+   * - If active contracts exist for the room but none overlap target cycle -> CONTRACT_NOT_ELIGIBLE_FOR_CYCLE (400)
+   * - If no active contracts exist, but active provisional terms exist out of cycle -> PROVISIONAL_TERM_NOT_ELIGIBLE_FOR_CYCLE (400)
+   * - If no active contract or provisional term exists -> NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM (404)
+   */
+  public async resolveActiveAgreementBillingSource(
+    dormitoryId: string,
+    roomId: string,
+    billingCycle: { periodStart: Date | string; periodEnd: Date | string },
+    tx?: any
+  ): Promise<{ contract: any | null; provisionalTerm: any | null }> {
+    const cycleStart = new Date(billingCycle.periodStart);
+    const cycleEnd = new Date(billingCycle.periodEnd);
+
+    // 1. Fetch active contracts for room
+    const activeContracts = await this.contractRepo.findActiveContractsForRoom(dormitoryId, roomId);
+
+    if (activeContracts && activeContracts.length > 0) {
+      const overlappingContracts = activeContracts.filter((c: any) => {
+        const cStart = new Date(c.startDate);
+        const cEnd = new Date(c.endDate);
+        return cStart <= cycleEnd && cEnd >= cycleStart;
+      });
+
+      if (overlappingContracts.length === 0) {
+        const err = new Error('CONTRACT_NOT_ELIGIBLE_FOR_CYCLE');
+        (err as any).statusCode = 400;
+        (err as any).code = 'CONTRACT_NOT_ELIGIBLE_FOR_CYCLE';
+        (err as any).message = 'สัญญาเช่าไม่อยู่ในช่วงเวลาของรอบบิลนี้';
+        throw err;
+      }
+
+      overlappingContracts.sort((a: any, b: any) => {
+        const aStart = new Date(a.startDate).getTime();
+        const bStart = new Date(b.startDate).getTime();
+        if (aStart !== bStart) return aStart - bStart;
+        const aCreated = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+        const bCreated = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+        return bCreated - aCreated;
+      });
+
+      return { contract: overlappingContracts[0], provisionalTerm: null };
+    }
+
+    // 2. If no active contracts exist, resolve ProvisionalRentalTerm (Priority 2)
+    const provisionalTerm = await this.resolveProvisionalBillingSource(dormitoryId, roomId, billingCycle, tx);
+
+    if (provisionalTerm) {
+      return { contract: null, provisionalTerm };
+    }
+
+    const prisma = getPrismaClient();
+    const client = tx || prisma;
+    const anyActiveTerm = await client.provisionalRentalTerm.findFirst({
+      where: {
+        dormitoryId,
+        roomId,
+        status: 'ACTIVE',
+        deletedAt: null,
+      },
+    });
+
+    if (anyActiveTerm) {
+      const err = new Error('PROVISIONAL_TERM_NOT_ELIGIBLE_FOR_CYCLE');
+      (err as any).statusCode = 400;
+      (err as any).code = 'PROVISIONAL_TERM_NOT_ELIGIBLE_FOR_CYCLE';
+      (err as any).message = 'ข้อตกลงเช่าชั่วคราวไม่อยู่ในช่วงเวลาของรอบบิลนี้';
+      throw err;
+    }
+
+    const err = new Error('NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM');
+    (err as any).statusCode = 404;
+    (err as any).code = 'NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM';
+    (err as any).message = 'ห้องพักไม่มีสัญญาหรือข้อตกลงเช่าที่พร้อมออกบิลสำหรับงวดนี้';
+    throw err;
+  }
+
   public async generateBillPreview(
     dormitoryId: string,
     billingCycleId: string,
@@ -236,41 +319,13 @@ export class BillingService {
       throw err;
     }
 
-    // 1. Resolve Contract (Priority 1) or ACTIVE ProvisionalRentalTerm (Priority 2)
-    const activeContracts = await this.contractRepo.findActiveContractsForRoom(dormitoryId, roomId);
-    let contract = activeContracts.length > 0 ? activeContracts[0] : null;
-    let provisionalTerm: any = null;
-
-    const prisma = getPrismaClient();
-    const client = tx || prisma;
-
-    if (!contract) {
-      provisionalTerm = await this.resolveProvisionalBillingSource(dormitoryId, roomId, cycle, tx);
-
-      if (!provisionalTerm) {
-        // Check if there is an active provisional term out of cycle range
-        const anyActive = await client.provisionalRentalTerm.findFirst({
-          where: {
-            dormitoryId,
-            roomId,
-            status: 'ACTIVE',
-            deletedAt: null,
-          },
-        });
-        if (anyActive) {
-          const err = new Error('PROVISIONAL_TERM_NOT_ELIGIBLE_FOR_CYCLE');
-          (err as any).statusCode = 400;
-          (err as any).code = 'PROVISIONAL_TERM_NOT_ELIGIBLE_FOR_CYCLE';
-          (err as any).message = 'ข้อตกลงเช่าชั่วคราวไม่อยู่ในช่วงเวลาของรอบบิลนี้';
-          throw err;
-        }
-        const err = new Error('NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM');
-        (err as any).statusCode = 404;
-        (err as any).code = 'NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM';
-        (err as any).message = 'ห้องพักไม่มีสัญญาหรือข้อตกลงเช่าที่พร้อมออกบิลสำหรับงวดนี้';
-        throw err;
-      }
-    }
+    // 1. Resolve Contract (Priority 1) or ACTIVE ProvisionalRentalTerm (Priority 2) with cycle eligibility
+    const { contract, provisionalTerm } = await this.resolveActiveAgreementBillingSource(
+      dormitoryId,
+      roomId,
+      cycle,
+      tx
+    );
 
     const tenantId = contract ? contract.tenantId : provisionalTerm.tenantId;
     const tenant = tenantId ? await this.tenantRepo.findById(tenantId, dormitoryId) : null;
@@ -548,36 +603,13 @@ export class BillingService {
       throw err;
     }
 
-    // Derive/validate active contract or active provisional rental term for room
-    const activeContracts = await this.contractRepo.findActiveContractsForRoom(dormitoryId, data.roomId);
-    let contract = activeContracts.length > 0 ? activeContracts[0] : null;
-    let provisionalTerm: any = null;
-
-    if (!contract) {
-      provisionalTerm = await this.resolveProvisionalBillingSource(dormitoryId, data.roomId, cycle, existingTx);
-
-      if (!provisionalTerm) {
-        const anyActive = await (existingTx || prisma).provisionalRentalTerm.findFirst({
-          where: {
-            dormitoryId,
-            roomId: data.roomId,
-            status: 'ACTIVE',
-            deletedAt: null,
-          },
-        });
-        if (anyActive) {
-          const err = new Error('PROVISIONAL_TERM_NOT_ELIGIBLE_FOR_CYCLE');
-          (err as any).statusCode = 400;
-          (err as any).code = 'PROVISIONAL_TERM_NOT_ELIGIBLE_FOR_CYCLE';
-          (err as any).message = 'ข้อตกลงเช่าชั่วคราวไม่อยู่ในช่วงเวลาของรอบบิลนี้';
-          throw err;
-        }
-        const err = new Error('NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM');
-        (err as any).statusCode = 404;
-        (err as any).code = 'NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM';
-        throw err;
-      }
-    }
+    // Derive/validate active contract or active provisional rental term for room with cycle eligibility
+    const { contract, provisionalTerm } = await this.resolveActiveAgreementBillingSource(
+      dormitoryId,
+      data.roomId,
+      cycle,
+      existingTx
+    );
 
     const effectiveContractId = contract ? contract.id : null;
     const effectiveProvisionalRentalTermId = provisionalTerm ? provisionalTerm.id : null;
@@ -850,6 +882,7 @@ export class BillingService {
           if (
             err.code === 'MISSING_METER_READING' ||
             err.code === 'NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM' ||
+            err.code === 'CONTRACT_NOT_ELIGIBLE_FOR_CYCLE' ||
             err.code === 'PROVISIONAL_TERM_NOT_ELIGIBLE_FOR_CYCLE' ||
             err.code === 'NO_RENT_DUE_FOR_CYCLE' ||
             err.code === 'BILL_ALREADY_EXISTS' ||
@@ -867,26 +900,15 @@ export class BillingService {
         }
       } else {
         // Standard room issuance without dirty row
-        const activeContracts = await this.contractRepo.findActiveContractsForRoom(dormitoryId, roomId);
-        let contract = activeContracts.length > 0 ? activeContracts[0] : null;
-        let provisionalTerm: any = null;
-
-        if (!contract) {
-          provisionalTerm = await this.resolveProvisionalBillingSource(dormitoryId, roomId, cycle);
-        }
-
-        if (!contract && !provisionalTerm) {
-          excluded.push({ roomId, reason: 'NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM' });
-          continue;
-        }
-
-        const existing = await this.billRepo.findByCycleAndRoom(dormitoryId, billingCycleId, roomId, targetBillKind);
-        if (existing) {
-          excluded.push({ roomId, reason: 'BILL_ALREADY_EXISTS' });
-          continue;
-        }
-
         try {
+          await this.resolveActiveAgreementBillingSource(dormitoryId, roomId, cycle);
+
+          const existing = await this.billRepo.findByCycleAndRoom(dormitoryId, billingCycleId, roomId, targetBillKind);
+          if (existing) {
+            excluded.push({ roomId, reason: 'BILL_ALREADY_EXISTS' });
+            continue;
+          }
+
           const { bill, created } = await this.generateBill(
             dormitoryId,
             {
@@ -907,6 +929,7 @@ export class BillingService {
           if (
             err.code === 'MISSING_METER_READING' ||
             err.code === 'NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM' ||
+            err.code === 'CONTRACT_NOT_ELIGIBLE_FOR_CYCLE' ||
             err.code === 'PROVISIONAL_TERM_NOT_ELIGIBLE_FOR_CYCLE' ||
             err.code === 'NO_RENT_DUE_FOR_CYCLE' ||
             err.code === 'BILL_ALREADY_EXISTS' ||
@@ -979,7 +1002,7 @@ export class BillingService {
         where: {
           dormitoryId: { in: activeDorms.map((d) => d.id) },
           status: { notIn: ['completed', 'locked'] },
-          cycleCode: { lte: nextCalCycle },
+          cycleCode: { gte: currentCalCycle, lte: nextCalCycle },
         },
         select: { id: true, dormitoryId: true, cycleCode: true },
         orderBy: { periodStart: 'asc' },
