@@ -706,43 +706,54 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
     staleTime: 5000,
   });
 
+  // Daily Detail Modal State
+  const [isDailyDetailOpen, setIsDailyDetailOpen] = useState(false);
+  const [viewingDailyDetail, setViewingDailyDetail] = useState<DailyStayInvoice | null>(null);
+
+  const handleOpenDailyDetail = (inv: DailyStayInvoice) => {
+    setViewingDailyDetail(inv);
+    setIsDailyDetailOpen(true);
+  };
+
+  // Effective billing cycle derivation
+  const effectiveCycleId = selectedBillingCycleId || billingCycles.find(c => c.cycleCode === selectedCycleCode)?.id;
+  const effectiveCycleCode = selectedCycleCode || billingCycles.find(c => c.id === effectiveCycleId)?.cycleCode || '';
+
+  const selectedCycleObj = useMemo(() => {
+    return billingCycles.find(c => c.id === effectiveCycleId || (effectiveCycleCode && c.cycleCode === effectiveCycleCode)) || null;
+  }, [billingCycles, effectiveCycleId, effectiveCycleCode]);
+
+  const isDailyInvoiceInSelectedCycle = (inv: any, cycle: BillingCycle | null): boolean => {
+    if (!cycle) return true;
+    const stay = inv.dailyStay;
+    const startStr = stay?.startDate ? String(stay.startDate).slice(0, 10) : (inv.checkInDate ? String(inv.checkInDate).slice(0, 10) : (inv.issuedAt ? String(inv.issuedAt).slice(0, 10) : ''));
+    const endStr = stay?.endDate ? String(stay.endDate).slice(0, 10) : (inv.checkOutDate ? String(inv.checkOutDate).slice(0, 10) : startStr);
+    const cycleStartStr = String(cycle.periodStart).slice(0, 10);
+    const cycleEndStr = String(cycle.periodEnd).slice(0, 10);
+
+    if (!startStr || !cycleStartStr || !cycleEndStr) return true;
+    return startStr <= cycleEndStr && endStr >= cycleStartStr;
+  };
+
   const unpaidDailyInvoices = useMemo(() => {
     if (!dailyInvoicesData || !Array.isArray(dailyInvoicesData)) return [];
     return dailyInvoicesData.filter((inv) => {
+      if (!isDailyInvoiceInSelectedCycle(inv, selectedCycleObj)) return false;
       const status = (inv.status || '').toUpperCase();
       if (status === 'PAID' || status === 'CANCELLED') return false;
       const outstanding = Number(inv.outstandingAmount ?? inv.totalAgreedAmount ?? 0);
       return outstanding > 0;
     });
-  }, [dailyInvoicesData]);
+  }, [dailyInvoicesData, selectedCycleObj]);
 
   const paidDailyInvoices = useMemo(() => {
     if (!dailyInvoicesData || !Array.isArray(dailyInvoicesData)) return [];
     return dailyInvoicesData.filter((inv) => {
+      if (!isDailyInvoiceInSelectedCycle(inv, selectedCycleObj)) return false;
       const status = (inv.status || '').toUpperCase();
       return status === 'PAID' || inv.items?.some((it: any) => it.status === 'SETTLED' || it.status === 'DECLARED_PAID');
     });
-  }, [dailyInvoicesData]);
-
-  // Stable Idempotency Key Manager (retains key across retries/uncertainty, resets on success)
-  const idempotencyKeyMapRef = useRef<Map<string, string>>(new Map());
-
-  const getIdempotencyKey = (operationId: string): string => {
-    if (!idempotencyKeyMapRef.current.has(operationId)) {
-      const newKey = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-        ? crypto.randomUUID()
-        : `key-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
-      idempotencyKeyMapRef.current.set(operationId, newKey);
-    }
-    return idempotencyKeyMapRef.current.get(operationId)!;
-  };
-
-  const clearIdempotencyKey = (operationId: string): void => {
-    idempotencyKeyMapRef.current.delete(operationId);
-  };
-
-  // Effective billing cycle derivation
-  const effectiveCycleId = selectedBillingCycleId || billingCycles.find(c => c.cycleCode === selectedCycleCode)?.id;
+  }, [dailyInvoicesData, selectedCycleObj]);
   const effectiveCycleCode = selectedCycleCode || billingCycles.find(c => c.id === effectiveCycleId)?.cycleCode || '';
 
   // Helpers to resolve Room Number, Tenant Name, Cycle Code
@@ -1939,11 +1950,11 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
 
                   <button
                     type="button"
-                    onClick={() => handleOpenDailyReceipt(inv)}
+                    onClick={() => handleOpenDailyDetail(inv)}
                     className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-xs"
                   >
-                    <Printer className="w-4 h-4" />
-                    ใบเสร็จรับเงิน
+                    <FileText className="w-4 h-4" />
+                    รายละเอียดการชำระเงิน
                   </button>
                 </div>
               );
@@ -2366,6 +2377,111 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
               </div>
             </div>
           </PrintView>
+        )}
+      </Modal>
+
+      {/* Daily Stay Invoice & Payment Detail Modal */}
+      <Modal
+        isOpen={isDailyDetailOpen}
+        onClose={() => setIsDailyDetailOpen(false)}
+        title="รายละเอียดการชำระเงินรายวัน"
+        size="lg"
+      >
+        {viewingDailyDetail && (
+          <div className="space-y-5 text-xs text-slate-800">
+            <div className="p-4 bg-slate-50 border border-slate-200/80 rounded-2xl grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+              <div>
+                <span className="text-slate-400 font-medium">เลขที่ใบแจ้งหนี้รายวัน:</span>
+                <p className="font-bold text-slate-900">{viewingDailyDetail.invoiceNumber || '-'}</p>
+              </div>
+              <div>
+                <span className="text-slate-400 font-medium">ห้องพัก:</span>
+                <p className="font-bold text-slate-900">
+                  ห้อง {viewingDailyDetail.dailyStay?.room?.roomNumber || getRoomNum(viewingDailyDetail.dailyStay?.roomId) || '-'}
+                </p>
+              </div>
+              <div>
+                <span className="text-slate-400 font-medium">ผู้พักรายวัน:</span>
+                <p className="font-bold text-slate-900">
+                  {viewingDailyDetail.dailyStay?.applicantFullName || viewingDailyDetail.dailyStay?.tenant?.displayName || 'ผู้พักรายวัน'}
+                </p>
+              </div>
+              <div>
+                <span className="text-slate-400 font-medium">เบอร์โทรศัพท์:</span>
+                <p className="font-bold text-slate-900">
+                  {viewingDailyDetail.dailyStay?.applicantPhone || viewingDailyDetail.dailyStay?.tenant?.phone || '-'}
+                </p>
+              </div>
+              <div>
+                <span className="text-slate-400 font-medium">ช่วงเวลาเข้าพัก:</span>
+                <p className="font-bold text-slate-900">
+                  {formatThaiDate(viewingDailyDetail.dailyStay?.startDate || viewingDailyDetail.checkInDate)} - {formatThaiDate(viewingDailyDetail.dailyStay?.endDate || viewingDailyDetail.checkOutDate)}
+                </p>
+              </div>
+              <div>
+                <span className="text-slate-400 font-medium">สถานะการชำระ:</span>
+                <div className="mt-0.5">
+                  <span className={`px-2.5 py-0.5 rounded-md text-[10px] font-bold border ${
+                    (viewingDailyDetail.status || '').toUpperCase() === 'PAID'
+                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                      : 'bg-amber-50 text-amber-700 border-amber-200'
+                  }`}>
+                    {(viewingDailyDetail.status || '').toUpperCase() === 'PAID' ? 'ชำระแล้ว' : 'รอชำระ'}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Line items table */}
+            <div className="border border-slate-200 rounded-2xl overflow-hidden">
+              <table className="w-full text-xs">
+                <thead className="bg-slate-100/70 border-b border-slate-200 text-slate-600 font-extrabold">
+                  <tr>
+                    <th className="p-2.5 text-left">รายการ</th>
+                    <th className="p-2.5 text-center">สถานะ</th>
+                    <th className="p-2.5 text-right">จำนวนเงิน</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {viewingDailyDetail.items && viewingDailyDetail.items.map((it: any, idx: number) => (
+                    <tr key={idx} className="hover:bg-slate-50/50">
+                      <td className="p-2.5 text-slate-800 font-medium">
+                        {it.description || (it.itemType === 'DAILY_RENT' ? 'ค่าเช่ารายวัน' : it.itemType)}
+                      </td>
+                      <td className="p-2.5 text-center">
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                          it.status === 'SETTLED' || it.status === 'DECLARED_PAID'
+                            ? 'bg-emerald-50 text-emerald-700'
+                            : 'bg-amber-50 text-amber-700'
+                        }`}>
+                          {it.status === 'SETTLED' || it.status === 'DECLARED_PAID' ? 'ชำระแล้ว' : 'ค้างชำระ'}
+                        </span>
+                      </td>
+                      <td className="p-2.5 text-right font-extrabold text-slate-900">
+                        {formatBaht(Number(it.amount))}
+                      </td>
+                    </tr>
+                  ))}
+                  <tr className="bg-slate-100/80 font-black border-t border-slate-300">
+                    <td colSpan={2} className="p-3 text-right text-slate-950 font-black">ยอดรวมทั้งหมด:</td>
+                    <td className="p-3 text-right text-indigo-900 font-black text-sm">
+                      {formatBaht(Number(viewingDailyDetail.totalAgreedAmount || 0))}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div className="flex justify-end pt-2">
+              <button
+                type="button"
+                onClick={() => setIsDailyDetailOpen(false)}
+                className="px-5 py-2 text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl cursor-pointer"
+              >
+                ปิด
+              </button>
+            </div>
+          </div>
         )}
       </Modal>
 

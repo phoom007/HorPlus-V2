@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import {
   IMeterRepository,
   MeterDeviceEntity,
@@ -1075,7 +1076,15 @@ export class MeterService {
             const inv = activeStay.invoice;
             // Safe immutability: do NOT mutate if invoice is paid or cancelled
             if (inv.status !== 'PAID' && inv.status !== 'CANCELLED') {
-              // Delete existing unpaid OTHER_FEE items on this invoice
+              // 1. Identify already settled / declared-paid items (historical and immutable)
+              const existingItems = await client.dailyStayInvoiceItem.findMany({
+                where: { invoiceId: inv.id },
+              });
+              const settledOtherFees = existingItems.filter(
+                (it: any) => it.itemType === 'OTHER_FEE' && (it.status === 'SETTLED' || it.status === 'DECLARED_PAID')
+              );
+
+              // 2. Delete only OUTSTANDING OTHER_FEE items
               await client.dailyStayInvoiceItem.deleteMany({
                 where: {
                   invoiceId: inv.id,
@@ -1084,35 +1093,65 @@ export class MeterService {
                 },
               });
 
-              // Create new OTHER_FEE items from cleanOtherFees
-              if (cleanOtherFees.length > 0) {
-                await client.dailyStayInvoiceItem.createMany({
-                  data: cleanOtherFees.map((f: any) => ({
+              // 3. Determine new OUTSTANDING items needed beyond settled ones
+              const matchedSettledIds = new Set<string>();
+              const itemsToCreate: any[] = [];
+
+              for (const fee of cleanOtherFees) {
+                const feeAmtDec = new Prisma.Decimal(formatDecimal(fee.amount));
+                const matchingSettled = settledOtherFees.find(
+                  (s: any) =>
+                    !matchedSettledIds.has(s.id) &&
+                    s.description === fee.description &&
+                    new Prisma.Decimal(formatDecimal(s.amount)).equals(feeAmtDec)
+                );
+
+                if (matchingSettled) {
+                  matchedSettledIds.add(matchingSettled.id);
+                } else {
+                  itemsToCreate.push({
                     invoiceId: inv.id,
                     itemType: 'OTHER_FEE',
-                    description: f.description,
-                    amount: toDecimal(f.amount),
+                    description: fee.description,
+                    amount: toDecimal(fee.amount),
                     status: 'OUTSTANDING',
                     paidAt: null,
-                  })),
+                  });
+                }
+              }
+
+              if (itemsToCreate.length > 0) {
+                await client.dailyStayInvoiceItem.createMany({
+                  data: itemsToCreate,
                 });
               }
 
-              // Recalculate aggregate invoice totalAgreedAmount & outstandingAmount
-              const allItems = await client.dailyStayInvoiceItem.findMany({
+              // 4. Recalculate invoice totals using exact Prisma.Decimal authority
+              const allUpdatedItems = await client.dailyStayInvoiceItem.findMany({
                 where: { invoiceId: inv.id },
               });
-              const totalAgreed = allItems.reduce((sum: number, it: any) => sum + Number(it.amount), 0);
-              const totalPaid = allItems
-                .filter((it: any) => it.status === 'SETTLED' || it.status === 'DECLARED_PAID')
-                .reduce((sum: number, it: any) => sum + Number(it.amount), 0);
-              const remainingOutstanding = Math.max(0, totalAgreed - totalPaid);
+
+              let totalAgreedDec = new Prisma.Decimal('0.00');
+              let totalPaidDec = new Prisma.Decimal('0.00');
+
+              for (const it of allUpdatedItems) {
+                const itAmt = new Prisma.Decimal(formatDecimal(it.amount));
+                totalAgreedDec = totalAgreedDec.plus(itAmt);
+                if (it.status === 'SETTLED' || it.status === 'DECLARED_PAID') {
+                  totalPaidDec = totalPaidDec.plus(itAmt);
+                }
+              }
+
+              const outstandingDec = totalAgreedDec.minus(totalPaidDec);
+              const finalOutstandingDec = outstandingDec.isNegative()
+                ? new Prisma.Decimal('0.00')
+                : outstandingDec;
 
               await client.dailyStayInvoice.update({
                 where: { id: inv.id },
                 data: {
-                  totalAgreedAmount: toDecimal(totalAgreed.toFixed(2)),
-                  outstandingAmount: toDecimal(remainingOutstanding.toFixed(2)),
+                  totalAgreedAmount: totalAgreedDec,
+                  outstandingAmount: finalOutstandingDec,
                 },
               });
             }
