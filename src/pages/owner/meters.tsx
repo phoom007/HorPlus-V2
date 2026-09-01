@@ -149,6 +149,8 @@ export function getTenantForRoomAndCycleHelper(
   const cycleStartStr = `${cycle}-01`;
   const daysInMonth = new Date(cy, cm, 0).getDate();
   const cycleEndStr = `${cycle}-${String(daysInMonth).padStart(2, '0')}`;
+  const nextMonthDate = new Date(Date.UTC(cy, cm, 1));
+  const cycleEndExclusive = `${nextMonthDate.getUTCFullYear()}-${String(nextMonthDate.getUTCMonth() + 1).padStart(2, '0')}-${String(nextMonthDate.getUTCDate()).padStart(2, '0')}`;
 
   const activeContract = (contracts || []).find(c => {
     if (c.roomId !== roomId) return false;
@@ -157,7 +159,7 @@ export function getTenantForRoomAndCycleHelper(
     const createdStr = (c as any).createdAt ? normalizeBangkokDate((c as any).createdAt) : startValStr;
     const effectiveStartStr = startValStr > createdStr ? startValStr : createdStr;
 
-    return effectiveStartStr <= cycleEndStr && endValStr >= cycleStartStr;
+    return effectiveStartStr < cycleEndExclusive && endValStr > cycleStartStr;
   });
 
   if (!activeContract) return undefined;
@@ -218,21 +220,16 @@ export function buildRowsFromWorkspace(params: {
     const roomReadings = readingsByRoom[r.id] || {};
     const cycleTenant = getTenantForRoomAndCycleHelper(r.id, selectedCycleCode || selectedCycle || '', contracts, rooms, tenants);
 
-    const rawWaterBaseline = r.initialWaterMeter !== undefined && r.initialWaterMeter !== null && String(r.initialWaterMeter).trim() !== '' ? String(r.initialWaterMeter) : (r as any).initialWaterReading !== undefined && (r as any).initialWaterReading !== null && String((r as any).initialWaterReading).trim() !== '' ? String((r as any).initialWaterReading) : '';
-    const rawElecBaseline = r.initialElectricMeter !== undefined && r.initialElectricMeter !== null && String(r.initialElectricMeter).trim() !== '' ? String(r.initialElectricMeter) : (r as any).initialElectricityReading !== undefined && (r as any).initialElectricityReading !== null && String((r as any).initialElectricityReading).trim() !== '' ? String((r as any).initialElectricityReading) : '';
-
-    const isWaterBaselineNonzero = rawWaterBaseline !== '' && Number(rawWaterBaseline) !== 0;
     const waterPrev = roomReadings.waterPrev !== undefined && roomReadings.waterPrev !== null && String(roomReadings.waterPrev).trim() !== ''
       ? formatMeterReadingDisplay(roomReadings.waterPrev)
-      : (isWaterBaselineNonzero ? formatMeterReadingDisplay(rawWaterBaseline) : '');
+      : '';
     const waterCurr = roomReadings.waterCurr !== undefined && roomReadings.waterCurr !== null && String(roomReadings.waterCurr).trim() !== ''
       ? formatMeterReadingDisplay(roomReadings.waterCurr)
       : '';
 
-    const isElecBaselineNonzero = rawElecBaseline !== '' && Number(rawElecBaseline) !== 0;
     const elecPrev = roomReadings.elecPrev !== undefined && roomReadings.elecPrev !== null && String(roomReadings.elecPrev).trim() !== ''
       ? formatMeterReadingDisplay(roomReadings.elecPrev)
-      : (isElecBaselineNonzero ? formatMeterReadingDisplay(rawElecBaseline) : '');
+      : '';
     const elecCurr = roomReadings.elecCurr !== undefined && roomReadings.elecCurr !== null && String(roomReadings.elecCurr).trim() !== ''
       ? formatMeterReadingDisplay(roomReadings.elecCurr)
       : '';
@@ -806,20 +803,11 @@ export function computeHasPersistedBaseline(params: {
 
   const applicableRooms = rooms.filter((room) => {
     if ((room.status as string) === 'archived') return false;
-    if (room.rentCycle === 'daily') return false;
-    if (previewRooms && previewRooms.length > 0) {
-      const ctx = previewRooms.find((p) => p.roomId === room.id);
-      if (ctx) {
-        if (ctx.billingSource === 'DAILY_STAY' || ctx.isDailyUnpaid) return false;
-        if (ctx.billingSource === 'NONE') return false;
-        return true;
-      }
-    }
     return true;
   });
 
   if (applicableRooms.length === 0) {
-    return true;
+    return false;
   }
 
   const waterBaselineByRoom = new Map<string, any>();
@@ -2867,10 +2855,11 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                   const isBillIssued = row.billStatus !== 'draft' && row.billStatus !== 'cancelled';
                   const isRowPaid = !isDailyContext && (row.isPaid || row.billStatus === 'paid');
 
-                  const hasElecBaseline = row.elecPrev !== '' && row.elecPrev !== null && row.elecPrev !== undefined;
+                  const origRow = (originalRowsRef.current || []).find((o) => o.roomId === row.roomId);
+                  const hasElecBaseline = Boolean(origRow?.elecPrev !== '' && origRow?.elecPrev !== null && origRow?.elecPrev !== undefined);
                   const isElecDirectEdit = isFirstCycle || !hasElecBaseline;
 
-                  const hasWaterBaseline = row.waterPrev !== '' && row.waterPrev !== null && row.waterPrev !== undefined;
+                  const hasWaterBaseline = Boolean(origRow?.waterPrev !== '' && origRow?.waterPrev !== null && origRow?.waterPrev !== undefined);
                   const isWaterDirectEdit = isFirstCycle || !hasWaterBaseline;
 
                   return (

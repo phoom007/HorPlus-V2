@@ -177,10 +177,10 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
   const isOverallPaid = displayStatus.isOverallPaid;
   const isRowPaid = !isDailyContext && isMonthlyUtilityPaid;
 
-  const hasElecBaseline = row.elecPrev !== '' && row.elecPrev !== null && row.elecPrev !== undefined;
+  const hasElecBaseline = Boolean(originalRow?.elecPrev !== '' && originalRow?.elecPrev !== null && originalRow?.elecPrev !== undefined);
   const isElecDirectEdit = isFirstCycle || !hasElecBaseline;
 
-  const hasWaterBaseline = row.waterPrev !== '' && row.waterPrev !== null && row.waterPrev !== undefined;
+  const hasWaterBaseline = Boolean(originalRow?.waterPrev !== '' && originalRow?.waterPrev !== null && originalRow?.waterPrev !== undefined);
   const isWaterDirectEdit = isFirstCycle || !hasWaterBaseline;
 
   const isOccupiedOrActive = Boolean(

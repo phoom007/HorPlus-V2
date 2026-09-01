@@ -221,7 +221,7 @@ export function getCalendarDayAfter(dateInput: Date | string): string {
 
 export interface AgreementCycleEligibilityParams {
   agreementStartDate: Date | string;
-  agreementEndDate: Date | string;
+  agreementEndDate?: Date | string | null;
   cyclePeriodStart: Date | string;
   cyclePeriodEnd: Date | string;
 }
@@ -240,7 +240,7 @@ export interface AgreementCycleEligibilityParams {
  */
 export function isAgreementEligibleForBillingCycle(params: AgreementCycleEligibilityParams): boolean {
   const agrStart = toDateOnlyString(params.agreementStartDate);
-  const agrEnd = toDateOnlyString(params.agreementEndDate);
+  const agrEnd = params.agreementEndDate ? toDateOnlyString(params.agreementEndDate) : '9999-12-31';
   const cycleStart = toDateOnlyString(params.cyclePeriodStart);
   const cycleEndExclusive = getCalendarDayAfter(params.cyclePeriodEnd);
 

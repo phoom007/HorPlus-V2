@@ -19,7 +19,7 @@ import { resolveBillDirectRecalculationEligibilityInTx } from './billing.service
 import { getPrismaClient } from '../db/prisma.js';
 import { toDecimal, formatDecimal, compareDecimals, divDecimals, mulDecimals, subDecimals, addDecimals, isZeroDecimal } from '../utils/decimal-math.util.js';
 import { calculateInstallmentSchedule } from '../utils/installment-calculator.util.js';
-import { currentBusinessDateInBangkok, toBangkokDateString, normalizeBangkokDate, getBangkokStartOfDayUtc } from '../utils/calendar-date.util.js';
+import { currentBusinessDateInBangkok, toBangkokDateString, normalizeBangkokDate, getBangkokStartOfDayUtc, isAgreementEligibleForBillingCycle } from '../utils/calendar-date.util.js';
 import { calculateMeterUsageUnits, parseMeterIntegerReading, calculateMeterRowPreview, TransientRowDraft, RoomPreviewContext } from '../utils/meter-billing-calculator.util.js';
 import { calculateCanonicalMonthlyUtility } from '../utils/monthly-utility-calculator.util.js';
 import { normalizeUtilityBillingMode } from '../utils/billing-mode-normalizer.util.js';
@@ -285,39 +285,7 @@ export class MeterService {
       }
     }
 
-    // 3. Active MeterDevice initial reading
-    const device = await this.meterRepo.findDeviceByRoomAndType(dormitoryId, roomId, meterType, client);
-    if (device && device.initialReading !== undefined && device.initialReading !== null && String(device.initialReading).trim() !== '') {
-      return parseAuthoritativeMeterReading(device.initialReading, 'meter device initial reading');
-    }
-
-    // 4. Room initial meter value (Legacy Nonzero Baseline Only)
-    const room = await this.roomRepo.findById(roomId, dormitoryId);
-    if (room) {
-      const roomObj = room as any;
-      if (meterType === 'water') {
-        const val = room.initialWaterReading ?? roomObj.initialWaterMeter;
-        if (val !== undefined && val !== null && String(val).trim() !== '') {
-          const parsed = parseAuthoritativeMeterReading(val, 'room initial reading');
-          // LOCKED POLICY R3.9-C.3.2: Technical room zero (0 / 0.00) is a storage placeholder, NOT an operational baseline.
-          if (Number(parsed) !== 0) {
-            return parsed;
-          }
-        }
-      }
-      if (meterType === 'electricity') {
-        const val = room.initialElectricityReading ?? roomObj.initialElectricMeter;
-        if (val !== undefined && val !== null && String(val).trim() !== '') {
-          const parsed = parseAuthoritativeMeterReading(val, 'room initial reading');
-          // LOCKED POLICY R3.9-C.3.2: Technical room zero (0 / 0.00) is a storage placeholder, NOT an operational baseline.
-          if (Number(parsed) !== 0) {
-            return parsed;
-          }
-        }
-      }
-    }
-
-    // 5. No authoritative baseline exists (NONE)
+    // 3. No authoritative prior baseline exists (NONE)
     return null;
   }
 
@@ -589,14 +557,18 @@ export class MeterService {
   }
 
   private async resolveIsFirstBillingCycle(dormitoryId: string, billingCycleId: string): Promise<boolean> {
-    const result = await this.billingCycleRepo.findAll(dormitoryId, {
-      page: 1,
-      pageSize: 1,
-      sortBy: 'periodStart',
-      sortDirection: 'asc',
-    });
-    const earliest = result.items?.[0];
-    return earliest ? earliest.id === billingCycleId : false;
+    if (typeof (this.billingCycleRepo as any)?.findAll === 'function') {
+      const result = await this.billingCycleRepo.findAll(dormitoryId, {
+        page: 1,
+        pageSize: 1,
+        sortBy: 'periodStart',
+        sortDirection: 'asc',
+      });
+      const earliest = result.items?.[0];
+      return earliest ? earliest.id === billingCycleId : false;
+    }
+    const cycle = await this.billingCycleRepo.findById(billingCycleId, dormitoryId);
+    return cycle ? Boolean((cycle as any).isFirstCycle) : false;
   }
 
   public async saveSingleRoomWorkspaceInTx(
@@ -1886,12 +1858,12 @@ export class MeterService {
     });
 
     const visibleContracts = allContracts.filter((c) => {
-      const occStartStr = normalizeBangkokDate(c.startDate);
-      const occEndStr = normalizeBangkokDate(c.endDate);
-      const recordVisibleFromStr = normalizeBangkokDate(c.createdAt || c.startDate);
-      const effectiveStartStr = occStartStr > recordVisibleFromStr ? occStartStr : recordVisibleFromStr;
-
-      return effectiveStartStr <= cycleEndStr && occEndStr >= cycleStartStr;
+      return isAgreementEligibleForBillingCycle({
+        agreementStartDate: c.startDate,
+        agreementEndDate: c.endDate,
+        cyclePeriodStart: cycle.periodStart,
+        cyclePeriodEnd: cycle.periodEnd,
+      });
     });
 
     // 2. Load active & historical provisional rental terms for this cycle
@@ -1908,12 +1880,12 @@ export class MeterService {
     });
 
     const visibleProvisionalTerms = allProvisionalTerms.filter((p) => {
-      const occStartStr = normalizeBangkokDate(p.startDate);
-      const occEndStr = normalizeBangkokDate(p.endDate);
-      const recordVisibleFromStr = normalizeBangkokDate(p.createdAt || p.startDate);
-      const effectiveStartStr = occStartStr > recordVisibleFromStr ? occStartStr : recordVisibleFromStr;
-
-      return effectiveStartStr <= cycleEndStr && occEndStr >= cycleStartStr;
+      return isAgreementEligibleForBillingCycle({
+        agreementStartDate: p.startDate,
+        agreementEndDate: p.endDate,
+        cyclePeriodStart: cycle.periodStart,
+        cyclePeriodEnd: cycle.periodEnd,
+      });
     });
 
     // 3. Load daily stays and evaluate real-time occupancy for this cycle
@@ -2434,40 +2406,76 @@ export class MeterService {
       let amountDueDec = toDecimal('0.00');
 
       if (billingSource === 'DAILY_STAY' || (billingSource === 'NONE' && unpaidDailyStay)) {
-        if (showDailyDepositLine) {
-          const depAmt = toDecimal(dailyDepositAmount || '0.00');
-          const isDepositPaid = Boolean(isDailyDepositPaidInDisplayedPeriod);
-          if (!isZeroDecimal(depAmt)) {
-            chargeComponents.push({
-              type: 'deposit',
-              label: 'ค่าประกัน',
-              amount: formatDecimal(depAmt),
-              status: isDepositPaid ? 'PAID' : 'UNPAID',
-              paidAt: dailyDepositPaidAt,
-              occurredInDisplayedPeriod: true,
-              includedInAmountDue: !isDepositPaid,
-              lineItems: [],
-            });
-            if (!isDepositPaid) {
-              amountDueDec = addDecimals(amountDueDec, depAmt);
+        if (primaryDailyStay?.invoice?.items && primaryDailyStay.invoice.items.length > 0) {
+          for (const item of primaryDailyStay.invoice.items) {
+            const itemAmt = toDecimal(item.amount ? item.amount.toString() : '0.00');
+            const isItemPaid = item.status === 'SETTLED' || item.status === 'DECLARED_PAID' || primaryDailyStay.invoice?.status === 'PAID';
+            let compType = 'other_fee';
+            let compLabel = item.description || 'ค่าใช้จ่ายอื่นๆ';
+
+            if (item.itemType === 'DEPOSIT') {
+              compType = 'deposit';
+              compLabel = 'ค่าประกัน';
+            } else if (item.itemType === 'DAILY_RENT' || item.itemType === 'RENT') {
+              compType = 'rent';
+              compLabel = 'ค่าเช่า (วัน)';
+            } else if (item.itemType === 'OTHER_FEE') {
+              compType = 'other_fee';
+              compLabel = item.description || 'ค่าใช้จ่ายอื่นๆ';
+            }
+
+            if (!isZeroDecimal(itemAmt)) {
+              chargeComponents.push({
+                type: compType,
+                label: compLabel,
+                amount: formatDecimal(itemAmt),
+                status: isItemPaid ? 'PAID' : 'UNPAID',
+                paidAt: isItemPaid ? ((primaryDailyStay.invoice as any)?.settledAt ? toBangkokDateString((primaryDailyStay.invoice as any).settledAt) : null) : null,
+                occurredInDisplayedPeriod: true,
+                includedInAmountDue: !isItemPaid,
+                lineItems: [],
+              });
+              if (!isItemPaid) {
+                amountDueDec = addDecimals(amountDueDec, itemAmt);
+              }
             }
           }
-        }
+        } else {
+          if (showDailyDepositLine) {
+            const depAmt = toDecimal(dailyDepositAmount || '0.00');
+            const isDepositPaid = Boolean(isDailyDepositPaidInDisplayedPeriod);
+            if (!isZeroDecimal(depAmt)) {
+              chargeComponents.push({
+                type: 'deposit',
+                label: 'ค่าประกัน',
+                amount: formatDecimal(depAmt),
+                status: isDepositPaid ? 'PAID' : 'UNPAID',
+                paidAt: dailyDepositPaidAt,
+                occurredInDisplayedPeriod: true,
+                includedInAmountDue: !isDepositPaid,
+                lineItems: [],
+              });
+              if (!isDepositPaid) {
+                amountDueDec = addDecimals(amountDueDec, depAmt);
+              }
+            }
+          }
 
-        const rentAmt = toDecimal(rentAmount || '0.00');
-        if (!isZeroDecimal(rentAmt)) {
-          chargeComponents.push({
-            type: 'rent',
-            label: 'ค่าเช่า (วัน)',
-            amount: formatDecimal(rentAmt),
-            status: isDailyRentPaid ? 'PAID' : 'UNPAID',
-            paidAt: null,
-            occurredInDisplayedPeriod: true,
-            includedInAmountDue: !isDailyRentPaid,
-            lineItems: [],
-          });
-          if (!isDailyRentPaid) {
-            amountDueDec = addDecimals(amountDueDec, rentAmt);
+          const rentAmt = toDecimal(rentAmount || '0.00');
+          if (!isZeroDecimal(rentAmt)) {
+            chargeComponents.push({
+              type: 'rent',
+              label: 'ค่าเช่า (วัน)',
+              amount: formatDecimal(rentAmt),
+              status: isDailyRentPaid ? 'PAID' : 'UNPAID',
+              paidAt: null,
+              occurredInDisplayedPeriod: true,
+              includedInAmountDue: !isDailyRentPaid,
+              lineItems: [],
+            });
+            if (!isDailyRentPaid) {
+              amountDueDec = addDecimals(amountDueDec, rentAmt);
+            }
           }
         }
       } else {
