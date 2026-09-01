@@ -87,6 +87,96 @@ export class RoomBillingStateService {
       statusText: 'รอชำระเงิน'
     };
   }
+
+  async getTenantRoomBillingState(
+    dormitoryId: string,
+    roomId: string,
+    tenantId: string,
+    asOfDate: Date = new Date()
+  ): Promise<RoomBillingStateSummary> {
+    const contracts = await prisma.contract.findMany({
+      where: { tenantId, dormitoryId },
+      select: { id: true }
+    });
+    const contractIds = contracts.map((c) => c.id);
+
+    const activeBills = await prisma.bill.findMany({
+      where: {
+        dormitoryId,
+        roomId,
+        status: { not: 'cancelled' },
+        OR: [
+          { tenantId },
+          ...(contractIds.length > 0 ? [{ contractId: { in: contractIds } }] : [])
+        ]
+      },
+      include: {
+        billingCycle: true
+      },
+      orderBy: { createdAt: 'desc' }
+    });
+
+    const { isBillVisibleToTenant } = await import('../utils/tenant-visibility.util.js');
+    const visibleBills = activeBills.filter((b) => isBillVisibleToTenant(b, asOfDate));
+
+    if (visibleBills.length === 0) {
+      return {
+        state: 'no_bill',
+        outstandingAmount: '0.00',
+        statusText: 'ไม่มีรายการค้างชำระ'
+      };
+    }
+
+    const latestBill = visibleBills[0];
+
+    if (latestBill.status === 'checking') {
+      return {
+        state: 'checking_payment',
+        currentBillId: latestBill.id,
+        billNumber: latestBill.billNumber,
+        outstandingAmount: latestBill.outstandingAmount.toString(),
+        totalAmount: latestBill.totalAmount.toString(),
+        dueDate: latestBill.dueDate,
+        statusText: 'กำลังตรวจสอบการชำระเงิน'
+      };
+    }
+
+    if (latestBill.status === 'paid' || compareDecimals(latestBill.outstandingAmount, '0.00') <= 0) {
+      return {
+        state: 'paid',
+        currentBillId: latestBill.id,
+        billNumber: latestBill.billNumber,
+        outstandingAmount: '0.00',
+        totalAmount: latestBill.totalAmount.toString(),
+        dueDate: latestBill.dueDate,
+        statusText: 'ชำระแล้ว'
+      };
+    }
+
+    const isOverdue = latestBill.status === 'overdue' || (latestBill.dueDate && latestBill.dueDate < asOfDate);
+
+    if (isOverdue) {
+      return {
+        state: 'overdue',
+        currentBillId: latestBill.id,
+        billNumber: latestBill.billNumber,
+        outstandingAmount: latestBill.outstandingAmount.toString(),
+        totalAmount: latestBill.totalAmount.toString(),
+        dueDate: latestBill.dueDate,
+        statusText: 'เกินกำหนดชำระ'
+      };
+    }
+
+    return {
+      state: 'pending_payment',
+      currentBillId: latestBill.id,
+      billNumber: latestBill.billNumber,
+      outstandingAmount: latestBill.outstandingAmount.toString(),
+      totalAmount: latestBill.totalAmount.toString(),
+      dueDate: latestBill.dueDate,
+      statusText: 'รอชำระเงิน'
+    };
+  }
 }
 
 export const roomBillingStateService = new RoomBillingStateService();

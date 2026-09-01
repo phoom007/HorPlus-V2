@@ -10,6 +10,7 @@ import { SensitiveFieldService } from '../services/sensitive-field.service.js';
 import { generatePromptPayPayload, maskPromptPayDisplay, generatePromptPayQrSvg } from '../services/promptpay-payload.service.js';
 import { billingOrchestrationService } from '../services/billing-orchestration.service.js';
 import { CreateCoOccupantSchema } from '../schemas/property-tenant-contract.schemas.js';
+import { isBillVisibleToTenant, getTenantRentCutoffDate } from '../utils/tenant-visibility.util.js';
 
 type TenantContextResult = {
   error?: undefined;
@@ -42,24 +43,27 @@ async function resolveTenantContext(req: Request): Promise<TenantContextResult> 
     include: { role: true }
   });
 
-  const membership = allMemberships.find(m => 
-    !m.role || (m.role.code || '').toUpperCase() === 'TENANT'
-  );
+  const membership = allMemberships.find((m) => m.role?.code === 'TENANT') || allMemberships[0];
 
   if (!membership) {
-    return { error: { code: 'FORBIDDEN', message: 'Not a tenant', statusCode: 403 } };
+    return { error: { code: 'FORBIDDEN', message: 'Forbidden: You do not have access to tenant portal', statusCode: 403 } };
   }
 
   const tenant = await prisma.tenant.findFirst({
-    where: { linkedUserId: userId, dormitoryId: membership.dormitoryId }
+    where: { userId, dormitoryId: membership.dormitoryId }
   });
 
   if (!tenant) {
-    return { error: { code: 'FORBIDDEN', message: 'Tenant record not found', statusCode: 403 } };
+    return { error: { code: 'TENANT_NOT_FOUND', message: 'ไม่พบข้อมูลผู้เช่าสำหรับบัญชีนี้', statusCode: 404 } };
   }
 
   const contract = await prisma.contract.findFirst({
-    where: { tenantId: tenant.id, status: 'active' }
+    where: {
+      tenantId: tenant.id,
+      dormitoryId: membership.dormitoryId,
+      status: { in: ['ACTIVE', 'active'] }
+    },
+    orderBy: { createdAt: 'desc' }
   });
 
   return {
@@ -76,6 +80,7 @@ async function getTenantBillWhere(prisma: any, ctx: { dormitoryId: string; tenan
     select: { id: true }
   });
   const contractIds = contracts.map((c: any) => c.id);
+  const cutoffDate = getTenantRentCutoffDate(asOfDate);
 
   return {
     dormitoryId: ctx.dormitoryId,
@@ -84,13 +89,13 @@ async function getTenantBillWhere(prisma: any, ctx: { dormitoryId: string; tenan
       { tenantId: ctx.tenant.id },
       ...(contractIds.length > 0 ? [{ contractId: { in: contractIds } }] : [])
     ],
-    // Future RENT Bill Visibility Gate: hide RENT bills before their billing cycle periodStart
+    // Future RENT Bill Visibility Gate: hide RENT bills before their billing cycle periodStart in Asia/Bangkok
     NOT: {
       AND: [
         { billKind: 'RENT' },
         {
           billingCycle: {
-            periodStart: { gt: asOfDate }
+            periodStart: { gt: cutoffDate }
           }
         }
       ]
@@ -115,8 +120,8 @@ async function checkBillOwnership(prisma: any, billId: string, ctx: { dormitoryI
     return null;
   }
 
-  // Future RENT Bill Visibility Gate
-  if (bill.billKind === 'RENT' && bill.billingCycle && new Date(bill.billingCycle.periodStart) > asOfDate) {
+  // Future RENT Bill Visibility Gate: authoritative check in Asia/Bangkok
+  if (!isBillVisibleToTenant(bill, asOfDate)) {
     return null;
   }
 
@@ -623,7 +628,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
       }
 
       const billingState = ctx.roomId
-        ? await roomBillingStateService.getRoomBillingState(ctx.dormitoryId, ctx.roomId)
+        ? await roomBillingStateService.getTenantRoomBillingState(ctx.dormitoryId, ctx.roomId, ctx.tenant.id, new Date())
         : { state: 'no_bill' as const, outstandingAmount: '0.00', statusText: 'ไม่มีรายการค้างชำระ' };
 
       const room = ctx.roomId ? await prisma.room.findUnique({ where: { id: ctx.roomId } }) : null;
