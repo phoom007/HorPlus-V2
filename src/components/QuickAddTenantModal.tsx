@@ -5,7 +5,7 @@
  * 3-Type Owner Quick Add: รายเทอม (TERM), รายเดือน (MONTHLY), รายวัน (DAILY).
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { X, Calendar, User, Phone, DollarSign, Clock, Shield, CheckCircle, AlertCircle, Loader2, Image as ImageIcon, Trash2, Building2, GraduationCap, CalendarDays, MessageSquare, Check, Copy, ExternalLink, Settings, CheckCircle2 } from 'lucide-react';
 import { QuickAddRoomContext } from '../types';
 import { httpRequest } from '../data/httpClient';
@@ -104,10 +104,14 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
     staleTime: 30000,
   });
 
-  const billingCycles: any[] = billingCyclesQuery.data?.data || [];
+  const billingCycles: any[] = Array.isArray(billingCyclesQuery.data?.data)
+    ? billingCyclesQuery.data.data
+    : Array.isArray(billingCyclesQuery.data)
+      ? billingCyclesQuery.data
+      : [];
 
   const earliestCycle = useMemo(() => {
-    if (!billingCycles || billingCycles.length === 0) return null;
+    if (!billingCycles || !Array.isArray(billingCycles) || billingCycles.length === 0) return null;
     return [...billingCycles].sort((a, b) => {
       const startA = new Date(a.periodStart || a.startDate || 0).getTime();
       const startB = new Date(b.periodStart || b.startDate || 0).getTime();

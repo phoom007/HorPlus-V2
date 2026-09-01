@@ -3338,6 +3338,19 @@ describe('OWNER ROOMS R2 & R2.1 — Rent-Cycle Deposit Model & Hardened Specific
         },
       };
 
+      const renderWithQuery = (ui: React.ReactElement) => {
+        const qc = new QueryClient({
+          defaultOptions: {
+            queries: { retry: false },
+          },
+        });
+        return render(
+          <QueryClientProvider client={qc}>
+            {ui}
+          </QueryClientProvider>
+        );
+      };
+
       it('T1 — PAYMENT BADGE WORDING: verifies PAID renders ชำระแล้ว and preserves all canonical badges', () => {
         expect(getPaymentStatusBadge('PAID').text).toBe('ชำระแล้ว');
         expect(getPaymentStatusBadge('PAID').className).toContain('text-emerald-700');
@@ -3356,7 +3369,7 @@ describe('OWNER ROOMS R2 & R2.1 — Rent-Cycle Deposit Model & Hardened Specific
       });
 
       it('T2 — MONTHLY TAB DEPOSIT PARITY: renders deposit amount input and deposit status with default UNPAID (รอชำระ)', () => {
-        render(
+        renderWithQuery(
           <QuickAddTenantModal
             isOpen={true}
             onClose={vi.fn()}
@@ -3390,7 +3403,7 @@ describe('OWNER ROOMS R2 & R2.1 — Rent-Cycle Deposit Model & Hardened Specific
         vi.mocked(httpRequest).mockImplementation(mockSubmitHttp as any);
 
         const onSuccess = vi.fn();
-        render(
+        renderWithQuery(
           <QuickAddTenantModal
             isOpen={true}
             onClose={vi.fn()}
@@ -3431,7 +3444,7 @@ describe('OWNER ROOMS R2 & R2.1 — Rent-Cycle Deposit Model & Hardened Specific
         vi.mocked(httpRequest).mockImplementation(mockSubmitHttp as any);
 
         const onSuccess = vi.fn();
-        render(
+        renderWithQuery(
           <QuickAddTenantModal
             isOpen={true}
             onClose={vi.fn()}
@@ -3468,7 +3481,7 @@ describe('OWNER ROOMS R2 & R2.1 — Rent-Cycle Deposit Model & Hardened Specific
       });
 
       it('T5 — DAILY TAB DEPOSIT PARITY: renders รอชำระ / ชำระแล้ว buttons matching MONTHLY & TERM', () => {
-        render(
+        renderWithQuery(
           <QuickAddTenantModal
             isOpen={true}
             onClose={vi.fn()}
@@ -3494,13 +3507,16 @@ describe('OWNER ROOMS R2 & R2.1 — Rent-Cycle Deposit Model & Hardened Specific
       });
 
       it('T6 — MODAL RESET ON REOPEN: always resets deposit status to UNPAID (รอชำระ)', () => {
+        const testQc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
         const { rerender } = render(
-          <QuickAddTenantModal
-            isOpen={true}
-            onClose={vi.fn()}
-            context={mockContext}
-            onSuccess={vi.fn()}
-          />
+          <QueryClientProvider client={testQc}>
+            <QuickAddTenantModal
+              isOpen={true}
+              onClose={vi.fn()}
+              context={mockContext}
+              onSuccess={vi.fn()}
+            />
+          </QueryClientProvider>
         );
 
         // Switch to MONTHLY and select PAID
@@ -3511,22 +3527,26 @@ describe('OWNER ROOMS R2 & R2.1 — Rent-Cycle Deposit Model & Hardened Specific
 
         // Close modal
         rerender(
-          <QuickAddTenantModal
-            isOpen={false}
-            onClose={vi.fn()}
-            context={mockContext}
-            onSuccess={vi.fn()}
-          />
+          <QueryClientProvider client={testQc}>
+            <QuickAddTenantModal
+              isOpen={false}
+              onClose={vi.fn()}
+              context={mockContext}
+              onSuccess={vi.fn()}
+            />
+          </QueryClientProvider>
         );
 
         // Reopen modal
         rerender(
-          <QuickAddTenantModal
-            isOpen={true}
-            onClose={vi.fn()}
-            context={mockContext}
-            onSuccess={vi.fn()}
-          />
+          <QueryClientProvider client={testQc}>
+            <QuickAddTenantModal
+              isOpen={true}
+              onClose={vi.fn()}
+              context={mockContext}
+              onSuccess={vi.fn()}
+            />
+          </QueryClientProvider>
         );
 
         // Switch to MONTHLY and verify status reset to UNPAID (รอชำระ)
