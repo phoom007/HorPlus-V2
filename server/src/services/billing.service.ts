@@ -598,9 +598,22 @@ export class BillingService {
       throw err;
     }
 
-    const billingDate = resolveBillIssueDate(issuanceNow);
-    const dueDate = resolveBillDueDate(issuanceNow, settings.dueDay);
     const billKind = data.billKind || 'LEGACY_COMBINED';
+
+    let billingDate: Date;
+    let dueDate: Date;
+
+    if (billKind === 'RENT') {
+      billingDate = data.billingDate ? new Date(data.billingDate) : new Date(cycle.periodStart);
+      dueDate = data.dueDate
+        ? new Date(data.dueDate)
+        : cycle.dueDate
+          ? new Date(cycle.dueDate)
+          : resolveBillDueDate(new Date(cycle.periodStart), settings.dueDay);
+    } else {
+      billingDate = data.billingDate ? new Date(data.billingDate) : resolveBillIssueDate(issuanceNow);
+      dueDate = data.dueDate ? new Date(data.dueDate) : resolveBillDueDate(issuanceNow, settings.dueDay);
+    }
 
     const executeInTx = async (tx: any) => {
       await this.billRepo.executeRawLock(data.roomId, tx);
@@ -652,6 +665,14 @@ export class BillingService {
             displayOrder: preview.items.length + idx,
           });
         });
+      }
+
+      if (billKind === 'RENT' && billItems.length === 0) {
+        const err = new Error('NO_RENT_DUE_FOR_CYCLE');
+        (err as any).statusCode = 400;
+        (err as any).code = 'NO_RENT_DUE_FOR_CYCLE';
+        (err as any).message = 'ไม่มีรายการค่าเช่าที่ต้องชำระในรอบบิลนี้';
+        throw err;
       }
 
       let subtotalDec = toDecimal('0.00');
@@ -831,6 +852,7 @@ export class BillingService {
             err.code === 'MISSING_METER_READING' ||
             err.code === 'NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM' ||
             err.code === 'PROVISIONAL_TERM_NOT_ELIGIBLE_FOR_CYCLE' ||
+            err.code === 'NO_RENT_DUE_FOR_CYCLE' ||
             err.code === 'BILL_ALREADY_EXISTS' ||
             err.code === 'ROOM_ENTITLEMENT_LOCKED' ||
             err.code === 'ROOM_NOT_FOUND'
@@ -887,6 +909,7 @@ export class BillingService {
             err.code === 'MISSING_METER_READING' ||
             err.code === 'NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM' ||
             err.code === 'PROVISIONAL_TERM_NOT_ELIGIBLE_FOR_CYCLE' ||
+            err.code === 'NO_RENT_DUE_FOR_CYCLE' ||
             err.code === 'BILL_ALREADY_EXISTS' ||
             err.code === 'ROOM_ENTITLEMENT_LOCKED' ||
             err.code === 'ROOM_NOT_FOUND'
@@ -927,6 +950,32 @@ export class BillingService {
     userId?: string
   ) {
     return this.bulkGenerateBills(dormitoryId, billingCycleId, roomIds, userId, undefined, 'RENT');
+  }
+
+  public async reconcileRecurringRentBillsForAllDormitories(asOfDate: Date = new Date()): Promise<number> {
+    const prisma = getPrismaClient();
+    let totalGenerated = 0;
+    try {
+      const cycles = await prisma.billingCycle.findMany({
+        where: {
+          status: { notIn: ['completed', 'locked'] },
+          periodStart: { lte: asOfDate },
+        },
+        select: { id: true, dormitoryId: true },
+      });
+
+      for (const cycle of cycles) {
+        try {
+          const res = await this.generateRecurringRentBills(cycle.dormitoryId, cycle.id);
+          totalGenerated += res.generatedCount;
+        } catch (err: any) {
+          // Continue reconciling next cycles
+        }
+      }
+    } catch (err: any) {
+      console.error('[BillingService] reconcileRecurringRentBillsForAllDormitories error', err);
+    }
+    return totalGenerated;
   }
 
   public async getBills(

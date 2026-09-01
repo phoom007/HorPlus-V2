@@ -129,6 +129,14 @@ export class CleanupService {
         console.error('[CleanupService] Error during outbox reconciliation', err);
       }
 
+      // Phase 6: Recurring Rent Bill Reconciliation (Day-1 Production Guarantee)
+      try {
+        const { billingService } = await import('./billing.service.js');
+        await billingService.reconcileRecurringRentBillsForAllDormitories(now);
+      } catch (err) {
+        console.error('[CleanupService] Error during recurring rent reconciliation', err);
+      }
+
       return { expiredMarked, orphansDeleted, consumedMetadataPurged };
     } catch (err) {
       console.error('[CleanupService] Unexpected error during cleanup execution', err);
