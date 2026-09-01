@@ -15,8 +15,8 @@ describe('Round 2 Phase E: LINE Logo Unification & Grid Status Badge Nowrap', ()
       render(<LineLogo className="w-6 h-6" />);
       const logo = screen.getByTestId('line-official-logo');
       expect(logo).toBeDefined();
-      expect(logo.getAttribute('viewBox')).toBe('0 0 40 40');
-      expect(logo.innerHTML).toContain('#06C755');
+      expect(logo.getAttribute('viewBox')).toBe('0 0 320 320');
+      expect(logo.innerHTML.toLowerCase()).toContain('#06c755');
     });
   });
 
