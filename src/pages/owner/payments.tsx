@@ -1589,6 +1589,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
               const overdueDays = getBillOverdueDays(b.dueDate);
               const amount = Number(b.outstandingAmount ?? b.totalAmount ?? 0);
               const isDepositBill = b.billKind === 'DEPOSIT';
+              const isRentBill = b.billKind === 'RENT';
 
               return (
                 <div key={b.id} className="bg-white rounded-3xl border border-slate-200/90 shadow-2xs hover:shadow-md transition-all p-5 flex flex-col justify-between space-y-4">
@@ -1596,8 +1597,13 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                     <span className="text-xl font-black text-slate-900">ห้อง {roomNum}</span>
                     <div className="flex items-center gap-1">
                       {isDepositBill && (
-                        <span className="px-2 py-0.5 bg-purple-50 text-purple-700 border border-purple-200 font-bold rounded-full text-[10px]">
+                        <span className="px-2 py-0.5 bg-purple-50 text-purple-700 border border-purple-200 font-bold rounded-full text-[10px] whitespace-nowrap">
                           เงินประกัน
+                        </span>
+                      )}
+                      {isRentBill && (
+                        <span className="px-2 py-0.5 bg-blue-50 text-blue-700 border border-blue-200 font-bold rounded-full text-[10px] whitespace-nowrap">
+                          ค่าเช่า
                         </span>
                       )}
                       {Number(b.paidAmount || 0) > 0 ? (
@@ -1774,19 +1780,24 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
 
                   {/* Items summary */}
                   <div className="text-[11px] text-slate-500 space-y-1 border-t border-slate-100 pt-2">
-                    {inv.items && inv.items.length > 0 ? (
-                      inv.items.map((it, idx) => (
-                        <div key={idx} className="flex justify-between items-center">
-                          <span className="truncate pr-1 text-slate-500 font-medium">{it.description || (it.itemType === 'DAILY_RENT' ? 'ค่าเช่ารายวัน' : it.itemType)}:</span>
-                          <span className="font-semibold text-slate-700 shrink-0">{formatBaht(Number(it.amount))}</span>
+                    {(() => {
+                      const unpaidItems = (inv.items || []).filter(
+                        (it: any) => it.status !== 'SETTLED' && it.status !== 'DECLARED_PAID' && (it.status === 'OUTSTANDING' || !it.status)
+                      );
+                      return unpaidItems.length > 0 ? (
+                        unpaidItems.map((it: any, idx: number) => (
+                          <div key={idx} className="flex justify-between items-center">
+                            <span className="truncate pr-1 text-slate-500 font-medium">{it.description || (it.itemType === 'DAILY_RENT' ? 'ค่าเช่ารายวัน' : it.itemType)}:</span>
+                            <span className="font-semibold text-slate-700 shrink-0">{formatBaht(Number(it.amount))}</span>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="flex justify-between items-center">
+                          <span className="text-slate-500">ค่าเช่ารายวัน:</span>
+                          <span className="font-semibold text-slate-700">{formatBaht(amount)}</span>
                         </div>
-                      ))
-                    ) : (
-                      <div className="flex justify-between items-center">
-                        <span className="text-slate-500">ค่าเช่ารายวัน:</span>
-                        <span className="font-semibold text-slate-700">{formatBaht(amount)}</span>
-                      </div>
-                    )}
+                      );
+                    })()}
                   </div>
 
                   <div className="flex items-baseline justify-between pt-1 border-t border-slate-100">
@@ -1794,15 +1805,28 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                     <span className="text-lg font-black text-slate-900">{formatBaht(amount)}</span>
                   </div>
 
-                  <button
-                    type="button"
-                    disabled={isSubmittingCash}
-                    onClick={() => handleSettleDailyInvoice(inv.id)}
-                    className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-1.5 shadow-xs transition-all cursor-pointer"
-                  >
-                    <DollarSign className="w-4 h-4" />
-                    รับเงินสด
-                  </button>
+                  <div className="grid grid-cols-2 gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setTargetScrollTenantId(inv.dailyStay?.tenantId || inv.dailyStay?.tenant?.id || null);
+                        setIsLineModalOpen(true);
+                      }}
+                      className="py-2.5 bg-[#06C755] hover:bg-[#05b34c] text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-1.5 shadow-2xs transition-all cursor-pointer"
+                    >
+                      <LineIcon className="w-3.5 h-3.5" />
+                      เตือน LINE
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isSubmittingCash}
+                      onClick={() => handleSettleDailyInvoice(inv.id)}
+                      className="py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-1.5 shadow-xs transition-all cursor-pointer"
+                    >
+                      <DollarSign className="w-4 h-4" />
+                      รับเงินสด
+                    </button>
+                  </div>
                 </div>
               );
             })}
@@ -1828,6 +1852,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
               const slipUrl = getSlipEvidenceUrl(p);
               const amount = Number(p.amount || p.bill?.totalAmount || 0);
               const isDeposit = p.bill?.billKind === 'DEPOSIT';
+              const isRent = p.bill?.billKind === 'RENT';
 
               return (
                 <div key={p.id} className="bg-white rounded-3xl border border-emerald-100 shadow-2xs hover:shadow-md transition-all p-5 flex flex-col justify-between space-y-4">
@@ -1835,8 +1860,13 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                     <span className="text-xl font-black text-slate-900">ห้อง {roomNum}</span>
                     <div className="flex items-center gap-1">
                       {isDeposit && (
-                        <span className="px-2 py-0.5 bg-purple-50 text-purple-700 border border-purple-200 font-bold rounded-full text-[10px]">
+                        <span className="px-2 py-0.5 bg-purple-50 text-purple-700 border border-purple-200 font-bold rounded-full text-[10px] whitespace-nowrap">
                           เงินประกัน
+                        </span>
+                      )}
+                      {isRent && (
+                        <span className="px-2 py-0.5 bg-blue-50 text-blue-700 border border-blue-200 font-bold rounded-full text-[10px] whitespace-nowrap">
+                          ค่าเช่า
                         </span>
                       )}
                       <span className="px-3 py-1 bg-emerald-50 text-emerald-700 border border-emerald-200 font-extrabold rounded-full text-[11px] flex items-center gap-1">
