@@ -16,7 +16,10 @@ import {
   doHalfOpenIntervalsOverlap,
   acquireRoomAvailabilityLock,
 } from '../utils/occupancy-interval.util.js';
-import { createDepositBillForAgreementInTx } from '../utils/deposit-billing.util.js';
+import {
+  createDepositBillForAgreementInTx,
+  createImmediateRentBillForAgreementInTx,
+} from '../utils/deposit-billing.util.js';
 
 export interface CreateProvisionalRentalTermDto {
   roomId: string;
@@ -326,6 +329,20 @@ export class ProvisionalRentalTermService {
         startDate: data.startDate,
         depositAmount: provisionalTerm.depositAmount || '0.00',
         depositDeclaredStatus: (data.depositDeclaredStatus as any) === 'PAID' ? 'PAID' : 'UNPAID',
+        provisionalRentalTermId: provisionalTerm.id,
+        actorUserId: userId,
+      });
+
+      // 3.6. Create immediate first HorPlus-managed Rent Bill for this agreement
+      await createImmediateRentBillForAgreementInTx(tx, {
+        dormitoryId,
+        roomId: data.roomId,
+        tenantId: tenant.id,
+        agreementType: data.rentalType,
+        startDate: data.startDate,
+        unitRentAmount: provisionalTerm.unitRentAmount || '0.00',
+        totalRentAmount: provisionalTerm.totalRentAmount || '0.00',
+        termInstallmentCount: provisionalTerm.termInstallmentCount,
         provisionalRentalTermId: provisionalTerm.id,
         actorUserId: userId,
       });
