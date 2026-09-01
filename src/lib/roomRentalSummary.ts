@@ -37,7 +37,7 @@ export function getCatalogRates(room: Room): RateItem[] {
   const items: RateItem[] = [];
 
   // Monthly
-  if (room.monthlyRent !== undefined && room.monthlyRent !== null) {
+  if (room.monthlyRent !== undefined && room.monthlyRent !== null && Number(room.monthlyRent) > 0) {
     items.push({
       cycle: 'monthly',
       label: 'รายเดือน',

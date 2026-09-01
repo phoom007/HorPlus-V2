@@ -6,7 +6,7 @@ export function mapRegistrationBuildingForFinalize(
   const bName = (b.name && b.name.trim()) ? b.name.trim() : '';
   const rawPrefix = (b.roomPrefix ? b.roomPrefix.trim() : '');
   const effectiveName = bName || (rawPrefix ? `อาคาร ${rawPrefix}` : `อาคาร ${idx + 1}`);
-  const effectivePrefix = bName || rawPrefix || null;
+  const effectivePrefix = rawPrefix || bName || null;
   const fallback = Number(fallbackDeposit) || 0;
 
   const termDep = b.termDeposit !== undefined && b.termDeposit !== '' ? (Number(b.termDeposit) || 0) : (b.securityDeposit !== undefined && b.securityDeposit !== '' ? (Number(b.securityDeposit) || 0) : fallback);

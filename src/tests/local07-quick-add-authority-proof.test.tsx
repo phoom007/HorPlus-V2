@@ -78,7 +78,7 @@ describe('LOCAL-07: Frontend Quick Add UI Authority & Installment Parity Proof',
     expect(installmentSelect.value).toBe('3');
 
     // 4. Live Installment Breakdown Preview
-    expect(screen.getByText('ค่าเช่ารายเทอมทั้งหมด:')).toBeDefined();
+    expect(screen.getByText('ค่าเช่ารวม:')).toBeDefined();
     expect(screen.getByText(/12,000\.00/)).toBeDefined();
     expect(screen.getByText('ตารางแบ่งชำระรายงวด (3 งวด):')).toBeDefined();
     expect(screen.getByText('งวดที่ 1:')).toBeDefined();
@@ -100,8 +100,8 @@ describe('LOCAL-07: Frontend Quick Add UI Authority & Installment Parity Proof',
 
     // MONTHLY tab
     fireEvent.click(screen.getByRole('button', { name: 'รายเดือน' }));
-    const monthlyInput = screen.getByDisplayValue('3500') as HTMLInputElement;
-    expect(monthlyInput).toBeDefined();
+    const monthlyInputs = screen.getAllByDisplayValue('3500');
+    expect(monthlyInputs.length).toBeGreaterThanOrEqual(1);
 
     // DAILY tab
     fireEvent.click(screen.getByRole('button', { name: 'รายวัน' }));

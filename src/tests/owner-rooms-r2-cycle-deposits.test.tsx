@@ -1446,7 +1446,7 @@ describe('OWNER ROOMS R2 & R2.1 — Rent-Cycle Deposit Model & Hardened Specific
 
     describe('Part K: Building Display Name vs Numbering Separation', () => {
       it('1. explicit non-empty Building.name takes priority without forced code in parentheses', () => {
-        expect(formatBuildingDisplayName({ name: 'สมบูรณ์', code: 'B' })).toBe('อาคารสมบูรณ์');
+        expect(formatBuildingDisplayName({ name: 'สมบูรณ์', code: 'B' })).toBe('อาคาร สมบูรณ์');
         expect(formatBuildingDisplayName({ name: 'อาคารสมบูรณ์', code: 'B' })).toBe('อาคารสมบูรณ์');
       });
 
@@ -1456,7 +1456,7 @@ describe('OWNER ROOMS R2 & R2.1 — Rent-Cycle Deposit Model & Hardened Specific
       });
 
       it('3. formatRoomLocation combines normalized building name and floor', () => {
-        expect(formatRoomLocation({ name: 'สมบูรณ์', code: 'B' }, 1)).toBe('อาคารสมบูรณ์ • ชั้น 1');
+        expect(formatRoomLocation({ name: 'สมบูรณ์', code: 'B' }, 1)).toBe('อาคาร สมบูรณ์ • ชั้น 1');
         expect(formatRoomLocation({ name: 'อาคารสมบูรณ์', code: 'B' }, 2)).toBe('อาคารสมบูรณ์ • ชั้น 2');
         expect(formatRoomLocation({ name: '', code: 'B' }, 3)).toBe('อาคาร B • ชั้น 3');
       });

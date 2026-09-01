@@ -177,7 +177,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
     return anniversary.toISOString().slice(0, 10);
   };
 
-  // Helper: inclusive days
+  // Helper: inclusive days (night-count / physical stay interval)
   const calculateInclusiveDays = (start: string, end: string): number => {
     if (!start || !end) return 1;
     const [sy, sm, sd] = start.split('-').map(Number);
@@ -185,7 +185,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
     const startUtc = Date.UTC(sy, sm - 1, sd);
     const endUtc = Date.UTC(ey, em - 1, ed);
     if (endUtc < startUtc) return 1;
-    return Math.round((endUtc - startUtc) / (24 * 3600 * 1000)) + 1;
+    return Math.max(1, Math.round((endUtc - startUtc) / (24 * 3600 * 1000)));
   };
 
   // Initialize room and building defaults when context opens
@@ -230,7 +230,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
           : null;
         setTermRent(tRent);
         setMaxInstallments(bldMaxInstallments);
-        setTermInstallmentCount(1);
+        setTermInstallmentCount(bldMaxInstallments);
         setTermEndDate(calculateMonthEndDate(today, bldTermMonths));
       } else {
         setTermMonths(null);

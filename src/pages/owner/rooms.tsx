@@ -377,10 +377,9 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
       setEditingRoom(room);
       setRoomNumber(room.roomNumber);
       setBuildingId(room.buildingId || '');
-      setFloor(room.floor);
-      setMonthlyRent(room.monthlyRent || 0);
-      setTermRent(room.termRent || (room.monthlyRent ? room.monthlyRent * 4 : 18000));
-      setDailyRent(room.dailyRent || 500);
+      setMonthlyRent(room.monthlyRent !== null && room.monthlyRent !== undefined ? room.monthlyRent : 0);
+      setTermRent(room.termRent !== null && room.termRent !== undefined ? room.termRent : 0);
+      setDailyRent(room.dailyRent !== null && room.dailyRent !== undefined ? room.dailyRent : 0);
       setRentCycle(room.rentCycle || 'monthly');
       setTermDeposit(room.termDeposit ?? room.depositAmount ?? 0);
       setMonthlyDeposit(room.monthlyDeposit ?? room.depositAmount ?? 0);
@@ -476,9 +475,9 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
     if (!editingRoom) {
       return roomNumber.trim().length > 0;
     }
-    const origMonthlyRent = editingRoom.monthlyRent || 0;
-    const origTermRent = editingRoom.termRent || (editingRoom.monthlyRent ? editingRoom.monthlyRent * 4 : 18000);
-    const origDailyRent = editingRoom.dailyRent || 500;
+    const origMonthlyRent = editingRoom.monthlyRent !== null && editingRoom.monthlyRent !== undefined ? Number(editingRoom.monthlyRent) : 0;
+    const origTermRent = editingRoom.termRent !== null && editingRoom.termRent !== undefined ? Number(editingRoom.termRent) : 0;
+    const origDailyRent = editingRoom.dailyRent !== null && editingRoom.dailyRent !== undefined ? Number(editingRoom.dailyRent) : 0;
     const origTermDeposit = editingRoom.termDeposit ?? editingRoom.depositAmount ?? 0;
     const origMonthlyDeposit = editingRoom.monthlyDeposit ?? editingRoom.depositAmount ?? 0;
     const origDailyDeposit = editingRoom.dailyDeposit ?? 0;
@@ -486,8 +485,8 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
     const origStatus = editingRoom.status || 'vacant';
 
     const curMonthly = monthlyRent === '' ? 0 : Number(monthlyRent);
-    const curTerm = termRent === '' ? (curMonthly * 4) : Number(termRent);
-    const curDaily = dailyRent === '' ? 500 : Number(dailyRent);
+    const curTerm = termRent === '' ? 0 : Number(termRent);
+    const curDaily = dailyRent === '' ? 0 : Number(dailyRent);
     const curTermDeposit = termDeposit === '' ? 0 : Number(termDeposit);
     const curMonthlyDeposit = monthlyDeposit === '' ? 0 : Number(monthlyDeposit);
     const curDailyDeposit = dailyDeposit === '' ? 0 : Number(dailyDeposit);
