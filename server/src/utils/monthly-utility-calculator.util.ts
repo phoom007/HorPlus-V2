@@ -177,7 +177,7 @@ export function calculateCanonicalMonthlyUtility(
     throw err;
   }
 
-  const peopleCount = Math.max(0, rawPeopleCount ?? 0);
+  const peopleCount = rawPeopleCount !== undefined && rawPeopleCount !== null ? Math.max(0, rawPeopleCount) : 1;
   const peopleCountDec = toDecimal(peopleCount.toString());
 
   // 1. Water Calculation
@@ -248,7 +248,7 @@ export function calculateCanonicalMonthlyUtility(
       });
     }
   } else if (waterMode === 'fixed') {
-    if (!isZeroDecimal(waterRate)) {
+    if (peopleCount > 0 && !isZeroDecimal(waterRate)) {
       waterUsageStr = '1.00';
       waterAmountStr = formatDecimal(waterRate);
       items.push({
@@ -383,7 +383,7 @@ export function calculateCanonicalMonthlyUtility(
       });
     }
   } else if (elecMode === 'fixed') {
-    if (!isZeroDecimal(elecRate)) {
+    if (peopleCount > 0 && !isZeroDecimal(elecRate)) {
       elecUsageStr = '1.00';
       elecAmountStr = formatDecimal(elecRate);
       items.push({
@@ -456,7 +456,7 @@ export function calculateCanonicalMonthlyUtility(
   const commonFee = toDecimal(rateSnapshot.commonFee ?? '0.00');
   let commonFeeStr = '0.00';
 
-  if (!isZeroDecimal(commonFee) && rawCommonMode !== 'free' && rawCommonMode !== 'none') {
+  if (peopleCount > 0 && !isZeroDecimal(commonFee) && rawCommonMode !== 'free' && rawCommonMode !== 'none') {
     const isPerPerson = rawCommonMode === 'person' || rawCommonMode === 'per_person';
     const q = isPerPerson ? peopleCountDec : toDecimal('1.00');
     const amt = isPerPerson ? mulDecimals(peopleCountDec, commonFee) : commonFee;
@@ -479,7 +479,7 @@ export function calculateCanonicalMonthlyUtility(
   const internetFee = toDecimal(rateSnapshot.internetFee ?? '0.00');
   let internetFeeStr = '0.00';
 
-  if (!isZeroDecimal(internetFee) && rawInternetMode !== 'free' && rawInternetMode !== 'none') {
+  if (peopleCount > 0 && !isZeroDecimal(internetFee) && rawInternetMode !== 'free' && rawInternetMode !== 'none') {
     const isPerPerson = rawInternetMode === 'person' || rawInternetMode === 'per_person';
     const q = isPerPerson ? peopleCountDec : toDecimal('1.00');
     const amt = isPerPerson ? mulDecimals(peopleCountDec, internetFee) : internetFee;
@@ -502,7 +502,7 @@ export function calculateCanonicalMonthlyUtility(
   const parkingFee = toDecimal(rateSnapshot.parkingFee ?? '0.00');
   let parkingFeeStr = '0.00';
 
-  if (!isZeroDecimal(parkingFee) && rawParkingMode !== 'free' && rawParkingMode !== 'none') {
+  if (peopleCount > 0 && !isZeroDecimal(parkingFee) && rawParkingMode !== 'free' && rawParkingMode !== 'none') {
     const isPerPerson = rawParkingMode === 'person' || rawParkingMode === 'per_person';
     const isPerVehicle = rawParkingMode === 'vehicle' || rawParkingMode === 'per_vehicle';
 

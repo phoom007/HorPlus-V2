@@ -558,8 +558,8 @@ describe('LOCAL-07 Shared Canonical Monthly Utility Calculation Authority', () =
     }
   });
 
-  // Decision B3 Semantics: Zero People Count (peopleCount = 0)
-  it('B3-1: peopleCount = 0 with commonFeeMode = per_room charges fixed common fee (100.00)', () => {
+  // Decision B3 Semantics: Zero People Count (peopleCount = 0) (Locked Policy Q2 = B)
+  it('B3-1: peopleCount = 0 with commonFeeMode = per_room zeroes common fee (0.00)', () => {
     const res = calculateCanonicalMonthlyUtility({
       rateSnapshot: {
         ...baseRates,
@@ -570,7 +570,7 @@ describe('LOCAL-07 Shared Canonical Monthly Utility Calculation Authority', () =
       waterReading: { previousReading: '0', currentReading: '0' },
       electricReading: { previousReading: '0', currentReading: '0' },
     });
-    expect(res.commonFee).toBe('100.00');
+    expect(res.commonFee).toBe('0.00');
   });
 
   it('B3-2: peopleCount = 0 with commonFeeMode = per_person charges 0.00 common fee', () => {
@@ -587,7 +587,7 @@ describe('LOCAL-07 Shared Canonical Monthly Utility Calculation Authority', () =
     expect(res.commonFee).toBe('0.00');
   });
 
-  it('B3-3: peopleCount = 0 with waterBillingType = fixed charges fixed water fee (150.00)', () => {
+  it('B3-3: peopleCount = 0 with waterBillingType = fixed zeroes fixed water fee (0.00)', () => {
     const res = calculateCanonicalMonthlyUtility({
       rateSnapshot: {
         ...baseRates,
@@ -598,7 +598,7 @@ describe('LOCAL-07 Shared Canonical Monthly Utility Calculation Authority', () =
       waterReading: null,
       electricReading: { previousReading: '0', currentReading: '0' },
     });
-    expect(res.waterAmount).toBe('150.00');
+    expect(res.waterAmount).toBe('0.00');
   });
 
   it('B3-4: peopleCount = 0 with waterBillingType = per_person charges 0.00 water fee', () => {
@@ -629,7 +629,7 @@ describe('LOCAL-07 Shared Canonical Monthly Utility Calculation Authority', () =
     expect(res.waterAmount).toBe('180.00');
   });
 
-  it('B3-6: peopleCount = 0 with electricityBillingType = fixed charges fixed electric fee (300.00)', () => {
+  it('B3-6: peopleCount = 0 with electricityBillingType = fixed zeroes fixed electric fee (0.00)', () => {
     const res = calculateCanonicalMonthlyUtility({
       rateSnapshot: {
         ...baseRates,
@@ -640,7 +640,7 @@ describe('LOCAL-07 Shared Canonical Monthly Utility Calculation Authority', () =
       waterReading: { previousReading: '0', currentReading: '0' },
       electricReading: null,
     });
-    expect(res.electricityAmount).toBe('300.00');
+    expect(res.electricityAmount).toBe('0.00');
   });
 
   it('B3-7: peopleCount = 0 with electricityBillingType = per_person charges 0.00 electric fee', () => {
@@ -671,7 +671,7 @@ describe('LOCAL-07 Shared Canonical Monthly Utility Calculation Authority', () =
     expect(res.electricityAmount).toBe('420.00');
   });
 
-  it('B3-9: peopleCount = 0 with parkingFeeMode = per_room charges fixed parking fee (100.00)', () => {
+  it('B3-9: peopleCount = 0 with parkingFeeMode = per_room zeroes parking fee (0.00)', () => {
     const res = calculateCanonicalMonthlyUtility({
       rateSnapshot: {
         ...baseRates,
@@ -682,10 +682,10 @@ describe('LOCAL-07 Shared Canonical Monthly Utility Calculation Authority', () =
       waterReading: { previousReading: '0', currentReading: '0' },
       electricReading: { previousReading: '0', currentReading: '0' },
     });
-    expect(res.parkingFee).toBe('100.00');
+    expect(res.parkingFee).toBe('0.00');
   });
 
-  it('B3-10: peopleCount = 0 with parkingFeeMode = per_vehicle (2 vehicles @ 100), otherFees, and manualOutstanding applies all independent charges', () => {
+  it('B3-10: peopleCount = 0 with parkingFeeMode = per_vehicle (2 vehicles @ 100), otherFees, and manualOutstanding zeroes parking/common/internet while keeping otherFees and manualOutstanding', () => {
     const res = calculateCanonicalMonthlyUtility({
       rateSnapshot: {
         ...baseRates,
@@ -710,12 +710,12 @@ describe('LOCAL-07 Shared Canonical Monthly Utility Calculation Authority', () =
 
     expect(res.waterAmount).toBe('0.00');
     expect(res.electricityAmount).toBe('0.00');
-    expect(res.commonFee).toBe('200.00');
-    expect(res.internetFee).toBe('150.00');
-    expect(res.parkingFee).toBe('200.00');
+    expect(res.commonFee).toBe('0.00');
+    expect(res.internetFee).toBe('0.00');
+    expect(res.parkingFee).toBe('0.00');
     expect(res.manualOutstandingAmount).toBe('50.00');
     expect(res.otherFees).toEqual([{ description: 'คีย์การ์ด', amount: '100.00' }]);
-    expect(res.monthlyUtilityTotal).toBe('700.00'); // 200 + 150 + 200 + 100 + 50 = 700.00
+    expect(res.monthlyUtilityTotal).toBe('150.00'); // 100 other fee + 50 outstanding = 150.00
   });
 
   describe('LOCAL-07 Canonical Late Fee Authority (Decision 2)', () => {
