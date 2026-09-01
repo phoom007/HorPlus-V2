@@ -1,4 +1,4 @@
-/**
+﻿/**
  * @license Apache-2.0
  * Round 2 Phase C: Recurring Rent Bill Production, Pre-Generation & Agreement-Boundary Tests
  * Directly tests production BillingService logic with mocked repositories
@@ -9,13 +9,16 @@ import { BillingService } from '../../services/billing.service.js';
 import { subscriptionEntitlementService } from '../../services/subscription-entitlement.service.js';
 import { billingOrchestrationService } from '../../services/billing-orchestration.service.js';
 import { billingCycleService } from '../../services/billing-cycle.service.js';
+import { resolveProvisionalBillingSource } from '../../services/provisional-billing-source.service.js';
 import { isBillVisibleToTenant } from '../../utils/tenant-visibility.util.js';
+import { isAgreementEligibleForBillingCycle, getCalendarDayAfter } from '../../utils/calendar-date.util.js';
 import * as prismaModule from '../../db/prisma.js';
 
 describe('Round 2 Phase C: Recurring Rent Generation & Next-Cycle Pre-Generation', () => {
   const DORM_ID = '11111111-1111-4111-8111-111111111111';
   const ROOM_ID = '22222222-2222-4222-8222-222222222222';
   const TENANT_ID = '33333333-3333-4333-8333-333333333333';
+  const CYCLE_AUG_ID = '77777777-7777-4777-8777-777777777777';
   const CYCLE_SEP_ID = '44444444-4444-4444-8444-444444444444';
   const CYCLE_OCT_ID = '55555555-5555-4555-8555-555555555555';
   const CYCLE_NOV_ID = '66666666-6666-4666-8666-666666666666';
@@ -51,9 +54,10 @@ describe('Round 2 Phase C: Recurring Rent Generation & Next-Cycle Pre-Generation
           const lte = where.cycleCode?.lte;
           const gte = where.cycleCode?.gte;
           const allCycles = [
-            { id: CYCLE_SEP_ID, dormitoryId: DORM_ID, cycleCode: '2026-09', periodStart: new Date('2026-09-01T00:00:00.000Z') },
-            { id: CYCLE_OCT_ID, dormitoryId: DORM_ID, cycleCode: '2026-10', periodStart: new Date('2026-10-01T00:00:00.000Z') },
-            { id: CYCLE_NOV_ID, dormitoryId: DORM_ID, cycleCode: '2026-11', periodStart: new Date('2026-11-01T00:00:00.000Z') },
+            { id: CYCLE_AUG_ID, dormitoryId: DORM_ID, cycleCode: '2026-08', periodStart: new Date('2026-08-01T00:00:00.000Z'), periodEnd: new Date('2026-08-31T23:59:59.999Z') },
+            { id: CYCLE_SEP_ID, dormitoryId: DORM_ID, cycleCode: '2026-09', periodStart: new Date('2026-09-01T00:00:00.000Z'), periodEnd: new Date('2026-09-30T23:59:59.999Z') },
+            { id: CYCLE_OCT_ID, dormitoryId: DORM_ID, cycleCode: '2026-10', periodStart: new Date('2026-10-01T00:00:00.000Z'), periodEnd: new Date('2026-10-31T23:59:59.999Z') },
+            { id: CYCLE_NOV_ID, dormitoryId: DORM_ID, cycleCode: '2026-11', periodStart: new Date('2026-11-01T00:00:00.000Z'), periodEnd: new Date('2026-11-30T23:59:59.999Z') },
           ];
           return allCycles.filter((c) => {
             if (gte && c.cycleCode < gte) return false;
@@ -67,6 +71,7 @@ describe('Round 2 Phase C: Recurring Rent Generation & Next-Cycle Pre-Generation
       },
       provisionalRentalTerm: {
         findFirst: vi.fn().mockResolvedValue(null),
+        findMany: vi.fn().mockResolvedValue([]),
       },
       contractSnapshot: {
         findUnique: vi.fn().mockResolvedValue(null),
@@ -101,6 +106,17 @@ describe('Round 2 Phase C: Recurring Rent Generation & Next-Cycle Pre-Generation
 
     mockBillingCycleRepo = {
       findById: vi.fn().mockImplementation(async (id) => {
+        if (id === CYCLE_AUG_ID) {
+          return {
+            id: CYCLE_AUG_ID,
+            cycleCode: '2026-08',
+            periodStart: new Date('2026-08-01T00:00:00.000Z'),
+            periodEnd: new Date('2026-08-31T23:59:59.999Z'),
+            billingDate: new Date('2026-08-01T00:00:00.000Z'),
+            dueDate: new Date('2026-08-05T00:00:00.000Z'),
+            status: 'draft',
+          };
+        }
         if (id === CYCLE_OCT_ID) {
           return {
             id: CYCLE_OCT_ID,
@@ -177,6 +193,7 @@ describe('Round 2 Phase C: Recurring Rent Generation & Next-Cycle Pre-Generation
       tenantId: TENANT_ID,
       rentalType: 'MONTHLY',
       startDate: new Date('2026-09-01'),
+      endDate: new Date('2027-02-28'),
       durationMonths: 6,
       unitRentAmount: new Prisma.Decimal('4500.00'),
     });
@@ -213,6 +230,7 @@ describe('Round 2 Phase C: Recurring Rent Generation & Next-Cycle Pre-Generation
       tenantId: TENANT_ID,
       rentalType: 'TERM',
       startDate: new Date('2026-09-01'),
+      endDate: new Date('2026-10-31'),
       durationMonths: 2,
       totalRentAmount: new Prisma.Decimal('9000.00'),
       termInstallmentCount: 2,
@@ -243,6 +261,7 @@ describe('Round 2 Phase C: Recurring Rent Generation & Next-Cycle Pre-Generation
       tenantId: TENANT_ID,
       rentalType: 'MONTHLY',
       startDate: new Date('2026-09-01'),
+      endDate: new Date('2027-02-28'),
       durationMonths: 6,
       unitRentAmount: new Prisma.Decimal('4500.00'),
     });
@@ -266,6 +285,7 @@ describe('Round 2 Phase C: Recurring Rent Generation & Next-Cycle Pre-Generation
       tenantId: TENANT_ID,
       rentalType: 'MONTHLY',
       startDate: new Date('2026-09-01'),
+      endDate: new Date('2027-02-28'),
       durationMonths: 6,
       unitRentAmount: new Prisma.Decimal('4500.00'),
     });
@@ -300,6 +320,7 @@ describe('Round 2 Phase C: Recurring Rent Generation & Next-Cycle Pre-Generation
       tenantId: TENANT_ID,
       rentalType: 'MONTHLY',
       startDate: new Date('2026-09-01'),
+      endDate: new Date('2027-02-28'),
       durationMonths: 6,
       unitRentAmount: new Prisma.Decimal('4500.00'),
     });
@@ -311,79 +332,83 @@ describe('Round 2 Phase C: Recurring Rent Generation & Next-Cycle Pre-Generation
     expect(billingCycleService.ensureRollingBillingCycles).toHaveBeenCalledWith(DORM_ID);
   });
 
-  describe('6. Contract Cycle Eligibility & Agreement Boundary Tests', () => {
-    it('6a. Active Contract that ends before target cycle (2026-09-01 -> 2026-09-20) excludes with CONTRACT_NOT_ELIGIBLE_FOR_CYCLE for October', async () => {
-      mockContractRepo.findActiveContractsForRoom.mockResolvedValueOnce([
+  describe('6. Policy B: Half-Open Agreement Boundary [startDate, endDate) & Contract / Provisional Parity', () => {
+    it('6a. Contract Boundary: agreement 2026-09-01 -> 2026-10-01 is billable for September, but NOT billable for October (end == Oct periodStart)', async () => {
+      // 1. September generation -> eligible and generates RENT
+      mockContractRepo.findActiveContractsForRoom.mockResolvedValue([
         {
-          id: 'contract-sep-only',
+          id: 'contract-sep-to-oct1',
           dormitoryId: DORM_ID,
           roomId: ROOM_ID,
           tenantId: TENANT_ID,
           status: 'active',
           startDate: new Date('2026-09-01T00:00:00.000Z'),
-          endDate: new Date('2026-09-20T23:59:59.999Z'),
+          endDate: new Date('2026-10-01T00:00:00.000Z'),
           rentBillingType: 'monthly',
           rentAmount: '4500.00',
         },
       ]);
 
+      const sepRes = await billingService.bulkGenerateBills(DORM_ID, CYCLE_SEP_ID, [ROOM_ID], 'owner-1', undefined, 'RENT');
+      expect(sepRes.generatedCount).toBe(1);
+      expect(sepRes.bills[0].billKind).toBe('RENT');
+
+      // 2. October generation -> NOT eligible under Policy B because endDate equals cycle periodStart
       mockBillRepo.create.mockClear();
 
       const octRes = await billingService.bulkGenerateBills(DORM_ID, CYCLE_OCT_ID, [ROOM_ID], 'owner-1', undefined, 'RENT');
-
       expect(octRes.generatedCount).toBe(0);
       expect(octRes.excluded.length).toBe(1);
       expect(octRes.excluded[0].reason).toBe('CONTRACT_NOT_ELIGIBLE_FOR_CYCLE');
       expect(mockBillRepo.create).not.toHaveBeenCalled();
 
       // Direct generateBill throws 400 CONTRACT_NOT_ELIGIBLE_FOR_CYCLE
-      mockContractRepo.findActiveContractsForRoom.mockResolvedValueOnce([
-        {
-          id: 'contract-sep-only',
-          dormitoryId: DORM_ID,
-          roomId: ROOM_ID,
-          tenantId: TENANT_ID,
-          status: 'active',
-          startDate: new Date('2026-09-01T00:00:00.000Z'),
-          endDate: new Date('2026-09-20T23:59:59.999Z'),
-          rentBillingType: 'monthly',
-          rentAmount: '4500.00',
-        },
-      ]);
-
       await expect(
         billingService.generateBill(DORM_ID, { billingCycleId: CYCLE_OCT_ID, roomId: ROOM_ID, billKind: 'RENT' })
       ).rejects.toMatchObject({ code: 'CONTRACT_NOT_ELIGIBLE_FOR_CYCLE', statusCode: 400 });
 
       // Direct generateBillPreview throws 400 CONTRACT_NOT_ELIGIBLE_FOR_CYCLE
-      mockContractRepo.findActiveContractsForRoom.mockResolvedValueOnce([
-        {
-          id: 'contract-sep-only',
-          dormitoryId: DORM_ID,
-          roomId: ROOM_ID,
-          tenantId: TENANT_ID,
-          status: 'active',
-          startDate: new Date('2026-09-01T00:00:00.000Z'),
-          endDate: new Date('2026-09-20T23:59:59.999Z'),
-          rentBillingType: 'monthly',
-          rentAmount: '4500.00',
-        },
-      ]);
-
       await expect(
         billingService.generateBillPreview(DORM_ID, CYCLE_OCT_ID, ROOM_ID, undefined, 'RENT')
       ).rejects.toMatchObject({ code: 'CONTRACT_NOT_ELIGIBLE_FOR_CYCLE', statusCode: 400 });
     });
 
-    it('6b. Active Contract that overlaps target cycle (2026-09-01 -> 2026-10-31) successfully generates October RENT', async () => {
+    it('6b. Contract Standard 1-Month UI: agreement 2026-08-01 -> 2026-08-31 is billable for August, but NOT for September', async () => {
       mockContractRepo.findActiveContractsForRoom.mockResolvedValue([
         {
-          id: 'contract-sep-oct',
+          id: 'contract-aug-1mo',
           dormitoryId: DORM_ID,
           roomId: ROOM_ID,
           tenantId: TENANT_ID,
           status: 'active',
-          startDate: new Date('2026-09-01T00:00:00.000Z'),
+          startDate: new Date('2026-08-01T00:00:00.000Z'),
+          endDate: new Date('2026-08-31T23:59:59.999Z'),
+          rentBillingType: 'monthly',
+          rentAmount: '4500.00',
+        },
+      ]);
+
+      const augRes = await billingService.bulkGenerateBills(DORM_ID, CYCLE_AUG_ID, [ROOM_ID], 'owner-1', undefined, 'RENT');
+      expect(augRes.generatedCount).toBe(1);
+      expect(augRes.bills[0].billKind).toBe('RENT');
+
+      mockBillRepo.create.mockClear();
+
+      const sepRes = await billingService.bulkGenerateBills(DORM_ID, CYCLE_SEP_ID, [ROOM_ID], 'owner-1', undefined, 'RENT');
+      expect(sepRes.generatedCount).toBe(0);
+      expect(sepRes.excluded[0].reason).toBe('CONTRACT_NOT_ELIGIBLE_FOR_CYCLE');
+      expect(mockBillRepo.create).not.toHaveBeenCalled();
+    });
+
+    it('6c. Contract Multi-Month: agreement 2026-08-01 -> 2026-10-31 is billable for August, September, October, but NOT November', async () => {
+      mockContractRepo.findActiveContractsForRoom.mockResolvedValue([
+        {
+          id: 'contract-3mo',
+          dormitoryId: DORM_ID,
+          roomId: ROOM_ID,
+          tenantId: TENANT_ID,
+          status: 'active',
+          startDate: new Date('2026-08-01T00:00:00.000Z'),
           endDate: new Date('2026-10-31T23:59:59.999Z'),
           rentBillingType: 'monthly',
           rentAmount: '4500.00',
@@ -391,14 +416,18 @@ describe('Round 2 Phase C: Recurring Rent Generation & Next-Cycle Pre-Generation
       ]);
 
       const octRes = await billingService.bulkGenerateBills(DORM_ID, CYCLE_OCT_ID, [ROOM_ID], 'owner-1', undefined, 'RENT');
-
       expect(octRes.generatedCount).toBe(1);
       expect(octRes.bills[0].billKind).toBe('RENT');
-      expect(Number(octRes.bills[0].totalAmount)).toBe(4500);
-      expect(mockBillRepo.create).toHaveBeenCalled();
+
+      mockBillRepo.create.mockClear();
+
+      const novRes = await billingService.bulkGenerateBills(DORM_ID, CYCLE_NOV_ID, [ROOM_ID], 'owner-1', undefined, 'RENT');
+      expect(novRes.generatedCount).toBe(0);
+      expect(novRes.excluded[0].reason).toBe('CONTRACT_NOT_ELIGIBLE_FOR_CYCLE');
+      expect(mockBillRepo.create).not.toHaveBeenCalled();
     });
 
-    it('6c. Future-start active Contract (2026-11-01 -> 2026-12-31) excludes with CONTRACT_NOT_ELIGIBLE_FOR_CYCLE for October', async () => {
+    it('6d. Future-start active Contract (2026-11-01 -> 2026-12-31) excludes with CONTRACT_NOT_ELIGIBLE_FOR_CYCLE for October', async () => {
       mockContractRepo.findActiveContractsForRoom.mockResolvedValue([
         {
           id: 'contract-future-nov',
@@ -421,6 +450,77 @@ describe('Round 2 Phase C: Recurring Rent Generation & Next-Cycle Pre-Generation
       expect(octRes.excluded.length).toBe(1);
       expect(octRes.excluded[0].reason).toBe('CONTRACT_NOT_ELIGIBLE_FOR_CYCLE');
       expect(mockBillRepo.create).not.toHaveBeenCalled();
+    });
+
+    it('6e. Provisional Monthly Boundary: shared resolver rejects 2026-09-01 -> 2026-10-01 for October (end == Oct periodStart)', async () => {
+      mockContractRepo.findActiveContractsForRoom.mockResolvedValue([]);
+
+      const mockTerm = {
+        id: 'prov-sep-to-oct1',
+        dormitoryId: DORM_ID,
+        roomId: ROOM_ID,
+        tenantId: TENANT_ID,
+        status: 'ACTIVE',
+        rentalType: 'MONTHLY',
+        startDate: new Date('2026-09-01T00:00:00.000Z'),
+        endDate: new Date('2026-10-01T00:00:00.000Z'),
+        unitRentAmount: new Prisma.Decimal('4500.00'),
+      };
+
+      mockPrisma.provisionalRentalTerm.findMany.mockResolvedValue([mockTerm]);
+
+      // 1. Resolver for September -> returns term
+      const sepCycle = { periodStart: new Date('2026-09-01T00:00:00.000Z'), periodEnd: new Date('2026-09-30T23:59:59.999Z') };
+      const sepResolved = await resolveProvisionalBillingSource({
+        dormitoryId: DORM_ID,
+        roomId: ROOM_ID,
+        billingCycle: sepCycle,
+      });
+      expect(sepResolved).not.toBeNull();
+      expect(sepResolved.id).toBe('prov-sep-to-oct1');
+
+      // 2. Resolver for October -> returns null (half-open: endDate == periodStart is not billable)
+      const octCycle = { periodStart: new Date('2026-10-01T00:00:00.000Z'), periodEnd: new Date('2026-10-31T23:59:59.999Z') };
+      const octResolved = await resolveProvisionalBillingSource({
+        dormitoryId: DORM_ID,
+        roomId: ROOM_ID,
+        billingCycle: octCycle,
+      });
+      expect(octResolved).toBeNull();
+    });
+
+    it('6f. Provisional Monthly Normal UI (2026-08-01 -> 2026-08-31) is billable for August, but returns null for September', async () => {
+      mockContractRepo.findActiveContractsForRoom.mockResolvedValue([]);
+
+      const mockTerm = {
+        id: 'prov-aug-1mo',
+        dormitoryId: DORM_ID,
+        roomId: ROOM_ID,
+        tenantId: TENANT_ID,
+        status: 'ACTIVE',
+        rentalType: 'MONTHLY',
+        startDate: new Date('2026-08-01T00:00:00.000Z'),
+        endDate: new Date('2026-08-31T23:59:59.999Z'),
+        unitRentAmount: new Prisma.Decimal('4500.00'),
+      };
+
+      mockPrisma.provisionalRentalTerm.findMany.mockResolvedValue([mockTerm]);
+
+      const augCycle = { periodStart: new Date('2026-08-01T00:00:00.000Z'), periodEnd: new Date('2026-08-31T23:59:59.999Z') };
+      const augResolved = await resolveProvisionalBillingSource({
+        dormitoryId: DORM_ID,
+        roomId: ROOM_ID,
+        billingCycle: augCycle,
+      });
+      expect(augResolved).not.toBeNull();
+
+      const sepCycle = { periodStart: new Date('2026-09-01T00:00:00.000Z'), periodEnd: new Date('2026-09-30T23:59:59.999Z') };
+      const sepResolved = await resolveProvisionalBillingSource({
+        dormitoryId: DORM_ID,
+        roomId: ROOM_ID,
+        billingCycle: sepCycle,
+      });
+      expect(sepResolved).toBeNull();
     });
   });
 });
