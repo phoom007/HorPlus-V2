@@ -80,12 +80,15 @@ export function resolveDailyTimestampsAndPricing(
   if (checkOutTimeStr && /^\d{2}:\d{2}(:\d{2})?$/.test(checkOutTimeStr.trim())) {
     const outTime = checkOutTimeStr.trim().length === 5 ? `${checkOutTimeStr.trim()}:00` : checkOutTimeStr.trim();
     checkOutAt = new Date(`${endDateStr}T${outTime}+07:00`);
-  } else {
-    // Default checkout: day AFTER endDate at 00:00:00 Asia/Bangkok
+  } else if (startDateStr === endDateStr) {
+    // Single-day stay (same-date without explicit time): minimum 1 physical day ending next day 00:00
     const [ey, em, ed] = endDateStr.split('-').map(Number);
     const nextDay = new Date(Date.UTC(ey, em - 1, ed + 1));
     const nextDayStr = nextDay.toISOString().slice(0, 10);
     checkOutAt = new Date(`${nextDayStr}T00:00:00+07:00`);
+  } else {
+    // Multi-day stay: checkout occurs on endDate at 00:00:00 Asia/Bangkok
+    checkOutAt = new Date(`${endDateStr}T00:00:00+07:00`);
   }
 
   if (checkOutAt.getTime() <= checkInAt.getTime()) {

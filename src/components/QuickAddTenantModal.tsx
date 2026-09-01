@@ -276,7 +276,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
       const bld = context.building;
 
       // 1. Monthly defaults: from authoritative server context
-      const mRent = eff && typeof eff.monthlyRent === 'number' ? Number(eff.monthlyRent) : 0;
+      const mRent = eff && (eff.monthlyRent !== null && eff.monthlyRent !== undefined) ? Number(eff.monthlyRent) : 0;
       const mDep = eff?.monthlyDeposit !== null && eff?.monthlyDeposit !== undefined
         ? Number(eff.monthlyDeposit)
         : (eff?.depositAmount !== null && eff?.depositAmount !== undefined ? Number(eff.depositAmount) : 0);
@@ -302,7 +302,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
         setTermMonths(bldTermMonths);
         const tRent = eff?.termRent !== null && eff?.termRent !== undefined
           ? Number(eff.termRent)
-          : null;
+          : 0;
         setTermRent(tRent);
         setMaxInstallments(bldMaxInstallments);
         setTermInstallmentCount(bldMaxInstallments);
@@ -316,7 +316,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
       }
 
       // 3. Daily defaults: strictly from authoritative server context (preserves null vs 0, and explicit 0 deposit)
-      const dRent = eff?.dailyRent !== null && eff?.dailyRent !== undefined ? Number(eff.dailyRent) : null;
+      const dRent = eff?.dailyRent !== null && eff?.dailyRent !== undefined ? Number(eff.dailyRent) : 0;
       const dDep = eff?.dailyDeposit !== null && eff?.dailyDeposit !== undefined
         ? Number(eff.dailyDeposit)
         : (eff?.depositAmount !== null && eff?.depositAmount !== undefined ? Number(eff.depositAmount) : 0);
@@ -383,8 +383,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
 
   const isTermTabDisabled =
     !context.building?.termMonths ||
-    !context.effective?.termRent ||
-    Number(context.effective?.termRent) <= 0;
+    Number(context.building?.termMonths) < 1;
 
   const inclusiveDays = calculateInclusiveDays(startDate, dailyEndDate);
   const dailyTotalRent = normalizeMoneyInput(dailyRate) * inclusiveDays;
