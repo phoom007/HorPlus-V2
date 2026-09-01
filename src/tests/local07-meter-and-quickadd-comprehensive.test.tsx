@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import React from 'react';
 import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
   calculateMeterUsageUnits,
   calculateMeterRowPreview,
@@ -240,13 +241,16 @@ describe('LOCAL-07 Meter Workspace & Quick Add Comprehensive Frontend Suite', ()
     };
 
     it('renders optional check-in and check-out time fields in DAILY tab', () => {
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
       render(
-        <QuickAddTenantModal
-          isOpen={true}
-          onClose={vi.fn()}
-          context={mockContext as any}
-          onSuccess={vi.fn()}
-        />
+        <QueryClientProvider client={queryClient}>
+          <QuickAddTenantModal
+            isOpen={true}
+            onClose={vi.fn()}
+            context={mockContext as any}
+            onSuccess={vi.fn()}
+          />
+        </QueryClientProvider>
       );
 
       // Switch to DAILY tab
@@ -262,14 +266,17 @@ describe('LOCAL-07 Meter Workspace & Quick Add Comprehensive Frontend Suite', ()
       const httpRequestSpy = vi.spyOn(httpClient, 'httpRequest').mockResolvedValue({ success: true } as any);
       const onSuccess = vi.fn();
       const onClose = vi.fn();
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
       render(
-        <QuickAddTenantModal
-          isOpen={true}
-          onClose={onClose}
-          context={mockContext as any}
-          onSuccess={onSuccess}
-        />
+        <QueryClientProvider client={queryClient}>
+          <QuickAddTenantModal
+            isOpen={true}
+            onClose={onClose}
+            context={mockContext as any}
+            onSuccess={onSuccess}
+          />
+        </QueryClientProvider>
       );
 
       // Switch to DAILY tab

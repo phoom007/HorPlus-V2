@@ -1660,10 +1660,9 @@ describe('LOCAL-07 Source-Reviewed Meter Workspace Correction Suite', () => {
       expect(julyTenant?.id).toBe(mockTenantA.id);
       expect(julyTenant?.name).toBe('นายกิตติ มุ่งมั่น');
 
-      // 3. August (2026-08): contract occupancy touches Aug 1 -> SHOWN
+      // 3. August (2026-08): contract ended Aug 1 under half-open policy B [startDate, endDate) -> NOT shown
       const augTenant = getTenantForRoomAndCycleHelper('room-temp-101', '2026-08', [contractJulyReg], [mockRoom], [mockTenantA]);
-      expect(augTenant?.id).toBe(mockTenantA.id);
-      expect(augTenant?.name).toBe('นายกิตติ มุ่งมั่น');
+      expect(augTenant).toBeUndefined();
 
       // 4. September (2026-09): contract ended Aug 1 -> NOT shown
       const septTenant = getTenantForRoomAndCycleHelper('room-temp-101', '2026-09', [contractJulyReg], [mockRoom], [mockTenantA]);
@@ -1689,10 +1688,9 @@ describe('LOCAL-07 Source-Reviewed Meter Workspace Correction Suite', () => {
         createdAt: '2026-07-01T00:00:00.000Z',
       } as any;
 
-      // August cycle check
+      // August cycle check under half-open policy B
       const aug1Tenant = getTenantForRoomAndCycleHelper('r1', '2026-08', [contractEndsAug1], [], [mockTenantA]);
-      expect(aug1Tenant).toBeDefined();
-      expect(aug1Tenant?.id).toBe(mockTenantA.id);
+      expect(aug1Tenant).toBeUndefined();
 
       const july31Tenant = getTenantForRoomAndCycleHelper('r2', '2026-08', [contractEndsJuly31], [], [mockTenantA]);
       expect(july31Tenant).toBeUndefined();
@@ -1749,9 +1747,9 @@ describe('LOCAL-07 Source-Reviewed Meter Workspace Correction Suite', () => {
       const julyTenant = getTenantForRoomAndCycleHelper('room-tz-1', '2026-07', [contractTz], [], [mockTenantA]);
       expect(julyTenant?.id).toBe(mockTenantA.id);
 
-      // August 2026: visible
+      // August 2026: contract ended Aug 1 under half-open policy B -> NOT visible
       const augTenant = getTenantForRoomAndCycleHelper('room-tz-1', '2026-08', [contractTz], [], [mockTenantA]);
-      expect(augTenant?.id).toBe(mockTenantA.id);
+      expect(augTenant).toBeUndefined();
     });
 
     it('Proof 9E: Timezone boundary regression - ISO timestamp createdAt 2026-07-31T18:30:00.000Z normalizes to Bangkok 2026-08-01', () => {

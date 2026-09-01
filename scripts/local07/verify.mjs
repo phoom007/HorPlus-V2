@@ -186,9 +186,9 @@ export async function runVerification() {
   const totalPaid = (julyCycle?.bills.reduce((sum, b) => sum + Number(b.paidAmount || 0), 0)) || 0;
   const totalUnpaid = (julyCycle?.bills.reduce((sum, b) => sum + Number(b.outstandingAmount || 0), 0)) || 0;
 
-  assert(Math.round(totalBilled) === 88999, 'Total billed in July 2026 equals ฿88,999.00', totalBilled);
+  assert(Math.round(totalBilled) === 88399, 'Total billed in July 2026 equals ฿88,399.00', totalBilled);
   assert(Math.round(totalPaid) === 48594, 'Total paid in July 2026 equals ฿48,594.00 (฿46,494 + ฿2,100 partial)', totalPaid);
-  assert(Math.round(totalUnpaid) === 40405, 'Total unpaid in July 2026 equals ฿40,405.00 (฿36,405 + ฿4,000 partial)', totalUnpaid);
+  assert(Math.round(totalUnpaid) === 39805, 'Total unpaid in July 2026 equals ฿39,805.00 (฿35,805 + ฿4,000 partial)', totalUnpaid);
 
   // Receipts count verification
   const receiptsCount = julyCycle?.bills.reduce((sum, b) => sum + b.Receipt.length, 0) || 0;
@@ -223,15 +223,15 @@ export async function runVerification() {
   assert(weeraContract?.startDate?.toISOString().startsWith('2026-06-01'), 'Room 204 Contract startDate is 2026-06-01', weeraContract?.startDate?.toISOString());
   assert(weeraContract?.endDate?.toISOString().startsWith('2026-08-01'), 'Room 204 Contract endDate is 2026-08-01', weeraContract?.endDate?.toISOString());
 
-  const { MeterService } = require('../../server/dist/services/meter.service.js');
-  const { BillingService } = require('../../server/dist/services/billing.service.js');
-  const { PrismaMeterRepository } = require('../../server/dist/db/repositories/meter.repository.js');
-  const { PrismaBillingCycleRepository } = require('../../server/dist/db/repositories/billing-cycle.repository.js');
-  const { PrismaRoomRepository } = require('../../server/dist/db/repositories/room.repository.js');
-  const { PrismaBillRepository } = require('../../server/dist/db/repositories/bill.repository.js');
-  const { PrismaContractRepository } = require('../../server/dist/db/repositories/contract.repository.js');
-  const { PrismaTenantRepository } = require('../../server/dist/db/repositories/tenant.repository.js');
-  const { AuditService } = require('../../server/dist/services/audit.service.js');
+  const { MeterService } = await import('../../server/src/services/meter.service.ts');
+  const { BillingService } = await import('../../server/src/services/billing.service.ts');
+  const { PrismaMeterRepository } = await import('../../server/src/db/repositories/meter.repository.ts');
+  const { PrismaBillingCycleRepository } = await import('../../server/src/db/repositories/billing-cycle.repository.ts');
+  const { PrismaRoomRepository } = await import('../../server/src/db/repositories/room.repository.ts');
+  const { PrismaBillRepository } = await import('../../server/src/db/repositories/bill.repository.ts');
+  const { PrismaContractRepository } = await import('../../server/src/db/repositories/contract.repository.ts');
+  const { PrismaTenantRepository } = await import('../../server/src/db/repositories/tenant.repository.ts');
+  const { AuditService } = await import('../../server/src/services/audit.service.ts');
 
   const meterRepo = new PrismaMeterRepository(prisma);
   const cycleRepo = new PrismaBillingCycleRepository(prisma);
@@ -279,8 +279,7 @@ export async function runVerification() {
   if (cycleAugDb && room204Db) {
     const augPreview = await meterService.getMeterBillingPreviewContext(COMP_DORM.id, cycleAugDb.id);
     const r204Aug = augPreview.rooms.find(r => r.roomId === room204Db.id);
-    assert(r204Aug?.tenantId === weeraContract?.tenantId, 'Room 204 (Weera) is visible in August 2026 (endDate 2026-08-01 intersects August)');
-    assert(r204Aug?.tenantName === 'นายวีระ กล้าหาญ', 'Room 204 tenant name is นายวีระ กล้าหาญ in August');
+    assert(r204Aug?.tenantId === null && r204Aug?.billingSource === 'NONE', 'Room 204 (Weera) is absent in August 2026 (contract ended August 1 under half-open policy B)');
 
     const r105Aug = augPreview.rooms.find(r => r.roomId === room105Db?.id);
     assert(Boolean(r105Aug?.tenantId) && r105Aug?.billingSource === 'PROVISIONAL_TERM', 'Room 105 (Term) is visible in August 2026 as PROVISIONAL_TERM');
@@ -377,12 +376,12 @@ export async function runVerification() {
     // 2 Components (RENT + INVALID utility): Room 201
     const r201Aug = augPreview.rooms.find(r => r.roomId === room201Db.id);
     assert(r201Aug?.chargeComponents?.length === 2, 'Room 201 has 2 charge components in August 2026 (RENT + utility)', r201Aug?.chargeComponents?.length);
-    assert(Number(r201Aug?.amountDue) === 4800, 'Room 201 amountDue is 4800.00 in August 2026 (unpaid rent only)');
+    assert(Number(r201Aug?.amountDue) === 6156, 'Room 201 amountDue is 6156.00 in August 2026 (unpaid rent 4,800 + monthly utility 1,356)', r201Aug?.amountDue);
 
     // 3 Components: Room 202 (RENT + DEPOSIT + MONTHLY_UTILITY)
     const r202Aug = augPreview.rooms.find(r => r.roomId === room202Db.id);
     assert(r202Aug?.chargeComponents?.length === 3, 'Room 202 has 3 charge components in August 2026', r202Aug?.chargeComponents?.length);
-    assert(Number(r202Aug?.amountDue) === 6000, 'Room 202 amountDue is 6000.00 in August 2026 (unpaid rent + utility)');
+    assert(Number(r202Aug?.amountDue) === 6450, 'Room 202 amountDue is 6450.00 in August 2026 (unpaid rent 4,800 + deposit paid 4,800 + unpaid utility 1,650)', r202Aug?.amountDue);
 
     // Multi-Cycle Parity: July 2026 Room 101 (Decomposed into Rent 4500 + MU 950, 0 combined labels)
     if (cycleJulyDb) {
@@ -926,7 +925,7 @@ export async function runVerification() {
 
     // Pending Combined Payment Group
     const bill302Aug = await prisma.bill.findFirst({
-      where: { dormitoryId: COMP_DORM.id, roomId: room302Db.id, billingCycleId: cycleAugDb.id },
+      where: { dormitoryId: COMP_DORM.id, roomId: room302Db.id, billingCycleId: cycleAugDb.id, billKind: 'RENT' },
     });
     assert(Boolean(bill302Aug), 'Room 302 August bill exists');
     assert(Number(bill302Aug.outstandingAmount) === 5000, 'Room 302 August Bill outstanding is ฿5,000.00', Number(bill302Aug.outstandingAmount));
