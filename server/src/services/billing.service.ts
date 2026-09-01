@@ -956,7 +956,7 @@ export class BillingService {
     let totalGenerated = 0;
     try {
       const { billingCycleService } = await import('./billing-cycle.service.js');
-      const { getTenantRentCutoffDate } = await import('../utils/tenant-visibility.util.js');
+      const { toBangkokDateString, getAdjacentCycleCode } = await import('../utils/calendar-date.util.js');
 
       const activeDorms = await prisma.dormitory.findMany({
         where: { status: 'active' },
@@ -971,13 +971,18 @@ export class BillingService {
         }
       }
 
-      const cutoff = getTenantRentCutoffDate(asOfDate);
+      const bkkDateStr = toBangkokDateString(asOfDate);
+      const currentCalCycle = bkkDateStr.slice(0, 7);
+      const nextCalCycle = getAdjacentCycleCode(currentCalCycle, 1);
+
       const cycles = await prisma.billingCycle.findMany({
         where: {
+          dormitoryId: { in: activeDorms.map((d) => d.id) },
           status: { notIn: ['completed', 'locked'] },
-          periodStart: { lte: cutoff },
+          cycleCode: { lte: nextCalCycle },
         },
-        select: { id: true, dormitoryId: true },
+        select: { id: true, dormitoryId: true, cycleCode: true },
+        orderBy: { periodStart: 'asc' },
       });
 
       for (const cycle of cycles) {

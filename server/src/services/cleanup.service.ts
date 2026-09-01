@@ -147,42 +147,10 @@ export class CleanupService {
   }
 
   private intervalId: NodeJS.Timeout | null = null;
-  private dailyMidnightTimerId: NodeJS.Timeout | null = null;
-
-  public getNextBangkokMidnightDelayMs(now: Date = new Date()): number {
-    const targetUtcHour = 17;
-    const targetUtcMinute = 1;
-    const target = new Date(now.getTime());
-    target.setUTCHours(targetUtcHour, targetUtcMinute, 0, 0);
-
-    if (now.getTime() >= target.getTime()) {
-      target.setUTCDate(target.getUTCDate() + 1);
-    }
-    return target.getTime() - now.getTime();
-  }
-
-  public startDailyBangkokSchedule(): void {
-    if (this.dailyMidnightTimerId) return;
-
-    const scheduleNext = () => {
-      const delayMs = this.getNextBangkokMidnightDelayMs();
-      this.dailyMidnightTimerId = setTimeout(async () => {
-        try {
-          await this.runCleanup();
-        } catch (err) {
-          console.error('[CleanupService] Error during scheduled Bangkok midnight cleanup', err);
-        }
-        scheduleNext();
-      }, delayMs);
-    };
-
-    scheduleNext();
-  }
 
   startHourly() {
     this.runCleanup();
     this.intervalId = setInterval(() => this.runCleanup(), 60 * 60 * 1000);
-    this.startDailyBangkokSchedule();
   }
 
   async startDailyLateFee() {
@@ -200,10 +168,6 @@ export class CleanupService {
     if (this.intervalId) {
       clearInterval(this.intervalId);
       this.intervalId = null;
-    }
-    if (this.dailyMidnightTimerId) {
-      clearTimeout(this.dailyMidnightTimerId);
-      this.dailyMidnightTimerId = null;
     }
     const { lateFeeReconciliationService } = await import('./late-fee-reconciliation.service.js');
     lateFeeReconciliationService.stop();
