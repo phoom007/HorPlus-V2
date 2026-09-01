@@ -178,3 +178,72 @@ export function getAdjacentCycleCode(code: string, offsetMonths: number): string
   }
   return `${y}-${String(m).padStart(2, '0')}`;
 }
+
+/**
+ * Canonical helper that extracts the YYYY-MM-DD date-only string from a Date instance,
+ * ISO timestamp, or date-only string without timezone rollover artifacts.
+ */
+export function toDateOnlyString(input: Date | string): string {
+  if (!input) {
+    throw new Error('toDateOnlyString: input cannot be null, undefined, or empty');
+  }
+
+  if (typeof input === 'string') {
+    const trimmed = input.trim();
+    if (/^\d{4}-\d{2}-\d{2}/.test(trimmed)) {
+      return trimmed.slice(0, 10);
+    }
+    return toBangkokDateString(new Date(trimmed));
+  }
+
+  if (input instanceof Date) {
+    if (isNaN(input.getTime())) {
+      throw new Error(`Invalid Date passed to toDateOnlyString: ${String(input)}`);
+    }
+    return input.toISOString().slice(0, 10);
+  }
+
+  throw new Error(`Invalid date input type: ${typeof input}`);
+}
+
+/**
+ * Returns the calendar day string (YYYY-MM-DD) immediately after the given date in calendar date semantics.
+ */
+export function getCalendarDayAfter(dateInput: Date | string): string {
+  const dateStr = toDateOnlyString(dateInput);
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const nextDay = new Date(Date.UTC(y, m - 1, d + 1));
+  const ny = nextDay.getUTCFullYear();
+  const nm = String(nextDay.getUTCMonth() + 1).padStart(2, '0');
+  const nd = String(nextDay.getUTCDate()).padStart(2, '0');
+  return `${ny}-${nm}-${nd}`;
+}
+
+export interface AgreementCycleEligibilityParams {
+  agreementStartDate: Date | string;
+  agreementEndDate: Date | string;
+  cyclePeriodStart: Date | string;
+  cyclePeriodEnd: Date | string;
+}
+
+/**
+ * Authoritatively determines if an agreement (Contract or ProvisionalRentalTerm)
+ * overlaps a BillingCycle for recurring MONTHLY / TERM RENT eligibility under Half-Open Policy B:
+ * [agreementStart, agreementEnd)
+ *
+ * An agreement is eligible IF AND ONLY IF:
+ * agreementStart < cycleEndExclusive AND agreementEnd > cyclePeriodStart
+ *
+ * Where:
+ * - cyclePeriodStart is the start of the billing cycle
+ * - cycleEndExclusive is the calendar day immediately after cyclePeriodEnd
+ */
+export function isAgreementEligibleForBillingCycle(params: AgreementCycleEligibilityParams): boolean {
+  const agrStart = toDateOnlyString(params.agreementStartDate);
+  const agrEnd = toDateOnlyString(params.agreementEndDate);
+  const cycleStart = toDateOnlyString(params.cyclePeriodStart);
+  const cycleEndExclusive = getCalendarDayAfter(params.cyclePeriodEnd);
+
+  return agrStart < cycleEndExclusive && agrEnd > cycleStart;
+}
+

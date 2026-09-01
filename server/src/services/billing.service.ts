@@ -21,6 +21,7 @@ import { toDecimal, addDecimals, mulDecimals, divDecimals, formatDecimal, subDec
 import { calculateInstallmentSchedule } from '../utils/installment-calculator.util.js';
 import { normalizeUtilityBillingMode } from '../utils/billing-mode-normalizer.util.js';
 import { calculateCanonicalMonthlyUtility } from '../utils/monthly-utility-calculator.util.js';
+import { isAgreementEligibleForBillingCycle } from '../utils/calendar-date.util.js';
 import { getPrismaClient } from '../db/prisma.js';
 
 /**
@@ -208,18 +209,18 @@ export class BillingService {
     billingCycle: { periodStart: Date | string; periodEnd: Date | string },
     tx?: any
   ): Promise<{ contract: any | null; provisionalTerm: any | null }> {
-    const cycleStart = new Date(billingCycle.periodStart);
-    const cycleEnd = new Date(billingCycle.periodEnd);
-
     // 1. Fetch active contracts for room
     const activeContracts = await this.contractRepo.findActiveContractsForRoom(dormitoryId, roomId);
 
     if (activeContracts && activeContracts.length > 0) {
-      const overlappingContracts = activeContracts.filter((c: any) => {
-        const cStart = new Date(c.startDate);
-        const cEnd = new Date(c.endDate);
-        return cStart <= cycleEnd && cEnd >= cycleStart;
-      });
+      const overlappingContracts = activeContracts.filter((c: any) =>
+        isAgreementEligibleForBillingCycle({
+          agreementStartDate: c.startDate,
+          agreementEndDate: c.endDate,
+          cyclePeriodStart: billingCycle.periodStart,
+          cyclePeriodEnd: billingCycle.periodEnd,
+        })
+      );
 
       if (overlappingContracts.length === 0) {
         const err = new Error('CONTRACT_NOT_ELIGIBLE_FOR_CYCLE');
