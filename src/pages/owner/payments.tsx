@@ -727,12 +727,19 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
     if (!cycle) return true;
     const stay = inv.dailyStay;
     const startStr = stay?.startDate ? String(stay.startDate).slice(0, 10) : (inv.checkInDate ? String(inv.checkInDate).slice(0, 10) : (inv.issuedAt ? String(inv.issuedAt).slice(0, 10) : ''));
-    const endStr = stay?.endDate ? String(stay.endDate).slice(0, 10) : (inv.checkOutDate ? String(inv.checkOutDate).slice(0, 10) : startStr);
     const cycleStartStr = String(cycle.periodStart).slice(0, 10);
     const cycleEndStr = String(cycle.periodEnd).slice(0, 10);
 
     if (!startStr || !cycleStartStr || !cycleEndStr) return true;
-    return startStr <= cycleEndStr && endStr >= cycleStartStr;
+    // Canonical start-month authority: Daily invoice belongs strictly to the billing cycle of stay.startDate
+    return startStr >= cycleStartStr && startStr <= cycleEndStr;
+  };
+
+  const isDailyInvoiceFullyPaid = (inv: any): boolean => {
+    const status = (inv.status || '').toUpperCase();
+    if (status === 'CANCELLED') return false;
+    const outstanding = Number(inv.outstandingAmount ?? inv.totalAgreedAmount ?? 0);
+    return (status === 'PAID' || outstanding === 0) && outstanding === 0 && Number(inv.totalAgreedAmount ?? 0) > 0;
   };
 
   const unpaidDailyInvoices = useMemo(() => {
@@ -740,9 +747,8 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
     return dailyInvoicesData.filter((inv) => {
       if (!isDailyInvoiceInSelectedCycle(inv, selectedCycleObj)) return false;
       const status = (inv.status || '').toUpperCase();
-      if (status === 'PAID' || status === 'CANCELLED') return false;
-      const outstanding = Number(inv.outstandingAmount ?? inv.totalAgreedAmount ?? 0);
-      return outstanding > 0;
+      if (status === 'CANCELLED') return false;
+      return !isDailyInvoiceFullyPaid(inv);
     });
   }, [dailyInvoicesData, selectedCycleObj]);
 
@@ -750,8 +756,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
     if (!dailyInvoicesData || !Array.isArray(dailyInvoicesData)) return [];
     return dailyInvoicesData.filter((inv) => {
       if (!isDailyInvoiceInSelectedCycle(inv, selectedCycleObj)) return false;
-      const status = (inv.status || '').toUpperCase();
-      return status === 'PAID' || inv.items?.some((it: any) => it.status === 'SETTLED' || it.status === 'DECLARED_PAID');
+      return isDailyInvoiceFullyPaid(inv);
     });
   }, [dailyInvoicesData, selectedCycleObj]);
 
