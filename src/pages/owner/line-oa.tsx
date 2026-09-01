@@ -14,6 +14,7 @@ import {
   ShieldCheck,
 } from 'lucide-react';
 import { Task009ApiAdapter } from '../../data/adapters/task009';
+import { LineLogo } from '../../components/LineLogo';
 
 interface OwnerLineOaPageProps {
   dormitoryId?: string;
@@ -277,7 +278,7 @@ export const OwnerLineOaPage: React.FC<OwnerLineOaPageProps> = ({
           </button>
           <div>
             <h1 className="text-xl font-extrabold text-slate-900 flex items-center gap-2">
-              <MessageSquare className="w-6 h-6 text-[#06C755]" />
+              <LineLogo className="w-6 h-6 shrink-0" />
               จัดการ LINE Official Account (LINE OA)
             </h1>
             <p className="text-xs text-slate-500 mt-0.5">

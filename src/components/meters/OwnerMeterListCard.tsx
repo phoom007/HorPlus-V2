@@ -428,7 +428,7 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
             if (displayStatus.isDaily) {
               if (displayStatus.statusKey === 'DAILY_OVERDUE') {
                 return (
-                  <span className="inline-flex items-center px-2.5 py-0.5 bg-rose-100 text-rose-800 text-xs font-bold rounded-md border border-rose-200">
+                  <span className="inline-flex items-center px-2.5 py-0.5 bg-rose-100 text-rose-800 text-xs font-bold rounded-md border border-rose-200 whitespace-nowrap shrink-0">
                     <AlertCircle className="w-3 h-3 text-rose-600 mr-1 shrink-0" />
                     {displayStatus.label}
                   </span>
@@ -437,7 +437,7 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
 
               if (displayStatus.statusKey === 'DAILY_PAID') {
                 return (
-                  <span className="inline-flex items-center px-2.5 py-0.5 bg-emerald-100 text-emerald-800 text-xs font-bold rounded-md border border-emerald-200">
+                  <span className="inline-flex items-center px-2.5 py-0.5 bg-emerald-100 text-emerald-800 text-xs font-bold rounded-md border border-emerald-200 whitespace-nowrap shrink-0">
                     <CheckCircle className="w-3 h-3 text-emerald-600 mr-1 shrink-0" />
                     {displayStatus.label}
                   </span>
@@ -445,7 +445,7 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
               }
 
               return (
-                <span className="text-xs font-extrabold px-2.5 py-0.5 rounded-md bg-slate-100 text-slate-600 border border-slate-200">
+                <span className="text-xs font-extrabold px-2.5 py-0.5 rounded-md bg-slate-100 text-slate-600 border border-slate-200 whitespace-nowrap shrink-0">
                   {displayStatus.label}
                 </span>
               );
@@ -453,7 +453,7 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
 
             return (
               <span
-                className={`text-xs font-extrabold px-2.5 py-0.5 rounded-md ${displayStatus.tone === 'success'
+                className={`text-xs font-extrabold px-2.5 py-0.5 rounded-md whitespace-nowrap shrink-0 ${displayStatus.tone === 'success'
                     ? 'bg-emerald-100 text-emerald-800'
                     : displayStatus.tone === 'warning'
                       ? 'bg-amber-100 text-amber-800'

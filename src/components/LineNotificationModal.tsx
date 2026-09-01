@@ -19,11 +19,10 @@ export function formatCycleThaiShort(cycle: string) {
   return `${months[idx] || m} ${parseInt(y, 10) + 543}`;
 }
 
+import { LineLogo } from './LineLogo';
+
 export const LineIcon: React.FC<{ className?: string }> = ({ className = "w-5 h-5" }) => (
-  <svg className={className} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <rect width="24" height="24" rx="6" fill="#06C755" />
-    <path d="M12 4C7.58 4 4 7.02 4 10.75c0 3.33 2.76 6.13 6.5 6.67.28.06.67.19.77.43.08.2.05.52.03.73-.04.29-.19 1.15-.22 1.4-.04.39.18.6.51.38 2.58-1.72 5.17-3.55 6.5-5.36.77-1.05 1.25-2.22 1.25-3.5C20 7.02 16.42 4 12 4z" fill="#FFFFFF" />
-  </svg>
+  <LineLogo className={className} />
 );
 
 const getRoomForTenant = (

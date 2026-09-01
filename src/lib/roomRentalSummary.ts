@@ -258,33 +258,33 @@ export function getPaymentStatusBadge(
     case 'PAID':
       return {
         text: 'ชำระแล้ว',
-        className: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+        className: 'bg-emerald-50 text-emerald-700 border-emerald-200 whitespace-nowrap shrink-0',
         dotColor: 'bg-emerald-500',
       };
     case 'UNPAID':
       return {
         text: 'รอชำระ',
-        className: 'bg-amber-50 text-amber-700 border-amber-200',
+        className: 'bg-amber-50 text-amber-700 border-amber-200 whitespace-nowrap shrink-0',
         dotColor: 'bg-amber-500',
       };
     case 'PARTIAL':
     case 'PARTIALLY_PAID':
       return {
         text: 'ชำระบางส่วน',
-        className: 'bg-amber-50 text-amber-700 border-amber-200',
+        className: 'bg-amber-50 text-amber-700 border-amber-200 whitespace-nowrap shrink-0',
         dotColor: 'bg-amber-500',
       };
     case 'NOT_ISSUED':
       return {
         text: 'ยังไม่ออกบิล',
-        className: 'bg-sky-50 text-sky-700 border-sky-200',
+        className: 'bg-sky-50 text-sky-700 border-sky-200 whitespace-nowrap shrink-0',
         dotColor: 'bg-sky-500',
       };
     case 'UNKNOWN':
     default:
       return {
         text: 'ไม่พบข้อมูลการชำระ',
-        className: 'bg-slate-50 text-slate-600 border-slate-200',
+        className: 'bg-slate-50 text-slate-600 border-slate-200 whitespace-nowrap shrink-0',
         dotColor: 'bg-slate-400',
       };
   }
