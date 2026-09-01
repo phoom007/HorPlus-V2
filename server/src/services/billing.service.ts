@@ -283,6 +283,9 @@ export class BillingService {
     asOfDate?: Date | string | null,
     billDueDate?: Date | string | null
   ): Promise<BillPreviewResult> {
+    const prisma = getPrismaClient();
+    const client = tx || prisma;
+
     const cycle = await this.billingCycleRepo.findById(billingCycleId, dormitoryId);
     if (!cycle) {
       const err = new Error('BILLING_CYCLE_NOT_FOUND');

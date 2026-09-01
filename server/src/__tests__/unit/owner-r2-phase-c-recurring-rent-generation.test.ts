@@ -1,6 +1,6 @@
-﻿/**
+/**
  * @license Apache-2.0
- * Round 2 Phase C: Recurring Rent Bill Production, Pre-Generation & Idempotency Tests
+ * Round 2 Phase C: Recurring Rent Bill Production, Pre-Generation & Agreement-Boundary Tests
  * Directly tests production BillingService logic with mocked repositories
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -49,15 +49,17 @@ describe('Round 2 Phase C: Recurring Rent Generation & Next-Cycle Pre-Generation
       billingCycle: {
         findMany: vi.fn().mockImplementation(async ({ where }) => {
           const lte = where.cycleCode?.lte;
+          const gte = where.cycleCode?.gte;
           const allCycles = [
             { id: CYCLE_SEP_ID, dormitoryId: DORM_ID, cycleCode: '2026-09', periodStart: new Date('2026-09-01T00:00:00.000Z') },
             { id: CYCLE_OCT_ID, dormitoryId: DORM_ID, cycleCode: '2026-10', periodStart: new Date('2026-10-01T00:00:00.000Z') },
             { id: CYCLE_NOV_ID, dormitoryId: DORM_ID, cycleCode: '2026-11', periodStart: new Date('2026-11-01T00:00:00.000Z') },
           ];
-          if (lte) {
-            return allCycles.filter((c) => c.cycleCode <= lte);
-          }
-          return allCycles;
+          return allCycles.filter((c) => {
+            if (gte && c.cycleCode < gte) return false;
+            if (lte && c.cycleCode > lte) return false;
+            return true;
+          });
         }),
       },
       dormitoryBillingSettings: {
@@ -307,5 +309,118 @@ describe('Round 2 Phase C: Recurring Rent Generation & Next-Cycle Pre-Generation
     const generated = await billingService.reconcileRecurringRentBillsForAllDormitories(oct01MorningUtc);
     expect(generated).toBeGreaterThan(0);
     expect(billingCycleService.ensureRollingBillingCycles).toHaveBeenCalledWith(DORM_ID);
+  });
+
+  describe('6. Contract Cycle Eligibility & Agreement Boundary Tests', () => {
+    it('6a. Active Contract that ends before target cycle (2026-09-01 -> 2026-09-20) excludes with CONTRACT_NOT_ELIGIBLE_FOR_CYCLE for October', async () => {
+      mockContractRepo.findActiveContractsForRoom.mockResolvedValueOnce([
+        {
+          id: 'contract-sep-only',
+          dormitoryId: DORM_ID,
+          roomId: ROOM_ID,
+          tenantId: TENANT_ID,
+          status: 'active',
+          startDate: new Date('2026-09-01T00:00:00.000Z'),
+          endDate: new Date('2026-09-20T23:59:59.999Z'),
+          rentBillingType: 'monthly',
+          rentAmount: '4500.00',
+        },
+      ]);
+
+      mockBillRepo.create.mockClear();
+
+      const octRes = await billingService.bulkGenerateBills(DORM_ID, CYCLE_OCT_ID, [ROOM_ID], 'owner-1', undefined, 'RENT');
+
+      expect(octRes.generatedCount).toBe(0);
+      expect(octRes.excluded.length).toBe(1);
+      expect(octRes.excluded[0].reason).toBe('CONTRACT_NOT_ELIGIBLE_FOR_CYCLE');
+      expect(mockBillRepo.create).not.toHaveBeenCalled();
+
+      // Direct generateBill throws 400 CONTRACT_NOT_ELIGIBLE_FOR_CYCLE
+      mockContractRepo.findActiveContractsForRoom.mockResolvedValueOnce([
+        {
+          id: 'contract-sep-only',
+          dormitoryId: DORM_ID,
+          roomId: ROOM_ID,
+          tenantId: TENANT_ID,
+          status: 'active',
+          startDate: new Date('2026-09-01T00:00:00.000Z'),
+          endDate: new Date('2026-09-20T23:59:59.999Z'),
+          rentBillingType: 'monthly',
+          rentAmount: '4500.00',
+        },
+      ]);
+
+      await expect(
+        billingService.generateBill(DORM_ID, { billingCycleId: CYCLE_OCT_ID, roomId: ROOM_ID, billKind: 'RENT' })
+      ).rejects.toMatchObject({ code: 'CONTRACT_NOT_ELIGIBLE_FOR_CYCLE', statusCode: 400 });
+
+      // Direct generateBillPreview throws 400 CONTRACT_NOT_ELIGIBLE_FOR_CYCLE
+      mockContractRepo.findActiveContractsForRoom.mockResolvedValueOnce([
+        {
+          id: 'contract-sep-only',
+          dormitoryId: DORM_ID,
+          roomId: ROOM_ID,
+          tenantId: TENANT_ID,
+          status: 'active',
+          startDate: new Date('2026-09-01T00:00:00.000Z'),
+          endDate: new Date('2026-09-20T23:59:59.999Z'),
+          rentBillingType: 'monthly',
+          rentAmount: '4500.00',
+        },
+      ]);
+
+      await expect(
+        billingService.generateBillPreview(DORM_ID, CYCLE_OCT_ID, ROOM_ID, undefined, 'RENT')
+      ).rejects.toMatchObject({ code: 'CONTRACT_NOT_ELIGIBLE_FOR_CYCLE', statusCode: 400 });
+    });
+
+    it('6b. Active Contract that overlaps target cycle (2026-09-01 -> 2026-10-31) successfully generates October RENT', async () => {
+      mockContractRepo.findActiveContractsForRoom.mockResolvedValue([
+        {
+          id: 'contract-sep-oct',
+          dormitoryId: DORM_ID,
+          roomId: ROOM_ID,
+          tenantId: TENANT_ID,
+          status: 'active',
+          startDate: new Date('2026-09-01T00:00:00.000Z'),
+          endDate: new Date('2026-10-31T23:59:59.999Z'),
+          rentBillingType: 'monthly',
+          rentAmount: '4500.00',
+        },
+      ]);
+
+      const octRes = await billingService.bulkGenerateBills(DORM_ID, CYCLE_OCT_ID, [ROOM_ID], 'owner-1', undefined, 'RENT');
+
+      expect(octRes.generatedCount).toBe(1);
+      expect(octRes.bills[0].billKind).toBe('RENT');
+      expect(Number(octRes.bills[0].totalAmount)).toBe(4500);
+      expect(mockBillRepo.create).toHaveBeenCalled();
+    });
+
+    it('6c. Future-start active Contract (2026-11-01 -> 2026-12-31) excludes with CONTRACT_NOT_ELIGIBLE_FOR_CYCLE for October', async () => {
+      mockContractRepo.findActiveContractsForRoom.mockResolvedValue([
+        {
+          id: 'contract-future-nov',
+          dormitoryId: DORM_ID,
+          roomId: ROOM_ID,
+          tenantId: TENANT_ID,
+          status: 'active',
+          startDate: new Date('2026-11-01T00:00:00.000Z'),
+          endDate: new Date('2026-12-31T23:59:59.999Z'),
+          rentBillingType: 'monthly',
+          rentAmount: '4500.00',
+        },
+      ]);
+
+      mockBillRepo.create.mockClear();
+
+      const octRes = await billingService.bulkGenerateBills(DORM_ID, CYCLE_OCT_ID, [ROOM_ID], 'owner-1', undefined, 'RENT');
+
+      expect(octRes.generatedCount).toBe(0);
+      expect(octRes.excluded.length).toBe(1);
+      expect(octRes.excluded[0].reason).toBe('CONTRACT_NOT_ELIGIBLE_FOR_CYCLE');
+      expect(mockBillRepo.create).not.toHaveBeenCalled();
+    });
   });
 });
