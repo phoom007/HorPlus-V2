@@ -739,7 +739,8 @@ export class BillingService {
     billingCycleId: string,
     roomIds?: string[],
     userId?: string,
-    dirtyRows?: any[]
+    dirtyRows?: any[],
+    requestedBillKind?: 'LEGACY_COMBINED' | 'MONTHLY_UTILITY' | 'RENT' | 'DEPOSIT'
   ): Promise<{
     generatedCount: number;
     bills: BillEntity[];
@@ -747,6 +748,7 @@ export class BillingService {
     excluded: Array<{ roomId: string; reason: string }>;
     failed: Array<{ roomId: string; error: string; code: string }>;
   }> {
+    const targetBillKind = requestedBillKind || 'MONTHLY_UTILITY';
     const cycle = await this.billingCycleRepo.findById(billingCycleId, dormitoryId);
     if (!cycle) {
       const err = new Error('BILLING_CYCLE_NOT_FOUND');
@@ -812,7 +814,7 @@ export class BillingService {
             await meterService.saveSingleRoomWorkspaceInTx(dormitoryId, billingCycleId, dirtyRow, userId, tx);
             const { bill, created } = await this.generateBill(
               dormitoryId,
-              { billingCycleId, roomId, billKind: 'MONTHLY_UTILITY' },
+              { billingCycleId, roomId, billKind: targetBillKind },
               userId,
               issuanceNow,
               tx
@@ -857,7 +859,7 @@ export class BillingService {
           continue;
         }
 
-        const existing = await this.billRepo.findActiveMonthlyUtilityByRoomAndCycle(dormitoryId, billingCycleId, roomId);
+        const existing = await this.billRepo.findByCycleAndRoom(dormitoryId, billingCycleId, roomId, targetBillKind);
         if (existing) {
           excluded.push({ roomId, reason: 'BILL_ALREADY_EXISTS' });
           continue;
@@ -869,7 +871,7 @@ export class BillingService {
             {
               billingCycleId,
               roomId,
-              billKind: 'MONTHLY_UTILITY',
+              billKind: targetBillKind,
             },
             userId,
             issuanceNow
@@ -916,6 +918,15 @@ export class BillingService {
       excluded,
       failed,
     };
+  }
+
+  public async generateRecurringRentBills(
+    dormitoryId: string,
+    billingCycleId: string,
+    roomIds?: string[],
+    userId?: string
+  ) {
+    return this.bulkGenerateBills(dormitoryId, billingCycleId, roomIds, userId, undefined, 'RENT');
   }
 
   public async getBills(

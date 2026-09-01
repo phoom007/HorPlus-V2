@@ -133,7 +133,38 @@ export function createBillingRouter(
         parsed.data.billingCycleId,
         parsed.data.roomIds,
         req.auth?.userId,
-        parsed.data.dirtyRows
+        parsed.data.dirtyRows,
+        parsed.data.billKind
+      );
+      res.json({ data: result });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  });
+
+  // POST /api/v1/bills/generate/recurring-rent
+  router.post('/generate/recurring-rent', mutationGuard('billing:write'), async (req: Request, res: Response) => {
+    if (!verifyCsrf(req, res)) return;
+    try {
+      const dormId = getDormitoryId(req);
+      const parsed = BulkGenerateBillSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'ข้อมูลการสร้างใบแจ้งหนี้ค่าเช่ารายเดือนไม่ถูกต้อง',
+            fieldErrors: parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+
+      const result = await billingService.generateRecurringRentBills(
+        dormId,
+        parsed.data.billingCycleId,
+        parsed.data.roomIds,
+        req.auth?.userId
       );
       res.json({ data: result });
     } catch (err) {
