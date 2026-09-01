@@ -21,14 +21,14 @@ describe('LOCAL-07: Daily Stay Pricing & Integer-Only Meter Authority', () => {
       const res = resolveDailyTimestampsAndPricing('2026-08-15', '2026-08-16');
       expect(res.inclusiveDayCount).toBe(1);
       expect(res.checkInAt.toISOString()).toBe('2026-08-14T17:00:00.000Z');
-      expect(res.checkOutAt.toISOString()).toBe('2026-08-16T17:00:00.000Z'); // 17 Aug 00:00 BKK
+      expect(res.checkOutAt.toISOString()).toBe('2026-08-15T17:00:00.000Z'); // 16 Aug 00:00 BKK
     });
 
-    it('15 -> 18 no times: checkOutAt = 19 00:00 BKK, rent = 3 days', () => {
+    it('15 -> 18 no times: checkOutAt = 18 00:00 BKK, rent = 3 days', () => {
       const res = resolveDailyTimestampsAndPricing('2026-08-15', '2026-08-18');
       expect(res.inclusiveDayCount).toBe(3);
       expect(res.checkInAt.toISOString()).toBe('2026-08-14T17:00:00.000Z');
-      expect(res.checkOutAt.toISOString()).toBe('2026-08-18T17:00:00.000Z'); // 19 Aug 00:00 BKK
+      expect(res.checkOutAt.toISOString()).toBe('2026-08-17T17:00:00.000Z'); // 18 Aug 00:00 BKK
     });
 
     it('15 14:00 -> 15 18:00: valid, rent = 1 day', () => {
@@ -141,10 +141,10 @@ describe('LOCAL-07: Daily Stay Pricing & Integer-Only Meter Authority', () => {
       expect(res.inclusiveDayCount).toBe(3);
     });
 
-    it('omitted checkout time (2026-08-20 to 2026-08-23): checkOutAt defaults to 2026-08-24 00:00 BKK', () => {
+    it('omitted checkout time (2026-08-20 to 2026-08-23): checkOutAt defaults to 2026-08-23 00:00 BKK', () => {
       const res = resolveDailyTimestampsAndPricing('2026-08-20', '2026-08-23');
       expect(res.checkInAt.toISOString()).toBe('2026-08-19T17:00:00.000Z'); // 20 Aug 00:00 BKK
-      expect(res.checkOutAt.toISOString()).toBe('2026-08-23T17:00:00.000Z'); // 24 Aug 00:00 BKK
+      expect(res.checkOutAt.toISOString()).toBe('2026-08-22T17:00:00.000Z'); // 23 Aug 00:00 BKK
       expect(res.inclusiveDayCount).toBe(3);
     });
   });
