@@ -1049,6 +1049,77 @@ export class MeterService {
         }
       }
 
+      if (row.otherFees !== undefined) {
+        // Sync otherFees to active DailyStayInvoice if room has an active daily stay in this cycle
+        const cycle = await client.billingCycle.findUnique({ where: { id: billingCycleId } });
+        if (cycle) {
+          const cycleStart = new Date(cycle.periodStart);
+          const cycleEndExclusive = new Date(new Date(cycle.periodEnd).getTime() + 24 * 3600 * 1000);
+          const roomDailyStays = await client.dailyStay.findMany({
+            where: {
+              dormitoryId,
+              roomId: row.roomId,
+              deletedAt: null,
+              status: { in: ['ACTIVE', 'RESERVED', 'CHECKED_OUT', 'COMPLETED'] },
+            },
+            include: { invoice: { include: { items: true } } },
+            orderBy: { startDate: 'desc' },
+          });
+
+          const activeStay = roomDailyStays.find((d: any) => {
+            const dIv = getDailyStayPhysicalInterval(d);
+            return doHalfOpenIntervalsOverlap({ start: cycleStart, end: cycleEndExclusive }, dIv);
+          });
+
+          if (activeStay && activeStay.invoice) {
+            const inv = activeStay.invoice;
+            // Safe immutability: do NOT mutate if invoice is paid or cancelled
+            if (inv.status !== 'PAID' && inv.status !== 'CANCELLED') {
+              // Delete existing unpaid OTHER_FEE items on this invoice
+              await client.dailyStayInvoiceItem.deleteMany({
+                where: {
+                  invoiceId: inv.id,
+                  itemType: 'OTHER_FEE',
+                  status: 'OUTSTANDING',
+                },
+              });
+
+              // Create new OTHER_FEE items from cleanOtherFees
+              if (cleanOtherFees.length > 0) {
+                await client.dailyStayInvoiceItem.createMany({
+                  data: cleanOtherFees.map((f: any) => ({
+                    invoiceId: inv.id,
+                    itemType: 'OTHER_FEE',
+                    description: f.description,
+                    amount: toDecimal(f.amount),
+                    status: 'OUTSTANDING',
+                    paidAt: null,
+                  })),
+                });
+              }
+
+              // Recalculate aggregate invoice totalAgreedAmount & outstandingAmount
+              const allItems = await client.dailyStayInvoiceItem.findMany({
+                where: { invoiceId: inv.id },
+              });
+              const totalAgreed = allItems.reduce((sum: number, it: any) => sum + Number(it.amount), 0);
+              const totalPaid = allItems
+                .filter((it: any) => it.status === 'SETTLED' || it.status === 'DECLARED_PAID')
+                .reduce((sum: number, it: any) => sum + Number(it.amount), 0);
+              const remainingOutstanding = Math.max(0, totalAgreed - totalPaid);
+
+              await client.dailyStayInvoice.update({
+                where: { id: inv.id },
+                data: {
+                  totalAgreedAmount: toDecimal(totalAgreed.toFixed(2)),
+                  outstandingAmount: toDecimal(remainingOutstanding.toFixed(2)),
+                },
+              });
+            }
+          }
+        }
+      }
+
       return {
         roomId: row.roomId,
         version: savedVersion,

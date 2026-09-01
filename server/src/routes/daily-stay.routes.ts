@@ -519,7 +519,7 @@ export function createDailyStayRouter(
 
   // 9. Settle Daily Stay Invoice Item (Canonical Payment / Cash Collection Action)
   const SettleItemSchema = z.object({
-    itemType: z.enum(['DAILY_RENT', 'RENT', 'DEPOSIT']),
+    itemType: z.enum(['DAILY_RENT', 'RENT', 'DEPOSIT', 'OTHER_FEE', 'ALL']),
   });
 
   router.post(

@@ -695,6 +695,35 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
     staleTime: 5000,
   });
 
+  const {
+    data: dailyInvoicesData = [],
+    isLoading: isDailyInvoicesLoading,
+    refetch: refetchDailyInvoices,
+  } = useQuery({
+    queryKey: queryKeys.dailyInvoices(dormitoryId),
+    queryFn: () => fetchDailyInvoices(dormitoryId),
+    enabled: !!dormitoryId,
+    staleTime: 5000,
+  });
+
+  const unpaidDailyInvoices = useMemo(() => {
+    if (!dailyInvoicesData || !Array.isArray(dailyInvoicesData)) return [];
+    return dailyInvoicesData.filter((inv) => {
+      const status = (inv.status || '').toUpperCase();
+      if (status === 'PAID' || status === 'CANCELLED') return false;
+      const outstanding = Number(inv.outstandingAmount ?? inv.totalAgreedAmount ?? 0);
+      return outstanding > 0;
+    });
+  }, [dailyInvoicesData]);
+
+  const paidDailyInvoices = useMemo(() => {
+    if (!dailyInvoicesData || !Array.isArray(dailyInvoicesData)) return [];
+    return dailyInvoicesData.filter((inv) => {
+      const status = (inv.status || '').toUpperCase();
+      return status === 'PAID' || inv.items?.some((it: any) => it.status === 'SETTLED' || it.status === 'DECLARED_PAID');
+    });
+  }, [dailyInvoicesData]);
+
   // Stable Idempotency Key Manager (retains key across retries/uncertainty, resets on success)
   const idempotencyKeyMapRef = useRef<Map<string, string>>(new Map());
 
@@ -958,6 +987,60 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
       const billNum = (b.billNumber || '').toLowerCase();
       return roomNum.includes(q) || tenantName.includes(q) || billNum.includes(q);
     });
+  };
+
+  const filterDailyInvoicesByQuery = (list: DailyStayInvoice[]) => {
+    const q = (cashSearchQuery || searchQuery || '').toLowerCase().trim();
+    if (!q) return list;
+    return list.filter(inv => {
+      const roomNum = (inv.dailyStay?.room?.roomNumber || getRoomNum(inv.dailyStay?.roomId)).toLowerCase();
+      const tenantName = (inv.dailyStay?.applicantFullName || inv.dailyStay?.tenant?.displayName || '').toLowerCase();
+      const invoiceNo = (inv.invoiceNumber || '').toLowerCase();
+      return roomNum.includes(q) || tenantName.includes(q) || invoiceNo.includes(q);
+    });
+  };
+
+  const handleSettleDailyInvoice = async (invoiceId: string) => {
+    try {
+      setIsSubmittingCash(true);
+      await httpRequest(
+        'POST',
+        `/daily-stays/invoices/${invoiceId}/settle-item`,
+        { itemType: 'ALL' },
+        { headers: { 'x-dormitory-id': dormitoryId } }
+      );
+      triggerToast('บันทึกการชำระเงินรายวันสำเร็จ');
+      queryClient.invalidateQueries({ queryKey: queryKeys.dailyInvoices(dormitoryId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.payments(dormitoryId) });
+      onUpdateBills();
+    } catch (err: any) {
+      triggerToast(err?.message || 'เกิดข้อผิดพลาดในการบันทึกการชำระเงิน');
+    } finally {
+      setIsSubmittingCash(false);
+    }
+  };
+
+  const handleOpenDailyReceipt = (inv: DailyStayInvoice) => {
+    const roomNum = inv.dailyStay?.room?.roomNumber || getRoomNum(inv.dailyStay?.roomId) || '-';
+    const tenantName = inv.dailyStay?.applicantFullName || inv.dailyStay?.tenant?.displayName || 'ผู้พักรายวัน';
+    const items = (inv.items || []).map(it => ({
+      description: it.description || (it.itemType === 'DAILY_RENT' ? 'ค่าเช่ารายวัน' : it.itemType),
+      amount: Number(it.amount),
+      quantity: 1,
+      unitPrice: Number(it.amount),
+    }));
+
+    setViewingReceipt({
+      receiptNumber: inv.invoiceNumber,
+      roomNumber: roomNum,
+      tenantName,
+      totalAmount: Number(inv.totalAgreedAmount || 0),
+      paidAt: (inv.updatedAt ? new Date(inv.updatedAt) : new Date(inv.issuedAt)).toISOString(),
+      paymentMethod: 'เงินสด',
+      receiverName: currentAuthUserName,
+      items,
+    });
+    setIsReceiptOpen(true);
   };
 
   /* -------------------------------------------------------------------------
@@ -1277,7 +1360,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
               }`}
             >
               <AlertCircle className="w-4 h-4 text-indigo-500 shrink-0" />
-              <span className="truncate">ยังไม่ชำระ ({cashPendingBills.length})</span>
+              <span className="truncate">ยังไม่ชำระ ({cashPendingBills.length + unpaidDailyInvoices.length})</span>
             </button>
 
             {/* Tab 3: ชำระแล้ว (paid) -> SELECTED CYCLE ONLY */}
@@ -1291,7 +1374,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
               }`}
             >
               <CheckCircle className="w-4 h-4 text-emerald-500 shrink-0" />
-              <span className="truncate">ชำระแล้ว ({paidPayments.length})</span>
+              <span className="truncate">ชำระแล้ว ({paidPayments.length + paidDailyInvoices.length})</span>
             </button>
 
             {/* Tab 4: สลิปผิดพลาด (rejected) -> SELECTED CYCLE ONLY */}
@@ -1641,9 +1724,82 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                 </div>
               );
             })}
+            {filterDailyInvoicesByQuery(unpaidDailyInvoices).map((inv) => {
+              const roomNum = inv.dailyStay?.room?.roomNumber || getRoomNum(inv.dailyStay?.roomId) || '-';
+              const tenantName = inv.dailyStay?.applicantFullName || inv.dailyStay?.tenant?.displayName || 'ผู้พักรายวัน';
+              const amount = Number(inv.outstandingAmount ?? inv.totalAgreedAmount ?? 0);
+              const isPartiallyPaid = (inv.status || '').toUpperCase() === 'PARTIALLY_PAID';
+
+              return (
+                <div key={inv.id} className="bg-white rounded-3xl border border-emerald-200/90 shadow-2xs hover:shadow-md transition-all p-5 flex flex-col justify-between space-y-4">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xl font-black text-slate-900">ห้อง {roomNum}</span>
+                    <div className="flex items-center gap-1">
+                      <span className="px-2.5 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-200 font-extrabold rounded-full text-[10px]">
+                        รายวัน
+                      </span>
+                      {isPartiallyPaid ? (
+                        <span className="px-3 py-1 bg-amber-50 text-amber-700 border border-amber-200 font-extrabold rounded-full text-[11px] flex items-center gap-1">
+                          <Clock className="w-3.5 h-3.5" />
+                          ชำระบางส่วน
+                        </span>
+                      ) : (
+                        <span className="px-3 py-1 bg-indigo-50 text-indigo-700 border border-indigo-200 font-extrabold rounded-full text-[11px] flex items-center gap-1">
+                          <AlertCircle className="w-3.5 h-3.5" />
+                          ยังไม่ชำระ
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="p-3 bg-slate-50/80 rounded-2xl space-y-1.5 text-xs">
+                    <p className="font-bold text-slate-800 flex items-center gap-1.5">
+                      <User className="w-3.5 h-3.5 text-slate-400" />
+                      {tenantName}
+                    </p>
+                    <p className="text-[11px] text-slate-500 flex items-center gap-1">
+                      <Calendar className="w-3 h-3 text-slate-400" />
+                      ใบแจ้งหนี้: <span className="font-bold text-slate-700">{inv.invoiceNumber}</span>
+                    </p>
+                  </div>
+
+                  {/* Items summary */}
+                  <div className="text-[11px] text-slate-500 space-y-1 border-t border-slate-100 pt-2">
+                    {inv.items && inv.items.length > 0 ? (
+                      inv.items.map((it, idx) => (
+                        <div key={idx} className="flex justify-between items-center">
+                          <span className="truncate pr-1 text-slate-500 font-medium">{it.description || (it.itemType === 'DAILY_RENT' ? 'ค่าเช่ารายวัน' : it.itemType)}:</span>
+                          <span className="font-semibold text-slate-700 shrink-0">{formatBaht(Number(it.amount))}</span>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="flex justify-between items-center">
+                        <span className="text-slate-500">ค่าเช่ารายวัน:</span>
+                        <span className="font-semibold text-slate-700">{formatBaht(amount)}</span>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex items-baseline justify-between pt-1 border-t border-slate-100">
+                    <span className="text-xs text-slate-400 font-bold">ยอดที่ต้องชำระ</span>
+                    <span className="text-lg font-black text-slate-900">{formatBaht(amount)}</span>
+                  </div>
+
+                  <button
+                    type="button"
+                    disabled={isSubmittingCash}
+                    onClick={() => handleSettleDailyInvoice(inv.id)}
+                    className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-1.5 shadow-xs transition-all cursor-pointer"
+                  >
+                    <DollarSign className="w-4 h-4" />
+                    รับเงินสด
+                  </button>
+                </div>
+              );
+            })}
           </div>
 
-          {filterBillsByQuery(cashPendingBills).length === 0 && (
+          {filterBillsByQuery(cashPendingBills).length === 0 && filterDailyInvoicesByQuery(unpaidDailyInvoices).length === 0 && (
             <div className="bg-white p-12 rounded-3xl border border-slate-100 text-center text-slate-400 font-bold text-xs">
               ไม่พบห้องพักค้างชำระในรอบบิลนี้
             </div>
@@ -1735,9 +1891,66 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                 </div>
               );
             })}
+            {filterDailyInvoicesByQuery(paidDailyInvoices).map((inv) => {
+              const roomNum = inv.dailyStay?.room?.roomNumber || getRoomNum(inv.dailyStay?.roomId) || '-';
+              const tenantName = inv.dailyStay?.applicantFullName || inv.dailyStay?.tenant?.displayName || 'ผู้พักรายวัน';
+              const totalAmount = Number(inv.totalAgreedAmount || 0);
+
+              return (
+                <div key={inv.id} className="bg-white rounded-3xl border border-emerald-100 shadow-2xs hover:shadow-md transition-all p-5 flex flex-col justify-between space-y-4">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xl font-black text-slate-900">ห้อง {roomNum}</span>
+                    <div className="flex items-center gap-1">
+                      <span className="px-2.5 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-200 font-extrabold rounded-full text-[10px]">
+                        รายวัน
+                      </span>
+                      <span className="px-3 py-1 bg-emerald-50 text-emerald-700 border border-emerald-200 font-extrabold rounded-full text-[11px] flex items-center gap-1">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                        ชำระแล้ว
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="p-3 bg-slate-50/80 rounded-2xl space-y-1.5 text-xs">
+                    <p className="font-bold text-slate-800 flex items-center gap-1.5">
+                      <User className="w-3.5 h-3.5 text-slate-400" />
+                      {tenantName}
+                    </p>
+                    <div className="flex items-center justify-between text-[11px] text-slate-500 pt-1 border-t border-slate-200/50">
+                      <span>ช่องทาง: <strong className="text-slate-700">เงินสด</strong></span>
+                      <span>{inv.updatedAt ? formatThaiDate(inv.updatedAt) : formatThaiDate(inv.issuedAt)}</span>
+                    </div>
+                  </div>
+
+                  {/* Items summary */}
+                  <div className="text-[11px] text-slate-500 space-y-1 border-t border-slate-100 pt-2">
+                    {inv.items && inv.items.map((it, idx) => (
+                      <div key={idx} className="flex justify-between items-center">
+                        <span className="truncate pr-1 text-slate-500 font-medium">{it.description || (it.itemType === 'DAILY_RENT' ? 'ค่าเช่ารายวัน' : it.itemType)}:</span>
+                        <span className="font-semibold text-slate-700 shrink-0">{formatBaht(Number(it.amount))}</span>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="flex items-baseline justify-between pt-1 border-t border-slate-100">
+                    <span className="text-xs text-slate-400 font-bold">ยอดชำระสำเร็จ</span>
+                    <span className="text-lg font-black text-emerald-600">{formatBaht(totalAmount)}</span>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => handleOpenDailyReceipt(inv)}
+                    className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-xs"
+                  >
+                    <Printer className="w-4 h-4" />
+                    ใบเสร็จรับเงิน
+                  </button>
+                </div>
+              );
+            })}
           </div>
 
-          {filterPaymentsByQuery(paidPayments).length === 0 && (
+          {filterPaymentsByQuery(paidPayments).length === 0 && filterDailyInvoicesByQuery(paidDailyInvoices).length === 0 && (
             <div className="bg-white p-12 rounded-3xl border border-slate-100 text-center text-slate-400 font-bold text-xs">
               ไม่พบบิลที่ชำระแล้วในรอบบิลนี้
             </div>

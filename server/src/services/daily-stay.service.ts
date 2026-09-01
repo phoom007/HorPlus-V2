@@ -1276,7 +1276,7 @@ export class DailyStayService {
   public async settleDailyStayInvoiceItem(
     dormitoryId: string,
     invoiceId: string,
-    itemType: 'DAILY_RENT' | 'RENT' | 'DEPOSIT',
+    itemType: 'DAILY_RENT' | 'RENT' | 'DEPOSIT' | 'OTHER_FEE' | 'ALL',
     actorUserId?: string,
     txClient?: any
   ) {
@@ -1293,12 +1293,17 @@ export class DailyStayService {
         throw err;
       }
 
-      const targetItems = invoice.items.filter(
-        (it: any) => it.itemType === itemType || (itemType === 'DAILY_RENT' && it.itemType === 'RENT')
-      );
+      let targetItems: any[] = [];
+      if (itemType === 'ALL') {
+        targetItems = invoice.items.filter((it: any) => it.status === 'OUTSTANDING');
+      } else {
+        targetItems = invoice.items.filter(
+          (it: any) => it.itemType === itemType || (itemType === 'DAILY_RENT' && it.itemType === 'RENT')
+        );
+      }
 
       if (targetItems.length === 0) {
-        const err = new Error(`ไม่พบรายการ ${itemType} ในใบแจ้งหนี้`);
+        const err = new Error(`ไม่พบรายการ ${itemType} ที่ค้างชำระในใบแจ้งหนี้`);
         (err as any).statusCode = 404;
         (err as any).code = 'INVOICE_ITEM_NOT_FOUND';
         throw err;
