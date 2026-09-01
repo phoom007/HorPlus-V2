@@ -30,6 +30,7 @@ import {
 } from '../utils/calendar-date.util.js';
 import { LATE_FEE_GRACE_DAYS } from '../utils/monthly-utility-calculator.util.js';
 import { backfillRoomOperationalStatusBaseline } from './room-operational-baseline.service.js';
+import { UTILITY_RATE_CONSUMING_BILL_KINDS } from '../utils/utility-rate-consuming.util.js';
 
 export interface CreateBillingCycleDto {
   cycleCode: string;
@@ -615,12 +616,16 @@ export class BillingCycleService {
       isLocked = true;
       lockReason = 'งวดนี้ถูกล็อคแล้ว จึงไม่สามารถแก้ไขค่าที่มีผลต่อบิลได้';
     } else {
-      // STRICT ALL-ROOM UNISSUED GATE: Rates are editable ONLY IF every room in cycle is still in unissued state
+      // STRICT ALL-ROOM UNISSUED GATE: Rates are editable ONLY IF no utility-consuming bill in cycle has progressed beyond unissued
       const nonUnissuedBillsCount = await prisma.bill.count({
         where: {
           dormitoryId,
           billingCycleId: cycle.id,
           status: { notIn: ['draft', 'cancelled', 'voided', 'withdrawn', 'superseded'] },
+          OR: [
+            { billKind: { in: UTILITY_RATE_CONSUMING_BILL_KINDS as any } },
+            { billKind: null },
+          ],
         },
       });
 
@@ -736,12 +741,16 @@ export class BillingCycleService {
     };
 
     const txResult = await prisma.$transaction(async (tx) => {
-      // 0. Transactional race-safe verification: ensure no room in cycle has progressed beyond unissued
+      // 0. Transactional race-safe verification: ensure no utility-consuming bill in cycle has progressed beyond unissued
       const nonUnissuedCount = await tx.bill.count({
         where: {
           dormitoryId,
           billingCycleId: cycle.id,
           status: { notIn: ['draft', 'cancelled', 'voided', 'withdrawn', 'superseded'] },
+          OR: [
+            { billKind: { in: UTILITY_RATE_CONSUMING_BILL_KINDS as any } },
+            { billKind: null },
+          ],
         },
       });
       if (nonUnissuedCount > 0) {
@@ -779,13 +788,17 @@ export class BillingCycleService {
         where: { id: rateSnapshot.id },
       });
 
-      // 2. Recalculate any unpaid bills in current editable cycle using authoritative peopleCount
+      // 2. Recalculate any unpaid utility-consuming bills in current editable cycle using authoritative peopleCount
       const unpaidBills = await tx.bill.findMany({
         where: {
           dormitoryId,
           billingCycleId: cycle.id,
           status: { notIn: ['paid', 'partially_paid', 'cancelled', 'voided', 'withdrawn', 'superseded'] },
           cancelledAt: null,
+          OR: [
+            { billKind: { in: UTILITY_RATE_CONSUMING_BILL_KINDS as any } },
+            { billKind: null },
+          ],
         },
         include: { room: true },
       });
@@ -840,9 +853,17 @@ export class BillingCycleService {
           break;
         }
 
-        // Stop propagation if future cycle is locked, completed, or has paid bills
+        // Stop propagation if future cycle is locked, completed, or has paid utility-consuming bills
         const fcPaidCount = await tx.bill.count({
-          where: { dormitoryId, billingCycleId: fc.id, status: 'paid' },
+          where: {
+            dormitoryId,
+            billingCycleId: fc.id,
+            status: 'paid',
+            OR: [
+              { billKind: { in: UTILITY_RATE_CONSUMING_BILL_KINDS as any } },
+              { billKind: null },
+            ],
+          },
         });
         if (fc.status === 'locked' || fc.status === 'completed' || fcPaidCount > 0) {
           break;
