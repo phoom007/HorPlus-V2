@@ -547,7 +547,18 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
   const tenantRoom = rooms.find(r => r.currentTenantId === tenant.id || r.currentTenantId === localTenant.id) || (rooms.length > 0 ? rooms[0] : undefined);
   const hasRoom = !financialLoading && !!tenantRoom?.roomNumber;
   const tenantBills = [...bills]
-    .filter(b => b.status !== 'draft' && b.status !== 'DRAFT')
+    .filter(b => {
+      const status = (b.status || '').toLowerCase();
+      if (status === 'draft' || status === 'cancelled') return false;
+      const kind = ((b as any).billKind || (b as any).kind || '').toUpperCase();
+      if (kind === 'RENT') {
+        const periodStart = (b as any).billingCycle?.periodStart || (b as any).periodStart;
+        if (periodStart && new Date(periodStart) > new Date()) {
+          return false;
+        }
+      }
+      return true;
+    })
     .sort((a, b) => (b.cycleId || b.billingCycleId || '').localeCompare(a.cycleId || a.billingCycleId || '') || (b.createdAt || '').localeCompare(a.createdAt || ''));
   const tenantRepairs = repairs.filter(r => r.roomId === tenantRoom?.id || r.tenantId === tenant.id);
   const tenantContracts = contracts;

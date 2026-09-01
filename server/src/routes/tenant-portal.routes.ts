@@ -70,7 +70,7 @@ async function resolveTenantContext(req: Request): Promise<TenantContextResult> 
   };
 }
 
-async function getTenantBillWhere(prisma: any, ctx: { dormitoryId: string; tenant: { id: string } }) {
+async function getTenantBillWhere(prisma: any, ctx: { dormitoryId: string; tenant: { id: string } }, asOfDate: Date = new Date()) {
   const contracts = await prisma.contract.findMany({
     where: { tenantId: ctx.tenant.id, dormitoryId: ctx.dormitoryId },
     select: { id: true }
@@ -83,15 +83,27 @@ async function getTenantBillWhere(prisma: any, ctx: { dormitoryId: string; tenan
     OR: [
       { tenantId: ctx.tenant.id },
       ...(contractIds.length > 0 ? [{ contractId: { in: contractIds } }] : [])
-    ]
+    ],
+    // Future RENT Bill Visibility Gate: hide RENT bills before their billing cycle periodStart
+    NOT: {
+      AND: [
+        { billKind: 'RENT' },
+        {
+          billingCycle: {
+            periodStart: { gt: asOfDate }
+          }
+        }
+      ]
+    }
   };
 }
 
-async function checkBillOwnership(prisma: any, billId: string, ctx: { dormitoryId: string; tenant: { id: string } }) {
+async function checkBillOwnership(prisma: any, billId: string, ctx: { dormitoryId: string; tenant: { id: string } }, asOfDate: Date = new Date()) {
   const bill = await prisma.bill.findUnique({
     where: { id: billId },
     include: {
       items: true,
+      billingCycle: true,
       Payment: {
         include: { receipt: true },
         orderBy: { createdAt: 'desc' }
@@ -100,6 +112,11 @@ async function checkBillOwnership(prisma: any, billId: string, ctx: { dormitoryI
   });
 
   if (!bill || bill.dormitoryId !== ctx.dormitoryId || bill.status === 'cancelled') {
+    return null;
+  }
+
+  // Future RENT Bill Visibility Gate
+  if (bill.billKind === 'RENT' && bill.billingCycle && new Date(bill.billingCycle.periodStart) > asOfDate) {
     return null;
   }
 
