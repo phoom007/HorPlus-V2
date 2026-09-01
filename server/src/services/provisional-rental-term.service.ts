@@ -336,13 +336,14 @@ export class ProvisionalRentalTermService {
         actorUserId: userId,
       });
 
-      // 3.6. Create immediate first HorPlus-managed Rent Bill for this agreement
+      // 3.6. Create immediate HorPlus-managed Rent Bills for this agreement
       await createImmediateRentBillForAgreementInTx(tx, {
         dormitoryId,
         roomId: data.roomId,
         tenantId: tenant.id,
         agreementType: data.rentalType,
         startDate: data.startDate,
+        endDate: data.endDate,
         unitRentAmount: provisionalTerm.unitRentAmount || '0.00',
         totalRentAmount: provisionalTerm.totalRentAmount || '0.00',
         termInstallmentCount: provisionalTerm.termInstallmentCount,

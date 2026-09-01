@@ -12,16 +12,18 @@ import {
 describe('Round 2 Phase C: Immediate Rent Billing & Go-Live Boundary', () => {
   it('1. creates immediate first Rent Bill for Monthly agreement in matching cycle', async () => {
     let createdBill: any = null;
+    const cycleSeptember = {
+      id: 'cycle-sep-uuid',
+      cycleCode: '2026-09',
+      periodStart: new Date('2026-09-01'),
+      periodEnd: new Date('2026-09-30'),
+      billingDate: new Date('2026-09-01'),
+      dueDate: new Date('2026-09-05'),
+    };
     const mockTx = {
       billingCycle: {
-        findFirst: vi.fn().mockResolvedValue({
-          id: 'cycle-sep-uuid',
-          cycleCode: '2026-09',
-          periodStart: new Date('2026-09-01'),
-          periodEnd: new Date('2026-09-30'),
-          billingDate: new Date('2026-09-01'),
-          dueDate: new Date('2026-09-05'),
-        }),
+        findFirst: vi.fn().mockResolvedValue(cycleSeptember),
+        findMany: vi.fn().mockResolvedValue([cycleSeptember]),
       },
       bill: {
         findFirst: vi.fn().mockResolvedValue(null),
@@ -56,16 +58,18 @@ describe('Round 2 Phase C: Immediate Rent Billing & Go-Live Boundary', () => {
 
   it('2. creates immediate first Installment Rent Bill for Term agreement', async () => {
     let createdBill: any = null;
+    const cycleSeptember = {
+      id: 'cycle-sep-uuid',
+      cycleCode: '2026-09',
+      periodStart: new Date('2026-09-01'),
+      periodEnd: new Date('2026-09-30'),
+      billingDate: new Date('2026-09-01'),
+      dueDate: new Date('2026-09-05'),
+    };
     const mockTx = {
       billingCycle: {
-        findFirst: vi.fn().mockResolvedValue({
-          id: 'cycle-sep-uuid',
-          cycleCode: '2026-09',
-          periodStart: new Date('2026-09-01'),
-          periodEnd: new Date('2026-09-30'),
-          billingDate: new Date('2026-09-01'),
-          dueDate: new Date('2026-09-05'),
-        }),
+        findFirst: vi.fn().mockResolvedValue(cycleSeptember),
+        findMany: vi.fn().mockResolvedValue([cycleSeptember]),
       },
       bill: {
         findFirst: vi.fn().mockResolvedValue(null),

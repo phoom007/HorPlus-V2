@@ -2,6 +2,8 @@ import { Prisma } from '@prisma/client';
 import { recordCashPaymentInTx } from './payment-transaction.util.js';
 import { generateNextBillNumberInTx } from './bill-number.util.js';
 import { calculateInstallmentSchedule } from './installment-calculator.util.js';
+import { isAgreementEligibleForBillingCycle } from './calendar-date.util.js';
+import { formatDecimal } from './decimal-math.util.js';
 
 export { generateNextBillNumberInTx };
 
@@ -29,11 +31,6 @@ export function toBangkokDateString(date: Date): string {
     day: '2-digit',
   });
   return formatter.format(date);
-}
-
-function formatDecimal(val: number | string | Prisma.Decimal): string {
-  const num = typeof val === 'object' && 'toNumber' in val ? (val as Prisma.Decimal).toNumber() : Number(val);
-  return (isNaN(num) ? 0 : num).toFixed(2);
 }
 
 /**
@@ -180,6 +177,7 @@ export interface CreateRentBillInput {
   provisionalRentalTermId?: string | null;
   agreementType: 'MONTHLY' | 'TERM';
   startDate: Date | string;
+  endDate?: Date | string | null;
   unitRentAmount: number | string | Prisma.Decimal;
   totalRentAmount?: number | string | Prisma.Decimal;
   termInstallmentCount?: number | null;
@@ -187,10 +185,10 @@ export interface CreateRentBillInput {
 }
 
 /**
- * Creates the FIRST immediate HorPlus-managed Rent Bill for an agreement.
- * - For Monthly: Creates bill for the first managed month (duration 1 month)
- * - For Term: Creates bill for the first managed installment currently due
- * - If agreement starts before HorPlus go-live, attaches to the earliest billing cycle
+ * Materializes HorPlus-managed Rent Bills for an agreement across all existing eligible BillingCycles.
+ * - For Monthly: Creates bill for each eligible cycle in the agreement duration
+ * - For Term: Creates bill for each eligible cycle corresponding to its installment index
+ * - Idempotent: Skips if RENT bill already exists for that agreement in that cycle
  */
 export async function createImmediateRentBillForAgreementInTx(
   tx: any,
@@ -208,104 +206,118 @@ export async function createImmediateRentBillForAgreementInTx(
     throw new Error('createImmediateRentBillForAgreementInTx requires exactly one agreement identity (contractId XOR provisionalRentalTermId)');
   }
 
-  // 2. Resolve target HorPlus-managed billing cycle
-  const startD = new Date(input.startDate);
-  let cycle = await tx.billingCycle.findFirst({
-    where: {
-      dormitoryId: input.dormitoryId,
-      periodStart: { lte: startD },
-      periodEnd: { gte: startD },
-    },
+  // 2. Fetch all existing billing cycles for this dormitory ordered by periodStart
+  const existingCycles = await tx.billingCycle.findMany({
+    where: { dormitoryId: input.dormitoryId },
+    orderBy: { periodStart: 'asc' },
   });
 
-  if (!cycle) {
-    const earliestCycle = await tx.billingCycle.findFirst({
-      where: { dormitoryId: input.dormitoryId },
-      orderBy: { periodStart: 'asc' },
-    });
-    if (earliestCycle && startD < new Date(earliestCycle.periodStart)) {
-      cycle = earliestCycle;
-    }
-  }
-
-  if (!cycle) {
+  if (!existingCycles || existingCycles.length === 0) {
     return null;
   }
 
-  // 3. Idempotency Check: search existing RENT bill on this agreement in this cycle
-  const existingBill = await tx.bill.findFirst({
-    where: {
-      dormitoryId: input.dormitoryId,
-      billingCycleId: cycle.id,
-      billKind: 'RENT',
-      ...(input.contractId ? { contractId: input.contractId } : { provisionalRentalTermId: input.provisionalRentalTermId }),
-    },
-    include: { items: true },
-  });
-
-  if (existingBill) {
-    return existingBill;
-  }
-
-  // 4. Determine bill amount and description
-  let billAmountDec = rentAmtDec;
-  let description = 'ค่าเช่าห้องพัก (รายเดือน)';
-
-  if (input.agreementType === 'TERM') {
-    const installments = Math.max(1, input.termInstallmentCount || 1);
-    const totalRent = input.totalRentAmount ? new Prisma.Decimal(formatDecimal(input.totalRentAmount)) : rentAmtDec;
-    const totalRentNum = totalRent.toNumber();
-    const schedule = calculateInstallmentSchedule(totalRentNum, installments);
-    const firstItem = schedule[0];
-    billAmountDec = new Prisma.Decimal(firstItem.formattedAmount);
-    description = `ค่าเช่าห้องพัก (งวดที่ 1/${installments})`;
-  }
-
-  // 5. Generate bill number
-  const billNumber = await generateNextBillNumberInTx(tx, input.dormitoryId, cycle.cycleCode);
-
-  const isPreGoLive = startD < new Date(cycle.periodStart);
-  const billingDate = isPreGoLive ? new Date(cycle.periodStart) : startD;
-  const dueDate = cycle.dueDate ? new Date(cycle.dueDate) : startD;
+  const startD = new Date(input.startDate);
   const safeActorId = input.actorUserId && /^[0-9a-fA-F-]{36}$/.test(input.actorUserId) ? input.actorUserId : null;
   const now = new Date();
+  const createdBills: any[] = [];
 
-  // 6. Create issued Rent Bill in unpaid status
-  const bill = await tx.bill.create({
-    data: {
-      dormitoryId: input.dormitoryId,
-      billingCycleId: cycle.id,
-      roomId: input.roomId,
-      tenantId: input.tenantId || null,
-      contractId: input.contractId || null,
-      provisionalRentalTermId: input.provisionalRentalTermId || null,
-      billKind: 'RENT',
-      billNumber,
-      status: 'unpaid',
-      billingDate,
-      dueDate,
-      subtotal: billAmountDec,
-      totalAmount: billAmountDec,
-      paidAmount: new Prisma.Decimal('0.00'),
-      outstandingAmount: billAmountDec,
-      paidAt: null,
-      generatedByUserId: safeActorId,
-      generatedAt: now,
-      items: {
-        create: [
-          {
-            dormitoryId: input.dormitoryId,
-            type: 'rent',
-            description,
-            amount: billAmountDec,
-            unitPrice: billAmountDec,
-            quantity: new Prisma.Decimal('1.00'),
-          },
-        ],
+  const installments = input.agreementType === 'TERM' ? Math.max(1, input.termInstallmentCount || 1) : 1;
+  const totalRent = input.agreementType === 'TERM' && input.totalRentAmount
+    ? new Prisma.Decimal(formatDecimal(input.totalRentAmount))
+    : rentAmtDec;
+  const schedule = input.agreementType === 'TERM'
+    ? calculateInstallmentSchedule(totalRent.toNumber(), installments)
+    : [];
+
+  for (const cycle of existingCycles) {
+    const isEligible = isAgreementEligibleForBillingCycle({
+      agreementStartDate: input.startDate,
+      agreementEndDate: input.endDate,
+      cyclePeriodStart: cycle.periodStart,
+      cyclePeriodEnd: cycle.periodEnd,
+    });
+
+    if (!isEligible) {
+      continue;
+    }
+
+    // 3. Idempotency Check: search existing RENT bill on this agreement in this cycle
+    const existingBill = await tx.bill.findFirst({
+      where: {
+        dormitoryId: input.dormitoryId,
+        billingCycleId: cycle.id,
+        billKind: 'RENT',
+        ...(input.contractId ? { contractId: input.contractId } : { provisionalRentalTermId: input.provisionalRentalTermId }),
       },
-    },
-    include: { items: true },
-  });
+      include: { items: true },
+    });
 
-  return bill;
+    if (existingBill) {
+      createdBills.push(existingBill);
+      continue;
+    }
+
+    // 4. Determine bill amount and description
+    let billAmountDec = rentAmtDec;
+    let description = 'ค่าเช่าห้องพัก (รายเดือน)';
+
+    if (input.agreementType === 'TERM') {
+      const cycleStart = new Date(cycle.periodStart);
+      const cycleOffset = (cycleStart.getUTCFullYear() - startD.getUTCFullYear()) * 12 + (cycleStart.getUTCMonth() - startD.getUTCMonth());
+      if (cycleOffset < 0 || cycleOffset >= installments) {
+        continue;
+      }
+      const item = schedule[cycleOffset];
+      if (!item) continue;
+      billAmountDec = new Prisma.Decimal(item.formattedAmount);
+      description = `ค่าเช่าห้องพัก (งวดที่ ${cycleOffset + 1}/${installments})`;
+    }
+
+    // 5. Generate bill number
+    const billNumber = await generateNextBillNumberInTx(tx, input.dormitoryId, cycle.cycleCode);
+    const isPreGoLive = startD < new Date(cycle.periodStart);
+    const billingDate = isPreGoLive ? new Date(cycle.periodStart) : (startD > new Date(cycle.periodStart) ? startD : new Date(cycle.periodStart));
+    const dueDate = cycle.dueDate ? new Date(cycle.dueDate) : billingDate;
+
+    // 6. Create issued Rent Bill in unpaid status
+    const bill = await tx.bill.create({
+      data: {
+        dormitoryId: input.dormitoryId,
+        billingCycleId: cycle.id,
+        roomId: input.roomId,
+        tenantId: input.tenantId || null,
+        contractId: input.contractId || null,
+        provisionalRentalTermId: input.provisionalRentalTermId || null,
+        billKind: 'RENT',
+        billNumber,
+        status: 'unpaid',
+        billingDate,
+        dueDate,
+        subtotal: billAmountDec,
+        totalAmount: billAmountDec,
+        paidAmount: new Prisma.Decimal('0.00'),
+        outstandingAmount: billAmountDec,
+        paidAt: null,
+        generatedByUserId: safeActorId,
+        generatedAt: now,
+        items: {
+          create: [
+            {
+              dormitoryId: input.dormitoryId,
+              type: 'rent',
+              description,
+              amount: billAmountDec,
+              unitPrice: billAmountDec,
+              quantity: new Prisma.Decimal('1.00'),
+            },
+          ],
+        },
+      },
+      include: { items: true },
+    });
+
+    createdBills.push(bill);
+  }
+
+  return createdBills.length > 0 ? createdBills[0] : null;
 }
