@@ -131,45 +131,42 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
     if (!isPreHorPlus || !startDate || !earliestCycleStartDate) return [];
 
     const periods: Array<{ id: string; label: string }> = [];
-    const current = new Date(startDate);
+    const [startYear, startMonth, startDay] = startDate.split('-').map(Number);
     const end = new Date(earliestCycleStartDate);
 
     if (activeTab === 'MONTHLY') {
+      const current = new Date(Date.UTC(startYear, startMonth - 1, startDay));
       while (current < end) {
-        const yearThai = current.getFullYear() + 543;
+        const yearThai = current.getUTCFullYear() + 543;
         const monthNames = [
           'มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน',
           'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'
         ];
-        const monthName = monthNames[current.getMonth()];
-        const id = `${current.getFullYear()}-${String(current.getMonth() + 1).padStart(2, '0')}`;
+        const monthName = monthNames[current.getUTCMonth()];
+        const id = `${current.getUTCFullYear()}-${String(current.getUTCMonth() + 1).padStart(2, '0')}`;
         periods.push({
           id,
           label: `${monthName} ${yearThai}`,
         });
-        current.setMonth(current.getMonth() + 1);
+        current.setUTCMonth(current.getUTCMonth() + 1);
       }
     } else if (activeTab === 'TERM') {
       const installments = Math.max(1, termInstallmentCount || 1);
       for (let i = 1; i <= installments; i++) {
-        periods.push({
-          id: `inst-${i}`,
-          label: `งวดที่ ${i}`,
-        });
+        const instDate = new Date(Date.UTC(startYear, startMonth - 1 + (i - 1), 1));
+        const instMonthStr = instDate.toISOString().slice(0, 10);
+        if (instMonthStr < earliestCycleStartDate) {
+          periods.push({
+            id: String(i),
+            label: `งวดที่ ${i}`,
+          });
+        }
       }
     }
     return periods;
   }, [isPreHorPlus, startDate, earliestCycleStartDate, activeTab, termInstallmentCount]);
 
   const [migratedPaidPeriods, setMigratedPaidPeriods] = useState<string[]>([]);
-
-  useEffect(() => {
-    if (preHorPlusPeriods.length > 0) {
-      setMigratedPaidPeriods(preHorPlusPeriods.map(p => p.id));
-    } else {
-      setMigratedPaidPeriods([]);
-    }
-  }, [preHorPlusPeriods]);
 
   // LINE OA Config state scoped strictly by context.dormitoryId
   const [lineConfig, setLineConfig] = useState<LineOaConfigResponse | null>(null);
@@ -459,6 +456,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
           totalRentAmount: (normalizeMoneyInput(monthlyRent) * Number(durationMonths || 1)).toFixed(2),
           depositAmount: normalizeMoneyInput(monthlyDeposit).toFixed(2),
           depositDeclaredStatus: monthlyDepositDeclaredStatus,
+          migratedPaidPeriods: migratedPaidPeriods.filter(p => /^\d{4}-\d{2}$/.test(p)),
         };
 
         if (idCardFile) {
@@ -490,6 +488,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
           depositAmount: normalizeMoneyInput(termDeposit).toFixed(2),
           depositDeclaredStatus: termDepositDeclaredStatus,
           termInstallmentCount: Number(termInstallmentCount),
+          migratedPaidInstallments: migratedPaidPeriods.map(Number).filter(n => !isNaN(n) && n > 0),
         };
 
         if (idCardFile) {

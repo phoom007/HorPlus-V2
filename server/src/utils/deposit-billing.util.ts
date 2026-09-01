@@ -1,6 +1,7 @@
 import { Prisma } from '@prisma/client';
 import { recordCashPaymentInTx } from './payment-transaction.util.js';
 import { generateNextBillNumberInTx } from './bill-number.util.js';
+import { calculateInstallmentSchedule } from './installment-calculator.util.js';
 
 export { generateNextBillNumberInTx };
 
@@ -109,7 +110,8 @@ export async function createDepositBillForAgreementInTx(
 
   // 5. Status and settlement dates
   const isPaid = (input.depositDeclaredStatus || '').toUpperCase() === 'PAID';
-  const billingDate = cycle.billingDate ? new Date(cycle.billingDate) : startD;
+  const isPreGoLive = startD < new Date(cycle.periodStart);
+  const billingDate = isPreGoLive ? new Date(cycle.periodStart) : startD;
   const dueDate = cycle.dueDate ? new Date(cycle.dueDate) : startD;
   const safeActorId = input.actorUserId && /^[0-9a-fA-F-]{36}$/.test(input.actorUserId) ? input.actorUserId : null;
   const now = new Date();
@@ -253,17 +255,17 @@ export async function createImmediateRentBillForAgreementInTx(
     const installments = Math.max(1, input.termInstallmentCount || 1);
     const totalRent = input.totalRentAmount ? new Prisma.Decimal(formatDecimal(input.totalRentAmount)) : rentAmtDec;
     const totalRentNum = totalRent.toNumber();
-    const basePerInstallment = Math.floor((totalRentNum / installments) * 100) / 100;
-    const remainder = Math.round((totalRentNum - basePerInstallment * installments) * 100) / 100;
-    const firstAmount = (basePerInstallment + remainder).toFixed(2);
-    billAmountDec = new Prisma.Decimal(firstAmount);
+    const schedule = calculateInstallmentSchedule(totalRentNum, installments);
+    const firstItem = schedule[0];
+    billAmountDec = new Prisma.Decimal(firstItem.formattedAmount);
     description = `ค่าเช่าห้องพัก (งวดที่ 1/${installments})`;
   }
 
   // 5. Generate bill number
   const billNumber = await generateNextBillNumberInTx(tx, input.dormitoryId, cycle.cycleCode);
 
-  const billingDate = cycle.billingDate ? new Date(cycle.billingDate) : startD;
+  const isPreGoLive = startD < new Date(cycle.periodStart);
+  const billingDate = isPreGoLive ? new Date(cycle.periodStart) : startD;
   const dueDate = cycle.dueDate ? new Date(cycle.dueDate) : startD;
   const safeActorId = input.actorUserId && /^[0-9a-fA-F-]{36}$/.test(input.actorUserId) ? input.actorUserId : null;
   const now = new Date();

@@ -172,6 +172,8 @@ export const CreateProvisionalRentalTermSchema = z
     depositAmount: z.string().regex(/^\d+(\.\d{1,2})?$/, 'เงินประกันต้องเป็นตัวเลขทศนิยมไม่เกิน 2 ตำแหน่งและไม่ติดลบ').optional().nullable(),
     depositDeclaredStatus: z.enum(['PAID', 'UNPAID']).optional().nullable(),
     termInstallmentCount: z.number().int().min(1).max(12).optional(),
+    migratedPaidPeriods: z.array(z.string().regex(/^\d{4}-\d{2}$/)).optional(),
+    migratedPaidInstallments: z.array(z.number().int().min(1)).optional(),
   })
   .superRefine((val, ctx) => {
     if (val.rentalType === 'TERM' && (val.termInstallmentCount === undefined || val.termInstallmentCount === null)) {

@@ -19,6 +19,7 @@ import {
 import {
   createDepositBillForAgreementInTx,
   createImmediateRentBillForAgreementInTx,
+  toBangkokDateString,
 } from '../utils/deposit-billing.util.js';
 
 export interface CreateProvisionalRentalTermDto {
@@ -34,6 +35,8 @@ export interface CreateProvisionalRentalTermDto {
   depositAmount?: string | number | null;
   depositDeclaredStatus?: 'PAID' | 'UNPAID' | null;
   termInstallmentCount?: number;
+  migratedPaidPeriods?: string[];
+  migratedPaidInstallments?: number[];
 }
 
 /**
@@ -347,6 +350,52 @@ export class ProvisionalRentalTermService {
         actorUserId: userId,
       });
 
+      // 3.7. Durable Pre-HorPlus Migration Markers (Auditable, creates NO Bill/Payment/Receipt)
+      const earliestCycle = await tx.billingCycle.findFirst({
+        where: { dormitoryId },
+        orderBy: { periodStart: 'asc' },
+      });
+
+      let validPreGoLivePeriods: string[] = [];
+      let validPreGoLiveInstallments: number[] = [];
+
+      if (earliestCycle) {
+        const earliestPeriodStartStr = toBangkokDateString(new Date(earliestCycle.periodStart));
+
+        if (data.rentalType === 'MONTHLY' && Array.isArray(data.migratedPaidPeriods)) {
+          validPreGoLivePeriods = data.migratedPaidPeriods.filter((p) => {
+            const pMonthStart = `${p}-01`;
+            return pMonthStart < earliestPeriodStartStr && pMonthStart >= data.startDate.slice(0, 7) + '-01';
+          });
+        } else if (data.rentalType === 'TERM' && Array.isArray(data.migratedPaidInstallments)) {
+          const startYear = parseInt(data.startDate.slice(0, 4), 10);
+          const startMonth = parseInt(data.startDate.slice(5, 7), 10);
+
+          validPreGoLiveInstallments = data.migratedPaidInstallments.filter((instNo) => {
+            if (instNo < 1 || (termInstallmentCount && instNo > termInstallmentCount)) return false;
+            const instDate = new Date(Date.UTC(startYear, startMonth - 1 + (instNo - 1), 1));
+            const instMonthStr = instDate.toISOString().slice(0, 10);
+            return instMonthStr < earliestPeriodStartStr;
+          });
+        }
+
+        if (validPreGoLivePeriods.length > 0 || validPreGoLiveInstallments.length > 0) {
+          await tx.auditLog.create({
+            data: {
+              dormitoryId,
+              actorUserId: userId && /^[0-9a-fA-F-]{36}$/.test(userId) ? userId : null,
+              entityType: 'PROVISIONAL_RENTAL_TERM',
+              entityId: provisionalTerm.id,
+              action: 'MIGRATION_HISTORICAL_PAID_MARKERS',
+              afterValues: {
+                periods: validPreGoLivePeriods,
+                installments: validPreGoLiveInstallments,
+              },
+            },
+          });
+        }
+      }
+
       // 4. Update Room status
       if (!isFuture) {
         await tx.room.update({
@@ -391,8 +440,25 @@ export class ProvisionalRentalTermService {
         tenant,
         occupancy,
         provisionalTerm,
+        migratedPaidMarkers: {
+          periods: validPreGoLivePeriods,
+          installments: validPreGoLiveInstallments,
+        },
       };
     });
+  }
+
+  public async getProvisionalTermMigrationMarkers(termId: string, tx?: any) {
+    const client = tx || this.prisma;
+    const log = await client.auditLog.findFirst({
+      where: {
+        entityType: 'PROVISIONAL_RENTAL_TERM',
+        entityId: termId,
+        action: 'MIGRATION_HISTORICAL_PAID_MARKERS',
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    return (log?.afterValues as any) || { periods: [], installments: [] };
   }
 
   public async findActiveProvisionalTermForRoom(
