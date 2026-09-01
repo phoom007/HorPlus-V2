@@ -1,6 +1,5 @@
 import { getPrismaClient } from '../db/prisma.js';
 import { compareDecimals } from '../utils/decimal-math.util.js';
-const prisma = getPrismaClient();
 
 export type RoomBillingState = 'no_bill' | 'pending_payment' | 'checking_payment' | 'paid' | 'overdue';
 
@@ -16,6 +15,7 @@ export interface RoomBillingStateSummary {
 
 export class RoomBillingStateService {
   async getRoomBillingState(dormitoryId: string, roomId: string): Promise<RoomBillingStateSummary> {
+    const prisma = getPrismaClient();
     const activeBills = await prisma.bill.findMany({
       where: {
         dormitoryId,
@@ -94,6 +94,7 @@ export class RoomBillingStateService {
     tenantId: string,
     asOfDate: Date = new Date()
   ): Promise<RoomBillingStateSummary> {
+    const prisma = getPrismaClient();
     const contracts = await prisma.contract.findMany({
       where: { tenantId, dormitoryId },
       select: { id: true }

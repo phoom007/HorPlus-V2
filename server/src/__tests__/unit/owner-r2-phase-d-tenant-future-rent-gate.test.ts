@@ -1,13 +1,15 @@
 ﻿/**
  * @license Apache-2.0
- * Round 2 Phase D: Tenant Future Rent Visibility Gate & Dashboard Non-Leakage Tests
+ * Round 2 Phase D: Tenant Future Rent Visibility Gate & Dashboard Current-Period Tests
  * Directly tests production helpers and services: isBillVisibleToTenant, getTenantRentCutoffDate, RoomBillingStateService
  */
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { isBillVisibleToTenant, getTenantRentCutoffDate } from '../../utils/tenant-visibility.util.js';
 import { RoomBillingStateService } from '../../services/room-billing-state.service.js';
+import * as prismaModule from '../../db/prisma.js';
 
-describe('Round 2 Phase D: Tenant Future Rent Visibility Gate (Production Path)', () => {
+describe('Round 2 Phase D: Tenant Future Rent Visibility Gate & Dashboard Authority', () => {
+  const septPeriodStartUtc = new Date('2026-09-01T00:00:00.000Z');
   const octPeriodStartUtc = new Date('2026-10-01T00:00:00.000Z');
   const sept30NightUtc = new Date('2026-09-30T16:59:59.000Z'); // 23:59:59 Asia/Bangkok
   const oct01MidnightUtc = new Date('2026-09-30T17:00:00.000Z'); // 00:00:00 Asia/Bangkok on Oct 1
@@ -54,10 +56,12 @@ describe('Round 2 Phase D: Tenant Future Rent Visibility Gate (Production Path)'
     expect(octPeriodStartUtc.getTime() <= cutoffAfter.getTime()).toBe(true);
   });
 
-  it('4. Tenant Dashboard Non-Leakage: future October RENT does not leak to tenant dashboard before Oct 1', async () => {
+  it('4. Real RoomBillingStateService: future October RENT does NOT override September bill before Oct 1, but becomes current bill on Oct 1', async () => {
     const roomBillingService = new RoomBillingStateService();
 
-    // Mock prisma bill.findMany to simulate future October Rent bill present in DB
+    // Database has two bills:
+    // 1. Oct RENT generated early on Sep 15 (periodStart: Oct 1)
+    // 2. Sep Utility generated on Sep 25 (periodStart: Sep 1, createdAt later than Oct RENT)
     const mockPrisma = {
       contract: {
         findMany: vi.fn().mockResolvedValue([{ id: 'ctr-1' }]),
@@ -65,51 +69,51 @@ describe('Round 2 Phase D: Tenant Future Rent Visibility Gate (Production Path)'
       bill: {
         findMany: vi.fn().mockResolvedValue([
           {
-            id: 'oct-rent-bill-123',
-            billNumber: 'B-202610-001',
+            id: 'bill-sep-utility',
+            billNumber: 'B-202609-UTILITY',
+            tenantId: 'tenant-1',
+            contractId: 'ctr-1',
+            status: 'unpaid',
+            outstandingAmount: '1200.00',
+            totalAmount: '1200.00',
+            dueDate: new Date('2026-10-05'),
+            billKind: 'MONTHLY_UTILITY',
+            billingDate: new Date('2026-09-25'),
+            createdAt: new Date('2026-09-25T10:00:00Z'),
+            billingCycle: { periodStart: septPeriodStartUtc },
+          },
+          {
+            id: 'bill-oct-rent',
+            billNumber: 'B-202610-RENT',
+            tenantId: 'tenant-1',
+            contractId: 'ctr-1',
             status: 'unpaid',
             outstandingAmount: '4500.00',
             totalAmount: '4500.00',
             dueDate: new Date('2026-10-05'),
             billKind: 'RENT',
+            billingDate: new Date('2026-10-01'),
+            createdAt: new Date('2026-09-15T10:00:00Z'),
             billingCycle: { periodStart: octPeriodStartUtc },
           },
         ]),
       },
     };
 
-    // Replace global getPrismaClient in test scope
-    vi.spyOn(roomBillingService as any, 'getTenantRoomBillingState').mockImplementation(async (dormId, roomId, tenantId, asOfDate) => {
-      const activeBills = await mockPrisma.bill.findMany();
-      const visibleBills = activeBills.filter((b: any) => isBillVisibleToTenant(b, asOfDate));
-      if (visibleBills.length === 0) {
-        return {
-          state: 'no_bill',
-          outstandingAmount: '0.00',
-          statusText: 'ไม่มีรายการค้างชำระ',
-        };
-      }
-      return {
-        state: 'pending_payment',
-        currentBillId: visibleBills[0].id,
-        billNumber: visibleBills[0].billNumber,
-        outstandingAmount: visibleBills[0].outstandingAmount,
-        statusText: 'รอชำระเงิน',
-      };
-    });
+    vi.spyOn(prismaModule, 'getPrismaClient').mockReturnValue(mockPrisma as any);
 
-    // Before midnight (Sep 30 23:59:59)
+    // At Sep 30 23:59:59 Bangkok time: October RENT is hidden; September Utility is the current bill
     const summaryBefore = await roomBillingService.getTenantRoomBillingState('dorm-1', 'room-1', 'tenant-1', sept30NightUtc);
-    expect(summaryBefore.state).toBe('no_bill');
-    expect(summaryBefore.outstandingAmount).toBe('0.00');
-    expect(summaryBefore.currentBillId).toBeUndefined();
-    expect(summaryBefore.billNumber).toBeUndefined();
+    expect(summaryBefore.state).toBe('pending_payment');
+    expect(summaryBefore.currentBillId).toBe('bill-sep-utility');
+    expect(summaryBefore.billNumber).toBe('B-202609-UTILITY');
+    expect(summaryBefore.outstandingAmount).toBe('1200.00');
 
-    // After midnight (Oct 1 00:00:00)
+    // At Oct 1 00:00:00 Bangkok time: October RENT is visible and is selected by periodStart authority (Oct 1 > Sep 1)
     const summaryAfter = await roomBillingService.getTenantRoomBillingState('dorm-1', 'room-1', 'tenant-1', oct01MidnightUtc);
     expect(summaryAfter.state).toBe('pending_payment');
-    expect(summaryAfter.currentBillId).toBe('oct-rent-bill-123');
-    expect(summaryAfter.billNumber).toBe('B-202610-001');
+    expect(summaryAfter.currentBillId).toBe('bill-oct-rent');
+    expect(summaryAfter.billNumber).toBe('B-202610-RENT');
     expect(summaryAfter.outstandingAmount).toBe('4500.00');
   });
 });

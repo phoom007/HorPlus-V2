@@ -9,6 +9,7 @@ import { getPrismaClient } from '../db/prisma.js';
 import { AppError } from '../types/index.js';
 import {
   IBillingCycleRepository,
+  PrismaBillingCycleRepository,
   BillingCycleEntity,
   BillingRateSnapshotEntity,
   BillingCycleFilterQuery,

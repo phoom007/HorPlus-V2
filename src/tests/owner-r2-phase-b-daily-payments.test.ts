@@ -1,10 +1,11 @@
-/**
+﻿/**
  * @license Apache-2.0
- * Round 2 Phase B: Daily Invoices Surfacing & Other Fees Sync Test Suite
+ * Round 2 Phase B: Daily Invoices Surfacing, Other Fees Sync, and Strict Paid Authority
  */
 import { describe, it, expect } from 'vitest';
+import { isDailyInvoiceFullyPaid } from '../utils/dailyPaymentPredicate';
 
-describe('Round 2 Phase B: Daily Invoices Surfacing & Other Fees Sync', () => {
+describe('Round 2 Phase B: Daily Invoices Surfacing & Strict Paid Authority', () => {
   describe('1. Daily Invoice Amount Aggregation with Other Fees', () => {
     it('aggregates daily rent (500) + other fee (50) into single invoice total (550)', () => {
       const dailyRentItem = { itemType: 'DAILY_RENT', description: 'ค่าเช่าห้องพักรายวัน (1 วัน)', amount: '500.00', status: 'OUTSTANDING' };
@@ -38,30 +39,7 @@ describe('Round 2 Phase B: Daily Invoices Surfacing & Other Fees Sync', () => {
     });
   });
 
-  describe('2. Daily Other Fees Idempotent Replacement', () => {
-    it('repeatedly syncing clean other fees does not duplicate items', () => {
-      let invoiceItems = [
-        { id: 'item-1', itemType: 'DAILY_RENT', description: 'ค่าเช่าห้องพักรายวัน', amount: '500.00', status: 'OUTSTANDING' },
-        { id: 'item-2', itemType: 'OTHER_FEE', description: 'ค่าล้างแอร์', amount: '50.00', status: 'OUTSTANDING' },
-      ];
-
-      // Re-sync other fees: delete unpaid OTHER_FEE and insert new list
-      const cleanOtherFees = [{ description: 'ค่าล้างแอร์', amount: '50.00' }];
-      invoiceItems = invoiceItems.filter(it => it.itemType !== 'OTHER_FEE');
-      invoiceItems.push(...cleanOtherFees.map((f, idx) => ({
-        id: `item-new-${idx}`,
-        itemType: 'OTHER_FEE',
-        description: f.description,
-        amount: f.amount,
-        status: 'OUTSTANDING',
-      })));
-
-      expect(invoiceItems.length).toBe(2);
-      expect(invoiceItems.filter(it => it.itemType === 'OTHER_FEE').length).toBe(1);
-    });
-  });
-
-  describe('3. Daily Start-Month Cycle Authority', () => {
+  describe('2. Daily Start-Month Cycle Authority', () => {
     const isDailyInvoiceInSelectedCycle = (inv: any, cycle: { periodStart: string; periodEnd: string } | null): boolean => {
       if (!cycle) return true;
       const stay = inv.dailyStay;
@@ -100,44 +78,54 @@ describe('Round 2 Phase B: Daily Invoices Surfacing & Other Fees Sync', () => {
     });
   });
 
-  describe('4. Daily Partial Payment Tab Separation', () => {
-    const isDailyInvoiceFullyPaid = (inv: any): boolean => {
-      const status = (inv.status || '').toUpperCase();
-      if (status === 'CANCELLED') return false;
-      const outstanding = Number(inv.outstandingAmount ?? inv.totalAgreedAmount ?? 0);
-      return (status === 'PAID' || outstanding === 0) && outstanding === 0 && Number(inv.totalAgreedAmount ?? 0) > 0;
-    };
-
-    it('partially settled invoice (deposit settled 500, rent outstanding 500) is in unpaid tab only', () => {
-      const partialInvoice = {
-        id: 'inv-part-1',
-        status: 'PARTIALLY_PAID',
-        totalAgreedAmount: '1000.00',
-        outstandingAmount: '500.00',
-        items: [
-          { itemType: 'DEPOSIT', amount: '500.00', status: 'SETTLED' },
-          { itemType: 'DAILY_RENT', amount: '500.00', status: 'OUTSTANDING' },
-        ],
-      };
-
-      expect(isDailyInvoiceFullyPaid(partialInvoice)).toBe(false);
-      // In unpaid tab
-      expect(!isDailyInvoiceFullyPaid(partialInvoice)).toBe(true);
+  describe('3. Strict Daily Paid Authority & Tab Mutual Exclusivity (Production Helper)', () => {
+    it('Case 1: PAID + outstanding 0 + totalAgreed > 0 -> TRUE (in Paid tab)', () => {
+      const inv = { status: 'PAID', outstandingAmount: '0.00', totalAgreedAmount: '550.00' };
+      expect(isDailyInvoiceFullyPaid(inv)).toBe(true);
     });
 
-    it('after settling remaining rent (outstanding 0), moves to paid tab only', () => {
-      const fullyPaidInvoice = {
-        id: 'inv-full-1',
-        status: 'PAID',
-        totalAgreedAmount: '1000.00',
-        outstandingAmount: '0.00',
-        items: [
-          { itemType: 'DEPOSIT', amount: '500.00', status: 'SETTLED' },
-          { itemType: 'DAILY_RENT', amount: '500.00', status: 'SETTLED' },
-        ],
-      };
+    it('Case 2: PARTIALLY_PAID + outstanding 500 -> FALSE (in Unpaid tab only)', () => {
+      const inv = { status: 'PARTIALLY_PAID', outstandingAmount: '500.00', totalAgreedAmount: '1000.00' };
+      expect(isDailyInvoiceFullyPaid(inv)).toBe(false);
+    });
 
-      expect(isDailyInvoiceFullyPaid(fullyPaidInvoice)).toBe(true);
+    it('Case 3: ISSUED + outstanding 0 -> FALSE (fails closed)', () => {
+      const inv = { status: 'ISSUED', outstandingAmount: '0.00', totalAgreedAmount: '500.00' };
+      expect(isDailyInvoiceFullyPaid(inv)).toBe(false);
+    });
+
+    it('Case 4: PARTIALLY_PAID + outstanding 0 -> FALSE (fails closed until backend status is corrected)', () => {
+      const inv = { status: 'PARTIALLY_PAID', outstandingAmount: '0.00', totalAgreedAmount: '500.00' };
+      expect(isDailyInvoiceFullyPaid(inv)).toBe(false);
+    });
+
+    it('Case 5: CANCELLED + outstanding 0 -> FALSE (in neither active tab)', () => {
+      const inv = { status: 'CANCELLED', outstandingAmount: '0.00', totalAgreedAmount: '500.00' };
+      expect(isDailyInvoiceFullyPaid(inv)).toBe(false);
+    });
+
+    it('Case 6: Mutual Exclusivity - same invoice never appears in both Paid and Unpaid tabs', () => {
+      const testInvoices = [
+        { id: '1', status: 'PAID', outstandingAmount: '0.00', totalAgreedAmount: '500.00' },
+        { id: '2', status: 'PARTIALLY_PAID', outstandingAmount: '200.00', totalAgreedAmount: '500.00' },
+        { id: '3', status: 'ISSUED', outstandingAmount: '500.00', totalAgreedAmount: '500.00' },
+        { id: '4', status: 'CANCELLED', outstandingAmount: '0.00', totalAgreedAmount: '500.00' },
+      ];
+
+      const unpaidTab = testInvoices.filter((inv) => inv.status !== 'CANCELLED' && !isDailyInvoiceFullyPaid(inv));
+      const paidTab = testInvoices.filter((inv) => isDailyInvoiceFullyPaid(inv));
+
+      const unpaidIds = new Set(unpaidTab.map((i) => i.id));
+      const paidIds = new Set(paidTab.map((i) => i.id));
+
+      for (const id of unpaidIds) {
+        expect(paidIds.has(id)).toBe(false);
+      }
+      expect(paidIds.has('1')).toBe(true);
+      expect(unpaidIds.has('2')).toBe(true);
+      expect(unpaidIds.has('3')).toBe(true);
+      expect(unpaidIds.has('4')).toBe(false);
+      expect(paidIds.has('4')).toBe(false);
     });
   });
 });

@@ -8,6 +8,7 @@ import { Prisma } from '@prisma/client';
 import { BillingService } from '../../services/billing.service.js';
 import { subscriptionEntitlementService } from '../../services/subscription-entitlement.service.js';
 import { billingOrchestrationService } from '../../services/billing-orchestration.service.js';
+import { billingCycleService } from '../../services/billing-cycle.service.js';
 import * as prismaModule from '../../db/prisma.js';
 
 describe('Round 2 Phase C: Recurring Rent Generation (Production Path)', () => {
@@ -25,6 +26,7 @@ describe('Round 2 Phase C: Recurring Rent Generation (Production Path)', () => {
   let mockContractRepo: any;
   let mockRoomRepo: any;
   let mockTenantRepo: any;
+  let mockPrisma: any;
 
   beforeEach(() => {
     vi.spyOn(subscriptionEntitlementService, 'assertRoomOperationalEntitlement').mockResolvedValue(undefined as any);
@@ -37,8 +39,23 @@ describe('Round 2 Phase C: Recurring Rent Generation (Production Path)', () => {
       totalRooms: 1,
     } as any);
     vi.spyOn(billingOrchestrationService, 'resolveCyclePeopleCount').mockResolvedValue(1);
+    vi.spyOn(billingCycleService, 'ensureRollingBillingCycles').mockResolvedValue([]);
 
-    const mockPrisma = {
+    mockPrisma = {
+      dormitory: {
+        findMany: vi.fn().mockResolvedValue([{ id: DORM_ID }]),
+      },
+      billingCycle: {
+        findMany: vi.fn().mockImplementation(async ({ where }) => {
+          // If periodStart <= cutoff
+          const octStart = new Date('2026-10-01T00:00:00.000Z');
+          const cutoff = where.periodStart?.lte;
+          if (cutoff && octStart.getTime() <= cutoff.getTime()) {
+            return [{ id: CYCLE_OCT_ID, dormitoryId: DORM_ID }];
+          }
+          return [];
+        }),
+      },
       dormitoryBillingSettings: {
         findUnique: vi.fn().mockResolvedValue({ dueDay: 5 }),
       },
@@ -82,10 +99,10 @@ describe('Round 2 Phase C: Recurring Rent Generation (Production Path)', () => {
           return {
             id: CYCLE_OCT_ID,
             cycleCode: '2026-10',
-            periodStart: new Date('2026-10-01'),
-            periodEnd: new Date('2026-10-31'),
-            billingDate: new Date('2026-10-01'),
-            dueDate: new Date('2026-10-05'),
+            periodStart: new Date('2026-10-01T00:00:00.000Z'),
+            periodEnd: new Date('2026-10-31T23:59:59.999Z'),
+            billingDate: new Date('2026-10-01T00:00:00.000Z'),
+            dueDate: new Date('2026-10-05T00:00:00.000Z'),
             status: 'draft',
           };
         }
@@ -93,20 +110,20 @@ describe('Round 2 Phase C: Recurring Rent Generation (Production Path)', () => {
           return {
             id: CYCLE_NOV_ID,
             cycleCode: '2026-11',
-            periodStart: new Date('2026-11-01'),
-            periodEnd: new Date('2026-11-30'),
-            billingDate: new Date('2026-11-01'),
-            dueDate: new Date('2026-11-05'),
+            periodStart: new Date('2026-11-01T00:00:00.000Z'),
+            periodEnd: new Date('2026-11-30T23:59:59.999Z'),
+            billingDate: new Date('2026-11-01T00:00:00.000Z'),
+            dueDate: new Date('2026-11-05T00:00:00.000Z'),
             status: 'draft',
           };
         }
         return {
           id,
           cycleCode: '2026-09',
-          periodStart: new Date('2026-09-01'),
-          periodEnd: new Date('2026-09-30'),
-          billingDate: new Date('2026-09-01'),
-          dueDate: new Date('2026-09-05'),
+          periodStart: new Date('2026-09-01T00:00:00.000Z'),
+          periodEnd: new Date('2026-09-30T23:59:59.999Z'),
+          billingDate: new Date('2026-09-01T00:00:00.000Z'),
+          dueDate: new Date('2026-09-05T00:00:00.000Z'),
           status: 'draft',
         };
       }),
@@ -166,6 +183,9 @@ describe('Round 2 Phase C: Recurring Rent Generation (Production Path)', () => {
         billingCycleId: CYCLE_OCT_ID,
         roomId: ROOM_ID,
         billKind: 'RENT',
+        // Client attempt to supply invalid dates must be ignored by server authority
+        billingDate: '2026-09-15',
+        dueDate: '2026-09-20',
       },
       'owner-user-1',
       earlyIssuanceDate
@@ -175,7 +195,7 @@ describe('Round 2 Phase C: Recurring Rent Generation (Production Path)', () => {
     expect(result.bill.billKind).toBe('RENT');
     // billingDate must be October 1st, NOT September 15th
     expect(result.bill.billingDate.toISOString().slice(0, 10)).toBe('2026-10-01');
-    // dueDate must be October 5th
+    // dueDate must be October 5th, NOT September 20th
     expect(result.bill.dueDate.toISOString().slice(0, 10)).toBe('2026-10-05');
     expect(Number(result.bill.totalAmount)).toBe(4500);
     expect(result.items[0].description).toBe('ค่าเช่าห้องพัก');
@@ -196,6 +216,8 @@ describe('Round 2 Phase C: Recurring Rent Generation (Production Path)', () => {
     const octRes = await billingService.bulkGenerateBills(DORM_ID, CYCLE_OCT_ID, [ROOM_ID], 'owner-1', undefined, 'RENT');
     expect(octRes.generatedCount).toBe(1);
     expect(octRes.bills[0].billKind).toBe('RENT');
+    // Generating RENT alone must NOT update cycle status to 'generated' (preserves draft status)
+    expect(mockBillingCycleRepo.update).not.toHaveBeenCalled();
 
     // Reset bill repo call history
     mockBillRepo.create.mockClear();
@@ -230,5 +252,29 @@ describe('Round 2 Phase C: Recurring Rent Generation (Production Path)', () => {
     expect(res.excluded.length).toBe(1);
     expect(res.excluded[0].reason).toBe('BILL_ALREADY_EXISTS');
     expect(mockBillRepo.create).not.toHaveBeenCalled();
+  });
+
+  it('4. Automatic Reconciler: executes rolling cycle check and respects Bangkok month boundary', async () => {
+    vi.spyOn(billingService as any, 'resolveProvisionalBillingSource').mockResolvedValue({
+      id: 'prov-monthly-1',
+      tenantId: TENANT_ID,
+      rentalType: 'MONTHLY',
+      startDate: new Date('2026-09-01'),
+      durationMonths: 6,
+      unitRentAmount: new Prisma.Decimal('4500.00'),
+    });
+
+    const sept30NightUtc = new Date('2026-09-30T16:59:59.000Z'); // 23:59:59 Bangkok
+    const oct01MidnightUtc = new Date('2026-09-30T17:00:00.000Z'); // 00:00:00 Bangkok on Oct 1
+
+    // At Sep 30 23:59:59 Bangkok time: October cycle is NOT yet reconciled
+    const countBefore = await billingService.reconcileRecurringRentBillsForAllDormitories(sept30NightUtc);
+    expect(countBefore).toBe(0);
+    expect(billingCycleService.ensureRollingBillingCycles).toHaveBeenCalledWith(DORM_ID);
+
+    // At Oct 1 00:00:00 Bangkok time: October cycle IS reconciled
+    const countAfter = await billingService.reconcileRecurringRentBillsForAllDormitories(oct01MidnightUtc);
+    expect(countAfter).toBe(1);
+    expect(mockBillRepo.create).toHaveBeenCalled();
   });
 });
