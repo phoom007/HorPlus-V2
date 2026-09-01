@@ -25,6 +25,7 @@ import { LineNotificationModal, LineIcon } from '../../components/LineNotificati
 import { Bill, Tenant, Room } from '../../types';
 import { queryKeys } from '../../lib/queryClient';
 import { httpRequest } from '../../data/httpClient';
+import { isDailyInvoiceFullyPaid } from '../../utils/dailyPaymentPredicate';
 
 export interface BillingCycle {
   id: string;
@@ -733,13 +734,6 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
     if (!startStr || !cycleStartStr || !cycleEndStr) return true;
     // Canonical start-month authority: Daily invoice belongs strictly to the billing cycle of stay.startDate
     return startStr >= cycleStartStr && startStr <= cycleEndStr;
-  };
-
-  const isDailyInvoiceFullyPaid = (inv: any): boolean => {
-    const status = (inv.status || '').toUpperCase();
-    if (status === 'CANCELLED') return false;
-    const outstanding = Number(inv.outstandingAmount ?? inv.totalAgreedAmount ?? 0);
-    return (status === 'PAID' || outstanding === 0) && outstanding === 0 && Number(inv.totalAgreedAmount ?? 0) > 0;
   };
 
   const unpaidDailyInvoices = useMemo(() => {
