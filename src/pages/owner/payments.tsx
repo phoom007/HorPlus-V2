@@ -754,7 +754,6 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
       return status === 'PAID' || inv.items?.some((it: any) => it.status === 'SETTLED' || it.status === 'DECLARED_PAID');
     });
   }, [dailyInvoicesData, selectedCycleObj]);
-  const effectiveCycleCode = selectedCycleCode || billingCycles.find(c => c.id === effectiveCycleId)?.cycleCode || '';
 
   // Helpers to resolve Room Number, Tenant Name, Cycle Code
   const isUuidString = (str: string): boolean => {
