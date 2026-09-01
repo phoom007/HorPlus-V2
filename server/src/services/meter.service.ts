@@ -1084,6 +1084,38 @@ export class MeterService {
                 (it: any) => it.itemType === 'OTHER_FEE' && (it.status === 'SETTLED' || it.status === 'DECLARED_PAID')
               );
 
+              // 1.5. Validate that all settled other fees are immutable and untouched in cleanOtherFees
+              if (settledOtherFees.length > 0) {
+                const availableCleanFees = cleanOtherFees.map((f: any) => ({
+                  description: f.description,
+                  amountDec: new Prisma.Decimal(formatDecimal(f.amount)),
+                  matched: false,
+                }));
+
+                for (const settled of settledOtherFees) {
+                  const settledAmtDec = new Prisma.Decimal(formatDecimal(settled.amount));
+                  const exactMatch = availableCleanFees.find(
+                    (cf: any) => !cf.matched && cf.description === settled.description && cf.amountDec.equals(settledAmtDec)
+                  );
+
+                  if (exactMatch) {
+                    exactMatch.matched = true;
+                  } else {
+                    const changedFee = availableCleanFees.find((cf: any) => cf.description === settled.description);
+                    if (changedFee) {
+                      const err = new Error(`ไม่สามารถแก้ไขรายการค่าใช้จ่าย "${settled.description}" ที่ชำระเงินแล้วได้ (จำนวนเงินเดิม ${formatDecimal(settled.amount)} บาท)`);
+                      (err as any).statusCode = 409;
+                      (err as any).code = 'DAILY_OTHER_FEE_ALREADY_SETTLED';
+                      throw err;
+                    }
+                    const err = new Error(`ไม่สามารถลบรายการค่าใช้จ่าย "${settled.description}" ที่ชำระเงินแล้วได้`);
+                    (err as any).statusCode = 409;
+                    (err as any).code = 'DAILY_OTHER_FEE_ALREADY_SETTLED';
+                    throw err;
+                  }
+                }
+              }
+
               // 2. Delete only OUTSTANDING OTHER_FEE items
               await client.dailyStayInvoiceItem.deleteMany({
                 where: {
