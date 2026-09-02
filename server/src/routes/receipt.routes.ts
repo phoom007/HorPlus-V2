@@ -169,7 +169,8 @@ export function createReceiptRouter(authService: AuthenticationService) {
         }
       }
 
-      const receipt = await receiptService.getFinalReceiptForBill(bill.dormitoryId, billId);
+      const userId = (req as any).user?.id || (req as any).auth?.userId;
+      const receipt = await receiptService.getFinalReceiptForBill(bill.dormitoryId, billId, userId);
       if (!receipt) return res.status(404).json({ error: 'Final receipt not found' });
       
       res.json(receipt);
@@ -195,7 +196,8 @@ export function createReceiptRouter(authService: AuthenticationService) {
         }
       }
 
-      const receipt = await receiptService.getFinalReceiptForDailyInvoice(invoice.dormitoryId, invoiceId);
+      const userId = (req as any).user?.id || (req as any).auth?.userId;
+      const receipt = await receiptService.getFinalReceiptForDailyInvoice(invoice.dormitoryId, invoiceId, userId);
       if (!receipt) return res.status(404).json({ error: 'Final receipt not found' });
       
       res.json(receipt);

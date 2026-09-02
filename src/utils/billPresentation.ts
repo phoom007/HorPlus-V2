@@ -352,7 +352,7 @@ export function formatCanonicalLineItemDescription(item: {
 }, options?: {
   rentCycle?: 'monthly' | 'term' | 'daily' | string | null;
 }): string {
-  const desc = (item.description || '').trim();
+  let desc = (item.description || '').replace(/\(ค้างชำระ\)/g, '').trim();
   const t = (item.type || item.category || '').toLowerCase();
   const meta = item.metadata as Record<string, any> | undefined;
 
@@ -366,15 +366,43 @@ export function formatCanonicalLineItemDescription(item: {
     return `${prefix} (ขั้นบันได)`;
   }
 
-  // 2. Rent
+  // 2. Deposit / Security deposit (Canonical wording: Monthly, Term, Daily)
+  if (
+    t === 'deposit' ||
+    t === 'security_deposit' ||
+    desc.includes('ประกัน') ||
+    desc.includes('มัดจำ')
+  ) {
+    const rc = options?.rentCycle || (
+      desc.includes('รายเทอม') || desc.includes('เทอม') ? 'term' :
+      desc.includes('รายวัน') || desc.includes('วัน') ? 'daily' : 'monthly'
+    );
+    if (rc === 'daily') return 'ค่าประกัน / มัดจำ (รายวัน)';
+    if (rc === 'term') return 'ค่าประกัน / มัดจำ (รายเทอม)';
+    return 'ค่าประกัน / มัดจำ (รายเดือน)';
+  }
+
+  // 3. Rent (Canonical wording with day/night semantics)
   if (t === 'rent' || desc.includes('ค่าเช่า')) {
-    const rc = options?.rentCycle || (desc.includes('รายเทอม') || desc.includes('เทอม') ? 'term' : (desc.includes('รายวัน') || desc.includes('วัน') ? 'daily' : 'monthly'));
+    const rc = options?.rentCycle || (
+      desc.includes('รายเทอม') || desc.includes('เทอม') ? 'term' :
+      desc.includes('รายวัน') || desc.includes('วัน') ? 'daily' : 'monthly'
+    );
     if (rc === 'term') return 'ค่าเช่า (รายเทอม)';
-    if (rc === 'daily') return 'ค่าเช่า (รายวัน)';
+    if (rc === 'daily') {
+      const matchNights = desc.match(/(\d+)\s*(คืน|วัน)/);
+      if (matchNights) {
+        return `ค่าเช่า (รายวัน) ${matchNights[1]} ${matchNights[2] === 'วัน' ? 'คืน' : matchNights[2]}`;
+      }
+      if (item.quantity !== undefined && item.quantity !== null && Number(item.quantity) > 0) {
+        return `ค่าเช่า (รายวัน) ${item.quantity} คืน`;
+      }
+      return 'ค่าเช่า (รายวัน)';
+    }
     return 'ค่าเช่า (รายเดือน)';
   }
 
-  // 3. Normalized Title Base
+  // 4. Normalized Title Base
   let title = desc;
   if (t === 'water' || desc.startsWith('ค่าน้ำ')) {
     title = 'ค่าน้ำ';
@@ -393,7 +421,7 @@ export function formatCanonicalLineItemDescription(item: {
   // Normalize user-facing "น้ำประปา" -> "น้ำ"
   title = title.replace(/น้ำประปา/g, 'น้ำ');
 
-  // 4. Scalar rate formula if rate & quantity exist
+  // 5. Scalar rate formula if rate & quantity exist
   const rateNum = item.unitPrice !== undefined && item.unitPrice !== null ? Number(item.unitPrice) : null;
   const qtyNum = item.quantity !== undefined && item.quantity !== null ? Number(item.quantity) : null;
 

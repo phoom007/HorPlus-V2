@@ -1380,5 +1380,210 @@ describe('Owner Round 2.4I.4 / A1: True Room-Cycle Final Settlement Receipt Auth
     );
     expect(resF).toBeNull();
   });
+
+  // =========================================================================
+  // ROUND 2.4J RECEIPT RECOVERY POLICY 1A TESTS
+  // =========================================================================
+
+  it('20. Round 2.4J Proof 1A: Lazy on-demand generation for settled Bill scope without active receipt, and idempotent on subsequent calls', async () => {
+    // Create a new room with a fully settled bill that does NOT have any receipt created yet
+    const rNumLazy = `LAZY-${Date.now().toString().slice(-4)}`;
+    const lazyRoom = await prisma.room.create({
+      data: {
+        dormitoryId,
+        buildingId,
+        roomNumber: rNumLazy,
+        normalizedRoomNumber: rNumLazy.toLowerCase(),
+        floor: 2,
+        status: 'occupied',
+        monthlyRent: 4500.0,
+        termRent: 22500.0,
+        termMonths: 5,
+        dailyRent: 800.0,
+        depositAmount: 500.0,
+        monthlyDeposit: 500.0,
+        termDeposit: 500.0,
+        dailyDeposit: 300.0,
+      },
+    });
+
+    const lazyBill = await prisma.bill.create({
+      data: {
+        dormitoryId,
+        billingCycleId: cycle1Id,
+        roomId: lazyRoom.id,
+        tenantId: tenantAId,
+        billKind: 'MONTHLY_RENT',
+        billNumber: `BILL-LAZY-${Date.now().toString().slice(-4)}`,
+        status: 'PAID',
+        billingDate: new Date('2026-08-25'),
+        dueDate: new Date('2026-08-31'),
+        subtotal: 5000.0,
+        totalAmount: 5000.0,
+        paidAmount: 5000.0,
+        outstandingAmount: 0.0,
+      },
+    });
+
+    const lazyItem = await prisma.billItem.create({
+      data: {
+        dormitoryId,
+        billId: lazyBill.id,
+        type: 'RENT',
+        description: 'ค่าเช่าห้อง',
+        amount: 5000.0,
+      },
+    });
+
+    await prisma.payment.create({
+      data: {
+        dormitoryId,
+        billId: lazyBill.id,
+        tenantId: tenantAId,
+        amount: 5000.0,
+        method: 'CASH',
+        status: 'APPROVED',
+        paymentDate: new Date('2026-08-26'),
+        reviewedAt: new Date(),
+        reviewedByUserId: ownerUserId,
+      },
+    });
+
+    // Verify scope has NO receipt currently
+    const beforeScopeKey = `ROOM_CYCLE:${lazyRoom.id}:${cycle1Id}`;
+    const beforeReceipts = await prisma.receipt.findMany({
+      where: { dormitoryId, settlementScopeKey: beforeScopeKey },
+    });
+    expect(beforeReceipts).toHaveLength(0);
+
+    // Call ReceiptService.getFinalReceiptForBill -> Lazy generation triggers!
+    const recoveredReceipt = await receiptService.getFinalReceiptForBill(dormitoryId, lazyBill.id, ownerUserId);
+    expect(recoveredReceipt).not.toBeNull();
+    expect(recoveredReceipt!.receiptKind).toBe('FINAL_SETTLEMENT');
+    expect((recoveredReceipt!.snapshotData as any).total).toBe('5000.00');
+    expect(recoveredReceipt!.settlementScopeKey).toBe(beforeScopeKey);
+
+    // Verify DB now has exactly 1 receipt in scope
+    const afterReceipts = await prisma.receipt.findMany({
+      where: { dormitoryId, settlementScopeKey: beforeScopeKey },
+    });
+    expect(afterReceipts).toHaveLength(1);
+    expect(afterReceipts[0].id).toBe(recoveredReceipt!.id);
+
+    // Calling it again returns the same active receipt without creating a new one
+    const secondCall = await receiptService.getFinalReceiptForBill(dormitoryId, lazyBill.id, ownerUserId);
+    expect(secondCall!.id).toBe(recoveredReceipt!.id);
+    const countAfterSecond = await prisma.receipt.count({
+      where: { dormitoryId, settlementScopeKey: beforeScopeKey },
+    });
+    expect(countAfterSecond).toBe(1);
+  });
+
+  it('21. Round 2.4J Proof 1A Guard: Lazy generation preserves VOID invariant and fails closed for UNPAID scopes', async () => {
+    // 1. VOID Invariant Guard: If all receipts in a scope are voided, lazy lookup returns null without recreating
+    const rNumVoid = `VOID-${Date.now().toString().slice(-4)}`;
+    const voidRoom = await prisma.room.create({
+      data: {
+        dormitoryId,
+        buildingId,
+        roomNumber: rNumVoid,
+        normalizedRoomNumber: rNumVoid.toLowerCase(),
+        floor: 3,
+        status: 'occupied',
+        monthlyRent: 3500.0,
+        termRent: 17500.0,
+        termMonths: 5,
+        dailyRent: 700.0,
+        depositAmount: 500.0,
+        monthlyDeposit: 500.0,
+        termDeposit: 500.0,
+        dailyDeposit: 300.0,
+      },
+    });
+
+    const voidBill = await prisma.bill.create({
+      data: {
+        dormitoryId,
+        billingCycleId: cycle1Id,
+        roomId: voidRoom.id,
+        tenantId: tenantAId,
+        billKind: 'MONTHLY_RENT',
+        billNumber: `BILL-VOID-${Date.now().toString().slice(-4)}`,
+        status: 'PAID',
+        billingDate: new Date('2026-08-25'),
+        dueDate: new Date('2026-08-31'),
+        subtotal: 3500.0,
+        totalAmount: 3500.0,
+        paidAmount: 3500.0,
+        outstandingAmount: 0.0,
+      },
+    });
+
+    const voidItem = await prisma.billItem.create({
+      data: {
+        dormitoryId,
+        billId: voidBill.id,
+        type: 'RENT',
+        description: 'ค่าเช่าห้อง',
+        amount: 3500.0,
+      },
+    });
+
+    await prisma.payment.create({
+      data: {
+        dormitoryId,
+        billId: voidBill.id,
+        tenantId: tenantAId,
+        amount: 3500.0,
+        method: 'CASH',
+        status: 'APPROVED',
+        paymentDate: new Date('2026-08-26'),
+        reviewedAt: new Date(),
+        reviewedByUserId: ownerUserId,
+      },
+    });
+
+    // Generate initial receipt
+    const initialReceipt = await receiptService.getFinalReceiptForBill(dormitoryId, voidBill.id, ownerUserId);
+    expect(initialReceipt).not.toBeNull();
+
+    // Owner voids the receipt
+    await prisma.receipt.update({
+      where: { id: initialReceipt!.id },
+      data: { isVoided: true, voidReason: 'เจ้าของหอยกเลิกเพื่อออกใหม่ภายหลัง' },
+    });
+
+    // Lookup MUST return null and MUST NOT automatically fabricate a new receipt!
+    const voidLookup = await receiptService.getFinalReceiptForBill(dormitoryId, voidBill.id, ownerUserId);
+    expect(voidLookup).toBeNull();
+
+    const scopeReceipts = await prisma.receipt.findMany({
+      where: { dormitoryId, settlementScopeKey: `ROOM_CYCLE:${voidRoom.id}:${cycle1Id}` },
+    });
+    expect(scopeReceipts).toHaveLength(1);
+    expect(scopeReceipts[0].isVoided).toBe(true);
+
+    // 2. Unsettled Guard: Unpaid bill fails closed (returns null)
+    const unpaidBill = await prisma.bill.create({
+      data: {
+        dormitoryId,
+        billingCycleId: cycle1Id,
+        roomId: voidRoom.id,
+        tenantId: tenantAId,
+        billKind: 'MONTHLY_UTILITY',
+        billNumber: `BILL-UNPAID-${Date.now().toString().slice(-4)}`,
+        status: 'PENDING',
+        billingDate: new Date('2026-08-25'),
+        dueDate: new Date('2026-08-31'),
+        subtotal: 800.0,
+        totalAmount: 800.0,
+        paidAmount: 0.0,
+        outstandingAmount: 800.0,
+      },
+    });
+
+    const unpaidLookup = await receiptService.getFinalReceiptForBill(dormitoryId, unpaidBill.id, ownerUserId);
+    expect(unpaidLookup).toBeNull();
+  });
 });
 

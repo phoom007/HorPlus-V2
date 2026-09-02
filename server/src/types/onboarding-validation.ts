@@ -15,28 +15,43 @@ export const OnboardingDormitoryInputSchema = z.object({
   email: z.string().trim().email('อีเมลหอพักไม่ถูกต้อง').optional().nullable().or(z.literal('')),
   estimatedBuildingCount: z.coerce.number().int().min(1, 'จำนวนอาคารต้องอย่างน้อย 1').max(100).default(1),
   estimatedRoomCount: z.coerce.number().int().min(1, 'จำนวนห้องต้องอย่างน้อย 1').max(150, 'หนึ่งหอพักสามารถสร้างห้องได้สูงสุด 150 ห้อง').default(10),
+  logoUrl: z.string().trim().optional().nullable(),
 }).strict();
+
+const normalizeMoneyField = (defaultVal = '0.00', msg = 'ต้องเป็นตัวเลขจำนวนเงินที่ถูกต้อง') =>
+  z.union([z.string(), z.number(), z.null(), z.undefined()])
+    .transform((val) => {
+      if (val === null || val === undefined || val === '') return defaultVal;
+      const str = String(val).replace(/,/g, '').trim();
+      if (!str || isNaN(Number(str))) return defaultVal;
+      if (/^\d+(\.\d{1,2})?$/.test(str)) return str;
+      return Number(str).toFixed(2);
+    })
+    .pipe(z.string().regex(/^\d+(\.\d{1,2})?$/, msg));
 
 export const OnboardingBillingInputSchema = z.object({
   billingDay: z.coerce.number().int().min(1).max(28).optional().nullable(),
   dueDay: z.coerce.number({ required_error: 'กรุณาระบุวันครบกำหนดชำระ (dueDay is required)', invalid_type_error: 'วันครบกำหนดชำระต้องเป็นตัวเลข' }).int().min(1, 'วันครบกำหนดชำระต้องอยู่ระหว่างวันที่ 1-28').max(28, 'วันครบกำหนดชำระต้องอยู่ระหว่างวันที่ 1-28'),
   waterBillingType: z.enum(['per_unit', 'fixed_monthly', 'flat_rate', 'unit', 'flat', 'per_person', 'person', 'room', 'per_room', 'tiered']).default('per_person'),
-  waterRate: z.string().regex(/^\d+(\.\d{1,2})?$/, 'ค่าน้ำต้องเป็นตัวเลขจำนวนเงินที่ถูกต้อง').default('0.00'),
+  waterRate: normalizeMoneyField('0.00', 'ค่าน้ำต้องเป็นตัวเลขจำนวนเงินที่ถูกต้อง').default('0.00'),
   waterTierRates: z.array(z.object({ upTo: z.string().nullable(), rate: z.string() })).nullable().optional(),
   electricityBillingType: z.enum(['per_unit', 'fixed_monthly', 'flat_rate', 'unit', 'flat', 'per_person', 'person', 'room', 'per_room', 'tiered']).default('per_unit'),
-  electricityRate: z.string().regex(/^\d+(\.\d{1,2})?$/, 'ค่าไฟต้องเป็นตัวเลขจำนวนเงินที่ถูกต้อง').default('0.00'),
+  electricityRate: normalizeMoneyField('0.00', 'ค่าไฟต้องเป็นตัวเลขจำนวนเงินที่ถูกต้อง').default('0.00'),
   electricityTierRates: z.array(z.object({ upTo: z.string().nullable(), rate: z.string() })).nullable().optional(),
-  commonFee: z.string().regex(/^\d+(\.\d{1,2})?$/, 'ค่าส่วนกลางต้องเป็นตัวเลขจำนวนเงินที่ถูกต้อง').default('0.00'),
+  commonFee: normalizeMoneyField('0.00', 'ค่าส่วนกลางต้องเป็นตัวเลขจำนวนเงินที่ถูกต้อง').default('0.00'),
   commonFeeMode: z.string().trim().optional().nullable().default('per_room'),
-  internetFee: z.string().regex(/^\d+(\.\d{1,2})?$/, 'ค่าอินเทอร์เน็ตต้องเป็นตัวเลขจำนวนเงินที่ถูกต้อง').default('0.00'),
+  internetFee: normalizeMoneyField('0.00', 'ค่าอินเทอร์เน็ตต้องเป็นตัวเลขจำนวนเงินที่ถูกต้อง').default('0.00'),
   internetFeeMode: z.string().trim().optional().nullable().default('per_person'),
-  parkingRate: z.string().regex(/^\d+(\.\d{1,2})?$/, 'ค่าจอดรถต้องเป็นตัวเลขจำนวนเงินที่ถูกต้อง').optional().nullable().default('0.00'),
+  parkingRate: normalizeMoneyField('0.00', 'ค่าจอดรถต้องเป็นตัวเลขจำนวนเงินที่ถูกต้อง').optional().nullable().default('0.00'),
   parkingFeeMode: z.string().trim().optional().nullable().default('per_room'),
   gracePeriodDays: z.coerce.number().int().min(0).max(90).optional().nullable().default(2).transform(() => 2),
   advanceRentMonths: z.coerce.number().int().min(0).max(12).optional().nullable().default(1),
-  lateFeeType: z.enum(['fixed', 'per_day', 'percentage', 'none']).default('none'),
-  lateFeeValue: z.string().regex(/^\d+(\.\d{1,2})?$/, 'ค่าปรับต้องเป็นตัวเลขจำนวนเงินที่ถูกต้อง').default('0.00'),
+  lateFeeType: z.enum(['fixed', 'fixed_once', 'per_day', 'percentage', 'none'])
+    .default('none')
+    .transform((val) => (val === 'fixed_once' ? 'fixed' : val)),
+  lateFeeValue: normalizeMoneyField('0.00', 'ค่าปรับต้องเป็นตัวเลขจำนวนเงินที่ถูกต้อง').default('0.00'),
   rentBillingType: z.enum(['monthly']).default('monthly'),
+  billingCycle: z.string().trim().optional().nullable(),
 }).strict();
 
 export const OnboardingPaymentInputSchema = z.object({

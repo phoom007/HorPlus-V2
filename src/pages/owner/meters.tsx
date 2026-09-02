@@ -977,6 +977,131 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   const [templateUsed, setTemplateUsed] = useState(false);
   const [templateMode, setTemplateMode] = useState<'FULL' | 'METER_ONLY'>('FULL');
   const [isSpreadsheetMode, setIsSpreadsheetMode] = useState(false);
+
+  // Spreadsheet Real Drag-Fill Handle State
+  const [activeSpreadsheetCell, setActiveSpreadsheetCell] = useState<{
+    rowIndex: number;
+    colKey: 'elecPrev' | 'elecCurr' | 'waterPrev' | 'waterCurr' | 'peopleCount';
+  } | null>(null);
+
+  const [dragFillRange, setDragFillRange] = useState<{
+    startRow: number;
+    targetRow: number;
+    colKey: 'elecPrev' | 'elecCurr' | 'waterPrev' | 'waterCurr' | 'peopleCount';
+  } | null>(null);
+
+  const isDraggingFillRef = useRef(false);
+  const dragFillStateRef = useRef<{
+    startRow: number;
+    targetRow: number;
+    colKey: 'elecPrev' | 'elecCurr' | 'waterPrev' | 'waterCurr' | 'peopleCount';
+  } | null>(null);
+
+  const spreadsheetScrollContainerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isDraggingFillRef.current) {
+        isDraggingFillRef.current = false;
+        dragFillStateRef.current = null;
+        setDragFillRange(null);
+        document.body.style.userSelect = '';
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  const handlePointerDownFillHandle = (
+    e: React.PointerEvent<HTMLDivElement>,
+    rowIndex: number,
+    colKey: 'elecPrev' | 'elecCurr' | 'waterPrev' | 'waterCurr' | 'peopleCount'
+  ) => {
+    e.preventDefault();
+    e.stopPropagation();
+    try {
+      (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    } catch {}
+    isDraggingFillRef.current = true;
+    dragFillStateRef.current = { startRow: rowIndex, targetRow: rowIndex, colKey };
+    setDragFillRange({ startRow: rowIndex, targetRow: rowIndex, colKey });
+    document.body.style.userSelect = 'none';
+  };
+
+  const handlePointerMoveFillHandle = (e: React.PointerEvent) => {
+    if (!isDraggingFillRef.current || !dragFillStateRef.current) return;
+    const container = spreadsheetScrollContainerRef.current;
+    if (!container) return;
+
+    const rect = container.getBoundingClientRect();
+    const edgeThreshold = 35;
+    if (e.clientY < rect.top + edgeThreshold) {
+      container.scrollTop -= 10;
+    } else if (e.clientY > rect.bottom - edgeThreshold) {
+      container.scrollTop += 10;
+    }
+
+    const rowElements = container.querySelectorAll<HTMLTableRowElement>('tr[data-row-index]');
+    let foundRow = dragFillStateRef.current.targetRow;
+    rowElements.forEach((el) => {
+      const rRect = el.getBoundingClientRect();
+      if (e.clientY >= rRect.top && e.clientY <= rRect.bottom) {
+        const idx = parseInt(el.getAttribute('data-row-index') || '-1', 10);
+        if (idx >= 0) foundRow = idx;
+      }
+    });
+
+    if (rowElements.length > 0) {
+      const firstRect = rowElements[0].getBoundingClientRect();
+      const lastRect = rowElements[rowElements.length - 1].getBoundingClientRect();
+      if (e.clientY < firstRect.top) foundRow = 0;
+      else if (e.clientY > lastRect.bottom) foundRow = rowElements.length - 1;
+    }
+
+    if (foundRow !== dragFillStateRef.current.targetRow) {
+      dragFillStateRef.current.targetRow = foundRow;
+      setDragFillRange({ ...dragFillStateRef.current });
+    }
+  };
+
+  const handlePointerUpFillHandle = (e: React.PointerEvent) => {
+    if (!isDraggingFillRef.current) return;
+    try {
+      (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+    } catch {}
+    isDraggingFillRef.current = false;
+    document.body.style.userSelect = '';
+
+    if (dragFillStateRef.current) {
+      const { startRow, targetRow, colKey } = dragFillStateRef.current;
+      const minRow = Math.min(startRow, targetRow);
+      const maxRow = Math.max(startRow, targetRow);
+      const sourceVal = meterRows[startRow]?.[colKey];
+
+      if (sourceVal !== undefined && minRow !== maxRow) {
+        const updated = [...meterRows];
+        for (let r = minRow; r <= maxRow; r++) {
+          if (colKey === 'peopleCount') {
+            updated[r] = {
+              ...updated[r],
+              peopleCount: typeof sourceVal === 'number' ? sourceVal : parseInt(String(sourceVal), 10) || 0,
+            };
+          } else {
+            updated[r] = {
+              ...updated[r],
+              [colKey]: String(sourceVal),
+            };
+          }
+        }
+        setMeterRows(updated);
+        pushHistory(updated);
+        showToast(`คัดลอกข้อมูล ${maxRow - minRow + 1} ห้อง เรียบร้อยแล้ว`);
+      }
+    }
+    setDragFillRange(null);
+    dragFillStateRef.current = null;
+  };
+
   const [quickAddModalOpen, setQuickAddModalOpen] = useState(false);
   const [selectedQuickAddContext, setSelectedQuickAddContext] = useState<QuickAddRoomContext | null>(null);
   const [quickAddLoadingRoomId, setQuickAddLoadingRoomId] = useState<string | null>(null);
@@ -3802,7 +3927,12 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                   }
                 }}
               >
-                <div className="overflow-x-auto overflow-y-auto h-full">
+                <div
+                  ref={spreadsheetScrollContainerRef}
+                  className="overflow-x-auto overflow-y-auto h-full"
+                  onPointerMove={handlePointerMoveFillHandle}
+                  onPointerUp={handlePointerUpFillHandle}
+                >
                   <table className="w-full text-left text-xs border-collapse border border-slate-300 font-sans">
                     <thead className="bg-slate-100 text-slate-800 font-extrabold sticky top-0 border-b border-slate-300 select-none">
                       <tr>
@@ -3816,78 +3946,150 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                       </tr>
                     </thead>
                     <tbody className="font-mono text-slate-800">
-                      {meterRows.map((row) => (
-                        <tr key={row.roomId} className="hover:bg-slate-50/80 transition-colors">
+                      {meterRows.map((row, rowIdx) => (
+                        <tr key={row.roomId} data-row-index={rowIdx} className="hover:bg-slate-50/80 transition-colors">
                           <td className="p-0 border border-slate-300 text-center select-none text-slate-500 font-bold font-sans bg-slate-50/50 h-8">
                             {(row.buildingCode || 'A').replace(/^BLD-/, '').replace(/^อาคาร\s*/, '') || 'A'}
                           </td>
                           <td className="p-0 border border-slate-300 text-center select-none font-bold text-slate-900 bg-slate-50/50 h-8">
                             {row.roomNumber}
                           </td>
-                          {isElecUnit && (
-                            <td className="p-0 border border-slate-300">
-                              <input
-                                type="text"
-                                value={row.elecPrev}
-                                onChange={(e) => {
-                                  const v = e.target.value;
-                                  setMeterRows(prev => prev.map(r => r.roomId === row.roomId ? { ...r, elecPrev: v } : r));
-                                }}
-                                className="w-full h-8 px-2 text-center bg-transparent border-0 text-xs font-mono font-bold text-slate-700 focus:outline-none focus:bg-indigo-50/50 focus:ring-1 focus:ring-indigo-500"
-                              />
-                            </td>
-                          )}
-                          {isElecUnit && (
-                            <td className="p-0 border border-slate-300 bg-indigo-50/20">
-                              <input
-                                type="text"
-                                value={row.elecCurr}
-                                onChange={(e) => {
-                                  const v = e.target.value;
-                                  setMeterRows(prev => prev.map(r => r.roomId === row.roomId ? { ...r, elecCurr: v } : r));
-                                }}
-                                className="w-full h-8 px-2 text-center bg-transparent border-0 text-xs font-mono font-bold text-indigo-950 focus:outline-none focus:bg-indigo-50 focus:ring-1 focus:ring-indigo-500"
-                              />
-                            </td>
-                          )}
-                          {isWaterUnit && (
-                            <td className="p-0 border border-slate-300">
-                              <input
-                                type="text"
-                                value={row.waterPrev}
-                                onChange={(e) => {
-                                  const v = e.target.value;
-                                  setMeterRows(prev => prev.map(r => r.roomId === row.roomId ? { ...r, waterPrev: v } : r));
-                                }}
-                                className="w-full h-8 px-2 text-center bg-transparent border-0 text-xs font-mono font-bold text-slate-700 focus:outline-none focus:bg-blue-50/50 focus:ring-1 focus:ring-blue-500"
-                              />
-                            </td>
-                          )}
-                          {isWaterUnit && (
-                            <td className="p-0 border border-slate-300 bg-blue-50/20">
-                              <input
-                                type="text"
-                                value={row.waterCurr}
-                                onChange={(e) => {
-                                  const v = e.target.value;
-                                  setMeterRows(prev => prev.map(r => r.roomId === row.roomId ? { ...r, waterCurr: v } : r));
-                                }}
-                                className="w-full h-8 px-2 text-center bg-transparent border-0 text-xs font-mono font-bold text-blue-950 focus:outline-none focus:bg-blue-50 focus:ring-1 focus:ring-blue-500"
-                              />
-                            </td>
-                          )}
-                          <td className="p-0 border border-slate-300">
-                            <input
-                              type="number"
-                              min={0}
-                              value={row.peopleCount}
-                              onChange={(e) => {
-                                const v = parseInt(e.target.value, 10);
-                                setMeterRows(prev => prev.map(r => r.roomId === row.roomId ? { ...r, peopleCount: isNaN(v) ? 0 : v } : r));
-                              }}
-                              className="w-full h-8 px-2 text-center bg-transparent border-0 text-xs font-mono font-bold text-slate-800 focus:outline-none focus:bg-indigo-50/50 focus:ring-1 focus:ring-indigo-500"
-                            />
-                          </td>
+                          {isElecUnit && (() => {
+                            const isActive = activeSpreadsheetCell?.rowIndex === rowIdx && activeSpreadsheetCell?.colKey === 'elecPrev';
+                            const isFillPreview = dragFillRange && dragFillRange.colKey === 'elecPrev' && rowIdx >= Math.min(dragFillRange.startRow, dragFillRange.targetRow) && rowIdx <= Math.max(dragFillRange.startRow, dragFillRange.targetRow);
+                            return (
+                              <td className={`p-0 border border-slate-300 relative ${isActive ? 'ring-2 ring-indigo-600 ring-inset z-10' : ''} ${isFillPreview ? 'bg-indigo-100/70 border-indigo-500' : ''}`}>
+                                <input
+                                  type="text"
+                                  value={row.elecPrev}
+                                  onFocus={() => setActiveSpreadsheetCell({ rowIndex: rowIdx, colKey: 'elecPrev' })}
+                                  onClick={() => setActiveSpreadsheetCell({ rowIndex: rowIdx, colKey: 'elecPrev' })}
+                                  onChange={(e) => {
+                                    const v = e.target.value;
+                                    setMeterRows(prev => prev.map(r => r.roomId === row.roomId ? { ...r, elecPrev: v } : r));
+                                  }}
+                                  className="w-full h-8 px-2 text-center bg-transparent border-0 text-xs font-mono font-bold text-slate-700 focus:outline-none focus:bg-indigo-50/50 focus:ring-1 focus:ring-indigo-500"
+                                />
+                                {isActive && (
+                                  <div
+                                    data-testid="drag-fill-handle"
+                                    onPointerDown={(e) => handlePointerDownFillHandle(e, rowIdx, 'elecPrev')}
+                                    className="absolute -bottom-1 -right-1 w-2.5 h-2.5 bg-indigo-600 border border-white cursor-crosshair z-20 shadow-xs select-none"
+                                    title="ลากเพื่อเติมข้อมูลอัตโนมัติ"
+                                  />
+                                )}
+                              </td>
+                            );
+                          })()}
+                          {isElecUnit && (() => {
+                            const isActive = activeSpreadsheetCell?.rowIndex === rowIdx && activeSpreadsheetCell?.colKey === 'elecCurr';
+                            const isFillPreview = dragFillRange && dragFillRange.colKey === 'elecCurr' && rowIdx >= Math.min(dragFillRange.startRow, dragFillRange.targetRow) && rowIdx <= Math.max(dragFillRange.startRow, dragFillRange.targetRow);
+                            return (
+                              <td className={`p-0 border border-slate-300 relative bg-indigo-50/20 ${isActive ? 'ring-2 ring-indigo-600 ring-inset z-10' : ''} ${isFillPreview ? 'bg-indigo-100/70 border-indigo-500' : ''}`}>
+                                <input
+                                  type="text"
+                                  value={row.elecCurr}
+                                  onFocus={() => setActiveSpreadsheetCell({ rowIndex: rowIdx, colKey: 'elecCurr' })}
+                                  onClick={() => setActiveSpreadsheetCell({ rowIndex: rowIdx, colKey: 'elecCurr' })}
+                                  onChange={(e) => {
+                                    const v = e.target.value;
+                                    setMeterRows(prev => prev.map(r => r.roomId === row.roomId ? { ...r, elecCurr: v } : r));
+                                  }}
+                                  className="w-full h-8 px-2 text-center bg-transparent border-0 text-xs font-mono font-bold text-indigo-950 focus:outline-none focus:bg-indigo-50 focus:ring-1 focus:ring-indigo-500"
+                                />
+                                {isActive && (
+                                  <div
+                                    data-testid="drag-fill-handle"
+                                    onPointerDown={(e) => handlePointerDownFillHandle(e, rowIdx, 'elecCurr')}
+                                    className="absolute -bottom-1 -right-1 w-2.5 h-2.5 bg-indigo-600 border border-white cursor-crosshair z-20 shadow-xs select-none"
+                                    title="ลากเพื่อเติมข้อมูลอัตโนมัติ"
+                                  />
+                                )}
+                              </td>
+                            );
+                          })()}
+                          {isWaterUnit && (() => {
+                            const isActive = activeSpreadsheetCell?.rowIndex === rowIdx && activeSpreadsheetCell?.colKey === 'waterPrev';
+                            const isFillPreview = dragFillRange && dragFillRange.colKey === 'waterPrev' && rowIdx >= Math.min(dragFillRange.startRow, dragFillRange.targetRow) && rowIdx <= Math.max(dragFillRange.startRow, dragFillRange.targetRow);
+                            return (
+                              <td className={`p-0 border border-slate-300 relative ${isActive ? 'ring-2 ring-indigo-600 ring-inset z-10' : ''} ${isFillPreview ? 'bg-indigo-100/70 border-indigo-500' : ''}`}>
+                                <input
+                                  type="text"
+                                  value={row.waterPrev}
+                                  onFocus={() => setActiveSpreadsheetCell({ rowIndex: rowIdx, colKey: 'waterPrev' })}
+                                  onClick={() => setActiveSpreadsheetCell({ rowIndex: rowIdx, colKey: 'waterPrev' })}
+                                  onChange={(e) => {
+                                    const v = e.target.value;
+                                    setMeterRows(prev => prev.map(r => r.roomId === row.roomId ? { ...r, waterPrev: v } : r));
+                                  }}
+                                  className="w-full h-8 px-2 text-center bg-transparent border-0 text-xs font-mono font-bold text-slate-700 focus:outline-none focus:bg-blue-50/50 focus:ring-1 focus:ring-blue-500"
+                                />
+                                {isActive && (
+                                  <div
+                                    data-testid="drag-fill-handle"
+                                    onPointerDown={(e) => handlePointerDownFillHandle(e, rowIdx, 'waterPrev')}
+                                    className="absolute -bottom-1 -right-1 w-2.5 h-2.5 bg-indigo-600 border border-white cursor-crosshair z-20 shadow-xs select-none"
+                                    title="ลากเพื่อเติมข้อมูลอัตโนมัติ"
+                                  />
+                                )}
+                              </td>
+                            );
+                          })()}
+                          {isWaterUnit && (() => {
+                            const isActive = activeSpreadsheetCell?.rowIndex === rowIdx && activeSpreadsheetCell?.colKey === 'waterCurr';
+                            const isFillPreview = dragFillRange && dragFillRange.colKey === 'waterCurr' && rowIdx >= Math.min(dragFillRange.startRow, dragFillRange.targetRow) && rowIdx <= Math.max(dragFillRange.startRow, dragFillRange.targetRow);
+                            return (
+                              <td className={`p-0 border border-slate-300 relative bg-blue-50/20 ${isActive ? 'ring-2 ring-indigo-600 ring-inset z-10' : ''} ${isFillPreview ? 'bg-indigo-100/70 border-indigo-500' : ''}`}>
+                                <input
+                                  type="text"
+                                  value={row.waterCurr}
+                                  onFocus={() => setActiveSpreadsheetCell({ rowIndex: rowIdx, colKey: 'waterCurr' })}
+                                  onClick={() => setActiveSpreadsheetCell({ rowIndex: rowIdx, colKey: 'waterCurr' })}
+                                  onChange={(e) => {
+                                    const v = e.target.value;
+                                    setMeterRows(prev => prev.map(r => r.roomId === row.roomId ? { ...r, waterCurr: v } : r));
+                                  }}
+                                  className="w-full h-8 px-2 text-center bg-transparent border-0 text-xs font-mono font-bold text-blue-950 focus:outline-none focus:bg-blue-50 focus:ring-1 focus:ring-blue-500"
+                                />
+                                {isActive && (
+                                  <div
+                                    data-testid="drag-fill-handle"
+                                    onPointerDown={(e) => handlePointerDownFillHandle(e, rowIdx, 'waterCurr')}
+                                    className="absolute -bottom-1 -right-1 w-2.5 h-2.5 bg-indigo-600 border border-white cursor-crosshair z-20 shadow-xs select-none"
+                                    title="ลากเพื่อเติมข้อมูลอัตโนมัติ"
+                                  />
+                                )}
+                              </td>
+                            );
+                          })()}
+                          {(() => {
+                            const isActive = activeSpreadsheetCell?.rowIndex === rowIdx && activeSpreadsheetCell?.colKey === 'peopleCount';
+                            const isFillPreview = dragFillRange && dragFillRange.colKey === 'peopleCount' && rowIdx >= Math.min(dragFillRange.startRow, dragFillRange.targetRow) && rowIdx <= Math.max(dragFillRange.startRow, dragFillRange.targetRow);
+                            return (
+                              <td className={`p-0 border border-slate-300 relative ${isActive ? 'ring-2 ring-indigo-600 ring-inset z-10' : ''} ${isFillPreview ? 'bg-indigo-100/70 border-indigo-500' : ''}`}>
+                                <input
+                                  type="number"
+                                  min={0}
+                                  value={row.peopleCount}
+                                  onFocus={() => setActiveSpreadsheetCell({ rowIndex: rowIdx, colKey: 'peopleCount' })}
+                                  onClick={() => setActiveSpreadsheetCell({ rowIndex: rowIdx, colKey: 'peopleCount' })}
+                                  onChange={(e) => {
+                                    const v = parseInt(e.target.value, 10);
+                                    setMeterRows(prev => prev.map(r => r.roomId === row.roomId ? { ...r, peopleCount: isNaN(v) ? 0 : v } : r));
+                                  }}
+                                  className="w-full h-8 px-2 text-center bg-transparent border-0 text-xs font-mono font-bold text-slate-800 focus:outline-none focus:bg-indigo-50/50 focus:ring-1 focus:ring-indigo-500"
+                                />
+                                {isActive && (
+                                  <div
+                                    data-testid="drag-fill-handle"
+                                    onPointerDown={(e) => handlePointerDownFillHandle(e, rowIdx, 'peopleCount')}
+                                    className="absolute -bottom-1 -right-1 w-2.5 h-2.5 bg-indigo-600 border border-white cursor-crosshair z-20 shadow-xs select-none"
+                                    title="ลากเพื่อเติมข้อมูลอัตโนมัติ"
+                                  />
+                                )}
+                              </td>
+                            );
+                          })()}
                         </tr>
                       ))}
                     </tbody>

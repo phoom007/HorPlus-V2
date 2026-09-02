@@ -920,7 +920,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
         const img = new Image();
         img.onload = () => {
           ctx.clearRect(0, 0, canvas.width, canvas.height);
-          ctx.drawImage(img, 0, 0);
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
         };
         img.src = formData.ownerSignatureUrl;
       }
@@ -934,8 +934,12 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
     if (!ctx) return;
     setIsDrawing(true);
     const rect = canvas.getBoundingClientRect();
-    const x = ('touches' in e) ? e.touches[0].clientX - rect.left : e.clientX - rect.left;
-    const y = ('touches' in e) ? e.touches[0].clientY - rect.top : e.clientY - rect.top;
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
+    const x = (clientX - rect.left) * scaleX;
+    const y = (clientY - rect.top) * scaleY;
     ctx.beginPath();
     ctx.moveTo(x, y);
   };
@@ -947,8 +951,12 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     const rect = canvas.getBoundingClientRect();
-    const x = ('touches' in e) ? e.touches[0].clientX - rect.left : e.clientX - rect.left;
-    const y = ('touches' in e) ? e.touches[0].clientY - rect.top : e.clientY - rect.top;
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
+    const x = (clientX - rect.left) * scaleX;
+    const y = (clientY - rect.top) * scaleY;
     ctx.lineWidth = 3;
     ctx.lineCap = 'round';
     ctx.strokeStyle = '#1e293b';
@@ -1465,12 +1473,16 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
       const provDormId = await ensureProvisionalDormitoryId();
 
       // 2. Upload Signature (Object storage path only - fail closed)
+      let uploadedSignatureRef = formData.ownerSignatureUrl;
       if (formData.ownerSignatureUrl) {
         if (formData.ownerSignatureUrl.startsWith('data:')) {
           const uploadRes = await onboardingClient.uploadSignature(provDormId, formData.ownerSignatureUrl);
           const safeRef = uploadRes?.data?.url || uploadRes?.url || uploadRes?.data?.objectKey || uploadRes?.objectKey;
           if (safeRef) {
-            setFormData(prev => ({ ...prev, ownerSignatureUrl: safeRef }));
+            uploadedSignatureRef = safeRef;
+            if (safeRef.startsWith('http')) {
+              setFormData(prev => ({ ...prev, ownerSignatureUrl: safeRef }));
+            }
           }
         }
       } else {
@@ -1587,23 +1599,23 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
           estimatedRoomCount: mappedRooms.length,
         },
         billing: {
-          dueDay: Number(formData.deposits.dueDateDay),
+          dueDay: Number(formData.deposits.dueDateDay) || 15,
           waterBillingType,
-          waterRate: String(formData.utilities.waterRate ?? 0),
+          waterRate: String(formData.utilities.waterRate ?? '0.00').replace(/,/g, '').trim() || '0.00',
           waterTierRates: waterTierRates || null,
           electricityBillingType: elecBillingType,
-          electricityRate: String(formData.utilities.electricRate ?? 0),
+          electricityRate: String(formData.utilities.electricRate ?? '0.00').replace(/,/g, '').trim() || '0.00',
           electricityTierRates: electricityTierRates || null,
-          commonFee: String(formData.utilities.commonFeeRate ?? 0),
+          commonFee: String(formData.utilities.commonFeeRate ?? '0.00').replace(/,/g, '').trim() || '0.00',
           commonFeeMode: formData.utilities.commonFeeMode || 'none',
-          internetFee: String(formData.utilities.internetRate ?? 0),
+          internetFee: String(formData.utilities.internetRate ?? '0.00').replace(/,/g, '').trim() || '0.00',
           internetFeeMode: formData.utilities.internetFeeMode || 'none',
-          parkingRate: String(formData.utilities.parkingFeeRate ?? 0),
+          parkingRate: String(formData.utilities.parkingFeeRate ?? '0.00').replace(/,/g, '').trim() || '0.00',
           parkingFeeMode: formData.utilities.parkingFeeMode || 'none',
           gracePeriodDays: formData.deposits.gracePeriodDays || 0,
           advanceRentMonths: formData.deposits.advanceRentMonths || 1,
-          lateFeeType: formData.deposits.lateFeeType || 'none',
-          lateFeeValue: String(formData.deposits.lateFeeAmount ?? 0),
+          lateFeeType: formData.deposits.lateFeeType === 'fixed_once' ? 'fixed' : (formData.deposits.lateFeeType || 'none'),
+          lateFeeValue: String(formData.deposits.lateFeeAmount ?? '0.00').replace(/,/g, '').trim() || '0.00',
           rentBillingType: 'monthly',
         },
         payment: {
@@ -1623,6 +1635,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
         promoCode: appliedPromo && validatedPromoCode ? validatedPromoCode : undefined,
         referralCode: isReferralBound && referralCodeInput ? referralCodeInput.trim() : undefined,
         coinApplied: coinToApply > 0 ? coinToApply : undefined,
+        ownerSignatureUrl: uploadedSignatureRef,
         petPolicy: {
           allowed: formData.petPolicy.allowed || 'none',
           allowedTypes: formData.petPolicy.allowedTypes || [],
@@ -1661,7 +1674,13 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
         window.location.href = '/owner/dashboard';
       }, 2800);
     } catch (e: any) {
-      setValidationError(e?.message || 'เกิดข้อผิดพลาดในการบันทึกข้อมูล');
+      const fieldErrors = e?.fieldErrors || e?.domainError?.details?.fieldErrors || e?.domainError?.details?.error?.fieldErrors || e?.response?.data?.fieldErrors;
+      let msg = e?.message || 'เกิดข้อผิดพลาดในการบันทึกข้อมูล';
+      if (Array.isArray(fieldErrors) && fieldErrors.length > 0) {
+        const details = fieldErrors.map((f: any) => `${f.field ? `${f.field}: ` : ''}${f.message || f.code}`).join(', ');
+        msg = `${msg}: ${details}`;
+      }
+      setValidationError(msg);
     }
   };
 
@@ -3172,15 +3191,22 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
               {/* Owner Electronic Signature */}
               <div className="bg-slate-50/60 p-4 sm:p-5 rounded-2xl border border-slate-100 space-y-3">
                 <div className="flex items-center justify-between flex-wrap gap-2">
-                  <h4 className="text-xs font-black text-slate-700 flex items-center gap-1.5 uppercase tracking-wide">
-                    <PenTool className="w-4 h-4 text-blue-600" /> ลายเซ็นเจ้าของหอพักสำหรับเอกสารสัญญาเช่า
-                  </h4>
+                  <div className="flex items-center gap-2">
+                    <h4 className="text-xs font-black text-slate-700 flex items-center gap-1.5 uppercase tracking-wide">
+                      <PenTool className="w-4 h-4 text-blue-600" /> ลายเซ็นเจ้าของหอพักสำหรับเอกสารสัญญาเช่า
+                    </h4>
+                    {formData.ownerSignatureUrl && (
+                      <span className="text-[10px] font-extrabold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                        บันทึกลายเซ็นแล้ว
+                      </span>
+                    )}
+                  </div>
                   <button
                     type="button"
                     onClick={clearCanvas}
                     className="text-[11px] font-bold text-rose-500 hover:text-rose-700 hover:bg-rose-50 border border-rose-100 px-2.5 py-1 rounded-xl transition-all cursor-pointer"
                   >
-                    ล้างลายเซ็น
+                    {formData.ownerSignatureUrl ? 'เซ็นใหม่ / ล้าง' : 'ล้างลายเซ็น'}
                   </button>
                 </div>
 

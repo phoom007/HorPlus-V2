@@ -859,6 +859,47 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
     staleTime: 5000,
   });
 
+  const { data: contractsData = [] } = useQuery({
+    queryKey: queryKeys.contracts(dormitoryId),
+    queryFn: async () => {
+      if (!dormitoryId) return [];
+      try {
+        const res = await httpRequest<any>('GET', `/contracts?dormitoryId=${dormitoryId}`, undefined, {
+          headers: { 'x-dormitory-id': dormitoryId },
+        });
+        if (Array.isArray(res)) return res;
+        if (res?.data && Array.isArray(res.data)) return res.data;
+        return [];
+      } catch {
+        return [];
+      }
+    },
+    enabled: !!dormitoryId,
+    staleTime: 60000,
+  });
+
+  // Partial Popover State (Anchored details inside yellow summary box)
+  const [openPartialPopoverId, setOpenPartialPopoverId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!openPartialPopoverId) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpenPartialPopoverId(null);
+    };
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest(`[data-partial-popover="${openPartialPopoverId}"]`)) {
+        setOpenPartialPopoverId(null);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [openPartialPopoverId]);
+
   // Daily Detail Modal State
   const [isDailyDetailOpen, setIsDailyDetailOpen] = useState(false);
   const [viewingDailyDetail, setViewingDailyDetail] = useState<DailyStayInvoice | null>(null);
@@ -1996,6 +2037,11 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
               const isDepositBill = b.billKind === 'DEPOSIT';
               const isRentBill = b.billKind === 'RENT';
 
+              const isDeposit = isDepositBill || b.items?.some((it: any) => it.type === 'DEPOSIT' || it.itemType === 'DEPOSIT' || (it.description || '').includes('ประกัน') || (it.description || '').includes('มัดจำ'));
+              const allContracts = contractsData.length > 0 ? contractsData : (queryClient.getQueryData<any[]>(queryKeys.contracts(dormitoryId)) || []);
+              const contract = allContracts.find((c: any) => (b.contractId && c.id === b.contractId) || (c.roomId === b.roomId && c.tenantId === b.tenantId));
+              const depositStartDate = (b as any).contractStartDate || (b as any).contract?.startDate || contract?.startDate || (b as any).provisionalRentalStartDate || b.dueDate;
+
               return (
                 <div key={b.id} className="bg-white rounded-3xl border border-slate-200/90 shadow-2xs hover:shadow-md transition-all p-5 flex flex-col justify-between space-y-4">
                   <div className="flex items-center justify-between">
@@ -2034,16 +2080,87 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                     </p>
                     <p className="text-[11px] text-slate-500 flex items-center gap-1">
                       <Calendar className="w-3 h-3 text-slate-400" />
-                      กำหนดชำระ: <span className="font-bold text-slate-700">{b.dueDate ? formatThaiDate(b.dueDate) : '-'}</span>
+                      {isDeposit ? (
+                        <>วันที่เริ่มเข้าพัก: <span className="font-bold text-slate-700">{depositStartDate ? formatThaiDate(depositStartDate) : '-'}</span></>
+                      ) : (
+                        <>กำหนดชำระ: <span className="font-bold text-slate-700">{b.dueDate ? formatThaiDate(b.dueDate) : '-'}</span></>
+                      )}
                     </p>
                   </div>
 
-                  {/* Items summary */}
+                  {/* Items summary & Partial details */}
                   <div className="text-[11px] text-slate-500 space-y-1 border-t border-slate-100 pt-2">
                     {(() => {
                       const sortedNonZero = sortCanonicalBillItems(b.items);
                       const count = sortedNonZero.length;
+                      const isPartial = Number(b.paidAmount || 0) > 0;
 
+                      // PARTIAL PAYMENT CARD: Replace inline section with compact popover trigger inside yellow summary
+                      if (isPartial) {
+                        return (
+                          <div
+                            data-partial-popover={b.id}
+                            className="bg-amber-50/90 border border-amber-200/90 rounded-2xl p-3 text-[11px] space-y-1.5 text-amber-950 relative"
+                          >
+                            <div className="flex justify-between items-center text-slate-600">
+                              <span>ยอดรวมเดิม:</span>
+                              <span className="font-semibold text-slate-800">{formatBaht(Number(b.totalAmount))}</span>
+                            </div>
+                            <div className="flex justify-between items-center text-emerald-700">
+                              <span className="font-medium">ชำระแล้ว:</span>
+                              <span className="font-bold">-{formatBaht(Number(b.paidAmount))}</span>
+                            </div>
+                            <div className="flex justify-between items-center text-amber-900 border-t border-amber-200/60 pt-1">
+                              <span className="font-bold">ยอดที่ต้องชำระ:</span>
+                              <span className="font-black text-amber-950">{formatBaht(amount)}</span>
+                            </div>
+
+                            {/* Anchored popover toggle button inside yellow summary */}
+                            <div className="pt-1 flex items-center justify-between">
+                              <button
+                                type="button"
+                                onClick={() => setOpenPartialPopoverId(openPartialPopoverId === b.id ? null : b.id)}
+                                className="text-[11px] font-extrabold text-amber-900 hover:text-amber-950 bg-amber-200/60 hover:bg-amber-200 px-2.5 py-1 rounded-lg transition-all flex items-center gap-1 cursor-pointer"
+                              >
+                                <span>
+                                  {openPartialPopoverId === b.id ? 'ซ่อนรายละเอียด' : `ดูรายละเอียด +${count}`}
+                                </span>
+                                {openPartialPopoverId === b.id ? (
+                                  <ChevronUp className="w-3.5 h-3.5" />
+                                ) : (
+                                  <ChevronDown className="w-3.5 h-3.5" />
+                                )}
+                              </button>
+                            </div>
+
+                            {/* Small Anchored Popover / Panel */}
+                            {openPartialPopoverId === b.id && (
+                              <div
+                                className="absolute left-0 right-0 top-full mt-1.5 z-30 bg-white border border-amber-300 rounded-2xl p-3 shadow-xl space-y-1.5 animate-in fade-in zoom-in-95 duration-100 text-xs"
+                              >
+                                <div className="flex items-center justify-between pb-1 border-b border-slate-100">
+                                  <span className="font-black text-slate-800 text-[11px]">รายการค่าใช้จ่าย</span>
+                                  <span className="text-[10px] text-slate-400 font-medium">({count} รายการ)</span>
+                                </div>
+                                <div className="space-y-1 max-h-48 overflow-y-auto">
+                                  {sortedNonZero.map((it, idx) => (
+                                    <div key={idx} className="flex justify-between items-center py-0.5">
+                                      <span className="truncate pr-2 text-slate-600 font-medium text-[11px]">
+                                        {formatCanonicalLineItemDescription(it)}
+                                      </span>
+                                      <span className="font-bold text-slate-900 shrink-0 font-mono text-[11px]">
+                                        {formatBaht(it.amount)}
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      }
+
+                      // NORMAL (NON-PARTIAL) BILL: Standard inline display
                       if (count === 0) {
                         return (
                           <div className="flex justify-between items-center">
@@ -2097,20 +2214,6 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                         </div>
                       );
                     })()}
-
-                    {/* Partial Bill Reconciliation Notice */}
-                    {Number(b.paidAmount || 0) > 0 && (
-                      <div className="bg-amber-50/70 border border-amber-200/80 rounded-xl p-2 mt-1.5 text-[10px] space-y-0.5 text-amber-900">
-                        <div className="flex justify-between">
-                          <span className="text-slate-500">ยอดรวมเดิม:</span>
-                          <span className="font-semibold text-slate-700">{formatBaht(Number(b.totalAmount))}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-emerald-600 font-medium">ชำระแล้ว:</span>
-                          <span className="font-semibold text-emerald-600">-{formatBaht(Number(b.paidAmount))}</span>
-                        </div>
-                      </div>
-                    )}
                   </div>
 
                   <div className="flex items-baseline justify-between pt-1 border-t border-slate-100">
@@ -2209,13 +2312,20 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                       return unpaidItems.length > 0 ? (
                         unpaidItems.map((it: any, idx: number) => (
                           <div key={idx} className="flex justify-between items-center">
-                            <span className="truncate pr-1 text-slate-500 font-medium">{it.description || (it.itemType === 'DAILY_RENT' ? 'ค่าเช่ารายวัน' : it.itemType)}:</span>
+                            <span className="truncate pr-1 text-slate-500 font-medium">
+                              {formatCanonicalLineItemDescription({
+                                description: it.description || (it.itemType === 'DAILY_RENT' ? 'ค่าเช่า (รายวัน)' : it.itemType),
+                                type: it.itemType === 'DAILY_RENT' ? 'rent' : it.itemType === 'DAILY_DEPOSIT' ? 'deposit' : it.itemType,
+                                quantity: it.quantity,
+                                unitPrice: it.unitPrice,
+                              }, { rentCycle: 'daily' })}:
+                            </span>
                             <span className="font-semibold text-slate-700 shrink-0">{formatBaht(Number(it.amount))}</span>
                           </div>
                         ))
                       ) : (
                         <div className="flex justify-between items-center">
-                          <span className="text-slate-500">ค่าเช่ารายวัน:</span>
+                          <span className="text-slate-500">ค่าเช่า (รายวัน):</span>
                           <span className="font-semibold text-slate-700">{formatBaht(amount)}</span>
                         </div>
                       );
@@ -2327,18 +2437,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                   </div>
 
                   <div className="flex items-baseline justify-between pt-1 border-t border-slate-100">
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-xs text-slate-400 font-bold">ยอดชำระสำเร็จ</span>
-                      {group.payments.length > 1 && (
-                        <button
-                          type="button"
-                          onClick={() => setViewingGroupDetail(group)}
-                          className="text-[10px] text-emerald-600 hover:underline font-semibold cursor-pointer"
-                        >
-                          ({group.payments.length} รายการ)
-                        </button>
-                      )}
-                    </div>
+                    <span className="text-xs text-slate-400 font-bold">ยอดชำระสำเร็จ</span>
                     <span className="text-lg font-black text-emerald-600">{formatBaht(group.totalAmount)}</span>
                   </div>
 
