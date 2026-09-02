@@ -289,7 +289,7 @@ export const TieredRateEditor: React.FC<TieredRateEditorProps> = ({
         cardBg: 'bg-white dark:bg-slate-900',
         badge: 'bg-sky-100 dark:bg-sky-900/50 text-sky-800 dark:text-sky-300 border border-sky-200 dark:border-sky-800',
         headerIcon: <Droplet className="w-4 h-4 text-sky-500 shrink-0" />,
-        title: 'อัตราค่าน้ำประปาแบบขั้นบันได',
+        title: 'อัตราค่าน้ำแบบขั้นบันได',
         unitLabel: 'หน่วยน้ำ',
         accentBtn: 'bg-sky-600 hover:bg-sky-700 text-white focus:ring-sky-500',
         textAccent: 'text-sky-600 dark:text-sky-400',

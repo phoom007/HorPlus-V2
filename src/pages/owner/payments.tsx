@@ -22,7 +22,12 @@ import {
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Modal, formatBaht, formatThaiDate, formatCycleCode, PrintView, formatBillingQuantity, formatBillingRate, resolveBillingDisplayUnit, isNonZeroAmount, filterNonZeroBillItems } from '../../components/GlobalComponents';
 import { TierBreakdownView } from '../../components/bills/TierBreakdownView';
-import { formatTierRateLabel } from '../../utils/billPresentation';
+import {
+  formatTierRateLabel,
+  formatCanonicalLineItemDescription,
+  sortCanonicalBillItems,
+  formatMoneyPlain,
+} from '../../utils/billPresentation';
 import { LineNotificationModal, LineIcon } from '../../components/LineNotificationModal';
 import { Bill, Tenant, Room } from '../../types';
 import { queryKeys } from '../../lib/queryClient';
@@ -548,6 +553,65 @@ export function buildViewingReceipt(
     billTotal,
     allocatedAmount,
     items,
+  };
+}
+
+/**
+ * Maps a settled DailyStayInvoice into the authoritative Receipt View state.
+ * 1 Daily Stay = 1 Final Receipt when fully settled.
+ */
+export function buildViewingDailyReceipt(
+  inv: DailyStayInvoice,
+  getRoomNum: (id?: string | null) => string = (id) => id || '',
+  dormitoryInfo?: { name?: string; address?: string; phone?: string; taxId?: string }
+): any {
+  if (!inv) return null;
+  const stay = inv.dailyStay;
+  const roomNum = stay?.room?.roomNumber || getRoomNum(stay?.roomId) || 'ไม่ระบุ';
+  const tenantName = stay?.applicantFullName || stay?.tenant?.displayName || 'ผู้พักรายวัน';
+  const totalAmount = Number(inv.totalAgreedAmount || 0);
+
+  const nonZeroItems = filterNonZeroBillItems(inv.items);
+  const items = nonZeroItems.length > 0
+    ? nonZeroItems.map((it: any) => ({
+        description: it.description || it.type || '-',
+        quantity: it.quantity,
+        unit: resolveBillingDisplayUnit({ unit: it.unit, type: it.type }),
+        unitPrice: it.unitPrice,
+        amount: Number(it.amount),
+        metadata: it.metadata,
+        type: it.type,
+      }))
+    : [
+        {
+          description: `การเข้าพักรายวัน (${inv.invoiceNumber})`,
+          amount: totalAmount,
+        },
+      ];
+
+  const receiptNumber = inv.invoiceNumber
+    ? (inv.invoiceNumber.startsWith('DINV-') ? `RC-${inv.invoiceNumber.replace(/^DINV-/, '')}` : inv.invoiceNumber)
+    : `RC-DAILY-${inv.id?.slice(0, 8)}`;
+
+  return {
+    receiptNumber,
+    roomNumber: roomNum,
+    tenantName,
+    totalAmount,
+    paidAt: inv.updatedAt || inv.issuedAt,
+    paymentMethod: 'เงินสด',
+    cycleLabel: 'การเข้าพักรายวัน',
+    billNumber: inv.invoiceNumber,
+    dormitoryName: dormitoryInfo?.name || 'หอพัก HorPlus',
+    dormitoryAddress: dormitoryInfo?.address || null,
+    dormitoryPhone: dormitoryInfo?.phone || null,
+    dormitoryTaxId: dormitoryInfo?.taxId || null,
+    receiverName: 'ฝ่ายการเงิน หอพัก HorPlus',
+    items,
+    isMultiBill: false,
+    billGroups: [],
+    isHistorical: false,
+    originalPaymentDateKnown: true,
   };
 }
 
@@ -1368,29 +1432,6 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
     cashTimersRef.current[inv.id] = timer;
   };
 
-  const handleOpenDailyReceipt = (inv: DailyStayInvoice) => {
-    const roomNum = inv.dailyStay?.room?.roomNumber || getRoomNum(inv.dailyStay?.roomId) || '-';
-    const tenantName = inv.dailyStay?.applicantFullName || inv.dailyStay?.tenant?.displayName || 'ผู้พักรายวัน';
-    const items = (inv.items || []).map(it => ({
-      description: it.description || (it.itemType === 'DAILY_RENT' ? 'ค่าเช่ารายวัน' : it.itemType),
-      amount: Number(it.amount),
-      quantity: 1,
-      unitPrice: Number(it.amount),
-    }));
-
-    setViewingReceipt({
-      receiptNumber: inv.invoiceNumber,
-      roomNumber: roomNum,
-      tenantName,
-      totalAmount: Number(inv.totalAgreedAmount || 0),
-      paidAt: (inv.updatedAt ? new Date(inv.updatedAt) : new Date(inv.issuedAt)).toISOString(),
-      paymentMethod: 'เงินสด',
-      receiverName: currentAuthUserName,
-      items,
-    });
-    setIsReceiptOpen(true);
-  };
-
   /* -------------------------------------------------------------------------
    * Server Mutation Handlers
    * ------------------------------------------------------------------------- */
@@ -1636,6 +1677,26 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
       getCycleCodeForCycleId,
       (id) => getRoomNum(id),
       (id) => getTenantName(id)
+    );
+    if (!receiptData) {
+      triggerToast('ไม่พบข้อมูลใบเสร็จรับเงิน กรุณาโหลดข้อมูลใหม่');
+      return;
+    }
+
+    setViewingReceipt(receiptData);
+    setIsReceiptOpen(true);
+  };
+
+  const handleOpenDailyReceipt = (inv: DailyStayInvoice) => {
+    const receiptData = buildViewingDailyReceipt(
+      inv,
+      (id) => getRoomNum(id),
+      selectedDormitory ? {
+        name: selectedDormitory.name,
+        address: selectedDormitory.addressLine1,
+        phone: selectedDormitory.phone,
+        taxId: (selectedDormitory as any).taxId,
+      } : undefined
     );
     if (!receiptData) {
       triggerToast('ไม่พบข้อมูลใบเสร็จรับเงิน กรุณาโหลดข้อมูลใหม่');
@@ -1965,9 +2026,8 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                   {/* Items summary */}
                   <div className="text-[11px] text-slate-500 space-y-1 border-t border-slate-100 pt-2">
                     {(() => {
-                      const nonZeroItems = filterNonZeroBillItems(b.items);
-                      const isExpanded = expandedBillDetails.has(b.id);
-                      const count = nonZeroItems.length;
+                      const sortedNonZero = sortCanonicalBillItems(b.items);
+                      const count = sortedNonZero.length;
 
                       if (count === 0) {
                         return (
@@ -1978,33 +2038,25 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                         );
                       }
 
+                      // 1 to 3 items: always show all items directly; NO detail button / toggle
                       if (count <= 3) {
                         return (
-                          <div>
-                            {isExpanded && (
-                              <div className="space-y-1 mb-1.5">
-                                {nonZeroItems.map((it, idx) => (
-                                  <div key={idx} className="flex justify-between items-center">
-                                    <span className="truncate pr-1 text-slate-500 font-medium">{formatItemDescription(it.description)}:</span>
-                                    <span className="font-semibold text-slate-700 shrink-0">{formatBahtDash(it.amount)}</span>
-                                  </div>
-                                ))}
+                          <div className="space-y-1 mb-1.5">
+                            {sortedNonZero.map((it, idx) => (
+                              <div key={idx} className="flex justify-between items-center">
+                                <span className="truncate pr-1 text-slate-500 font-medium">
+                                  {formatCanonicalLineItemDescription(it)}:
+                                </span>
+                                <span className="font-semibold text-slate-700 shrink-0">{formatBaht(it.amount)}</span>
                               </div>
-                            )}
-                            <button
-                              type="button"
-                              onClick={() => toggleBillDetail(b.id)}
-                              className="text-[11px] font-bold text-indigo-600 hover:text-indigo-800 flex items-center gap-1 pt-0.5 cursor-pointer"
-                            >
-                              <span>{isExpanded ? 'ซ่อนรายละเอียด' : `ดูรายละเอียด +${count}`}</span>
-                              {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-                            </button>
+                            ))}
                           </div>
                         );
                       }
 
-                      // count > 3
-                      const visibleItems = isExpanded ? nonZeroItems : nonZeroItems.slice(0, 3);
+                      // More than 3 items: collapsed shows first 3 + button; expanded shows all + button
+                      const isExpanded = expandedBillDetails.has(b.id);
+                      const visibleItems = isExpanded ? sortedNonZero : sortedNonZero.slice(0, 3);
                       const hiddenCount = count - 3;
 
                       return (
@@ -2012,8 +2064,10 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                           <div className="space-y-1 mb-1.5">
                             {visibleItems.map((it, idx) => (
                               <div key={idx} className="flex justify-between items-center">
-                                <span className="truncate pr-1 text-slate-500 font-medium">{formatItemDescription(it.description)}:</span>
-                                <span className="font-semibold text-slate-700 shrink-0">{formatBahtDash(it.amount)}</span>
+                                <span className="truncate pr-1 text-slate-500 font-medium">
+                                  {formatCanonicalLineItemDescription(it)}:
+                                </span>
+                                <span className="font-semibold text-slate-700 shrink-0">{formatBaht(it.amount)}</span>
                               </div>
                             ))}
                           </div>
@@ -2288,7 +2342,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                         {group.isHistorical ? 'ประวัติเดิม' : 'ไม่มีสลิป'}
                       </div>
                     )}
-                    {group.payments.length === 1 ? (
+                    {group.payments.length >= 1 ? (
                       <button
                         type="button"
                         onClick={() => handleOpenReceipt(group.payments[0])}
@@ -2296,15 +2350,6 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                       >
                         <Printer className="w-4 h-4" />
                         ใบเสร็จรับเงิน
-                      </button>
-                    ) : group.payments.length > 1 ? (
-                      <button
-                        type="button"
-                        onClick={() => setViewingGroupDetail(group)}
-                        className="py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-xs"
-                      >
-                        <FileText className="w-4 h-4" />
-                        ดูใบเสร็จ ({group.payments.length})
                       </button>
                     ) : (
                       <div className="py-2.5 bg-slate-50 text-slate-400 font-bold text-xs rounded-xl flex items-center justify-center border border-slate-100">
@@ -2316,7 +2361,6 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
               );
             })}
             {filterConsolidatedDailyGroupsByQuery(consolidatedPaidDailyGroups).map((group) => {
-              const isSingle = group.invoices.length === 1;
               const firstInv = group.invoices[0];
 
               return (
@@ -2345,37 +2389,24 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                     </div>
                   </div>
 
-                  {/* Invoices summary */}
-                  <div className="text-[11px] text-slate-500 space-y-1 border-t border-slate-100 pt-2">
-                    {group.invoices.map((inv, idx) => (
-                      <div key={inv.id || idx} className="flex justify-between items-center text-xs">
-                        <span className="truncate pr-1 text-slate-600 font-medium">
-                          {inv.invoiceNumber || `รายการเข้าพัก #${idx + 1}`}:
-                        </span>
-                        <span className="font-semibold text-slate-700 shrink-0">{formatBaht(Number(inv.totalAgreedAmount || 0))}</span>
-                      </div>
-                    ))}
-                  </div>
-
                   <div className="flex items-baseline justify-between pt-1 border-t border-slate-100">
                     <span className="text-xs text-slate-400 font-bold">ยอดชำระสำเร็จรวม</span>
                     <span className="text-lg font-black text-emerald-600">{formatBaht(group.totalAmount)}</span>
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (isSingle) {
-                        handleOpenDailyDetail(firstInv);
-                      } else {
-                        setViewingDailyGroupDetail(group);
-                      }
-                    }}
-                    className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-xs"
-                  >
-                    <FileText className="w-4 h-4" />
-                    {isSingle ? 'รายละเอียดการชำระเงิน' : `รายละเอียด (${group.invoices.length} รายการ)`}
-                  </button>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="py-2.5 bg-slate-50 text-slate-400 font-bold text-xs rounded-xl flex items-center justify-center border border-slate-100">
+                      ไม่มีสลิป
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleOpenDailyReceipt(firstInv)}
+                      className="py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-xs"
+                    >
+                      <Printer className="w-4 h-4" />
+                      ใบเสร็จรับเงิน
+                    </button>
+                  </div>
                 </div>
               );
             })}
@@ -2649,12 +2680,23 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
             <div className="space-y-5 text-xs text-slate-900 font-sans max-w-xl mx-auto leading-relaxed">
               <div className="flex justify-between items-start border-b border-slate-300 pb-4">
                 <div className="flex items-center gap-2.5">
-                  <div className="p-2 bg-indigo-600 text-white rounded-xl shrink-0">
-                    <Building className="w-5 h-5" />
+                  <div className="w-10 h-10 rounded-xl overflow-hidden border border-slate-200 bg-slate-50 flex items-center justify-center shrink-0">
+                    <img
+                      src={selectedDormitory?.id ? `/api/v1/dormitories/${selectedDormitory.id}/logo` : '/favicon.ico'}
+                      alt="Logo"
+                      className="w-full h-full object-contain"
+                      onError={(e) => {
+                        (e.target as HTMLElement).style.display = 'none';
+                      }}
+                    />
                   </div>
                   <div>
-                    <h4 className="font-extrabold text-slate-900 text-sm leading-tight">หอพักฮอร์สมาร์ท (HorPlus)</h4>
-                    <p className="text-[11px] text-slate-500 font-medium mt-0.5">โทร. 081-234-5678</p>
+                    <h4 className="font-extrabold text-slate-900 text-sm leading-tight">
+                      {selectedDormitory?.name || viewingReceipt.dormitoryName || 'หอพัก HorPlus'}
+                    </h4>
+                    <p className="text-[11px] text-slate-500 font-medium mt-0.5">
+                      {selectedDormitory?.phone || viewingReceipt.dormitoryPhone ? `โทร. ${selectedDormitory?.phone || viewingReceipt.dormitoryPhone}` : 'โทร. 081-234-5678'}
+                    </p>
                   </div>
                 </div>
                 <div className="text-right">
@@ -2707,7 +2749,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                           {group.items.map((it, idx) => (
                             <tr key={idx}>
                               <td className="p-2 text-slate-800 font-medium align-top">
-                                <div>{formatItemDescription(it.description)}</div>
+                                <div>{formatCanonicalLineItemDescription(it)}</div>
                                 <TierBreakdownView metadata={it.metadata} unit={it.unit} isPrint />
                               </td>
                               <td className="p-2 text-center text-slate-600 font-medium align-top">{formatBillingQuantity(it.quantity, it.unit)}</td>
@@ -2759,7 +2801,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                         {viewingReceipt.items?.map((it, idx) => (
                           <tr key={idx}>
                             <td className="p-3 text-slate-800 font-medium align-top">
-                              <div>{formatItemDescription(it.description)}</div>
+                              <div>{formatCanonicalLineItemDescription(it)}</div>
                               <TierBreakdownView metadata={it.metadata} unit={it.unit} isPrint />
                             </td>
                             <td className="p-3 text-center text-slate-600 font-medium align-top">{formatBillingQuantity(it.quantity, it.unit)}</td>

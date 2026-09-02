@@ -353,9 +353,12 @@ export function renderReceiptHtml(receiptRecord: any): string {
     <button onclick="window.print()" style="padding: 8px 16px; background: #4f46e5; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold;">พิมพ์ใบเสร็จ (Print Receipt)</button>
   </div>
   ${receiptRecord.isVoided ? `<div class="void-banner">ยกเลิกแล้ว (VOIDED): ${escapeHTML(receiptRecord.voidReason || 'ไม่มีระบุเหตุผล')}</div>` : ''}
-  <div class="header">
-    <h1>ใบเสร็จรับเงิน (RECEIPT)</h1>
-    <p>เลขที่ใบเสร็จ: ${escapeHTML(receiptRecord.receiptNumber)}</p>
+  <div class="header" style="display: flex; align-items: center; justify-content: center; gap: 16px; margin-bottom: 24px;">
+    ${receiptRecord.dormitoryId ? `<img src="/api/v1/dormitories/${escapeHTML(receiptRecord.dormitoryId)}/logo" alt="Dormitory Logo" style="max-height: 56px; max-width: 140px; object-fit: contain;" onerror="this.style.display='none'" />` : ''}
+    <div>
+      <h1 style="margin: 0; color: #4338ca; font-size: 24px;">ใบเสร็จรับเงิน (RECEIPT)</h1>
+      <p style="margin: 4px 0 0; color: #64748b; font-size: 14px; font-weight: bold;">เลขที่ใบเสร็จ: ${escapeHTML(receiptRecord.receiptNumber)}</p>
+    </div>
   </div>
   <div class="meta-grid">
     <div class="meta-card">
@@ -399,7 +402,7 @@ export function renderReceiptHtml(receiptRecord: any): string {
                 <tr>
                   <td>${idx + 1}</td>
                   <td>
-                    <div>${escapeHTML(i.description)}</div>
+                    <div>${escapeHTML(String(i.description || '').replace(/น้ำประปา/g, 'น้ำ'))}</div>
                     ${renderTierBreakdownHtml(i.metadata, i.unit)}
                   </td>
                   <td class="num">${escapeHTML(formatQuantityHtml(i.quantity, i.unit))}</td>
@@ -445,7 +448,7 @@ export function renderReceiptHtml(receiptRecord: any): string {
             <tr>
               <td>${idx + 1}</td>
               <td>
-                <div>${escapeHTML(i.description)}</div>
+                <div>${escapeHTML(String(i.description || '').replace(/น้ำประปา/g, 'น้ำ'))}</div>
                 ${renderTierBreakdownHtml(i.metadata, i.unit)}
               </td>
               <td class="num">${escapeHTML(formatQuantityHtml(i.quantity, i.unit))}</td>

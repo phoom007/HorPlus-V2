@@ -1519,13 +1519,13 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   };
 
   const getTemplateFormatString = (mode: 'FULL' | 'METER_ONLY' = templateMode) => {
-    const sampleBld = meterRows[0]?.buildingCode || "A";
+    const rawBld = meterRows[0]?.buildingCode || "A";
+    const sampleBld = rawBld.replace(/^BLD-/, '').replace(/^อาคาร\s*/, '') || "A";
     const sampleRoom = meterRows[0]?.roomNumber || "101";
     const sampleIdent = `${sampleBld} ${sampleRoom}`;
     const sampleElec = formatMeterReadingDisplay(meterRows[0]?.elecPrev || 500);
     const sampleWater = formatMeterReadingDisplay(meterRows[0]?.waterPrev || 500);
     const samplePeople = formatCountDisplay(meterRows[0]?.peopleCount ?? 0);
-    const sampleOverdue = formatMeterReadingDisplay(meterRows[0]?.overdueAmount || 50);
 
     if (mode === 'METER_ONLY') {
       if (isElecUnit && isWaterUnit) {
@@ -1538,13 +1538,13 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     }
 
     if (isElecUnit && isWaterUnit) {
-      return `${sampleIdent} : ไฟ ${sampleElec} : น้ำ ${sampleWater} : ${samplePeople} คน : ค้าง ${sampleOverdue}`;
+      return `${sampleIdent} : ไฟ ${sampleElec} : น้ำ ${sampleWater} : ${samplePeople} คน`;
     } else if (isElecUnit && !isWaterUnit) {
-      return `${sampleIdent} : ไฟ ${sampleElec} : ${samplePeople} คน : ค้าง ${sampleOverdue}`;
+      return `${sampleIdent} : ไฟ ${sampleElec} : ${samplePeople} คน`;
     } else if (!isElecUnit && isWaterUnit) {
-      return `${sampleIdent} : น้ำ ${sampleWater} : ${samplePeople} คน : ค้าง ${sampleOverdue}`;
+      return `${sampleIdent} : น้ำ ${sampleWater} : ${samplePeople} คน`;
     } else {
-      return `${sampleIdent} : ${samplePeople} คน : ค้าง ${sampleOverdue}`;
+      return `${sampleIdent} : ${samplePeople} คน`;
     }
   };
 
@@ -1556,7 +1556,8 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     });
 
     return sortedRows.map(row => {
-      const bCode = row.buildingCode || 'A';
+      const rawBld = row.buildingCode || 'A';
+      const bCode = rawBld.replace(/^BLD-/, '').replace(/^อาคาร\s*/, '') || 'A';
       const parts = [`${bCode} ${row.roomNumber}`];
       if (isElecUnit) {
         parts.push(`ไฟ ${formatMeterReadingDisplay(row.elecPrev)}`);
@@ -1569,11 +1570,6 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         const roomCtx = previewContext?.rooms?.find(r => r.roomId === row.roomId);
         const householdCount = freshCount !== undefined ? freshCount : (roomCtx?.currentHouseholdPeopleCount !== undefined ? roomCtx.currentHouseholdPeopleCount : row.peopleCount);
         parts.push(`${formatCountDisplay(householdCount)} คน`);
-        if (Number(row.overdueAmount) > 0) {
-          parts.push(`ค้าง ${formatMeterReadingDisplay(row.overdueAmount)}`);
-        } else {
-          parts.push(`ค้าง `);
-        }
       }
       return parts.join(' : ');
     }).join('\n');
@@ -1588,17 +1584,19 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       const tokens = trimmed.split(/\s+/);
 
       if (tokens.length >= 2) {
-        let bCode = tokens[0].toUpperCase().replace(/^อาคาร/, '');
+        let bCode = tokens[0].toUpperCase().replace(/^BLD-/, '').replace(/^อาคาร\s*/, '');
         let rNum = tokens.slice(1).join(' ');
         if (!bCode && tokens[0].startsWith('อาคาร') && tokens.length >= 3) {
-          bCode = tokens[1].toUpperCase();
+          bCode = tokens[1].toUpperCase().replace(/^BLD-/, '').replace(/^อาคาร\s*/, '');
           rNum = tokens.slice(2).join(' ');
         }
         if (bCode) {
-          const matched = meterRows.find(r =>
-            (r.buildingCode?.toUpperCase() === bCode || r.buildingName?.toUpperCase().replace(/^อาคาร\s*/, '') === bCode) &&
-            r.roomNumber.toLowerCase() === rNum.toLowerCase()
-          );
+          const matched = meterRows.find(r => {
+            const rB = (r.buildingCode || '').toUpperCase().replace(/^BLD-/, '').replace(/^อาคาร\s*/, '');
+            const rName = (r.buildingName || '').toUpperCase().replace(/^BLD-/, '').replace(/^อาคาร\s*/, '');
+            return (rB === bCode || rName === bCode) &&
+              r.roomNumber.toLowerCase() === rNum.toLowerCase();
+          });
           if (matched) return matched;
         }
       }
@@ -1629,8 +1627,6 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       let waterCurr = row.waterCurr;
       let elecCurr = row.elecCurr;
       let peopleCount = row.peopleCount;
-      let overdueAmount = row.overdueAmount;
-      let otherFees = [...(row.otherFees || [])];
 
       parts.slice(1).forEach(part => {
         const trimmedPart = part.trim();
@@ -1645,49 +1641,18 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         } else if (trimmedPart.includes('คน')) {
           const match = trimmedPart.match(/\d+/);
           if (match) peopleCount = normalizeSingleDigitCount(match[0]);
-        } else if (trimmedPart.startsWith('ค้างชำระ') || trimmedPart.startsWith('ค้าง')) {
-          // Alias rule: "ค้าง <amount>" or "ค้างชำระ <amount>" -> description = 'ค้างชำระ', amount = <amount>
-          const match = trimmedPart.match(/\d+(\.\d{1,2})?/);
-          if (match) {
-            const amt = match[0];
-            const desc = 'ค้างชำระ';
-            const existingIdx = otherFees.findIndex(f => f.description === desc);
-            if (existingIdx >= 0) {
-              otherFees[existingIdx] = { ...otherFees[existingIdx], amount: amt };
-            } else {
-              otherFees.push({ description: desc, amount: amt });
-            }
-          }
-        } else {
-          // Arbitrary other fee: e.g. "ค่าทำความสะอาด 50", "ค่าปรับ 100"
-          const numMatch = trimmedPart.match(/(\d+(\.\d{1,2})?)$/);
-          if (numMatch) {
-            const amt = numMatch[1];
-            const desc = trimmedPart.substring(0, trimmedPart.length - amt.length).trim();
-            if (desc) {
-              const existingIdx = otherFees.findIndex(f => f.description.toLowerCase() === desc.toLowerCase());
-              if (existingIdx >= 0) {
-                otherFees[existingIdx] = { ...otherFees[existingIdx], amount: amt };
-              } else {
-                otherFees.push({ description: desc, amount: amt });
-              }
-            }
-          }
         }
       });
 
       if (waterCurr !== row.waterCurr) newFlashing[`${row.roomId}-waterCurr`] = true;
       if (elecCurr !== row.elecCurr) newFlashing[`${row.roomId}-elecCurr`] = true;
       if (peopleCount !== row.peopleCount) newFlashing[`${row.roomId}-peopleCount`] = true;
-      if (overdueAmount !== row.overdueAmount) newFlashing[`${row.roomId}-overdueAmount`] = true;
 
       return {
         ...row,
         waterCurr,
         elecCurr,
         peopleCount,
-        overdueAmount,
-        otherFees,
       };
     });
 
@@ -3778,9 +3743,9 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
             </div>
 
             {isSpreadsheetMode ? (
-              /* Spreadsheet / Excel Grid Mode */
+              /* Spreadsheet / Excel Connected Grid Mode */
               <div
-                className="flex flex-col gap-2 h-[340px] overflow-hidden border border-gray-200 rounded-2xl bg-white shadow-2xs"
+                className="flex flex-col gap-2 h-[340px] overflow-hidden border border-slate-300 rounded-2xl bg-white shadow-2xs"
                 onPaste={(e) => {
                   const text = e.clipboardData.getData('text');
                   if (!text) return;
@@ -3794,26 +3759,38 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                     if (cells.length >= 2) {
                       let bCode = cells[0];
                       let rNum = cells[1];
-                      let elecVal = cells[3] !== undefined ? cells[3] : cells[2];
-                      let waterVal = cells[5] !== undefined ? cells[5] : cells[4];
-                      let peopleVal = cells[6] !== undefined ? cells[6] : undefined;
+                      let elecPrevVal = cells[2];
+                      let elecCurrVal = cells[3];
+                      let waterPrevVal = cells[4];
+                      let waterCurrVal = cells[5];
+                      let peopleVal = cells[6];
 
-                      let rowIdx = updated.findIndex(r =>
-                        (r.buildingCode?.toUpperCase() === bCode.toUpperCase() || r.buildingName?.toLowerCase() === bCode.toLowerCase()) &&
-                        r.roomNumber.toLowerCase() === rNum.toLowerCase()
-                      );
+                      const normB = bCode.toUpperCase().replace(/^BLD-/, '').replace(/^อาคาร\s*/, '');
+
+                      let rowIdx = updated.findIndex(r => {
+                        const rB = (r.buildingCode || '').toUpperCase().replace(/^BLD-/, '').replace(/^อาคาร\s*/, '');
+                        const rName = (r.buildingName || '').toUpperCase().replace(/^BLD-/, '').replace(/^อาคาร\s*/, '');
+                        return (rB === normB || rName === normB) &&
+                          r.roomNumber.toLowerCase() === rNum.toLowerCase();
+                      });
+
                       if (rowIdx < 0) {
                         rowIdx = updated.findIndex(r => r.roomNumber.toLowerCase() === bCode.toLowerCase());
                         if (rowIdx >= 0) {
-                          elecVal = cells[1];
-                          waterVal = cells[2];
-                          peopleVal = cells[3];
+                          elecPrevVal = cells[1];
+                          elecCurrVal = cells[2];
+                          waterPrevVal = cells[3];
+                          waterCurrVal = cells[4];
+                          peopleVal = cells[5];
                         }
                       }
+
                       if (rowIdx >= 0) {
                         matchCount++;
-                        if (elecVal !== undefined && elecVal !== '') updated[rowIdx].elecCurr = elecVal;
-                        if (waterVal !== undefined && waterVal !== '') updated[rowIdx].waterCurr = waterVal;
+                        if (elecPrevVal !== undefined && elecPrevVal !== '') updated[rowIdx].elecPrev = elecPrevVal;
+                        if (elecCurrVal !== undefined && elecCurrVal !== '') updated[rowIdx].elecCurr = elecCurrVal;
+                        if (waterPrevVal !== undefined && waterPrevVal !== '') updated[rowIdx].waterPrev = waterPrevVal;
+                        if (waterCurrVal !== undefined && waterCurrVal !== '') updated[rowIdx].waterCurr = waterCurrVal;
                         if (peopleVal !== undefined && peopleVal !== '') updated[rowIdx].peopleCount = parseInt(peopleVal, 10) || 0;
                       }
                     }
@@ -3826,27 +3803,42 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                 }}
               >
                 <div className="overflow-x-auto overflow-y-auto h-full">
-                  <table className="w-full text-left text-xs border-collapse font-sans">
-                    <thead className="bg-slate-50 text-slate-700 font-bold sticky top-0 border-b border-gray-200 select-none">
+                  <table className="w-full text-left text-xs border-collapse border border-slate-300 font-sans">
+                    <thead className="bg-slate-100 text-slate-800 font-extrabold sticky top-0 border-b border-slate-300 select-none">
                       <tr>
-                        <th className="py-2.5 px-3 whitespace-nowrap">อาคาร</th>
-                        <th className="py-2.5 px-3 whitespace-nowrap">ห้อง</th>
-                        {isElecUnit && <th className="py-2.5 px-3 whitespace-nowrap">มิเตอร์ไฟเดิม</th>}
-                        {isElecUnit && <th className="py-2.5 px-3 whitespace-nowrap bg-indigo-50/70 text-indigo-900">มิเตอร์ไฟใหม่</th>}
-                        {isWaterUnit && <th className="py-2.5 px-3 whitespace-nowrap">มิเตอร์น้ำเดิม</th>}
-                        {isWaterUnit && <th className="py-2.5 px-3 whitespace-nowrap bg-blue-50/70 text-blue-900">มิเตอร์น้ำใหม่</th>}
-                        <th className="py-2.5 px-3 whitespace-nowrap">จำนวนคน</th>
-                        <th className="py-2.5 px-3 whitespace-nowrap">ค้างชำระ</th>
+                        <th className="py-2 px-2.5 whitespace-nowrap border border-slate-300 text-center w-16">อาคาร</th>
+                        <th className="py-2 px-2.5 whitespace-nowrap border border-slate-300 text-center w-20">ห้อง</th>
+                        {isElecUnit && <th className="py-2 px-2.5 whitespace-nowrap border border-slate-300 text-center">มิเตอร์ไฟเดิม</th>}
+                        {isElecUnit && <th className="py-2 px-2.5 whitespace-nowrap border border-slate-300 text-center bg-indigo-50 text-indigo-900">มิเตอร์ไฟใหม่</th>}
+                        {isWaterUnit && <th className="py-2 px-2.5 whitespace-nowrap border border-slate-300 text-center">มิเตอร์น้ำเดิม</th>}
+                        {isWaterUnit && <th className="py-2 px-2.5 whitespace-nowrap border border-slate-300 text-center bg-blue-50 text-blue-900">มิเตอร์น้ำใหม่</th>}
+                        <th className="py-2 px-2.5 whitespace-nowrap border border-slate-300 text-center w-20">จำนวนคน</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-gray-100 font-mono text-slate-800">
+                    <tbody className="font-mono text-slate-800">
                       {meterRows.map((row) => (
                         <tr key={row.roomId} className="hover:bg-slate-50/80 transition-colors">
-                          <td className="py-2 px-3 select-none text-slate-400 font-bold font-sans">{row.buildingCode || 'A'}</td>
-                          <td className="py-2 px-3 select-none font-bold text-slate-900">{row.roomNumber}</td>
-                          {isElecUnit && <td className="py-2 px-3 select-none text-slate-400">{row.elecPrev || '-'}</td>}
+                          <td className="p-0 border border-slate-300 text-center select-none text-slate-500 font-bold font-sans bg-slate-50/50 h-8">
+                            {(row.buildingCode || 'A').replace(/^BLD-/, '').replace(/^อาคาร\s*/, '') || 'A'}
+                          </td>
+                          <td className="p-0 border border-slate-300 text-center select-none font-bold text-slate-900 bg-slate-50/50 h-8">
+                            {row.roomNumber}
+                          </td>
                           {isElecUnit && (
-                            <td className="py-1 px-2 bg-indigo-50/30">
+                            <td className="p-0 border border-slate-300">
+                              <input
+                                type="text"
+                                value={row.elecPrev}
+                                onChange={(e) => {
+                                  const v = e.target.value;
+                                  setMeterRows(prev => prev.map(r => r.roomId === row.roomId ? { ...r, elecPrev: v } : r));
+                                }}
+                                className="w-full h-8 px-2 text-center bg-transparent border-0 text-xs font-mono font-bold text-slate-700 focus:outline-none focus:bg-indigo-50/50 focus:ring-1 focus:ring-indigo-500"
+                              />
+                            </td>
+                          )}
+                          {isElecUnit && (
+                            <td className="p-0 border border-slate-300 bg-indigo-50/20">
                               <input
                                 type="text"
                                 value={row.elecCurr}
@@ -3854,13 +3846,25 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                                   const v = e.target.value;
                                   setMeterRows(prev => prev.map(r => r.roomId === row.roomId ? { ...r, elecCurr: v } : r));
                                 }}
-                                className="w-20 px-2 py-1 bg-white border border-indigo-200 rounded-lg text-xs font-bold text-indigo-950 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                                className="w-full h-8 px-2 text-center bg-transparent border-0 text-xs font-mono font-bold text-indigo-950 focus:outline-none focus:bg-indigo-50 focus:ring-1 focus:ring-indigo-500"
                               />
                             </td>
                           )}
-                          {isWaterUnit && <td className="py-2 px-3 select-none text-slate-400">{row.waterPrev || '-'}</td>}
                           {isWaterUnit && (
-                            <td className="py-1 px-2 bg-blue-50/30">
+                            <td className="p-0 border border-slate-300">
+                              <input
+                                type="text"
+                                value={row.waterPrev}
+                                onChange={(e) => {
+                                  const v = e.target.value;
+                                  setMeterRows(prev => prev.map(r => r.roomId === row.roomId ? { ...r, waterPrev: v } : r));
+                                }}
+                                className="w-full h-8 px-2 text-center bg-transparent border-0 text-xs font-mono font-bold text-slate-700 focus:outline-none focus:bg-blue-50/50 focus:ring-1 focus:ring-blue-500"
+                              />
+                            </td>
+                          )}
+                          {isWaterUnit && (
+                            <td className="p-0 border border-slate-300 bg-blue-50/20">
                               <input
                                 type="text"
                                 value={row.waterCurr}
@@ -3868,11 +3872,11 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                                   const v = e.target.value;
                                   setMeterRows(prev => prev.map(r => r.roomId === row.roomId ? { ...r, waterCurr: v } : r));
                                 }}
-                                className="w-20 px-2 py-1 bg-white border border-blue-200 rounded-lg text-xs font-bold text-blue-950 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                                className="w-full h-8 px-2 text-center bg-transparent border-0 text-xs font-mono font-bold text-blue-950 focus:outline-none focus:bg-blue-50 focus:ring-1 focus:ring-blue-500"
                               />
                             </td>
                           )}
-                          <td className="py-1 px-2">
+                          <td className="p-0 border border-slate-300">
                             <input
                               type="number"
                               min={0}
@@ -3881,19 +3885,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                                 const v = parseInt(e.target.value, 10);
                                 setMeterRows(prev => prev.map(r => r.roomId === row.roomId ? { ...r, peopleCount: isNaN(v) ? 0 : v } : r));
                               }}
-                              className="w-14 px-2 py-1 bg-white border border-gray-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                            />
-                          </td>
-                          <td className="py-1 px-2">
-                            <input
-                              type="text"
-                              value={row.overdueAmount}
-                              onChange={(e) => {
-                                const v = e.target.value;
-                                setMeterRows(prev => prev.map(r => r.roomId === row.roomId ? { ...r, overdueAmount: v } : r));
-                              }}
-                              placeholder="0"
-                              className="w-20 px-2 py-1 bg-white border border-gray-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                              className="w-full h-8 px-2 text-center bg-transparent border-0 text-xs font-mono font-bold text-slate-800 focus:outline-none focus:bg-indigo-50/50 focus:ring-1 focus:ring-indigo-500"
                             />
                           </td>
                         </tr>
@@ -3907,14 +3899,13 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
               <div className="flex flex-col gap-4 h-[320px] justify-between shrink-0">
                 {/* Template Section: only show if text is <= 1 line */}
                 {quickFillText.split('\n').filter(l => l.trim()).length <= 1 && (
-                  <div className="bg-slate-50 border border-slate-100 rounded-2xl p-4 flex flex-col gap-2 shrink-0 h-[112px] justify-center">
+                  <div className="bg-slate-50 border border-slate-100 rounded-2xl p-4 flex flex-col gap-2 shrink-0 h-[100px] justify-center">
                     <span className="text-xs font-black text-slate-800 leading-none text-left">
                       รูปแบบ ({templateMode === 'METER_ONLY' ? 'เฉพาะมิเตอร์' : 'ทั้งหมด'})
                     </span>
                     <div className="bg-white border border-gray-200 rounded-xl p-3 font-mono text-xs text-slate-600 flex items-center justify-start text-left shadow-2xs leading-relaxed whitespace-nowrap overflow-x-auto select-all no-scrollbar">
                       {getTemplateFormatString(templateMode)}
                     </div>
-                    <span className="text-[10px] text-gray-400 font-bold leading-none mt-0.5 text-left">ถ้าไม่มีค้าง ไม่ต้องใส่ข้อมูลค้างก็ได้</span>
                   </div>
                 )}
 

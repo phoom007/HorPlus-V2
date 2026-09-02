@@ -1961,7 +1961,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                 </div>
 
                 <div className="space-y-1">
-                  <label className="block font-semibold text-slate-700">รูปแบบค่าน้ำประปา</label>
+                  <label className="block font-semibold text-slate-700">รูปแบบค่าน้ำ</label>
                   <select
                     value={waterBillingMode}
                     disabled={isCycleLocked || !isSnapshotReady}

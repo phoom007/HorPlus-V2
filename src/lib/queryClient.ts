@@ -31,6 +31,8 @@ export const queryClient = new QueryClient({
  * Deterministic Query Key Factory scoped by Dormitory & Billing Cycle.
  */
 export const queryKeys = {
+  dormitories: ['dormitories'] as const,
+  dormitory: (dormId: string) => ['dormitory', dormId] as const,
   owner: (dormId: string) => ['owner', dormId] as const,
   rooms: (dormId: string) => ['owner', dormId, 'rooms'] as const,
   buildings: (dormId: string) => ['owner', dormId, 'buildings'] as const,

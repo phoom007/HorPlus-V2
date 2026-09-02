@@ -21,13 +21,16 @@ import {
 } from 'lucide-react';
 
 // Format Helpers
-export const formatBaht = (amount: number): string => {
-  return new Intl.NumberFormat('th-TH', {
-    style: 'currency',
-    currency: 'THB',
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2
-  }).format(amount).replace('฿', '฿\u00A0');
+export const formatBaht = (amount: number | string | undefined | null): string => {
+  if (amount === undefined || amount === null || amount === '') return '฿\u00A00';
+  const num = typeof amount === 'number' ? amount : Number(amount);
+  if (isNaN(num)) return '฿\u00A00';
+  const isInteger = Number.isInteger(num) || num === Math.floor(num);
+  const formatted = new Intl.NumberFormat('th-TH', {
+    minimumFractionDigits: isInteger ? 0 : 2,
+    maximumFractionDigits: 2,
+  }).format(num);
+  return `฿\u00A0${formatted}`;
 };
 
 export const formatThaiDate = (isoString?: string, showTime = false): string => {

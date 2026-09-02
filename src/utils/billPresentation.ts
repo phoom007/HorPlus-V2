@@ -258,3 +258,166 @@ export function formatTierRateLabel(
 
   return formatBillingRate(unitPrice, unit);
 }
+
+/**
+ * Formats a money/numeric value without useless .00 when exact integer,
+ * and preserving 2-decimal precision on fractions.
+ * Examples:
+ *   18.00 -> "18"
+ *   324.00 -> "324"
+ *   4500.00 -> "4,500"
+ *   18.50 -> "18.50"
+ *   324.25 -> "324.25"
+ */
+export function formatMoneyPlain(val?: number | string | null): string {
+  if (val === undefined || val === null || val === '') return '0';
+  const num = Number(val);
+  if (isNaN(num)) return String(val);
+  const isInteger = Number.isInteger(num) || num === Math.floor(num);
+  return new Intl.NumberFormat('th-TH', {
+    minimumFractionDigits: isInteger ? 0 : 2,
+    maximumFractionDigits: 2,
+  }).format(num);
+}
+
+/**
+ * Returns canonical sorting weight for a line item (1 to 8):
+ * 1. ค่าเช่า (rent)
+ * 2. ค่าน้ำ (water)
+ * 3. ค่าไฟฟ้า (electric / electricity)
+ * 4. ค่าส่วนกลาง (common / common_fee)
+ * 5. ค่าอินเทอร์เน็ต (internet)
+ * 6. ค่าจอดรถ (parking)
+ * 7. ค่าใช้จ่ายอื่น ๆ (other / other_fee)
+ * 8. ค่าปรับชำระล่าช้า (fine / late_fee / late_fine)
+ */
+export function getCanonicalLineItemOrder(item: {
+  type?: string | null;
+  category?: string | null;
+  description?: string | null;
+}): number {
+  const t = (item.type || item.category || '').toLowerCase();
+  const d = (item.description || '').toLowerCase();
+
+  if (t === 'rent' || d.includes('ค่าเช่า')) return 1;
+  if (t === 'water' || d.includes('ค่าน้ำ')) return 2;
+  if (t === 'electric' || t === 'electricity' || d.includes('ค่าไฟ') || d.includes('ค่าไฟฟ้า')) return 3;
+  if (t === 'common' || t === 'common_fee' || d.includes('ค่าส่วนกลาง')) return 4;
+  if (t === 'internet' || d.includes('อินเทอร์เน็ต') || d.includes('อินเตอร์เน็ต')) return 5;
+  if (t === 'parking' || d.includes('ค่าจอดรถ')) return 6;
+  if (t === 'fine' || t === 'late_fee' || t === 'late_fine' || d.includes('ค่าปรับ') || d.includes('ล่าช้า')) return 8;
+  if (t === 'other' || t === 'other_fee' || t === 'other_fees' || d.includes('ค่าใช้จ่ายอื่น')) return 7;
+
+  return 99;
+}
+
+/**
+ * Sorts bill items according to canonical presentation order and filters out zero-amount items.
+ */
+export function sortCanonicalBillItems<T extends {
+  type?: string | null;
+  category?: string | null;
+  description?: string | null;
+  amount?: number | string | null;
+}>(items?: T[] | null): T[] {
+  if (!items || !Array.isArray(items)) return [];
+  const nonZero = items.filter(it => {
+    if (it.amount === undefined || it.amount === null || it.amount === '') return false;
+    const num = Number(it.amount);
+    return !isNaN(num) && num !== 0;
+  });
+
+  return [...nonZero].sort((a, b) => {
+    return getCanonicalLineItemOrder(a) - getCanonicalLineItemOrder(b);
+  });
+}
+
+/**
+ * Formats a canonical line item label with formula for payment and billing presentation.
+ * Enforces:
+ * - "น้ำประปา" -> "น้ำ"
+ * - Tiered: "ค่าน้ำ (12 หน่วย • ขั้นบันได)" or "ค่าไฟฟ้า (170 หน่วย • ขั้นบันได)"
+ * - Rent: "ค่าเช่า (รายเดือน)", "ค่าเช่า (รายเทอม)", "ค่าเช่า (รายวัน)"
+ * - Scalar: "ค่าน้ำ (@ 18 × 12 หน่วย)", "ค่าไฟฟ้า (@ 7 × 120 หน่วย)", "ค่าส่วนกลาง (@ 100 × 2 คน)", "ค่าจอดรถ (@ 200 × 1 คัน)"
+ * - Never combines ambiguous multiple bases.
+ */
+export function formatCanonicalLineItemDescription(item: {
+  type?: string | null;
+  category?: string | null;
+  description?: string | null;
+  quantity?: number | string | null;
+  unit?: string | null;
+  unitPrice?: number | string | null;
+  metadata?: unknown;
+}, options?: {
+  rentCycle?: 'monthly' | 'term' | 'daily' | string | null;
+}): string {
+  const desc = (item.description || '').trim();
+  const t = (item.type || item.category || '').toLowerCase();
+  const meta = item.metadata as Record<string, any> | undefined;
+
+  // 1. Tiered water / electricity
+  if (meta?.mode === 'tiered' || desc.includes('ขั้นบันได')) {
+    const units = meta?.usageUnits ? formatMoneyPlain(meta.usageUnits) : (item.quantity !== undefined && item.quantity !== null ? formatMoneyPlain(item.quantity) : '');
+    const prefix = (t === 'water' || desc.includes('น้ำ')) ? 'ค่าน้ำ' : 'ค่าไฟฟ้า';
+    if (units) {
+      return `${prefix} (${units} หน่วย • ขั้นบันได)`;
+    }
+    return `${prefix} (ขั้นบันได)`;
+  }
+
+  // 2. Rent
+  if (t === 'rent' || desc.includes('ค่าเช่า')) {
+    const rc = options?.rentCycle || (desc.includes('รายเทอม') || desc.includes('เทอม') ? 'term' : (desc.includes('รายวัน') || desc.includes('วัน') ? 'daily' : 'monthly'));
+    if (rc === 'term') return 'ค่าเช่า (รายเทอม)';
+    if (rc === 'daily') return 'ค่าเช่า (รายวัน)';
+    return 'ค่าเช่า (รายเดือน)';
+  }
+
+  // 3. Normalized Title Base
+  let title = desc;
+  if (t === 'water' || desc.startsWith('ค่าน้ำ')) {
+    title = 'ค่าน้ำ';
+  } else if (t === 'electric' || t === 'electricity' || desc.startsWith('ค่าไฟ') || desc.startsWith('ค่าไฟฟ้า')) {
+    title = 'ค่าไฟฟ้า';
+  } else if (t === 'common' || t === 'common_fee' || desc.startsWith('ค่าส่วนกลาง')) {
+    title = 'ค่าส่วนกลาง';
+  } else if (t === 'internet' || desc.startsWith('ค่าอินเทอร์เน็ต') || desc.startsWith('ค่าอินเตอร์เน็ต')) {
+    title = 'ค่าอินเทอร์เน็ต';
+  } else if (t === 'parking' || desc.startsWith('ค่าจอดรถ')) {
+    title = 'ค่าจอดรถ';
+  } else if (t === 'fine' || t === 'late_fee' || t === 'late_fine' || desc.startsWith('ค่าปรับ')) {
+    title = 'ค่าปรับชำระล่าช้า';
+  }
+
+  // Normalize user-facing "น้ำประปา" -> "น้ำ"
+  title = title.replace(/น้ำประปา/g, 'น้ำ');
+
+  // 4. Scalar rate formula if rate & quantity exist
+  const rateNum = item.unitPrice !== undefined && item.unitPrice !== null ? Number(item.unitPrice) : null;
+  const qtyNum = item.quantity !== undefined && item.quantity !== null ? Number(item.quantity) : null;
+
+  if (rateNum !== null && !isNaN(rateNum) && qtyNum !== null && !isNaN(qtyNum) && rateNum > 0 && qtyNum > 0) {
+    const rawUnit = (item.unit || '').trim().toLowerCase();
+    let thaiUnit = '';
+    if (rawUnit === 'unit') thaiUnit = 'หน่วย';
+    else if (rawUnit === 'person') thaiUnit = 'คน';
+    else if (rawUnit === 'room') thaiUnit = 'ห้อง';
+    else if (rawUnit === 'vehicle' || rawUnit === 'car' || rawUnit === 'motorcycle') thaiUnit = 'คัน';
+    else if (rawUnit === 'day') thaiUnit = 'วัน';
+    else if (rawUnit === 'month') thaiUnit = 'เดือน';
+    else if (rawUnit === 'term') thaiUnit = 'เทอม';
+    else if (t === 'water' || t === 'electric' || t === 'electricity') thaiUnit = 'หน่วย';
+    else if (t === 'parking') thaiUnit = 'คัน';
+    else if (t === 'internet') thaiUnit = 'ห้อง';
+    else if (t === 'fine' || t === 'late_fee') thaiUnit = 'วัน';
+
+    const rateStr = formatMoneyPlain(rateNum);
+    const qtyStr = formatMoneyPlain(qtyNum);
+    const unitPart = thaiUnit ? ` ${thaiUnit}` : '';
+
+    return `${title} (@ ${rateStr} × ${qtyStr}${unitPart})`;
+  }
+
+  return title;
+}

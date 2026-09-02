@@ -80,6 +80,8 @@ export const mapRegisterUtilityMode = (mode: string): string => {
   }
 };
 import React, { useState, useRef } from 'react';
+import { LogoEditorModal } from '../../components/LogoEditorModal';
+import { queryClient, queryKeys } from '../../lib/queryClient';
 import {
   Building2,
   User,
@@ -245,9 +247,11 @@ export const DormitoryLogoUploader: React.FC<DormitoryLogoUploaderProps> = ({
 }) => {
   const [isUploading, setIsUploading] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
+  const [editorFile, setEditorFile] = useState<File | null>(null);
+  const [isEditorOpen, setIsEditorOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleFile = async (file: File) => {
+  const handleFile = (file: File) => {
     if (!file) return;
 
     if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
@@ -260,21 +264,34 @@ export const DormitoryLogoUploader: React.FC<DormitoryLogoUploaderProps> = ({
       return;
     }
 
+    // Open Logo Editor instead of immediate upload
+    setEditorFile(file);
+    setIsEditorOpen(true);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const handleConfirmEdit = async (processedFile: File) => {
     try {
       setIsUploading(true);
       const dormId = await ensureProvisionalDormitoryId();
-      const res = await onboardingClient.uploadLogo(dormId, file);
+      const res = await onboardingClient.uploadLogo(dormId, processedFile);
       if (!res?.logoUrl) {
         throw new Error('เกิดข้อผิดพลาดในการอัปโหลดรูปภาพ');
       }
 
       onLogoChange(`${res.logoUrl}?t=${Date.now()}`);
+      setIsEditorOpen(false);
+      setEditorFile(null);
+
+      // Invalidate dormitories query cache for immediate Dormitory Picker refresh
+      queryClient.invalidateQueries({ queryKey: queryKeys.dormitories });
+      queryClient.invalidateQueries({ queryKey: ['auth', 'session'] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.dormitory(dormId) });
     } catch (err: any) {
       console.error('[LOGO_UPLOAD_FAILED]', err);
       onError(err.message || 'ไม่สามารถอัปโหลดโลโก้ได้ กรุณาลองใหม่อีกครั้ง');
     } finally {
       setIsUploading(false);
-      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
@@ -284,6 +301,11 @@ export const DormitoryLogoUploader: React.FC<DormitoryLogoUploaderProps> = ({
       const dormId = await ensureProvisionalDormitoryId();
       await onboardingClient.deleteLogo(dormId);
       onLogoChange(null);
+
+      // Invalidate dormitories query cache for immediate Dormitory Picker fallback refresh
+      queryClient.invalidateQueries({ queryKey: queryKeys.dormitories });
+      queryClient.invalidateQueries({ queryKey: ['auth', 'session'] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.dormitory(dormId) });
     } catch (err: any) {
       console.error('[LOGO_DELETE_FAILED]', err);
       onError(err.message || 'ไม่สามารถลบโลโก้ได้ กรุณาลองใหม่อีกครั้ง');
@@ -408,6 +430,17 @@ export const DormitoryLogoUploader: React.FC<DormitoryLogoUploaderProps> = ({
           <div className="text-[10px] text-slate-400">รองรับไฟล์ PNG, JPG หรือ WebP ขนาดไม่เกิน 5MB</div>
         </div>
       )}
+
+      <LogoEditorModal
+        isOpen={isEditorOpen}
+        imageFile={editorFile}
+        onClose={() => {
+          setIsEditorOpen(false);
+          setEditorFile(null);
+        }}
+        onConfirm={handleConfirmEdit}
+        isSubmitting={isUploading}
+      />
     </div>
   );
 };
