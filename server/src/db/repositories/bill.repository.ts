@@ -29,6 +29,13 @@ export interface BillEntity {
   cancellationReason?: string | null;
   version: number;
   items?: BillItemEntity[];
+  Payment?: Array<{
+    id: string;
+    status: string;
+    amount: string;
+    paymentDate?: Date | null;
+    metadata?: any;
+  }>;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -484,6 +491,15 @@ export class PrismaBillRepository implements IBillRepository {
       cancellationReason: model.cancellationReason || null,
       version: model.version,
       items: Array.isArray(model.items) ? model.items.map((i: any) => this.mapItemToEntity(i)) : undefined,
+      Payment: Array.isArray(model.Payment)
+        ? model.Payment.map((p: any) => ({
+            id: p.id,
+            status: p.status,
+            amount: this.formatDecimal(p.amount),
+            paymentDate: p.paymentDate || null,
+            metadata: p.metadata || null,
+          }))
+        : undefined,
       createdAt: model.createdAt,
       updatedAt: model.updatedAt,
     };
@@ -576,6 +592,18 @@ export class PrismaBillRepository implements IBillRepository {
     if (!isUuid(id)) return null;
     const bill = await this.prisma.bill.findFirst({
       where: { id, dormitoryId },
+      include: {
+        items: true,
+        Payment: {
+          select: {
+            id: true,
+            status: true,
+            amount: true,
+            paymentDate: true,
+            metadata: true,
+          },
+        },
+      },
     });
     return bill ? this.mapBillToEntity(bill) : null;
   }
@@ -681,7 +709,18 @@ export class PrismaBillRepository implements IBillRepository {
     const [bills, total] = await Promise.all([
       client.bill.findMany({
         where,
-        include: { items: true },
+        include: {
+          items: true,
+          Payment: {
+            select: {
+              id: true,
+              status: true,
+              amount: true,
+              paymentDate: true,
+              metadata: true,
+            },
+          },
+        },
         skip,
         take: pageSize,
         orderBy: { createdAt: 'desc' },

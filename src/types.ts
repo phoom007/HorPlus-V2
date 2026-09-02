@@ -356,6 +356,13 @@ export interface Bill {
   paymentMethod?: 'promptpay' | 'cash';
   paidAt?: string;
   slipImage?: string;
+  Payment?: Array<{
+    id?: string;
+    status: string;
+    amount?: number | string;
+    paymentDate?: string | null;
+    metadata?: Record<string, any> | null;
+  }>;
   createdAt: string;
   updatedAt: string;
 }

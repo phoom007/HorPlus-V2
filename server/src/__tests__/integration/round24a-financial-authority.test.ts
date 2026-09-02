@@ -21,6 +21,7 @@ import {
 } from '../../utils/payment-transaction.util.js';
 import { createDepositBillForAgreementInTx } from '../../utils/deposit-billing.util.js';
 import { calculateOwnerReports, isHistoricalPaidBill } from '../../utils/report-calculations.js';
+import { PrismaBillRepository } from '../../db/repositories/bill.repository.js';
 
 describe('HORPLUS Round 2.4A Financial Authority & Historical Isolation', () => {
   const prisma = getPrismaClient();
@@ -683,5 +684,224 @@ describe('HORPLUS Round 2.4A Financial Authority & Historical Isolation', () => 
     expect(report.totalBilledThisMonth).toBe(4500);
     expect(report.totalRevenueThisMonth).toBe(4500);
     expect(report.totalUnpaidThisMonth).toBe(0);
+  });
+
+  describe('Round 2.4C Real Bill Repository / API DTO Payment Provenance Tests', () => {
+    const billRepo = new PrismaBillRepository(prisma);
+
+    it('H. Real PrismaBillRepository.findAll() returns Payment provenance for pre-HorPlus paid import and excludes it from Owner Reports', async () => {
+      // Create a pre-HorPlus paid bill with approved historical payment in DB
+      let createdBillId = '';
+      await prisma.$transaction(async (tx) => {
+        const b = await tx.bill.create({
+          data: {
+            dormitoryId,
+            billingCycleId,
+            roomId: room1Id,
+            tenantId,
+            billKind: 'RENT',
+            billNumber: 'INV-202609-101-MAY-PREPAID',
+            status: 'paid',
+            billingDate: new Date('2026-09-01'),
+            dueDate: new Date('2026-09-05'),
+            totalAmount: new Prisma.Decimal('4500.00'),
+            paidAmount: new Prisma.Decimal('4500.00'),
+            outstandingAmount: new Prisma.Decimal('0.00'),
+            items: {
+              create: [
+                {
+                  dormitoryId,
+                  type: 'rent',
+                  description: 'ค่าเช่า พ.ค. 69 (ชำระแล้วก่อนใช้ HorPlus)',
+                  amount: new Prisma.Decimal('4500.00'),
+                  metadata: {
+                    isHistoricalImport: true,
+                    originalPeriodLabel: 'พ.ค. 69',
+                  },
+                },
+              ],
+            },
+            Payment: {
+              create: [
+                {
+                  dormitoryId,
+                  amount: new Prisma.Decimal('4500.00'),
+                  method: 'CASH',
+                  status: 'APPROVED',
+                  paymentDate: null,
+                  metadata: {
+                    isHistoricalImport: true,
+                    originalPaymentDateKnown: false,
+                  },
+                },
+              ],
+            },
+          },
+        });
+        createdBillId = b.id;
+      });
+
+      // Fetch using the REAL repository findAll (identical to GET /api/v1/bills)
+      const res = await billRepo.findAll(dormitoryId, { billingCycleId });
+      const returnedBill = res.items.find((b) => b.id === createdBillId);
+
+      expect(returnedBill).toBeDefined();
+      expect(returnedBill?.Payment).toBeDefined();
+      expect(returnedBill?.Payment?.length).toBeGreaterThanOrEqual(1);
+      expect(returnedBill?.Payment?.[0].metadata?.isHistoricalImport).toBe(true);
+      expect(returnedBill?.Payment?.[0].status).toBe('APPROVED');
+
+      // Real DTO directly passed to calculateOwnerReports
+      expect(isHistoricalPaidBill(returnedBill)).toBe(true);
+
+      const report = calculateOwnerReports({
+        bills: [returnedBill] as any,
+        rooms: [{ id: room1Id, status: 'occupied' }] as any,
+        selectedBillingCycleId: billingCycleId,
+        selectedCycleCode: '2026-09',
+        selectedYear: '2026',
+      });
+
+      // Pre-HorPlus paid bill contributes 0 to revenue and 0 to billed inflation
+      expect(report.totalBilledThisMonth).toBe(0);
+      expect(report.totalRevenueThisMonth).toBe(0);
+      expect(report.totalUnpaidThisMonth).toBe(0);
+    });
+
+    it('I. Real PrismaBillRepository.findAll() returns Payment provenance for live-paid historical debt and includes it in Owner Reports', async () => {
+      // Create a historical debt bill settled via normal LIVE payment in DB
+      let createdBillId = '';
+      await prisma.$transaction(async (tx) => {
+        const b = await tx.bill.create({
+          data: {
+            dormitoryId,
+            billingCycleId,
+            roomId: room1Id,
+            tenantId,
+            billKind: 'RENT',
+            billNumber: 'INV-202609-101-JULY-LIVEPAID',
+            status: 'paid',
+            billingDate: new Date('2026-09-01'),
+            dueDate: new Date('2026-09-05'),
+            totalAmount: new Prisma.Decimal('4500.00'),
+            paidAmount: new Prisma.Decimal('4500.00'),
+            outstandingAmount: new Prisma.Decimal('0.00'),
+            items: {
+              create: [
+                {
+                  dormitoryId,
+                  type: 'rent',
+                  description: 'ค่าเช่า ก.ค. 69 (หนี้ค้างชำระแล้วหลัง Go-Live)',
+                  amount: new Prisma.Decimal('4500.00'),
+                  metadata: {
+                    isHistoricalImport: true,
+                    originalPeriodLabel: 'ก.ค. 69',
+                  },
+                },
+              ],
+            },
+            Payment: {
+              create: [
+                {
+                  dormitoryId,
+                  amount: new Prisma.Decimal('4500.00'),
+                  method: 'CASH',
+                  status: 'APPROVED',
+                  paymentDate: new Date('2026-10-10T14:30:00.000Z'),
+                  metadata: {
+                    isHistoricalImport: false, // Live payment
+                  },
+                },
+              ],
+            },
+          },
+        });
+        createdBillId = b.id;
+      });
+
+      // Fetch using the REAL repository findAll (identical to GET /api/v1/bills)
+      const res = await billRepo.findAll(dormitoryId, { billingCycleId });
+      const returnedBill = res.items.find((b) => b.id === createdBillId);
+
+      expect(returnedBill).toBeDefined();
+      expect(returnedBill?.items?.[0].metadata?.isHistoricalImport).toBe(true);
+      expect(returnedBill?.Payment).toBeDefined();
+      expect(returnedBill?.Payment?.length).toBeGreaterThanOrEqual(1);
+      expect(returnedBill?.Payment?.[0].metadata?.isHistoricalImport).toBe(false);
+
+      // Real DTO evaluated by predicate
+      expect(isHistoricalPaidBill(returnedBill)).toBe(false);
+
+      const report = calculateOwnerReports({
+        bills: [returnedBill] as any,
+        rooms: [{ id: room1Id, status: 'occupied' }] as any,
+        selectedBillingCycleId: billingCycleId,
+        selectedCycleCode: '2026-09',
+        selectedYear: '2026',
+      });
+
+      // Live paid historical debt MUST be included in the bill's billing cycle revenue
+      expect(report.totalBilledThisMonth).toBe(4500);
+      expect(report.totalRevenueThisMonth).toBe(4500);
+      expect(report.totalUnpaidThisMonth).toBe(0);
+    });
+
+    it('J. Real PrismaBillRepository.findAll() for historical UNPAID does not synthesize Payment and includes AR', async () => {
+      let createdBillId = '';
+      await prisma.$transaction(async (tx) => {
+        const b = await tx.bill.create({
+          data: {
+            dormitoryId,
+            billingCycleId,
+            roomId: room2Id,
+            tenantId,
+            billKind: 'RENT',
+            billNumber: 'INV-202609-102-UNPAID-HIST',
+            status: 'unpaid',
+            billingDate: new Date('2026-09-01'),
+            dueDate: new Date('2026-09-05'),
+            totalAmount: new Prisma.Decimal('4500.00'),
+            paidAmount: new Prisma.Decimal('0.00'),
+            outstandingAmount: new Prisma.Decimal('4500.00'),
+            items: {
+              create: [
+                {
+                  dormitoryId,
+                  type: 'rent',
+                  description: 'ค่าเช่า ก.ค. 69 (ค้างชำระ)',
+                  amount: new Prisma.Decimal('4500.00'),
+                  metadata: {
+                    isHistoricalImport: true,
+                    originalPeriodLabel: 'ก.ค. 69',
+                  },
+                },
+              ],
+            },
+          },
+        });
+        createdBillId = b.id;
+      });
+
+      const res = await billRepo.findAll(dormitoryId, { billingCycleId });
+      const returnedBill = res.items.find((b) => b.id === createdBillId);
+
+      expect(returnedBill).toBeDefined();
+      expect(returnedBill?.status).toBe('unpaid');
+      // No synthesized payments on unpaid bill
+      expect(!returnedBill?.Payment || returnedBill.Payment.length === 0).toBe(true);
+      expect(isHistoricalPaidBill(returnedBill)).toBe(false);
+
+      const report = calculateOwnerReports({
+        bills: [returnedBill] as any,
+        rooms: [{ id: room2Id, status: 'occupied' }] as any,
+        selectedBillingCycleId: billingCycleId,
+        selectedCycleCode: '2026-09',
+        selectedYear: '2026',
+      });
+
+      expect(report.totalBilledThisMonth).toBe(4500);
+      expect(report.totalRevenueThisMonth).toBe(0);
+      expect(report.totalUnpaidThisMonth).toBe(4500);
+    });
   });
 });
