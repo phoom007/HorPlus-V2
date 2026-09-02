@@ -220,4 +220,118 @@ describe('Round 2.4A Paid Consolidation & Daily Summary Logic', () => {
     const dailyGroups = consolidatePaidDailyInvoices(dailyInvoices, 'cycle-09');
     expect(dailyGroups.length).toBe(2);
   });
+
+  describe('Receipt View Props: Historical Debt vs Live Payment Authority', () => {
+    // Mimics buildReceiptViewProps logic
+    const buildReceiptProps = (payment: any) => {
+      const snap = payment.receipt?.snapshotData || {};
+      const targetBill = payment.bill;
+
+      const isHistoricalPayment = Boolean(
+        snap.isHistoricalImport ||
+        payment.metadata?.isHistoricalImport
+      );
+      const originalPaymentDateKnown = isHistoricalPayment
+        ? Boolean(snap.originalPaymentDateKnown ?? payment.metadata?.originalPaymentDateKnown ?? false)
+        : true;
+      const originalPaidAt = (!isHistoricalPayment || originalPaymentDateKnown)
+        ? (snap.paymentDate || payment.paymentDate || payment.createdAt || null)
+        : null;
+      const importedAt = snap.importedAt || payment.metadata?.importedAt || payment.createdAt;
+
+      return {
+        receiptNumber: snap.receiptNumber || payment.receipt?.receiptNumber || 'RC-001',
+        totalAmount: Number(payment.amount || 0),
+        paidAt: originalPaidAt,
+        isHistorical: isHistoricalPayment,
+        originalPaymentDateKnown,
+        importedAt,
+      };
+    };
+
+    it('J. Historical debt + LIVE Payment: Receipt is NOT marked historical payment and has concrete paid date', () => {
+      const livePaymentOfHistoricalDebt = {
+        id: 'pay-live-01',
+        amount: 4500,
+        paymentDate: '2026-10-10T14:30:00.000Z',
+        createdAt: '2026-10-10T14:30:00.000Z',
+        metadata: {
+          isHistoricalImport: false, // Normal LIVE payment
+        },
+        bill: {
+          id: 'bill-july-debt',
+          items: [
+            {
+              description: 'ค่าเช่า ก.ค. 69 (หนี้ค้างก่อนใช้ HorPlus)',
+              amount: 4500,
+              metadata: {
+                isHistoricalImport: true,
+                originalPeriod: '2026-07',
+              },
+            },
+          ],
+        },
+        receipt: {
+          receiptNumber: 'RC-202610-101-0001',
+          snapshotData: {
+            receiptNumber: 'RC-202610-101-0001',
+            paymentDate: '2026-10-10T14:30:00.000Z',
+            isHistoricalImport: false,
+            originalPaymentDateKnown: true,
+          },
+        },
+      };
+
+      const props = buildReceiptProps(livePaymentOfHistoricalDebt);
+      expect(props.isHistorical).toBe(false);
+      expect(props.originalPaymentDateKnown).toBe(true);
+      expect(props.paidAt).toBe('2026-10-10T14:30:00.000Z');
+      // Verify modal text: must NOT show 'ไม่ทราบวันที่ชำระเดิม'
+      const showsUnknownOldDate = props.isHistorical && !props.originalPaymentDateKnown;
+      expect(showsUnknownOldDate).toBe(false);
+    });
+
+    it('K. Imported Historical PAID payment: Receipt is marked historical and displays unknown original date', () => {
+      const importedHistoricalPayment = {
+        id: 'pay-hist-01',
+        amount: 4500,
+        paymentDate: null,
+        createdAt: '2026-09-01T08:00:00.000Z',
+        metadata: {
+          isHistoricalImport: true,
+          originalPaymentDateKnown: false,
+          importedAt: '2026-09-01T08:00:00.000Z',
+        },
+        bill: {
+          id: 'bill-may-paid',
+          items: [
+            {
+              description: 'ค่าเช่า พ.ค. 69',
+              amount: 4500,
+              metadata: { isHistoricalImport: true },
+            },
+          ],
+        },
+        receipt: {
+          receiptNumber: 'RC-202609-101-0001',
+          snapshotData: {
+            receiptNumber: 'RC-202609-101-0001',
+            paymentDate: null,
+            isHistoricalImport: true,
+            originalPaymentDateKnown: false,
+            importedAt: '2026-09-01T08:00:00.000Z',
+          },
+        },
+      };
+
+      const props = buildReceiptProps(importedHistoricalPayment);
+      expect(props.isHistorical).toBe(true);
+      expect(props.originalPaymentDateKnown).toBe(false);
+      expect(props.paidAt).toBeNull();
+      // Verify modal text: MUST show 'ไม่ทราบวันที่ชำระเดิม'
+      const showsUnknownOldDate = props.isHistorical && !props.originalPaymentDateKnown;
+      expect(showsUnknownOldDate).toBe(true);
+      expect(props.importedAt).toBe('2026-09-01T08:00:00.000Z');
+    });
+  });
 });

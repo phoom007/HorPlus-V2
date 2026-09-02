@@ -243,7 +243,7 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
           <div>
             <h3 className="text-lg font-black text-slate-800 leading-tight">วิเคราะห์การเงินและสถิติหอพัก</h3>
             <p className="text-xs text-slate-400 font-medium mt-1 leading-none">
-              สรุปรายงานผลประกอบการ กระแสเงินสด และอัตราครองห้องพักแบบ Sync ข้อมูลจริง
+              สรุปรายงานผลการจัดเก็บของรอบบิล สถานะการจัดเก็บตามรอบบิล และอัตราครองห้องพักแบบ Sync ข้อมูลจริง
             </p>
           </div>
         </div>

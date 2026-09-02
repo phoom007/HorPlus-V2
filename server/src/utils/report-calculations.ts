@@ -179,24 +179,43 @@ const THAI_MONTH_FULL: Record<string, string> = {
   '09': 'กันยายน', '10': 'ตุลาคม', '11': 'พฤศจิกายน', '12': 'ธันวาคม'
 };
 
+/**
+ * Determines if a PAID bill was settled by imported pre-HorPlus payment evidence.
+ * 
+ * Invariant (Q7=A / Round 2.4B):
+ * - Historical obligation (BillItem.metadata.isHistoricalImport) represents the pre-HorPlus origin of the DEBT.
+ * - Historical payment import (Payment.metadata.isHistoricalImport) represents money already PAID before HorPlus.
+ * - A Bill is excluded from revenue/collection metrics ONLY when its settled payments are imported pre-HorPlus payments.
+ * - A historical debt settled via a LIVE HorPlus payment (Payment.metadata.isHistoricalImport !== true) MUST be included in the bill's cycle revenue.
+ */
 export const isHistoricalPaidBill = (b: any): boolean => {
   if (!b) return false;
   const isPaid = (b.status || '').toLowerCase() === 'paid';
   if (!isPaid) return false;
 
-  const hasItemHistorical = Array.isArray(b.items) && b.items.some((it: any) =>
-    it?.metadata?.isHistoricalImport === true ||
-    (it?.metadata && typeof it.metadata === 'object' && (it.metadata as any).isHistoricalImport === true)
+  // 1. If explicit Payment records are populated on the Bill:
+  if (Array.isArray(b.Payment) && b.Payment.length > 0) {
+    const approvedPayments = b.Payment.filter((p: any) => {
+      const s = (p.status || '').toUpperCase();
+      return !s || s === 'APPROVED' || s === 'COMPLETED';
+    });
+    if (approvedPayments.length > 0) {
+      // Must be settled exclusively by historical imported payments
+      return approvedPayments.every((p: any) =>
+        p?.metadata?.isHistoricalImport === true ||
+        (p?.metadata && typeof p.metadata === 'object' && (p.metadata as any).isHistoricalImport === true) ||
+        p?.isHistoricalImport === true
+      );
+    }
+  }
+
+  // 2. Direct Payment-level flag on the bill if Payment array is unpopulated:
+  const isDirectPaymentFlag = Boolean(
+    b.isHistoricalPaymentImport ||
+    b.metadata?.isHistoricalPaymentImport
   );
 
-  const hasPaymentHistorical = Array.isArray(b.Payment) && b.Payment.some((p: any) =>
-    p?.metadata?.isHistoricalImport === true ||
-    (p?.metadata && typeof p.metadata === 'object' && (p.metadata as any).isHistoricalImport === true)
-  );
-
-  const isDirectFlag = Boolean(b.isHistoricalImport || b.metadata?.isHistoricalImport);
-
-  return hasItemHistorical || hasPaymentHistorical || isDirectFlag;
+  return isDirectPaymentFlag;
 };
 
 export const isPreHorPlusPaidBill = isHistoricalPaidBill;
@@ -237,13 +256,15 @@ export function calculateOwnerReports(params: ReportCalculationParams): ReportCa
     currentMonthBills = filteredBills.filter(b =>
       b.cycleCode === selectedCycleCode ||
       b.cycleId === selectedCycleCode ||
-      b.billingCycleId === selectedCycleCode
+      b.billingCycleId === selectedCycleCode ||
+      b.billingCycle?.cycleCode === selectedCycleCode
     );
   } else if (selectedCycle) {
     currentMonthBills = filteredBills.filter(b =>
       b.billingCycleId === selectedCycle ||
       b.cycleId === selectedCycle ||
-      b.cycleCode === selectedCycle
+      b.cycleCode === selectedCycle ||
+      b.billingCycle?.cycleCode === selectedCycle
     );
   } else {
     currentMonthBills = filteredBills;

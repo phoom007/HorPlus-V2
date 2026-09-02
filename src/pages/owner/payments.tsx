@@ -423,14 +423,13 @@ export function buildViewingReceipt(
 
     const isHistorical = Boolean(
       snap.isHistoricalImport ||
-      payment.metadata?.isHistoricalImport ||
-      billGroups.some((bg: any) => bg.items?.some((it: any) => it.metadata?.isHistoricalImport))
+      payment.metadata?.isHistoricalImport
     );
     const originalPaymentDateKnown = isHistorical
       ? Boolean(snap.originalPaymentDateKnown ?? payment.metadata?.originalPaymentDateKnown ?? false)
       : true;
     const originalPaidAt = (!isHistorical || originalPaymentDateKnown)
-      ? (snap.paymentDate || rcpt.issuedAt || payment.paymentDate || null)
+      ? (snap.paymentDate || rcpt.issuedAt || payment.paymentDate || rcpt.paidAt || payment.createdAt || null)
       : null;
     const importedAt = snap.importedAt || payment.metadata?.importedAt || rcpt.issuedAt || payment.createdAt;
 
@@ -513,14 +512,13 @@ export function buildViewingReceipt(
 
   const isHistorical = Boolean(
     snap.isHistoricalImport ||
-    payment.metadata?.isHistoricalImport ||
-    (targetBill?.items && targetBill.items.some((it: any) => it.metadata?.isHistoricalImport))
+    payment.metadata?.isHistoricalImport
   );
   const originalPaymentDateKnown = isHistorical
     ? Boolean(snap.originalPaymentDateKnown ?? payment.metadata?.originalPaymentDateKnown ?? false)
     : true;
   const originalPaidAt = (!isHistorical || originalPaymentDateKnown)
-    ? (snap.paymentDate || payment.paymentDate || null)
+    ? (snap.paymentDate || payment.paymentDate || rcpt.issuedAt || rcpt.paidAt || payment.createdAt || null)
     : null;
   const importedAt = snap.importedAt || payment.metadata?.importedAt || rcpt.issuedAt || payment.createdAt;
 
@@ -1037,8 +1035,8 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
       const tenantName = p.bill?.tenant?.displayName || getTenantName(tenantId);
       const slipUrl = getSlipEvidenceUrl(p);
       const pAmt = Number(p.amount || p.bill?.totalAmount || 0);
-      const isHist = Boolean(p.metadata?.isHistoricalImport || p.bill?.metadata?.isHistoricalImport || (p as any).isHistoricalImport);
-      const histLabel = p.metadata?.originalPeriodLabel || p.bill?.metadata?.originalPeriodLabel || (p.bill?.billKind === 'DEPOSIT' ? 'เงินประกัน' : undefined);
+      const isHist = Boolean(p.metadata?.isHistoricalImport || (p as any).isHistoricalImport);
+      const histLabel = p.metadata?.originalPeriodLabel || (p.bill?.items?.find((it: any) => it.metadata?.isHistoricalImport)?.metadata?.originalPeriodLabel) || (p.bill?.billKind === 'DEPOSIT' ? 'เงินประกัน' : undefined);
 
       const existing = map.get(key);
       if (existing) {

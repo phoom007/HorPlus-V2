@@ -686,18 +686,18 @@ export async function generateReceiptInTx(
     }
   }
 
-  const isHistorical = Boolean(
+  const isHistoricalPayment = Boolean(
     payment?.metadata?.isHistoricalImport ||
     (payment?.metadata && typeof payment.metadata === 'object' && (payment.metadata as any).isHistoricalImport) ||
-    bill?.items?.some((it: any) => it.metadata?.isHistoricalImport)
+    (payment as any)?.isHistoricalImport
   );
-  const originalPaymentDateKnown = isHistorical
-    ? Boolean(payment?.metadata?.originalPaymentDateKnown ?? false)
+  const originalPaymentDateKnown = isHistoricalPayment
+    ? Boolean(payment?.metadata?.originalPaymentDateKnown ?? (payment?.paymentDate ? true : false))
     : true;
-  const originalPaymentDate = (isHistorical && !originalPaymentDateKnown)
+  const originalPaymentDate = (isHistoricalPayment && !originalPaymentDateKnown)
     ? null
-    : (payment?.paymentDate ? payment.paymentDate.toISOString() : (isHistorical ? null : today.toISOString()));
-  const importedAt = isHistorical
+    : (payment?.paymentDate ? payment.paymentDate.toISOString() : (isHistoricalPayment ? null : today.toISOString()));
+  const importedAt = isHistoricalPayment
     ? (payment?.metadata?.importedAt || (payment?.metadata as any)?.importedAt || today.toISOString())
     : undefined;
 
@@ -717,7 +717,7 @@ export async function generateReceiptInTx(
     dormitoryPhone: bill?.dormitory?.phone || null,
     paymentMethod: payment?.method || 'CASH',
     paymentDate: originalPaymentDate,
-    isHistoricalImport: isHistorical,
+    isHistoricalImport: isHistoricalPayment,
     originalPaymentDateKnown,
     importedAt,
     receiverName: receiverDisplayName,
@@ -757,6 +757,7 @@ export async function generateGroupReceiptInTx(params: {
   tenantName?: string;
   paymentMethod?: string;
   paymentDate?: Date;
+  isHistoricalImport?: boolean;
 }) {
   const { tx, dormitoryId, paymentGroupId, totalAmount, userId } = params;
   const today = new Date();
@@ -843,14 +844,12 @@ export async function generateGroupReceiptInTx(params: {
     );
   }
 
-  const isHistorical = Boolean(
-    finalBillGroups.some((bg: any) => bg.items?.some((it: any) => it.metadata?.isHistoricalImport))
-  );
-  const originalPaymentDateKnown = isHistorical ? Boolean(params.paymentDate) : true;
-  const originalPaymentDate = (isHistorical && !originalPaymentDateKnown)
+  const isHistoricalPayment = Boolean(params.isHistoricalImport);
+  const originalPaymentDateKnown = isHistoricalPayment ? Boolean(params.paymentDate) : true;
+  const originalPaymentDate = (isHistoricalPayment && !originalPaymentDateKnown)
     ? null
-    : (params.paymentDate ? params.paymentDate.toISOString() : (isHistorical ? null : today.toISOString()));
-  const importedAt = isHistorical ? today.toISOString() : undefined;
+    : (params.paymentDate ? params.paymentDate.toISOString() : (isHistoricalPayment ? null : today.toISOString()));
+  const importedAt = isHistoricalPayment ? today.toISOString() : undefined;
 
   const legacyReceiptItems = finalBillGroups.flatMap((bg: any) => bg.items || []);
 
@@ -869,7 +868,7 @@ export async function generateGroupReceiptInTx(params: {
     dormitoryPhone: dorm?.phone || null,
     paymentMethod: params.paymentMethod || 'BANK_TRANSFER',
     paymentDate: originalPaymentDate,
-    isHistoricalImport: isHistorical,
+    isHistoricalImport: isHistoricalPayment,
     originalPaymentDateKnown,
     importedAt,
     receiverName: receiverDisplayName,

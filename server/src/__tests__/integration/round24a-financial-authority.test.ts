@@ -276,6 +276,14 @@ describe('HORPLUS Round 2.4A Financial Authority & Historical Isolation', () => 
             metadata: { isHistoricalImport: true, originalPeriodLabel: 'พ.ค. 69' },
           },
         ],
+        Payment: [
+          {
+            status: 'APPROVED',
+            amount: 4500,
+            paymentDate: null,
+            metadata: { isHistoricalImport: true, originalPaymentDateKnown: false },
+          },
+        ],
       },
       // 2. June historical DEPOSIT 4500 PAID
       {
@@ -295,6 +303,14 @@ describe('HORPLUS Round 2.4A Financial Authority & Historical Isolation', () => 
             description: 'เงินประกัน',
             amount: 4500,
             metadata: { isHistoricalImport: true, originalPeriodLabel: 'เงินประกัน' },
+          },
+        ],
+        Payment: [
+          {
+            status: 'APPROVED',
+            amount: 4500,
+            paymentDate: null,
+            metadata: { isHistoricalImport: true, originalPaymentDateKnown: false },
           },
         ],
       },
@@ -459,5 +475,213 @@ describe('HORPLUS Round 2.4A Financial Authority & Historical Isolation', () => 
         });
       })
     ).rejects.toThrow('ไม่อนุญาตให้รวมบิลข้ามห้องพัก');
+  });
+
+  it('F. Historical UNPAID rent obligation settled LIVE post-GoLive is included in September revenue with concrete date', async () => {
+    // 1. Create October 2026 Billing Cycle to verify isolation
+    const octCycle = await prisma.billingCycle.create({
+      data: {
+        dormitoryId,
+        cycleCode: '2026-10',
+        name: 'รอบบิลตุลาคม 2569',
+        periodStart: new Date('2026-10-01'),
+        periodEnd: new Date('2026-10-31'),
+        billingDate: new Date('2026-10-01'),
+        dueDate: new Date('2026-10-05'),
+        status: 'published',
+      },
+    });
+
+    let liveBillId = '';
+    await prisma.$transaction(async (tx) => {
+      // Create historical July RENT obligation imported into September as UNPAID
+      const bill = await tx.bill.create({
+        data: {
+          dormitoryId,
+          billingCycleId,
+          roomId: room1Id,
+          tenantId,
+          billKind: 'RENT',
+          billNumber: 'INV-202609-101-JULY-DEBT',
+          status: 'unpaid',
+          billingDate: new Date('2026-09-01'),
+          dueDate: new Date('2026-09-05'),
+          totalAmount: new Prisma.Decimal('4500.00'),
+          paidAmount: new Prisma.Decimal('0.00'),
+          outstandingAmount: new Prisma.Decimal('4500.00'),
+          items: {
+            create: [
+              {
+                dormitoryId,
+                type: 'rent',
+                description: 'ค่าเช่า ก.ค. 69 (หนี้ค้างก่อนใช้ HorPlus)',
+                amount: new Prisma.Decimal('4500.00'),
+                metadata: {
+                  isHistoricalImport: true,
+                  originalPeriod: '2026-07',
+                  originalPeriodLabel: 'ก.ค. 69',
+                },
+              },
+            ],
+          },
+        },
+      });
+      liveBillId = bill.id;
+    });
+
+    // Verify initial state: unpaid obligation in September
+    const initialBill = await prisma.bill.findUnique({
+      where: { id: liveBillId },
+      include: { items: true, Payment: true, billingCycle: true },
+    });
+    expect(isHistoricalPaidBill(initialBill)).toBe(false);
+
+    const initialSeptReport = calculateOwnerReports({
+      bills: [initialBill] as any,
+      rooms: [{ id: room1Id, status: 'occupied' }] as any,
+      selectedCycleCode: '2026-09',
+      selectedYear: '2026',
+    });
+    expect(initialSeptReport.totalBilledThisMonth).toBe(4500);
+    expect(initialSeptReport.totalRevenueThisMonth).toBe(0);
+    expect(initialSeptReport.totalUnpaidThisMonth).toBe(4500);
+
+    // 2. Tenant pays LIVE on October 10 via normal cash payment
+    const livePaymentDate = new Date('2026-10-10T14:30:00.000Z');
+    await prisma.$transaction(async (tx) => {
+      await recordCashPaymentInTx(tx, {
+        dormitoryId,
+        billId: liveBillId,
+        amount: '4500.00',
+        paymentDate: livePaymentDate,
+        metadata: {
+          isHistoricalImport: false, // LIVE HorPlus payment
+        },
+      });
+    });
+
+    // 3. Query settled bill with Payment
+    const settledBill = await prisma.bill.findUnique({
+      where: { id: liveBillId },
+      include: { items: true, Payment: true, billingCycle: true },
+    });
+
+    expect(settledBill?.status).toBe('PAID');
+    expect(settledBill?.outstandingAmount.toString()).toBe('0');
+    expect(settledBill?.paidAmount.toString()).toBe('4500');
+
+    // Authority check: Historical debt + Live payment must NOT be classified as historical pre-HorPlus paid!
+    expect(isHistoricalPaidBill(settledBill)).toBe(false);
+
+    // 4. Receipt check: contains concrete live payment date
+    const rcpt = await prisma.receipt.findFirst({
+      where: { billId: liveBillId },
+    });
+    expect(rcpt).toBeDefined();
+    const snap: any = rcpt?.snapshotData;
+    expect(snap.isHistoricalImport).toBe(false);
+    expect(snap.originalPaymentDateKnown).toBe(true);
+    expect(snap.paymentDate).toBe('2026-10-10T14:30:00.000Z');
+
+    // 5. September Report check (Q7=A BillingCycle policy):
+    // September revenue includes the settled 4500, unpaid drops to 0
+    const settledSeptReport = calculateOwnerReports({
+      bills: [settledBill] as any,
+      rooms: [{ id: room1Id, status: 'occupied' }] as any,
+      selectedCycleCode: '2026-09',
+      selectedYear: '2026',
+    });
+    expect(settledSeptReport.totalBilledThisMonth).toBe(4500);
+    expect(settledSeptReport.totalRevenueThisMonth).toBe(4500);
+    expect(settledSeptReport.totalUnpaidThisMonth).toBe(0);
+
+    // 6. October Report check:
+    // October report does NOT adopt or reclassify this September bill
+    const octReport = calculateOwnerReports({
+      bills: [settledBill] as any,
+      rooms: [{ id: room1Id, status: 'occupied' }] as any,
+      selectedCycleCode: '2026-10',
+      selectedYear: '2026',
+    });
+    expect(octReport.totalBilledThisMonth).toBe(0);
+    expect(octReport.totalRevenueThisMonth).toBe(0);
+    expect(octReport.totalUnpaidThisMonth).toBe(0);
+  });
+
+  it('G. Deposit Parity: Old Deposit declared PAID before HorPlus is excluded, whereas UNPAID then live-paid is included', () => {
+    // A. Old Deposit declared PAID before HorPlus
+    const preGoLivePaidDepositBill = {
+      id: 'dep-pre-paid',
+      billingCycleId,
+      cycleCode: '2026-09',
+      roomId: room1Id,
+      tenantId,
+      status: 'PAID',
+      billKind: 'DEPOSIT',
+      totalAmount: 4500,
+      paidAmount: 4500,
+      outstandingAmount: 0,
+      items: [
+        {
+          type: 'deposit',
+          description: 'เงินประกัน (ชำระแล้วก่อนใช้ HorPlus)',
+          amount: 4500,
+          metadata: { isHistoricalImport: true, originalPeriodLabel: 'เงินประกัน' },
+        },
+      ],
+      Payment: [
+        {
+          status: 'APPROVED',
+          amount: 4500,
+          paymentDate: null,
+          metadata: { isHistoricalImport: true, originalPaymentDateKnown: false },
+        },
+      ],
+    };
+
+    // B. Old Deposit imported UNPAID and paid LIVE later
+    const historicalUnpaidThenLivePaidDepositBill = {
+      id: 'dep-live-paid',
+      billingCycleId,
+      cycleCode: '2026-09',
+      roomId: room2Id,
+      tenantId,
+      status: 'PAID',
+      billKind: 'DEPOSIT',
+      totalAmount: 4500,
+      paidAmount: 4500,
+      outstandingAmount: 0,
+      items: [
+        {
+          type: 'deposit',
+          description: 'เงินประกัน (นำเข้าค้างชำระ)',
+          amount: 4500,
+          metadata: { isHistoricalImport: true, originalPeriodLabel: 'เงินประกัน' },
+        },
+      ],
+      Payment: [
+        {
+          status: 'APPROVED',
+          amount: 4500,
+          paymentDate: '2026-10-10T10:00:00.000Z',
+          metadata: { isHistoricalImport: false },
+        },
+      ],
+    };
+
+    expect(isHistoricalPaidBill(preGoLivePaidDepositBill)).toBe(true);
+    expect(isHistoricalPaidBill(historicalUnpaidThenLivePaidDepositBill)).toBe(false);
+
+    const report = calculateOwnerReports({
+      bills: [preGoLivePaidDepositBill, historicalUnpaidThenLivePaidDepositBill] as any,
+      rooms: [{ id: room1Id, status: 'occupied' }, { id: room2Id, status: 'occupied' }] as any,
+      selectedCycleCode: '2026-09',
+      selectedYear: '2026',
+    });
+
+    // Only historicalUnpaidThenLivePaidDepositBill counts toward billed & revenue
+    expect(report.totalBilledThisMonth).toBe(4500);
+    expect(report.totalRevenueThisMonth).toBe(4500);
+    expect(report.totalUnpaidThisMonth).toBe(0);
   });
 });
