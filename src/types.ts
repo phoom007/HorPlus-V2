@@ -69,6 +69,7 @@ export interface Dormitory {
 export interface Building {
   id: string;
   name: string; // e.g. "อาคาร A", "อาคาร B"
+  code?: string;
   floorsCount: number;
   description?: string;
   termMonths?: number;

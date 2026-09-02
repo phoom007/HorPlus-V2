@@ -175,13 +175,26 @@ export function buildRowsFromWorkspace(params: {
   bills: Bill[];
   contracts?: Contract[];
   tenants?: Tenant[];
+  buildings?: Building[];
   selectedBillingCycleId?: string;
   selectedCycleCode?: string;
   selectedCycle?: string;
   currentDormId?: string;
   isFirstCycle?: boolean;
 }): { rows: MeterRowState[]; originalRows: MeterRowState[] } {
-  const { workspaceData, rooms, bills, contracts = [], tenants = [], selectedBillingCycleId, selectedCycleCode, selectedCycle, currentDormId, isFirstCycle } = params;
+  const {
+    workspaceData,
+    rooms,
+    bills,
+    contracts = [],
+    tenants = [],
+    buildings = [],
+    selectedBillingCycleId,
+    selectedCycleCode,
+    selectedCycle,
+    currentDormId,
+    isFirstCycle,
+  } = params;
   if (!workspaceData) {
     return { rows: [], originalRows: [] };
   }
@@ -257,6 +270,19 @@ export function buildRowsFromWorkspace(params: {
     const previewRooms = workspaceData?.previewContext?.rooms || workspaceData?.rooms || [];
     const roomCtx = previewRooms.find((ctx: any) => ctx.roomId === r.id);
     const overallFinancialStatus = (roomCtx?.overallFinancialStatus as BillStatus) || (roomCtx?.billStatus as BillStatus) || (existingMonthlyUtilityBill ? existingMonthlyUtilityBill.status : 'draft');
+    const monthlyUtilityBillStatus =
+      (roomCtx?.monthlyUtilityBillStatus as string)
+      || (existingMonthlyUtilityBill
+          ? existingMonthlyUtilityBill.status
+          : 'draft');
+    const isMonthlyUtilityPaid =
+      Boolean(
+        roomCtx?.isMonthlyUtilityPaid
+        || monthlyUtilityBillStatus === 'paid'
+      );
+    const isPaid =
+      overallFinancialStatus === 'paid'
+      || Boolean(roomCtx?.isPaid);
     const bld = (buildings || []).find(b => b.id === r.buildingId);
     const bCode = bld?.code || (bld?.name ? bld.name.replace(/^อาคาร\s*/, '').trim() : 'A');
     const bName = bld?.name || `อาคาร ${bCode}`;
@@ -879,6 +905,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         bills,
         contracts,
         tenants,
+        buildings,
         selectedBillingCycleId,
         selectedCycleCode,
         selectedCycle,
@@ -886,7 +913,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       });
     }
     return null;
-  }, []);
+  }, [buildings]);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [viewMode, setViewMode] = useState<'table' | 'list'>(() => {
@@ -1873,6 +1900,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       bills,
       contracts,
       tenants,
+      buildings,
       selectedBillingCycleId,
       selectedCycleCode,
       selectedCycle,
@@ -1900,7 +1928,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     setMeterRows(built.rows);
     resetHistory(built.rows);
     setLoadedCycle(selectedBillingCycleId);
-  }, [meterWorkspaceQuery.data, selectedBillingCycleId, rooms, bills, contracts, tenants]);
+  }, [meterWorkspaceQuery.data, selectedBillingCycleId, rooms, bills, contracts, tenants, buildings]);
 
   // Synchronize unsaved deltas to isolated in-memory draft store
   useEffect(() => {
