@@ -75,6 +75,10 @@ model Dormitory {
   createdAt              DateTime  @default(now()) @map("created_at") @db.Timestamptz()
   updatedAt              DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
   deletedAt              DateTime? @map("deleted_at") @db.Timestamptz()
+  logoObjectKey          String?   @map("logo_object_key") @db.VarChar(500)
+  logoMimeType           String?   @map("logo_mime_type") @db.VarChar(100)
+  logoSha256             String?   @map("logo_sha256") @db.VarChar(64)
+  logoUpdatedAt          DateTime? @map("logo_updated_at") @db.Timestamptz()
 
   members                    DormitoryMember[]
   roles                      Role[]

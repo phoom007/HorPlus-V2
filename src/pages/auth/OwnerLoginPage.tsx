@@ -246,8 +246,7 @@ export const OwnerLoginPage: React.FC<OwnerLoginPageProps> = ({ onLoginSuccess }
 
             <div className="flex-1 overflow-y-auto pr-1 space-y-3 scrollbar-thin">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {userMemberships.map((membership, index) => {
-                  const avatarUrl = dormAvatars[index % dormAvatars.length];
+                {userMemberships.map((membership) => {
                   return (
                     <div
                       key={membership.id}
@@ -256,8 +255,12 @@ export const OwnerLoginPage: React.FC<OwnerLoginPageProps> = ({ onLoginSuccess }
                     >
                       <div className="flex items-start gap-3">
                         <div className="relative shrink-0">
-                          <div className="w-12 h-12 rounded-xl overflow-hidden border border-indigo-100 shadow-2xs group-hover:scale-105 transition-transform bg-slate-100">
-                            <img src={avatarUrl} alt={membership.dormitoryName} className="w-full h-full object-cover" />
+                          <div className="w-12 h-12 rounded-xl overflow-hidden border border-indigo-100 shadow-2xs group-hover:scale-105 transition-transform bg-slate-50 flex items-center justify-center">
+                            {membership.logoUrl ? (
+                              <img src={membership.logoUrl} alt={membership.dormitoryName} className="w-full h-full object-contain p-1" />
+                            ) : (
+                              <Building2 className="w-6 h-6 text-indigo-500" />
+                            )}
                           </div>
                           <span className="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 bg-emerald-500 border-2 border-white rounded-full" title="เปิดใช้งานอยู่" />
                         </div>

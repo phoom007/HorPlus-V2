@@ -109,7 +109,8 @@ import {
   Gift,
   Tag,
   Bot,
-  Loader2
+  Loader2,
+  Upload,
 } from 'lucide-react';
 
 import { onboardingClient } from '../../data/onboardingClient';
@@ -211,6 +212,165 @@ const PRESET_DORM_RULES = [
   { id: 'safety_lock', label: '🔐 ล็อคประตูและดูแลทรัพย์สิน', text: '• กรุณาล็อคประตูห้องพักทุกครั้งเมื่อออกไปข้างนอก ทางหอพักไม่รับผิดชอบกรณีทรัพย์สินสูญหาย' }
 ];
 
+interface DormitoryLogoUploaderProps {
+  provisionalDormitoryId: string | null;
+  ensureProvisionalDormitoryId: () => Promise<string>;
+  logoUrl: string | null;
+  onLogoChange: (newLogoUrl: string | null) => void;
+  onError: (msg: string) => void;
+}
+
+export const DormitoryLogoUploader: React.FC<DormitoryLogoUploaderProps> = ({
+  ensureProvisionalDormitoryId,
+  logoUrl,
+  onLogoChange,
+  onError,
+}) => {
+  const [isUploading, setIsUploading] = useState(false);
+  const [isDragOver, setIsDragOver] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleFile = async (file: File) => {
+    if (!file) return;
+
+    if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
+      onError('รองรับเฉพาะไฟล์รูปภาพประเภท PNG, JPG และ WebP เท่านั้น');
+      return;
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      onError('ขนาดไฟล์ต้องไม่เกิน 5MB');
+      return;
+    }
+
+    try {
+      setIsUploading(true);
+      const dormId = await ensureProvisionalDormitoryId();
+      const body = new FormData();
+      body.append('file', file);
+
+      const res = await fetch(`/api/v1/dormitories/${dormId}/logo`, {
+        method: 'POST',
+        body,
+        credentials: 'include',
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.error?.message || 'เกิดข้อผิดพลาดในการอัปโหลดรูปภาพ');
+      }
+
+      onLogoChange(`${data.data.logoUrl}?t=${Date.now()}`);
+    } catch (err: any) {
+      console.error('[LOGO_UPLOAD_FAILED]', err);
+      onError(err.message || 'ไม่สามารถอัปโหลดโลโก้ได้ กรุณาลองใหม่อีกครั้ง');
+    } finally {
+      setIsUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const handleRemove = async () => {
+    try {
+      setIsUploading(true);
+      const dormId = await ensureProvisionalDormitoryId();
+      await fetch(`/api/v1/dormitories/${dormId}/logo`, {
+        method: 'DELETE',
+        credentials: 'include',
+      });
+      onLogoChange(null);
+    } catch (err: any) {
+      console.error('[LOGO_DELETE_FAILED]', err);
+      onLogoChange(null);
+    } finally {
+      setIsUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between">
+        <label className="block text-xs font-bold text-slate-700">
+          โลโก้หอพัก <span className="text-[10px] text-slate-400 font-normal">(ไม่บังคับ)</span>
+        </label>
+        {logoUrl && (
+          <button
+            type="button"
+            onClick={handleRemove}
+            disabled={isUploading}
+            className="text-[11px] font-bold text-rose-500 hover:text-rose-600 cursor-pointer flex items-center gap-1"
+          >
+            <Trash2 className="w-3 h-3" />
+            <span>ลบโลโก้</span>
+          </button>
+        )}
+      </div>
+
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/png,image/jpeg,image/webp"
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) handleFile(file);
+        }}
+      />
+
+      {logoUrl ? (
+        <div className="flex items-center gap-3 p-3 bg-white border border-slate-200 rounded-2xl">
+          <div className="w-16 h-16 rounded-xl border border-slate-100 bg-slate-50 flex items-center justify-center overflow-hidden shrink-0">
+            <img src={logoUrl} alt="Dormitory Logo" className="w-full h-full object-contain" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-xs font-bold text-slate-800">มีโลโก้หอพักแล้ว</p>
+            <p className="text-[10px] text-slate-400">รูปภาพนี้จะแสดงในส่วนหัวและเมนูเลือกหอพัก</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={isUploading}
+            className="px-3 py-1.5 text-xs font-bold text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-xl transition cursor-pointer shrink-0"
+          >
+            เปลี่ยนรูป
+          </button>
+        </div>
+      ) : (
+        <div
+          onClick={() => !isUploading && fileInputRef.current?.click()}
+          onDragOver={(e) => {
+            e.preventDefault();
+            setIsDragOver(true);
+          }}
+          onDragLeave={() => setIsDragOver(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setIsDragOver(false);
+            const file = e.dataTransfer.files?.[0];
+            if (file) handleFile(file);
+          }}
+          className={`border-2 border-dashed rounded-2xl p-4 text-center cursor-pointer transition flex flex-col items-center justify-center gap-1.5 ${
+            isDragOver
+              ? 'border-blue-500 bg-blue-50/50'
+              : 'border-slate-200 hover:border-blue-400 bg-white hover:bg-slate-50/50'
+          } ${isUploading ? 'opacity-50 pointer-events-none' : ''}`}
+        >
+          {isUploading ? (
+            <Loader2 className="w-6 h-6 text-blue-500 animate-spin" />
+          ) : (
+            <Upload className="w-6 h-6 text-slate-400" />
+          )}
+          <div className="text-xs font-bold text-slate-700">
+            {isUploading ? 'กำลังอัปโหลด...' : 'คลิกเพื่อเลือกไฟล์ หรือลากไฟล์มาวางที่นี่'}
+          </div>
+          <div className="text-[10px] text-slate-400">รองรับไฟล์ PNG, JPG หรือ WebP ขนาดไม่เกิน 5MB</div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, mode = 'initial' }) => {
   const authContext = React.useContext(AuthContext);
   const authUserName = authContext?.user?.name || authContext?.user?.displayName || authContext?.name || '';
@@ -297,6 +457,8 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
       province: 'กรุงเทพมหานคร',
       dormType: 'หอพักนักเรียน/นักศึกษา',
       genderType: 'รวม',
+      logoUrl: null as string | null,
+      hasLogo: false,
 
       // 2. Buildings & Flexible Structure
       buildings: [
@@ -1534,6 +1696,20 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                 className="w-full px-3.5 py-2.5 text-xs sm:text-sm bg-white border border-slate-200 rounded-xl focus:border-blue-500 outline-none font-bold text-slate-800"
               />
             </div>
+
+            <DormitoryLogoUploader
+              provisionalDormitoryId={provisionalDormitoryId}
+              ensureProvisionalDormitoryId={ensureProvisionalDormitoryId}
+              logoUrl={formData.logoUrl || null}
+              onLogoChange={(newLogoUrl) => {
+                setFormData((prev: any) => ({
+                  ...prev,
+                  logoUrl: newLogoUrl,
+                  hasLogo: Boolean(newLogoUrl),
+                }));
+              }}
+              onError={(err) => setValidationError(err)}
+            />
 
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-1">ที่อยู่หอพัก (สำหรับออกเอกสารสัญญา) <span className="text-rose-500">*</span></label>

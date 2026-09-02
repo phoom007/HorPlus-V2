@@ -30,6 +30,7 @@ import {
 } from '../utils/calendar-date.util.js';
 import { LATE_FEE_GRACE_DAYS } from '../utils/monthly-utility-calculator.util.js';
 import { backfillRoomOperationalStatusBaseline } from './room-operational-baseline.service.js';
+import { materializeFirstCyclePeopleSnapshots } from './first-cycle-people-materialization.service.js';
 import { UTILITY_RATE_CONSUMING_BILL_KINDS } from '../utils/utility-rate-consuming.util.js';
 
 export interface CreateBillingCycleDto {
@@ -339,6 +340,9 @@ export class BillingCycleService {
 
         // Establish one-time room operational status baseline for existing rooms without history
         await backfillRoomOperationalStatusBaseline(dormitoryId, tx);
+
+        // Authoritatively materialize first-cycle peopleCount = 1 snapshots for active rooms
+        await materializeFirstCyclePeopleSnapshots(dormitoryId, tx);
 
         return { cycle, rateSnapshot };
       });
@@ -1076,6 +1080,9 @@ export class BillingCycleService {
         }
       }
     }
+
+    // Authoritatively materialize first-cycle peopleCount = 1 snapshots for active rooms
+    await materializeFirstCyclePeopleSnapshots(dormitoryId);
 
     const res = await this.getBillingCycles(dormitoryId, { pageSize: 50 });
     return res.items;

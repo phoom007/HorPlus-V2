@@ -1681,63 +1681,40 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                   <div key={item.id} className="bg-white rounded-3xl border border-amber-200 shadow-2xs hover:shadow-md transition-all p-5 flex flex-col justify-between space-y-4">
                     <div className="flex items-center justify-between">
                       <span className="text-xl font-black text-slate-900">ห้อง {item.roomNum}</span>
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex items-center gap-1.5 shrink-0">
                         {item.isGroup ? (
-                          <span className="px-2.5 py-0.5 bg-purple-50 text-purple-700 border border-purple-200 font-bold rounded-full text-[10px]">
+                          <span className="inline-flex whitespace-nowrap shrink-0 px-2.5 py-0.5 bg-purple-50 text-purple-700 border border-purple-200 font-bold rounded-full text-[10px]">
                             รวม {item.affectedOrigins.length} บิล
                           </span>
                         ) : (
-                          <span className="px-2.5 py-0.5 bg-indigo-50 text-indigo-700 border border-indigo-100 font-bold rounded-full text-[10px]">
+                          <span className="inline-flex whitespace-nowrap shrink-0 px-2.5 py-0.5 bg-indigo-50 text-indigo-700 border border-indigo-100 font-bold rounded-full text-[10px]">
                             {item.affectedOrigins[0]?.cycleLabel ? `งวด ${item.affectedOrigins[0].cycleLabel}` : 'ไม่พบข้อมูลงวดบิล'}
                           </span>
                         )}
-                        <span className="px-3 py-1 bg-amber-50 text-amber-800 border border-amber-200 font-extrabold rounded-full text-[11px] flex items-center gap-1 animate-pulse">
+                        <span className="inline-flex whitespace-nowrap shrink-0 px-3 py-1 bg-amber-50 text-amber-800 border border-amber-200 font-extrabold rounded-full text-[11px] items-center gap-1">
                           <Clock className="w-3.5 h-3.5 text-amber-600" />
                           รอตรวจสลิป
                         </span>
                       </div>
                     </div>
 
-                    <div className="text-xs space-y-1">
+                    <div className="text-xs">
                       <p className="font-bold text-slate-800 flex items-center gap-1.5">
-                        <User className="w-3.5 h-3.5 text-slate-400" />
-                        {item.tenantName}
-                      </p>
-                      <div className="flex items-center gap-1 text-[11px] text-amber-700 font-medium bg-amber-50/60 px-2 py-0.5 rounded-md border border-amber-100/80">
-                        <AlertCircle className="w-3 h-3 text-amber-600 shrink-0" />
-                        <span>ยังไม่ได้ตรวจสอบเวลาการโอนจากระบบธนาคาร</span>
-                      </div>
-                      <p className="text-[11px] text-slate-400">
-                        ยื่นตรวจเมื่อ: {formatThaiDate(item.createdAt)}
+                        <User className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                        <span className="truncate">{item.tenantName}</span>
                       </p>
                     </div>
-
-                    {item.isGroup && item.affectedOrigins.length > 0 && (
-                      <div className="bg-slate-50/80 p-2.5 rounded-xl border border-slate-100 space-y-1 text-[11px]">
-                        <span className="font-bold text-slate-500 block text-[10px]">การจัดสรรตามบิล:</span>
-                        {item.affectedOrigins.map((orig, oIdx) => (
-                          <div key={oIdx} className="flex justify-between items-center text-slate-700">
-                            <span className="truncate pr-1">{orig.cycleLabel ? `งวด ${orig.cycleLabel}` : orig.billNumber}</span>
-                            <span className="font-bold shrink-0">{formatBaht(orig.amount)}</span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
 
                     {item.slipUrl ? (
                       <div
                         onClick={() => setViewingSlipUrl(item.slipUrl!)}
-                        className="relative bg-slate-50 border border-slate-200 rounded-2xl h-36 flex items-center justify-center p-2 cursor-pointer hover:border-indigo-400 transition-all group overflow-hidden"
+                        className="relative bg-slate-50 border border-slate-200 rounded-2xl h-36 flex items-center justify-center p-2 cursor-pointer hover:border-indigo-400 transition-all overflow-hidden"
                       >
                         <img
                           src={item.slipUrl}
                           alt="สลิปโอนเงิน"
-                          className="max-h-full max-w-full object-contain rounded-xl group-hover:scale-105 transition-transform"
+                          className="max-h-full max-w-full object-contain rounded-xl hover:scale-105 transition-transform"
                         />
-                        <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1 text-white text-xs font-bold rounded-2xl">
-                          <Eye className="w-4 h-4" />
-                          ดูรายละเอียด
-                        </div>
                       </div>
                     ) : (
                       <div className="bg-slate-50 border border-dashed border-slate-200 rounded-2xl h-24 flex items-center justify-center text-slate-400 text-xs font-semibold">

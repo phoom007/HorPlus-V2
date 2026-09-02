@@ -214,7 +214,6 @@ export function resolveRoomTenantAction(
     return { kind: 'DISABLED', reason: 'ไม่สามารถตรวจสอบสถานะห้องได้ กรุณาโหลดข้อมูลใหม่' };
   }
 
-  // 6. Pricing configuration check
   const hasPricing = Boolean(
     (room.monthlyRent && Number(room.monthlyRent) > 0) ||
     (room.termRent && Number(room.termRent) > 0) ||
@@ -225,7 +224,6 @@ export function resolveRoomTenantAction(
     return { kind: 'DISABLED', reason: 'ข้อมูลค่าเช่าของห้องไม่ครบ' };
   }
 
-  // 7. If room is current vacant and operational authority proves it's eligible
   if (room.status === 'vacant') {
     return { kind: 'QUICK_ADD_CURRENT' };
   }
@@ -234,6 +232,21 @@ export function resolveRoomTenantAction(
     kind: 'DISABLED',
     reason: 'ไม่สามารถตรวจสอบสถานะห้องได้ กรุณาโหลดข้อมูลใหม่',
   };
+}
+
+export function deriveFloorFromRoomNumber(roomNumber: string): number {
+  if (!roomNumber) return 1;
+  const digitsOnly = roomNumber.replace(/\D/g, '');
+  if (!digitsOnly) return 1;
+  const firstDigit = parseInt(digitsOnly.charAt(0), 10);
+  return (!isNaN(firstDigit) && firstDigit >= 1) ? firstDigit : 1;
+}
+
+export interface DormitoryPropertyDefaultsState {
+  defaultDeposit?: number | null;
+  defaultMonthlyRent?: number | null;
+  defaultTermRent?: number | null;
+  defaultDailyRent?: number | null;
 }
 
 export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
@@ -255,8 +268,12 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
   onClearInitialRoomId,
   selectedBillingCycleId,
   selectedCycleCode,
-  billingCycles = []
+  billingCycles = [],
+  onOpenBuildingPricingModal,
+  onOpenTieredRatesModal,
 }) => {
+  const [activeTab, setActiveTab] = useState<'rooms' | 'buildings'>('rooms');
+
   const queryClient = useQueryClient();
   const previewContextQuery = useQuery({
     queryKey: selectedBillingCycleId && dormitoryId ? queryKeys.meterPreviewContext(dormitoryId, selectedBillingCycleId) : ['previewContext-disabled'],
@@ -283,20 +300,29 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
   const [selectedStatus, setSelectedStatus] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
-  // Create / Edit modal state
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingRoom, setEditingRoom] = useState<Room | null>(null);
-  const [dormDefaults, setDormDefaults] = useState<{ defaultDeposit: number; defaultMonthlyRent: number } | null>(null);
+  const [dormDefaults, setDormDefaults] = useState<DormitoryPropertyDefaultsState | null>(null);
+  const [dirtiedPricingFields, setDirtiedPricingFields] = useState<Set<string>>(new Set());
   const [isDefaultsLoading, setIsDefaultsLoading] = useState(false);
   const [quickAddModalOpen, setQuickAddModalOpen] = useState(false);
   const [selectedQuickAddContext, setSelectedQuickAddContext] = useState<QuickAddRoomContext | null>(null);
   const [quickAddLoadingRoomId, setQuickAddLoadingRoomId] = useState<string | null>(null);
 
-  const loadDormDefaults = async (): Promise<{ defaultDeposit: number; defaultMonthlyRent: number } | null> => {
+  const loadDormDefaults = async (): Promise<DormitoryPropertyDefaultsState | null> => {
     if (!dormitoryId) return null;
     try {
       setIsDefaultsLoading(true);
-      const res = await httpRequest<{ data: { property?: { defaultDeposit?: number | string | null; defaultMonthlyRent?: number | string | null } } }>(
+      const res = await httpRequest<{
+        data: {
+          property?: {
+            defaultDeposit?: number | string | null;
+            defaultMonthlyRent?: number | string | null;
+            defaultTermRent?: number | string | null;
+            defaultDailyRent?: number | string | null;
+          };
+        };
+      }>(
         'GET',
         '/api/v1/properties/dormitory/defaults',
         undefined,
@@ -304,13 +330,24 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
       );
       if (res.data?.property) {
         const prop = res.data.property;
-        const defaultDeposit = prop.defaultDeposit !== null && prop.defaultDeposit !== undefined
+        const defaultDeposit = prop.defaultDeposit !== null && prop.defaultDeposit !== undefined && prop.defaultDeposit !== ''
           ? Number(prop.defaultDeposit)
-          : 0;
-        const defaultMonthlyRent = prop.defaultMonthlyRent !== null && prop.defaultMonthlyRent !== undefined
+          : null;
+        const defaultMonthlyRent = prop.defaultMonthlyRent !== null && prop.defaultMonthlyRent !== undefined && prop.defaultMonthlyRent !== ''
           ? Number(prop.defaultMonthlyRent)
-          : 0;
-        const loaded = { defaultDeposit, defaultMonthlyRent };
+          : null;
+        const defaultTermRent = prop.defaultTermRent !== null && prop.defaultTermRent !== undefined && prop.defaultTermRent !== ''
+          ? Number(prop.defaultTermRent)
+          : null;
+        const defaultDailyRent = prop.defaultDailyRent !== null && prop.defaultDailyRent !== undefined && prop.defaultDailyRent !== ''
+          ? Number(prop.defaultDailyRent)
+          : null;
+        const loaded: DormitoryPropertyDefaultsState = {
+          defaultDeposit,
+          defaultMonthlyRent,
+          defaultTermRent,
+          defaultDailyRent,
+        };
         setDormDefaults(loaded);
         return loaded;
       }
@@ -320,6 +357,50 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
     } finally {
       setIsDefaultsLoading(false);
     }
+  };
+
+  const resolvePricingDefaults = (targetBuildingId: string, customDefaults?: DormitoryPropertyDefaultsState | null) => {
+    const targetBld = buildings.find((b) => b.id === targetBuildingId);
+    const defs = customDefaults !== undefined ? customDefaults : dormDefaults;
+
+    const resolveValue = (bldVal: any, dormVal: any): number | '' => {
+      if (bldVal !== null && bldVal !== undefined && bldVal !== '' && !isNaN(Number(bldVal))) {
+        return Number(bldVal);
+      }
+      if (dormVal !== null && dormVal !== undefined && dormVal !== '' && !isNaN(Number(dormVal))) {
+        return Number(dormVal);
+      }
+      return '';
+    };
+
+    const monthlyRentVal = resolveValue(targetBld?.monthlyRent, defs?.defaultMonthlyRent);
+    const termRentVal = resolveValue(targetBld?.termRent, defs?.defaultTermRent);
+    const dailyRentVal = resolveValue(targetBld?.dailyRent, defs?.defaultDailyRent);
+
+    const bldDeposit = targetBld?.depositAmount;
+    const dormDeposit = defs?.defaultDeposit;
+    const monthlyDepositVal = resolveValue(bldDeposit, dormDeposit);
+    const termDepositVal = resolveValue(bldDeposit, dormDeposit);
+    const dailyDepositVal = resolveValue(bldDeposit, dormDeposit);
+
+    return {
+      monthlyRent: monthlyRentVal,
+      termRent: termRentVal,
+      dailyRent: dailyRentVal,
+      monthlyDeposit: monthlyDepositVal,
+      termDeposit: termDepositVal,
+      dailyDeposit: dailyDepositVal,
+    };
+  };
+
+  const applyBuildingPricingDefaults = (newBldId: string) => {
+    const pricing = resolvePricingDefaults(newBldId);
+    if (!dirtiedPricingFields.has('monthlyRent')) setMonthlyRent(pricing.monthlyRent);
+    if (!dirtiedPricingFields.has('termRent')) setTermRent(pricing.termRent);
+    if (!dirtiedPricingFields.has('dailyRent')) setDailyRent(pricing.dailyRent);
+    if (!dirtiedPricingFields.has('monthlyDeposit')) setMonthlyDeposit(pricing.monthlyDeposit);
+    if (!dirtiedPricingFields.has('termDeposit')) setTermDeposit(pricing.termDeposit);
+    if (!dirtiedPricingFields.has('dailyDeposit')) setDailyDeposit(pricing.dailyDeposit);
   };
 
   useEffect(() => {
@@ -387,9 +468,10 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
       setEditingRoom(room);
       setRoomNumber(room.roomNumber);
       const curBld = buildings.find(b => b.id === room.buildingId);
-      setBuildingSearchText(curBld ? `${curBld.name} • ชั้น ${curBld.floorCount || 1}` : '');
+      setBuildingSearchText(curBld ? curBld.name : '');
       setInlineBuildingCode(null);
       setIsBuildingDropdownOpen(false);
+      setFloor(room.floor || 1);
       setMonthlyRent(room.monthlyRent !== null && room.monthlyRent !== undefined ? room.monthlyRent : 0);
       setTermRent(room.termRent !== null && room.termRent !== undefined ? room.termRent : 0);
       setDailyRent(room.dailyRent !== null && room.dailyRent !== undefined ? room.dailyRent : 0);
@@ -401,38 +483,35 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
       setRoomStatus(room.status || 'vacant');
       setInitialWaterMeter(room.initialWaterMeter || 100);
       setInitialElectricMeter(room.initialElectricMeter || 1200);
+      setDirtiedPricingFields(new Set());
       setIsModalOpen(true);
     } else {
       let currentDefaults = dormDefaults;
       if (!currentDefaults) {
         currentDefaults = await loadDormDefaults();
       }
-      if (!currentDefaults) {
-        setToastMessage('ไม่สามารถโหลดข้อมูลการตั้งค่าเริ่มต้นของหอพักได้ กรุณาลองใหม่');
-        return;
-      }
 
-      const initialDeposit = currentDefaults.defaultDeposit;
-      const initialRent = currentDefaults.defaultMonthlyRent;
       const defBld = buildings[0];
+      const pricing = resolvePricingDefaults(defBld?.id || '', currentDefaults);
       setEditingRoom(null);
       setRoomNumber('');
       setBuildingId(defBld?.id || '');
-      setBuildingSearchText(defBld ? `${defBld.name} • ชั้น ${defBld.floorCount || 1}` : '');
+      setBuildingSearchText(defBld ? defBld.name : '');
       setInlineBuildingCode(null);
       setIsBuildingDropdownOpen(false);
-      setFloor(1);
-      setMonthlyRent(initialRent);
-      setTermRent(initialRent * 4);
-      setDailyRent(500);
+      setFloor(0);
+      setMonthlyRent(pricing.monthlyRent);
+      setTermRent(pricing.termRent);
+      setDailyRent(pricing.dailyRent);
       setRentCycle('monthly');
-      setTermDeposit(initialDeposit);
-      setMonthlyDeposit(initialDeposit);
-      setDailyDeposit(initialDeposit);
+      setTermDeposit(pricing.termDeposit);
+      setMonthlyDeposit(pricing.monthlyDeposit);
+      setDailyDeposit(pricing.dailyDeposit);
       setMaxOccupants(2);
       setRoomStatus('vacant');
       setInitialWaterMeter(100);
       setInitialElectricMeter(1200);
+      setDirtiedPricingFields(new Set());
       setIsModalOpen(true);
     }
   };
@@ -580,8 +659,17 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
       }
     }
 
-    const digitsOnly = roomNumber.replace(/\D/g, '');
-    const calculatedFloor = Number(floor) || (digitsOnly ? (parseInt(digitsOnly.charAt(0)) || 1) : 1);
+    let calculatedFloor = 1;
+    if (editingRoom) {
+      if (roomNumber.trim() === editingRoom.roomNumber.trim()) {
+        calculatedFloor = (editingRoom.floor && editingRoom.floor >= 1) ? editingRoom.floor : deriveFloorFromRoomNumber(roomNumber);
+      } else {
+        calculatedFloor = deriveFloorFromRoomNumber(roomNumber) || (editingRoom.floor && editingRoom.floor >= 1 ? editingRoom.floor : 1);
+      }
+    } else {
+      calculatedFloor = deriveFloorFromRoomNumber(roomNumber);
+    }
+    if (calculatedFloor < 1) calculatedFloor = 1;
 
     // Calculate effective status based on operational vs maintenance (Part A & B Single Authority)
     let effectiveStatus: RoomStatus;
@@ -666,7 +754,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
           if (existingBld) {
             effectiveBuildingId = existingBld.id;
           } else {
-            const createBldRes = await dataProvider.dormitory.addBuilding({
+            const createBldRes = await (dataProvider as any).dormitory.addBuilding({
               name: `อาคาร ${normCode}`,
               code: normCode,
               floorCount: 1,
@@ -2043,7 +2131,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
               <div className="w-full px-3 py-2 text-xs border border-gray-200 rounded-xl bg-slate-100 text-slate-500 font-bold select-none cursor-not-allowed">
                 {(() => {
                   const bld = buildings.find(b => b.id === (editingRoom.buildingId || buildingId));
-                  return bld ? `${bld.name} • ชั้น ${bld.floorCount || 1}` : 'อาคารหลัก';
+                  return bld ? bld.name : 'อาคารหลัก';
                 })()}
               </div>
             ) : (
@@ -2063,18 +2151,21 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                     if (matched) {
                       setBuildingId(matched.id);
                       setInlineBuildingCode(null);
+                      applyBuildingPricingDefaults(matched.id);
                     } else if (cleanCode.length > 0) {
                       setBuildingId('');
                       setInlineBuildingCode(cleanCode);
+                      applyBuildingPricingDefaults('');
                     } else {
                       setBuildingId('');
                       setInlineBuildingCode(null);
+                      applyBuildingPricingDefaults('');
                     }
                   }}
                   onBlur={() => {
                     setTimeout(() => setIsBuildingDropdownOpen(false), 200);
                     if (inlineBuildingCode) {
-                      setBuildingSearchText(`อาคาร ${inlineBuildingCode} • ชั้น 1`);
+                      setBuildingSearchText(`อาคาร ${inlineBuildingCode}`);
                     }
                   }}
                   placeholder="เลือกอาคาร หรือพิมพ์รหัสอาคารใหม่ เช่น C"
@@ -2089,12 +2180,13 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                         onMouseDown={() => {
                           setBuildingId(b.id);
                           setInlineBuildingCode(null);
-                          setBuildingSearchText(`${b.name} • ชั้น ${b.floorCount || 1}`);
+                          setBuildingSearchText(b.name);
                           setIsBuildingDropdownOpen(false);
+                          applyBuildingPricingDefaults(b.id);
                         }}
                         className="w-full text-left px-3 py-2 text-xs font-bold text-slate-700 hover:bg-indigo-50 hover:text-indigo-600 cursor-pointer flex items-center justify-between"
                       >
-                        <span>{b.name} • ชั้น {b.floorCount || 1}</span>
+                        <span>{b.name}</span>
                         {b.code && <span className="text-[10px] text-slate-400">รหัส: {b.code}</span>}
                       </button>
                     ))}
@@ -2103,13 +2195,14 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                         type="button"
                         onMouseDown={() => {
                           setBuildingId('');
-                          setBuildingSearchText(`อาคาร ${inlineBuildingCode} • ชั้น 1`);
+                          setBuildingSearchText(`อาคาร ${inlineBuildingCode}`);
                           setIsBuildingDropdownOpen(false);
+                          applyBuildingPricingDefaults('');
                         }}
                         className="w-full text-left px-3 py-2 text-xs font-bold text-indigo-600 bg-indigo-50/50 hover:bg-indigo-100 cursor-pointer flex items-center gap-1.5"
                       >
                         <Plus className="w-3.5 h-3.5" />
-                        <span>สร้างอาคารใหม่: <strong>อาคาร {inlineBuildingCode} • ชั้น 1</strong></span>
+                        <span>สร้างอาคารใหม่: <strong>อาคาร {inlineBuildingCode}</strong></span>
                       </button>
                     )}
                   </div>
@@ -2168,7 +2261,10 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                   type="number"
                   min={0}
                   value={termRent}
-                  onChange={(e) => setTermRent(e.target.value === '' ? '' : (e.target.value as any))}
+                  onChange={(e) => {
+                    setTermRent(e.target.value === '' ? '' : (e.target.value as any));
+                    setDirtiedPricingFields((prev) => new Set(prev).add('termRent'));
+                  }}
                   onBlur={(e) => setTermRent(normalizeMoneyValue(e.target.value))}
                   placeholder="เช่น 18000"
                   className="w-full px-3 py-2 text-xs border border-gray-200 rounded-xl bg-white font-bold"
@@ -2181,7 +2277,10 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                   required
                   min={0}
                   value={monthlyRent}
-                  onChange={(e) => setMonthlyRent(e.target.value === '' ? '' : (e.target.value as any))}
+                  onChange={(e) => {
+                    setMonthlyRent(e.target.value === '' ? '' : (e.target.value as any));
+                    setDirtiedPricingFields((prev) => new Set(prev).add('monthlyRent'));
+                  }}
                   onBlur={(e) => setMonthlyRent(normalizeMoneyValue(e.target.value))}
                   placeholder="เช่น 4500"
                   className="w-full px-3 py-2 text-xs border border-gray-200 rounded-xl bg-white font-bold"
@@ -2193,7 +2292,10 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                   type="number"
                   min={0}
                   value={dailyRent}
-                  onChange={(e) => setDailyRent(e.target.value === '' ? '' : (e.target.value as any))}
+                  onChange={(e) => {
+                    setDailyRent(e.target.value === '' ? '' : (e.target.value as any));
+                    setDirtiedPricingFields((prev) => new Set(prev).add('dailyRent'));
+                  }}
                   onBlur={(e) => setDailyRent(normalizeMoneyValue(e.target.value))}
                   placeholder="เช่น 500"
                   className="w-full px-3 py-2 text-xs border border-gray-200 rounded-xl bg-white font-bold"
@@ -2217,7 +2319,10 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                   type="number"
                   min={0}
                   value={termDeposit}
-                  onChange={(e) => setTermDeposit(e.target.value === '' ? '' : (e.target.value as any))}
+                  onChange={(e) => {
+                    setTermDeposit(e.target.value === '' ? '' : (e.target.value as any));
+                    setDirtiedPricingFields((prev) => new Set(prev).add('termDeposit'));
+                  }}
                   onBlur={(e) => setTermDeposit(normalizeMoneyValue(e.target.value))}
                   placeholder="เช่น 9000"
                   className="w-full px-3 py-2 text-xs border border-gray-200 rounded-xl bg-white font-bold text-slate-800 focus:border-indigo-600 focus:outline-none"
@@ -2229,7 +2334,10 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                   type="number"
                   min={0}
                   value={monthlyDeposit}
-                  onChange={(e) => setMonthlyDeposit(e.target.value === '' ? '' : (e.target.value as any))}
+                  onChange={(e) => {
+                    setMonthlyDeposit(e.target.value === '' ? '' : (e.target.value as any));
+                    setDirtiedPricingFields((prev) => new Set(prev).add('monthlyDeposit'));
+                  }}
                   onBlur={(e) => setMonthlyDeposit(normalizeMoneyValue(e.target.value))}
                   placeholder="เช่น 9000"
                   className="w-full px-3 py-2 text-xs border border-gray-200 rounded-xl bg-white font-bold text-slate-800 focus:border-indigo-600 focus:outline-none"
@@ -2241,7 +2349,10 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                   type="number"
                   min={0}
                   value={dailyDeposit}
-                  onChange={(e) => setDailyDeposit(e.target.value === '' ? '' : (e.target.value as any))}
+                  onChange={(e) => {
+                    setDailyDeposit(e.target.value === '' ? '' : (e.target.value as any));
+                    setDirtiedPricingFields((prev) => new Set(prev).add('dailyDeposit'));
+                  }}
                   onBlur={(e) => setDailyDeposit(normalizeMoneyValue(e.target.value))}
                   placeholder="เช่น 1000"
                   className="w-full px-3 py-2 text-xs border border-gray-200 rounded-xl bg-white font-bold text-slate-800 focus:border-indigo-600 focus:outline-none"

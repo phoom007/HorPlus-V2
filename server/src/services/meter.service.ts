@@ -16,6 +16,7 @@ import { ENTITLEMENT_ROOM_LIMITS } from './entitlement.service.js';
 import { subscriptionEntitlementService } from './subscription-entitlement.service.js';
 import { AppError } from '../types/index.js';
 import { resolveBillDirectRecalculationEligibilityInTx } from './billing.service.js';
+import { materializeFirstCyclePeopleSnapshots } from './first-cycle-people-materialization.service.js';
 import { getPrismaClient } from '../db/prisma.js';
 import { toDecimal, formatDecimal, compareDecimals, divDecimals, mulDecimals, subDecimals, addDecimals, isZeroDecimal } from '../utils/decimal-math.util.js';
 import { calculateInstallmentSchedule } from '../utils/installment-calculator.util.js';
@@ -2973,6 +2974,9 @@ export class MeterService {
     // 4. Load previous cycle snapshots (if previous cycle exists) - STRICTLY READ ONLY
     const prevSnapshotMap = new Map<string, number>();
     if (previousCycle) {
+      // Authoritatively ensure first-cycle peopleCount = 1 snapshots exist if previous was earliest cycle
+      await materializeFirstCyclePeopleSnapshots(dormitoryId);
+
       const prevSnapshots = await prisma.roomBillingCycleSnapshot.findMany({
         where: {
           dormitoryId,

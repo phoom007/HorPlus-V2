@@ -1649,11 +1649,22 @@ export async function seedLocal07Data() {
   });
 
   // Seed Room 101 July 2026 Snapshot with 1 person (Section 7: People-Count difference fixture; current household = 2)
-  await prisma.roomBillingCycleSnapshot.create({
-    data: {
+  await prisma.roomBillingCycleSnapshot.upsert({
+    where: {
+      dormitory_billing_cycle_room_unique: {
+        dormitoryId: compDorm.id,
+        billingCycleId: cycleJuly.id,
+        roomId: createdRooms['101'].id,
+      },
+    },
+    create: {
       dormitoryId: compDorm.id,
       billingCycleId: cycleJuly.id,
       roomId: createdRooms['101'].id,
+      peopleCount: 1,
+      source: 'HOUSEHOLD_SYNC',
+    },
+    update: {
       peopleCount: 1,
       source: 'HOUSEHOLD_SYNC',
     },
