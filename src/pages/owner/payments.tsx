@@ -421,12 +421,28 @@ export function buildViewingReceipt(
       });
     }
 
+    const isHistorical = Boolean(
+      snap.isHistoricalImport ||
+      payment.metadata?.isHistoricalImport ||
+      billGroups.some((bg: any) => bg.items?.some((it: any) => it.metadata?.isHistoricalImport))
+    );
+    const originalPaymentDateKnown = isHistorical
+      ? Boolean(snap.originalPaymentDateKnown ?? payment.metadata?.originalPaymentDateKnown ?? false)
+      : true;
+    const originalPaidAt = (!isHistorical || originalPaymentDateKnown)
+      ? (snap.paymentDate || rcpt.issuedAt || payment.paymentDate || null)
+      : null;
+    const importedAt = snap.importedAt || payment.metadata?.importedAt || rcpt.issuedAt || payment.createdAt;
+
     return {
       receiptNumber: snap.receiptNumber || rcpt.receiptNumber,
       roomNumber,
       tenantName,
       totalAmount,
-      paidAt: snap.paymentDate || rcpt.issuedAt || rcpt.paidAt || payment.paymentDate || payment.createdAt,
+      paidAt: originalPaidAt,
+      isHistorical,
+      originalPaymentDateKnown,
+      importedAt,
       paymentMethod: snap.paymentMethod
         ? (String(snap.paymentMethod).toUpperCase() === 'CASH' ? 'เงินสดสำนักงาน' : 'แสกน PromptPay QR')
         : ((payment.method || '').toUpperCase() === 'CASH' ? 'เงินสดสำนักงาน' : 'แสกน PromptPay QR'),
@@ -495,13 +511,29 @@ export function buildViewingReceipt(
     ];
   }
 
+  const isHistorical = Boolean(
+    snap.isHistoricalImport ||
+    payment.metadata?.isHistoricalImport ||
+    (targetBill?.items && targetBill.items.some((it: any) => it.metadata?.isHistoricalImport))
+  );
+  const originalPaymentDateKnown = isHistorical
+    ? Boolean(snap.originalPaymentDateKnown ?? payment.metadata?.originalPaymentDateKnown ?? false)
+    : true;
+  const originalPaidAt = (!isHistorical || originalPaymentDateKnown)
+    ? (snap.paymentDate || payment.paymentDate || null)
+    : null;
+  const importedAt = snap.importedAt || payment.metadata?.importedAt || rcpt.issuedAt || payment.createdAt;
+
   return {
     receiptNumber: snap.receiptNumber || rcpt.receiptNumber,
     billNumber: snap.billNumber || targetBill?.billNumber,
     roomNumber,
     tenantName,
     totalAmount,
-    paidAt: snap.paymentDate || rcpt.issuedAt || rcpt.paidAt || payment.paymentDate || payment.createdAt,
+    paidAt: originalPaidAt,
+    isHistorical,
+    originalPaymentDateKnown,
+    importedAt,
     paymentMethod: snap.paymentMethod
       ? (String(snap.paymentMethod).toUpperCase() === 'CASH' ? 'เงินสดสำนักงาน' : 'แสกน PromptPay QR')
       : ((payment.method || '').toUpperCase() === 'CASH' ? 'เงินสดสำนักงาน' : 'แสกน PromptPay QR'),
@@ -617,7 +649,10 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
     roomNumber: string;
     tenantName: string;
     totalAmount: number;
-    paidAt?: string;
+    paidAt?: string | null;
+    isHistorical?: boolean;
+    originalPaymentDateKnown?: boolean;
+    importedAt?: string;
     paymentMethod: string;
     receiverName?: string;
     isMultiBill?: boolean;
@@ -649,6 +684,18 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
       metadata?: any;
       type?: string;
     }>;
+  } | null>(null);
+
+  const [viewingDailyGroupDetail, setViewingDailyGroupDetail] = useState<{
+    id: string;
+    roomId: string;
+    roomNumber: string;
+    tenantId?: string | null;
+    tenantName: string;
+    phone?: string | null;
+    totalAmount: number;
+    invoices: DailyStayInvoice[];
+    latestPaidDate: string;
   } | null>(null);
 
   // Toast notification state
@@ -1033,6 +1080,58 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
     });
   }, [paidPayments, billingCycles, effectiveCycleId, rooms, tenants]);
 
+  // Consolidated Paid Daily Summary Groups (1 card per billingCycle + tenantId + roomId when tenantId exists, isolated when null)
+  const consolidatedPaidDailyGroups = useMemo(() => {
+    const map = new Map<string, {
+      id: string;
+      roomId: string;
+      roomNumber: string;
+      tenantId?: string | null;
+      tenantName: string;
+      phone?: string | null;
+      totalAmount: number;
+      invoices: typeof paidDailyInvoices;
+      latestPaidDate: string;
+    }>();
+
+    paidDailyInvoices.forEach(inv => {
+      const tenantId = inv.dailyStay?.tenantId;
+      const roomId = inv.dailyStay?.roomId || inv.dailyStay?.room?.id || '';
+      const key = tenantId ? `${effectiveCycleId}_${tenantId}_${roomId}` : `daily_${inv.id}`;
+
+      const roomNum = inv.dailyStay?.room?.roomNumber || getRoomNum(roomId) || '-';
+      const tenantName = inv.dailyStay?.tenant?.displayName || inv.dailyStay?.applicantFullName || 'ผู้พักรายวัน';
+      const phone = inv.dailyStay?.applicantPhone || inv.dailyStay?.tenant?.phone;
+      const totalAmt = Number(inv.totalAgreedAmount || 0);
+      const paidDate = inv.updatedAt || inv.issuedAt;
+
+      const existing = map.get(key);
+      if (existing) {
+        existing.totalAmount += totalAmt;
+        existing.invoices.push(inv);
+        if (new Date(paidDate).getTime() > new Date(existing.latestPaidDate).getTime()) {
+          existing.latestPaidDate = paidDate;
+        }
+      } else {
+        map.set(key, {
+          id: key,
+          roomId,
+          roomNumber: roomNum,
+          tenantId,
+          tenantName,
+          phone,
+          totalAmount: totalAmt,
+          invoices: [inv],
+          latestPaidDate: paidDate,
+        });
+      }
+    });
+
+    return Array.from(map.values()).sort((a, b) => {
+      return a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true, sensitivity: 'base' });
+    });
+  }, [paidDailyInvoices, effectiveCycleId, rooms, tenants]);
+
   // Tab 4: Rejected (สลิปผิดพลาด) -> Strictly Selected Header Cycle ONLY (Fail Closed on missing bill cycle authority)
   const rejectedPayments = useMemo(() => {
     return paymentsData
@@ -1056,6 +1155,18 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
     const q = searchQuery.toLowerCase().trim();
     return list.filter(g => {
       return g.roomNumber.toLowerCase().includes(q) || g.tenantName.toLowerCase().includes(q);
+    });
+  };
+
+  const filterConsolidatedDailyGroupsByQuery = (list: typeof consolidatedPaidDailyGroups) => {
+    if (!searchQuery?.trim()) return list;
+    const q = searchQuery.toLowerCase().trim();
+    return list.filter(g => {
+      return (
+        g.roomNumber.toLowerCase().includes(q) ||
+        g.tenantName.toLowerCase().includes(q) ||
+        g.invoices.some(inv => (inv.invoiceNumber || '').toLowerCase().includes(q))
+      );
     });
   };
 
@@ -1510,7 +1621,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
               }`}
             >
               <CheckCircle className="w-4 h-4 text-emerald-500 shrink-0" />
-              <span className="truncate">ชำระแล้ว ({paidPayments.length + paidDailyInvoices.length})</span>
+              <span className="truncate">ชำระแล้ว ({consolidatedPaidGroups.length + consolidatedPaidDailyGroups.length})</span>
             </button>
 
             {/* Tab 4: สลิปผิดพลาด (rejected) -> SELECTED CYCLE ONLY */}
@@ -2093,15 +2204,14 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                 </div>
               );
             })}
-            {filterDailyInvoicesByQuery(paidDailyInvoices).map((inv) => {
-              const roomNum = inv.dailyStay?.room?.roomNumber || getRoomNum(inv.dailyStay?.roomId) || '-';
-              const tenantName = inv.dailyStay?.applicantFullName || inv.dailyStay?.tenant?.displayName || 'ผู้พักรายวัน';
-              const totalAmount = Number(inv.totalAgreedAmount || 0);
+            {filterConsolidatedDailyGroupsByQuery(consolidatedPaidDailyGroups).map((group) => {
+              const isSingle = group.invoices.length === 1;
+              const firstInv = group.invoices[0];
 
               return (
-                <div key={inv.id} className="bg-white rounded-3xl border border-emerald-100 shadow-2xs hover:shadow-md transition-all p-5 flex flex-col justify-between space-y-4">
+                <div key={group.id} className="bg-white rounded-3xl border border-emerald-100 shadow-2xs hover:shadow-md transition-all p-5 flex flex-col justify-between space-y-4">
                   <div className="flex items-center justify-between">
-                    <span className="text-xl font-black text-slate-900">ห้อง {roomNum}</span>
+                    <span className="text-xl font-black text-slate-900">ห้อง {group.roomNumber}</span>
                     <div className="flex items-center gap-1">
                       <span className="px-2.5 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-200 font-extrabold rounded-full text-[10px]">
                         รายวัน
@@ -2116,43 +2226,51 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                   <div className="p-3 bg-slate-50/80 rounded-2xl space-y-1.5 text-xs">
                     <p className="font-bold text-slate-800 flex items-center gap-1.5">
                       <User className="w-3.5 h-3.5 text-slate-400" />
-                      {tenantName}
+                      {group.tenantName}
                     </p>
                     <div className="flex items-center justify-between text-[11px] text-slate-500 pt-1 border-t border-slate-200/50">
                       <span>ช่องทาง: <strong className="text-slate-700">เงินสด</strong></span>
-                      <span>{inv.updatedAt ? formatThaiDate(inv.updatedAt) : formatThaiDate(inv.issuedAt)}</span>
+                      <span>{group.latestPaidDate ? formatThaiDate(group.latestPaidDate) : '-'}</span>
                     </div>
                   </div>
 
-                  {/* Items summary */}
+                  {/* Invoices summary */}
                   <div className="text-[11px] text-slate-500 space-y-1 border-t border-slate-100 pt-2">
-                    {inv.items && inv.items.map((it, idx) => (
-                      <div key={idx} className="flex justify-between items-center">
-                        <span className="truncate pr-1 text-slate-500 font-medium">{it.description || (it.itemType === 'DAILY_RENT' ? 'ค่าเช่ารายวัน' : it.itemType)}:</span>
-                        <span className="font-semibold text-slate-700 shrink-0">{formatBaht(Number(it.amount))}</span>
+                    {group.invoices.map((inv, idx) => (
+                      <div key={inv.id || idx} className="flex justify-between items-center text-xs">
+                        <span className="truncate pr-1 text-slate-600 font-medium">
+                          {inv.invoiceNumber || `รายการเข้าพัก #${idx + 1}`}:
+                        </span>
+                        <span className="font-semibold text-slate-700 shrink-0">{formatBaht(Number(inv.totalAgreedAmount || 0))}</span>
                       </div>
                     ))}
                   </div>
 
                   <div className="flex items-baseline justify-between pt-1 border-t border-slate-100">
-                    <span className="text-xs text-slate-400 font-bold">ยอดชำระสำเร็จ</span>
-                    <span className="text-lg font-black text-emerald-600">{formatBaht(totalAmount)}</span>
+                    <span className="text-xs text-slate-400 font-bold">ยอดชำระสำเร็จรวม</span>
+                    <span className="text-lg font-black text-emerald-600">{formatBaht(group.totalAmount)}</span>
                   </div>
 
                   <button
                     type="button"
-                    onClick={() => handleOpenDailyDetail(inv)}
+                    onClick={() => {
+                      if (isSingle) {
+                        handleOpenDailyDetail(firstInv);
+                      } else {
+                        setViewingDailyGroupDetail(group);
+                      }
+                    }}
                     className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-xs"
                   >
                     <FileText className="w-4 h-4" />
-                    รายละเอียดการชำระเงิน
+                    {isSingle ? 'รายละเอียดการชำระเงิน' : `รายละเอียด (${group.invoices.length} รายการ)`}
                   </button>
                 </div>
               );
             })}
           </div>
 
-          {filterPaymentsByQuery(paidPayments).length === 0 && filterDailyInvoicesByQuery(paidDailyInvoices).length === 0 && (
+          {filterConsolidatedGroupsByQuery(consolidatedPaidGroups).length === 0 && filterConsolidatedDailyGroupsByQuery(consolidatedPaidDailyGroups).length === 0 && (
             <div className="bg-white p-12 rounded-3xl border border-slate-100 text-center text-slate-400 font-bold text-xs">
               ไม่พบบิลที่ชำระแล้วในรอบบิลนี้
             </div>
@@ -2440,9 +2558,16 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                 <div className="text-right">
                   <h4 className="font-extrabold text-slate-950 text-sm uppercase leading-tight">ใบเสร็จรับเงิน</h4>
                   <p className="text-[11px] text-slate-600 font-semibold mt-1">เลขที่: {viewingReceipt.receiptNumber}</p>
-                  {viewingReceipt.paidAt && (
+                  {viewingReceipt.isHistorical && !viewingReceipt.originalPaymentDateKnown ? (
+                    <>
+                      <p className="text-[10px] text-amber-700 font-semibold mt-0.5">วันที่ชำระเดิม: ไม่ทราบวันที่ชำระเดิม</p>
+                      {viewingReceipt.importedAt && (
+                        <p className="text-[10px] text-slate-500 font-medium mt-0.5">วันที่นำเข้าระบบ: {formatThaiDate(viewingReceipt.importedAt)}</p>
+                      )}
+                    </>
+                  ) : viewingReceipt.paidAt ? (
                     <p className="text-[10px] text-slate-500 font-medium mt-0.5">วันที่ออก: {formatThaiDate(viewingReceipt.paidAt)}</p>
-                  )}
+                  ) : null}
                 </div>
               </div>
 
@@ -2667,6 +2792,88 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
               <button
                 type="button"
                 onClick={() => setIsDailyDetailOpen(false)}
+                className="px-5 py-2 text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl cursor-pointer"
+              >
+                ปิด
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* Daily Stay Group Detail Modal */}
+      <Modal
+        isOpen={!!viewingDailyGroupDetail}
+        onClose={() => setViewingDailyGroupDetail(null)}
+        title={`รายละเอียดการชำระเงินรายวัน (ห้อง ${viewingDailyGroupDetail?.roomNumber})`}
+        size="lg"
+      >
+        {viewingDailyGroupDetail && (
+          <div className="space-y-5 text-xs text-slate-800">
+            <div className="p-4 bg-slate-50 border border-slate-200/80 rounded-2xl grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+              <div>
+                <span className="text-slate-400 font-medium">ห้องพัก:</span>
+                <p className="font-bold text-slate-900">ห้อง {viewingDailyGroupDetail.roomNumber}</p>
+              </div>
+              <div>
+                <span className="text-slate-400 font-medium">ผู้พักรายวัน:</span>
+                <p className="font-bold text-slate-900">{viewingDailyGroupDetail.tenantName}</p>
+              </div>
+              <div>
+                <span className="text-slate-400 font-medium">ยอดรวมทั้งหมด:</span>
+                <p className="font-bold text-emerald-600 text-sm">{formatBaht(viewingDailyGroupDetail.totalAmount)}</p>
+              </div>
+              <div>
+                <span className="text-slate-400 font-medium">จำนวนใบแจ้งหนี้:</span>
+                <p className="font-bold text-slate-900">{viewingDailyGroupDetail.invoices.length} รายการ</p>
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              {viewingDailyGroupDetail.invoices.map((inv, idx) => (
+                <div key={inv.id || idx} className="border border-slate-200 rounded-2xl p-3.5 bg-white space-y-2">
+                  <div className="flex justify-between items-center pb-1.5 border-b border-slate-100">
+                    <div>
+                      <span className="font-bold text-slate-800">{inv.invoiceNumber || `ใบแจ้งหนี้ #${idx + 1}`}</span>
+                      <span className="text-[10px] text-slate-500 ml-2">
+                        {formatThaiDate(inv.dailyStay?.startDate || inv.checkInDate)} - {formatThaiDate(inv.dailyStay?.endDate || inv.checkOutDate)}
+                      </span>
+                    </div>
+                    <span className="font-extrabold text-emerald-600 text-xs">
+                      {formatBaht(Number(inv.totalAgreedAmount || 0))}
+                    </span>
+                  </div>
+
+                  <div className="text-[11px] text-slate-600 space-y-1">
+                    {inv.items && inv.items.map((it: any, itIdx: number) => (
+                      <div key={itIdx} className="flex justify-between items-center">
+                        <span className="text-slate-500">{it.description || (it.itemType === 'DAILY_RENT' ? 'ค่าเช่ารายวัน' : it.itemType)}</span>
+                        <span className="font-medium text-slate-700">{formatBaht(Number(it.amount))}</span>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="flex justify-end pt-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setViewingDailyGroupDetail(null);
+                        handleOpenDailyDetail(inv);
+                      }}
+                      className="px-3 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-[10px] rounded-lg border border-indigo-200 transition-all cursor-pointer flex items-center gap-1"
+                    >
+                      <FileText className="w-3 h-3" />
+                      ดูใบแจ้งหนี้ฉบับเต็ม
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex justify-end pt-2">
+              <button
+                type="button"
+                onClick={() => setViewingDailyGroupDetail(null)}
                 className="px-5 py-2 text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl cursor-pointer"
               >
                 ปิด

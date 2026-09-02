@@ -179,6 +179,28 @@ const THAI_MONTH_FULL: Record<string, string> = {
   '09': 'กันยายน', '10': 'ตุลาคม', '11': 'พฤศจิกายน', '12': 'ธันวาคม'
 };
 
+export const isHistoricalPaidBill = (b: any): boolean => {
+  if (!b) return false;
+  const isPaid = (b.status || '').toLowerCase() === 'paid';
+  if (!isPaid) return false;
+
+  const hasItemHistorical = Array.isArray(b.items) && b.items.some((it: any) =>
+    it?.metadata?.isHistoricalImport === true ||
+    (it?.metadata && typeof it.metadata === 'object' && (it.metadata as any).isHistoricalImport === true)
+  );
+
+  const hasPaymentHistorical = Array.isArray(b.Payment) && b.Payment.some((p: any) =>
+    p?.metadata?.isHistoricalImport === true ||
+    (p?.metadata && typeof p.metadata === 'object' && (p.metadata as any).isHistoricalImport === true)
+  );
+
+  const isDirectFlag = Boolean(b.isHistoricalImport || b.metadata?.isHistoricalImport);
+
+  return hasItemHistorical || hasPaymentHistorical || isDirectFlag;
+};
+
+export const isPreHorPlusPaidBill = isHistoricalPaidBill;
+
 export function calculateOwnerReports(params: ReportCalculationParams): ReportCalculationResult {
   const rooms = params.rooms || [];
   const bills = params.bills || [];
@@ -227,17 +249,7 @@ export function calculateOwnerReports(params: ReportCalculationParams): ReportCa
     currentMonthBills = filteredBills;
   }
 
-  const isPreHorPlusPaidBill = (b: any): boolean => {
-    const isPaid = (b.status || '').toLowerCase() === 'paid';
-    const isHist = Boolean(
-      b.metadata?.isHistoricalImport ||
-      b.isHistoricalImport ||
-      (b.metadata && typeof b.metadata === 'object' && b.metadata.isHistoricalImport)
-    );
-    return isPaid && isHist;
-  };
-
-  const revenueActiveBills = currentMonthBills.filter(b => !isPreHorPlusPaidBill(b));
+  const revenueActiveBills = currentMonthBills.filter(b => !isHistoricalPaidBill(b));
   const paidBills = revenueActiveBills.filter(b => (b.status || '').toLowerCase() === 'paid');
   const unpaidBills = currentMonthBills.filter(b => (b.status || '').toLowerCase() !== 'paid');
 
@@ -340,15 +352,17 @@ export function calculateOwnerReports(params: ReportCalculationParams): ReportCa
   const defaultMonths = ['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12'];
   const monthlyRevenueHistory: MonthlyRevenueHistoryItem[] = defaultMonths.map(m => {
     const cycleKey = `${selectedYear}-${m}`;
-    const monthBills = filteredBills.filter(b => {
-      if (b.cycleCode === cycleKey || b.cycleId === cycleKey) return true;
-      if (b.billingCycle?.cycleCode === cycleKey) return true;
-      if (b.billingDate) {
-        const dStr = typeof b.billingDate === 'string' ? b.billingDate : b.billingDate.toISOString?.();
-        if (dStr && dStr.startsWith(cycleKey)) return true;
-      }
-      return false;
-    });
+    const monthBills = filteredBills
+      .filter(b => {
+        if (b.cycleCode === cycleKey || b.cycleId === cycleKey) return true;
+        if (b.billingCycle?.cycleCode === cycleKey) return true;
+        if (b.billingDate) {
+          const dStr = typeof b.billingDate === 'string' ? b.billingDate : b.billingDate.toISOString?.();
+          if (dStr && dStr.startsWith(cycleKey)) return true;
+        }
+        return false;
+      })
+      .filter(b => !isPreHorPlusPaidBill(b));
 
     const mRentSat = monthBills.reduce((s: bigint, b: any) => s + getBillRentSatangs(b), 0n);
     const mWaterSat = monthBills.reduce((s: bigint, b: any) => s + getBillWaterSatangs(b), 0n);

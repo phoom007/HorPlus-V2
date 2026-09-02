@@ -95,7 +95,7 @@ export async function recordCashPaymentInTx(
       totalAmount: new Prisma.Decimal(submitAmount.toFixed(2)),
       method: 'CASH',
       status: 'APPROVED',
-      paymentDate: effectivePaymentDate,
+      paymentDate: (effectivePaymentDate instanceof Date) ? effectivePaymentDate : now,
       recordedByUserId: safeUserId,
       idempotencyKey: input.idempotencyKey || null,
       notes: input.metadata?.notes || 'รับชำระด้วยเงินสด ณ เคาน์เตอร์',
@@ -342,7 +342,7 @@ export async function recordCombinedCashPaymentInTx(
       totalAmount: new Prisma.Decimal(submitAmount.toFixed(2)),
       method: 'CASH',
       status: 'APPROVED',
-      paymentDate: effectivePaymentDate,
+      paymentDate: (effectivePaymentDate instanceof Date) ? effectivePaymentDate : now,
       recordedByUserId: safeUserId,
       idempotencyKey: input.idempotencyKey || null,
       notes: input.metadata?.notes || 'รับชำระเงินสดแบบรวมบิล ณ เคาน์เตอร์',
@@ -686,6 +686,21 @@ export async function generateReceiptInTx(
     }
   }
 
+  const isHistorical = Boolean(
+    payment?.metadata?.isHistoricalImport ||
+    (payment?.metadata && typeof payment.metadata === 'object' && (payment.metadata as any).isHistoricalImport) ||
+    bill?.items?.some((it: any) => it.metadata?.isHistoricalImport)
+  );
+  const originalPaymentDateKnown = isHistorical
+    ? Boolean(payment?.metadata?.originalPaymentDateKnown ?? false)
+    : true;
+  const originalPaymentDate = (isHistorical && !originalPaymentDateKnown)
+    ? null
+    : (payment?.paymentDate ? payment.paymentDate.toISOString() : (isHistorical ? null : today.toISOString()));
+  const importedAt = isHistorical
+    ? (payment?.metadata?.importedAt || (payment?.metadata as any)?.importedAt || today.toISOString())
+    : undefined;
+
   const snapshotData = {
     receiptNumber,
     billNumber: bill?.billNumber || null,
@@ -701,7 +716,10 @@ export async function generateReceiptInTx(
     dormitoryAddress: bill?.dormitory?.address || null,
     dormitoryPhone: bill?.dormitory?.phone || null,
     paymentMethod: payment?.method || 'CASH',
-    paymentDate: (payment?.paymentDate || today).toISOString(),
+    paymentDate: originalPaymentDate,
+    isHistoricalImport: isHistorical,
+    originalPaymentDateKnown,
+    importedAt,
     receiverName: receiverDisplayName,
     isCombinedReceipt: false,
   };
@@ -774,7 +792,7 @@ export async function generateGroupReceiptInTx(params: {
     }
   }
 
-  const dorm = await tx.dormitory.findUnique({ where: { id: dormitoryId }, select: { name: true, taxId: true, address: true, phone: true } });
+  const dorm = await tx.dormitory.findUnique({ where: { id: dormitoryId }, select: { name: true, addressLine1: true, phone: true } });
 
   // Resolve authoritative billGroups: use passed parameter or atomically construct inside tx
   let billGroups = params.billGroups;
@@ -825,11 +843,16 @@ export async function generateGroupReceiptInTx(params: {
     );
   }
 
-  // Construct legacy compatibility summary items if not explicitly provided
-  const legacyReceiptItems = params.receiptItems || finalBillGroups.map((bg) => ({
-    description: `ชำระบิล ${bg.billNumber || bg.billId}`,
-    amount: bg.allocatedAmount,
-  }));
+  const isHistorical = Boolean(
+    finalBillGroups.some((bg: any) => bg.items?.some((it: any) => it.metadata?.isHistoricalImport))
+  );
+  const originalPaymentDateKnown = isHistorical ? Boolean(params.paymentDate) : true;
+  const originalPaymentDate = (isHistorical && !originalPaymentDateKnown)
+    ? null
+    : (params.paymentDate ? params.paymentDate.toISOString() : (isHistorical ? null : today.toISOString()));
+  const importedAt = isHistorical ? today.toISOString() : undefined;
+
+  const legacyReceiptItems = finalBillGroups.flatMap((bg: any) => bg.items || []);
 
   const snapshotData = {
     receiptNumber,
@@ -837,15 +860,18 @@ export async function generateGroupReceiptInTx(params: {
     total: totalAmount.toFixed(2),
     receivedAmount: totalAmount.toFixed(2),
     items: legacyReceiptItems,
-    billGroups,
+    billGroups: finalBillGroups,
     roomNumber: params.roomNumber || 'GEN',
     tenantName: params.tenantName || 'ผู้เช่า',
     dormitoryName: dorm?.name || 'หอพัก HorPlus',
-    dormitoryTaxId: dorm?.taxId || null,
-    dormitoryAddress: dorm?.address || null,
+    dormitoryTaxId: null,
+    dormitoryAddress: dorm?.addressLine1 || null,
     dormitoryPhone: dorm?.phone || null,
     paymentMethod: params.paymentMethod || 'BANK_TRANSFER',
-    paymentDate: (params.paymentDate || today).toISOString(),
+    paymentDate: originalPaymentDate,
+    isHistoricalImport: isHistorical,
+    originalPaymentDateKnown,
+    importedAt,
     receiverName: receiverDisplayName,
     isCombinedReceipt: true,
   };

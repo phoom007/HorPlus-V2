@@ -143,6 +143,12 @@ export async function createDepositBillForAgreementInTx(
             amount: new Prisma.Decimal(formatDecimal(depAmtDec)),
             unitPrice: new Prisma.Decimal(formatDecimal(depAmtDec)),
             quantity: new Prisma.Decimal('1.00'),
+            metadata: isPreGoLive ? {
+              isHistoricalImport: true,
+              originalPeriodLabel: 'เงินประกัน',
+              originalPaymentDateKnown: false,
+              importedAt: now.toISOString(),
+            } : undefined,
           },
         ],
       },
