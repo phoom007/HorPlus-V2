@@ -924,24 +924,39 @@ export async function generateFinalSettlementReceiptForBillInTx(
 ) {
   const { dormitoryId, billId, userId } = params;
 
-  const bill = await tx.bill.findUnique({
+  if (!billId || !/^[0-9a-fA-F-]{36}$/.test(billId)) {
+    return null;
+  }
+
+  // 1. Load seed Bill and validate basic dormitory / room / cycle identity
+  const seedBill = await tx.bill.findUnique({
     where: { id: billId },
-    include: {
-      items: { orderBy: { displayOrder: 'asc' } },
-      dormitory: true,
-      tenant: true,
-      room: true,
-      billingCycle: true,
+    select: {
+      id: true,
+      dormitoryId: true,
+      roomId: true,
+      billingCycleId: true,
+      status: true,
+      cancelledAt: true,
     },
   });
 
-  if (!bill) {
-    throw new AppError('ไม่พบข้อมูลบิลสำหรับออกใบเสร็จรับเงิน', 404, 'BILL_NOT_FOUND');
+  if (!seedBill || seedBill.cancelledAt || seedBill.dormitoryId !== dormitoryId || !seedBill.roomId || !seedBill.billingCycleId) {
+    return null;
   }
 
-  const settlementScopeKey = `ROOM_CYCLE:${bill.roomId}:${bill.billingCycleId}`;
+  const settlementScopeKey = `ROOM_CYCLE:${seedBill.roomId}:${seedBill.billingCycleId}`;
 
-  // 1. Check if a non-voided Final Settlement receipt already exists for this scope
+  // 2. Deterministic PostgreSQL Transaction Advisory Lock on settlement scope key
+  if (typeof tx.$executeRaw === 'function') {
+    try {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${'FINAL_RECEIPT:' + dormitoryId + ':' + settlementScopeKey}));`;
+    } catch {
+      // Ignore if DB does not support pg_advisory_xact_lock (e.g. test mocks)
+    }
+  }
+
+  // 3. Check if an active non-voided Final Settlement receipt already exists under lock
   const existing = tx.receipt?.findFirst
     ? await tx.receipt.findFirst({
         where: {
@@ -954,6 +969,58 @@ export async function generateFinalSettlementReceiptForBillInTx(
 
   if (existing) {
     return existing;
+  }
+
+  // 4. Re-read ALL active financial obligations / Bills belonging to the same room + billing cycle scope
+  const scopeBills = await tx.bill.findMany({
+    where: {
+      dormitoryId,
+      roomId: seedBill.roomId,
+      billingCycleId: seedBill.billingCycleId,
+      cancelledAt: null,
+      status: { notIn: ['void', 'cancelled', 'superseded', 'draft'] },
+    },
+    include: {
+      items: { orderBy: { displayOrder: 'asc' } },
+      Payment: {
+        where: { status: 'APPROVED' },
+        include: {
+          verification: true,
+          receipt: true,
+        },
+        orderBy: { createdAt: 'asc' },
+      },
+      dormitory: true,
+      tenant: true,
+      room: true,
+      billingCycle: true,
+    },
+    orderBy: { createdAt: 'asc' },
+  });
+
+  if (!scopeBills || scopeBills.length === 0) {
+    return null;
+  }
+
+  Decimal.set({ rounding: Decimal.ROUND_HALF_UP });
+
+  // 5. Fail closed: Check that EVERY active bill in this room-cycle is fully settled (status === 'PAID' and outstanding === 0)
+  for (const b of scopeBills) {
+    const outDec = new Decimal((b.outstandingAmount ?? 0).toString());
+    const totalDec = new Decimal((b.totalAmount ?? 0).toString());
+    const paidDec = new Decimal((b.paidAmount ?? 0).toString());
+
+    if (b.status !== 'PAID' || outDec.greaterThan(0) || totalDec.isNaN() || paidDec.isNaN()) {
+      // Scope is not fully settled! Fail closed.
+      return null;
+    }
+  }
+
+  const scopeTotal = scopeBills.reduce((sum: Decimal, b: any) => sum.plus(new Decimal((b.totalAmount ?? 0).toString())), new Decimal(0));
+  const scopePaid = scopeBills.reduce((sum: Decimal, b: any) => sum.plus(new Decimal((b.paidAmount ?? 0).toString())), new Decimal(0));
+
+  if (scopeTotal.isZero()) {
+    return null;
   }
 
   const today = new Date();
@@ -976,7 +1043,8 @@ export async function generateFinalSettlementReceiptForBillInTx(
     },
   });
 
-  const rawRoomNumber = bill.room?.normalizedRoomNumber || bill.room?.roomNumber || 'GEN';
+  const firstBill = scopeBills[0];
+  const rawRoomNumber = firstBill.room?.normalizedRoomNumber || firstBill.room?.roomNumber || 'GEN';
   const normalizedRoom = rawRoomNumber.replace(/[^a-zA-Z0-9]/g, '').toUpperCase() || 'GEN';
   const sequenceStr = String(seq.lastValue).padStart(4, '0');
   const receiptNumber = `RC-${yearMonth}-${normalizedRoom}-${sequenceStr}`;
@@ -989,50 +1057,75 @@ export async function generateFinalSettlementReceiptForBillInTx(
     }
   }
 
-  Decimal.set({ rounding: Decimal.ROUND_HALF_UP });
-  const totalAmount = new Decimal(bill.totalAmount.toString());
+  // 6. Aggregate whole-scope line items, bill groups, and real payment event history
+  const billGroups = scopeBills.map((b: any) => ({
+    billId: b.id,
+    billNumber: b.billNumber || null,
+    billKind: b.billKind || 'MONTHLY',
+    cycleCode: b.billingCycle?.cycleCode || null,
+    billTotal: new Decimal(b.totalAmount.toString()).toFixed(2),
+    paidAmount: new Decimal(b.paidAmount.toString()).toFixed(2),
+    status: b.status,
+    items: (b.items || []).map((it: any) => ({
+      type: it.type || 'other',
+      description: it.description,
+      quantity: it.quantity ? new Decimal(it.quantity.toString()).toFixed(2) : '1.00',
+      unit: it.unit || null,
+      unitPrice: it.unitPrice ? new Decimal(it.unitPrice.toString()).toFixed(2) : '0.00',
+      amount: new Decimal(it.amount.toString()).toFixed(2),
+      metadata: it.metadata ? JSON.parse(JSON.stringify(it.metadata)) : null,
+    })),
+  }));
 
-  const receiptItems = bill.items && bill.items.length > 0
-    ? mapBillItemsToSnapshot(bill.items)
-    : [
-        {
-          type: 'rent',
-          description: `ค่าเช่าห้องพัก ${bill.room?.roomNumber || ''}`.trim(),
-          quantity: '1.00',
-          unit: 'month',
-          unitPrice: totalAmount.toFixed(2),
-          amount: totalAmount.toFixed(2),
-          metadata: null,
-        },
-      ];
+  const flatItems = scopeBills.flatMap((b: any) => (b.items && b.items.length > 0 ? mapBillItemsToSnapshot(b.items) : []));
+
+  const paymentEvents = scopeBills.flatMap((b: any) =>
+    ((b as any).Payment || []).map((p: any) => ({
+      paymentId: p.id,
+      billId: b.id,
+      paymentGroupId: p.paymentGroupId || null,
+      amount: new Decimal(p.amount.toString()).toFixed(2),
+      method: p.method || 'CASH',
+      effectivePaymentDate: p.paymentDate ? p.paymentDate.toISOString() : (p.reviewedAt ? p.reviewedAt.toISOString() : p.createdAt.toISOString()),
+      paymentDate: p.paymentDate ? p.paymentDate.toISOString() : (p.reviewedAt ? p.reviewedAt.toISOString() : p.createdAt.toISOString()),
+      evidenceReference: p.verification?.objectKey || p.evidenceUrl || null,
+      receiptNumber: p.receipt?.receiptNumber || null,
+      status: p.status,
+    }))
+  );
 
   const snapshotData = {
     receiptNumber,
-    billNumber: bill.billNumber || null,
-    cycleCode: bill.billingCycle?.cycleCode || null,
-    total: totalAmount.toFixed(2),
-    receivedAmount: totalAmount.toFixed(2),
-    billTotal: totalAmount.toFixed(2),
-    items: receiptItems,
-    roomNumber: bill.room?.roomNumber || 'GEN',
-    tenantName: bill.tenant?.displayName || (bill.tenant?.firstName ? `${bill.tenant.firstName || ''} ${bill.tenant.lastName || ''}`.trim() : 'ผู้เช่า'),
-    dormitoryName: bill.dormitory?.name || 'หอพัก HorPlus',
-    dormitoryTaxId: bill.dormitory?.taxId || null,
-    dormitoryAddress: bill.dormitory?.addressLine1 || bill.dormitory?.address || null,
-    dormitoryPhone: bill.dormitory?.phone || null,
+    billNumber: scopeBills.map((b: any) => b.billNumber).filter(Boolean).join(', ') || firstBill.billNumber || null,
+    billIds: scopeBills.map((b: any) => b.id),
+    cycleCode: firstBill.billingCycle?.cycleCode || null,
+    cycleLabel: firstBill.billingCycle?.name || firstBill.billingCycle?.cycleCode || null,
+    total: scopeTotal.toFixed(2),
+    receivedAmount: scopePaid.toFixed(2),
+    billTotal: scopeTotal.toFixed(2),
+    items: flatItems,
+    billGroups,
+    paymentEvents,
+    roomNumber: firstBill.room?.roomNumber || 'GEN',
+    tenantName: firstBill.tenant?.displayName || (firstBill.tenant?.firstName ? `${firstBill.tenant.firstName || ''} ${firstBill.tenant.lastName || ''}`.trim() : 'ผู้เช่า'),
+    dormitoryName: firstBill.dormitory?.name || 'หอพัก HorPlus',
+    dormitoryTaxId: firstBill.dormitory?.taxId || null,
+    dormitoryAddress: firstBill.dormitory?.addressLine1 || firstBill.dormitory?.address || null,
+    dormitoryPhone: firstBill.dormitory?.phone || null,
     paymentMethod: 'SETTLED',
-    paymentDate: bill.paidAt ? bill.paidAt.toISOString() : today.toISOString(),
+    paymentDate: today.toISOString(),
     receiverName: receiverDisplayName,
     isFinalSettlement: true,
+    isMultiBill: scopeBills.length > 1,
   };
 
   try {
     const receipt = await tx.receipt.create({
       data: {
         dormitoryId,
-        billId: bill.id,
-        roomId: bill.roomId,
-        billingCycleId: bill.billingCycleId,
+        billId: seedBill.id,
+        roomId: seedBill.roomId,
+        billingCycleId: seedBill.billingCycleId,
         receiptKind: 'FINAL_SETTLEMENT',
         settlementScopeKey,
         receiptNumber,
@@ -1073,6 +1166,10 @@ export async function generateFinalSettlementReceiptForDailyInvoiceInTx(
 ) {
   const { dormitoryId, dailyStayInvoiceId, userId } = params;
 
+  if (!dailyStayInvoiceId || !/^[0-9a-fA-F-]{36}$/.test(dailyStayInvoiceId)) {
+    return null;
+  }
+
   const invoice = await tx.dailyStayInvoice.findUnique({
     where: { id: dailyStayInvoiceId },
     include: {
@@ -1087,17 +1184,29 @@ export async function generateFinalSettlementReceiptForDailyInvoiceInTx(
     },
   });
 
-  if (!invoice) {
-    throw new AppError('ไม่พบข้อมูลใบแจ้งหนี้รายวันสำหรับออกใบเสร็จรับเงิน', 404, 'INVOICE_NOT_FOUND');
+  if (!invoice || invoice.deletedAt || invoice.dormitoryId !== dormitoryId) {
+    return null;
   }
 
+  Decimal.set({ rounding: Decimal.ROUND_HALF_UP });
   const totalAgreed = new Decimal(invoice.totalAgreedAmount.toString());
-  // Zero obligation produces no receipt
-  if (totalAgreed.isZero()) {
+  const outDec = new Decimal((invoice.outstandingAmount ?? 0).toString());
+
+  // Fail closed: Zero obligation, or un-settled invoice produces no receipt
+  if (totalAgreed.isZero() || invoice.status !== 'PAID' || outDec.greaterThan(0)) {
     return null;
   }
 
   const settlementScopeKey = `DAILY_INVOICE:${invoice.id}`;
+
+  // Deterministic locking for Daily Stay Invoice scope
+  if (typeof tx.$executeRaw === 'function') {
+    try {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${'FINAL_RECEIPT:' + dormitoryId + ':' + settlementScopeKey}));`;
+    } catch {
+      // Ignore if DB does not support advisory lock
+    }
+  }
 
   const existing = tx.receipt?.findFirst
     ? await tx.receipt.findFirst({
@@ -1156,6 +1265,20 @@ export async function generateFinalSettlementReceiptForDailyInvoiceInTx(
     metadata: null,
   }));
 
+  const paymentEvents = (invoice.items || [])
+    .filter((it: any) => it.paidAt)
+    .map((it: any) => ({
+      paymentId: `daily-item-${it.id}`,
+      itemType: it.itemType,
+      amount: new Decimal(it.amount.toString()).toFixed(2),
+      method: 'CASH',
+      effectivePaymentDate: it.paidAt.toISOString(),
+      paymentDate: it.paidAt.toISOString(),
+      evidenceReference: null,
+      receiptNumber: null,
+      status: 'APPROVED',
+    }));
+
   const snapshotData = {
     receiptNumber,
     invoiceNumber: invoice.invoiceNumber,
@@ -1164,6 +1287,7 @@ export async function generateFinalSettlementReceiptForDailyInvoiceInTx(
     receivedAmount: totalAgreed.toFixed(2),
     billTotal: totalAgreed.toFixed(2),
     items: receiptItems,
+    paymentEvents,
     roomNumber: invoice.dailyStay?.room?.roomNumber || 'GEN',
     tenantName: invoice.dailyStay?.applicantFullName || invoice.dailyStay?.tenant?.displayName || 'ผู้พักรายวัน',
     dormitoryName: invoice.dormitory?.name || 'หอพัก HorPlus',

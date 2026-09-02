@@ -40,10 +40,19 @@ export class ReceiptService {
   }
 
   async getFinalReceiptForBill(dormitoryId: string, billId: string) {
+    const bill = await prisma.bill.findFirst({
+      where: { id: billId, dormitoryId },
+      select: { id: true, roomId: true, billingCycleId: true },
+    });
+    if (!bill || !bill.roomId || !bill.billingCycleId) {
+      return null;
+    }
+
+    const settlementScopeKey = `ROOM_CYCLE:${bill.roomId}:${bill.billingCycleId}`;
     const receipt = await prisma.receipt.findFirst({
       where: {
         dormitoryId,
-        billId,
+        settlementScopeKey,
         receiptKind: 'FINAL_SETTLEMENT',
         isVoided: false,
       },
@@ -61,10 +70,11 @@ export class ReceiptService {
   }
 
   async getFinalReceiptForDailyInvoice(dormitoryId: string, dailyStayInvoiceId: string) {
+    const settlementScopeKey = `DAILY_INVOICE:${dailyStayInvoiceId}`;
     const receipt = await prisma.receipt.findFirst({
       where: {
         dormitoryId,
-        dailyStayInvoiceId,
+        settlementScopeKey,
         receiptKind: 'FINAL_SETTLEMENT',
         isVoided: false,
       },

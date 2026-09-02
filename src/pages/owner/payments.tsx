@@ -1671,22 +1671,18 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
   // 5. Open Authoritative Final Receipt Directly (/api/v1/receipts/{id}/print)
   const handleOpenReceipt = async (paymentOrGroup: any) => {
     try {
-      let receiptId = paymentOrGroup?.finalReceiptId || paymentOrGroup?.receipt?.id || paymentOrGroup?.receipts?.[0]?.id;
       const billId = paymentOrGroup?.billId || paymentOrGroup?.bill?.id || (paymentOrGroup?.payments && paymentOrGroup.payments[0]?.billId);
+      let receiptId: string | null = null;
       
-      if (!receiptId && billId) {
+      if (billId) {
         const token = localStorage.getItem('horplus_auth_token') || '';
         const res = await fetch(`/api/v1/receipts/final/bill/${billId}`, {
           headers: token ? { Authorization: `Bearer ${token}` } : {},
         });
         if (res.ok) {
           const data = await res.json();
-          receiptId = data?.id;
+          receiptId = data?.id || null;
         }
-      }
-      
-      if (!receiptId && paymentOrGroup?.receiptId) {
-        receiptId = paymentOrGroup.receiptId;
       }
 
       if (receiptId) {
@@ -1694,38 +1690,24 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
         return;
       }
 
-      // Fallback to in-page preview if receiptId could not be resolved from backend
-      const receiptData = buildViewingReceipt(
-        paymentOrGroup,
-        bills,
-        getCycleCodeForCycleId,
-        (id) => getRoomNum(id),
-        (id) => getTenantName(id)
-      );
-      if (receiptData) {
-        setViewingReceipt(receiptData);
-        setIsReceiptOpen(true);
-        return;
-      }
-
-      triggerToast('ไม่พบข้อมูลใบเสร็จรับเงิน กรุณาโหลดข้อมูลใหม่');
+      triggerToast('ไม่พบใบเสร็จรับเงินฉบับสมบูรณ์สำหรับรอบบิลนี้ กรุณาตรวจสอบว่าบิลได้รับการชำระครบถ้วนแล้ว');
     } catch (err) {
-      triggerToast('ไม่สามารถเปิดใบเสร็จรับเงินได้');
+      triggerToast('ไม่สามารถเปิดใบเสร็จรับเงินได้ กรุณาลองใหม่อีกครั้ง');
     }
   };
 
   const handleOpenDailyReceipt = async (inv: DailyStayInvoice) => {
     try {
-      let receiptId = (inv as any)?.finalReceiptId || (inv as any)?.receipts?.[0]?.id || (inv as any)?.finalReceipt?.id;
+      let receiptId: string | null = null;
       
-      if (!receiptId && inv?.id) {
+      if (inv?.id) {
         const token = localStorage.getItem('horplus_auth_token') || '';
         const res = await fetch(`/api/v1/receipts/final/daily-invoice/${inv.id}`, {
           headers: token ? { Authorization: `Bearer ${token}` } : {},
         });
         if (res.ok) {
           const data = await res.json();
-          receiptId = data?.id;
+          receiptId = data?.id || null;
         }
       }
 
@@ -1734,25 +1716,9 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
         return;
       }
 
-      const receiptData = buildViewingDailyReceipt(
-        inv,
-        (id) => getRoomNum(id),
-        selectedDormitory ? {
-          name: selectedDormitory.name,
-          address: selectedDormitory.addressLine1,
-          phone: selectedDormitory.phone,
-          taxId: (selectedDormitory as any).taxId,
-        } : undefined
-      );
-      if (receiptData) {
-        setViewingReceipt(receiptData);
-        setIsReceiptOpen(true);
-        return;
-      }
-
-      triggerToast('ไม่พบข้อมูลใบเสร็จรับเงิน กรุณาโหลดข้อมูลใหม่');
+      triggerToast('ไม่พบใบเสร็จรับเงินฉบับสมบูรณ์สำหรับการเข้าพักรายวันนี้ กรุณาตรวจสอบว่ายอดเงินได้รับการชำระครบถ้วนแล้ว');
     } catch (err) {
-      triggerToast('ไม่สามารถเปิดใบเสร็จรับเงินได้');
+      triggerToast('ไม่สามารถเปิดใบเสร็จรับเงินได้ กรุณาลองใหม่อีกครั้ง');
     }
   };
 

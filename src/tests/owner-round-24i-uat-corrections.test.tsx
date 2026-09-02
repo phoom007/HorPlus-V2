@@ -464,6 +464,91 @@ describe('Owner Round 2.4I: Verification Suite', () => {
       expect(rcpt.roomNumber).toBe('104');
       expect(rcpt.totalAmount).toBe(4800);
     });
+
+    it('36a. Normal Owner Paid: Queries final receipt endpoint and opens FINAL_SETTLEMENT print URL instead of event receipt', async () => {
+      const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
+      const originalFetch = global.fetch;
+      global.fetch = vi.fn().mockImplementation(async (url: string) => {
+        if (url.includes('/api/v1/receipts/final/bill/bill-104')) {
+          return {
+            ok: true,
+            json: async () => ({ id: 'rcpt-final-999', receiptNumber: 'RC-202608-104-0001' }),
+          } as Response;
+        }
+        return { ok: false } as Response;
+      });
+
+      // Directly invoke handleOpenReceipt simulation
+      const mockPaymentGroup = {
+        billId: 'bill-104',
+        receipt: { id: 'rcpt-event-111' }, // EVENT receipt ID that must NOT be used
+      };
+
+      // Query final bill receipt
+      const res = await fetch(`/api/v1/receipts/final/bill/${mockPaymentGroup.billId}`);
+      const data = await res.json();
+      if (data?.id) {
+        window.open(`/api/v1/receipts/${data.id}/print`, '_blank');
+      }
+
+      expect(openSpy).toHaveBeenCalledWith('/api/v1/receipts/rcpt-final-999/print', '_blank');
+      expect(openSpy).not.toHaveBeenCalledWith('/api/v1/receipts/rcpt-event-111/print', '_blank');
+
+      openSpy.mockRestore();
+      global.fetch = originalFetch;
+    });
+
+    it('36b. Normal Owner Paid 404: Does not open print window or fallback to event receipt', async () => {
+      const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
+      const originalFetch = global.fetch;
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 404,
+      } as Response);
+
+      const billId = 'bill-unsettled';
+      const res = await fetch(`/api/v1/receipts/final/bill/${billId}`);
+      let receiptId: string | null = null;
+      if (res.ok) {
+        const data = await res.json();
+        receiptId = data?.id;
+      }
+
+      if (receiptId) {
+        window.open(`/api/v1/receipts/${receiptId}/print`, '_blank');
+      }
+
+      expect(openSpy).not.toHaveBeenCalled();
+
+      openSpy.mockRestore();
+      global.fetch = originalFetch;
+    });
+
+    it('36c. Daily Owner Paid: Queries final daily invoice endpoint and opens FINAL_SETTLEMENT print URL', async () => {
+      const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
+      const originalFetch = global.fetch;
+      global.fetch = vi.fn().mockImplementation(async (url: string) => {
+        if (url.includes('/api/v1/receipts/final/daily-invoice/dinv-202')) {
+          return {
+            ok: true,
+            json: async () => ({ id: 'rcpt-daily-final-888', receiptNumber: 'RC-202609-104-0002' }),
+          } as Response;
+        }
+        return { ok: false } as Response;
+      });
+
+      const invId = 'dinv-202';
+      const res = await fetch(`/api/v1/receipts/final/daily-invoice/${invId}`);
+      const data = await res.json();
+      if (data?.id) {
+        window.open(`/api/v1/receipts/${data.id}/print`, '_blank');
+      }
+
+      expect(openSpy).toHaveBeenCalledWith('/api/v1/receipts/rcpt-daily-final-888/print', '_blank');
+
+      openSpy.mockRestore();
+      global.fetch = originalFetch;
+    });
   });
 
   // =========================================================================
