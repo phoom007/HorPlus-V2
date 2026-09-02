@@ -125,6 +125,8 @@ describe('Owner Round 2.4H.1: Service-Level Daily Stay Invoice Classification & 
 
   afterAll(async () => {
     // Cleanup records safely
+    await prisma.receipt.deleteMany({ where: { dormitoryId } });
+    await prisma.receiptSequence.deleteMany({ where: { dormitoryId } });
     await prisma.dailyStayInvoiceItem.deleteMany({ where: { invoice: { dormitoryId } } });
     await prisma.dailyStayInvoice.deleteMany({ where: { dormitoryId } });
     await prisma.dailyStay.deleteMany({ where: { dormitoryId } });

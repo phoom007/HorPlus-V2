@@ -155,5 +155,54 @@ export function createReceiptRouter(authService: AuthenticationService) {
   router.get('/:receiptId/html', requireAuth, handleReceiptHtml);
   router.get('/:receiptId/print', requireAuth, handleReceiptHtml);
 
+  router.get('/final/bill/:billId', requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { billId } = req.params;
+      const bill = await prisma.bill.findUnique({ where: { id: billId } });
+      if (!bill) return res.status(404).json({ error: 'Bill not found' });
+      
+      const isOwner = ensureOwnerOrManager(req, res, bill.dormitoryId);
+      if (!isOwner) {
+        const tenant = await ensureTenant(req, res, bill.dormitoryId);
+        if (!tenant || (bill.tenantId !== tenant.id)) {
+          return res.status(403).json({ error: 'Forbidden' });
+        }
+      }
+
+      const receipt = await receiptService.getFinalReceiptForBill(bill.dormitoryId, billId);
+      if (!receipt) return res.status(404).json({ error: 'Final receipt not found' });
+      
+      res.json(receipt);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.get('/final/daily-invoice/:invoiceId', requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { invoiceId } = req.params;
+      const invoice = await prisma.dailyStayInvoice.findUnique({
+        where: { id: invoiceId },
+        include: { dailyStay: true },
+      });
+      if (!invoice) return res.status(404).json({ error: 'Invoice not found' });
+      
+      const isOwner = ensureOwnerOrManager(req, res, invoice.dormitoryId);
+      if (!isOwner) {
+        const tenant = await ensureTenant(req, res, invoice.dormitoryId);
+        if (!tenant || (invoice.dailyStay?.tenantId !== tenant.id)) {
+          return res.status(403).json({ error: 'Forbidden' });
+        }
+      }
+
+      const receipt = await receiptService.getFinalReceiptForDailyInvoice(invoice.dormitoryId, invoiceId);
+      if (!receipt) return res.status(404).json({ error: 'Final receipt not found' });
+      
+      res.json(receipt);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   return router;
 }

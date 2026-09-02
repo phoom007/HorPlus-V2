@@ -38,6 +38,53 @@ export class ReceiptService {
 
     return receipt;
   }
+
+  async getFinalReceiptForBill(dormitoryId: string, billId: string) {
+    const receipt = await prisma.receipt.findFirst({
+      where: {
+        dormitoryId,
+        billId,
+        receiptKind: 'FINAL_SETTLEMENT',
+        isVoided: false,
+      },
+      include: {
+        bill: {
+          include: {
+            items: true,
+            room: true,
+          },
+        },
+        dormitory: true,
+      },
+    });
+    return receipt;
+  }
+
+  async getFinalReceiptForDailyInvoice(dormitoryId: string, dailyStayInvoiceId: string) {
+    const receipt = await prisma.receipt.findFirst({
+      where: {
+        dormitoryId,
+        dailyStayInvoiceId,
+        receiptKind: 'FINAL_SETTLEMENT',
+        isVoided: false,
+      },
+      include: {
+        dailyStayInvoice: {
+          include: {
+            items: true,
+            dailyStay: {
+              include: {
+                room: true,
+                tenant: true,
+              },
+            },
+          },
+        },
+        dormitory: true,
+      },
+    });
+    return receipt;
+  }
 }
 
 export const receiptService = new ReceiptService();

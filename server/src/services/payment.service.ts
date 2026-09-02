@@ -22,6 +22,7 @@ import {
   recordCombinedCashPaymentInTx,
   generateReceiptInTx,
   generateGroupReceiptInTx,
+  generateFinalSettlementReceiptForBillInTx,
   buildBillGroupSnapshot,
   GroupReceiptBillSnapshot,
 } from '../utils/payment-transaction.util.js';
@@ -936,6 +937,16 @@ export class PaymentService {
             paymentDate: group.paymentDate,
           });
 
+          for (const aff of allocationPlan.affectedBills) {
+            if (aff.newStatus === 'PAID') {
+              await generateFinalSettlementReceiptForBillInTx(tx, {
+                dormitoryId: input.dormitoryId,
+                billId: aff.id,
+                userId: safeUserId,
+              });
+            }
+          }
+
           return {
             group: updatedGroup,
             receipt,
@@ -1369,6 +1380,14 @@ export class PaymentService {
             null,
             submitAmount
           );
+
+          if (aff.newStatus === 'PAID') {
+            await generateFinalSettlementReceiptForBillInTx(tx, {
+              dormitoryId: input.dormitoryId,
+              billId: bill.id,
+              userId: safeUserId,
+            });
+          }
 
           return updatedPayment;
         });

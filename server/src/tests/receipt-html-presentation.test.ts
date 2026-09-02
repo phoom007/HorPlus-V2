@@ -196,7 +196,7 @@ describe('OWNER R3.9-E.1B.2.3 — Backend Receipt HTML Presentation Authority', 
       };
 
       const html = renderReceiptHtml(receiptRecord);
-      expect(html).toContain('ค่าน้ำประปา');
+      expect(html).toContain('ค่าน้ำ');
       expect(html).toContain('คิดตามขั้นบันได');
       expect(html).toContain('25.00');
       expect(html).not.toContain('•'); // No nested breakdown rows
@@ -269,7 +269,7 @@ describe('OWNER R3.9-E.1B.2.3 — Backend Receipt HTML Presentation Authority', 
       expect(html).toContain('RC-202608-101-0001');
       expect(html).toContain('1 เดือน');
       expect(html).toContain('15 หน่วย');
-      expect(html).toContain('ค่าน้ำประปา (ขั้นบันได)');
+      expect(html).toContain('ค่าน้ำ (ขั้นบันได)');
       expect(html).toContain('คิดตามขั้นบันได');
       expect(html).toContain('1–10 หน่วย: 10 × 3.40 = 34.00 บาท');
       expect(html).toContain('11–20 หน่วย: 5 × 4.25 = 21.25 บาท');

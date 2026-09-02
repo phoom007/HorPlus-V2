@@ -28,6 +28,40 @@ export interface LogoEditorModalProps {
 const CROP_SIZE = 280; // Size of the square crop preview workspace in px
 const EXPORT_SIZE = 512; // High-resolution export dimension in px
 
+export function getClampedPan(
+  pan: { x: number; y: number },
+  zoom: number,
+  rotation: number,
+  imageElement: HTMLImageElement | null
+): { x: number; y: number } {
+  if (!imageElement) return { x: 0, y: 0 };
+
+  const isRotated90or270 = rotation === 90 || rotation === 270;
+  const naturalW = isRotated90or270 ? imageElement.height : imageElement.width;
+  const naturalH = isRotated90or270 ? imageElement.width : imageElement.height;
+  const aspect = naturalW / naturalH;
+
+  let baseW = CROP_SIZE;
+  let baseH = CROP_SIZE;
+  if (aspect > 1) {
+    baseW = CROP_SIZE * aspect;
+  } else {
+    baseH = CROP_SIZE / aspect;
+  }
+
+  const scale = Math.max(1, zoom / 100);
+  const currentW = baseW * scale;
+  const currentH = baseH * scale;
+
+  const maxPanX = Math.max(0, (currentW - CROP_SIZE) / 2);
+  const maxPanY = Math.max(0, (currentH - CROP_SIZE) / 2);
+
+  return {
+    x: Math.min(maxPanX, Math.max(-maxPanX, pan.x)),
+    y: Math.min(maxPanY, Math.max(-maxPanY, pan.y)),
+  };
+}
+
 export const LogoEditorModal: React.FC<LogoEditorModalProps> = ({
   isOpen,
   imageFile,
@@ -106,13 +140,15 @@ export const LogoEditorModal: React.FC<LogoEditorModalProps> = ({
       ctx.rotate((rotation * Math.PI) / 180);
 
       // Scale factor
-      const scale = zoom / 100;
+      const effectiveZoom = Math.max(100, zoom);
+      const scale = effectiveZoom / 100;
       ctx.scale(scale, scale);
 
-      // Apply pan scaled relative to targetSize vs CROP_SIZE
+      // Apply clamped pan scaled relative to targetSize vs CROP_SIZE
+      const clamped = getClampedPan(pan, effectiveZoom, rotation, imageElement);
       const panScale = targetSize / CROP_SIZE;
-      const effectivePanX = (rotation === 90 ? pan.y : rotation === 180 ? -pan.x : rotation === 270 ? -pan.y : pan.x) * panScale;
-      const effectivePanY = (rotation === 90 ? -pan.x : rotation === 180 ? -pan.y : rotation === 270 ? pan.x : pan.y) * panScale;
+      const effectivePanX = (rotation === 90 ? clamped.y : rotation === 180 ? -clamped.x : rotation === 270 ? -clamped.y : clamped.x) * panScale;
+      const effectivePanY = (rotation === 90 ? -clamped.x : rotation === 180 ? -clamped.y : rotation === 270 ? clamped.x : clamped.y) * panScale;
 
       // Calculate base image dimensions to fit/cover nicely
       const imgAspect = imageElement.width / imageElement.height;
@@ -187,10 +223,11 @@ export const LogoEditorModal: React.FC<LogoEditorModalProps> = ({
     if (!isDragging) return;
     const dx = e.clientX - dragStartRef.current.x;
     const dy = e.clientY - dragStartRef.current.y;
-    setPan({
+    const newPan = {
       x: dragStartRef.current.panX + dx,
       y: dragStartRef.current.panY + dy,
-    });
+    };
+    setPan(getClampedPan(newPan, zoom, rotation, imageElement));
   };
 
   const handlePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -205,7 +242,11 @@ export const LogoEditorModal: React.FC<LogoEditorModalProps> = ({
   };
 
   const handleRotate = () => {
-    setRotation((prev) => (prev + 90) % 360);
+    setRotation((prev) => {
+      const nextRot = (prev + 90) % 360;
+      setPan((p) => getClampedPan(p, zoom, nextRot, imageElement));
+      return nextRot;
+    });
   };
 
   const handleReset = () => {
@@ -323,7 +364,7 @@ export const LogoEditorModal: React.FC<LogoEditorModalProps> = ({
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
-                    onClick={() => setZoom((prev) => Math.max(50, prev - 10))}
+                    onClick={() => setZoom((prev) => Math.max(100, prev - 10))}
                     className="p-1 text-slate-500 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
                     title="ย่อ"
                   >
@@ -331,7 +372,7 @@ export const LogoEditorModal: React.FC<LogoEditorModalProps> = ({
                   </button>
                   <input
                     type="range"
-                    min={50}
+                    min={100}
                     max={300}
                     step={1}
                     value={zoom}

@@ -269,7 +269,7 @@ describe('OWNER ROOMS R3.5a — Canonical Deposit Billing & Lifecycle Suite', ()
       expect(bshArg.toStatus).toBe('PAID');
 
       // Canonical Receipt
-      expect(mockTx.receipt.create).toHaveBeenCalledTimes(1);
+      expect(mockTx.receipt.create).toHaveBeenCalled();
       const receiptArg = mockTx.receipt.create.mock.calls[0][0].data;
       expect(receiptArg.snapshotData.total).toBe('9000.00');
       expect(receiptArg.receiptNumber).toMatch(/^RC-/);

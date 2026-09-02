@@ -23,6 +23,7 @@ import {
   doHalfOpenIntervalsOverlap,
   acquireRoomAvailabilityLock,
 } from '../utils/occupancy-interval.util.js';
+import { generateFinalSettlementReceiptForDailyInvoiceInTx } from '../utils/payment-transaction.util.js';
 
 export interface CreateTenantDailyStayRequestDto {
   roomId?: string;
@@ -647,6 +648,14 @@ export class DailyStayService {
           },
           include: { items: true },
         });
+
+        if (invoiceStatus === 'PAID' && toDecimal(totalAgreed).greaterThan(0)) {
+          await generateFinalSettlementReceiptForDailyInvoiceInTx(tx, {
+            dormitoryId,
+            dailyStayInvoiceId: invoice.id,
+            userId,
+          });
+        }
       }
 
       // 7. Update DailyStay record
@@ -947,6 +956,14 @@ export class DailyStayService {
         },
         include: { items: true },
       });
+
+      if (invoiceStatus === 'PAID' && toDecimal(totalAgreed).greaterThan(0)) {
+        await generateFinalSettlementReceiptForDailyInvoiceInTx(tx, {
+          dormitoryId,
+          dailyStayInvoiceId: invoice.id,
+          userId,
+        });
+      }
 
       // 7. Update Room status
       if (!isFuture) {
@@ -1412,6 +1429,14 @@ export class DailyStayService {
           },
         },
       });
+
+      if (newStatus === 'PAID' && totalAgreed > 0) {
+        await generateFinalSettlementReceiptForDailyInvoiceInTx(tx, {
+          dormitoryId,
+          dailyStayInvoiceId: invoice.id,
+          userId: actorUserId,
+        });
+      }
 
       return {
         ...updatedInvoice,

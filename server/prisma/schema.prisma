@@ -482,6 +482,7 @@ model Room {
   roomNextCycleCorrections  RoomNextCycleCorrection[]
   provisionalRentalTerms    ProvisionalRentalTerm[]
   dailyStays                DailyStay[]
+  receipts                  Receipt[]
 
   @@unique([dormitoryId, buildingId, normalizedRoomNumber], map: "dormitory_building_normalized_room_number_unique")
   @@map("rooms")
@@ -751,6 +752,7 @@ model BillingCycle {
   bills                     Bill[]
   roomBillingCycleSnapshots RoomBillingCycleSnapshot[]
   roomOperationalStatusChanges RoomOperationalStatusChange[]
+  receipts                  Receipt[]
 
   @@unique([dormitoryId, cycleCode], name: "dormitory_cycle_code_unique")
   @@map("billing_cycles")
@@ -1193,6 +1195,10 @@ model Receipt {
   paymentGroupId     String?               @map("payment_group_id") @db.Uuid
   billId             String?               @map("bill_id") @db.Uuid
   dailyStayInvoiceId String?               @map("daily_stay_invoice_id") @db.Uuid
+  receiptKind        String                @default("EVENT") @map("receipt_kind") @db.VarChar(50) // EVENT | FINAL_SETTLEMENT
+  settlementScopeKey String?               @map("settlement_scope_key") @db.VarChar(255)
+  roomId             String?               @map("room_id") @db.Uuid
+  billingCycleId     String?               @map("billing_cycle_id") @db.Uuid
   receiptNumber      String                @map("receipt_number") @db.VarChar(100)
   snapshotData       Json                  @map("snapshot_data")
   isVoided           Boolean               @default(false) @map("is_voided")
@@ -1209,10 +1215,15 @@ model Receipt {
   paymentGroup       CombinedPaymentGroup? @relation(fields: [paymentGroupId], references: [id], onDelete: SetNull)
   bill               Bill?                 @relation(fields: [billId], references: [id], onDelete: Restrict)
   dailyStayInvoice   DailyStayInvoice?     @relation(fields: [dailyStayInvoiceId], references: [id], onDelete: SetNull)
+  room               Room?                 @relation(fields: [roomId], references: [id], onDelete: SetNull)
+  billingCycle       BillingCycle?         @relation(fields: [billingCycleId], references: [id], onDelete: SetNull)
 
   @@unique([dormitoryId, receiptNumber], name: "dormitory_receipt_number_unique")
+  @@unique([dormitoryId, settlementScopeKey], name: "dormitory_settlement_scope_unique")
   @@index([dormitoryId, paymentGroupId], name: "idx_receipts_dorm_group")
   @@index([dormitoryId, dailyStayInvoiceId], name: "idx_receipts_dorm_daily_invoice")
+  @@index([dormitoryId, receiptKind], name: "idx_receipts_dorm_kind")
+  @@index([dormitoryId, roomId, billingCycleId], name: "idx_receipts_dorm_room_cycle")
   @@map("receipts")
 }
 

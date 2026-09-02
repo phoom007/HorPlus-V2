@@ -249,7 +249,7 @@ export function formatItemDescription(desc?: string): string {
     const match = str.match(/\(([^)]+)\)/);
     return match ? `ค่าอินเทอร์เน็ต (${match[1]})` : 'ค่าอินเทอร์เน็ต';
   }
-  return str.replace(/ค่าไฟฟ้า\s*\([^)]*\)/, 'ค่าไฟฟ้า').replace(/ค่าน้ำ\s*\([^)]*\)/, 'ค่าน้ำประปา');
+  return str.replace(/ค่าไฟฟ้า\s*\([^)]*\)/, 'ค่าไฟฟ้า').replace(/ค่าน้ำ\s*\([^)]*\)/, 'ค่าน้ำ');
 }
 
 export function formatBahtDash(amount: number | string | undefined): string {
@@ -589,9 +589,8 @@ export function buildViewingDailyReceipt(
         },
       ];
 
-  const receiptNumber = inv.invoiceNumber
-    ? (inv.invoiceNumber.startsWith('DINV-') ? `RC-${inv.invoiceNumber.replace(/^DINV-/, '')}` : inv.invoiceNumber)
-    : `RC-DAILY-${inv.id?.slice(0, 8)}`;
+  const persistedReceipt = (inv as any).finalReceipt || (inv as any).receipts?.[0];
+  const receiptNumber = persistedReceipt?.receiptNumber || (inv.invoiceNumber?.startsWith('DINV-') ? `RC-${inv.invoiceNumber.replace(/^DINV-/, '')}` : inv.invoiceNumber) || `RC-DAILY-${inv.id?.slice(0, 8)}`;
 
   return {
     receiptNumber,
@@ -1669,42 +1668,92 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
     }
   };
 
-  // 5. Open Real Receipt Modal (P0-D & P0-E Canonical Authority)
-  const handleOpenReceipt = (payment: PaymentRecord) => {
-    const receiptData = buildViewingReceipt(
-      payment,
-      bills,
-      getCycleCodeForCycleId,
-      (id) => getRoomNum(id),
-      (id) => getTenantName(id)
-    );
-    if (!receiptData) {
-      triggerToast('ไม่พบข้อมูลใบเสร็จรับเงิน กรุณาโหลดข้อมูลใหม่');
-      return;
-    }
+  // 5. Open Authoritative Final Receipt Directly (/api/v1/receipts/{id}/print)
+  const handleOpenReceipt = async (paymentOrGroup: any) => {
+    try {
+      let receiptId = paymentOrGroup?.finalReceiptId || paymentOrGroup?.receipt?.id || paymentOrGroup?.receipts?.[0]?.id;
+      const billId = paymentOrGroup?.billId || paymentOrGroup?.bill?.id || (paymentOrGroup?.payments && paymentOrGroup.payments[0]?.billId);
+      
+      if (!receiptId && billId) {
+        const token = localStorage.getItem('horplus_auth_token') || '';
+        const res = await fetch(`/api/v1/receipts/final/bill/${billId}`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+        if (res.ok) {
+          const data = await res.json();
+          receiptId = data?.id;
+        }
+      }
+      
+      if (!receiptId && paymentOrGroup?.receiptId) {
+        receiptId = paymentOrGroup.receiptId;
+      }
 
-    setViewingReceipt(receiptData);
-    setIsReceiptOpen(true);
+      if (receiptId) {
+        window.open(`/api/v1/receipts/${receiptId}/print`, '_blank');
+        return;
+      }
+
+      // Fallback to in-page preview if receiptId could not be resolved from backend
+      const receiptData = buildViewingReceipt(
+        paymentOrGroup,
+        bills,
+        getCycleCodeForCycleId,
+        (id) => getRoomNum(id),
+        (id) => getTenantName(id)
+      );
+      if (receiptData) {
+        setViewingReceipt(receiptData);
+        setIsReceiptOpen(true);
+        return;
+      }
+
+      triggerToast('ไม่พบข้อมูลใบเสร็จรับเงิน กรุณาโหลดข้อมูลใหม่');
+    } catch (err) {
+      triggerToast('ไม่สามารถเปิดใบเสร็จรับเงินได้');
+    }
   };
 
-  const handleOpenDailyReceipt = (inv: DailyStayInvoice) => {
-    const receiptData = buildViewingDailyReceipt(
-      inv,
-      (id) => getRoomNum(id),
-      selectedDormitory ? {
-        name: selectedDormitory.name,
-        address: selectedDormitory.addressLine1,
-        phone: selectedDormitory.phone,
-        taxId: (selectedDormitory as any).taxId,
-      } : undefined
-    );
-    if (!receiptData) {
-      triggerToast('ไม่พบข้อมูลใบเสร็จรับเงิน กรุณาโหลดข้อมูลใหม่');
-      return;
-    }
+  const handleOpenDailyReceipt = async (inv: DailyStayInvoice) => {
+    try {
+      let receiptId = (inv as any)?.finalReceiptId || (inv as any)?.receipts?.[0]?.id || (inv as any)?.finalReceipt?.id;
+      
+      if (!receiptId && inv?.id) {
+        const token = localStorage.getItem('horplus_auth_token') || '';
+        const res = await fetch(`/api/v1/receipts/final/daily-invoice/${inv.id}`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+        if (res.ok) {
+          const data = await res.json();
+          receiptId = data?.id;
+        }
+      }
 
-    setViewingReceipt(receiptData);
-    setIsReceiptOpen(true);
+      if (receiptId) {
+        window.open(`/api/v1/receipts/${receiptId}/print`, '_blank');
+        return;
+      }
+
+      const receiptData = buildViewingDailyReceipt(
+        inv,
+        (id) => getRoomNum(id),
+        selectedDormitory ? {
+          name: selectedDormitory.name,
+          address: selectedDormitory.addressLine1,
+          phone: selectedDormitory.phone,
+          taxId: (selectedDormitory as any).taxId,
+        } : undefined
+      );
+      if (receiptData) {
+        setViewingReceipt(receiptData);
+        setIsReceiptOpen(true);
+        return;
+      }
+
+      triggerToast('ไม่พบข้อมูลใบเสร็จรับเงิน กรุณาโหลดข้อมูลใหม่');
+    } catch (err) {
+      triggerToast('ไม่สามารถเปิดใบเสร็จรับเงินได้');
+    }
   };
 
   return (

@@ -242,6 +242,14 @@ export async function recordCashPaymentInTx(
     submitAmount
   );
 
+  if (newStatus === 'PAID') {
+    await generateFinalSettlementReceiptForBillInTx(tx, {
+      dormitoryId: input.dormitoryId,
+      billId: bill.id,
+      userId: safeUserId,
+    });
+  }
+
   return {
     ...payment,
     group,
@@ -501,6 +509,16 @@ export async function recordCombinedCashPaymentInTx(
     paymentMethod: 'CASH',
     paymentDate: effectivePaymentDate || undefined,
   });
+
+  for (const aff of plan.affectedBills) {
+    if (aff.newStatus === 'PAID') {
+      await generateFinalSettlementReceiptForBillInTx(tx, {
+        dormitoryId: input.dormitoryId,
+        billId: aff.id,
+        userId: safeUserId,
+      });
+    }
+  }
 
   return {
     group,
@@ -889,4 +907,302 @@ export async function generateGroupReceiptInTx(params: {
   });
 
   return receipt;
+}
+
+/**
+ * Generates or retrieves the canonical FINAL_SETTLEMENT receipt for a fully settled bill (Monthly / Term).
+ * Invariant: Exactly ONE Final Receipt per (dormitoryId, settlementScopeKey = "ROOM_CYCLE:{roomId}:{billingCycleId}").
+ * Fully idempotent, concurrency-safe, and preserves all underlying transaction history.
+ */
+export async function generateFinalSettlementReceiptForBillInTx(
+  tx: any,
+  params: {
+    dormitoryId: string;
+    billId: string;
+    userId?: string | null;
+  }
+) {
+  const { dormitoryId, billId, userId } = params;
+
+  const bill = await tx.bill.findUnique({
+    where: { id: billId },
+    include: {
+      items: { orderBy: { displayOrder: 'asc' } },
+      dormitory: true,
+      tenant: true,
+      room: true,
+      billingCycle: true,
+    },
+  });
+
+  if (!bill) {
+    throw new AppError('ไม่พบข้อมูลบิลสำหรับออกใบเสร็จรับเงิน', 404, 'BILL_NOT_FOUND');
+  }
+
+  const settlementScopeKey = `ROOM_CYCLE:${bill.roomId}:${bill.billingCycleId}`;
+
+  // 1. Check if a non-voided Final Settlement receipt already exists for this scope
+  const existing = tx.receipt?.findFirst
+    ? await tx.receipt.findFirst({
+        where: {
+          dormitoryId,
+          settlementScopeKey,
+          isVoided: false,
+        },
+      })
+    : null;
+
+  if (existing) {
+    return existing;
+  }
+
+  const today = new Date();
+  const yearMonth = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, '0')}`;
+
+  const seq = await tx.receiptSequence.upsert({
+    where: {
+      dormitory_receipt_seq_unique: {
+        dormitoryId,
+        yearMonth,
+      },
+    },
+    create: {
+      dormitoryId,
+      yearMonth,
+      lastValue: 1,
+    },
+    update: {
+      lastValue: { increment: 1 },
+    },
+  });
+
+  const rawRoomNumber = bill.room?.normalizedRoomNumber || bill.room?.roomNumber || 'GEN';
+  const normalizedRoom = rawRoomNumber.replace(/[^a-zA-Z0-9]/g, '').toUpperCase() || 'GEN';
+  const sequenceStr = String(seq.lastValue).padStart(4, '0');
+  const receiptNumber = `RC-${yearMonth}-${normalizedRoom}-${sequenceStr}`;
+
+  let receiverDisplayName = 'ฝ่ายการเงิน หอพัก HorPlus';
+  if (userId) {
+    const user = await tx.user.findUnique({ where: { id: userId }, select: { name: true } });
+    if (user?.name) {
+      receiverDisplayName = user.name;
+    }
+  }
+
+  Decimal.set({ rounding: Decimal.ROUND_HALF_UP });
+  const totalAmount = new Decimal(bill.totalAmount.toString());
+
+  const receiptItems = bill.items && bill.items.length > 0
+    ? mapBillItemsToSnapshot(bill.items)
+    : [
+        {
+          type: 'rent',
+          description: `ค่าเช่าห้องพัก ${bill.room?.roomNumber || ''}`.trim(),
+          quantity: '1.00',
+          unit: 'month',
+          unitPrice: totalAmount.toFixed(2),
+          amount: totalAmount.toFixed(2),
+          metadata: null,
+        },
+      ];
+
+  const snapshotData = {
+    receiptNumber,
+    billNumber: bill.billNumber || null,
+    cycleCode: bill.billingCycle?.cycleCode || null,
+    total: totalAmount.toFixed(2),
+    receivedAmount: totalAmount.toFixed(2),
+    billTotal: totalAmount.toFixed(2),
+    items: receiptItems,
+    roomNumber: bill.room?.roomNumber || 'GEN',
+    tenantName: bill.tenant?.displayName || (bill.tenant?.firstName ? `${bill.tenant.firstName || ''} ${bill.tenant.lastName || ''}`.trim() : 'ผู้เช่า'),
+    dormitoryName: bill.dormitory?.name || 'หอพัก HorPlus',
+    dormitoryTaxId: bill.dormitory?.taxId || null,
+    dormitoryAddress: bill.dormitory?.addressLine1 || bill.dormitory?.address || null,
+    dormitoryPhone: bill.dormitory?.phone || null,
+    paymentMethod: 'SETTLED',
+    paymentDate: bill.paidAt ? bill.paidAt.toISOString() : today.toISOString(),
+    receiverName: receiverDisplayName,
+    isFinalSettlement: true,
+  };
+
+  try {
+    const receipt = await tx.receipt.create({
+      data: {
+        dormitoryId,
+        billId: bill.id,
+        roomId: bill.roomId,
+        billingCycleId: bill.billingCycleId,
+        receiptKind: 'FINAL_SETTLEMENT',
+        settlementScopeKey,
+        receiptNumber,
+        snapshotData,
+        issuedByUserId: userId || null,
+        issuedAt: today,
+      },
+    });
+
+    return receipt;
+  } catch (err: any) {
+    if (err.code === 'P2002' || err.message?.includes('Unique constraint failed')) {
+      const raceWinner = await tx.receipt.findFirst({
+        where: {
+          dormitoryId,
+          settlementScopeKey,
+          isVoided: false,
+        },
+      });
+      if (raceWinner) return raceWinner;
+    }
+    throw err;
+  }
+}
+
+/**
+ * Generates or retrieves the canonical FINAL_SETTLEMENT receipt for a fully settled Daily Stay Invoice.
+ * Invariant: Exactly ONE Final Receipt per (dormitoryId, settlementScopeKey = "DAILY_INVOICE:{dailyStayInvoiceId}").
+ * Zero obligation produces no receipt.
+ */
+export async function generateFinalSettlementReceiptForDailyInvoiceInTx(
+  tx: any,
+  params: {
+    dormitoryId: string;
+    dailyStayInvoiceId: string;
+    userId?: string | null;
+  }
+) {
+  const { dormitoryId, dailyStayInvoiceId, userId } = params;
+
+  const invoice = await tx.dailyStayInvoice.findUnique({
+    where: { id: dailyStayInvoiceId },
+    include: {
+      items: true,
+      dormitory: true,
+      dailyStay: {
+        include: {
+          room: true,
+          tenant: true,
+        },
+      },
+    },
+  });
+
+  if (!invoice) {
+    throw new AppError('ไม่พบข้อมูลใบแจ้งหนี้รายวันสำหรับออกใบเสร็จรับเงิน', 404, 'INVOICE_NOT_FOUND');
+  }
+
+  const totalAgreed = new Decimal(invoice.totalAgreedAmount.toString());
+  // Zero obligation produces no receipt
+  if (totalAgreed.isZero()) {
+    return null;
+  }
+
+  const settlementScopeKey = `DAILY_INVOICE:${invoice.id}`;
+
+  const existing = tx.receipt?.findFirst
+    ? await tx.receipt.findFirst({
+        where: {
+          dormitoryId,
+          settlementScopeKey,
+          isVoided: false,
+        },
+      })
+    : null;
+
+  if (existing) {
+    return existing;
+  }
+
+  const today = new Date();
+  const yearMonth = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, '0')}`;
+
+  const seq = await tx.receiptSequence.upsert({
+    where: {
+      dormitory_receipt_seq_unique: {
+        dormitoryId,
+        yearMonth,
+      },
+    },
+    create: {
+      dormitoryId,
+      yearMonth,
+      lastValue: 1,
+    },
+    update: {
+      lastValue: { increment: 1 },
+    },
+  });
+
+  const rawRoomNumber = invoice.dailyStay?.room?.normalizedRoomNumber || invoice.dailyStay?.room?.roomNumber || 'GEN';
+  const normalizedRoom = rawRoomNumber.replace(/[^a-zA-Z0-9]/g, '').toUpperCase() || 'GEN';
+  const sequenceStr = String(seq.lastValue).padStart(4, '0');
+  const receiptNumber = `RC-${yearMonth}-${normalizedRoom}-${sequenceStr}`;
+
+  let receiverDisplayName = 'ฝ่ายการเงิน หอพัก HorPlus';
+  if (userId) {
+    const user = await tx.user.findUnique({ where: { id: userId }, select: { name: true } });
+    if (user?.name) {
+      receiverDisplayName = user.name;
+    }
+  }
+
+  const receiptItems = invoice.items.map((it: any) => ({
+    type: it.itemType === 'DAILY_RENT' ? 'rent' : (it.itemType === 'DEPOSIT' ? 'deposit' : 'other'),
+    description: it.description || (it.itemType === 'DAILY_RENT' ? 'ค่าเช่าห้องพักรายวัน' : 'เงินประกันห้องพัก'),
+    quantity: '1.00',
+    unit: it.itemType === 'DAILY_RENT' ? 'day' : null,
+    unitPrice: new Decimal(it.amount.toString()).toFixed(2),
+    amount: new Decimal(it.amount.toString()).toFixed(2),
+    metadata: null,
+  }));
+
+  const snapshotData = {
+    receiptNumber,
+    invoiceNumber: invoice.invoiceNumber,
+    billNumber: invoice.invoiceNumber,
+    total: totalAgreed.toFixed(2),
+    receivedAmount: totalAgreed.toFixed(2),
+    billTotal: totalAgreed.toFixed(2),
+    items: receiptItems,
+    roomNumber: invoice.dailyStay?.room?.roomNumber || 'GEN',
+    tenantName: invoice.dailyStay?.applicantFullName || invoice.dailyStay?.tenant?.displayName || 'ผู้พักรายวัน',
+    dormitoryName: invoice.dormitory?.name || 'หอพัก HorPlus',
+    dormitoryTaxId: invoice.dormitory?.taxId || null,
+    dormitoryAddress: invoice.dormitory?.addressLine1 || invoice.dormitory?.address || null,
+    dormitoryPhone: invoice.dormitory?.phone || null,
+    paymentMethod: 'CASH',
+    paymentDate: invoice.updatedAt ? invoice.updatedAt.toISOString() : (invoice.issuedAt ? invoice.issuedAt.toISOString() : today.toISOString()),
+    receiverName: receiverDisplayName,
+    isFinalSettlement: true,
+  };
+
+  try {
+    const receipt = await tx.receipt.create({
+      data: {
+        dormitoryId,
+        dailyStayInvoiceId: invoice.id,
+        roomId: invoice.dailyStay?.roomId || null,
+        receiptKind: 'FINAL_SETTLEMENT',
+        settlementScopeKey,
+        receiptNumber,
+        snapshotData,
+        issuedByUserId: userId || null,
+        issuedAt: today,
+      },
+    });
+
+    return receipt;
+  } catch (err: any) {
+    if (err.code === 'P2002' || err.message?.includes('Unique constraint failed')) {
+      const raceWinner = await tx.receipt.findFirst({
+        where: {
+          dormitoryId,
+          settlementScopeKey,
+          isVoided: false,
+        },
+      });
+      if (raceWinner) return raceWinner;
+    }
+    throw err;
+  }
 }
