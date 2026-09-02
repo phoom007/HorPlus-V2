@@ -609,9 +609,11 @@ export class DailyStayService {
           ? new Date()
           : null;
 
+        const hasPositiveSettledObligation = (!isDepositZero && depositStatus === 'DECLARED_PAID');
+
         const invoiceStatus = isOutstandingZero
           ? 'PAID'
-          : (depositStatus === 'DECLARED_PAID' || isDepositZero ? 'PARTIALLY_PAID' : 'ISSUED');
+          : (hasPositiveSettledObligation ? 'PARTIALLY_PAID' : 'ISSUED');
 
         invoice = await tx.dailyStayInvoice.create({
           data: {
@@ -907,9 +909,11 @@ export class DailyStayService {
         ? new Date()
         : null;
 
+      const hasPositiveSettledObligation = (!isDepositZero && depositStatus === 'DECLARED_PAID');
+
       const invoiceStatus = isOutstandingZero
         ? 'PAID'
-        : (depositStatus === 'DECLARED_PAID' || isDepositZero ? 'PARTIALLY_PAID' : 'ISSUED');
+        : (hasPositiveSettledObligation ? 'PARTIALLY_PAID' : 'ISSUED');
 
       const invoice = await tx.dailyStayInvoice.create({
         data: {
@@ -1374,7 +1378,7 @@ export class DailyStayService {
       const remainingOutstanding = Math.max(0, totalAgreed - totalPaid);
 
       let newStatus = 'ISSUED';
-      if (remainingOutstanding === 0 && totalAgreed > 0) {
+      if (remainingOutstanding === 0) {
         newStatus = 'PAID';
       } else if (totalPaid > 0) {
         newStatus = 'PARTIALLY_PAID';

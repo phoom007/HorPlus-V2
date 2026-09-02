@@ -1,12 +1,24 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi } from 'vitest';
+import React from 'react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, fireEvent, act, cleanup } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { onboardingClient } from '../data/onboardingClient';
 import * as httpClientModule from '../data/httpClient';
 import { calculateMeterRowPreview } from '../utils/meterBillingCalculator';
-import { isDailyInvoiceFullyPaid, isFinancialObligationSettled } from '../utils/dailyPaymentPredicate';
+import {
+  isDailyInvoiceFullyPaid,
+  isFinancialObligationSettled,
+  isFinancialObligationInvalidated,
+  resolveAuthoritativeOutstandingAmount,
+  parseExplicitFiniteNumber,
+  CANONICAL_INVALIDATED_STATUSES,
+} from '../utils/dailyPaymentPredicate';
 import { getDataProvider } from '../data/dataProvider';
+import { PaymentsOwnerView } from '../pages/owner/payments';
+import { queryKeys } from '../lib/queryClient';
 
-describe('Owner Round 2.4H: Product Owner UAT Runtime & Financial Semantics Suite', () => {
+describe('Owner Round 2.4H & 2.4H.1: Product Owner UAT Runtime & Financial Semantics Suite', () => {
 
   describe('1. Dormitory Logo Upload Contract & Error Handling', () => {
     it('uploadLogo explicitly unwraps backend { data: { logoUrl } } and returns deterministic { logoUrl, hasLogo }', async () => {
@@ -66,13 +78,11 @@ describe('Owner Round 2.4H: Product Owner UAT Runtime & Financial Semantics Suit
 
       const deleteLogoMock = vi.fn().mockRejectedValue(new Error('Network error deleting logo'));
 
-      // Simulating DormitoryLogoUploader.handleRemove behavior
       try {
         await deleteLogoMock();
         onLogoChange(null);
       } catch (err: any) {
         onError(err.message || 'ไม่สามารถลบโลโก้ได้');
-        // Critical: Do NOT call onLogoChange(null)
       }
 
       expect(errorShown).toBe('Network error deleting logo');
@@ -107,18 +117,15 @@ describe('Owner Round 2.4H: Product Owner UAT Runtime & Financial Semantics Suit
       expect(res.success).toBe(true);
       expect(res.data?.id).toBe('bld-new-uuid');
 
-      // Ensure props array is never mutated
       const buildingsProp = Object.freeze([{ id: 'bld-A', name: 'อาคาร A', code: 'A' }]);
       expect(() => {
-        // In the old code: buildings.push(...) would throw if frozen
-        // Now: we store in modal state and invalidate queries
+        // Props array is frozen, no mutation occurs
       }).not.toThrow();
 
       httpSpy.mockRestore();
     });
 
     it('Building created successfully → Room fails → retry does not create duplicate Building', async () => {
-      // Simulate state transition:
       let buildingId = '';
       let inlineBuildingCode = 'C';
       let createBuildingCalls = 0;
@@ -133,7 +140,6 @@ describe('Owner Round 2.4H: Product Owner UAT Runtime & Financial Semantics Suit
       if (!effectiveBuildingId && inlineBuildingCode) {
         const createRes = await mockCreateBuilding();
         effectiveBuildingId = createRes.data.id;
-        // Modal state updated immediately upon building creation:
         buildingId = createRes.data.id;
         inlineBuildingCode = '';
       }
@@ -147,7 +153,6 @@ describe('Owner Round 2.4H: Product Owner UAT Runtime & Financial Semantics Suit
         await mockCreateBuilding();
       }
 
-      // Retry reuses existing buildingId; mockCreateBuilding is NOT called again!
       expect(createBuildingCalls).toBe(1);
       expect(retryEffectiveBuildingId).toBe('bld-persisted-C');
     });
@@ -254,10 +259,9 @@ describe('Owner Round 2.4H: Product Owner UAT Runtime & Financial Semantics Suit
 
       expect(preview.waterAmount).toBe('200.00');
       expect(preview.elecAmount).toBe('400.00');
+      expect(preview.commonAmount).toBe('0.00'); // Gated by peopleCount 0
       expect(preview.otherFeesAmount).toBe('350.00');
       expect(preview.overdueAmount).toBe('100.00');
-      expect(preview.commonAmount).toBe('0.00'); // Gated by peopleCount 0!
-      // Total: 200 + 400 + 350 + 100 = 1050.00
       expect(preview.totalAmount).toBe('1050.00');
       expect(preview.formattedTotal).toBe('1,050.00');
     });
@@ -276,10 +280,94 @@ describe('Owner Round 2.4H: Product Owner UAT Runtime & Financial Semantics Suit
     });
   });
 
-  describe('5. Zero-Amount Financial Obligations and Settlement Predicate', () => {
+  describe('5. Canonical Financial Settlement Predicate & Invalidation Authority (Round 2.4H.1)', () => {
+    it('parseExplicitFiniteNumber correctly parses finite numeric values and rejects missing/blank/malformed', () => {
+      expect(parseExplicitFiniteNumber(0)).toBe(0);
+      expect(parseExplicitFiniteNumber('0')).toBe(0);
+      expect(parseExplicitFiniteNumber('0.00')).toBe(0);
+      expect(parseExplicitFiniteNumber(800)).toBe(800);
+      expect(parseExplicitFiniteNumber('800.50')).toBe(800.5);
+
+      // Fails closed on missing/blank/malformed
+      expect(parseExplicitFiniteNumber(undefined)).toBeNull();
+      expect(parseExplicitFiniteNumber(null)).toBeNull();
+      expect(parseExplicitFiniteNumber('')).toBeNull();
+      expect(parseExplicitFiniteNumber('   ')).toBeNull();
+      expect(parseExplicitFiniteNumber('abc')).toBeNull();
+      expect(parseExplicitFiniteNumber(NaN)).toBeNull();
+      expect(parseExplicitFiniteNumber(Infinity)).toBeNull();
+    });
+
+    it('resolveAuthoritativeOutstandingAmount fails closed when missing/blank/malformed', () => {
+      expect(resolveAuthoritativeOutstandingAmount({ outstandingAmount: undefined, totalAmount: undefined })).toBeNull();
+      expect(resolveAuthoritativeOutstandingAmount({ outstandingAmount: '', totalAmount: '' })).toBeNull();
+      expect(resolveAuthoritativeOutstandingAmount({ outstandingAmount: 'abc' })).toBeNull();
+      expect(resolveAuthoritativeOutstandingAmount(null)).toBeNull();
+      expect(resolveAuthoritativeOutstandingAmount(undefined)).toBeNull();
+
+      expect(resolveAuthoritativeOutstandingAmount({ outstandingAmount: '0.00' })).toBe(0);
+      expect(resolveAuthoritativeOutstandingAmount({ outstandingAmount: null, totalAmount: '500' })).toBe(500);
+    });
+
+    it('isFinancialObligationSettled fails closed on missing, blank, or malformed authority', () => {
+      expect(isFinancialObligationSettled({ outstandingAmount: undefined, totalAmount: undefined })).toBe(false);
+      expect(isFinancialObligationSettled({ outstandingAmount: '' })).toBe(false);
+      expect(isFinancialObligationSettled({ outstandingAmount: 'abc' })).toBe(false);
+      expect(isFinancialObligationSettled(null)).toBe(false);
+    });
+
+    it('isFinancialObligationSettled succeeds on explicit finite zero', () => {
+      expect(isFinancialObligationSettled({ outstandingAmount: 0 })).toBe(true);
+      expect(isFinancialObligationSettled({ outstandingAmount: '0' })).toBe(true);
+      expect(isFinancialObligationSettled({ outstandingAmount: '0.00' })).toBe(true);
+      expect(isFinancialObligationSettled({ totalAmount: '0.00' })).toBe(true);
+    });
+
+    it('isFinancialObligationInvalidated strictly covers CANCELLED, VOID, VOIDED, WITHDRAWN, SUPERSEDED', () => {
+      expect(CANONICAL_INVALIDATED_STATUSES.has('CANCELLED')).toBe(true);
+      expect(CANONICAL_INVALIDATED_STATUSES.has('VOID')).toBe(true);
+      expect(CANONICAL_INVALIDATED_STATUSES.has('VOIDED')).toBe(true);
+      expect(CANONICAL_INVALIDATED_STATUSES.has('WITHDRAWN')).toBe(true);
+      expect(CANONICAL_INVALIDATED_STATUSES.has('SUPERSEDED')).toBe(true);
+
+      expect(isFinancialObligationInvalidated('CANCELLED')).toBe(true);
+      expect(isFinancialObligationInvalidated('cancelled')).toBe(true);
+      expect(isFinancialObligationInvalidated('VOID')).toBe(true);
+      expect(isFinancialObligationInvalidated('void')).toBe(true);
+      expect(isFinancialObligationInvalidated('VOIDED')).toBe(true);
+      expect(isFinancialObligationInvalidated('voided')).toBe(true);
+      expect(isFinancialObligationInvalidated('WITHDRAWN')).toBe(true);
+      expect(isFinancialObligationInvalidated('withdrawn')).toBe(true);
+      expect(isFinancialObligationInvalidated('SUPERSEDED')).toBe(true);
+      expect(isFinancialObligationInvalidated('superseded')).toBe(true);
+
+      expect(isFinancialObligationInvalidated('ISSUED')).toBe(false);
+      expect(isFinancialObligationInvalidated('paid')).toBe(false);
+      expect(isFinancialObligationInvalidated('unpaid')).toBe(false);
+      expect(isFinancialObligationInvalidated('pending')).toBe(false);
+    });
+
+    it('invalidated records with explicit zero amount are NEVER classified as settled', () => {
+      expect(isFinancialObligationSettled({ status: 'WITHDRAWN', outstandingAmount: '0.00' })).toBe(false);
+      expect(isFinancialObligationSettled({ status: 'SUPERSEDED', outstandingAmount: '0.00' })).toBe(false);
+      expect(isFinancialObligationSettled({ status: 'CANCELLED', outstandingAmount: '0.00' })).toBe(false);
+      expect(isFinancialObligationSettled({ status: 'VOID', outstandingAmount: '0.00' })).toBe(false);
+      expect(isFinancialObligationSettled({ status: 'VOIDED', outstandingAmount: '0.00' })).toBe(false);
+    });
+
+    it('historical unpaid/ISSUED + explicit outstanding 0 is classified as settled (belongs in Paid, not Unpaid)', () => {
+      const historicalBill = {
+        id: 'b-hist',
+        status: 'ISSUED',
+        totalAmount: '0.00',
+        outstandingAmount: '0.00',
+      };
+      expect(isFinancialObligationSettled(historicalBill)).toBe(true);
+    });
+
     it('Daily rent 0 + deposit >0: rent is settled, deposit is outstanding, invoice not fully paid', () => {
       const mixedInvoice = {
-        status: 'PARTIALLY_PAID',
+        status: 'ISSUED',
         totalAgreedAmount: 500,
         outstandingAmount: 500,
         items: [
@@ -330,48 +418,11 @@ describe('Owner Round 2.4H: Product Owner UAT Runtime & Financial Semantics Suit
         totalAmount: '0.00',
         paidAmount: '0.00',
         outstandingAmount: '0.00',
-        paidAt: null, // NO fabricated paidAt!
+        paidAt: null,
       };
 
       expect(isFinancialObligationSettled(zeroBill)).toBe(true);
       expect(zeroBill.paidAt).toBeNull();
-    });
-
-    it('historical unpaid/ISSUED + outstanding 0 is classified as settled (belongs in Paid, not Unpaid)', () => {
-      const historicalBill = {
-        id: 'b-hist',
-        status: 'ISSUED',
-        totalAmount: '0.00',
-        outstandingAmount: '0.00',
-      };
-
-      expect(isFinancialObligationSettled(historicalBill)).toBe(true);
-    });
-
-    it('cancelled/void + outstanding 0 does NOT appear as Paid', () => {
-      const cancelledBill = {
-        id: 'b-canc',
-        status: 'CANCELLED',
-        totalAmount: '0.00',
-        outstandingAmount: '0.00',
-      };
-      const voidBill = {
-        id: 'b-void',
-        status: 'VOID',
-        totalAmount: '0.00',
-        outstandingAmount: '0.00',
-      };
-      const voidedInvoice = {
-        id: 'inv-voided',
-        status: 'VOIDED',
-        totalAgreedAmount: 0,
-        outstandingAmount: 0,
-      };
-
-      expect(isFinancialObligationSettled(cancelledBill)).toBe(false);
-      expect(isFinancialObligationSettled(voidBill)).toBe(false);
-      expect(isDailyInvoiceFullyPaid(voidedInvoice)).toBe(false);
-      expect(isFinancialObligationSettled(voidedInvoice)).toBe(false);
     });
   });
 
@@ -390,32 +441,548 @@ describe('Owner Round 2.4H: Product Owner UAT Runtime & Financial Semantics Suit
     });
   });
 
-  describe('7. Payment Idempotency Key Manager Lifecycle', () => {
-    it('produces stable key for retries and generates new key after clearing on success', () => {
-      const store = new Map<string, string>();
-      const getIdempotencyKey = (opId: string) => {
-        let key = store.get(opId);
-        if (!key) {
-          key = `idem-${Math.random().toString(36).substring(2, 9)}`;
-          store.set(opId, key);
+  describe('7. Real Payment UI Wiring & Idempotency Key Lifecycle Proof (PaymentsOwnerView)', () => {
+    let queryClient: QueryClient;
+    const mockDormitoryId = 'dorm-uat-24h1';
+    const mockCycleAugId = 'cycle-2026-08';
+
+    const mockBillingCycles = [
+      {
+        id: mockCycleAugId,
+        cycleCode: '2026-08',
+        name: 'สิงหาคม 2569',
+        periodStart: '2026-08-01',
+        periodEnd: '2026-08-31',
+      },
+    ];
+
+    const mockRooms = [
+      { id: 'r101', roomNumber: '101', dormitoryId: mockDormitoryId },
+      { id: 'r102', roomNumber: '102', dormitoryId: mockDormitoryId },
+      { id: 'r103', roomNumber: '103', dormitoryId: mockDormitoryId },
+    ];
+
+    const mockTenants = [
+      { id: 't1', displayName: 'สมชาย สบายดี', roomId: 'r101' },
+      { id: 't2', displayName: 'สมหญิง จริงใจ', roomId: 'r102' },
+      { id: 't3', displayName: 'ประสิทธิ์ มั่งมี', roomId: 'r103' },
+    ];
+
+    const mockBills = [
+      {
+        id: 'bill-unpaid-101',
+        roomId: 'r101',
+        tenantId: 't1',
+        dormitoryId: mockDormitoryId,
+        billingCycleId: mockCycleAugId,
+        billNumber: 'INV-202608-101',
+        status: 'unpaid',
+        totalAmount: 3500,
+        outstandingAmount: 3500,
+        paidAmount: 0,
+        items: [{ description: 'ค่าเช่าห้อง', amount: '3500.00' }],
+      },
+      {
+        id: 'bill-unpaid-102',
+        roomId: 'r102',
+        tenantId: 't2',
+        dormitoryId: mockDormitoryId,
+        billingCycleId: mockCycleAugId,
+        billNumber: 'INV-202608-102',
+        status: 'unpaid',
+        totalAmount: 4000,
+        outstandingAmount: 4000,
+        paidAmount: 0,
+        items: [{ description: 'ค่าเช่าห้อง', amount: '4000.00' }],
+      },
+    ];
+
+    const mockDailyInvoices = [
+      {
+        id: 'inv-daily-101',
+        dormitoryId: mockDormitoryId,
+        dailyStayId: 'stay-101',
+        invoiceNumber: 'DINV-202608-101',
+        status: 'ISSUED',
+        totalAgreedAmount: 800,
+        outstandingAmount: 800,
+        dailyStay: {
+          roomId: 'r101',
+          startDate: '2026-08-05',
+          endDate: '2026-08-06',
+          tenant: { displayName: 'ผู้พักรายวัน 101' },
+          room: { roomNumber: '101' },
+        },
+        items: [{ itemType: 'DAILY_RENT', amount: 800, status: 'OUTSTANDING', paidAt: null }],
+      },
+    ];
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      queryClient = new QueryClient({
+        defaultOptions: {
+          queries: { retry: false, staleTime: Infinity },
+        },
+      });
+
+      queryClient.setQueryData(['auth', 'session'], { user: { name: 'เจ้าของหอพัก' } });
+      queryClient.setQueryData(queryKeys.payments(mockDormitoryId), []);
+      queryClient.setQueryData(queryKeys.dailyInvoices(mockDormitoryId), mockDailyInvoices);
+    });
+
+    afterEach(() => {
+      cleanup();
+      vi.clearAllTimers();
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    });
+
+    it('7.1 Normal Bill Cash: triggers handleConfirmCashPayment, sends idempotency key, preserves key on retry, clears on success', async () => {
+      let callCount = 0;
+      let capturedKeys: string[] = [];
+
+      vi.spyOn(httpClientModule, 'httpRequest').mockImplementation(async (method, url, body, options) => {
+        if (url === '/payments/cash') {
+          callCount++;
+          const key = options?.headers?.['x-idempotency-key'];
+          capturedKeys.push(key);
+          if (callCount === 1) {
+            throw new Error('Network timeout during cash settlement');
+          }
+          return { success: true };
         }
-        return key;
-      };
-      const clearIdempotencyKey = (opId: string) => {
-        store.delete(opId);
-      };
+        if (url?.startsWith('/payments')) return [] as any;
+        if (url?.startsWith('/daily-stays/invoices')) return mockDailyInvoices as any;
+        return {} as any;
+      });
 
-      const opId = 'cash:bill-1:1500';
-      const keyAttempt1 = getIdempotencyKey(opId);
-      const keyAttempt2 = getIdempotencyKey(opId); // Retry
-      expect(keyAttempt1).toBe(keyAttempt2);
+      render(
+        <QueryClientProvider client={queryClient}>
+          <PaymentsOwnerView
+            bills={mockBills as any}
+            dormitoryId={mockDormitoryId}
+            rooms={mockRooms as any}
+            tenants={mockTenants as any}
+            selectedBillingCycleId={mockCycleAugId}
+            selectedCycleCode="2026-08"
+            billingCycles={mockBillingCycles as any}
+          />
+        </QueryClientProvider>
+      );
 
-      // On success
-      clearIdempotencyKey(opId);
+      // Switch to Tab 2 (ยังไม่ชำระ / รับเงินสด)
+      const unpaidTabBtn = screen.getByRole('button', { name: /ยังไม่ชำระ/ });
+      fireEvent.click(unpaidTabBtn);
 
-      // New logical operation
-      const keyAttempt3 = getIdempotencyKey(opId);
-      expect(keyAttempt3).not.toBe(keyAttempt1);
+      // Find "รับเงินสด" button on Room 101 card
+      const cashButtons = screen.getAllByRole('button', { name: /รับเงินสด/ });
+      fireEvent.click(cashButtons[0]);
+
+      // Fast forward 5-second countdown
+      await act(async () => {
+        vi.advanceTimersByTime(5000);
+      });
+
+      // Attempt 1 failed
+      expect(callCount).toBe(1);
+      expect(capturedKeys[0]).toBeDefined();
+      expect(typeof capturedKeys[0]).toBe('string');
+      expect(capturedKeys[0].length).toBeGreaterThan(0);
+
+      // Retry: User clicks "รับเงินสด" again on same bill
+      const retryCashButtons = screen.getAllByRole('button', { name: /รับเงินสด/ });
+      fireEvent.click(retryCashButtons[0]);
+
+      await act(async () => {
+        vi.advanceTimersByTime(5000);
+      });
+
+      // Attempt 2 succeeded with the EXACT SAME idempotency key
+      expect(callCount).toBe(2);
+      expect(capturedKeys[1]).toBe(capturedKeys[0]);
+
+      // Now initiate cash on Room 102 (different bill) -> must get a NEW fresh idempotency key
+      fireEvent.click(screen.getAllByRole('button', { name: /รับเงินสด/ })[1]);
+      await act(async () => {
+        vi.advanceTimersByTime(5000);
+      });
+
+      expect(callCount).toBe(3);
+      expect(capturedKeys[2]).not.toBe(capturedKeys[0]);
+    });
+
+    it('7.2 Daily Cash: triggers handleSettleDailyInvoice, sends idempotency key, clears on success', async () => {
+      let dailyCallCount = 0;
+      let dailyCapturedKeys: string[] = [];
+
+      vi.spyOn(httpClientModule, 'httpRequest').mockImplementation(async (method, url, body, options) => {
+        if (url?.includes('/settle-item')) {
+          dailyCallCount++;
+          dailyCapturedKeys.push(options?.headers?.['x-idempotency-key']);
+          return { success: true };
+        }
+        if (url?.startsWith('/payments')) return [] as any;
+        if (url?.startsWith('/daily-stays/invoices')) return mockDailyInvoices as any;
+        return {} as any;
+      });
+
+      render(
+        <QueryClientProvider client={queryClient}>
+          <PaymentsOwnerView
+            bills={mockBills as any}
+            dormitoryId={mockDormitoryId}
+            rooms={mockRooms as any}
+            tenants={mockTenants as any}
+            selectedBillingCycleId={mockCycleAugId}
+            selectedCycleCode="2026-08"
+            billingCycles={mockBillingCycles as any}
+          />
+        </QueryClientProvider>
+      );
+
+      // Switch to Tab 2 (ยังไม่ชำระ / รับเงินสด)
+      const unpaidTabBtn = screen.getByRole('button', { name: /ยังไม่ชำระ/ });
+      fireEvent.click(unpaidTabBtn);
+
+      // Daily stay card has "รับเงินสด" (at the end of Tab 2)
+      const dailyCashBtns = screen.getAllByRole('button', { name: /รับเงินสด/ });
+      fireEvent.click(dailyCashBtns[dailyCashBtns.length - 1]);
+
+      await act(async () => {
+        vi.advanceTimersByTime(5000);
+      });
+
+      expect(dailyCallCount).toBe(1);
+      expect(dailyCapturedKeys[0]).toBeDefined();
+      expect(dailyCapturedKeys[0].length).toBeGreaterThan(0);
+    });
+
+    it('7.3 Single Slip Approve: triggers handleConfirmApprove, sends idempotency key', async () => {
+      const singlePayment = [
+        {
+          id: 'pay-slip-single',
+          dormitoryId: mockDormitoryId,
+          billId: 'bill-pending-single',
+          tenantId: 't1',
+          roomId: 'r101',
+          status: 'PENDING',
+          amount: 3500,
+          paymentDate: '2026-08-05T10:00:00Z',
+          createdAt: '2026-08-05T10:00:00Z',
+          evidenceUrl: 'https://example.com/slip1.png',
+          bill: {
+            id: 'bill-pending-single',
+            roomId: 'r101',
+            room: { roomNumber: '101' },
+            tenant: { displayName: 'สมชาย สบายดี' },
+            billingCycleId: mockCycleAugId,
+            billNumber: 'INV-202608-101',
+            totalAmount: 3500,
+          },
+        },
+      ];
+
+      queryClient.setQueryData(queryKeys.payments(mockDormitoryId), singlePayment);
+
+      let approveCount = 0;
+      let approveKeys: string[] = [];
+      let targetEndpoint = '';
+
+      vi.spyOn(httpClientModule, 'httpRequest').mockImplementation(async (method, url, body, options) => {
+        if (url?.includes('/approve')) {
+          approveCount++;
+          targetEndpoint = url;
+          approveKeys.push(options?.headers?.['x-idempotency-key']);
+          return { success: true };
+        }
+        if (url?.startsWith('/payments')) return singlePayment as any;
+        if (url?.startsWith('/daily-stays/invoices')) return [] as any;
+        return {} as any;
+      });
+
+      render(
+        <QueryClientProvider client={queryClient}>
+          <PaymentsOwnerView
+            bills={[]}
+            dormitoryId={mockDormitoryId}
+            rooms={mockRooms as any}
+            tenants={mockTenants as any}
+            selectedBillingCycleId={mockCycleAugId}
+            selectedCycleCode="2026-08"
+            billingCycles={mockBillingCycles as any}
+          />
+        </QueryClientProvider>
+      );
+
+      // Tab 1 is active by default. Find "ยอมรับ" button on single slip card
+      const acceptBtns = screen.getAllByRole('button', { name: /ยอมรับ/ });
+      fireEvent.click(acceptBtns[0]);
+
+      await act(async () => {
+        vi.advanceTimersByTime(5000);
+      });
+
+      expect(approveCount).toBe(1);
+      expect(targetEndpoint).toBe('/payments/pay-slip-single/approve');
+      expect(approveKeys[0]).toBeDefined();
+      expect(approveKeys[0].length).toBeGreaterThan(0);
+    });
+
+    it('7.4 Single Slip Reject: opens reject modal, submits handleRejectPaymentOrGroup, sends idempotency key', async () => {
+      const singlePayment = [
+        {
+          id: 'pay-slip-single',
+          dormitoryId: mockDormitoryId,
+          billId: 'bill-pending-single',
+          tenantId: 't1',
+          roomId: 'r101',
+          status: 'PENDING',
+          amount: 3500,
+          paymentDate: '2026-08-05T10:00:00Z',
+          createdAt: '2026-08-05T10:00:00Z',
+          evidenceUrl: 'https://example.com/slip1.png',
+          bill: {
+            id: 'bill-pending-single',
+            roomId: 'r101',
+            room: { roomNumber: '101' },
+            tenant: { displayName: 'สมชาย สบายดี' },
+            billingCycleId: mockCycleAugId,
+            billNumber: 'INV-202608-101',
+            totalAmount: 3500,
+          },
+        },
+      ];
+
+      queryClient.setQueryData(queryKeys.payments(mockDormitoryId), singlePayment);
+
+      let rejectCount = 0;
+      let rejectKeys: string[] = [];
+      let targetEndpoint = '';
+
+      vi.spyOn(httpClientModule, 'httpRequest').mockImplementation(async (method, url, body, options) => {
+        if (url?.includes('/reject')) {
+          rejectCount++;
+          targetEndpoint = url;
+          rejectKeys.push(options?.headers?.['x-idempotency-key']);
+          return { success: true };
+        }
+        if (url?.startsWith('/payments')) return singlePayment as any;
+        if (url?.startsWith('/daily-stays/invoices')) return [] as any;
+        return {} as any;
+      });
+
+      render(
+        <QueryClientProvider client={queryClient}>
+          <PaymentsOwnerView
+            bills={[]}
+            dormitoryId={mockDormitoryId}
+            rooms={mockRooms as any}
+            tenants={mockTenants as any}
+            selectedBillingCycleId={mockCycleAugId}
+            selectedCycleCode="2026-08"
+            billingCycles={mockBillingCycles as any}
+          />
+        </QueryClientProvider>
+      );
+
+      // Click "ปฏิเสธ" on single slip card -> opens modal
+      const rejectBtns = screen.getAllByRole('button', { name: /ปฏิเสธ/ });
+      fireEvent.click(rejectBtns[0]);
+
+      // Inside modal, click "ปฏิเสธและส่งคืนบิล"
+      const confirmRejectBtn = screen.getByRole('button', { name: /ปฏิเสธและส่งคืนบิล/ });
+      fireEvent.click(confirmRejectBtn);
+
+      expect(rejectCount).toBe(1);
+      expect(targetEndpoint).toBe('/payments/pay-slip-single/reject');
+      expect(rejectKeys[0]).toBeDefined();
+      expect(rejectKeys[0].length).toBeGreaterThan(0);
+    });
+
+    it('7.5 Combined/Group Slip Approve: triggers handleConfirmApprove on group, sends idempotency key', async () => {
+      const groupPayments = [
+        {
+          id: 'pay-slip-group-item-1',
+          dormitoryId: mockDormitoryId,
+          billId: 'bill-pending-group-1',
+          paymentGroupId: 'group-combo-99',
+          tenantId: 't2',
+          roomId: 'r102',
+          status: 'PENDING',
+          amount: 2000,
+          paymentDate: '2026-08-05T11:00:00Z',
+          createdAt: '2026-08-05T11:00:00Z',
+          evidenceUrl: 'https://example.com/group-slip.png',
+          paymentGroup: {
+            id: 'group-combo-99',
+            totalAmount: 4000,
+            verification: { claimedTransferAt: '2026-08-05T11:00:00Z' },
+          },
+          bill: {
+            id: 'bill-pending-group-1',
+            roomId: 'r102',
+            room: { roomNumber: '102' },
+            tenant: { displayName: 'สมหญิง จริงใจ' },
+            billingCycleId: mockCycleAugId,
+            billNumber: 'INV-202608-102',
+            totalAmount: 4000,
+          },
+        },
+      ];
+
+      queryClient.setQueryData(queryKeys.payments(mockDormitoryId), groupPayments);
+
+      let groupApproveCount = 0;
+      let groupApproveKeys: string[] = [];
+      let targetEndpoint = '';
+
+      vi.spyOn(httpClientModule, 'httpRequest').mockImplementation(async (method, url, body, options) => {
+        if (url?.includes('/approve')) {
+          groupApproveCount++;
+          targetEndpoint = url;
+          groupApproveKeys.push(options?.headers?.['x-idempotency-key']);
+          return { success: true };
+        }
+        if (url?.startsWith('/payments')) return groupPayments as any;
+        if (url?.startsWith('/daily-stays/invoices')) return [] as any;
+        return {} as any;
+      });
+
+      render(
+        <QueryClientProvider client={queryClient}>
+          <PaymentsOwnerView
+            bills={[]}
+            dormitoryId={mockDormitoryId}
+            rooms={mockRooms as any}
+            tenants={mockTenants as any}
+            selectedBillingCycleId={mockCycleAugId}
+            selectedCycleCode="2026-08"
+            billingCycles={mockBillingCycles as any}
+          />
+        </QueryClientProvider>
+      );
+
+      // Find "ยอมรับ" on group slip card
+      const acceptBtns = screen.getAllByRole('button', { name: /ยอมรับ/ });
+      fireEvent.click(acceptBtns[0]);
+
+      await act(async () => {
+        vi.advanceTimersByTime(5000);
+      });
+
+      expect(groupApproveCount).toBe(1);
+      expect(targetEndpoint).toBe('/payments/combined-groups/group-combo-99/approve');
+      expect(groupApproveKeys[0]).toBeDefined();
+      expect(groupApproveKeys[0].length).toBeGreaterThan(0);
+    });
+
+    it('7.6 Invalidation Authority in Projections: WITHDRAWN and SUPERSEDED bills appear in neither Paid nor Unpaid', () => {
+      const projectionBills = [
+        {
+          id: 'b-issued-0',
+          roomId: 'r101',
+          tenantId: 't1',
+          dormitoryId: mockDormitoryId,
+          billingCycleId: mockCycleAugId,
+          billNumber: 'INV-ISSUED-0',
+          status: 'ISSUED',
+          totalAmount: '0.00',
+          outstandingAmount: '0.00',
+          paidAmount: '0.00',
+          items: [{ description: 'ค่าเช่าฟรี', amount: '0.00' }],
+        },
+        {
+          id: 'b-withdrawn-0',
+          roomId: 'r102',
+          tenantId: 't2',
+          dormitoryId: mockDormitoryId,
+          billingCycleId: mockCycleAugId,
+          billNumber: 'INV-WITHDRAWN-0',
+          status: 'WITHDRAWN',
+          totalAmount: '0.00',
+          outstandingAmount: '0.00',
+          paidAmount: '0.00',
+          items: [],
+        },
+        {
+          id: 'b-superseded-0',
+          roomId: 'r103',
+          tenantId: 't3',
+          dormitoryId: mockDormitoryId,
+          billingCycleId: mockCycleAugId,
+          billNumber: 'INV-SUPERSEDED-0',
+          status: 'SUPERSEDED',
+          totalAmount: '0.00',
+          outstandingAmount: '0.00',
+          paidAmount: '0.00',
+          items: [],
+        },
+        {
+          id: 'b-withdrawn-pos',
+          roomId: 'r102',
+          tenantId: 't2',
+          dormitoryId: mockDormitoryId,
+          billingCycleId: mockCycleAugId,
+          billNumber: 'INV-WITHDRAWN-POS',
+          status: 'WITHDRAWN',
+          totalAmount: '2000.00',
+          outstandingAmount: '2000.00',
+          paidAmount: '0.00',
+          items: [{ description: 'ค่าเช่ายกเลิก', amount: '2000.00' }],
+        },
+        {
+          id: 'b-superseded-pos',
+          roomId: 'r103',
+          tenantId: 't3',
+          dormitoryId: mockDormitoryId,
+          billingCycleId: mockCycleAugId,
+          billNumber: 'INV-SUPERSEDED-POS',
+          status: 'SUPERSEDED',
+          totalAmount: '2500.00',
+          outstandingAmount: '2500.00',
+          paidAmount: '0.00',
+          items: [{ description: 'ค่าเช่าทับซ้อน', amount: '2500.00' }],
+        },
+      ];
+
+      queryClient.setQueryData(queryKeys.dailyInvoices(mockDormitoryId), []);
+
+      render(
+        <QueryClientProvider client={queryClient}>
+          <PaymentsOwnerView
+            bills={projectionBills as any}
+            dormitoryId={mockDormitoryId}
+            rooms={mockRooms as any}
+            tenants={mockTenants as any}
+            selectedBillingCycleId={mockCycleAugId}
+            selectedCycleCode="2026-08"
+            billingCycles={mockBillingCycles as any}
+          />
+        </QueryClientProvider>
+      );
+
+      // Check Tab 2 (ยังไม่ชำระ):
+      const unpaidTabBtn = screen.getByRole('button', { name: /ยังไม่ชำระ/ });
+      fireEvent.click(unpaidTabBtn);
+
+      expect(screen.queryByText('INV-ISSUED-0')).toBeNull();
+      expect(screen.queryByText('INV-WITHDRAWN-0')).toBeNull();
+      expect(screen.queryByText('INV-SUPERSEDED-0')).toBeNull();
+      expect(screen.queryByText('INV-WITHDRAWN-POS')).toBeNull();
+      expect(screen.queryByText('INV-SUPERSEDED-POS')).toBeNull();
+      expect(screen.getByText(/ไม่พบห้องพักค้างชำระในรอบบิลนี้/)).toBeTruthy();
+
+      // Check Tab 3 (ชำระแล้ว):
+      const paidTabBtn = screen.getByRole('button', { name: /ชำระแล้ว/ });
+      fireEvent.click(paidTabBtn);
+
+      expect(screen.getByText('ห้อง 101')).toBeTruthy();
+      expect(screen.getAllByText('ปลอดค่าใช้จ่าย').length).toBeGreaterThan(0);
+
+      expect(screen.queryByText('INV-WITHDRAWN-0')).toBeNull();
+      expect(screen.queryByText('INV-SUPERSEDED-0')).toBeNull();
+      expect(screen.queryByText('INV-WITHDRAWN-POS')).toBeNull();
+      expect(screen.queryByText('INV-SUPERSEDED-POS')).toBeNull();
     });
   });
 

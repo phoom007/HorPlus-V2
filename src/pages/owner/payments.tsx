@@ -27,7 +27,12 @@ import { LineNotificationModal, LineIcon } from '../../components/LineNotificati
 import { Bill, Tenant, Room } from '../../types';
 import { queryKeys } from '../../lib/queryClient';
 import { httpRequest } from '../../data/httpClient';
-import { isDailyInvoiceFullyPaid, isFinancialObligationSettled } from '../../utils/dailyPaymentPredicate';
+import {
+  isDailyInvoiceFullyPaid,
+  isFinancialObligationSettled,
+  isFinancialObligationInvalidated,
+  resolveAuthoritativeOutstandingAmount,
+} from '../../utils/dailyPaymentPredicate';
 
 export interface BillingCycle {
   id: string;
@@ -824,8 +829,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
     if (!dailyInvoicesData || !Array.isArray(dailyInvoicesData)) return [];
     return dailyInvoicesData.filter((inv) => {
       if (!isDailyInvoiceInSelectedCycle(inv, selectedCycleObj)) return false;
-      const status = (inv.status || '').toUpperCase();
-      if (status === 'CANCELLED' || status === 'VOID' || status === 'VOIDED') return false;
+      if (isFinancialObligationInvalidated(inv.status)) return false;
       return !isFinancialObligationSettled(inv);
     });
   }, [dailyInvoicesData, selectedCycleObj]);
@@ -1002,12 +1006,14 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
         const resolvedCycleId = resolveRecordBillingCycleId(b.billingCycleId, b.cycleId, billingCycles);
         if (!resolvedCycleId || !effectiveCycleId || resolvedCycleId !== effectiveCycleId) return false;
 
-        // Unpaid or Overdue status (strictly exclude PAID, CANCELLED, VOID, VOIDED)
+        // Unpaid or Overdue status (strictly exclude PAID, CANCELLED, VOID, VOIDED, WITHDRAWN, SUPERSEDED)
         const normStatus = (b.status || '').toUpperCase();
-        if (normStatus === 'PAID' || normStatus === 'CANCELLED' || normStatus === 'VOID' || normStatus === 'VOIDED') return false;
+        if (normStatus === 'PAID') return false;
+        if (isFinancialObligationInvalidated(normStatus)) return false;
+        if (isFinancialObligationSettled(b)) return false;
 
-        const outstanding = Number(b.outstandingAmount ?? b.totalAmount ?? 0);
-        if (outstanding <= 0) return false;
+        const outstanding = resolveAuthoritativeOutstandingAmount(b);
+        if (outstanding === null || outstanding <= 0) return false;
 
         // Exclude bills that already have pending or approved payments
         if (activePaymentBillIds.has(b.id)) return false;
@@ -1028,6 +1034,9 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
         const s = (p.status || '').toUpperCase();
         const isApproved = s === 'APPROVED' || s === 'VERIFIED';
         if (!isApproved) return false;
+
+        // Invalidation guard: invalidated bills must not project as paid
+        if (p.bill && isFinancialObligationInvalidated(p.bill.status)) return false;
 
         // Strict cycle authority - FAIL CLOSED if bill cycle cannot be resolved
         const resolvedCycleId = resolveRecordBillingCycleId(p.bill?.billingCycleId, (p.bill as any)?.cycleId, billingCycles);
@@ -1119,9 +1128,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
       // Must not already be accounted for via a Payment
       if (paidBillIds.has(b.id)) return false;
 
-      // Authoritative outstanding must be 0
-      const outstanding = Number(b.outstandingAmount ?? b.totalAmount ?? 0);
-      return outstanding === 0;
+      return true;
     });
 
     zeroSettledBills.forEach(b => {
