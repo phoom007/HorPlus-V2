@@ -8,7 +8,7 @@ import {
   generateFinalSettlementReceiptForDailyInvoiceInTx,
 } from '../../utils/payment-transaction.util.js';
 
-describe('Owner Round 2.4I.3 / A1: True Room-Cycle Final Settlement Receipt Authority & Concurrency Proofs', () => {
+describe('Owner Round 2.4I.4 / A1: True Room-Cycle Final Settlement Receipt Authority, Void/Reissue & Tenant Safety B1', () => {
   const prisma = getPrismaClient();
   const receiptService = new ReceiptService();
   const dailyStayService = new DailyStayService(prisma);
@@ -22,17 +22,25 @@ describe('Owner Round 2.4I.3 / A1: True Room-Cycle Final Settlement Receipt Auth
   let room104Id: string;
   let room105Id: string;
   let room106Id: string;
-  let tenantId: string;
+  let room107Id: string;
+  let room108Id: string;
+  let room109Id: string;
+  let room110Id: string;
+  let room111Id: string;
+  let tenantAId: string;
+  let tenantBId: string;
+  let contract1Id: string;
+  let contract2Id: string;
 
   beforeAll(async () => {
     // 1. Create Owner User
-    const ownerEmail = `owner-24i3-${Date.now()}@example.com`;
+    const ownerEmail = `owner-24i4-${Date.now()}@example.com`;
     const ownerUser = await prisma.user.create({
       data: {
-        googleSubject: `sub-owner-24i3-${Date.now()}`,
+        googleSubject: `sub-owner-24i4-${Date.now()}`,
         email: ownerEmail,
         emailNormalized: ownerEmail.toLowerCase(),
-        name: 'เจ้าของหอพัก 2.4I.3 True Scope Authority',
+        name: 'เจ้าของหอพัก 2.4I.4 Scope Safety',
       },
     });
     ownerUserId = ownerUser.id;
@@ -40,7 +48,7 @@ describe('Owner Round 2.4I.3 / A1: True Room-Cycle Final Settlement Receipt Auth
     // 2. Create Dormitory
     const dorm = await prisma.dormitory.create({
       data: {
-        name: `หอพักทดสอบ 2.4I.3 ${Date.now()}`,
+        name: `หอพักทดสอบ 2.4I.4 ${Date.now()}`,
         status: 'active',
       },
     });
@@ -78,18 +86,28 @@ describe('Owner Round 2.4I.3 / A1: True Room-Cycle Final Settlement Receipt Auth
       });
     };
 
-    const room104 = await createRoom('104');
-    const room105 = await createRoom('105');
-    const room106 = await createRoom('106');
-    room104Id = room104.id;
-    room105Id = room105.id;
-    room106Id = room106.id;
+    const r104 = await createRoom('104');
+    const r105 = await createRoom('105');
+    const r106 = await createRoom('106');
+    const r107 = await createRoom('107');
+    const r108 = await createRoom('108');
+    const r109 = await createRoom('109');
+    const r110 = await createRoom('110');
+    const r111 = await createRoom('111');
+    room104Id = r104.id;
+    room105Id = r105.id;
+    room106Id = r106.id;
+    room107Id = r107.id;
+    room108Id = r108.id;
+    room109Id = r109.id;
+    room110Id = r110.id;
+    room111Id = r111.id;
 
-    // 4. Create Tenant
-    const tenant = await prisma.tenant.create({
+    // 4. Create Tenants
+    const tenantA = await prisma.tenant.create({
       data: {
         dormitoryId,
-        tenantNumber: `T-${Date.now().toString().slice(-6)}`,
+        tenantNumber: `T-A-${Date.now().toString().slice(-4)}`,
         firstName: 'คุณสมศักดิ์',
         lastName: 'ชำระจริง',
         displayName: 'คุณสมศักดิ์ ชำระจริง',
@@ -97,10 +115,54 @@ describe('Owner Round 2.4I.3 / A1: True Room-Cycle Final Settlement Receipt Auth
         status: 'active',
       },
     });
-    tenantId = tenant.id;
+    tenantAId = tenantA.id;
 
-    // 5. Create Billing Cycles
-    const c1 = await prisma.billingCycle.create({
+    const tenantB = await prisma.tenant.create({
+      data: {
+        dormitoryId,
+        tenantNumber: `T-B-${Date.now().toString().slice(-4)}`,
+        firstName: 'คุณวิชัย',
+        lastName: 'คนละคน',
+        displayName: 'คุณวิชัย คนละคน',
+        phone: '089-444-5566',
+        status: 'active',
+      },
+    });
+    tenantBId = tenantB.id;
+
+    // 5. Create Contracts
+    const c1 = await prisma.contract.create({
+      data: {
+        dormitoryId,
+        roomId: room109Id,
+        tenantId: tenantAId,
+        contractNumber: `CTR-1-${Date.now().toString().slice(-4)}`,
+        status: 'active',
+        startDate: new Date('2026-01-01'),
+        endDate: new Date('2026-12-31'),
+        rentAmount: 4500.0,
+        depositAmount: 5000.0,
+      },
+    });
+    contract1Id = c1.id;
+
+    const c2 = await prisma.contract.create({
+      data: {
+        dormitoryId,
+        roomId: room109Id,
+        tenantId: tenantAId,
+        contractNumber: `CTR-2-${Date.now().toString().slice(-4)}`,
+        status: 'active',
+        startDate: new Date('2026-01-01'),
+        endDate: new Date('2026-12-31'),
+        rentAmount: 4500.0,
+        depositAmount: 5000.0,
+      },
+    });
+    contract2Id = c2.id;
+
+    // 6. Create Billing Cycles
+    const bc1 = await prisma.billingCycle.create({
       data: {
         dormitoryId,
         cycleCode: `2026-08-${Date.now().toString().slice(-4)}`,
@@ -112,9 +174,9 @@ describe('Owner Round 2.4I.3 / A1: True Room-Cycle Final Settlement Receipt Auth
         status: 'active',
       },
     });
-    cycle1Id = c1.id;
+    cycle1Id = bc1.id;
 
-    const c2 = await prisma.billingCycle.create({
+    const bc2 = await prisma.billingCycle.create({
       data: {
         dormitoryId,
         cycleCode: `2026-09-${Date.now().toString().slice(-4)}`,
@@ -126,7 +188,7 @@ describe('Owner Round 2.4I.3 / A1: True Room-Cycle Final Settlement Receipt Auth
         status: 'active',
       },
     });
-    cycle2Id = c2.id;
+    cycle2Id = bc2.id;
   });
 
   afterAll(async () => {
@@ -140,6 +202,7 @@ describe('Owner Round 2.4I.3 / A1: True Room-Cycle Final Settlement Receipt Auth
     await prisma.billStatusHistory.deleteMany({ where: { dormitoryId } });
     await prisma.billItem.deleteMany({ where: { dormitoryId } });
     await prisma.bill.deleteMany({ where: { dormitoryId } });
+    await prisma.contract.deleteMany({ where: { dormitoryId } });
     await prisma.provisionalRentalTerm.deleteMany({ where: { dormitoryId } });
     await prisma.dailyStayInvoiceItem.deleteMany({ where: { invoice: { dormitoryId } } });
     await prisma.dailyStayInvoice.deleteMany({ where: { dormitoryId } });
@@ -153,12 +216,16 @@ describe('Owner Round 2.4I.3 / A1: True Room-Cycle Final Settlement Receipt Auth
     await prisma.user.deleteMany({ where: { id: ownerUserId } });
   });
 
+  // =========================================================================
+  // EXISTING A1 REGRESSION PROOFS
+  // =========================================================================
+
   it('1. True Multi-Bill Scope Authority: Rent Bill (4,500 PAID) + Utility Bill (700 UNPAID) creates NO Final Receipt; settling Utility creates ONE Final Receipt (5,200)', async () => {
     const term104 = await prisma.provisionalRentalTerm.create({
       data: {
         dormitoryId,
         roomId: room104Id,
-        tenantId,
+        tenantId: tenantAId,
         rentalType: 'MONTHLY',
         startDate: new Date('2026-08-01T00:00:00.000Z'),
         endDate: new Date('2026-08-31T23:59:59.000Z'),
@@ -168,13 +235,12 @@ describe('Owner Round 2.4I.3 / A1: True Room-Cycle Final Settlement Receipt Auth
       },
     });
 
-    // Bill 1: Rent Bill 4,500 (billKind: 'RENT')
     const rentBill = await prisma.bill.create({
       data: {
         dormitoryId,
         billingCycleId: cycle1Id,
         roomId: room104Id,
-        tenantId,
+        tenantId: tenantAId,
         provisionalRentalTermId: term104.id,
         billKind: 'RENT',
         billNumber: `BILL-104-RENT-${Date.now().toString().slice(-4)}`,
@@ -193,13 +259,12 @@ describe('Owner Round 2.4I.3 / A1: True Room-Cycle Final Settlement Receipt Auth
       },
     });
 
-    // Bill 2: Utility Bill 700 (billKind: 'MONTHLY_UTILITY')
     const utilityBill = await prisma.bill.create({
       data: {
         dormitoryId,
         billingCycleId: cycle1Id,
         roomId: room104Id,
-        tenantId,
+        tenantId: tenantAId,
         billKind: 'MONTHLY_UTILITY',
         billNumber: `BILL-104-UTIL-${Date.now().toString().slice(-4)}`,
         status: 'issued',
@@ -230,7 +295,7 @@ describe('Owner Round 2.4I.3 / A1: True Room-Cycle Final Settlement Receipt Auth
     const rentBillAfter = await prisma.bill.findUnique({ where: { id: rentBill.id } });
     expect(rentBillAfter!.status).toBe('PAID');
 
-    // Proof A: Because Utility Bill (700) is still UNPAID in this room-cycle, NO Final Receipt is created
+    // Proof A: Because Utility Bill (700) is still UNPAID, NO Final Receipt is created
     const finalReceiptsStepA = await prisma.receipt.findMany({
       where: {
         dormitoryId,
@@ -268,25 +333,20 @@ describe('Owner Round 2.4I.3 / A1: True Room-Cycle Final Settlement Receipt Auth
     expect((finalRcpt.snapshotData as any).billGroups).toHaveLength(2);
     expect((finalRcpt.snapshotData as any).paymentEvents).toHaveLength(2);
 
-    // Proof C: getFinalReceiptForBill with Rent Bill ID resolves this same Final Receipt
+    // Proof C: getFinalReceiptForBill resolves the same Final Receipt for either bill
     const receiptFromRentBill = await receiptService.getFinalReceiptForBill(dormitoryId, rentBill.id);
-    expect(receiptFromRentBill).not.toBeNull();
-    expect(receiptFromRentBill!.id).toBe(finalRcpt.id);
-
-    // Proof D: getFinalReceiptForBill with Utility Bill ID resolves the exact same Final Receipt
     const receiptFromUtilBill = await receiptService.getFinalReceiptForBill(dormitoryId, utilityBill.id);
-    expect(receiptFromUtilBill).not.toBeNull();
-    expect(receiptFromUtilBill!.id).toBe(finalRcpt.id);
+    expect(receiptFromRentBill?.id).toBe(finalRcpt.id);
+    expect(receiptFromUtilBill?.id).toBe(finalRcpt.id);
   });
 
   it('2. Partial Payments & Real Payment Event History Proof: 2,000 + 2,800 on Bill records both payment events in snapshot', async () => {
-    // Room 105 in Cycle 1: Bill 4,800
     const bill105 = await prisma.bill.create({
       data: {
         dormitoryId,
         billingCycleId: cycle1Id,
         roomId: room105Id,
-        tenantId,
+        tenantId: tenantAId,
         billNumber: `BILL-105-PART-${Date.now().toString().slice(-4)}`,
         status: 'issued',
         billingDate: new Date('2026-08-25'),
@@ -312,7 +372,6 @@ describe('Owner Round 2.4I.3 / A1: True Room-Cycle Final Settlement Receipt Auth
       idempotencyKey: `idem-p105-1-${Date.now()}`,
     });
 
-    // Partial status -> 0 final receipts
     const noRcpt = await prisma.receipt.findMany({
       where: { dormitoryId, settlementScopeKey: `ROOM_CYCLE:${room105Id}:${cycle1Id}`, receiptKind: 'FINAL_SETTLEMENT' },
     });
@@ -327,7 +386,6 @@ describe('Owner Round 2.4I.3 / A1: True Room-Cycle Final Settlement Receipt Auth
       idempotencyKey: `idem-p105-2-${Date.now()}`,
     });
 
-    // Fully settled -> exactly 1 Final Receipt with 2 payment events
     const rcpts = await prisma.receipt.findMany({
       where: { dormitoryId, settlementScopeKey: `ROOM_CYCLE:${room105Id}:${cycle1Id}`, receiptKind: 'FINAL_SETTLEMENT' },
     });
@@ -339,13 +397,12 @@ describe('Owner Round 2.4I.3 / A1: True Room-Cycle Final Settlement Receipt Auth
   });
 
   it('3. Fresh First-Creation Concurrency Proof: Concurrent initial finalization calls resolve cleanly to exactly ONE Final Receipt without crash', async () => {
-    // Room 106 in Cycle 1: Paid Bill 4,500 with NO Final Receipt created yet
     const freshBill = await prisma.bill.create({
       data: {
         dormitoryId,
         billingCycleId: cycle1Id,
         roomId: room106Id,
-        tenantId,
+        tenantId: tenantAId,
         billNumber: `BILL-106-FRESH-${Date.now().toString().slice(-4)}`,
         status: 'PAID',
         billingDate: new Date('2026-08-25'),
@@ -362,13 +419,6 @@ describe('Owner Round 2.4I.3 / A1: True Room-Cycle Final Settlement Receipt Auth
       },
     });
 
-    // Ensure 0 receipts exist initially
-    const initialCount = await prisma.receipt.count({
-      where: { dormitoryId, settlementScopeKey: `ROOM_CYCLE:${room106Id}:${cycle1Id}` },
-    });
-    expect(initialCount).toBe(0);
-
-    // Concurrently invoke finalization for the first time
     const results = await Promise.all([
       prisma.$transaction(tx => generateFinalSettlementReceiptForBillInTx(tx, { dormitoryId, billId: freshBill.id, userId: ownerUserId })),
       prisma.$transaction(tx => generateFinalSettlementReceiptForBillInTx(tx, { dormitoryId, billId: freshBill.id, userId: ownerUserId })),
@@ -379,9 +429,8 @@ describe('Owner Round 2.4I.3 / A1: True Room-Cycle Final Settlement Receipt Auth
     expect(results[0]?.id).toBe(results[1]?.id);
     expect(results[1]?.id).toBe(results[2]?.id);
 
-    // Database contains exactly 1 FINAL_SETTLEMENT
     const countAfter = await prisma.receipt.count({
-      where: { dormitoryId, settlementScopeKey: `ROOM_CYCLE:${room106Id}:${cycle1Id}` },
+      where: { dormitoryId, settlementScopeKey: `ROOM_CYCLE:${room106Id}:${cycle1Id}`, isVoided: false },
     });
     expect(countAfter).toBe(1);
   });
@@ -404,7 +453,6 @@ describe('Owner Round 2.4I.3 / A1: True Room-Cycle Final Settlement Receipt Auth
 
     const invId = addResult.invoice.id;
 
-    // Settle the remaining daily rent so invoice status is fully PAID (outstanding = 0)
     await dailyStayService.settleDailyStayInvoiceItem(
       dormitoryId,
       invId,
@@ -412,7 +460,6 @@ describe('Owner Round 2.4I.3 / A1: True Room-Cycle Final Settlement Receipt Auth
       ownerUserId
     );
 
-    // Concurrently invoke finalization
     const results = await Promise.all([
       prisma.$transaction(tx => generateFinalSettlementReceiptForDailyInvoiceInTx(tx, { dormitoryId, dailyStayInvoiceId: invId, userId: ownerUserId })),
       prisma.$transaction(tx => generateFinalSettlementReceiptForDailyInvoiceInTx(tx, { dormitoryId, dailyStayInvoiceId: invId, userId: ownerUserId })),
@@ -422,19 +469,18 @@ describe('Owner Round 2.4I.3 / A1: True Room-Cycle Final Settlement Receipt Auth
     expect(results[0]?.id).toBe(results[1]?.id);
 
     const count = await prisma.receipt.count({
-      where: { dormitoryId, settlementScopeKey: `DAILY_INVOICE:${invId}` },
+      where: { dormitoryId, settlementScopeKey: `DAILY_INVOICE:${invId}`, isVoided: false },
     });
     expect(count).toBe(1);
   });
 
   it('5. Scope Separation Proof: Same room different cycle produces separate Final Receipts', async () => {
-    // Room 104 in Cycle 2: Bill 4,500
     const bill104Cycle2 = await prisma.bill.create({
       data: {
         dormitoryId,
         billingCycleId: cycle2Id,
         roomId: room104Id,
-        tenantId,
+        tenantId: tenantAId,
         billNumber: `BILL-104-C2-${Date.now().toString().slice(-4)}`,
         status: 'issued',
         billingDate: new Date('2026-09-25'),
@@ -455,10 +501,10 @@ describe('Owner Round 2.4I.3 / A1: True Room-Cycle Final Settlement Receipt Auth
     });
 
     const receiptC1 = await prisma.receipt.findFirst({
-      where: { dormitoryId, settlementScopeKey: `ROOM_CYCLE:${room104Id}:${cycle1Id}` },
+      where: { dormitoryId, settlementScopeKey: `ROOM_CYCLE:${room104Id}:${cycle1Id}`, isVoided: false },
     });
     const receiptC2 = await prisma.receipt.findFirst({
-      where: { dormitoryId, settlementScopeKey: `ROOM_CYCLE:${room104Id}:${cycle2Id}` },
+      where: { dormitoryId, settlementScopeKey: `ROOM_CYCLE:${room104Id}:${cycle2Id}`, isVoided: false },
     });
 
     expect(receiptC1).not.toBeNull();
@@ -492,7 +538,6 @@ describe('Owner Round 2.4I.3 / A1: True Room-Cycle Final Settlement Receipt Auth
       ownerUserId
     );
 
-    // Partial -> NO Final Receipt
     const noRcptPartial = await prisma.receipt.findMany({
       where: { dormitoryId, dailyStayInvoiceId: invoiceId, receiptKind: 'FINAL_SETTLEMENT' },
     });
@@ -506,9 +551,8 @@ describe('Owner Round 2.4I.3 / A1: True Room-Cycle Final Settlement Receipt Auth
       ownerUserId
     );
 
-    // Fully settled -> Exactly ONE Final Receipt
     const finalReceipts = await prisma.receipt.findMany({
-      where: { dormitoryId, dailyStayInvoiceId: invoiceId, receiptKind: 'FINAL_SETTLEMENT' },
+      where: { dormitoryId, dailyStayInvoiceId: invoiceId, receiptKind: 'FINAL_SETTLEMENT', isVoided: false },
     });
     expect(finalReceipts).toHaveLength(1);
     expect((finalReceipts[0].snapshotData as any).total).toBe('2000.00');
@@ -534,7 +578,6 @@ describe('Owner Round 2.4I.3 / A1: True Room-Cycle Final Settlement Receipt Auth
     const inv = zeroResult.invoice;
     expect(Number(inv.totalAgreedAmount)).toBe(0);
 
-    // Assert NO fake records exist
     const receipts = await prisma.receipt.findMany({ where: { dormitoryId, dailyStayInvoiceId: inv.id } });
     expect(receipts).toHaveLength(0);
 
@@ -548,35 +591,492 @@ describe('Owner Round 2.4I.3 / A1: True Room-Cycle Final Settlement Receipt Auth
     expect(allocations).toHaveLength(0);
   });
 
-  it('8. Fail Closed Proof: Invalidated, unsettled, or missing context requests refuse to create Final Receipt', async () => {
-    // Unsettled bill in room 106 cycle 2
-    const unsettledBill = await prisma.bill.create({
+  // =========================================================================
+  // NEW ROUND 2.4I.4 REQUIRED INTEGRATION PROOFS
+  // =========================================================================
+
+  it('8. Proof A: Negative Outstanding MUST Fail Closed (Bill and Daily)', async () => {
+    // Bill with negative outstanding (-100)
+    const negBill = await prisma.bill.create({
       data: {
         dormitoryId,
         billingCycleId: cycle2Id,
-        roomId: room106Id,
-        tenantId,
+        roomId: room105Id,
+        tenantId: tenantAId,
         billKind: 'MONTHLY_UTILITY',
-        billNumber: `BILL-UNSETTLED-${Date.now().toString().slice(-4)}`,
-        status: 'issued',
+        billNumber: `BILL-NEG-${Date.now().toString().slice(-4)}`,
+        status: 'PAID',
         billingDate: new Date('2026-09-25'),
         dueDate: new Date('2026-09-30'),
-        subtotal: 1000.0,
-        totalAmount: 1000.0,
-        paidAmount: 0.0,
-        outstandingAmount: 1000.0,
+        subtotal: 4500.0,
+        totalAmount: 4500.0,
+        paidAmount: 4600.0,
+        outstandingAmount: -100.0, // Negative outstanding!
       },
     });
 
-    const billRcpt = await prisma.$transaction(tx =>
-      generateFinalSettlementReceiptForBillInTx(tx, { dormitoryId, billId: unsettledBill.id, userId: ownerUserId })
+    const billResult = await prisma.$transaction(tx =>
+      generateFinalSettlementReceiptForBillInTx(tx, { dormitoryId, billId: negBill.id, userId: ownerUserId })
     );
-    expect(billRcpt).toBeNull();
+    expect(billResult).toBeNull();
 
-    // Missing room context
-    const fakeRcpt = await prisma.$transaction(tx =>
-      generateFinalSettlementReceiptForBillInTx(tx, { dormitoryId, billId: 'non-existent-id', userId: ownerUserId })
+    // Daily with negative outstanding (-50)
+    const dailyStay = await prisma.dailyStay.create({
+      data: {
+        dormitoryId,
+        roomId: room105Id,
+        applicantFullName: 'คุณทดสอบ ค้างลบ',
+        applicantPhone: '081-111-2222',
+        startDate: new Date('2026-09-15'),
+        endDate: new Date('2026-09-17'),
+        inclusiveDayCount: 2,
+        dailyRateAmount: 800.0,
+        depositAmount: 300.0,
+        status: 'CHECKED_IN',
+      },
+    });
+
+    const negDailyInvoice = await prisma.dailyStayInvoice.create({
+      data: {
+        dormitoryId,
+        dailyStayId: dailyStay.id,
+        invoiceNumber: `DINV-NEG-${Date.now().toString().slice(-4)}`,
+        status: 'PAID',
+        totalAgreedAmount: 1900.0,
+        outstandingAmount: -50.0, // Negative outstanding!
+      },
+    });
+
+    const dailyResult = await prisma.$transaction(tx =>
+      generateFinalSettlementReceiptForDailyInvoiceInTx(tx, { dormitoryId, dailyStayInvoiceId: negDailyInvoice.id, userId: ownerUserId })
     );
-    expect(fakeRcpt).toBeNull();
+    expect(dailyResult).toBeNull();
+  });
+
+  it('9. Proof B: Canonical Invalidation Semantics: VOIDED, withdrawn, SUPERSEDED, Cancelled bills do NOT block or contribute', async () => {
+    // Room 107 in Cycle 1
+    // 1. Legitimate PAID active bill
+    const activePaidBill = await prisma.bill.create({
+      data: {
+        dormitoryId,
+        billingCycleId: cycle1Id,
+        roomId: room107Id,
+        tenantId: tenantAId,
+        billKind: 'RENT',
+        billNumber: `BILL-107-ACT-${Date.now().toString().slice(-4)}`,
+        status: 'PAID',
+        billingDate: new Date('2026-08-25'),
+        dueDate: new Date('2026-08-31'),
+        subtotal: 4500.0,
+        totalAmount: 4500.0,
+        paidAmount: 4500.0,
+        outstandingAmount: 0.0,
+        items: {
+          create: [{ dormitoryId, type: 'rent', description: 'ค่าเช่าห้องพัก', amount: 4500.0, displayOrder: 1 }],
+        },
+      },
+    });
+
+    // 2. VOIDED bill
+    await prisma.bill.create({
+      data: {
+        dormitoryId,
+        billingCycleId: cycle1Id,
+        roomId: room107Id,
+        tenantId: tenantAId,
+        billKind: 'MONTHLY_UTILITY',
+        billNumber: `BILL-107-VOID-${Date.now().toString().slice(-4)}`,
+        status: 'VOIDED',
+        billingDate: new Date('2026-08-25'),
+        dueDate: new Date('2026-08-31'),
+        subtotal: 500.0,
+        totalAmount: 500.0,
+        paidAmount: 0.0,
+        outstandingAmount: 500.0,
+      },
+    });
+
+    // 3. withdrawn bill (lowercase)
+    await prisma.bill.create({
+      data: {
+        dormitoryId,
+        billingCycleId: cycle1Id,
+        roomId: room107Id,
+        tenantId: tenantAId,
+        billKind: 'OTHER',
+        billNumber: `BILL-107-WITH-${Date.now().toString().slice(-4)}`,
+        status: 'withdrawn',
+        billingDate: new Date('2026-08-25'),
+        dueDate: new Date('2026-08-31'),
+        subtotal: 300.0,
+        totalAmount: 300.0,
+        paidAmount: 0.0,
+        outstandingAmount: 300.0,
+      },
+    });
+
+    // 4. SUPERSEDED bill
+    await prisma.bill.create({
+      data: {
+        dormitoryId,
+        billingCycleId: cycle1Id,
+        roomId: room107Id,
+        tenantId: tenantAId,
+        billKind: 'OTHER',
+        billNumber: `BILL-107-SUP-${Date.now().toString().slice(-4)}`,
+        status: 'SUPERSEDED',
+        billingDate: new Date('2026-08-25'),
+        dueDate: new Date('2026-08-31'),
+        subtotal: 400.0,
+        totalAmount: 400.0,
+        paidAmount: 0.0,
+        outstandingAmount: 400.0,
+      },
+    });
+
+    // 5. Cancelled bill
+    await prisma.bill.create({
+      data: {
+        dormitoryId,
+        billingCycleId: cycle1Id,
+        roomId: room107Id,
+        tenantId: tenantAId,
+        billKind: 'OTHER',
+        billNumber: `BILL-107-CAN-${Date.now().toString().slice(-4)}`,
+        status: 'Cancelled',
+        cancelledAt: new Date(),
+        billingDate: new Date('2026-08-25'),
+        dueDate: new Date('2026-08-31'),
+        subtotal: 200.0,
+        totalAmount: 200.0,
+        paidAmount: 0.0,
+        outstandingAmount: 200.0,
+      },
+    });
+
+    // Generate Final Settlement Receipt: should ignore all invalidated bills and succeed with 4,500.00
+    const receipt = await prisma.$transaction(tx =>
+      generateFinalSettlementReceiptForBillInTx(tx, { dormitoryId, billId: activePaidBill.id, userId: ownerUserId })
+    );
+
+    expect(receipt).not.toBeNull();
+    const snap = receipt!.snapshotData as any;
+    expect(snap.total).toBe('4500.00');
+    expect(snap.billGroups).toHaveLength(1);
+    expect(snap.billGroups[0].billId).toBe(activePaidBill.id);
+  });
+
+  it('10. Proof C: Tenant Context Safety (B1): Multiple distinct tenants in same room-cycle MUST FAIL CLOSED', async () => {
+    // Room 108 in Cycle 1
+    // Bill 1: Tenant A
+    const billTenantA = await prisma.bill.create({
+      data: {
+        dormitoryId,
+        billingCycleId: cycle1Id,
+        roomId: room108Id,
+        tenantId: tenantAId,
+        billKind: 'RENT',
+        billNumber: `BILL-108-TA-${Date.now().toString().slice(-4)}`,
+        status: 'PAID',
+        billingDate: new Date('2026-08-25'),
+        dueDate: new Date('2026-08-31'),
+        subtotal: 4500.0,
+        totalAmount: 4500.0,
+        paidAmount: 4500.0,
+        outstandingAmount: 0.0,
+      },
+    });
+
+    // Bill 2: Tenant B (Different Tenant!)
+    await prisma.bill.create({
+      data: {
+        dormitoryId,
+        billingCycleId: cycle1Id,
+        roomId: room108Id,
+        tenantId: tenantBId,
+        billKind: 'MONTHLY_UTILITY',
+        billNumber: `BILL-108-TB-${Date.now().toString().slice(-4)}`,
+        status: 'PAID',
+        billingDate: new Date('2026-08-25'),
+        dueDate: new Date('2026-08-31'),
+        subtotal: 700.0,
+        totalAmount: 700.0,
+        paidAmount: 700.0,
+        outstandingAmount: 0.0,
+      },
+    });
+
+    // Generator must fail closed and return null
+    const result = await prisma.$transaction(tx =>
+      generateFinalSettlementReceiptForBillInTx(tx, { dormitoryId, billId: billTenantA.id, userId: ownerUserId })
+    );
+    expect(result).toBeNull();
+
+    // Confirm 0 receipts created in DB
+    const rcptCount = await prisma.receipt.count({
+      where: { dormitoryId, settlementScopeKey: `ROOM_CYCLE:${room108Id}:${cycle1Id}` },
+    });
+    expect(rcptCount).toBe(0);
+  });
+
+  it('11. Proof D: Rental Context Safety (B1): Incompatible contracts / provisional terms MUST FAIL CLOSED', async () => {
+    // Room 109 in Cycle 1
+    // Bill 1: Contract 1
+    const billContract1 = await prisma.bill.create({
+      data: {
+        dormitoryId,
+        billingCycleId: cycle1Id,
+        roomId: room109Id,
+        tenantId: tenantAId,
+        contractId: contract1Id,
+        billKind: 'RENT',
+        billNumber: `BILL-109-C1-${Date.now().toString().slice(-4)}`,
+        status: 'PAID',
+        billingDate: new Date('2026-08-25'),
+        dueDate: new Date('2026-08-31'),
+        subtotal: 4500.0,
+        totalAmount: 4500.0,
+        paidAmount: 4500.0,
+        outstandingAmount: 0.0,
+      },
+    });
+
+    // Bill 2: Contract 2 (Incompatible Contract!)
+    await prisma.bill.create({
+      data: {
+        dormitoryId,
+        billingCycleId: cycle1Id,
+        roomId: room109Id,
+        tenantId: tenantAId,
+        contractId: contract2Id,
+        billKind: 'MONTHLY_UTILITY',
+        billNumber: `BILL-109-C2-${Date.now().toString().slice(-4)}`,
+        status: 'PAID',
+        billingDate: new Date('2026-08-25'),
+        dueDate: new Date('2026-08-31'),
+        subtotal: 700.0,
+        totalAmount: 700.0,
+        paidAmount: 700.0,
+        outstandingAmount: 0.0,
+      },
+    });
+
+    const result = await prisma.$transaction(tx =>
+      generateFinalSettlementReceiptForBillInTx(tx, { dormitoryId, billId: billContract1.id, userId: ownerUserId })
+    );
+    expect(result).toBeNull();
+  });
+
+  it('12. Proof E: Void -> Reissue Lifecycle: Voided receipt preserved for audit, exactly 1 active receipt reissued', async () => {
+    // Room 110 in Cycle 1
+    const bill110 = await prisma.bill.create({
+      data: {
+        dormitoryId,
+        billingCycleId: cycle1Id,
+        roomId: room110Id,
+        tenantId: tenantAId,
+        billKind: 'RENT',
+        billNumber: `BILL-110-VRE-${Date.now().toString().slice(-4)}`,
+        status: 'PAID',
+        billingDate: new Date('2026-08-25'),
+        dueDate: new Date('2026-08-31'),
+        subtotal: 4500.0,
+        totalAmount: 4500.0,
+        paidAmount: 4500.0,
+        outstandingAmount: 0.0,
+      },
+    });
+
+    // 1. Initial creation of Receipt A
+    const receiptA = await prisma.$transaction(tx =>
+      generateFinalSettlementReceiptForBillInTx(tx, { dormitoryId, billId: bill110.id, userId: ownerUserId })
+    );
+    expect(receiptA).not.toBeNull();
+    expect(receiptA!.isVoided).toBe(false);
+
+    // 2. Void Receipt A
+    await prisma.receipt.update({
+      where: { id: receiptA!.id },
+      data: {
+        isVoided: true,
+        voidedAt: new Date(),
+        voidedByUserId: ownerUserId,
+        voidReason: 'ออกผิดพลาด ต้องการแก้ไข',
+      },
+    });
+
+    // Check: 0 active receipts, 1 total receipt
+    const activeCountBefore = await prisma.receipt.count({
+      where: { dormitoryId, settlementScopeKey: `ROOM_CYCLE:${room110Id}:${cycle1Id}`, isVoided: false },
+    });
+    expect(activeCountBefore).toBe(0);
+
+    // 3. Re-issue: Call generator again for the settled scope
+    const receiptB = await prisma.$transaction(tx =>
+      generateFinalSettlementReceiptForBillInTx(tx, { dormitoryId, billId: bill110.id, userId: ownerUserId })
+    );
+    expect(receiptB).not.toBeNull();
+    expect(receiptB!.id).not.toBe(receiptA!.id);
+    expect(receiptB!.isVoided).toBe(false);
+
+    // 4. Assertions: Receipt A preserved, Receipt B active, exactly 1 active, 2 total
+    const allReceiptsInScope = await prisma.receipt.findMany({
+      where: { dormitoryId, settlementScopeKey: `ROOM_CYCLE:${room110Id}:${cycle1Id}` },
+      orderBy: { createdAt: 'asc' },
+    });
+    expect(allReceiptsInScope).toHaveLength(2);
+    expect(allReceiptsInScope[0].id).toBe(receiptA!.id);
+    expect(allReceiptsInScope[0].isVoided).toBe(true);
+    expect(allReceiptsInScope[1].id).toBe(receiptB!.id);
+    expect(allReceiptsInScope[1].isVoided).toBe(false);
+  });
+
+  it('13. Proof F: Void -> Concurrent Reissue: Concurrent generators after void resolve to ONE new active receipt', async () => {
+    // Room 111 in Cycle 1
+    const bill111 = await prisma.bill.create({
+      data: {
+        dormitoryId,
+        billingCycleId: cycle1Id,
+        roomId: room111Id,
+        tenantId: tenantAId,
+        billKind: 'RENT',
+        billNumber: `BILL-111-CONCV-${Date.now().toString().slice(-4)}`,
+        status: 'PAID',
+        billingDate: new Date('2026-08-25'),
+        dueDate: new Date('2026-08-31'),
+        subtotal: 4500.0,
+        totalAmount: 4500.0,
+        paidAmount: 4500.0,
+        outstandingAmount: 0.0,
+      },
+    });
+
+    // 1. Initial Receipt A
+    const receiptA = await prisma.$transaction(tx =>
+      generateFinalSettlementReceiptForBillInTx(tx, { dormitoryId, billId: bill111.id, userId: ownerUserId })
+    );
+    expect(receiptA).not.toBeNull();
+
+    // 2. Void Receipt A
+    await prisma.receipt.update({
+      where: { id: receiptA!.id },
+      data: {
+        isVoided: true,
+        voidedAt: new Date(),
+        voidedByUserId: ownerUserId,
+        voidReason: 'ยกเลิกเพื่อออกใหม่',
+      },
+    });
+
+    // 3. Concurrently invoke finalization 3 times in parallel
+    const results = await Promise.all([
+      prisma.$transaction(tx => generateFinalSettlementReceiptForBillInTx(tx, { dormitoryId, billId: bill111.id, userId: ownerUserId })),
+      prisma.$transaction(tx => generateFinalSettlementReceiptForBillInTx(tx, { dormitoryId, billId: bill111.id, userId: ownerUserId })),
+      prisma.$transaction(tx => generateFinalSettlementReceiptForBillInTx(tx, { dormitoryId, billId: bill111.id, userId: ownerUserId })),
+    ]);
+
+    expect(results[0]?.id).toBeDefined();
+    expect(results[0]?.id).toBe(results[1]?.id);
+    expect(results[1]?.id).toBe(results[2]?.id);
+    expect(results[0]?.id).not.toBe(receiptA!.id);
+
+    // 4. Assert: Exactly 1 active receipt, 2 total receipts
+    const activeReceipts = await prisma.receipt.findMany({
+      where: { dormitoryId, settlementScopeKey: `ROOM_CYCLE:${room111Id}:${cycle1Id}`, isVoided: false },
+    });
+    expect(activeReceipts).toHaveLength(1);
+
+    const totalReceipts = await prisma.receipt.findMany({
+      where: { dormitoryId, settlementScopeKey: `ROOM_CYCLE:${room111Id}:${cycle1Id}` },
+    });
+    expect(totalReceipts).toHaveLength(2);
+  });
+
+  it('14. Proof G: Daily Void -> Reissue Lifecycle: Old voided preserved, new active reissued', async () => {
+    const addResult = await dailyStayService.ownerQuickAddDailyStay(
+      dormitoryId,
+      {
+        roomId: room107Id,
+        fullName: 'คุณทดสอบ รายวัน ยกเลิกออกใหม่',
+        phone: '084-555-6677',
+        startDate: '2026-09-18',
+        endDate: '2026-09-20',
+        dailyRateAmount: 800.0,
+        depositAmount: 400.0,
+        depositDeclaredStatus: 'PAID',
+      },
+      ownerUserId
+    );
+
+    const invoiceId = addResult.invoice.id;
+
+    await dailyStayService.settleDailyStayInvoiceItem(
+      dormitoryId,
+      invoiceId,
+      'DAILY_RENT',
+      ownerUserId
+    );
+
+    // Initial receipt
+    const dailyRcptA = await prisma.$transaction(tx =>
+      generateFinalSettlementReceiptForDailyInvoiceInTx(tx, { dormitoryId, dailyStayInvoiceId: invoiceId, userId: ownerUserId })
+    );
+    expect(dailyRcptA).not.toBeNull();
+    expect(dailyRcptA!.isVoided).toBe(false);
+
+    // Void Receipt A
+    await prisma.receipt.update({
+      where: { id: dailyRcptA!.id },
+      data: {
+        isVoided: true,
+        voidedAt: new Date(),
+        voidReason: 'ยกเลิกใบเสร็จรายวัน',
+      },
+    });
+
+    // Reissue Daily Receipt B
+    const dailyRcptB = await prisma.$transaction(tx =>
+      generateFinalSettlementReceiptForDailyInvoiceInTx(tx, { dormitoryId, dailyStayInvoiceId: invoiceId, userId: ownerUserId })
+    );
+    expect(dailyRcptB).not.toBeNull();
+    expect(dailyRcptB!.id).not.toBe(dailyRcptA!.id);
+    expect(dailyRcptB!.isVoided).toBe(false);
+
+    // Database has 1 active and 1 voided
+    const activeDaily = await prisma.receipt.findMany({
+      where: { dormitoryId, settlementScopeKey: `DAILY_INVOICE:${invoiceId}`, isVoided: false },
+    });
+    expect(activeDaily).toHaveLength(1);
+
+    const totalDaily = await prisma.receipt.findMany({
+      where: { dormitoryId, settlementScopeKey: `DAILY_INVOICE:${invoiceId}` },
+    });
+    expect(totalDaily).toHaveLength(2);
+  });
+
+  it('15. Proof H: Active Lookup via ReceiptService: With A voided and B active returns B; with all voided returns null', async () => {
+    // For Room 110 (where Receipt A was voided and Receipt B is active):
+    const bill110 = await prisma.bill.findFirst({ where: { roomId: room110Id, billingCycleId: cycle1Id } });
+    expect(bill110).not.toBeNull();
+
+    // Lookup resolves Receipt B (the active one)
+    const resolvedActive = await receiptService.getFinalReceiptForBill(dormitoryId, bill110!.id);
+    expect(resolvedActive).not.toBeNull();
+    expect(resolvedActive!.isVoided).toBe(false);
+
+    // If Receipt B is also voided
+    await prisma.receipt.update({
+      where: { id: resolvedActive!.id },
+      data: { isVoided: true, voidReason: 'ยกเลิกใบเสร็จฉบับที่สอง' },
+    });
+
+    // Now all receipts are voided -> lookup returns null
+    const resolvedNone = await receiptService.getFinalReceiptForBill(dormitoryId, bill110!.id);
+    expect(resolvedNone).toBeNull();
+
+    // But direct audit lookup by ID still works!
+    const directAuditA = await receiptService.getReceipt(dormitoryId, resolvedActive!.id);
+    expect(directAuditA.id).toBe(resolvedActive!.id);
+    expect(directAuditA.isVoided).toBe(true);
   });
 });

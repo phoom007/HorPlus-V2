@@ -30,7 +30,10 @@ import {
 import {
   buildViewingDailyReceipt,
   buildViewingReceipt,
+  PaymentsOwnerView,
 } from '../pages/owner/payments';
+import * as httpClient from '../data/httpClient';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { onboardingClient } from '../data/onboardingClient';
 import { queryClient, queryKeys } from '../lib/queryClient';
 
@@ -547,6 +550,238 @@ describe('Owner Round 2.4I: Verification Suite', () => {
       expect(openSpy).toHaveBeenCalledWith('/api/v1/receipts/rcpt-daily-final-888/print', '_blank');
 
       openSpy.mockRestore();
+      global.fetch = originalFetch;
+    });
+
+    it('36d. Production Boundary (Mounted PaymentsOwnerView): Clicking ใบเสร็จรับเงิน on paid payment queries final receipt and opens FINAL_SETTLEMENT print URL', async () => {
+      const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
+      
+      const testQueryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false } },
+      });
+
+      const mockPaidBill = {
+        id: 'bill-104-paid',
+        billNumber: 'BILL-104-001',
+        roomId: 'room-104',
+        billingCycleId: 'cycle-aug',
+        status: 'PAID',
+        totalAmount: 4800,
+        paidAmount: 4800,
+        outstandingAmount: 0,
+        items: [{ id: 'it-1', description: 'ค่าเช่า', amount: 4800, type: 'rent' }],
+      };
+
+      const mockPaymentRecord = {
+        id: 'pay-104',
+        dormitoryId: 'dorm-1',
+        billId: 'bill-104-paid',
+        roomId: 'room-104',
+        amount: 4800,
+        method: 'CASH',
+        status: 'APPROVED',
+        receipt: { id: 'rcpt-event-111' }, // EVENT receipt that must NEVER be opened
+        bill: mockPaidBill,
+      };
+
+      const httpSpy = vi.spyOn(httpClient, 'httpRequest').mockImplementation(async (_method: string, url: string) => {
+        if (url.includes('/payments')) return [mockPaymentRecord] as any;
+        if (url.includes('/daily-stays/invoices')) return [] as any;
+        if (url.includes('/auth/session')) return { user: { role: 'OWNER' } } as any;
+        return {} as any;
+      });
+
+      const originalFetch = global.fetch;
+      global.fetch = vi.fn().mockImplementation(async (url: string) => {
+        if (url.includes('/api/v1/receipts/final/bill/bill-104-paid')) {
+          return {
+            ok: true,
+            json: async () => ({ id: 'rcpt-final-999', receiptNumber: 'RC-202608-104-0001' }),
+          } as Response;
+        }
+        return { ok: false, status: 404 } as Response;
+      });
+
+      render(
+        <QueryClientProvider client={testQueryClient}>
+          <PaymentsOwnerView
+            dormitoryId="dorm-1"
+            bills={[mockPaidBill] as any}
+            rooms={[{ id: 'room-104', roomNumber: '104' }] as any}
+            tenants={[{ id: 't-1', displayName: 'สมชาย รักดี' }] as any}
+            selectedBillingCycleId="cycle-aug"
+            selectedCycleCode="2026-08"
+            billingCycles={[{ id: 'cycle-aug', cycleCode: '2026-08', name: 'ส.ค. 2569' }] as any}
+          />
+        </QueryClientProvider>
+      );
+
+      // Switch to Tab 3 (ชำระแล้ว)
+      const paidTab = await screen.findByRole('button', { name: /ชำระแล้ว/ });
+      fireEvent.click(paidTab);
+
+      // Find "ใบเสร็จรับเงิน" button on the paid group card
+      const receiptBtn = await screen.findByRole('button', { name: /ใบเสร็จรับเงิน/ });
+      expect(receiptBtn).toBeDefined();
+
+      fireEvent.click(receiptBtn);
+
+      await waitFor(() => {
+        expect(openSpy).toHaveBeenCalledWith('/api/v1/receipts/rcpt-final-999/print', '_blank');
+        expect(openSpy).not.toHaveBeenCalledWith('/api/v1/receipts/rcpt-event-111/print', '_blank');
+      });
+
+      openSpy.mockRestore();
+      httpSpy.mockRestore();
+      global.fetch = originalFetch;
+    });
+
+    it('36e. Production Boundary (Mounted PaymentsOwnerView): 404 on final receipt endpoint shows Thai toast without opening window or modal', async () => {
+      const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
+      
+      const testQueryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false } },
+      });
+
+      const mockPaidBill = {
+        id: 'bill-105-unsettled-rcpt',
+        billNumber: 'BILL-105-001',
+        roomId: 'room-105',
+        billingCycleId: 'cycle-aug',
+        status: 'PAID',
+        totalAmount: 4800,
+        paidAmount: 4800,
+        outstandingAmount: 0,
+        items: [{ id: 'it-1', description: 'ค่าเช่า', amount: 4800, type: 'rent' }],
+      };
+
+      const mockPaymentRecord = {
+        id: 'pay-105',
+        dormitoryId: 'dorm-1',
+        billId: 'bill-105-unsettled-rcpt',
+        roomId: 'room-105',
+        amount: 4800,
+        method: 'CASH',
+        status: 'APPROVED',
+        bill: mockPaidBill,
+      };
+
+      const httpSpy = vi.spyOn(httpClient, 'httpRequest').mockImplementation(async (_method: string, url: string) => {
+        if (url.includes('/payments')) return [mockPaymentRecord] as any;
+        if (url.includes('/daily-stays/invoices')) return [] as any;
+        if (url.includes('/auth/session')) return { user: { role: 'OWNER' } } as any;
+        return {} as any;
+      });
+
+      const originalFetch = global.fetch;
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 404,
+      } as Response);
+
+      render(
+        <QueryClientProvider client={testQueryClient}>
+          <PaymentsOwnerView
+            dormitoryId="dorm-1"
+            bills={[mockPaidBill] as any}
+            rooms={[{ id: 'room-105', roomNumber: '105' }] as any}
+            tenants={[{ id: 't-1', displayName: 'สมชาย รักดี' }] as any}
+            selectedBillingCycleId="cycle-aug"
+            selectedCycleCode="2026-08"
+            billingCycles={[{ id: 'cycle-aug', cycleCode: '2026-08', name: 'ส.ค. 2569' }] as any}
+          />
+        </QueryClientProvider>
+      );
+
+      // Switch to Tab 3 (ชำระแล้ว)
+      const paidTab = await screen.findByRole('button', { name: /ชำระแล้ว/ });
+      fireEvent.click(paidTab);
+
+      const receiptBtn = await screen.findByRole('button', { name: /ใบเสร็จรับเงิน/ });
+      fireEvent.click(receiptBtn);
+
+      await waitFor(() => {
+        expect(openSpy).not.toHaveBeenCalled();
+        expect(screen.getByText(/ไม่พบใบเสร็จรับเงินฉบับสมบูรณ์สำหรับรอบบิลนี้/)).toBeDefined();
+      });
+
+      openSpy.mockRestore();
+      httpSpy.mockRestore();
+      global.fetch = originalFetch;
+    });
+
+    it('36f. Production Boundary (Mounted PaymentsOwnerView): Daily Stay Paid card queries final daily invoice and opens print URL', async () => {
+      const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
+      
+      const testQueryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false } },
+      });
+
+      const mockDailyInvoice = {
+        id: 'dinv-303',
+        dormitoryId: 'dorm-1',
+        dailyStayId: 'stay-303',
+        invoiceNumber: 'DINV-202609-303',
+        status: 'PAID',
+        totalAgreedAmount: 2400,
+        outstandingAmount: 0,
+        items: [{ id: 'dit-1', itemType: 'DAILY_RENT', amount: 2400 }],
+        dailyStay: {
+          id: 'stay-303',
+          roomId: 'room-303',
+          applicantFullName: 'คุณวิชัย รายวัน',
+          room: { roomNumber: '303' },
+        },
+      };
+
+      const httpSpy = vi.spyOn(httpClient, 'httpRequest').mockImplementation(async (_method: string, url: string) => {
+        if (url.includes('/payments')) return [] as any;
+        if (url.includes('/daily-stays/invoices')) return [mockDailyInvoice] as any;
+        if (url.includes('/auth/session')) return { user: { role: 'OWNER' } } as any;
+        return {} as any;
+      });
+
+      const originalFetch = global.fetch;
+      global.fetch = vi.fn().mockImplementation(async (url: string) => {
+        if (url.includes('/api/v1/receipts/final/daily-invoice/dinv-303')) {
+          return {
+            ok: true,
+            json: async () => ({ id: 'rcpt-daily-final-888', receiptNumber: 'RC-DAILY-303-001' }),
+          } as Response;
+        }
+        return { ok: false, status: 404 } as Response;
+      });
+
+      render(
+        <QueryClientProvider client={testQueryClient}>
+          <PaymentsOwnerView
+            dormitoryId="dorm-1"
+            bills={[] as any}
+            rooms={[{ id: 'room-303', roomNumber: '303' }] as any}
+            tenants={[] as any}
+            selectedBillingCycleId="cycle-aug"
+            selectedCycleCode="2026-08"
+            billingCycles={[{ id: 'cycle-aug', cycleCode: '2026-08', name: 'ส.ค. 2569' }] as any}
+          />
+        </QueryClientProvider>
+      );
+
+      // Switch to Tab 3 (ชำระแล้ว)
+      const paidTab = await screen.findByRole('button', { name: /ชำระแล้ว/ });
+      fireEvent.click(paidTab);
+
+      // Find "ใบเสร็จรับเงิน" button on the daily stay card
+      const receiptBtn = await screen.findByRole('button', { name: /ใบเสร็จรับเงิน/ });
+      expect(receiptBtn).toBeDefined();
+
+      fireEvent.click(receiptBtn);
+
+      await waitFor(() => {
+        expect(openSpy).toHaveBeenCalledWith('/api/v1/receipts/rcpt-daily-final-888/print', '_blank');
+      });
+
+      openSpy.mockRestore();
+      httpSpy.mockRestore();
       global.fetch = originalFetch;
     });
   });

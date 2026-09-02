@@ -1219,7 +1219,11 @@ model Receipt {
   billingCycle       BillingCycle?         @relation(fields: [billingCycleId], references: [id], onDelete: SetNull)
 
   @@unique([dormitoryId, receiptNumber], name: "dormitory_receipt_number_unique")
-  @@unique([dormitoryId, settlementScopeKey], name: "dormitory_settlement_scope_unique")
+  // Note: Active Final Settlement uniqueness (at most 1 active non-voided receipt per scope)
+  // is enforced authoritatively at DB level via partial unique index "receipts_active_final_settlement_unique"
+  // (WHERE receipt_kind = 'FINAL_SETTLEMENT' AND settlement_scope_key IS NOT NULL AND is_voided = false)
+  // to allow 0..N historical voided receipts per settlement scope.
+  @@index([dormitoryId, settlementScopeKey], name: "idx_receipts_dorm_settlement_scope")
   @@index([dormitoryId, paymentGroupId], name: "idx_receipts_dorm_group")
   @@index([dormitoryId, dailyStayInvoiceId], name: "idx_receipts_dorm_daily_invoice")
   @@index([dormitoryId, receiptKind], name: "idx_receipts_dorm_kind")

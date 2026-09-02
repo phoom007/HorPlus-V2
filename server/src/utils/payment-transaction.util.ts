@@ -941,7 +941,13 @@ export async function generateFinalSettlementReceiptForBillInTx(
     },
   });
 
-  if (!seedBill || seedBill.cancelledAt || seedBill.dormitoryId !== dormitoryId || !seedBill.roomId || !seedBill.billingCycleId) {
+  const isCanonicalInvalidatedOrNonIssued = (status?: string | null) => {
+    if (!status) return true;
+    const s = status.trim().toUpperCase();
+    return ['DRAFT', 'CANCELLED', 'VOID', 'VOIDED', 'WITHDRAWN', 'SUPERSEDED'].includes(s);
+  };
+
+  if (!seedBill || seedBill.cancelledAt || isCanonicalInvalidatedOrNonIssued(seedBill.status) || seedBill.dormitoryId !== dormitoryId || !seedBill.roomId || !seedBill.billingCycleId) {
     return null;
   }
 
@@ -962,8 +968,10 @@ export async function generateFinalSettlementReceiptForBillInTx(
         where: {
           dormitoryId,
           settlementScopeKey,
+          receiptKind: 'FINAL_SETTLEMENT',
           isVoided: false,
         },
+        orderBy: { createdAt: 'desc' },
       })
     : null;
 
@@ -971,14 +979,23 @@ export async function generateFinalSettlementReceiptForBillInTx(
     return existing;
   }
 
-  // 4. Re-read ALL active financial obligations / Bills belonging to the same room + billing cycle scope
-  const scopeBills = await tx.bill.findMany({
+  // 4. Re-read ALL financial obligations / Bills belonging to the same room + billing cycle scope
+  const allBills = await tx.bill.findMany({
     where: {
       dormitoryId,
       roomId: seedBill.roomId,
       billingCycleId: seedBill.billingCycleId,
       cancelledAt: null,
-      status: { notIn: ['void', 'cancelled', 'superseded', 'draft'] },
+      status: {
+        notIn: [
+          'draft', 'DRAFT',
+          'cancelled', 'CANCELLED',
+          'void', 'VOID',
+          'voided', 'VOIDED',
+          'withdrawn', 'WITHDRAWN',
+          'superseded', 'SUPERSEDED',
+        ],
+      },
     },
     include: {
       items: { orderBy: { displayOrder: 'asc' } },
@@ -994,9 +1011,16 @@ export async function generateFinalSettlementReceiptForBillInTx(
       tenant: true,
       room: true,
       billingCycle: true,
+      contract: true,
+      provisionalRentalTerm: true,
     },
     orderBy: { createdAt: 'asc' },
   });
+
+  // Filter out any bill whose status matches canonical invalidation semantics normalized
+  const scopeBills = allBills.filter(
+    (b: any) => !b.cancelledAt && !isCanonicalInvalidatedOrNonIssued(b.status)
+  );
 
   if (!scopeBills || scopeBills.length === 0) {
     return null;
@@ -1004,22 +1028,61 @@ export async function generateFinalSettlementReceiptForBillInTx(
 
   Decimal.set({ rounding: Decimal.ROUND_HALF_UP });
 
-  // 5. Fail closed: Check that EVERY active bill in this room-cycle is fully settled (status === 'PAID' and outstanding === 0)
+  // 5. Strict outstanding === 0 & status verification (Requirement 4)
   for (const b of scopeBills) {
+    const statusNorm = (b.status || '').trim().toUpperCase();
+    if (statusNorm !== 'PAID') {
+      return null;
+    }
+
     const outDec = new Decimal((b.outstandingAmount ?? 0).toString());
     const totalDec = new Decimal((b.totalAmount ?? 0).toString());
     const paidDec = new Decimal((b.paidAmount ?? 0).toString());
 
-    if (b.status !== 'PAID' || outDec.greaterThan(0) || totalDec.isNaN() || paidDec.isNaN()) {
-      // Scope is not fully settled! Fail closed.
+    if (
+      outDec.isNaN() ||
+      totalDec.isNaN() ||
+      paidDec.isNaN() ||
+      !outDec.isZero() || // Authoritative outstanding MUST equal exactly zero (positive or negative < 0 fails closed)
+      totalDec.lessThanOrEqualTo(0) || // Bill must have positive agreed obligation
+      !paidDec.equals(totalDec) // Paid amount must strictly equal total amount
+    ) {
+      // Scope is not fully settled or has invalid outstanding! Fail closed.
       return null;
     }
+  }
+
+  // 6. Tenant Context & Rental Context Compatibility - B1 (Requirements 6 & 7)
+  const tenantIds = Array.from(new Set(scopeBills.map((b: any) => b.tenantId).filter(Boolean)));
+  if (tenantIds.length !== 1 || scopeBills.some((b: any) => !b.tenantId)) {
+    // Multiple distinct tenants or missing tenant context -> FAIL CLOSED
+    return null;
+  }
+  const canonicalTenantId = tenantIds[0] as string;
+
+  const contractIds = Array.from(new Set(scopeBills.map((b: any) => b.contractId).filter(Boolean)));
+  if (contractIds.length > 1) {
+    // Multiple distinct contracts in the same scope -> FAIL CLOSED
+    return null;
+  }
+  const canonicalContractId = contractIds.length === 1 ? (contractIds[0] as string) : null;
+
+  const termIds = Array.from(new Set(scopeBills.map((b: any) => b.provisionalRentalTermId).filter(Boolean)));
+  if (termIds.length > 1) {
+    // Multiple distinct provisional terms in the same scope -> FAIL CLOSED
+    return null;
+  }
+  const canonicalTermId = termIds.length === 1 ? (termIds[0] as string) : null;
+
+  // Cross-incompatibility: Both a contract and a provisional term present in the same room-cycle scope -> FAIL CLOSED
+  if (canonicalContractId && canonicalTermId) {
+    return null;
   }
 
   const scopeTotal = scopeBills.reduce((sum: Decimal, b: any) => sum.plus(new Decimal((b.totalAmount ?? 0).toString())), new Decimal(0));
   const scopePaid = scopeBills.reduce((sum: Decimal, b: any) => sum.plus(new Decimal((b.paidAmount ?? 0).toString())), new Decimal(0));
 
-  if (scopeTotal.isZero()) {
+  if (scopeTotal.isZero() || !scopePaid.equals(scopeTotal)) {
     return null;
   }
 
@@ -1057,7 +1120,7 @@ export async function generateFinalSettlementReceiptForBillInTx(
     }
   }
 
-  // 6. Aggregate whole-scope line items, bill groups, and real payment event history
+  // 7. Aggregate whole-scope line items, bill groups, and real payment event history
   const billGroups = scopeBills.map((b: any) => ({
     billId: b.id,
     billNumber: b.billNumber || null,
@@ -1094,10 +1157,19 @@ export async function generateFinalSettlementReceiptForBillInTx(
     }))
   );
 
+  // 8. Snapshot Tenant Authority - populated only after tenant/rental compatibility passes (Requirement 8)
+  const tenantBill = scopeBills.find((b: any) => b.tenant && b.tenant.id === canonicalTenantId) || firstBill;
+  const canonicalTenant = tenantBill.tenant;
+  const resolvedTenantName = canonicalTenant?.displayName ||
+    (canonicalTenant?.firstName ? `${canonicalTenant.firstName || ''} ${canonicalTenant.lastName || ''}`.trim() : 'ผู้เช่า');
+
   const snapshotData = {
     receiptNumber,
     billNumber: scopeBills.map((b: any) => b.billNumber).filter(Boolean).join(', ') || firstBill.billNumber || null,
     billIds: scopeBills.map((b: any) => b.id),
+    tenantId: canonicalTenantId,
+    contractId: canonicalContractId,
+    provisionalRentalTermId: canonicalTermId,
     cycleCode: firstBill.billingCycle?.cycleCode || null,
     cycleLabel: firstBill.billingCycle?.name || firstBill.billingCycle?.cycleCode || null,
     total: scopeTotal.toFixed(2),
@@ -1107,7 +1179,7 @@ export async function generateFinalSettlementReceiptForBillInTx(
     billGroups,
     paymentEvents,
     roomNumber: firstBill.room?.roomNumber || 'GEN',
-    tenantName: firstBill.tenant?.displayName || (firstBill.tenant?.firstName ? `${firstBill.tenant.firstName || ''} ${firstBill.tenant.lastName || ''}`.trim() : 'ผู้เช่า'),
+    tenantName: resolvedTenantName,
     dormitoryName: firstBill.dormitory?.name || 'หอพัก HorPlus',
     dormitoryTaxId: firstBill.dormitory?.taxId || null,
     dormitoryAddress: firstBill.dormitory?.addressLine1 || firstBill.dormitory?.address || null,
@@ -1137,13 +1209,15 @@ export async function generateFinalSettlementReceiptForBillInTx(
 
     return receipt;
   } catch (err: any) {
-    if (err.code === 'P2002' || err.message?.includes('Unique constraint failed')) {
+    if (err.code === 'P2002' || err.message?.includes('Unique constraint failed') || err.message?.includes('receipts_active_final_settlement_unique')) {
       const raceWinner = await tx.receipt.findFirst({
         where: {
           dormitoryId,
           settlementScopeKey,
+          receiptKind: 'FINAL_SETTLEMENT',
           isVoided: false,
         },
+        orderBy: { createdAt: 'desc' },
       });
       if (raceWinner) return raceWinner;
     }
@@ -1153,7 +1227,8 @@ export async function generateFinalSettlementReceiptForBillInTx(
 
 /**
  * Generates or retrieves the canonical FINAL_SETTLEMENT receipt for a fully settled Daily Stay Invoice.
- * Invariant: Exactly ONE Final Receipt per (dormitoryId, settlementScopeKey = "DAILY_INVOICE:{dailyStayInvoiceId}").
+ * Invariant: Exactly ONE active Final Receipt per (dormitoryId, settlementScopeKey = "DAILY_INVOICE:{dailyStayInvoiceId}").
+ * Historical voided receipts are preserved (0..N voided, max 1 active).
  * Zero obligation produces no receipt.
  */
 export async function generateFinalSettlementReceiptForDailyInvoiceInTx(
@@ -1191,9 +1266,16 @@ export async function generateFinalSettlementReceiptForDailyInvoiceInTx(
   Decimal.set({ rounding: Decimal.ROUND_HALF_UP });
   const totalAgreed = new Decimal(invoice.totalAgreedAmount.toString());
   const outDec = new Decimal((invoice.outstandingAmount ?? 0).toString());
+  const invoiceStatus = (invoice.status || '').trim().toUpperCase();
 
-  // Fail closed: Zero obligation, or un-settled invoice produces no receipt
-  if (totalAgreed.isZero() || invoice.status !== 'PAID' || outDec.greaterThan(0)) {
+  // Fail closed: Zero obligation, or un-settled invoice, or negative outstanding produces no receipt (Requirement 4)
+  if (
+    totalAgreed.lessThanOrEqualTo(0) ||
+    totalAgreed.isNaN() ||
+    outDec.isNaN() ||
+    !outDec.isZero() || // Authoritative outstanding MUST equal exactly zero
+    invoiceStatus !== 'PAID'
+  ) {
     return null;
   }
 
@@ -1213,8 +1295,10 @@ export async function generateFinalSettlementReceiptForDailyInvoiceInTx(
         where: {
           dormitoryId,
           settlementScopeKey,
+          receiptKind: 'FINAL_SETTLEMENT',
           isVoided: false,
         },
+        orderBy: { createdAt: 'desc' },
       })
     : null;
 
@@ -1283,6 +1367,8 @@ export async function generateFinalSettlementReceiptForDailyInvoiceInTx(
     receiptNumber,
     invoiceNumber: invoice.invoiceNumber,
     billNumber: invoice.invoiceNumber,
+    dailyStayInvoiceId: invoice.id,
+    tenantId: invoice.dailyStay?.tenantId || null,
     total: totalAgreed.toFixed(2),
     receivedAmount: totalAgreed.toFixed(2),
     billTotal: totalAgreed.toFixed(2),
@@ -1317,13 +1403,15 @@ export async function generateFinalSettlementReceiptForDailyInvoiceInTx(
 
     return receipt;
   } catch (err: any) {
-    if (err.code === 'P2002' || err.message?.includes('Unique constraint failed')) {
+    if (err.code === 'P2002' || err.message?.includes('Unique constraint failed') || err.message?.includes('receipts_active_final_settlement_unique')) {
       const raceWinner = await tx.receipt.findFirst({
         where: {
           dormitoryId,
           settlementScopeKey,
+          receiptKind: 'FINAL_SETTLEMENT',
           isVoided: false,
         },
+        orderBy: { createdAt: 'desc' },
       });
       if (raceWinner) return raceWinner;
     }
