@@ -227,8 +227,19 @@ export function calculateOwnerReports(params: ReportCalculationParams): ReportCa
     currentMonthBills = filteredBills;
   }
 
-  const paidBills = currentMonthBills.filter(b => b.status === 'paid');
-  const unpaidBills = currentMonthBills.filter(b => b.status !== 'paid');
+  const isPreHorPlusPaidBill = (b: any): boolean => {
+    const isPaid = (b.status || '').toLowerCase() === 'paid';
+    const isHist = Boolean(
+      b.metadata?.isHistoricalImport ||
+      b.isHistoricalImport ||
+      (b.metadata && typeof b.metadata === 'object' && b.metadata.isHistoricalImport)
+    );
+    return isPaid && isHist;
+  };
+
+  const revenueActiveBills = currentMonthBills.filter(b => !isPreHorPlusPaidBill(b));
+  const paidBills = revenueActiveBills.filter(b => (b.status || '').toLowerCase() === 'paid');
+  const unpaidBills = currentMonthBills.filter(b => (b.status || '').toLowerCase() !== 'paid');
 
   // 4. Occupancy stats
   const totalRooms = filteredRooms.length;
@@ -291,15 +302,15 @@ export function calculateOwnerReports(params: ReportCalculationParams): ReportCa
   };
 
   // 6. Current Month Authoritative Exact-Satang Aggregations
-  const fixedRentSatangs: bigint = currentMonthBills.reduce((sum: bigint, b: any) => sum + getBillRentSatangs(b), 0n);
-  const waterSatangs: bigint = currentMonthBills.reduce((sum: bigint, b: any) => sum + getBillWaterSatangs(b), 0n);
-  const electricSatangs: bigint = currentMonthBills.reduce((sum: bigint, b: any) => sum + getBillElectricSatangs(b), 0n);
-  const commonSatangs: bigint = currentMonthBills.reduce((sum: bigint, b: any) => sum + getBillCommonSatangs(b), 0n);
-  const internetSatangs: bigint = currentMonthBills.reduce((sum: bigint, b: any) => sum + getBillInternetSatangs(b), 0n);
-  const parkingSatangs: bigint = currentMonthBills.reduce((sum: bigint, b: any) => sum + getBillParkingSatangs(b), 0n);
+  const fixedRentSatangs: bigint = revenueActiveBills.reduce((sum: bigint, b: any) => sum + getBillRentSatangs(b), 0n);
+  const waterSatangs: bigint = revenueActiveBills.reduce((sum: bigint, b: any) => sum + getBillWaterSatangs(b), 0n);
+  const electricSatangs: bigint = revenueActiveBills.reduce((sum: bigint, b: any) => sum + getBillElectricSatangs(b), 0n);
+  const commonSatangs: bigint = revenueActiveBills.reduce((sum: bigint, b: any) => sum + getBillCommonSatangs(b), 0n);
+  const internetSatangs: bigint = revenueActiveBills.reduce((sum: bigint, b: any) => sum + getBillInternetSatangs(b), 0n);
+  const parkingSatangs: bigint = revenueActiveBills.reduce((sum: bigint, b: any) => sum + getBillParkingSatangs(b), 0n);
   const commonParkingSatangs: bigint = commonSatangs + internetSatangs + parkingSatangs;
-  const otherServiceSatangs: bigint = currentMonthBills.reduce((sum: bigint, b: any) => sum + getBillOtherServiceSatangs(b), 0n);
-  const fineSatangs: bigint = currentMonthBills.reduce((sum: bigint, b: any) => sum + getBillFineSatangs(b), 0n);
+  const otherServiceSatangs: bigint = revenueActiveBills.reduce((sum: bigint, b: any) => sum + getBillOtherServiceSatangs(b), 0n);
+  const fineSatangs: bigint = revenueActiveBills.reduce((sum: bigint, b: any) => sum + getBillFineSatangs(b), 0n);
 
   // Deposits
   const contractDepositSatangs: bigint = contracts
@@ -313,7 +324,7 @@ export function calculateOwnerReports(params: ReportCalculationParams): ReportCa
   const depositSatangs: bigint = contractDepositSatangs > 0n ? contractDepositSatangs : roomDepositSatangs;
 
   // Authoritative Total Billed, Revenue, Unpaid
-  const sumBillsTotalSatangs: bigint = currentMonthBills.reduce((sum: bigint, b: any): bigint => sum + toSatangs(b.totalAmount), 0n);
+  const sumBillsTotalSatangs: bigint = revenueActiveBills.reduce((sum: bigint, b: any): bigint => sum + toSatangs(b.totalAmount), 0n);
   const sumCategoriesTotalSatangs: bigint = fixedRentSatangs + waterSatangs + electricSatangs + commonParkingSatangs + otherServiceSatangs + fineSatangs;
   const totalBilledSatangs: bigint = sumBillsTotalSatangs > 0n ? sumBillsTotalSatangs : sumCategoriesTotalSatangs;
 

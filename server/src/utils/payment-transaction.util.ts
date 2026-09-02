@@ -14,7 +14,8 @@ export interface RecordCashPaymentInTxInput {
   amount: string | number | Prisma.Decimal | Decimal;
   userId?: string | null;
   idempotencyKey?: string | null;
-  paymentDate?: Date;
+  paymentDate?: Date | null;
+  metadata?: any;
 }
 
 /**
@@ -86,6 +87,7 @@ export async function recordCashPaymentInTx(
     : null;
 
   // 4. Create CombinedPaymentGroup for real monetary transaction
+  const effectivePaymentDate = input.paymentDate !== undefined ? input.paymentDate : now;
   const group = await tx.combinedPaymentGroup.create({
     data: {
       dormitoryId: input.dormitoryId,
@@ -93,10 +95,10 @@ export async function recordCashPaymentInTx(
       totalAmount: new Prisma.Decimal(submitAmount.toFixed(2)),
       method: 'CASH',
       status: 'APPROVED',
-      paymentDate: now,
+      paymentDate: effectivePaymentDate,
       recordedByUserId: safeUserId,
       idempotencyKey: input.idempotencyKey || null,
-      notes: 'รับชำระด้วยเงินสด ณ เคาน์เตอร์',
+      notes: input.metadata?.notes || 'รับชำระด้วยเงินสด ณ เคาน์เตอร์',
     },
   });
 
@@ -120,9 +122,10 @@ export async function recordCashPaymentInTx(
       method: 'CASH',
       amount: new Prisma.Decimal(submitAmount.toFixed(2)),
       status: 'APPROVED',
-      paymentDate: now,
+      paymentDate: effectivePaymentDate,
       reviewedByUserId: safeUserId,
       reviewedAt: now,
+      metadata: input.metadata ? input.metadata : undefined,
       idempotencyKey: input.idempotencyKey ? `${input.idempotencyKey}-pay` : undefined,
     },
   });
@@ -251,6 +254,259 @@ export async function recordCashPaymentInTx(
       outstandingAmount: newOutstandingAmount.toFixed(2),
       status: newStatus,
     },
+  };
+}
+
+export interface RecordCombinedCashInTxInput {
+  dormitoryId: string;
+  billIds: string[];
+  amount?: string | number | Prisma.Decimal | Decimal;
+  userId?: string | null;
+  idempotencyKey?: string | null;
+  paymentDate?: Date | null;
+  metadata?: any;
+}
+
+/**
+ * Canonical grouped cash settlement for multiple bills belonging to the SAME tenant and SAME room.
+ * Generates 1 CombinedPaymentGroup, child Payment allocations, and 1 consolidated Receipt.
+ */
+export async function recordCombinedCashPaymentInTx(
+  tx: any,
+  input: RecordCombinedCashInTxInput
+) {
+  const sortedBillIds = [...input.billIds].sort();
+  if (sortedBillIds.length === 0) {
+    throw new AppError('ต้องระบุรายการบิลอย่างน้อย 1 รายการ', 400, 'NO_BILLS_SPECIFIED');
+  }
+
+  // 1. Row locks in deterministic order
+  if (typeof tx.$executeRaw === 'function') {
+    for (const bid of sortedBillIds) {
+      await tx.$executeRaw`SELECT "id" FROM "bills" WHERE "id" = ${bid}::uuid FOR UPDATE`;
+    }
+  }
+
+  // 2. Fetch all bills with relations
+  const bills = await tx.bill.findMany({
+    where: { id: { in: sortedBillIds }, dormitoryId: input.dormitoryId },
+    include: {
+      items: { orderBy: { displayOrder: 'asc' } },
+      billingCycle: true,
+      room: true,
+      tenant: true,
+      allocations: true,
+      Payment: { where: { status: { in: ['PENDING', 'UNDER_REVIEW'] } } },
+    },
+  });
+
+  if (bills.length !== sortedBillIds.length) {
+    throw new AppError('พบรายการบิลไม่ครบถ้วน', 404, 'NOT_FOUND');
+  }
+
+  // 3. Validate strict single room + single tenant invariant (Cross-room grouping is forbidden)
+  const firstRoomId = bills[0].roomId;
+  const firstTenantId = bills[0].tenantId;
+  for (const b of bills) {
+    if (b.roomId !== firstRoomId) throw new AppError('ไม่อนุญาตให้รวมบิลข้ามห้องพัก', 400, 'FORBIDDEN_CROSS_ROOM');
+    if (b.tenantId !== firstTenantId) throw new AppError('บิลทั้งหมดต้องเป็นของผู้เช่ารายเดียวกัน', 400, 'FORBIDDEN_DIFFERENT_TENANT');
+    if (b.status === 'PAID' || b.status === 'paid') throw new AppError(`บิล ${b.billNumber || b.id} ได้รับการชำระเงินครบแล้ว`, 400, 'ALREADY_PAID');
+    if (b.Payment && b.Payment.length > 0) throw new AppError('มีรายการชำระเงินที่อยู่ระหว่างรอการตรวจสอบสำหรับบิลในกลุ่มนี้แล้ว', 409, 'PAYMENT_IN_PROGRESS');
+  }
+
+  Decimal.set({ rounding: Decimal.ROUND_HALF_UP });
+  let totalOutstanding = new Decimal(0);
+  for (const b of bills) {
+    const bTot = b.totalAmount !== null && b.totalAmount !== undefined ? new Decimal(b.totalAmount.toString()) : new Decimal(0);
+    const bPaid = b.paidAmount !== null && b.paidAmount !== undefined ? new Decimal(b.paidAmount.toString()) : new Decimal(0);
+    const bOut = b.outstandingAmount !== null && b.outstandingAmount !== undefined ? new Decimal(b.outstandingAmount.toString()) : Decimal.max(bTot.minus(bPaid), new Decimal(0));
+    totalOutstanding = totalOutstanding.plus(bOut);
+  }
+
+  const submitAmount = input.amount !== undefined ? new Decimal(input.amount.toString()) : totalOutstanding;
+  if (submitAmount.lessThanOrEqualTo(0) || submitAmount.greaterThan(totalOutstanding)) {
+    throw new AppError('ยอดเงินที่ชำระไม่ถูกต้อง', 400, 'UNSUPPORTED_AMOUNT');
+  }
+
+  const now = new Date();
+  const effectivePaymentDate = input.paymentDate !== undefined ? input.paymentDate : now;
+  const safeUserId = input.userId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(input.userId)
+    ? input.userId
+    : null;
+
+  // 4. Create CombinedPaymentGroup
+  const group = await tx.combinedPaymentGroup.create({
+    data: {
+      dormitoryId: input.dormitoryId,
+      tenantId: firstTenantId,
+      totalAmount: new Prisma.Decimal(submitAmount.toFixed(2)),
+      method: 'CASH',
+      status: 'APPROVED',
+      paymentDate: effectivePaymentDate,
+      recordedByUserId: safeUserId,
+      idempotencyKey: input.idempotencyKey || null,
+      notes: input.metadata?.notes || 'รับชำระเงินสดแบบรวมบิล ณ เคาน์เตอร์',
+    },
+  });
+
+  let order = 1;
+  for (const b of bills) {
+    await tx.combinedPaymentGroupBillTarget.create({
+      data: {
+        dormitoryId: input.dormitoryId,
+        paymentGroupId: group.id,
+        billId: b.id,
+        targetOrder: order++,
+      },
+    });
+  }
+
+  const eligibleBills = bills.map((b: any) => {
+    const totalAmount = new Decimal(b.totalAmount.toString());
+    const paidAmount = b.paidAmount ? new Decimal(b.paidAmount.toString()) : new Decimal(0);
+    const outstandingAmount = b.outstandingAmount ? new Decimal(b.outstandingAmount.toString()) : totalAmount.minus(paidAmount);
+    const existingAllocSum = (b.allocations || []).reduce((sum: Decimal, a: any) => sum.plus(new Decimal(a.allocatedAmount.toString())), new Decimal(0));
+    const legacyUnallocatedPaidAmount = Decimal.max(paidAmount.minus(existingAllocSum), new Decimal(0));
+    return {
+      id: b.id,
+      dormitoryId: b.dormitoryId,
+      roomId: b.roomId,
+      tenantId: b.tenantId,
+      billNumber: b.billNumber,
+      billKind: b.billKind,
+      status: b.status,
+      billingDate: b.billingDate,
+      dueDate: b.dueDate,
+      totalAmount,
+      paidAmount,
+      outstandingAmount,
+      legacyUnallocatedPaidAmount,
+      billingCycleId: b.billingCycleId,
+      billingCycle: b.billingCycle,
+      items: (b.items || []).map((it: any) => {
+        return {
+          id: it.id,
+          type: it.type,
+          code: it.code,
+          description: it.description,
+          amount: it.amount,
+          displayOrder: it.displayOrder,
+        };
+      }),
+    };
+  });
+
+  const plan = computeCanonicalAllocationPlan({
+    submitAmount,
+    targetRoomId: firstRoomId,
+    targetTenantId: firstTenantId,
+    eligibleBills,
+  });
+
+  const childPayments: any[] = [];
+  const groupReceiptSnapshots: GroupReceiptBillSnapshot[] = [];
+
+  for (const billPlan of plan.affectedBills) {
+    if (billPlan.allocatedAmount.greaterThan(0)) {
+      const targetBill = bills.find((b: any) => b.id === billPlan.id);
+      if (!targetBill) continue;
+      const allocatedDec = billPlan.allocatedAmount;
+
+      const payment = await tx.payment.create({
+        data: {
+          dormitoryId: input.dormitoryId,
+          billId: billPlan.id,
+          tenantId: firstTenantId,
+          paymentGroupId: group.id,
+          method: 'CASH',
+          amount: new Prisma.Decimal(allocatedDec.toFixed(2)),
+          status: 'APPROVED',
+          paymentDate: effectivePaymentDate,
+          reviewedByUserId: safeUserId,
+          reviewedAt: now,
+          metadata: input.metadata ? input.metadata : undefined,
+        },
+      });
+
+      await tx.paymentStatusHistory.create({
+        data: {
+          dormitoryId: input.dormitoryId,
+          paymentId: payment.id,
+          fromStatus: null,
+          toStatus: 'APPROVED',
+          changedByUserId: safeUserId,
+          effectiveAt: now,
+        },
+      });
+
+      const billItemAllocs = plan.allocations.filter(a => a.billId === billPlan.id);
+      for (const itemPlan of billItemAllocs) {
+        if (itemPlan.allocatedAmount.greaterThan(0)) {
+          await tx.paymentAllocation.create({
+            data: {
+              dormitoryId: input.dormitoryId,
+              paymentId: payment.id,
+              billId: billPlan.id,
+              billItemId: itemPlan.billItemId,
+              allocatedAmount: new Prisma.Decimal(itemPlan.allocatedAmount.toFixed(2)),
+            },
+          });
+        }
+      }
+
+      const prevPaid = targetBill.paidAmount ? new Decimal(targetBill.paidAmount.toString()) : new Decimal(0);
+      const newPaid = prevPaid.plus(allocatedDec);
+      const billTotal = new Decimal(targetBill.totalAmount.toString());
+      const newOut = Decimal.max(billTotal.minus(newPaid), new Decimal(0));
+      const newStat = newOut.equals(0) ? 'PAID' : 'PARTIALLY_PAID';
+
+      await tx.billStatusHistory.create({
+        data: {
+          dormitoryId: input.dormitoryId,
+          billId: targetBill.id,
+          fromStatus: targetBill.status,
+          toStatus: newStat,
+          changedByUserId: safeUserId,
+          effectiveAt: now,
+        },
+      });
+
+      await tx.bill.update({
+        where: { id: targetBill.id },
+        data: {
+          status: newStat,
+          previousStatus: targetBill.status,
+          paidAt: newStat === 'PAID' ? now : (targetBill.paidAt ?? null),
+          paidAmount: new Prisma.Decimal(newPaid.toFixed(2)),
+          outstandingAmount: new Prisma.Decimal(newOut.toFixed(2)),
+        },
+      });
+
+      childPayments.push(payment);
+      groupReceiptSnapshots.push(buildBillGroupSnapshot(targetBill, allocatedDec));
+    }
+  }
+
+  // 5. Generate exactly 1 combined Receipt
+  const firstBill = bills[0];
+  const receipt = await generateGroupReceiptInTx({
+    tx,
+    dormitoryId: input.dormitoryId,
+    paymentGroupId: group.id,
+    totalAmount: submitAmount,
+    billGroups: groupReceiptSnapshots,
+    userId: safeUserId,
+    roomNumber: firstBill.room?.roomNumber || 'GEN',
+    tenantName: firstBill.tenant?.displayName || 'ผู้เช่า',
+    paymentMethod: 'CASH',
+    paymentDate: effectivePaymentDate || undefined,
+  });
+
+  return {
+    group,
+    payments: childPayments,
+    receipt,
+    totalAmount: submitAmount.toFixed(2),
   };
 }
 

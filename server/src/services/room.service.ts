@@ -164,10 +164,11 @@ export class RoomService {
         throw new AppError('ไม่สามารถเพิ่มห้องพักในอาคารที่ถูกจัดเก็บแล้วได้', 400, 'BUILDING_ARCHIVED');
       }
 
-      // Check Dormitory-scoped Duplicate Room
+      // Check Building-scoped Duplicate Room
       const existingRoom = await tx.room.findFirst({
         where: {
           dormitoryId,
+          buildingId: data.buildingId,
           normalizedRoomNumber,
           deletedAt: null,
         },
@@ -175,7 +176,7 @@ export class RoomService {
 
       if (existingRoom) {
         throw new AppError(
-          `หมายเลขห้องพัก "${data.roomNumber}" มีอยู่แล้วในหอพักนี้`,
+          `หมายเลขห้องพัก "${data.roomNumber}" มีอยู่แล้วในอาคารนี้`,
           409,
           'ROOM_NUMBER_ALREADY_EXISTS'
         );
@@ -327,10 +328,12 @@ export class RoomService {
         }
         normalizedRoomNumber = validation.normalized;
 
-        if (normalizedRoomNumber !== existing.normalizedRoomNumber) {
+        const targetBuildingId = changes.buildingId || existing.buildingId;
+        if (normalizedRoomNumber !== existing.normalizedRoomNumber || (changes.buildingId && changes.buildingId !== existing.buildingId)) {
           const duplicate = await tx.room.findFirst({
             where: {
               dormitoryId: targetDormId,
+              buildingId: targetBuildingId,
               normalizedRoomNumber,
               id: { not: id },
               deletedAt: null,
@@ -338,7 +341,7 @@ export class RoomService {
           });
           if (duplicate) {
             throw new AppError(
-              `หมายเลขห้องพัก "${changes.roomNumber}" มีอยู่แล้วในหอพักนี้`,
+              `หมายเลขห้องพัก "${changes.roomNumber || existing.roomNumber}" มีอยู่แล้วในอาคารนี้`,
               409,
               'ROOM_NUMBER_ALREADY_EXISTS'
             );

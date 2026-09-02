@@ -19,6 +19,7 @@ import { idempotencyService } from './idempotency.service.js';
 import { computeCanonicalAllocationPlan } from '../utils/allocation.util.js';
 import {
   recordCashPaymentInTx,
+  recordCombinedCashPaymentInTx,
   generateReceiptInTx,
   generateGroupReceiptInTx,
   buildBillGroupSnapshot,
@@ -258,6 +259,39 @@ export class PaymentService {
             userId: input.userId,
             idempotencyKey: input.idempotencyKey,
             paymentDate: input.paymentDate,
+          });
+        });
+      },
+    });
+  }
+
+  /**
+   * Owner records cash payment for multiple bills combined (SAME tenant + SAME room)
+   */
+  async recordCombinedCash(input: {
+    dormitoryId: string;
+    billIds: string[];
+    amount?: string | number;
+    userId: string;
+    idempotencyKey?: string | null;
+    paymentDate?: Date;
+    metadata?: any;
+  }) {
+    return await idempotencyService.runWithIdempotency({
+      actorUserId: input.userId,
+      operation: 'recordCombinedCash',
+      idempotencyKey: input.idempotencyKey,
+      payload: { billIds: input.billIds, amount: input.amount },
+      fn: async () => {
+        return await this.client.$transaction(async (tx) => {
+          return await recordCombinedCashPaymentInTx(tx, {
+            dormitoryId: input.dormitoryId,
+            billIds: input.billIds,
+            amount: input.amount,
+            userId: input.userId,
+            idempotencyKey: input.idempotencyKey,
+            paymentDate: input.paymentDate,
+            metadata: input.metadata,
           });
         });
       },

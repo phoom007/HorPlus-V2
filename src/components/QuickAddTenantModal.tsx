@@ -302,7 +302,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
           : 0;
         setTermRent(tRent);
         setMaxInstallments(bldMaxInstallments);
-        setTermInstallmentCount(bldMaxInstallments);
+        setTermInstallmentCount(1);
         setTermEndDate(calculateMonthEndDate(today, bldTermMonths));
       } else {
         setTermMonths(null);
@@ -364,15 +364,19 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
 
   // Recalculate monthly end date on start or duration change
   useEffect(() => {
-    if (startDate && durationMonths > 0) {
-      setMonthlyEndDate(calculateMonthEndDate(startDate, durationMonths));
+    if (startDate && durationMonths && Number(durationMonths) > 0) {
+      setMonthlyEndDate(calculateMonthEndDate(startDate, Number(durationMonths)));
+    } else {
+      setMonthlyEndDate('');
     }
   }, [startDate, durationMonths]);
 
   // Recalculate term end date on start change
   useEffect(() => {
-    if (startDate && termMonths && termMonths > 0) {
-      setTermEndDate(calculateMonthEndDate(startDate, termMonths));
+    if (startDate && termMonths && Number(termMonths) > 0) {
+      setTermEndDate(calculateMonthEndDate(startDate, Number(termMonths)));
+    } else {
+      setTermEndDate('');
     }
   }, [startDate, termMonths]);
 
@@ -393,7 +397,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
 
   const isMonthlyDisabled =
     activeTab === 'MONTHLY' &&
-    (monthlyRent === null || monthlyRent === undefined || isNaN(Number(monthlyRent)) || Number(monthlyRent) < 0);
+    (!durationMonths || Number(durationMonths) < 1 || monthlyRent === null || monthlyRent === undefined || isNaN(Number(monthlyRent)) || Number(monthlyRent) < 0);
 
   const isDailyDateInvalid = dailyEndDate < startDate;
 
@@ -411,8 +415,8 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
     }
 
     if (activeTab === 'TERM') {
-      if (!termMonths || Number(termMonths) < 1) {
-        setErrorText('ไม่พบข้อมูลระยะเวลาสัญญาแบบเทอมของอาคาร (termMonths) กรุณากำหนดการตั้งค่าอาคารก่อนทำสัญญาแบบเทอม');
+      if (!termMonths || isNaN(Number(termMonths)) || Number(termMonths) < 1) {
+        setErrorText('กรุณาระบุระยะเวลาตามเทอม (เดือน) ให้ถูกต้อง');
         return;
       }
       if (termRent === null || termRent === undefined || isNaN(Number(termRent)) || Number(termRent) < 0) {
@@ -422,6 +426,10 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
     }
 
     if (activeTab === 'MONTHLY') {
+      if (!durationMonths || isNaN(Number(durationMonths)) || Number(durationMonths) < 1) {
+        setErrorText('กรุณาระบุระยะเวลาสัญญา (เดือน) ให้ถูกต้อง');
+        return;
+      }
       if (monthlyRent === null || monthlyRent === undefined || isNaN(Number(monthlyRent)) || Number(monthlyRent) < 0) {
         setErrorText('กรุณาระบุค่าเช่ารายเดือน');
         return;
@@ -969,7 +977,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
           {/* TAB 1: TERM */}
           {activeTab === 'TERM' && (
             <div className="space-y-3 pt-2 border-t border-slate-100">
-              {!termMonths ? (
+              {!context.building?.termMonths || Number(context.building.termMonths) < 1 ? (
                 <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-800 text-xs font-semibold flex items-start gap-2">
                   <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-amber-600" />
                   <span>ไม่พบข้อมูลระยะเวลาสัญญาแบบเทอมของอาคาร (termMonths) กรุณากำหนดการตั้งค่าอาคารก่อนทำสัญญาแบบเทอม</span>
@@ -985,12 +993,17 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
                         type="number"
                         min="1"
                         required
-                        value={termMonths ?? ''}
+                        value={termMonths !== null && termMonths !== undefined ? termMonths : ''}
                         onChange={(e) => setTermMonths(e.target.value)}
                         onBlur={(e) => {
                           const val = e.target.value;
-                          const norm = normalizeNumericString(val);
-                          setTermMonths(norm === '' ? null : Math.max(1, parseInt(norm, 10) || 1));
+                          if (val !== '') {
+                            const norm = normalizeNumericString(val);
+                            const num = parseInt(norm, 10);
+                            setTermMonths(isNaN(num) || num < 1 ? 1 : num);
+                          } else {
+                            setTermMonths('');
+                          }
                         }}
                         className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
                       />
@@ -1184,9 +1197,18 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
                     type="number"
                     min="1"
                     required
-                    value={durationMonths}
-                    onChange={(e) => setDurationMonths(Math.max(1, parseInt(e.target.value) || 1))}
-                    onBlur={() => setDurationMonths(Math.max(1, parseInt(normalizeNumericString(durationMonths), 10) || 1))}
+                    value={durationMonths !== null && durationMonths !== undefined ? durationMonths : ''}
+                    onChange={(e) => setDurationMonths(e.target.value)}
+                    onBlur={(e) => {
+                      const val = e.target.value;
+                      if (val !== '') {
+                        const norm = normalizeNumericString(val);
+                        const num = parseInt(norm, 10);
+                        setDurationMonths(isNaN(num) || num < 1 ? 1 : num);
+                      } else {
+                        setDurationMonths('');
+                      }
+                    }}
                     className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
                   />
                 </div>

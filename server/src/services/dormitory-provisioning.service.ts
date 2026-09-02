@@ -823,20 +823,21 @@ export class DormitoryProvisioningService {
         },
       });
 
-      // Preflight validation: Reject duplicate normalized room numbers across buildings in payload
+      // Preflight validation: Reject duplicate normalized room numbers inside the same building in payload
       if (rooms && rooms.length > 0) {
         const seenInPayload = new Map<string, string>();
         for (const r of rooms) {
           const norm = normalizeRoomIdentifier(r.roomNumber);
           if (!norm) continue;
-          if (seenInPayload.has(norm)) {
+          const key = `${r.buildingId || 'default'}_${norm}`;
+          if (seenInPayload.has(key)) {
             throw new AppError(
-              `เลขห้อง "${r.roomNumber}" ซ้ำกับอาคารอื่น กรุณาเปลี่ยนเลขห้องหรือเลือกรูปแบบเลขห้องอื่น`,
+              `เลขห้อง "${r.roomNumber}" ซ้ำในอาคารเดียวกัน`,
               409,
               'ROOM_NUMBER_ALREADY_EXISTS'
             );
           }
-          seenInPayload.set(norm, r.roomNumber);
+          seenInPayload.set(key, r.roomNumber);
         }
       }
 
@@ -902,24 +903,6 @@ export class DormitoryProvisioningService {
           for (const r of matchingRooms) {
             const normalizedRoomNumber = normalizeRoomIdentifier(r.roomNumber);
 
-            // Preflight database collision check: Room must NOT exist under another Building
-            const existingRoom = await tx.room.findUnique({
-              where: {
-                dormitoryId_normalizedRoomNumber: {
-                  dormitoryId: dormId,
-                  normalizedRoomNumber,
-                },
-              },
-              select: { id: true, buildingId: true, roomNumber: true },
-            });
-
-            if (existingRoom && existingRoom.buildingId !== createdBld.id) {
-              throw new AppError(
-                `เลขห้อง "${r.roomNumber}" ซ้ำกับอาคารอื่น กรุณาเปลี่ยนเลขห้องหรือเลือกรูปแบบเลขห้องอื่น`,
-                409,
-                'ROOM_NUMBER_ALREADY_EXISTS'
-              );
-            }
             const rMonthlyStr = (r.monthlyRent !== undefined && r.monthlyRent !== null) ? String(r.monthlyRent) : (bMonthlyStr || '0');
             const rDailyStr = (r.dailyRent !== undefined && r.dailyRent !== null) ? String(r.dailyRent) : bDailyStr;
             const rTermStr = (r.termRent !== undefined && r.termRent !== null) ? String(r.termRent) : bTermStr;
@@ -942,8 +925,9 @@ export class DormitoryProvisioningService {
 
             await tx.room.upsert({
               where: {
-                dormitoryId_normalizedRoomNumber: {
+                dormitoryId_buildingId_normalizedRoomNumber: {
                   dormitoryId: dormId,
+                  buildingId: createdBld.id,
                   normalizedRoomNumber,
                 },
               },

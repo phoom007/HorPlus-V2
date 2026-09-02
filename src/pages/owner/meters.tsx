@@ -117,6 +117,9 @@ export interface OwnerMetersProps {
 export interface MeterRowState {
   roomId: string;
   roomNumber: string;
+  buildingId?: string;
+  buildingCode?: string;
+  buildingName?: string;
   waterPrev: number | string;
   waterCurr: number | string;
   elecPrev: number | string;
@@ -254,13 +257,16 @@ export function buildRowsFromWorkspace(params: {
     const previewRooms = workspaceData?.previewContext?.rooms || workspaceData?.rooms || [];
     const roomCtx = previewRooms.find((ctx: any) => ctx.roomId === r.id);
     const overallFinancialStatus = (roomCtx?.overallFinancialStatus as BillStatus) || (roomCtx?.billStatus as BillStatus) || (existingMonthlyUtilityBill ? existingMonthlyUtilityBill.status : 'draft');
-    const monthlyUtilityBillStatus = (roomCtx?.monthlyUtilityBillStatus as string) || (existingMonthlyUtilityBill ? existingMonthlyUtilityBill.status : 'draft');
-    const isMonthlyUtilityPaid = Boolean(roomCtx?.isMonthlyUtilityPaid || monthlyUtilityBillStatus === 'paid');
-    const isPaid = overallFinancialStatus === 'paid' || Boolean(roomCtx?.isPaid);
+    const bld = (buildings || []).find(b => b.id === r.buildingId);
+    const bCode = bld?.code || (bld?.name ? bld.name.replace(/^อาคาร\s*/, '').trim() : 'A');
+    const bName = bld?.name || `อาคาร ${bCode}`;
 
     return {
       roomId: r.id,
       roomNumber: r.roomNumber,
+      buildingId: r.buildingId,
+      buildingCode: bCode,
+      buildingName: bName,
       waterPrev,
       waterCurr,
       elecPrev,
@@ -942,6 +948,8 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   const [isQuickFillOpen, setIsQuickFillOpen] = useState(false);
   const [quickFillText, setQuickFillText] = useState('');
   const [templateUsed, setTemplateUsed] = useState(false);
+  const [templateMode, setTemplateMode] = useState<'FULL' | 'METER_ONLY'>('FULL');
+  const [isSpreadsheetMode, setIsSpreadsheetMode] = useState(false);
   const [quickAddModalOpen, setQuickAddModalOpen] = useState(false);
   const [selectedQuickAddContext, setSelectedQuickAddContext] = useState<QuickAddRoomContext | null>(null);
   const [quickAddLoadingRoomId, setQuickAddLoadingRoomId] = useState<string | null>(null);
@@ -1422,19 +1430,25 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
             }
           }
 
-          const currHousehold = pRoom.currentHouseholdPeopleCount ?? 0;
-          if (row.peopleCount !== currHousehold) {
-            nextRow.peopleCount = currHousehold;
+          let targetPeopleCount = row.peopleCount;
+          if (pRoom.previousCyclePeopleCount !== null && pRoom.previousCyclePeopleCount !== undefined) {
+            targetPeopleCount = pRoom.previousCyclePeopleCount;
+          } else if (pRoom.currentHouseholdPeopleCount !== null && pRoom.currentHouseholdPeopleCount !== undefined) {
+            targetPeopleCount = pRoom.currentHouseholdPeopleCount;
+          }
+
+          if (row.peopleCount !== targetPeopleCount) {
+            nextRow.peopleCount = targetPeopleCount;
             newFlashing[`${row.roomId}-peopleCount`] = true;
           }
 
-          // Compare previousCyclePeopleCount vs currentHouseholdPeopleCount for toast (Section 5)
+          // Compare previousCyclePeopleCount vs current for toast (Section 5)
           if (pRoom.previousCyclePeopleCount !== null && pRoom.previousCyclePeopleCount !== undefined) {
-            if (pRoom.previousCyclePeopleCount !== currHousehold) {
+            if (pRoom.previousCyclePeopleCount !== targetPeopleCount) {
               peopleChanges.push({
                 roomNumber: row.roomNumber,
                 prev: pRoom.previousCyclePeopleCount,
-                curr: currHousehold,
+                curr: targetPeopleCount,
               });
             }
           }
@@ -1477,43 +1491,62 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     }
   };
 
-  const getTemplateFormatString = () => {
-    const sampleRoom = meterRows[0]?.roomNumber || "A101";
+  const getTemplateFormatString = (mode: 'FULL' | 'METER_ONLY' = templateMode) => {
+    const sampleBld = meterRows[0]?.buildingCode || "A";
+    const sampleRoom = meterRows[0]?.roomNumber || "101";
+    const sampleIdent = `${sampleBld} ${sampleRoom}`;
     const sampleElec = formatMeterReadingDisplay(meterRows[0]?.elecPrev || 500);
     const sampleWater = formatMeterReadingDisplay(meterRows[0]?.waterPrev || 500);
     const samplePeople = formatCountDisplay(meterRows[0]?.peopleCount ?? 0);
     const sampleOverdue = formatMeterReadingDisplay(meterRows[0]?.overdueAmount || 50);
 
+    if (mode === 'METER_ONLY') {
+      if (isElecUnit && isWaterUnit) {
+        return `${sampleIdent} : ไฟ ${sampleElec} : น้ำ ${sampleWater}`;
+      } else if (isElecUnit && !isWaterUnit) {
+        return `${sampleIdent} : ไฟ ${sampleElec}`;
+      } else if (!isElecUnit && isWaterUnit) {
+        return `${sampleIdent} : น้ำ ${sampleWater}`;
+      }
+    }
+
     if (isElecUnit && isWaterUnit) {
-      return `${sampleRoom} : ไฟ ${sampleElec} : น้ำ ${sampleWater} : ${samplePeople} คน : ค้าง ${sampleOverdue}`;
+      return `${sampleIdent} : ไฟ ${sampleElec} : น้ำ ${sampleWater} : ${samplePeople} คน : ค้าง ${sampleOverdue}`;
     } else if (isElecUnit && !isWaterUnit) {
-      return `${sampleRoom} : ไฟ ${sampleElec} : ${samplePeople} คน : ค้าง ${sampleOverdue}`;
+      return `${sampleIdent} : ไฟ ${sampleElec} : ${samplePeople} คน : ค้าง ${sampleOverdue}`;
     } else if (!isElecUnit && isWaterUnit) {
-      return `${sampleRoom} : น้ำ ${sampleWater} : ${samplePeople} คน : ค้าง ${sampleOverdue}`;
+      return `${sampleIdent} : น้ำ ${sampleWater} : ${samplePeople} คน : ค้าง ${sampleOverdue}`;
     } else {
-      return `${sampleRoom} : ${samplePeople} คน : ค้าง ${sampleOverdue}`;
+      return `${sampleIdent} : ${samplePeople} คน : ค้าง ${sampleOverdue}`;
     }
   };
 
-  const generateTemplateText = (freshHouseholdMap?: Map<string, number>) => {
-    const sortedRows = [...meterRows].sort((a, b) => a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true, sensitivity: 'base' }));
+  const generateTemplateText = (mode: 'FULL' | 'METER_ONLY' = templateMode, freshHouseholdMap?: Map<string, number>) => {
+    const sortedRows = [...meterRows].sort((a, b) => {
+      const bComp = (a.buildingCode || '').localeCompare(b.buildingCode || '');
+      if (bComp !== 0) return bComp;
+      return a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true, sensitivity: 'base' });
+    });
 
     return sortedRows.map(row => {
-      const parts = [row.roomNumber];
+      const bCode = row.buildingCode || 'A';
+      const parts = [`${bCode} ${row.roomNumber}`];
       if (isElecUnit) {
         parts.push(`ไฟ ${formatMeterReadingDisplay(row.elecPrev)}`);
       }
       if (isWaterUnit) {
         parts.push(`น้ำ ${formatMeterReadingDisplay(row.waterPrev)}`);
       }
-      const freshCount = freshHouseholdMap?.get(row.roomId);
-      const roomCtx = previewContext?.rooms?.find(r => r.roomId === row.roomId);
-      const householdCount = freshCount !== undefined ? freshCount : (roomCtx?.currentHouseholdPeopleCount !== undefined ? roomCtx.currentHouseholdPeopleCount : row.peopleCount);
-      parts.push(`${formatCountDisplay(householdCount)} คน`);
-      if (Number(row.overdueAmount) > 0) {
-        parts.push(`ค้าง ${formatMeterReadingDisplay(row.overdueAmount)}`);
-      } else {
-        parts.push(`ค้าง `);
+      if (mode === 'FULL') {
+        const freshCount = freshHouseholdMap?.get(row.roomId);
+        const roomCtx = previewContext?.rooms?.find(r => r.roomId === row.roomId);
+        const householdCount = freshCount !== undefined ? freshCount : (roomCtx?.currentHouseholdPeopleCount !== undefined ? roomCtx.currentHouseholdPeopleCount : row.peopleCount);
+        parts.push(`${formatCountDisplay(householdCount)} คน`);
+        if (Number(row.overdueAmount) > 0) {
+          parts.push(`ค้าง ${formatMeterReadingDisplay(row.overdueAmount)}`);
+        } else {
+          parts.push(`ค้าง `);
+        }
       }
       return parts.join(' : ');
     }).join('\n');
@@ -1522,22 +1555,47 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   const parseQuickFillText = (text: string) => {
     const lines = text.split('\n');
 
-    const matchedCount = meterRows.filter(row => {
-      return lines.some(line => {
-        const firstPart = line.split(':')[0]?.trim();
-        return firstPart && row?.roomNumber && firstPart.toLowerCase() === row.roomNumber.toLowerCase();
-      });
-    }).length;
+    const matchRowForLine = (firstPart: string) => {
+      if (!firstPart) return undefined;
+      const trimmed = firstPart.trim();
+      const tokens = trimmed.split(/\s+/);
+
+      if (tokens.length >= 2) {
+        let bCode = tokens[0].toUpperCase().replace(/^อาคาร/, '');
+        let rNum = tokens.slice(1).join(' ');
+        if (!bCode && tokens[0].startsWith('อาคาร') && tokens.length >= 3) {
+          bCode = tokens[1].toUpperCase();
+          rNum = tokens.slice(2).join(' ');
+        }
+        if (bCode) {
+          const matched = meterRows.find(r =>
+            (r.buildingCode?.toUpperCase() === bCode || r.buildingName?.toUpperCase().replace(/^อาคาร\s*/, '') === bCode) &&
+            r.roomNumber.toLowerCase() === rNum.toLowerCase()
+          );
+          if (matched) return matched;
+        }
+      }
+
+      // Fallback: match roomNumber directly if unique across dormitory
+      const matchingRooms = meterRows.filter(r => r.roomNumber.toLowerCase() === trimmed.toLowerCase());
+      if (matchingRooms.length === 1) {
+        return matchingRooms[0];
+      }
+      return undefined;
+    };
 
     const newFlashing: { [key: string]: boolean } = {};
+    let matchedCount = 0;
 
     const updatedRows = meterRows.map(row => {
       const matchedLine = lines.find(line => {
         const firstPart = line.split(':')[0]?.trim();
-        return firstPart && row?.roomNumber && firstPart.toLowerCase() === row.roomNumber.toLowerCase();
+        const matched = matchRowForLine(firstPart);
+        return matched && matched.roomId === row.roomId;
       });
 
       if (!matchedLine) return row;
+      matchedCount++;
 
       const parts = matchedLine.split(':').map(p => p.trim());
 
@@ -3663,7 +3721,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       {/* Quick Fill Modal */}
       {isQuickFillOpen && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl p-6 max-w-lg w-full shadow-2xl border border-gray-100 flex flex-col gap-5 animate-in fade-in zoom-in-95 duration-200">
+          <div className={`bg-white rounded-3xl p-6 ${isSpreadsheetMode ? 'max-w-4xl' : 'max-w-lg'} w-full shadow-2xl border border-gray-100 flex flex-col gap-5 animate-in fade-in zoom-in-95 duration-200`}>
 
             {/* Header */}
             <div className="flex items-center justify-between gap-4">
@@ -3673,7 +3731,9 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                 </div>
                 <div>
                   <h4 className="text-base font-extrabold text-slate-900 leading-tight">กรอกแบบรวดเร็ว</h4>
-                  <p className="text-[11px] text-gray-400 font-bold mt-0.5 leading-none">วางข้อมูลหลายห้อง ระบบจะใส่ลงตารางให้</p>
+                  <p className="text-[11px] text-gray-400 font-bold mt-0.5 leading-none">
+                    {isSpreadsheetMode ? 'โหมดตาราง สามารถคัดลอก/วาง (Paste) จาก Excel ได้' : 'วางข้อมูลหลายห้อง ระบบจะใส่ลงตารางให้'}
+                  </p>
                 </div>
               </div>
               <button
@@ -3681,6 +3741,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                 onClick={() => {
                   setIsQuickFillOpen(false);
                   setTemplateUsed(false);
+                  setIsSpreadsheetMode(false);
                 }}
                 className="text-rose-500 bg-rose-50 hover:bg-rose-100 border border-rose-100 rounded-full p-2 cursor-pointer flex items-center justify-center transition-all shadow-sm"
               >
@@ -3688,84 +3749,259 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
               </button>
             </div>
 
-            {/* Template Section & Textarea Container with stable, non-jittery height */}
-            <div className="flex flex-col gap-4 h-[320px] justify-between shrink-0">
-              {/* Template Section: only show if text is <= 1 line */}
-              {quickFillText.split('\n').filter(l => l.trim()).length <= 1 && (
-                <div className="bg-slate-50 border border-slate-100 rounded-2xl p-4 flex flex-col gap-2 shrink-0 h-[112px] justify-center">
-                  <span className="text-xs font-black text-slate-800 leading-none text-left">รูปแบบ</span>
-                  <div className="bg-white border border-gray-200 rounded-xl p-3 font-mono text-xs text-slate-600 flex items-center justify-start text-left shadow-2xs leading-relaxed whitespace-nowrap overflow-x-auto select-all no-scrollbar">
-                    {getTemplateFormatString()}
-                  </div>
-                  <span className="text-[10px] text-gray-400 font-bold leading-none mt-0.5 text-left">ถ้าไม่มีค้าง ไม่ต้องใส่ข้อมูลค้างก็ได้</span>
-                </div>
-              )}
-
-              {/* Input Text Area - Single, Persistent to preserve focus */}
+            {isSpreadsheetMode ? (
+              /* Spreadsheet / Excel Grid Mode */
               <div
-                className="flex flex-col gap-1 w-full shrink-0 transition-all duration-300"
-                style={{
-                  height: quickFillText.split('\n').filter(l => l.trim()).length <= 1 ? '192px' : '320px'
+                className="flex flex-col gap-2 h-[340px] overflow-hidden border border-gray-200 rounded-2xl bg-white shadow-2xs"
+                onPaste={(e) => {
+                  const text = e.clipboardData.getData('text');
+                  if (!text) return;
+                  const lines = text.trim().split(/\r?\n/);
+                  if (lines.length === 0) return;
+
+                  let matchCount = 0;
+                  const updated = [...meterRows];
+                  lines.forEach(line => {
+                    const cells = line.split('\t').map(c => c.trim());
+                    if (cells.length >= 2) {
+                      let bCode = cells[0];
+                      let rNum = cells[1];
+                      let elecVal = cells[3] !== undefined ? cells[3] : cells[2];
+                      let waterVal = cells[5] !== undefined ? cells[5] : cells[4];
+                      let peopleVal = cells[6] !== undefined ? cells[6] : undefined;
+
+                      let rowIdx = updated.findIndex(r =>
+                        (r.buildingCode?.toUpperCase() === bCode.toUpperCase() || r.buildingName?.toLowerCase() === bCode.toLowerCase()) &&
+                        r.roomNumber.toLowerCase() === rNum.toLowerCase()
+                      );
+                      if (rowIdx < 0) {
+                        rowIdx = updated.findIndex(r => r.roomNumber.toLowerCase() === bCode.toLowerCase());
+                        if (rowIdx >= 0) {
+                          elecVal = cells[1];
+                          waterVal = cells[2];
+                          peopleVal = cells[3];
+                        }
+                      }
+                      if (rowIdx >= 0) {
+                        matchCount++;
+                        if (elecVal !== undefined && elecVal !== '') updated[rowIdx].elecCurr = elecVal;
+                        if (waterVal !== undefined && waterVal !== '') updated[rowIdx].waterCurr = waterVal;
+                        if (peopleVal !== undefined && peopleVal !== '') updated[rowIdx].peopleCount = parseInt(peopleVal, 10) || 0;
+                      }
+                    }
+                  });
+                  if (matchCount > 0) {
+                    setMeterRows(updated);
+                    pushHistory(updated);
+                    showToast(`วางข้อมูลสำเร็จ ${matchCount} ห้อง`);
+                  }
                 }}
               >
-                <textarea
-                  ref={quickFillInputRef}
-                  value={quickFillText}
-                  onChange={(e) => setQuickFillText(e.target.value)}
-                  wrap="off"
-                  placeholder="วางข้อมูลหลายห้องที่นี่ . . ."
-                  className="w-full h-full p-4 border border-gray-200 rounded-2xl bg-white text-slate-800 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 resize-none transition-all placeholder:text-gray-300 shadow-2xs overflow-x-auto whitespace-pre"
-                />
+                <div className="overflow-x-auto overflow-y-auto h-full">
+                  <table className="w-full text-left text-xs border-collapse font-sans">
+                    <thead className="bg-slate-50 text-slate-700 font-bold sticky top-0 border-b border-gray-200 select-none">
+                      <tr>
+                        <th className="py-2.5 px-3 whitespace-nowrap">อาคาร</th>
+                        <th className="py-2.5 px-3 whitespace-nowrap">ห้อง</th>
+                        {isElecUnit && <th className="py-2.5 px-3 whitespace-nowrap">มิเตอร์ไฟเดิม</th>}
+                        {isElecUnit && <th className="py-2.5 px-3 whitespace-nowrap bg-indigo-50/70 text-indigo-900">มิเตอร์ไฟใหม่</th>}
+                        {isWaterUnit && <th className="py-2.5 px-3 whitespace-nowrap">มิเตอร์น้ำเดิม</th>}
+                        {isWaterUnit && <th className="py-2.5 px-3 whitespace-nowrap bg-blue-50/70 text-blue-900">มิเตอร์น้ำใหม่</th>}
+                        <th className="py-2.5 px-3 whitespace-nowrap">จำนวนคน</th>
+                        <th className="py-2.5 px-3 whitespace-nowrap">ค้างชำระ</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100 font-mono text-slate-800">
+                      {meterRows.map((row) => (
+                        <tr key={row.roomId} className="hover:bg-slate-50/80 transition-colors">
+                          <td className="py-2 px-3 select-none text-slate-400 font-bold font-sans">{row.buildingCode || 'A'}</td>
+                          <td className="py-2 px-3 select-none font-bold text-slate-900">{row.roomNumber}</td>
+                          {isElecUnit && <td className="py-2 px-3 select-none text-slate-400">{row.elecPrev || '-'}</td>}
+                          {isElecUnit && (
+                            <td className="py-1 px-2 bg-indigo-50/30">
+                              <input
+                                type="text"
+                                value={row.elecCurr}
+                                onChange={(e) => {
+                                  const v = e.target.value;
+                                  setMeterRows(prev => prev.map(r => r.roomId === row.roomId ? { ...r, elecCurr: v } : r));
+                                }}
+                                className="w-20 px-2 py-1 bg-white border border-indigo-200 rounded-lg text-xs font-bold text-indigo-950 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                              />
+                            </td>
+                          )}
+                          {isWaterUnit && <td className="py-2 px-3 select-none text-slate-400">{row.waterPrev || '-'}</td>}
+                          {isWaterUnit && (
+                            <td className="py-1 px-2 bg-blue-50/30">
+                              <input
+                                type="text"
+                                value={row.waterCurr}
+                                onChange={(e) => {
+                                  const v = e.target.value;
+                                  setMeterRows(prev => prev.map(r => r.roomId === row.roomId ? { ...r, waterCurr: v } : r));
+                                }}
+                                className="w-20 px-2 py-1 bg-white border border-blue-200 rounded-lg text-xs font-bold text-blue-950 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                              />
+                            </td>
+                          )}
+                          <td className="py-1 px-2">
+                            <input
+                              type="number"
+                              min={0}
+                              value={row.peopleCount}
+                              onChange={(e) => {
+                                const v = parseInt(e.target.value, 10);
+                                setMeterRows(prev => prev.map(r => r.roomId === row.roomId ? { ...r, peopleCount: isNaN(v) ? 0 : v } : r));
+                              }}
+                              className="w-14 px-2 py-1 bg-white border border-gray-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                            />
+                          </td>
+                          <td className="py-1 px-2">
+                            <input
+                              type="text"
+                              value={row.overdueAmount}
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                setMeterRows(prev => prev.map(r => r.roomId === row.roomId ? { ...r, overdueAmount: v } : r));
+                              }}
+                              placeholder="0"
+                              className="w-20 px-2 py-1 bg-white border border-gray-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                            />
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
-            </div>
+            ) : (
+              /* Template Section & Textarea Container with stable, non-jittery height */
+              <div className="flex flex-col gap-4 h-[320px] justify-between shrink-0">
+                {/* Template Section: only show if text is <= 1 line */}
+                {quickFillText.split('\n').filter(l => l.trim()).length <= 1 && (
+                  <div className="bg-slate-50 border border-slate-100 rounded-2xl p-4 flex flex-col gap-2 shrink-0 h-[112px] justify-center">
+                    <span className="text-xs font-black text-slate-800 leading-none text-left">
+                      รูปแบบ ({templateMode === 'METER_ONLY' ? 'เฉพาะมิเตอร์' : 'ทั้งหมด'})
+                    </span>
+                    <div className="bg-white border border-gray-200 rounded-xl p-3 font-mono text-xs text-slate-600 flex items-center justify-start text-left shadow-2xs leading-relaxed whitespace-nowrap overflow-x-auto select-all no-scrollbar">
+                      {getTemplateFormatString(templateMode)}
+                    </div>
+                    <span className="text-[10px] text-gray-400 font-bold leading-none mt-0.5 text-left">ถ้าไม่มีค้าง ไม่ต้องใส่ข้อมูลค้างก็ได้</span>
+                  </div>
+                )}
+
+                {/* Input Text Area - Single, Persistent to preserve focus */}
+                <div
+                  className="flex flex-col gap-1 w-full shrink-0 transition-all duration-300"
+                  style={{
+                    height: quickFillText.split('\n').filter(l => l.trim()).length <= 1 ? '192px' : '320px'
+                  }}
+                >
+                  <textarea
+                    ref={quickFillInputRef}
+                    value={quickFillText}
+                    onChange={(e) => setQuickFillText(e.target.value)}
+                    wrap="off"
+                    placeholder="วางข้อมูลหลายห้องที่นี่ . . ."
+                    className="w-full h-full p-4 border border-gray-200 rounded-2xl bg-white text-slate-800 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 resize-none transition-all placeholder:text-gray-300 shadow-2xs overflow-x-auto whitespace-pre"
+                  />
+                </div>
+              </div>
+            )}
 
             {/* Footer Buttons */}
             <div className="flex items-center justify-between gap-2.5 mt-2 flex-nowrap">
-              {templateUsed ? (
-                <button
-                  type="button"
-                  disabled
-                  className="border border-gray-200 bg-gray-50 text-gray-400 px-2.5 sm:px-4 py-2.5 rounded-xl text-[10px] sm:text-xs font-black flex items-center gap-1 cursor-not-allowed select-none whitespace-nowrap shrink-0"
-                >
-                  <Sparkles className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-gray-300 shrink-0" />
-                  ใช้แม่แบบแล้ว
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={async () => {
-                    let freshHouseholdMap = new Map<string, number>();
-                    try {
-                      const res = await httpRequest<{ success: boolean; data: Array<{ roomId: string; currentHouseholdPeopleCount: number }> }>(
-                        'GET',
-                        `/api/v1/meters/workspace/household-counts?billingCycleId=${selectedBillingCycleId}`,
-                        undefined,
-                        { headers: currentDormId ? { 'x-dormitory-id': currentDormId } : {} }
-                      );
-                      if (res?.data && Array.isArray(res.data)) {
-                        res.data.forEach(h => freshHouseholdMap.set(h.roomId, h.currentHouseholdPeopleCount));
-                      } else {
-                        showToast('ไม่สามารถดึงจำนวนคนปัจจุบันได้ กรุณาลองอีกครั้ง');
-                        return;
-                      }
-                    } catch {
-                      showToast('ไม่สามารถดึงจำนวนคนปัจจุบันได้ กรุณาลองอีกครั้ง');
-                      return;
-                    }
+              <div className="flex items-center gap-2 shrink-0">
+                {!isSpreadsheetMode && (
+                  (!isElecUnit && !isWaterUnit) ? (
+                    templateUsed ? (
+                      <button
+                        type="button"
+                        disabled
+                        className="border border-gray-200 bg-gray-50 text-gray-400 px-2.5 sm:px-4 py-2.5 rounded-xl text-[10px] sm:text-xs font-black flex items-center gap-1 cursor-not-allowed select-none whitespace-nowrap shrink-0"
+                      >
+                        <Sparkles className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-gray-300 shrink-0" />
+                        ใช้แม่แบบแล้ว
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          let freshHouseholdMap = new Map<string, number>();
+                          try {
+                            const res = await httpRequest<{ success: boolean; data: Array<{ roomId: string; currentHouseholdPeopleCount: number }> }>(
+                              'GET',
+                              `/api/v1/meters/workspace/household-counts?billingCycleId=${selectedBillingCycleId}`,
+                              undefined,
+                              { headers: currentDormId ? { 'x-dormitory-id': currentDormId } : {} }
+                            );
+                            if (res?.data && Array.isArray(res.data)) {
+                              res.data.forEach(h => freshHouseholdMap.set(h.roomId, h.currentHouseholdPeopleCount));
+                            }
+                          } catch { }
 
-                    const txt = generateTemplateText(freshHouseholdMap);
-                    setQuickFillText(txt);
-                    setTemplateUsed(true);
-                    setTimeout(() => {
-                      quickFillInputRef.current?.focus();
-                    }, 50);
-                  }}
-                  className="border border-emerald-200 bg-emerald-50/50 hover:bg-emerald-50 text-emerald-600 px-2.5 sm:px-4 py-2.5 rounded-xl text-[10px] sm:text-xs font-black transition-all flex items-center gap-1 cursor-pointer shadow-2xs active:scale-98 whitespace-nowrap shrink-0"
+                          const txt = generateTemplateText('FULL', freshHouseholdMap);
+                          setQuickFillText(txt);
+                          setTemplateUsed(true);
+                          setTimeout(() => {
+                            quickFillInputRef.current?.focus();
+                          }, 50);
+                        }}
+                        className="border border-emerald-200 bg-emerald-50/50 hover:bg-emerald-50 text-emerald-600 px-2.5 sm:px-4 py-2.5 rounded-xl text-[10px] sm:text-xs font-black transition-all flex items-center gap-1 cursor-pointer shadow-2xs active:scale-98 whitespace-nowrap shrink-0"
+                      >
+                        <Sparkles className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-emerald-500 shrink-0" />
+                        ใช้แม่แบบ
+                      </button>
+                    )
+                  ) : (
+                    /* Meter-driven toggle */
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const nextMode = templateMode === 'FULL' ? 'METER_ONLY' : 'FULL';
+                        setTemplateMode(nextMode);
+
+                        let freshHouseholdMap = new Map<string, number>();
+                        try {
+                          const res = await httpRequest<{ success: boolean; data: Array<{ roomId: string; currentHouseholdPeopleCount: number }> }>(
+                            'GET',
+                            `/api/v1/meters/workspace/household-counts?billingCycleId=${selectedBillingCycleId}`,
+                            undefined,
+                            { headers: currentDormId ? { 'x-dormitory-id': currentDormId } : {} }
+                          );
+                          if (res?.data && Array.isArray(res.data)) {
+                            res.data.forEach(h => freshHouseholdMap.set(h.roomId, h.currentHouseholdPeopleCount));
+                          }
+                        } catch { }
+
+                        const txt = generateTemplateText(nextMode, freshHouseholdMap);
+                        setQuickFillText(txt);
+                        setTimeout(() => {
+                          quickFillInputRef.current?.focus();
+                        }, 50);
+                      }}
+                      className="border border-emerald-200 bg-emerald-50/50 hover:bg-emerald-50 text-emerald-600 px-2.5 sm:px-4 py-2.5 rounded-xl text-[10px] sm:text-xs font-black transition-all flex items-center gap-1 cursor-pointer shadow-2xs active:scale-98 whitespace-nowrap shrink-0"
+                    >
+                      <Sparkles className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-emerald-500 shrink-0" />
+                      <span>{templateMode === 'FULL' ? 'แม่แบบ (เฉพาะมิเตอร์)' : 'แม่แบบ (ทั้งหมด)'}</span>
+                    </button>
+                  )
+                )}
+
+                {/* Excel Mode Icon Button */}
+                <button
+                  type="button"
+                  onClick={() => setIsSpreadsheetMode(!isSpreadsheetMode)}
+                  className={`p-2 rounded-xl border transition-all cursor-pointer flex items-center justify-center ${isSpreadsheetMode ? 'bg-emerald-100 border-emerald-300 shadow-2xs' : 'bg-white hover:bg-slate-50 border-gray-200'}`}
+                  title={isSpreadsheetMode ? 'สลับไปยังโหมดข้อความ' : 'สลับไปยังโหมดตาราง Excel'}
                 >
-                  <Sparkles className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-emerald-500 shrink-0" />
-                  ใช้แม่แบบ
+                  <img
+                    src="https://upload.wikimedia.org/wikipedia/commons/thumb/6/60/Microsoft_Office_Excel_%282025%E2%80%93present%29.svg/330px-Microsoft_Office_Excel_%282025%E2%80%93present%29.svg.png"
+                    alt="Excel Mode"
+                    className="w-4 h-4 sm:w-5 sm:h-5 object-contain"
+                  />
                 </button>
-              )}
+              </div>
 
               <div className="flex items-center gap-1.5 flex-nowrap shrink-0">
                 <button
@@ -3773,47 +4009,50 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                   onClick={() => {
                     setIsQuickFillOpen(false);
                     setTemplateUsed(false);
+                    setIsSpreadsheetMode(false);
                   }}
                   className="border border-gray-200 hover:bg-gray-50 text-slate-600 px-2.5 sm:px-4 py-2.5 rounded-xl text-[10px] sm:text-xs font-bold transition-all cursor-pointer active:scale-98 whitespace-nowrap shrink-0"
                 >
-                  ยกเลิก
+                  {isSpreadsheetMode ? 'ปิด' : 'ยกเลิก'}
                 </button>
 
-                {quickFillText.trim() === '' ? (
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      try {
-                        const text = await navigator.clipboard.readText();
-                        if (text) {
-                          setQuickFillText(text);
-                          showToast("วางข้อมูลจากคลิปบอร์ดแล้ว!");
-                        } else {
-                          showToast("คลิปบอร์ดว่างเปล่า หรือกรุณากดวาง (Ctrl+V)");
+                {!isSpreadsheetMode && (
+                  quickFillText.trim() === '' ? (
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          const text = await navigator.clipboard.readText();
+                          if (text) {
+                            setQuickFillText(text);
+                            showToast("วางข้อมูลจากคลิปบอร์ดแล้ว!");
+                          } else {
+                            showToast("คลิปบอร์ดว่างเปล่า หรือกรุณากดวาง (Ctrl+V)");
+                          }
+                          setTimeout(() => {
+                            quickFillInputRef.current?.focus();
+                          }, 50);
+                        } catch (e) {
+                          showToast("กรุณากดวาง (Ctrl+V) ข้อความด้วยตนเอง");
+                          setTimeout(() => {
+                            quickFillInputRef.current?.focus();
+                          }, 50);
                         }
-                        setTimeout(() => {
-                          quickFillInputRef.current?.focus();
-                        }, 50);
-                      } catch (e) {
-                        showToast("กรุณากดวาง (Ctrl+V) ข้อความด้วยตนเอง");
-                        setTimeout(() => {
-                          quickFillInputRef.current?.focus();
-                        }, 50);
-                      }
-                    }}
-                    className="bg-slate-950 hover:bg-slate-900 text-white font-bold text-[10px] sm:text-xs px-3 sm:px-5 py-2.5 rounded-xl transition-all shadow-md shadow-slate-950/10 cursor-pointer active:scale-98 flex items-center gap-1 whitespace-nowrap shrink-0"
-                  >
-                    วางข้อความที่คัดลอก
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    disabled={!isMutationReady}
-                    onClick={handleApplyQuickFill}
-                    className="bg-slate-950 hover:bg-slate-900 disabled:opacity-50 text-white font-bold text-[10px] sm:text-xs px-3 sm:px-5 py-2.5 rounded-xl transition-all shadow-md shadow-slate-950/10 cursor-pointer active:scale-98 flex items-center gap-1 whitespace-nowrap shrink-0"
-                  >
-                    ต่อไป
-                  </button>
+                      }}
+                      className="bg-slate-950 hover:bg-slate-900 text-white font-bold text-[10px] sm:text-xs px-3 sm:px-5 py-2.5 rounded-xl transition-all shadow-md shadow-slate-950/10 cursor-pointer active:scale-98 flex items-center gap-1 whitespace-nowrap shrink-0"
+                    >
+                      วางข้อความที่คัดลอก
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={!isMutationReady}
+                      onClick={handleApplyQuickFill}
+                      className="bg-slate-950 hover:bg-slate-900 disabled:opacity-50 text-white font-bold text-[10px] sm:text-xs px-3 sm:px-5 py-2.5 rounded-xl transition-all shadow-md shadow-slate-950/10 cursor-pointer active:scale-98 flex items-center gap-1 whitespace-nowrap shrink-0"
+                    >
+                      ต่อไป
+                    </button>
+                  )
                 )}
               </div>
             </div>

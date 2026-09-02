@@ -330,6 +330,9 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
   // Form Fields
   const [roomNumber, setRoomNumber] = useState('');
   const [buildingId, setBuildingId] = useState('');
+  const [buildingSearchText, setBuildingSearchText] = useState('');
+  const [isBuildingDropdownOpen, setIsBuildingDropdownOpen] = useState(false);
+  const [inlineBuildingCode, setInlineBuildingCode] = useState<string | null>(null);
   const [floor, setFloor] = useState(1);
   const [monthlyRent, setMonthlyRent] = useState<number | ''>(4500);
   const [termRent, setTermRent] = useState<number | ''>(18000);
@@ -351,6 +354,13 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
     currentVersion?: number;
   } | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const normalizeMoneyValue = (val: string | number | null | undefined): number | '' => {
+    if (val === null || val === undefined || val === '') return '';
+    const cleanStr = String(val).trim().replace(/^0+(?=\d)/, '');
+    const num = parseFloat(cleanStr);
+    return isNaN(num) ? '' : num;
+  };
 
   useEffect(() => {
     if (toastMessage) {
@@ -376,7 +386,10 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
     if (room) {
       setEditingRoom(room);
       setRoomNumber(room.roomNumber);
-      setBuildingId(room.buildingId || '');
+      const curBld = buildings.find(b => b.id === room.buildingId);
+      setBuildingSearchText(curBld ? `${curBld.name} • ชั้น ${curBld.floorCount || 1}` : '');
+      setInlineBuildingCode(null);
+      setIsBuildingDropdownOpen(false);
       setMonthlyRent(room.monthlyRent !== null && room.monthlyRent !== undefined ? room.monthlyRent : 0);
       setTermRent(room.termRent !== null && room.termRent !== undefined ? room.termRent : 0);
       setDailyRent(room.dailyRent !== null && room.dailyRent !== undefined ? room.dailyRent : 0);
@@ -401,9 +414,13 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
 
       const initialDeposit = currentDefaults.defaultDeposit;
       const initialRent = currentDefaults.defaultMonthlyRent;
+      const defBld = buildings[0];
       setEditingRoom(null);
       setRoomNumber('');
-      setBuildingId(buildings[0]?.id || '');
+      setBuildingId(defBld?.id || '');
+      setBuildingSearchText(defBld ? `${defBld.name} • ชั้น ${defBld.floorCount || 1}` : '');
+      setInlineBuildingCode(null);
+      setIsBuildingDropdownOpen(false);
       setFloor(1);
       setMonthlyRent(initialRent);
       setTermRent(initialRent * 4);
@@ -642,7 +659,30 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
         setTimeout(() => setToastMessage(null), 3500);
       } else {
         // Create Room via authoritative backend API
-        const effectiveBuildingId = buildingId || (buildings && buildings[0]?.id ? buildings[0].id : '');
+        let effectiveBuildingId = buildingId;
+        if (!effectiveBuildingId && inlineBuildingCode) {
+          const normCode = inlineBuildingCode.trim().toUpperCase();
+          const existingBld = buildings.find(b => (b.code && b.code.toUpperCase() === normCode) || b.name.toUpperCase() === `อาคาร ${normCode}`.toUpperCase());
+          if (existingBld) {
+            effectiveBuildingId = existingBld.id;
+          } else {
+            const createBldRes = await dataProvider.dormitory.addBuilding({
+              name: `อาคาร ${normCode}`,
+              code: normCode,
+              floorCount: 1,
+            } as any);
+            if (!createBldRes.success || !createBldRes.data) {
+              setErrorText(createBldRes.error?.message || 'ไม่สามารถสร้างอาคารใหม่ได้');
+              setIsSubmitting(false);
+              return;
+            }
+            effectiveBuildingId = createBldRes.data.id;
+            buildings.push(createBldRes.data);
+          }
+        }
+        if (!effectiveBuildingId) {
+          effectiveBuildingId = buildings && buildings[0]?.id ? buildings[0].id : '';
+        }
         if (!effectiveBuildingId) {
           setErrorText('ไม่พบข้อมูลอาคารในหอพักนี้ กรุณาสร้างอาคารก่อนเพิ่มห้องพัก');
           setIsSubmitting(false);
@@ -656,12 +696,12 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
           roomType: 'standard',
           status: effectiveStatus,
           rentCycle,
-          monthlyRent: monthlyRent === '' ? null : String(monthlyRent),
-          termRent: termRent === '' ? null : String(termRent),
-          dailyRent: dailyRent === '' ? null : String(dailyRent),
-          termDeposit: termDeposit === '' ? null : String(termDeposit),
-          monthlyDeposit: monthlyDeposit === '' ? null : String(monthlyDeposit),
-          dailyDeposit: dailyDeposit === '' ? null : String(dailyDeposit),
+          monthlyRent: monthlyRent === '' ? null : String(normalizeMoneyValue(monthlyRent)),
+          termRent: termRent === '' ? null : String(normalizeMoneyValue(termRent)),
+          dailyRent: dailyRent === '' ? null : String(normalizeMoneyValue(dailyRent)),
+          termDeposit: termDeposit === '' ? null : String(normalizeMoneyValue(termDeposit)),
+          monthlyDeposit: monthlyDeposit === '' ? null : String(normalizeMoneyValue(monthlyDeposit)),
+          dailyDeposit: dailyDeposit === '' ? null : String(normalizeMoneyValue(dailyDeposit)),
           maximumOccupants: Number(maxOccupants) || 2,
           initialWaterReading: String(initialWaterMeter || 0),
           initialElectricityReading: String(initialElectricMeter || 0),
@@ -1996,6 +2036,88 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
         }
       >
         <form id="room-edit-form" onSubmit={handleSave} className="space-y-4">
+          {/* Building Selection Combobox */}
+          <div className="space-y-1 relative">
+            <label className="block text-xs font-bold text-slate-700">อาคาร *</label>
+            {editingRoom ? (
+              <div className="w-full px-3 py-2 text-xs border border-gray-200 rounded-xl bg-slate-100 text-slate-500 font-bold select-none cursor-not-allowed">
+                {(() => {
+                  const bld = buildings.find(b => b.id === (editingRoom.buildingId || buildingId));
+                  return bld ? `${bld.name} • ชั้น ${bld.floorCount || 1}` : 'อาคารหลัก';
+                })()}
+              </div>
+            ) : (
+              <div className="relative">
+                <input
+                  type="text"
+                  required
+                  value={buildingSearchText}
+                  onFocus={() => setIsBuildingDropdownOpen(true)}
+                  onChange={(e) => {
+                    setErrorText(null);
+                    const raw = e.target.value;
+                    setBuildingSearchText(raw);
+                    setIsBuildingDropdownOpen(true);
+                    const cleanCode = raw.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+                    const matched = buildings.find(b => (b.code && b.code.toUpperCase() === cleanCode) || b.name.toLowerCase() === raw.trim().toLowerCase() || b.name.toUpperCase() === `อาคาร ${cleanCode}`.toUpperCase());
+                    if (matched) {
+                      setBuildingId(matched.id);
+                      setInlineBuildingCode(null);
+                    } else if (cleanCode.length > 0) {
+                      setBuildingId('');
+                      setInlineBuildingCode(cleanCode);
+                    } else {
+                      setBuildingId('');
+                      setInlineBuildingCode(null);
+                    }
+                  }}
+                  onBlur={() => {
+                    setTimeout(() => setIsBuildingDropdownOpen(false), 200);
+                    if (inlineBuildingCode) {
+                      setBuildingSearchText(`อาคาร ${inlineBuildingCode} • ชั้น 1`);
+                    }
+                  }}
+                  placeholder="เลือกอาคาร หรือพิมพ์รหัสอาคารใหม่ เช่น C"
+                  className="w-full px-3 py-2 text-xs border border-gray-200 rounded-xl bg-white text-slate-800 font-bold focus:border-indigo-600 focus:outline-none"
+                />
+                {isBuildingDropdownOpen && (
+                  <div className="absolute z-20 top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg max-h-48 overflow-y-auto py-1">
+                    {buildings.map((b) => (
+                      <button
+                        key={b.id}
+                        type="button"
+                        onMouseDown={() => {
+                          setBuildingId(b.id);
+                          setInlineBuildingCode(null);
+                          setBuildingSearchText(`${b.name} • ชั้น ${b.floorCount || 1}`);
+                          setIsBuildingDropdownOpen(false);
+                        }}
+                        className="w-full text-left px-3 py-2 text-xs font-bold text-slate-700 hover:bg-indigo-50 hover:text-indigo-600 cursor-pointer flex items-center justify-between"
+                      >
+                        <span>{b.name} • ชั้น {b.floorCount || 1}</span>
+                        {b.code && <span className="text-[10px] text-slate-400">รหัส: {b.code}</span>}
+                      </button>
+                    ))}
+                    {inlineBuildingCode && !buildings.some(b => b.code?.toUpperCase() === inlineBuildingCode || b.name.toUpperCase() === `อาคาร ${inlineBuildingCode}`.toUpperCase()) && (
+                      <button
+                        type="button"
+                        onMouseDown={() => {
+                          setBuildingId('');
+                          setBuildingSearchText(`อาคาร ${inlineBuildingCode} • ชั้น 1`);
+                          setIsBuildingDropdownOpen(false);
+                        }}
+                        className="w-full text-left px-3 py-2 text-xs font-bold text-indigo-600 bg-indigo-50/50 hover:bg-indigo-100 cursor-pointer flex items-center gap-1.5"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>สร้างอาคารใหม่: <strong>อาคาร {inlineBuildingCode} • ชั้น 1</strong></span>
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1">
               <label className="block text-xs font-bold text-slate-700">เลขที่ห้องพัก *</label>
@@ -2046,7 +2168,8 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                   type="number"
                   min={0}
                   value={termRent}
-                  onChange={(e) => setTermRent(e.target.value === '' ? '' : Number(e.target.value))}
+                  onChange={(e) => setTermRent(e.target.value === '' ? '' : (e.target.value as any))}
+                  onBlur={(e) => setTermRent(normalizeMoneyValue(e.target.value))}
                   placeholder="เช่น 18000"
                   className="w-full px-3 py-2 text-xs border border-gray-200 rounded-xl bg-white font-bold"
                 />
@@ -2058,7 +2181,8 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                   required
                   min={0}
                   value={monthlyRent}
-                  onChange={(e) => setMonthlyRent(e.target.value === '' ? '' : Number(e.target.value))}
+                  onChange={(e) => setMonthlyRent(e.target.value === '' ? '' : (e.target.value as any))}
+                  onBlur={(e) => setMonthlyRent(normalizeMoneyValue(e.target.value))}
                   placeholder="เช่น 4500"
                   className="w-full px-3 py-2 text-xs border border-gray-200 rounded-xl bg-white font-bold"
                 />
@@ -2069,7 +2193,8 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                   type="number"
                   min={0}
                   value={dailyRent}
-                  onChange={(e) => setDailyRent(e.target.value === '' ? '' : Number(e.target.value))}
+                  onChange={(e) => setDailyRent(e.target.value === '' ? '' : (e.target.value as any))}
+                  onBlur={(e) => setDailyRent(normalizeMoneyValue(e.target.value))}
                   placeholder="เช่น 500"
                   className="w-full px-3 py-2 text-xs border border-gray-200 rounded-xl bg-white font-bold"
                 />
@@ -2092,7 +2217,8 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                   type="number"
                   min={0}
                   value={termDeposit}
-                  onChange={(e) => setTermDeposit(e.target.value === '' ? '' : Number(e.target.value))}
+                  onChange={(e) => setTermDeposit(e.target.value === '' ? '' : (e.target.value as any))}
+                  onBlur={(e) => setTermDeposit(normalizeMoneyValue(e.target.value))}
                   placeholder="เช่น 9000"
                   className="w-full px-3 py-2 text-xs border border-gray-200 rounded-xl bg-white font-bold text-slate-800 focus:border-indigo-600 focus:outline-none"
                 />
@@ -2103,7 +2229,8 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                   type="number"
                   min={0}
                   value={monthlyDeposit}
-                  onChange={(e) => setMonthlyDeposit(e.target.value === '' ? '' : Number(e.target.value))}
+                  onChange={(e) => setMonthlyDeposit(e.target.value === '' ? '' : (e.target.value as any))}
+                  onBlur={(e) => setMonthlyDeposit(normalizeMoneyValue(e.target.value))}
                   placeholder="เช่น 9000"
                   className="w-full px-3 py-2 text-xs border border-gray-200 rounded-xl bg-white font-bold text-slate-800 focus:border-indigo-600 focus:outline-none"
                 />
@@ -2114,7 +2241,8 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                   type="number"
                   min={0}
                   value={dailyDeposit}
-                  onChange={(e) => setDailyDeposit(e.target.value === '' ? '' : Number(e.target.value))}
+                  onChange={(e) => setDailyDeposit(e.target.value === '' ? '' : (e.target.value as any))}
+                  onBlur={(e) => setDailyDeposit(normalizeMoneyValue(e.target.value))}
                   placeholder="เช่น 1000"
                   className="w-full px-3 py-2 text-xs border border-gray-200 rounded-xl bg-white font-bold text-slate-800 focus:border-indigo-600 focus:outline-none"
                 />

@@ -157,7 +157,12 @@ export async function createDepositBillForAgreementInTx(
       billId: bill.id,
       amount: formatDecimal(depAmtDec),
       userId: safeActorId,
-      paymentDate: now,
+      paymentDate: isPreGoLive ? null : now,
+      metadata: isPreGoLive ? {
+        isHistoricalImport: true,
+        originalPaymentDateKnown: false,
+        importedAt: now.toISOString(),
+      } : undefined,
     });
 
     return await tx.bill.findUnique({

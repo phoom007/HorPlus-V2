@@ -604,6 +604,46 @@ export function createPaymentRouter(authService: AuthenticationService) {
     }
   });
 
+  // Owner: Record Combined Cash for multiple bills (Same Tenant + Same Room)
+  router.post('/cash/combined', requireAuth, requireDormitoryPermission('payment:write'), requireDormitoryWriteEntitlement, requireCsrf, async (req, res) => {
+    try {
+      const auth = (req as any).auth;
+      const context = (req as any).dormitoryContext || (await resolveAuthoritativeDormitoryContext(req));
+      const dormitoryId = context.dormitoryId;
+
+      if (!ensureOwnerOrManager(req, res, dormitoryId)) {
+        return res.status(403).json({
+          error: {
+            code: 'FORBIDDEN',
+            message: 'ไม่มีสิทธิ์บันทึกการรับเงินสด',
+            requestId: (req.headers['x-request-id'] as string) || (req as any).id || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+
+      const schema = z.object({
+        billIds: z.array(z.string()).min(1),
+        amount: z.string().optional(),
+      });
+      const data = schema.parse(req.body);
+
+      const idempotencyKey = (req.headers['x-idempotency-key'] || req.headers['idempotency-key']) as string | undefined;
+
+      const result = await paymentService.recordCombinedCash({
+        dormitoryId,
+        billIds: data.billIds,
+        amount: data.amount,
+        userId: auth.userId,
+        idempotencyKey,
+      });
+
+      res.json(result);
+    } catch (err: any) {
+      handlePaymentError(res, req, err);
+    }
+  });
+
   // Owner: Approve
   router.post('/:paymentId/approve', requireAuth, requireDormitoryPermission('payment:write'), requireDormitoryWriteEntitlement, requireCsrf, async (req, res) => {
     try {

@@ -476,7 +476,7 @@ model Room {
   provisionalRentalTerms    ProvisionalRentalTerm[]
   dailyStays                DailyStay[]
 
-  @@unique([dormitoryId, normalizedRoomNumber], map: "dormitory_normalized_room_number_unique")
+  @@unique([dormitoryId, buildingId, normalizedRoomNumber], map: "dormitory_building_normalized_room_number_unique")
   @@map("rooms")
 }
 
@@ -1136,7 +1136,7 @@ model Payment {
   method           String    @db.VarChar(50)
   amount           Decimal   @db.Decimal(12, 2)
   status           String    @default("PENDING") @db.VarChar(50)
-  paymentDate      DateTime  @map("payment_date") @db.Timestamptz()
+  paymentDate      DateTime? @map("payment_date") @db.Timestamptz()
   evidenceUrl      String?   @map("evidence_url") @db.Text
   fileHash         String?   @unique @map("file_hash") @db.VarChar(255)
   reviewedByUserId String?   @map("reviewed_by_user_id") @db.Uuid

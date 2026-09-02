@@ -68,7 +68,7 @@ export function resolveBillLateFeeEffectiveAsOfInTx(
       id: string;
       status: string;
       method: string;
-      paymentDate: Date;
+      paymentDate?: Date | null;
       verification?: {
         status?: string | null;
         provider?: string | null;

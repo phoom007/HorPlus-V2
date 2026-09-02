@@ -20,7 +20,9 @@ import {
   createDepositBillForAgreementInTx,
   createImmediateRentBillForAgreementInTx,
   toBangkokDateString,
+  generateNextBillNumberInTx,
 } from '../utils/deposit-billing.util.js';
+import { generateReceiptInTx } from '../utils/payment-transaction.util.js';
 
 export interface CreateProvisionalRentalTermDto {
   roomId: string;
@@ -351,46 +353,300 @@ export class ProvisionalRentalTermService {
         actorUserId: userId,
       });
 
-      // 3.7. Durable Pre-HorPlus Migration Markers (Auditable, creates NO Bill/Payment/Receipt)
+      // 3.7. Historical Pre-HorPlus Rent & Deposit Records (Real Financial Rows)
+      const recordedPeriods: string[] = [];
+      const recordedInstallments: number[] = [];
       const earliestCycle = await tx.billingCycle.findFirst({
         where: { dormitoryId },
         orderBy: { periodStart: 'asc' },
       });
 
-      let validPreGoLivePeriods: string[] = [];
-      let validPreGoLiveInstallments: number[] = [];
-
       if (earliestCycle) {
         const earliestPeriodStartStr = toBangkokDateString(new Date(earliestCycle.periodStart));
+        const unitRentDec = new Prisma.Decimal(formatDecimal(provisionalTerm.unitRentAmount || '0.00'));
+        const safeUserId = userId && /^[0-9a-fA-F-]{36}$/.test(userId) ? userId : null;
+        const now = new Date();
 
-        if (data.rentalType === 'MONTHLY' && Array.isArray(data.migratedPaidPeriods)) {
-          validPreGoLivePeriods = data.migratedPaidPeriods.filter((p) => {
-            const pMonthStart = `${p}-01`;
-            return pMonthStart < earliestPeriodStartStr && pMonthStart >= data.startDate.slice(0, 7) + '-01';
-          });
-        } else if (data.rentalType === 'TERM' && Array.isArray(data.migratedPaidInstallments)) {
-          const startYear = parseInt(data.startDate.slice(0, 4), 10);
-          const startMonth = parseInt(data.startDate.slice(5, 7), 10);
+        const formatThaiPeriodLabel = (periodStr: string): string => {
+          const parts = periodStr.split('-');
+          if (parts.length < 2) return periodStr;
+          const year = parseInt(parts[0], 10);
+          const month = parts[1];
+          const thaiYear = ((year + 543) % 100).toString().padStart(2, '0');
+          const monthNames: Record<string, string> = {
+            '01': 'ม.ค.', '02': 'ก.พ.', '03': 'มี.ค.', '04': 'เม.ย.',
+            '05': 'พ.ค.', '06': 'มิ.ย.', '07': 'ก.ค.', '08': 'ส.ค.',
+            '09': 'ก.ย.', '10': 'ต.ค.', '11': 'พ.ย.', '12': 'ธ.ค.'
+          };
+          const mName = monthNames[month] || month;
+          return `${mName} ${thaiYear}`;
+        };
 
-          validPreGoLiveInstallments = data.migratedPaidInstallments.filter((instNo) => {
-            if (instNo < 1 || (termInstallmentCount && instNo > termInstallmentCount)) return false;
-            const instDate = new Date(Date.UTC(startYear, startMonth - 1 + (instNo - 1), 1));
-            const instMonthStr = instDate.toISOString().slice(0, 10);
-            return instMonthStr < earliestPeriodStartStr;
-          });
+        if (unitRentDec.greaterThan(0)) {
+          if (data.rentalType === 'MONTHLY') {
+            const startYear = parseInt(data.startDate.slice(0, 4), 10);
+            const startMonth = parseInt(data.startDate.slice(5, 7), 10);
+            const duration = data.durationMonths || 12;
+
+            for (let i = 0; i < duration; i++) {
+              const pDate = new Date(Date.UTC(startYear, startMonth - 1 + i, 1));
+              const pStr = pDate.toISOString().slice(0, 7);
+              const pStartStr = `${pStr}-01`;
+              if (pStartStr >= earliestPeriodStartStr) {
+                break;
+              }
+
+              const isPaid = Array.isArray(data.migratedPaidPeriods) && data.migratedPaidPeriods.includes(pStr);
+              const pLabel = formatThaiPeriodLabel(pStr);
+              const billNumber = await generateNextBillNumberInTx(tx, dormitoryId, earliestCycle.cycleCode);
+
+              const bill = await tx.bill.create({
+                data: {
+                  dormitoryId,
+                  billingCycleId: earliestCycle.id,
+                  roomId: data.roomId,
+                  tenantId: tenant.id,
+                  provisionalRentalTermId: provisionalTerm.id,
+                  billKind: 'RENT',
+                  billNumber,
+                  status: isPaid ? 'PAID' : 'ISSUED',
+                  billingDate: new Date(earliestCycle.periodStart),
+                  dueDate: earliestCycle.dueDate ? new Date(earliestCycle.dueDate) : new Date(earliestCycle.periodStart),
+                  subtotal: unitRentDec,
+                  totalAmount: unitRentDec,
+                  paidAmount: isPaid ? unitRentDec : new Prisma.Decimal('0.00'),
+                  outstandingAmount: isPaid ? new Prisma.Decimal('0.00') : unitRentDec,
+                  paidAt: isPaid ? now : null,
+                  generatedByUserId: safeUserId,
+                  generatedAt: now,
+                  items: {
+                    create: [
+                      {
+                        dormitoryId,
+                        type: 'rent',
+                        description: `ค่าเช่าห้องพัก ${pLabel}`,
+                        amount: unitRentDec,
+                        unitPrice: unitRentDec,
+                        quantity: new Prisma.Decimal('1.00'),
+                        metadata: {
+                          isHistoricalImport: true,
+                          originalPeriod: pStr,
+                          originalPeriodLabel: pLabel,
+                          originalPaymentDateKnown: false,
+                          importedAt: now.toISOString(),
+                        },
+                      },
+                    ],
+                  },
+                },
+              });
+
+              if (isPaid) {
+                recordedPeriods.push(pStr);
+                const group = await tx.combinedPaymentGroup.create({
+                  data: {
+                    dormitoryId,
+                    tenantId: tenant.id,
+                    totalAmount: unitRentDec,
+                    method: 'CASH',
+                    status: 'APPROVED',
+                    paymentDate: now,
+                    recordedByUserId: safeUserId,
+                    notes: `ประวัติการชำระเงินก่อนเริ่มใช้ HorPlus • ${pLabel}`,
+                  },
+                });
+
+                await tx.combinedPaymentGroupBillTarget.create({
+                  data: {
+                    dormitoryId,
+                    paymentGroupId: group.id,
+                    billId: bill.id,
+                    targetOrder: 1,
+                  },
+                });
+
+                const payment = await tx.payment.create({
+                  data: {
+                    dormitoryId,
+                    billId: bill.id,
+                    tenantId: tenant.id,
+                    paymentGroupId: group.id,
+                    method: 'CASH',
+                    amount: unitRentDec,
+                    status: 'APPROVED',
+                    paymentDate: null,
+                    reviewedByUserId: safeUserId,
+                    reviewedAt: now,
+                    metadata: {
+                      isHistoricalImport: true,
+                      originalPeriod: pStr,
+                      originalPeriodLabel: pLabel,
+                      originalPaymentDateKnown: false,
+                      importedAt: now.toISOString(),
+                    },
+                  },
+                });
+
+                await tx.paymentAllocation.create({
+                  data: {
+                    dormitoryId,
+                    paymentId: payment.id,
+                    billId: bill.id,
+                    allocatedAmount: unitRentDec,
+                  },
+                });
+
+                await generateReceiptInTx(
+                  tx,
+                  payment.id,
+                  dormitoryId,
+                  bill.id,
+                  safeUserId,
+                  group.id,
+                  new Prisma.Decimal(unitRentDec.toString()) as any
+                );
+              }
+            }
+          } else if (data.rentalType === 'TERM') {
+            const startYear = parseInt(data.startDate.slice(0, 4), 10);
+            const startMonth = parseInt(data.startDate.slice(5, 7), 10);
+            const instCount = termInstallmentCount || 1;
+
+            for (let instNo = 1; instNo <= instCount; instNo++) {
+              const instDate = new Date(Date.UTC(startYear, startMonth - 1 + (instNo - 1), 1));
+              const instMonthStr = instDate.toISOString().slice(0, 10);
+              if (instMonthStr >= earliestPeriodStartStr) {
+                break;
+              }
+
+              const pStr = instDate.toISOString().slice(0, 7);
+              const pLabel = `งวดที่ ${instNo} (${formatThaiPeriodLabel(pStr)})`;
+              const isPaid = Array.isArray(data.migratedPaidInstallments) && data.migratedPaidInstallments.includes(instNo);
+              const billNumber = await generateNextBillNumberInTx(tx, dormitoryId, earliestCycle.cycleCode);
+
+              const bill = await tx.bill.create({
+                data: {
+                  dormitoryId,
+                  billingCycleId: earliestCycle.id,
+                  roomId: data.roomId,
+                  tenantId: tenant.id,
+                  provisionalRentalTermId: provisionalTerm.id,
+                  billKind: 'RENT',
+                  billNumber,
+                  status: isPaid ? 'PAID' : 'ISSUED',
+                  billingDate: new Date(earliestCycle.periodStart),
+                  dueDate: earliestCycle.dueDate ? new Date(earliestCycle.dueDate) : new Date(earliestCycle.periodStart),
+                  subtotal: unitRentDec,
+                  totalAmount: unitRentDec,
+                  paidAmount: isPaid ? unitRentDec : new Prisma.Decimal('0.00'),
+                  outstandingAmount: isPaid ? new Prisma.Decimal('0.00') : unitRentDec,
+                  paidAt: isPaid ? now : null,
+                  generatedByUserId: safeUserId,
+                  generatedAt: now,
+                  items: {
+                    create: [
+                      {
+                        dormitoryId,
+                        type: 'rent',
+                        description: `ค่าเช่าห้องพัก ${pLabel}`,
+                        amount: unitRentDec,
+                        unitPrice: unitRentDec,
+                        quantity: new Prisma.Decimal('1.00'),
+                        metadata: {
+                          isHistoricalImport: true,
+                          originalPeriod: pStr,
+                          originalPeriodLabel: pLabel,
+                          originalPaymentDateKnown: false,
+                          importedAt: now.toISOString(),
+                        },
+                      },
+                    ],
+                  },
+                },
+              });
+
+              if (isPaid) {
+                recordedInstallments.push(instNo);
+                const group = await tx.combinedPaymentGroup.create({
+                  data: {
+                    dormitoryId,
+                    tenantId: tenant.id,
+                    totalAmount: unitRentDec,
+                    method: 'CASH',
+                    status: 'APPROVED',
+                    paymentDate: now,
+                    recordedByUserId: safeUserId,
+                    notes: `ประวัติการชำระเงินก่อนเริ่มใช้ HorPlus • ${pLabel}`,
+                  },
+                });
+
+                await tx.combinedPaymentGroupBillTarget.create({
+                  data: {
+                    dormitoryId,
+                    paymentGroupId: group.id,
+                    billId: bill.id,
+                    targetOrder: 1,
+                  },
+                });
+
+                const payment = await tx.payment.create({
+                  data: {
+                    dormitoryId,
+                    billId: bill.id,
+                    tenantId: tenant.id,
+                    paymentGroupId: group.id,
+                    method: 'CASH',
+                    amount: unitRentDec,
+                    status: 'APPROVED',
+                    paymentDate: null,
+                    reviewedByUserId: safeUserId,
+                    reviewedAt: now,
+                    metadata: {
+                      isHistoricalImport: true,
+                      originalPeriod: pStr,
+                      originalPeriodLabel: pLabel,
+                      originalPaymentDateKnown: false,
+                      importedAt: now.toISOString(),
+                    },
+                  },
+                });
+
+                await tx.paymentAllocation.create({
+                  data: {
+                    dormitoryId,
+                    paymentId: payment.id,
+                    billId: bill.id,
+                    allocatedAmount: unitRentDec,
+                  },
+                });
+
+                await generateReceiptInTx(
+                  tx,
+                  payment.id,
+                  dormitoryId,
+                  bill.id,
+                  safeUserId,
+                  group.id,
+                  new Prisma.Decimal(unitRentDec.toString()) as any
+                );
+              }
+            }
+          }
         }
 
-        if (validPreGoLivePeriods.length > 0 || validPreGoLiveInstallments.length > 0) {
+        if (recordedPeriods.length > 0 || recordedInstallments.length > 0) {
           await tx.auditLog.create({
             data: {
               dormitoryId,
-              actorUserId: userId && /^[0-9a-fA-F-]{36}$/.test(userId) ? userId : null,
+              actorUserId: safeUserId,
+              action: 'MIGRATION_HISTORICAL_PAID_MARKERS',
               entityType: 'PROVISIONAL_RENTAL_TERM',
               entityId: provisionalTerm.id,
-              action: 'MIGRATION_HISTORICAL_PAID_MARKERS',
               afterValues: {
-                periods: validPreGoLivePeriods,
-                installments: validPreGoLiveInstallments,
+                roomId: data.roomId,
+                tenantId: tenant.id,
+                migratedPaidPeriods: recordedPeriods,
+                migratedPaidInstallments: recordedInstallments,
               },
             },
           });
@@ -442,8 +698,8 @@ export class ProvisionalRentalTermService {
         occupancy,
         provisionalTerm,
         migratedPaidMarkers: {
-          periods: validPreGoLivePeriods,
-          installments: validPreGoLiveInstallments,
+          periods: recordedPeriods,
+          installments: recordedInstallments,
         },
       };
     });
