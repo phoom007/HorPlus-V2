@@ -806,19 +806,33 @@ export class DormitoryProvisioningService {
         });
       }
 
-      // Save Dormitory Property Defaults (Step 5 Rules & Pet Policy)
+      // Save Dormitory Property Defaults (Step 5 Rules & Pet Policy, plus defaultDeposit / default rents if provided)
       const resolvedTerms = params.defaultTerms || (typeof params.rules === 'string' ? params.rules : null);
       const resolvedPetPolicy = params.petPolicy || { allowed: 'none', allowedTypes: [] };
+      const rawDefaultDeposit = (params as any).defaultDeposit !== undefined ? (params as any).defaultDeposit : (params as any).deposits?.securityDeposit;
+      const defaultDepositVal = (rawDefaultDeposit !== undefined && rawDefaultDeposit !== null && rawDefaultDeposit !== '' && !isNaN(Number(rawDefaultDeposit)))
+        ? String(rawDefaultDeposit)
+        : undefined;
+
+      const rawDefaultMonthly = (params as any).defaultMonthlyRent;
+      const defaultMonthlyVal = (rawDefaultMonthly !== undefined && rawDefaultMonthly !== null && rawDefaultMonthly !== '' && !isNaN(Number(rawDefaultMonthly)))
+        ? String(rawDefaultMonthly)
+        : undefined;
+
       await tx.dormitoryPropertyDefaults.upsert({
         where: { dormitoryId: dormId },
         create: {
           dormitoryId: dormId,
           defaultTerms: resolvedTerms,
           petPolicy: resolvedPetPolicy,
+          ...(defaultDepositVal !== undefined ? { defaultDeposit: defaultDepositVal } : {}),
+          ...(defaultMonthlyVal !== undefined ? { defaultMonthlyRent: defaultMonthlyVal } : {}),
         },
         update: {
           defaultTerms: resolvedTerms !== null ? resolvedTerms : undefined,
           petPolicy: resolvedPetPolicy,
+          ...(defaultDepositVal !== undefined ? { defaultDeposit: defaultDepositVal } : {}),
+          ...(defaultMonthlyVal !== undefined ? { defaultMonthlyRent: defaultMonthlyVal } : {}),
           updatedAt: now,
         },
       });
@@ -844,15 +858,17 @@ export class DormitoryProvisioningService {
       // Save Buildings and Rooms if provided (idempotent upsert)
       if (buildings && buildings.length > 0) {
         for (const b of buildings) {
-          const bMonthlyStr = (b.monthlyRent !== undefined && b.monthlyRent !== null) ? String(b.monthlyRent) : null;
-          const bDailyStr = (b.dailyRent !== undefined && b.dailyRent !== null) ? String(b.dailyRent) : null;
-          const bTermStr = (b.termRent !== undefined && b.termRent !== null) ? String(b.termRent) : null;
+          const bMonthlyStr = (b.monthlyRent !== undefined && b.monthlyRent !== null && String(b.monthlyRent) !== '') ? String(b.monthlyRent) : null;
+          const bDailyStr = (b.dailyRent !== undefined && b.dailyRent !== null && String(b.dailyRent) !== '') ? String(b.dailyRent) : null;
+          const bTermStr = (b.termRent !== undefined && b.termRent !== null && String(b.termRent) !== '') ? String(b.termRent) : null;
           const bTermMonths = b.termMonths ?? 4;
           const bMaxInstallments = (b.maxInstallmentMonths !== undefined && b.maxInstallmentMonths !== null)
             ? Math.max(1, Math.min(12, Number(b.maxInstallmentMonths)))
             : 2;
-          const bDepositNum = b.depositAmount !== undefined ? b.depositAmount : b.securityDeposit;
-          const bDepositStr = (bDepositNum !== undefined && bDepositNum !== null) ? String(bDepositNum) : null;
+          const bDepositNum = (b.depositAmount !== undefined && b.depositAmount !== null && String(b.depositAmount) !== '')
+            ? b.depositAmount
+            : ((b.securityDeposit !== undefined && b.securityDeposit !== null && String(b.securityDeposit) !== '') ? b.securityDeposit : null);
+          const bDepositStr = bDepositNum !== null ? String(bDepositNum) : null;
           const bMaxOcc = b.maximumOccupants ?? 2;
           const bNumPattern = b.numberingPattern || b.formatPattern || null;
 
@@ -903,7 +919,7 @@ export class DormitoryProvisioningService {
           for (const r of matchingRooms) {
             const normalizedRoomNumber = normalizeRoomIdentifier(r.roomNumber);
 
-            const rMonthlyStr = (r.monthlyRent !== undefined && r.monthlyRent !== null) ? String(r.monthlyRent) : (bMonthlyStr || '0');
+            const rMonthlyStr = (r.monthlyRent !== undefined && r.monthlyRent !== null) ? String(r.monthlyRent) : (bMonthlyStr !== null ? bMonthlyStr : null);
             const rDailyStr = (r.dailyRent !== undefined && r.dailyRent !== null) ? String(r.dailyRent) : bDailyStr;
             const rTermStr = (r.termRent !== undefined && r.termRent !== null) ? String(r.termRent) : bTermStr;
             const rTermMonths = r.termMonths ?? bTermMonths;

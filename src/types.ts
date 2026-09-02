@@ -78,6 +78,10 @@ export interface Building {
   termRent?: number;
   dailyRent?: number;
   depositAmount?: number;
+  monthlyDeposit?: number;
+  termDeposit?: number;
+  dailyDeposit?: number;
+  securityDeposit?: number;
   version?: number;
   createdAt: string;
   updatedAt: string;

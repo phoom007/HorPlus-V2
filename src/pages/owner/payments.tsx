@@ -1679,21 +1679,28 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
               .map(item => {
                 return (
                   <div key={item.id} className="bg-white rounded-3xl border border-amber-200 shadow-2xs hover:shadow-md transition-all p-5 flex flex-col justify-between space-y-4">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xl font-black text-slate-900">ห้อง {item.roomNum}</span>
-                      <div className="flex items-center gap-1.5 shrink-0">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xl font-black text-slate-900 shrink-0">ห้อง {item.roomNum}</span>
+                      <div className="flex items-center gap-1.5 shrink-0 flex-nowrap">
                         {item.isGroup ? (
-                          <span className="inline-flex whitespace-nowrap shrink-0 px-2.5 py-0.5 bg-purple-50 text-purple-700 border border-purple-200 font-bold rounded-full text-[10px]">
-                            รวม {item.affectedOrigins.length} บิล
-                          </span>
+                          <>
+                            {item.affectedOrigins[0]?.cycleLabel && (
+                              <span className="inline-flex whitespace-nowrap shrink-0 px-2.5 py-0.5 bg-indigo-50 text-indigo-700 border border-indigo-100 font-bold rounded-full text-[10px]">
+                                งวด {item.affectedOrigins[0].cycleLabel}
+                              </span>
+                            )}
+                            <span className="inline-flex whitespace-nowrap shrink-0 px-2.5 py-0.5 bg-purple-50 text-purple-700 border border-purple-200 font-bold rounded-full text-[10px]">
+                              รวม {item.affectedOrigins.length} บิล
+                            </span>
+                          </>
                         ) : (
                           <span className="inline-flex whitespace-nowrap shrink-0 px-2.5 py-0.5 bg-indigo-50 text-indigo-700 border border-indigo-100 font-bold rounded-full text-[10px]">
                             {item.affectedOrigins[0]?.cycleLabel ? `งวด ${item.affectedOrigins[0].cycleLabel}` : 'ไม่พบข้อมูลงวดบิล'}
                           </span>
                         )}
                         <span className="inline-flex whitespace-nowrap shrink-0 px-3 py-1 bg-amber-50 text-amber-800 border border-amber-200 font-extrabold rounded-full text-[11px] items-center gap-1">
-                          <Clock className="w-3.5 h-3.5 text-amber-600" />
-                          รอตรวจสลิป
+                          <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                          <span>รอตรวจสลิป</span>
                         </span>
                       </div>
                     </div>
@@ -1722,19 +1729,16 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                       </div>
                     )}
 
-                    <div className="flex items-baseline justify-between pt-1 border-t border-slate-100">
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-xs text-slate-400 font-bold">ยอดรอตรวจสอบ</span>
-                        {item.affectedOrigins[0]?.bill && (
-                          <button
-                            type="button"
-                            onClick={() => setViewingBillDetail({ bill: item.affectedOrigins[0].bill, tenantName: item.tenantName, roomNum: item.roomNum })}
-                            className="text-[10px] text-indigo-600 hover:underline font-semibold cursor-pointer"
-                          >
-                            (ดูรายการ)
-                          </button>
-                        )}
-                      </div>
+                    <div
+                      onClick={() => {
+                        if (item.affectedOrigins[0]?.bill) {
+                          setViewingBillDetail({ bill: item.affectedOrigins[0].bill, tenantName: item.tenantName, roomNum: item.roomNum });
+                        }
+                      }}
+                      className={`flex items-baseline justify-between pt-1 border-t border-slate-100 ${item.affectedOrigins[0]?.bill ? 'cursor-pointer hover:opacity-80 transition-opacity' : ''}`}
+                      title={item.affectedOrigins[0]?.bill ? 'คลิกเพื่อดูรายละเอียดบิล' : undefined}
+                    >
+                      <span className="text-xs text-slate-400 font-bold">ยอดรอตรวจสอบ</span>
                       <span className="text-lg font-black text-indigo-600">{formatBaht(item.totalAmount)}</span>
                     </div>
 

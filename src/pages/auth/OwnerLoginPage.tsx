@@ -37,6 +37,54 @@ export const OwnerLoginPage: React.FC<OwnerLoginPageProps> = ({ onLoginSuccess }
 
   const ownerUser = initialUsers.find(u => u.roleId === 'role-owner') || initialUsers[0];
 
+  const loadCanonicalDormitories = async () => {
+    try {
+      // 1. Canonical authenticated GET /api/v1/dormitories provides authoritative hasLogo & logoUrl
+      const dormRes = await fetch('/api/v1/dormitories', { credentials: 'include' });
+      if (dormRes.ok) {
+        const dormJson = await dormRes.json();
+        const dorms = dormJson.data || [];
+        if (dorms.length >= 1) {
+          const mapped = dorms.map((d: any) => ({
+            id: d.id,
+            dormitoryId: d.id,
+            dormitoryName: d.name,
+            name: d.name,
+            code: d.code,
+            type: d.type,
+            roleCode: d.roleCode || 'OWNER',
+            status: d.status || 'Active',
+            hasLogo: d.hasLogo,
+            logoUrl: d.logoUrl,
+          }));
+          setUserMemberships(mapped);
+          setShowPicker(true);
+          return mapped;
+        }
+      }
+    } catch {
+      // fallback
+    }
+
+    // 2. Fallback to /api/v1/auth/session
+    try {
+      const sessRes = await fetch('/api/v1/auth/session', { credentials: 'include' });
+      if (sessRes.ok) {
+        const sessJson = await sessRes.json();
+        if (sessJson?.data?.user) {
+          const memberships = sessJson.data.memberships || sessJson.data.user.memberships || [];
+          if (memberships.length >= 1) {
+            setUserMemberships(memberships);
+            setShowPicker(true);
+            return memberships;
+          }
+        }
+      }
+    } catch {}
+
+    return null;
+  };
+
   React.useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     const refParam = urlParams.get('ref');
@@ -44,25 +92,15 @@ export const OwnerLoginPage: React.FC<OwnerLoginPageProps> = ({ onLoginSuccess }
       sessionStorage.setItem('horplus_referral_code', refParam);
     }
 
-    fetch('/api/v1/auth/session')
-      .then(res => res.ok ? res.json() : null)
-      .then(json => {
-        if (json?.data?.user) {
-          const memberships = json.data.memberships || json.data.user.memberships || [];
-          if (memberships.length >= 1) {
-            setUserMemberships(memberships);
-            setShowPicker(true);
-          }
-        }
-      })
-      .catch(() => {});
+    loadCanonicalDormitories();
   }, []);
 
   const handleSelectDormitory = (dorm: any) => {
     setIsLoading(true);
-    if (dorm && dorm.dormitoryId) {
-      localStorage.setItem('selected_dormitory_id', dorm.dormitoryId);
-      sessionStorage.setItem('active_dormitory_selected_for_session', dorm.dormitoryId);
+    const targetId = dorm.dormitoryId || dorm.id;
+    if (targetId) {
+      localStorage.setItem('selected_dormitory_id', targetId);
+      sessionStorage.setItem('active_dormitory_selected_for_session', targetId);
     }
     setTimeout(() => {
       onLoginSuccess(ownerUser);
@@ -102,15 +140,15 @@ export const OwnerLoginPage: React.FC<OwnerLoginPageProps> = ({ onLoginSuccess }
         throw new Error(result.error?.message || 'Login failed');
       }
 
-      const memberships = result.data?.memberships || [];
-      if (memberships.length >= 1) {
-        setUserMemberships(memberships);
-        setShowPicker(true);
-      } else if (result.data?.onboardingRequired) {
-        navigate(`/owner/register${refQuery}`);
-      } else {
-        setUserMemberships(memberships);
-        setShowPicker(true);
+      const loaded = await loadCanonicalDormitories();
+      if (!loaded || loaded.length === 0) {
+        if (result.data?.onboardingRequired) {
+          navigate(`/owner/register${refQuery}`);
+        } else {
+          const memberships = result.data?.memberships || [];
+          setUserMemberships(memberships);
+          setShowPicker(true);
+        }
       }
     } catch (err: any) {
       console.error('Google Auth Failed', err);
@@ -257,7 +295,7 @@ export const OwnerLoginPage: React.FC<OwnerLoginPageProps> = ({ onLoginSuccess }
                         <div className="relative shrink-0">
                           <div className="w-12 h-12 rounded-xl overflow-hidden border border-indigo-100 shadow-2xs group-hover:scale-105 transition-transform bg-slate-50 flex items-center justify-center">
                             {membership.logoUrl ? (
-                              <img src={membership.logoUrl} alt={membership.dormitoryName} className="w-full h-full object-contain p-1" />
+                              <img src={membership.logoUrl} alt={membership.dormitoryName || membership.name} className="w-full h-full object-contain p-1" />
                             ) : (
                               <Building2 className="w-6 h-6 text-indigo-500" />
                             )}
@@ -267,7 +305,7 @@ export const OwnerLoginPage: React.FC<OwnerLoginPageProps> = ({ onLoginSuccess }
 
                         <div className="min-w-0 flex-1">
                           <h4 className="text-xs font-black text-slate-900 group-hover:text-indigo-600 transition-colors truncate">
-                            {membership.dormitoryName}
+                            {membership.dormitoryName || membership.name}
                           </h4>
 
                           <p className="text-[11px] text-slate-400 flex items-center gap-1 mt-0.5 truncate">

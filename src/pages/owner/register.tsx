@@ -1,3 +1,17 @@
+export function parseOptionalConfiguredNumber(val: any): number | null {
+  if (val === undefined || val === null || val === '') return null;
+  const num = Number(val);
+  return isNaN(num) ? null : num;
+}
+
+export function resolveFirstDefinedNumber(...vals: any[]): number | null {
+  for (const v of vals) {
+    const parsed = parseOptionalConfiguredNumber(v);
+    if (parsed !== null) return parsed;
+  }
+  return null;
+}
+
 export function mapRegistrationBuildingForFinalize(
   b: any,
   idx: number,
@@ -7,25 +21,28 @@ export function mapRegistrationBuildingForFinalize(
   const rawPrefix = (b.roomPrefix ? b.roomPrefix.trim() : '');
   const effectiveName = bName || (rawPrefix ? `อาคาร ${rawPrefix}` : `อาคาร ${idx + 1}`);
   const effectivePrefix = rawPrefix || bName || null;
-  const fallback = Number(fallbackDeposit) || 0;
 
-  const termDep = b.termDeposit !== undefined && b.termDeposit !== '' ? (Number(b.termDeposit) || 0) : (b.securityDeposit !== undefined && b.securityDeposit !== '' ? (Number(b.securityDeposit) || 0) : fallback);
-  const monthlyDep = b.monthlyDeposit !== undefined && b.monthlyDeposit !== '' ? (Number(b.monthlyDeposit) || 0) : (b.securityDeposit !== undefined && b.securityDeposit !== '' ? (Number(b.securityDeposit) || 0) : fallback);
-  const dailyDep = b.dailyDeposit !== undefined && b.dailyDeposit !== '' ? (Number(b.dailyDeposit) || 0) : (b.securityDeposit !== undefined && b.securityDeposit !== '' ? (Number(b.securityDeposit) || 0) : fallback);
+  const termDep = resolveFirstDefinedNumber(b.termDeposit, b.securityDeposit, fallbackDeposit);
+  const monthlyDep = resolveFirstDefinedNumber(b.monthlyDeposit, b.securityDeposit, fallbackDeposit);
+  const dailyDep = resolveFirstDefinedNumber(b.dailyDeposit, b.securityDeposit, fallbackDeposit);
+
+  const monthlyRent = parseOptionalConfiguredNumber(b.rentRates?.monthly);
+  const dailyRent = parseOptionalConfiguredNumber(b.rentRates?.daily);
+  const termRent = parseOptionalConfiguredNumber(b.rentRates?.term);
 
   return {
     id: b.id || `bld-${idx + 1}`,
     name: effectiveName,
     code: effectivePrefix,
     floorsCount: Number(b.totalFloors) || 1,
-    roomsPerFloor: b.roomsPerFloor !== '' ? Number(b.roomsPerFloor) : null,
+    roomsPerFloor: b.roomsPerFloor !== '' && b.roomsPerFloor !== null && b.roomsPerFloor !== undefined ? Number(b.roomsPerFloor) : null,
     roomPrefix: effectivePrefix,
     hasElevator: b.hasElevator ?? false,
     numberingPattern: b.formatPattern || null,
     description: `อาคาร ${effectiveName}`,
-    monthlyRent: Number(b.rentRates?.monthly) || 0,
-    dailyRent: b.rentRates?.daily ? Number(b.rentRates.daily) : null,
-    termRent: b.rentRates?.term ? Number(b.rentRates.term) : null,
+    monthlyRent,
+    dailyRent,
+    termRent,
     termMonths: Number(b.rentRates?.termMonths) || 4,
     maxInstallmentMonths: Number(b.rentRates?.maxInstallmentMonths) || 2,
     termDeposit: termDep,
@@ -297,7 +314,10 @@ export const DormitoryLogoUploader: React.FC<DormitoryLogoUploaderProps> = ({
         {logoUrl && (
           <button
             type="button"
-            onClick={handleRemove}
+            onClick={(e) => {
+              e.stopPropagation();
+              handleRemove();
+            }}
             disabled={isUploading}
             className="text-[11px] font-bold text-rose-500 hover:text-rose-600 cursor-pointer flex items-center gap-1"
           >
@@ -319,22 +339,55 @@ export const DormitoryLogoUploader: React.FC<DormitoryLogoUploaderProps> = ({
       />
 
       {logoUrl ? (
-        <div className="flex items-center gap-3 p-3 bg-white border border-slate-200 rounded-2xl">
+        <div
+          onClick={() => !isUploading && fileInputRef.current?.click()}
+          onDragOver={(e) => {
+            e.preventDefault();
+            setIsDragOver(true);
+          }}
+          onDragLeave={() => setIsDragOver(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setIsDragOver(false);
+            const file = e.dataTransfer.files?.[0];
+            if (file) handleFile(file);
+          }}
+          className={`flex items-center gap-3 p-3 bg-white border-2 rounded-2xl cursor-pointer transition ${
+            isDragOver ? 'border-blue-500 bg-blue-50/50' : 'border-slate-200 hover:border-blue-400'
+          } ${isUploading ? 'opacity-50 pointer-events-none' : ''}`}
+        >
           <div className="w-16 h-16 rounded-xl border border-slate-100 bg-slate-50 flex items-center justify-center overflow-hidden shrink-0">
             <img src={logoUrl} alt="Dormitory Logo" className="w-full h-full object-contain" />
           </div>
           <div className="flex-1 min-w-0">
             <p className="text-xs font-bold text-slate-800">มีโลโก้หอพักแล้ว</p>
-            <p className="text-[10px] text-slate-400">รูปภาพนี้จะแสดงในส่วนหัวและเมนูเลือกหอพัก</p>
+            <p className="text-[10px] text-slate-400">คลิกหรือลากไฟล์ใหม่มาวางที่นี่เพื่อเปลี่ยนรูปภาพ</p>
           </div>
-          <button
-            type="button"
-            onClick={() => fileInputRef.current?.click()}
-            disabled={isUploading}
-            className="px-3 py-1.5 text-xs font-bold text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-xl transition cursor-pointer shrink-0"
-          >
-            เปลี่ยนรูป
-          </button>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                fileInputRef.current?.click();
+              }}
+              disabled={isUploading}
+              className="px-3 py-1.5 text-xs font-bold text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-xl transition cursor-pointer shrink-0"
+            >
+              เปลี่ยนรูป
+            </button>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                handleRemove();
+              }}
+              disabled={isUploading}
+              className="p-1.5 text-rose-500 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition cursor-pointer shrink-0"
+              title="ลบโลโก้"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
+          </div>
         </div>
       ) : (
         <div
@@ -472,16 +525,16 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
           formatPattern: 'prefix_floor_room',
           mode: 'auto' as 'auto' | 'manual',
           customRooms: [] as string[],
-          termDeposit: 0 as number | string,
-          monthlyDeposit: 0 as number | string,
-          dailyDeposit: 0 as number | string,
-          securityDeposit: 0 as number | string,
+          termDeposit: '' as number | string,
+          monthlyDeposit: '' as number | string,
+          dailyDeposit: '' as number | string,
+          securityDeposit: '' as number | string,
           rentRates: {
-            monthly: 0 as number | string,
-            term: 0 as number | string,
+            monthly: '' as number | string,
+            term: '' as number | string,
             termMonths: 4 as number | string,
             maxInstallmentMonths: 2 as number | string,
-            daily: 0 as number | string,
+            daily: '' as number | string,
             maxOccupants: 2 as number | string
           }
         }
@@ -511,7 +564,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
 
       // 4. Deposits, Late Fees & Payment Account
       deposits: {
-        securityDeposit: 0 as number | string,
+        securityDeposit: '' as number | string,
         advanceRentMonths: 1,
         dueDateDay: 15 as number | string,
         gracePeriodDays: 2,
@@ -1019,13 +1072,16 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
       formatPattern: 'prefix_floor_room',
       mode: 'auto' as 'auto' | 'manual',
       customRooms: [] as string[],
-      securityDeposit: 0,
+      termDeposit: '',
+      monthlyDeposit: '',
+      dailyDeposit: '',
+      securityDeposit: '',
       rentRates: {
-        monthly: 0,
-        term: 0,
+        monthly: '',
+        term: '',
         termMonths: 4,
         maxInstallmentMonths: 2,
-        daily: 0,
+        daily: '',
         maxOccupants: 2
       }
     };
@@ -1407,12 +1463,13 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
       const mappedRooms: any[] = [];
       formData.buildings.forEach((b) => {
         const roomNumbers = getGeneratedRooms(b);
-        const rentRates = b.rentRates || { monthly: 0, term: 0, daily: 0, termMonths: 4, maxInstallmentMonths: 2, maxOccupants: 2 };
-        const fallback = Number(formData.deposits.securityDeposit) || 0;
-        const legacyDep = b.securityDeposit !== undefined && b.securityDeposit !== '' ? (Number(b.securityDeposit) || 0) : fallback;
-        const termDep = b.termDeposit !== undefined && b.termDeposit !== '' ? (Number(b.termDeposit) || 0) : legacyDep;
-        const monthlyDep = b.monthlyDeposit !== undefined && b.monthlyDeposit !== '' ? (Number(b.monthlyDeposit) || 0) : legacyDep;
-        const dailyDep = b.dailyDeposit !== undefined && b.dailyDeposit !== '' ? (Number(b.dailyDeposit) || 0) : legacyDep;
+        const rentRates = b.rentRates || {};
+        const termDep = resolveFirstDefinedNumber(b.termDeposit, b.securityDeposit, formData.deposits.securityDeposit);
+        const monthlyDep = resolveFirstDefinedNumber(b.monthlyDeposit, b.securityDeposit, formData.deposits.securityDeposit);
+        const dailyDep = resolveFirstDefinedNumber(b.dailyDeposit, b.securityDeposit, formData.deposits.securityDeposit);
+        const monthlyRent = parseOptionalConfiguredNumber(rentRates.monthly);
+        const dailyRent = parseOptionalConfiguredNumber(rentRates.daily);
+        const termRent = parseOptionalConfiguredNumber(rentRates.term);
 
         roomNumbers.forEach((rNum) => {
           const digitsOnly = rNum.replace(/\D/g, '');
@@ -1421,9 +1478,9 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
             buildingId: b.id,
             roomNumber: rNum,
             floor: calculatedFloor,
-            monthlyRent: Number(rentRates.monthly) || 0,
-            dailyRent: rentRates.daily ? Number(rentRates.daily) : null,
-            termRent: rentRates.term ? Number(rentRates.term) : null,
+            monthlyRent,
+            dailyRent,
+            termRent,
             termMonths: Number(rentRates.termMonths) || 4,
             termDeposit: termDep,
             monthlyDeposit: monthlyDep,
@@ -1548,6 +1605,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
           allowedTypes: formData.petPolicy.allowedTypes || [],
         },
         defaultTerms: formData.rulesTemplate || undefined,
+        defaultDeposit: parseOptionalConfiguredNumber(formData.deposits.securityDeposit),
       };
 
       const finalizeRes = await onboardingClient.finalize(payload as any);

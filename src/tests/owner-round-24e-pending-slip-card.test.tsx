@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { describe, it, expect } from 'vitest';
 import React from 'react';
 import { render, screen } from '@testing-library/react';
@@ -97,5 +98,6 @@ describe('Owner Round 2.4E: Pending Slip Card Presentation Simplification', () =
     expect(container.textContent).not.toContain('ยื่นตรวจเมื่อ:');
     expect(container.textContent).not.toContain('การจัดสรรตามบิล:');
     expect(container.textContent).not.toContain('ดูรายละเอียด');
+    expect(container.textContent).not.toContain('(ดูรายการ)');
   });
 });

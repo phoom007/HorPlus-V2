@@ -9,6 +9,8 @@ export interface DormitoryMemberEntity {
   roleId: string;
   roleCode?: string;
   rolePermissions?: unknown;
+  hasLogo?: boolean;
+  logoUrl?: string | null;
   status: 'invited' | 'active' | 'suspended' | 'revoked';
   invitedAt?: Date | null;
   acceptedAt?: Date | null;
@@ -132,6 +134,8 @@ export class PrismaMembershipRepository implements IMembershipRepository {
       roleId: model.roleId,
       roleCode: model.role?.code,
       rolePermissions: model.role?.permissions,
+      hasLogo: Boolean((model.dormitory as any)?.logoObjectKey),
+      logoUrl: (model.dormitory as any)?.logoObjectKey ? `/api/v1/dormitories/${model.dormitoryId}/logo` : null,
       status: model.status as any,
       invitedAt: model.invitedAt,
       acceptedAt: model.acceptedAt,

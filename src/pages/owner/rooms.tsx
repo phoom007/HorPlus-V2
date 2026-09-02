@@ -373,15 +373,28 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
       return '';
     };
 
-    const monthlyRentVal = resolveValue(targetBld?.monthlyRent, defs?.defaultMonthlyRent);
-    const termRentVal = resolveValue(targetBld?.termRent, defs?.defaultTermRent);
-    const dailyRentVal = resolveValue(targetBld?.dailyRent, defs?.defaultDailyRent);
+    const bldMonthlyRent = targetBld?.monthlyRent !== undefined ? targetBld.monthlyRent : (targetBld as any)?.rawOverrides?.monthlyRent;
+    const bldTermRent = targetBld?.termRent !== undefined ? targetBld.termRent : (targetBld as any)?.rawOverrides?.termRent;
+    const bldDailyRent = targetBld?.dailyRent !== undefined ? targetBld.dailyRent : (targetBld as any)?.rawOverrides?.dailyRent;
 
-    const bldDeposit = targetBld?.depositAmount;
+    const bldMonthlyDeposit = (targetBld as any)?.monthlyDeposit !== undefined && (targetBld as any)?.monthlyDeposit !== null && (targetBld as any)?.monthlyDeposit !== ''
+      ? (targetBld as any).monthlyDeposit
+      : (targetBld?.depositAmount !== undefined ? targetBld.depositAmount : (targetBld as any)?.rawOverrides?.depositAmount);
+    const bldTermDeposit = (targetBld as any)?.termDeposit !== undefined && (targetBld as any)?.termDeposit !== null && (targetBld as any)?.termDeposit !== ''
+      ? (targetBld as any).termDeposit
+      : undefined;
+    const bldDailyDeposit = (targetBld as any)?.dailyDeposit !== undefined && (targetBld as any)?.dailyDeposit !== null && (targetBld as any)?.dailyDeposit !== ''
+      ? (targetBld as any).dailyDeposit
+      : undefined;
+
+    const monthlyRentVal = resolveValue(bldMonthlyRent, defs?.defaultMonthlyRent);
+    const termRentVal = resolveValue(bldTermRent, defs?.defaultTermRent);
+    const dailyRentVal = resolveValue(bldDailyRent, defs?.defaultDailyRent);
+
     const dormDeposit = defs?.defaultDeposit;
-    const monthlyDepositVal = resolveValue(bldDeposit, dormDeposit);
-    const termDepositVal = resolveValue(bldDeposit, dormDeposit);
-    const dailyDepositVal = resolveValue(bldDeposit, dormDeposit);
+    const monthlyDepositVal = resolveValue(bldMonthlyDeposit, dormDeposit);
+    const termDepositVal = resolveValue(bldTermDeposit, dormDeposit);
+    const dailyDepositVal = resolveValue(bldDailyDeposit, dormDeposit);
 
     return {
       monthlyRent: monthlyRentVal,
