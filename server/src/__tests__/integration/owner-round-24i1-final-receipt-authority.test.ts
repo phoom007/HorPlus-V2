@@ -27,6 +27,10 @@ describe('Owner Round 2.4I.4 / A1: True Room-Cycle Final Settlement Receipt Auth
   let room109Id: string;
   let room110Id: string;
   let room111Id: string;
+  let room112Id: string;
+  let room113Id: string;
+  let room114Id: string;
+  let room115Id: string;
   let tenantAId: string;
   let tenantBId: string;
   let contract1Id: string;
@@ -94,6 +98,10 @@ describe('Owner Round 2.4I.4 / A1: True Room-Cycle Final Settlement Receipt Auth
     const r109 = await createRoom('109');
     const r110 = await createRoom('110');
     const r111 = await createRoom('111');
+    const r112 = await createRoom('112');
+    const r113 = await createRoom('113');
+    const r114 = await createRoom('114');
+    const r115 = await createRoom('115');
     room104Id = r104.id;
     room105Id = r105.id;
     room106Id = r106.id;
@@ -102,6 +110,10 @@ describe('Owner Round 2.4I.4 / A1: True Room-Cycle Final Settlement Receipt Auth
     room109Id = r109.id;
     room110Id = r110.id;
     room111Id = r111.id;
+    room112Id = r112.id;
+    room113Id = r113.id;
+    room114Id = r114.id;
+    room115Id = r115.id;
 
     // 4. Create Tenants
     const tenantA = await prisma.tenant.create({
@@ -1079,4 +1091,294 @@ describe('Owner Round 2.4I.4 / A1: True Room-Cycle Final Settlement Receipt Auth
     expect(directAuditA.id).toBe(resolvedActive!.id);
     expect(directAuditA.isVoided).toBe(true);
   });
+
+  // =========================================================================
+  // ROUND 2.4I.5 ZERO-OBLIGATION ROOM-CYCLE AUTHORITY TESTS
+  // =========================================================================
+
+  it('16. Proof 2.4I.5-A & B: Positive Rent (4,500) + Zero Utility Bill (0) produces exactly ONE Final Receipt (4,500) & Zero Bill produces 0 Payment/Receipt/Allocation', async () => {
+    // Room 112 in Cycle 1
+    const rentBill = await prisma.bill.create({
+      data: {
+        dormitoryId,
+        billingCycleId: cycle1Id,
+        roomId: room112Id,
+        tenantId: tenantAId,
+        billKind: 'RENT',
+        billNumber: `BILL-112-RENT-${Date.now().toString().slice(-4)}`,
+        status: 'PAID',
+        billingDate: new Date('2026-08-25'),
+        dueDate: new Date('2026-08-31'),
+        subtotal: 4500.0,
+        totalAmount: 4500.0,
+        paidAmount: 4500.0,
+        outstandingAmount: 0.0,
+        items: {
+          create: [{ dormitoryId, type: 'rent', description: 'ค่าเช่าห้องพัก 112', amount: 4500.0, displayOrder: 1 }],
+        },
+      },
+    });
+
+    // Record payment for Rent Bill
+    await prisma.payment.create({
+      data: {
+        dormitoryId,
+        billId: rentBill.id,
+        tenantId: tenantAId,
+        amount: 4500.0,
+        method: 'CASH',
+        status: 'APPROVED',
+        paymentDate: new Date(),
+        reviewedAt: new Date(),
+        reviewedByUserId: ownerUserId,
+      },
+    });
+
+    // Zero-obligation Utility Bill (total 0, paid 0, outstanding 0)
+    const zeroUtilBill = await prisma.bill.create({
+      data: {
+        dormitoryId,
+        billingCycleId: cycle1Id,
+        roomId: room112Id,
+        tenantId: tenantAId,
+        billKind: 'MONTHLY_UTILITY',
+        billNumber: `BILL-112-UTIL0-${Date.now().toString().slice(-4)}`,
+        status: 'PAID',
+        billingDate: new Date('2026-08-25'),
+        dueDate: new Date('2026-08-31'),
+        subtotal: 0.0,
+        totalAmount: 0.0,
+        paidAmount: 0.0,
+        outstandingAmount: 0.0,
+        items: {
+          create: [{ dormitoryId, type: 'water', description: 'ค่าน้ำ (0 หน่วย)', amount: 0.0, displayOrder: 2 }],
+        },
+      },
+    });
+
+    // Finalize room-cycle: zero bill does not block positive rent bill
+    const receipt = await prisma.$transaction(tx =>
+      generateFinalSettlementReceiptForBillInTx(tx, { dormitoryId, billId: rentBill.id, userId: ownerUserId })
+    );
+
+    expect(receipt).not.toBeNull();
+    const snap = receipt!.snapshotData as any;
+    expect(snap.total).toBe('4500.00');
+
+    // Snapshot line items contain only non-zero items (Rent 4,500), NO zero utility item
+    expect(snap.items).toHaveLength(1);
+    expect(snap.items[0].description).toBe('ค่าเช่าห้องพัก 112');
+    expect(snap.items[0].amount).toBe('4500.00');
+
+    // Exactly ONE active Final Receipt in database
+    const receiptsInScope = await prisma.receipt.findMany({
+      where: { dormitoryId, settlementScopeKey: `ROOM_CYCLE:${room112Id}:${cycle1Id}`, isVoided: false },
+    });
+    expect(receiptsInScope).toHaveLength(1);
+    expect(receiptsInScope[0].id).toBe(receipt!.id);
+
+    // Proof B: Assert zero Utility produced:
+    // 0 Payment, 0 EVENT Receipt, 0 PaymentAllocation
+    const paymentsForZeroBill = await prisma.payment.findMany({ where: { billId: zeroUtilBill.id } });
+    expect(paymentsForZeroBill).toHaveLength(0);
+
+    const allocationsForZeroBill = await prisma.paymentAllocation.findMany({ where: { billId: zeroUtilBill.id } });
+    expect(allocationsForZeroBill).toHaveLength(0);
+
+    const eventReceiptsForZeroBill = await prisma.receipt.findMany({
+      where: { billId: zeroUtilBill.id, receiptKind: 'EVENT' },
+    });
+    expect(eventReceiptsForZeroBill).toHaveLength(0);
+
+    // Also verify getFinalReceiptForBill resolves the same Final Receipt when passed the zeroUtilBill ID
+    const receiptFromZeroBill = await receiptService.getFinalReceiptForBill(dormitoryId, zeroUtilBill.id);
+    expect(receiptFromZeroBill).not.toBeNull();
+    expect(receiptFromZeroBill!.id).toBe(receipt!.id);
+  });
+
+  it('17. Proof 2.4I.5-C: Positive Bill (4,500) + TWO Zero Bills produces Final Receipt totaling 4,500', async () => {
+    // Room 113 in Cycle 1
+    const rentBill = await prisma.bill.create({
+      data: {
+        dormitoryId,
+        billingCycleId: cycle1Id,
+        roomId: room113Id,
+        tenantId: tenantAId,
+        billKind: 'RENT',
+        billNumber: `BILL-113-RENT-${Date.now().toString().slice(-4)}`,
+        status: 'PAID',
+        billingDate: new Date('2026-08-25'),
+        dueDate: new Date('2026-08-31'),
+        subtotal: 4500.0,
+        totalAmount: 4500.0,
+        paidAmount: 4500.0,
+        outstandingAmount: 0.0,
+        items: {
+          create: [{ dormitoryId, type: 'rent', description: 'ค่าเช่าห้องพัก 113', amount: 4500.0, displayOrder: 1 }],
+        },
+      },
+    });
+
+    await prisma.payment.create({
+      data: {
+        dormitoryId,
+        billId: rentBill.id,
+        tenantId: tenantAId,
+        amount: 4500.0,
+        method: 'CASH',
+        status: 'APPROVED',
+      },
+    });
+
+    // Zero Bill 1
+    await prisma.bill.create({
+      data: {
+        dormitoryId,
+        billingCycleId: cycle1Id,
+        roomId: room113Id,
+        tenantId: tenantAId,
+        billKind: 'MONTHLY_UTILITY',
+        billNumber: `BILL-113-Z1-${Date.now().toString().slice(-4)}`,
+        status: 'PAID',
+        billingDate: new Date('2026-08-25'),
+        dueDate: new Date('2026-08-31'),
+        subtotal: 0.0,
+        totalAmount: 0.0,
+        paidAmount: 0.0,
+        outstandingAmount: 0.0,
+      },
+    });
+
+    // Zero Bill 2
+    await prisma.bill.create({
+      data: {
+        dormitoryId,
+        billingCycleId: cycle1Id,
+        roomId: room113Id,
+        tenantId: tenantAId,
+        billKind: 'OTHER',
+        billNumber: `BILL-113-Z2-${Date.now().toString().slice(-4)}`,
+        status: 'PAID',
+        billingDate: new Date('2026-08-25'),
+        dueDate: new Date('2026-08-31'),
+        subtotal: 0.0,
+        totalAmount: 0.0,
+        paidAmount: 0.0,
+        outstandingAmount: 0.0,
+      },
+    });
+
+    const receipt = await prisma.$transaction(tx =>
+      generateFinalSettlementReceiptForBillInTx(tx, { dormitoryId, billId: rentBill.id, userId: ownerUserId })
+    );
+
+    expect(receipt).not.toBeNull();
+    const snap = receipt!.snapshotData as any;
+    expect(snap.total).toBe('4500.00');
+    expect(snap.items).toHaveLength(1);
+    expect(snap.items[0].amount).toBe('4500.00');
+  });
+
+  it('18. Proof 2.4I.5-D: All-Zero room-cycle produces ZERO Final Receipt (no ฿0 receipt created)', async () => {
+    // Room 114 in Cycle 1: Two bills, both ฿0
+    const zeroBillA = await prisma.bill.create({
+      data: {
+        dormitoryId,
+        billingCycleId: cycle1Id,
+        roomId: room114Id,
+        tenantId: tenantAId,
+        billKind: 'RENT',
+        billNumber: `BILL-114-ZA-${Date.now().toString().slice(-4)}`,
+        status: 'PAID',
+        billingDate: new Date('2026-08-25'),
+        dueDate: new Date('2026-08-31'),
+        subtotal: 0.0,
+        totalAmount: 0.0,
+        paidAmount: 0.0,
+        outstandingAmount: 0.0,
+      },
+    });
+
+    await prisma.bill.create({
+      data: {
+        dormitoryId,
+        billingCycleId: cycle1Id,
+        roomId: room114Id,
+        tenantId: tenantAId,
+        billKind: 'MONTHLY_UTILITY',
+        billNumber: `BILL-114-ZB-${Date.now().toString().slice(-4)}`,
+        status: 'PAID',
+        billingDate: new Date('2026-08-25'),
+        dueDate: new Date('2026-08-31'),
+        subtotal: 0.0,
+        totalAmount: 0.0,
+        paidAmount: 0.0,
+        outstandingAmount: 0.0,
+      },
+    });
+
+    // Generator must return null: scope is settled, but NO ฿0 receipt should be created
+    const result = await prisma.$transaction(tx =>
+      generateFinalSettlementReceiptForBillInTx(tx, { dormitoryId, billId: zeroBillA.id, userId: ownerUserId })
+    );
+    expect(result).toBeNull();
+
+    // Confirm 0 receipts created in DB
+    const count = await prisma.receipt.count({
+      where: { dormitoryId, settlementScopeKey: `ROOM_CYCLE:${room114Id}:${cycle1Id}` },
+    });
+    expect(count).toBe(0);
+  });
+
+  it('19. Proof 2.4I.5-E & F: Negative-total Bill or Zero-Bill with negative outstanding MUST FAIL CLOSED', async () => {
+    // Room 115 in Cycle 1
+    // Case E: Bill with negative total (-100)
+    const negTotalBill = await prisma.bill.create({
+      data: {
+        dormitoryId,
+        billingCycleId: cycle1Id,
+        roomId: room115Id,
+        tenantId: tenantAId,
+        billKind: 'RENT',
+        billNumber: `BILL-115-NEGT-${Date.now().toString().slice(-4)}`,
+        status: 'PAID',
+        billingDate: new Date('2026-08-25'),
+        dueDate: new Date('2026-08-31'),
+        subtotal: -100.0,
+        totalAmount: -100.0,
+        paidAmount: 0.0,
+        outstandingAmount: 0.0,
+      },
+    });
+
+    const resE = await prisma.$transaction(tx =>
+      generateFinalSettlementReceiptForBillInTx(tx, { dormitoryId, billId: negTotalBill.id, userId: ownerUserId })
+    );
+    expect(resE).toBeNull();
+
+    // Case F: Zero Bill with negative outstanding (-50)
+    const zeroBillNegOut = await prisma.bill.create({
+      data: {
+        dormitoryId,
+        billingCycleId: cycle1Id,
+        roomId: room115Id,
+        tenantId: tenantAId,
+        billKind: 'MONTHLY_UTILITY',
+        billNumber: `BILL-115-ZNEGO-${Date.now().toString().slice(-4)}`,
+        status: 'PAID',
+        billingDate: new Date('2026-08-25'),
+        dueDate: new Date('2026-08-31'),
+        subtotal: 0.0,
+        totalAmount: 0.0,
+        paidAmount: 0.0,
+        outstandingAmount: -50.0, // Negative outstanding!
+      },
+    });
+
+    const resF = await prisma.$transaction(tx =>
+      generateFinalSettlementReceiptForBillInTx(tx, { dormitoryId, billId: zeroBillNegOut.id, userId: ownerUserId })
+    );
+    expect(resF).toBeNull();
+  });
 });
+

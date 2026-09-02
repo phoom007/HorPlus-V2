@@ -1028,13 +1028,14 @@ export async function generateFinalSettlementReceiptForBillInTx(
 
   Decimal.set({ rounding: Decimal.ROUND_HALF_UP });
 
-  // 5. Strict outstanding === 0 & status verification (Requirement 4)
-  for (const b of scopeBills) {
-    const statusNorm = (b.status || '').trim().toUpperCase();
-    if (statusNorm !== 'PAID') {
-      return null;
-    }
+  // 5. Categorize and validate active financial obligations in scope:
+  //    A. Positive financial obligations (totalAmount > 0)
+  //    B. Genuine zero obligations (totalAmount === 0)
+  //    Negative total or non-zero outstanding -> FAIL CLOSED
+  const positiveBills: any[] = [];
+  const zeroBills: any[] = [];
 
+  for (const b of scopeBills) {
     const outDec = new Decimal((b.outstandingAmount ?? 0).toString());
     const totalDec = new Decimal((b.totalAmount ?? 0).toString());
     const paidDec = new Decimal((b.paidAmount ?? 0).toString());
@@ -1043,44 +1044,72 @@ export async function generateFinalSettlementReceiptForBillInTx(
       outDec.isNaN() ||
       totalDec.isNaN() ||
       paidDec.isNaN() ||
-      !outDec.isZero() || // Authoritative outstanding MUST equal exactly zero (positive or negative < 0 fails closed)
-      totalDec.lessThanOrEqualTo(0) || // Bill must have positive agreed obligation
-      !paidDec.equals(totalDec) // Paid amount must strictly equal total amount
+      !outDec.isZero() || // Authoritative outstanding MUST equal exactly zero (positive or negative fails closed)
+      totalDec.lessThan(0) // Negative total amount MUST fail closed
     ) {
-      // Scope is not fully settled or has invalid outstanding! Fail closed.
       return null;
+    }
+
+    if (totalDec.isZero()) {
+      // Genuine zero obligation:
+      // - totalAmount === 0
+      // - outstanding must equal exactly 0 (already verified)
+      // - paidAmount must be 0 (no payment needed)
+      if (!paidDec.isZero()) {
+        return null;
+      }
+      zeroBills.push(b);
+    } else {
+      // Positive financial obligation:
+      // - totalAmount > 0
+      // - status must be PAID
+      // - paidAmount must strictly equal totalAmount
+      const statusNorm = (b.status || '').trim().toUpperCase();
+      if (statusNorm !== 'PAID' || !paidDec.equals(totalDec)) {
+        return null;
+      }
+      positiveBills.push(b);
     }
   }
 
-  // 6. Tenant Context & Rental Context Compatibility - B1 (Requirements 6 & 7)
-  const tenantIds = Array.from(new Set(scopeBills.map((b: any) => b.tenantId).filter(Boolean)));
-  if (tenantIds.length !== 1 || scopeBills.some((b: any) => !b.tenantId)) {
-    // Multiple distinct tenants or missing tenant context -> FAIL CLOSED
+  // If there are NO positive obligations in scope (e.g. all-zero room cycle):
+  // Scope is settled, but NO Final Settlement receipt is created (do not create ฿0 receipt).
+  if (positiveBills.length === 0) {
+    return null;
+  }
+
+  // 6. Tenant Context & Rental Context Compatibility - B1 (Requirements 5 & 6)
+  // Apply compatibility validation to the financial obligations that actually contribute to the Final Receipt.
+  const contributingBills = positiveBills;
+
+  const tenantIds = Array.from(new Set(contributingBills.map((b: any) => b.tenantId).filter(Boolean)));
+  if (tenantIds.length !== 1 || contributingBills.some((b: any) => !b.tenantId)) {
+    // Multiple distinct tenants or missing tenant context among contributing bills -> FAIL CLOSED
     return null;
   }
   const canonicalTenantId = tenantIds[0] as string;
 
-  const contractIds = Array.from(new Set(scopeBills.map((b: any) => b.contractId).filter(Boolean)));
+  const contractIds = Array.from(new Set(contributingBills.map((b: any) => b.contractId).filter(Boolean)));
   if (contractIds.length > 1) {
-    // Multiple distinct contracts in the same scope -> FAIL CLOSED
+    // Multiple distinct contracts in the contributing scope -> FAIL CLOSED
     return null;
   }
   const canonicalContractId = contractIds.length === 1 ? (contractIds[0] as string) : null;
 
-  const termIds = Array.from(new Set(scopeBills.map((b: any) => b.provisionalRentalTermId).filter(Boolean)));
+  const termIds = Array.from(new Set(contributingBills.map((b: any) => b.provisionalRentalTermId).filter(Boolean)));
   if (termIds.length > 1) {
-    // Multiple distinct provisional terms in the same scope -> FAIL CLOSED
+    // Multiple distinct provisional terms in the contributing scope -> FAIL CLOSED
     return null;
   }
   const canonicalTermId = termIds.length === 1 ? (termIds[0] as string) : null;
 
-  // Cross-incompatibility: Both a contract and a provisional term present in the same room-cycle scope -> FAIL CLOSED
+  // Cross-incompatibility: Both a contract and a provisional term present in contributing bills -> FAIL CLOSED
   if (canonicalContractId && canonicalTermId) {
     return null;
   }
 
-  const scopeTotal = scopeBills.reduce((sum: Decimal, b: any) => sum.plus(new Decimal((b.totalAmount ?? 0).toString())), new Decimal(0));
-  const scopePaid = scopeBills.reduce((sum: Decimal, b: any) => sum.plus(new Decimal((b.paidAmount ?? 0).toString())), new Decimal(0));
+  const scopeTotal = contributingBills.reduce((sum: Decimal, b: any) => sum.plus(new Decimal((b.totalAmount ?? 0).toString())), new Decimal(0));
+  const scopePaid = contributingBills.reduce((sum: Decimal, b: any) => sum.plus(new Decimal((b.paidAmount ?? 0).toString())), new Decimal(0));
 
   if (scopeTotal.isZero() || !scopePaid.equals(scopeTotal)) {
     return null;
@@ -1106,7 +1135,7 @@ export async function generateFinalSettlementReceiptForBillInTx(
     },
   });
 
-  const firstBill = scopeBills[0];
+  const firstBill = contributingBills[0];
   const rawRoomNumber = firstBill.room?.normalizedRoomNumber || firstBill.room?.roomNumber || 'GEN';
   const normalizedRoom = rawRoomNumber.replace(/[^a-zA-Z0-9]/g, '').toUpperCase() || 'GEN';
   const sequenceStr = String(seq.lastValue).padStart(4, '0');
@@ -1120,8 +1149,8 @@ export async function generateFinalSettlementReceiptForBillInTx(
     }
   }
 
-  // 7. Aggregate whole-scope line items, bill groups, and real payment event history
-  const billGroups = scopeBills.map((b: any) => ({
+  // 7. Aggregate contributing line items, bill groups, and real payment event history
+  const billGroups = contributingBills.map((b: any) => ({
     billId: b.id,
     billNumber: b.billNumber || null,
     billKind: b.billKind || 'MONTHLY',
@@ -1129,20 +1158,26 @@ export async function generateFinalSettlementReceiptForBillInTx(
     billTotal: new Decimal(b.totalAmount.toString()).toFixed(2),
     paidAmount: new Decimal(b.paidAmount.toString()).toFixed(2),
     status: b.status,
-    items: (b.items || []).map((it: any) => ({
-      type: it.type || 'other',
-      description: it.description,
-      quantity: it.quantity ? new Decimal(it.quantity.toString()).toFixed(2) : '1.00',
-      unit: it.unit || null,
-      unitPrice: it.unitPrice ? new Decimal(it.unitPrice.toString()).toFixed(2) : '0.00',
-      amount: new Decimal(it.amount.toString()).toFixed(2),
-      metadata: it.metadata ? JSON.parse(JSON.stringify(it.metadata)) : null,
-    })),
+    items: (b.items || [])
+      .filter((it: any) => new Decimal((it.amount ?? 0).toString()).greaterThan(0))
+      .map((it: any) => ({
+        type: it.type || 'other',
+        description: it.description,
+        quantity: it.quantity ? new Decimal(it.quantity.toString()).toFixed(2) : '1.00',
+        unit: it.unit || null,
+        unitPrice: it.unitPrice ? new Decimal(it.unitPrice.toString()).toFixed(2) : '0.00',
+        amount: new Decimal(it.amount.toString()).toFixed(2),
+        metadata: it.metadata ? JSON.parse(JSON.stringify(it.metadata)) : null,
+      })),
   }));
 
-  const flatItems = scopeBills.flatMap((b: any) => (b.items && b.items.length > 0 ? mapBillItemsToSnapshot(b.items) : []));
+  const flatItems = contributingBills.flatMap((b: any) =>
+    b.items && b.items.length > 0
+      ? mapBillItemsToSnapshot(b.items.filter((it: any) => new Decimal((it.amount ?? 0).toString()).greaterThan(0)))
+      : []
+  );
 
-  const paymentEvents = scopeBills.flatMap((b: any) =>
+  const paymentEvents = contributingBills.flatMap((b: any) =>
     ((b as any).Payment || []).map((p: any) => ({
       paymentId: p.id,
       billId: b.id,
@@ -1158,15 +1193,15 @@ export async function generateFinalSettlementReceiptForBillInTx(
   );
 
   // 8. Snapshot Tenant Authority - populated only after tenant/rental compatibility passes (Requirement 8)
-  const tenantBill = scopeBills.find((b: any) => b.tenant && b.tenant.id === canonicalTenantId) || firstBill;
+  const tenantBill = contributingBills.find((b: any) => b.tenant && b.tenant.id === canonicalTenantId) || firstBill;
   const canonicalTenant = tenantBill.tenant;
   const resolvedTenantName = canonicalTenant?.displayName ||
     (canonicalTenant?.firstName ? `${canonicalTenant.firstName || ''} ${canonicalTenant.lastName || ''}`.trim() : 'ผู้เช่า');
 
   const snapshotData = {
     receiptNumber,
-    billNumber: scopeBills.map((b: any) => b.billNumber).filter(Boolean).join(', ') || firstBill.billNumber || null,
-    billIds: scopeBills.map((b: any) => b.id),
+    billNumber: contributingBills.map((b: any) => b.billNumber).filter(Boolean).join(', ') || firstBill.billNumber || null,
+    billIds: contributingBills.map((b: any) => b.id),
     tenantId: canonicalTenantId,
     contractId: canonicalContractId,
     provisionalRentalTermId: canonicalTermId,
@@ -1188,14 +1223,14 @@ export async function generateFinalSettlementReceiptForBillInTx(
     paymentDate: today.toISOString(),
     receiverName: receiverDisplayName,
     isFinalSettlement: true,
-    isMultiBill: scopeBills.length > 1,
+    isMultiBill: contributingBills.length > 1,
   };
 
   try {
     const receipt = await tx.receipt.create({
       data: {
         dormitoryId,
-        billId: seedBill.id,
+        billId: firstBill.id || seedBill.id,
         roomId: seedBill.roomId,
         billingCycleId: seedBill.billingCycleId,
         receiptKind: 'FINAL_SETTLEMENT',
