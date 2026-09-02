@@ -263,21 +263,12 @@ export const DormitoryLogoUploader: React.FC<DormitoryLogoUploaderProps> = ({
     try {
       setIsUploading(true);
       const dormId = await ensureProvisionalDormitoryId();
-      const body = new FormData();
-      body.append('file', file);
-
-      const res = await fetch(`/api/v1/dormitories/${dormId}/logo`, {
-        method: 'POST',
-        body,
-        credentials: 'include',
-      });
-
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data?.error?.message || 'เกิดข้อผิดพลาดในการอัปโหลดรูปภาพ');
+      const res = await onboardingClient.uploadLogo(dormId, file);
+      if (!res.success || !res.data) {
+        throw new Error('เกิดข้อผิดพลาดในการอัปโหลดรูปภาพ');
       }
 
-      onLogoChange(`${data.data.logoUrl}?t=${Date.now()}`);
+      onLogoChange(`${res.data.logoUrl}?t=${Date.now()}`);
     } catch (err: any) {
       console.error('[LOGO_UPLOAD_FAILED]', err);
       onError(err.message || 'ไม่สามารถอัปโหลดโลโก้ได้ กรุณาลองใหม่อีกครั้ง');
@@ -291,10 +282,7 @@ export const DormitoryLogoUploader: React.FC<DormitoryLogoUploaderProps> = ({
     try {
       setIsUploading(true);
       const dormId = await ensureProvisionalDormitoryId();
-      await fetch(`/api/v1/dormitories/${dormId}/logo`, {
-        method: 'DELETE',
-        credentials: 'include',
-      });
+      await onboardingClient.deleteLogo(dormId);
       onLogoChange(null);
     } catch (err: any) {
       console.error('[LOGO_DELETE_FAILED]', err);
@@ -671,10 +659,12 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
               const rawName = (typeof b.name === 'string' ? b.name : '').trim();
               const rawPrefix = (typeof b.roomPrefix === 'string' ? b.roomPrefix : '').trim();
               const effectiveName = rawName || rawPrefix || '';
-              const legacyDep = b.securityDeposit !== undefined && b.securityDeposit !== '' ? b.securityDeposit : (draft.formData?.deposits?.securityDeposit ?? 0);
-              const termDep = b.termDeposit !== undefined && b.termDeposit !== '' ? b.termDeposit : legacyDep;
-              const monthlyDep = b.monthlyDeposit !== undefined && b.monthlyDeposit !== '' ? b.monthlyDeposit : legacyDep;
-              const dailyDep = b.dailyDeposit !== undefined && b.dailyDeposit !== '' ? b.dailyDeposit : legacyDep;
+              const rawSecDep = draft.formData?.deposits?.securityDeposit;
+              const draftDormDep = (rawSecDep !== undefined && rawSecDep !== null && rawSecDep !== '') ? rawSecDep : '';
+              const legacyDep = (b.securityDeposit !== undefined && b.securityDeposit !== null && b.securityDeposit !== '') ? b.securityDeposit : draftDormDep;
+              const termDep = (b.termDeposit !== undefined && b.termDeposit !== null && b.termDeposit !== '') ? b.termDeposit : legacyDep;
+              const monthlyDep = (b.monthlyDeposit !== undefined && b.monthlyDeposit !== null && b.monthlyDeposit !== '') ? b.monthlyDeposit : legacyDep;
+              const dailyDep = (b.dailyDeposit !== undefined && b.dailyDeposit !== null && b.dailyDeposit !== '') ? b.dailyDeposit : legacyDep;
 
               return {
                 ...b,
@@ -1278,10 +1268,10 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
         const bLabel = (b.name && b.name.trim()) ? formatBuildingDisplayName(b.name) : (b.roomPrefix ? `อาคาร ${b.roomPrefix}` : `อาคารที่ ${i + 1}`);
         const rates = b.rentRates;
 
-        if (!rates || isNaN(rates.monthly) || rates.monthly <= 0) {
-          return { valid: false, error: `กรุณากรอก "ค่าเช่ารายเดือน" ของ ${bLabel} ให้ถูกต้อง (ต้องมากกว่า 0)` };
+        if (rates?.monthly !== undefined && rates.monthly !== null && rates.monthly !== '' && (isNaN(Number(rates.monthly)) || Number(rates.monthly) < 0)) {
+          return { valid: false, error: `กรุณากรอก "ค่าเช่ารายเดือน" ของ ${bLabel} ให้ถูกต้อง (ต้องเป็นตัวเลข >= 0)` };
         }
-        if (isNaN(rates.daily) || rates.daily < 0) {
+        if (rates?.daily !== undefined && rates.daily !== null && rates.daily !== '' && (isNaN(Number(rates.daily)) || Number(rates.daily) < 0)) {
           return { valid: false, error: `กรุณากรอก "ค่าเช่ารายวัน" ของ ${bLabel} ให้ถูกต้อง` };
         }
         if (!rates.maxOccupants || rates.maxOccupants <= 0) {

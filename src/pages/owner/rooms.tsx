@@ -377,21 +377,38 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
     const bldTermRent = targetBld?.termRent !== undefined ? targetBld.termRent : (targetBld as any)?.rawOverrides?.termRent;
     const bldDailyRent = targetBld?.dailyRent !== undefined ? targetBld.dailyRent : (targetBld as any)?.rawOverrides?.dailyRent;
 
-    const bldMonthlyDeposit = (targetBld as any)?.monthlyDeposit !== undefined && (targetBld as any)?.monthlyDeposit !== null && (targetBld as any)?.monthlyDeposit !== ''
-      ? (targetBld as any).monthlyDeposit
-      : (targetBld?.depositAmount !== undefined ? targetBld.depositAmount : (targetBld as any)?.rawOverrides?.depositAmount);
-    const bldTermDeposit = (targetBld as any)?.termDeposit !== undefined && (targetBld as any)?.termDeposit !== null && (targetBld as any)?.termDeposit !== ''
-      ? (targetBld as any).termDeposit
-      : undefined;
-    const bldDailyDeposit = (targetBld as any)?.dailyDeposit !== undefined && (targetBld as any)?.dailyDeposit !== null && (targetBld as any)?.dailyDeposit !== ''
-      ? (targetBld as any).dailyDeposit
-      : undefined;
-
     const monthlyRentVal = resolveValue(bldMonthlyRent, defs?.defaultMonthlyRent);
     const termRentVal = resolveValue(bldTermRent, defs?.defaultTermRent);
     const dailyRentVal = resolveValue(bldDailyRent, defs?.defaultDailyRent);
 
     const dormDeposit = defs?.defaultDeposit;
+
+    // Independent per-rental-type deposits:
+    // 1. If building has explicitly configured per-type deposit (including 0): that value is authoritative.
+    // 2. If legacy building has no per-type deposits configured at all (all three null/undefined):
+    //    preserve proven legacy compatibility where depositAmount represented monthly deposit.
+    // 3. Otherwise fall back to DormitoryPropertyDefaults.defaultDeposit -> empty ''.
+    const hasAnyExplicitPerTypeDeposit =
+      (targetBld?.monthlyDeposit !== null && targetBld?.monthlyDeposit !== undefined && targetBld?.monthlyDeposit !== '') ||
+      (targetBld?.termDeposit !== null && targetBld?.termDeposit !== undefined && targetBld?.termDeposit !== '') ||
+      (targetBld?.dailyDeposit !== null && targetBld?.dailyDeposit !== undefined && targetBld?.dailyDeposit !== '');
+
+    const legacyDepositAmount = targetBld?.depositAmount !== undefined && targetBld?.depositAmount !== null && targetBld?.depositAmount !== ''
+      ? targetBld.depositAmount
+      : (targetBld as any)?.rawOverrides?.depositAmount;
+
+    const bldMonthlyDeposit = (targetBld?.monthlyDeposit !== null && targetBld?.monthlyDeposit !== undefined && targetBld?.monthlyDeposit !== '')
+      ? targetBld.monthlyDeposit
+      : (!hasAnyExplicitPerTypeDeposit && legacyDepositAmount !== undefined && legacyDepositAmount !== null && legacyDepositAmount !== '' ? legacyDepositAmount : undefined);
+
+    const bldTermDeposit = (targetBld?.termDeposit !== null && targetBld?.termDeposit !== undefined && targetBld?.termDeposit !== '')
+      ? targetBld.termDeposit
+      : undefined;
+
+    const bldDailyDeposit = (targetBld?.dailyDeposit !== null && targetBld?.dailyDeposit !== undefined && targetBld?.dailyDeposit !== '')
+      ? targetBld.dailyDeposit
+      : undefined;
+
     const monthlyDepositVal = resolveValue(bldMonthlyDeposit, dormDeposit);
     const termDepositVal = resolveValue(bldTermDeposit, dormDeposit);
     const dailyDepositVal = resolveValue(bldDailyDeposit, dormDeposit);
@@ -485,13 +502,13 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
       setInlineBuildingCode(null);
       setIsBuildingDropdownOpen(false);
       setFloor(room.floor || 1);
-      setMonthlyRent(room.monthlyRent !== null && room.monthlyRent !== undefined ? room.monthlyRent : 0);
-      setTermRent(room.termRent !== null && room.termRent !== undefined ? room.termRent : 0);
-      setDailyRent(room.dailyRent !== null && room.dailyRent !== undefined ? room.dailyRent : 0);
+      setMonthlyRent(room.monthlyRent !== null && room.monthlyRent !== undefined ? room.monthlyRent : '');
+      setTermRent(room.termRent !== null && room.termRent !== undefined ? room.termRent : '');
+      setDailyRent(room.dailyRent !== null && room.dailyRent !== undefined ? room.dailyRent : '');
       setRentCycle(room.rentCycle || 'monthly');
-      setTermDeposit(room.termDeposit ?? room.depositAmount ?? 0);
-      setMonthlyDeposit(room.monthlyDeposit ?? room.depositAmount ?? 0);
-      setDailyDeposit(room.dailyDeposit ?? (room.dailyRent ? Number(room.dailyRent) * 2 : 0));
+      setTermDeposit(room.termDeposit !== null && room.termDeposit !== undefined ? room.termDeposit : (room.depositAmount ?? ''));
+      setMonthlyDeposit(room.monthlyDeposit !== null && room.monthlyDeposit !== undefined ? room.monthlyDeposit : (room.depositAmount ?? ''));
+      setDailyDeposit(room.dailyDeposit !== null && room.dailyDeposit !== undefined ? room.dailyDeposit : '');
       setMaxOccupants(room.maxOccupants || 2);
       setRoomStatus(room.status || 'vacant');
       setInitialWaterMeter(room.initialWaterMeter || 100);
@@ -647,8 +664,8 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
       return;
     }
 
-    if (monthlyRent <= 0) {
-      const err = 'กรุณากรอกค่าเช่ารายเดือนให้ถูกต้อง';
+    if (monthlyRent !== '' && monthlyRent !== null && monthlyRent !== undefined && Number(monthlyRent) < 0) {
+      const err = 'กรุณากรอกค่าเช่ารายเดือนให้ถูกต้อง (ต้องเป็นตัวเลข >= 0)';
       setErrorText(err);
       const formEl = document.getElementById('room-edit-form');
       if (formEl) formEl.scrollIntoView({ behavior: 'smooth', block: 'start' });

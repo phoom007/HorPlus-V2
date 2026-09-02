@@ -814,6 +814,8 @@ export function createDormitoryRouter(
 
   // POST /api/v1/dormitories/:dormitoryId/logo (Owner Round 2.4E Dormitory Logo Upload)
   const handlePostLogo = async (req: Request, res: Response) => {
+    if (!verifyCsrfToken(req, res)) return;
+
     try {
       const contentType = req.headers['content-type'] || '';
       if (!contentType.includes('multipart/form-data')) {
@@ -887,6 +889,8 @@ export function createDormitoryRouter(
 
   // DELETE /api/v1/dormitories/:dormitoryId/logo (Owner Round 2.4E Dormitory Logo Delete)
   const handleDeleteLogo = async (req: Request, res: Response) => {
+    if (!verifyCsrfToken(req, res)) return;
+
     try {
       const dormitoryId = req.params.dormitoryId;
       const result = await dormitoryLogoService.deleteLogo(dormitoryId);
@@ -906,9 +910,24 @@ export function createDormitoryRouter(
     }
   };
 
-  router.post('/:dormitoryId/logo', requireSession, requireDormitory, upload.single('file'), handlePostLogo);
+  router.post(
+    '/:dormitoryId/logo',
+    requireSession,
+    requireDormitory,
+    requireDormitoryUpdate,
+    requireDormitoryWriteEntitlement,
+    upload.single('file'),
+    handlePostLogo
+  );
   router.get('/:dormitoryId/logo', handleGetLogo);
-  router.delete('/:dormitoryId/logo', requireSession, requireDormitory, handleDeleteLogo);
+  router.delete(
+    '/:dormitoryId/logo',
+    requireSession,
+    requireDormitory,
+    requireDormitoryUpdate,
+    requireDormitoryWriteEntitlement,
+    handleDeleteLogo
+  );
 
   return router;
 }

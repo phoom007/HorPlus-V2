@@ -1736,7 +1736,6 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                         }
                       }}
                       className={`flex items-baseline justify-between pt-1 border-t border-slate-100 ${item.affectedOrigins[0]?.bill ? 'cursor-pointer hover:opacity-80 transition-opacity' : ''}`}
-                      title={item.affectedOrigins[0]?.bill ? 'คลิกเพื่อดูรายละเอียดบิล' : undefined}
                     >
                       <span className="text-xs text-slate-400 font-bold">ยอดรอตรวจสอบ</span>
                       <span className="text-lg font-black text-indigo-600">{formatBaht(item.totalAmount)}</span>

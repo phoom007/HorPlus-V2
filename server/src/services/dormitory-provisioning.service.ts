@@ -869,6 +869,9 @@ export class DormitoryProvisioningService {
             ? b.depositAmount
             : ((b.securityDeposit !== undefined && b.securityDeposit !== null && String(b.securityDeposit) !== '') ? b.securityDeposit : null);
           const bDepositStr = bDepositNum !== null ? String(bDepositNum) : null;
+          const bMonthlyDepositStr = (b.monthlyDeposit !== undefined && b.monthlyDeposit !== null && String(b.monthlyDeposit) !== '') ? String(b.monthlyDeposit) : null;
+          const bTermDepositStr = (b.termDeposit !== undefined && b.termDeposit !== null && String(b.termDeposit) !== '') ? String(b.termDeposit) : null;
+          const bDailyDepositStr = (b.dailyDeposit !== undefined && b.dailyDeposit !== null && String(b.dailyDeposit) !== '') ? String(b.dailyDeposit) : null;
           const bMaxOcc = b.maximumOccupants ?? 2;
           const bNumPattern = b.numberingPattern || b.formatPattern || null;
 
@@ -895,6 +898,9 @@ export class DormitoryProvisioningService {
               termMonths: bTermMonths,
               maxTermRentInstallments: bMaxInstallments,
               depositAmount: bDepositStr,
+              monthlyDeposit: bMonthlyDepositStr,
+              termDeposit: bTermDepositStr,
+              dailyDeposit: bDailyDepositStr,
               maximumOccupants: bMaxOcc,
             },
             update: {
@@ -911,6 +917,9 @@ export class DormitoryProvisioningService {
               termMonths: bTermMonths,
               maxTermRentInstallments: bMaxInstallments,
               depositAmount: bDepositStr,
+              monthlyDeposit: bMonthlyDepositStr,
+              termDeposit: bTermDepositStr,
+              dailyDeposit: bDailyDepositStr,
               maximumOccupants: bMaxOcc,
             },
           });
@@ -926,18 +935,32 @@ export class DormitoryProvisioningService {
 
             const isExplicitRoomDeposit = r.depositAmount !== undefined && r.depositAmount !== null && (bDepositStr === null || String(r.depositAmount) !== bDepositStr) && r.depositInheritsBuildingDefault === false;
             const depositInheritsBuildingDefault = isExplicitRoomDeposit ? false : (r.depositInheritsBuildingDefault !== undefined ? Boolean(r.depositInheritsBuildingDefault) : true);
+
+            const resolveAuthoritativeRoomDeposit = (roomVal: any, buildingVal: string | null, dormDefault: string | undefined, fieldLabel: string): string => {
+              if (roomVal !== undefined && roomVal !== null && String(roomVal) !== '') {
+                return String(roomVal);
+              }
+              if (buildingVal !== null) {
+                return buildingVal;
+              }
+              if (dormDefault !== undefined) {
+                return dormDefault;
+              }
+              throw new AppError(
+                `เงินประกัน (${fieldLabel}) สำหรับห้อง "${r.roomNumber}" ไม่ได้รับการกำหนดค่า กรุณาระบุเงินประกัน`,
+                400,
+                'REQUIRED_ROOM_DEPOSIT_MISSING'
+              );
+            };
+
+            const rMonthlyDeposit = resolveAuthoritativeRoomDeposit((r as any).monthlyDeposit, bMonthlyDepositStr ?? bDepositStr, defaultDepositVal, 'รายเดือน');
+            const rTermDeposit = resolveAuthoritativeRoomDeposit((r as any).termDeposit, bTermDepositStr ?? bDepositStr, defaultDepositVal, 'รายเทอม');
+            const rDailyDeposit = resolveAuthoritativeRoomDeposit((r as any).dailyDeposit, bDailyDepositStr ?? bDepositStr, defaultDepositVal, 'รายวัน');
             const rDepositStr = !depositInheritsBuildingDefault && r.depositAmount !== undefined && r.depositAmount !== null
               ? String(r.depositAmount)
-              : (bDepositStr !== null ? bDepositStr : (r.depositAmount !== undefined && r.depositAmount !== null ? String(r.depositAmount) : '0'));
+              : rMonthlyDeposit;
+
             const rMaxOcc = (r as any).maximumOccupants ?? bMaxOcc;
-
-            const bTermDeposit = b.termDeposit !== undefined && b.termDeposit !== null ? String(b.termDeposit) : bDepositStr;
-            const bMonthlyDeposit = b.monthlyDeposit !== undefined && b.monthlyDeposit !== null ? String(b.monthlyDeposit) : bDepositStr;
-            const bDailyDeposit = b.dailyDeposit !== undefined && b.dailyDeposit !== null ? String(b.dailyDeposit) : bDepositStr;
-
-            const rTermDeposit = (r as any).termDeposit !== undefined && (r as any).termDeposit !== null ? String((r as any).termDeposit) : (bTermDeposit || rDepositStr);
-            const rMonthlyDeposit = (r as any).monthlyDeposit !== undefined && (r as any).monthlyDeposit !== null ? String((r as any).monthlyDeposit) : (bMonthlyDeposit || rDepositStr);
-            const rDailyDeposit = (r as any).dailyDeposit !== undefined && (r as any).dailyDeposit !== null ? String((r as any).dailyDeposit) : (bDailyDeposit || rDepositStr);
 
             await tx.room.upsert({
               where: {

@@ -199,6 +199,26 @@ export const onboardingClient = {
     return httpRequest<any>('POST', `/dormitories/${dormitoryId}/signatures`, body, { headers });
   },
 
+  async uploadLogo(dormitoryId: string, file: File) {
+    const fd = new FormData();
+    fd.append('file', file);
+    return httpRequest<{ success: boolean; data: { logoUrl: string; hasLogo: boolean } }>(
+      'POST',
+      `/dormitories/${dormitoryId}/logo`,
+      fd,
+      { headers: { 'X-Dormitory-Id': dormitoryId }, dormitoryId }
+    );
+  },
+
+  async deleteLogo(dormitoryId: string) {
+    return httpRequest<{ success: boolean; data: { logoUrl: null; hasLogo: boolean } }>(
+      'DELETE',
+      `/dormitories/${dormitoryId}/logo`,
+      undefined,
+      { headers: { 'X-Dormitory-Id': dormitoryId }, dormitoryId }
+    );
+  },
+
   async getLineConfig(dormitoryId: string) {
     return httpRequest<any>('GET', `/dormitories/${dormitoryId}/line-oa`, undefined, {
       headers: { 'X-Dormitory-Id': dormitoryId },

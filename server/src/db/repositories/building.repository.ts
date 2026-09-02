@@ -8,6 +8,9 @@ export interface BuildingEntity {
   status: string; // active, inactive, archived
   displayOrder: number;
   numberingPattern?: string | null;
+  monthlyDeposit?: any;
+  termDeposit?: any;
+  dailyDeposit?: any;
   createdAt: Date;
   updatedAt: Date;
   deletedAt?: Date | null;
@@ -22,6 +25,9 @@ export interface CreateBuildingData {
   status?: string;
   displayOrder?: number;
   numberingPattern?: string | null;
+  monthlyDeposit?: any;
+  termDeposit?: any;
+  dailyDeposit?: any;
 }
 
 export interface BuildingFilterQuery {
