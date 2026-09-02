@@ -16,6 +16,8 @@ import {
   DollarSign,
   Building,
   FileText,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Modal, formatBaht, formatThaiDate, formatCycleCode, PrintView, formatBillingQuantity, formatBillingRate, resolveBillingDisplayUnit, isNonZeroAmount, filterNonZeroBillItems } from '../../components/GlobalComponents';
@@ -25,7 +27,7 @@ import { LineNotificationModal, LineIcon } from '../../components/LineNotificati
 import { Bill, Tenant, Room } from '../../types';
 import { queryKeys } from '../../lib/queryClient';
 import { httpRequest } from '../../data/httpClient';
-import { isDailyInvoiceFullyPaid } from '../../utils/dailyPaymentPredicate';
+import { isDailyInvoiceFullyPaid, isFinancialObligationSettled } from '../../utils/dailyPaymentPredicate';
 
 export interface BillingCycle {
   id: string;
@@ -632,6 +634,36 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
   const [pendingApproveMap, setPendingApproveMap] = useState<Record<string, number>>({});
   const approveTimersRef = useRef<Record<string, NodeJS.Timeout>>({});
 
+  // Component-stable Idempotency Key Manager
+  const idempotencyKeysRef = useRef<Map<string, string>>(new Map());
+  const getIdempotencyKey = (opId: string): string => {
+    let key = idempotencyKeysRef.current.get(opId);
+    if (!key) {
+      key = typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `idem-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+      idempotencyKeysRef.current.set(opId, key);
+    }
+    return key;
+  };
+  const clearIdempotencyKey = (opId: string): void => {
+    idempotencyKeysRef.current.delete(opId);
+  };
+
+  // Unpaid Card Inline Item Expansion state
+  const [expandedBillDetails, setExpandedBillDetails] = useState<Set<string>>(new Set());
+  const toggleBillDetail = (billId: string) => {
+    setExpandedBillDetails(prev => {
+      const next = new Set(prev);
+      if (next.has(billId)) {
+        next.delete(billId);
+      } else {
+        next.add(billId);
+      }
+      return next;
+    });
+  };
+
   const [isReceiptOpen, setIsReceiptOpen] = useState(false);
   const [viewingGroupDetail, setViewingGroupDetail] = useState<{
     roomNumber: string;
@@ -793,8 +825,8 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
     return dailyInvoicesData.filter((inv) => {
       if (!isDailyInvoiceInSelectedCycle(inv, selectedCycleObj)) return false;
       const status = (inv.status || '').toUpperCase();
-      if (status === 'CANCELLED') return false;
-      return !isDailyInvoiceFullyPaid(inv);
+      if (status === 'CANCELLED' || status === 'VOID' || status === 'VOIDED') return false;
+      return !isFinancialObligationSettled(inv);
     });
   }, [dailyInvoicesData, selectedCycleObj]);
 
@@ -802,7 +834,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
     if (!dailyInvoicesData || !Array.isArray(dailyInvoicesData)) return [];
     return dailyInvoicesData.filter((inv) => {
       if (!isDailyInvoiceInSelectedCycle(inv, selectedCycleObj)) return false;
-      return isDailyInvoiceFullyPaid(inv);
+      return isFinancialObligationSettled(inv);
     });
   }, [dailyInvoicesData, selectedCycleObj]);
 
@@ -1073,10 +1105,66 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
       }
     });
 
+    // Collect bill IDs that already have an entry in paidPayments
+    const paidBillIds = new Set(paidPayments.map(p => p.billId).filter(Boolean));
+
+    // Zero-amount settled bills in effective cycle (no fake payment, no fake receipt)
+    const zeroSettledBills = bills.filter(b => {
+      const resolvedCycleId = resolveRecordBillingCycleId(b.billingCycleId, b.cycleId, billingCycles);
+      if (!resolvedCycleId || !effectiveCycleId || resolvedCycleId !== effectiveCycleId) return false;
+
+      // Must be settled according to canonical predicate
+      if (!isFinancialObligationSettled(b)) return false;
+
+      // Must not already be accounted for via a Payment
+      if (paidBillIds.has(b.id)) return false;
+
+      // Authoritative outstanding must be 0
+      const outstanding = Number(b.outstandingAmount ?? b.totalAmount ?? 0);
+      return outstanding === 0;
+    });
+
+    zeroSettledBills.forEach(b => {
+      const cycleId = resolveRecordBillingCycleId(b.billingCycleId, b.cycleId, billingCycles) || effectiveCycleId || '';
+      const roomId = b.roomId || '';
+      const tenantId = b.tenantId || '';
+      const key = `${cycleId}_${tenantId}_${roomId}`;
+
+      const roomNum = b.room?.roomNumber || getRoomNum(roomId);
+      const tenantName = b.tenant?.displayName || getTenantName(tenantId);
+      const isHist = Boolean((b as any).metadata?.isHistoricalImport || b.items?.some((it: any) => it.metadata?.isHistoricalImport));
+      const histLabel = (b as any).metadata?.originalPeriodLabel || (b.items?.find((it: any) => it.metadata?.isHistoricalImport)?.metadata?.originalPeriodLabel) || (b.billKind === 'DEPOSIT' ? 'เงินประกัน' : undefined);
+
+      const existing = map.get(key);
+      if (existing) {
+        if (isHist) {
+          existing.isHistorical = true;
+          if (histLabel && !existing.historicalLabel) existing.historicalLabel = histLabel;
+        }
+      } else {
+        map.set(key, {
+          id: key,
+          roomId,
+          roomNumber: roomNum,
+          tenantId,
+          tenantName,
+          totalAmount: 0,
+          payments: [],
+          isHistorical: isHist,
+          historicalLabel: histLabel,
+          isDepositOnly: b.billKind === 'DEPOSIT',
+          isRentOnly: b.billKind === 'RENT',
+          latestPaidDate: b.billingDate ? String(b.billingDate) : new Date().toISOString(),
+          paymentMethods: ['ปลอดค่าใช้จ่าย'],
+          slipUrl: null,
+        });
+      }
+    });
+
     return Array.from(map.values()).sort((a, b) => {
       return a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true, sensitivity: 'base' });
     });
-  }, [paidPayments, billingCycles, effectiveCycleId, rooms, tenants]);
+  }, [paidPayments, bills, billingCycles, effectiveCycleId, rooms, tenants]);
 
   // Consolidated Paid Daily Summary Groups (1 card per billingCycle + tenantId + roomId when tenantId exists, isolated when null)
   const consolidatedPaidDailyGroups = useMemo(() => {
@@ -1216,14 +1304,22 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
   };
 
   const handleSettleDailyInvoice = async (invoiceId: string) => {
+    const opId = `daily-cash:${invoiceId}`;
+    const idempotencyKey = getIdempotencyKey(opId);
     try {
       setIsSubmittingCash(true);
       await httpRequest(
         'POST',
         `/daily-stays/invoices/${invoiceId}/settle-item`,
         { itemType: 'ALL' },
-        { headers: { 'x-dormitory-id': dormitoryId } }
+        {
+          headers: {
+            'x-dormitory-id': dormitoryId,
+            'x-idempotency-key': idempotencyKey,
+          },
+        }
       );
+      clearIdempotencyKey(opId);
       triggerToast('บันทึกการชำระเงินรายวันสำเร็จ');
       queryClient.invalidateQueries({ queryKey: queryKeys.dailyInvoices(dormitoryId) });
       queryClient.invalidateQueries({ queryKey: queryKeys.payments(dormitoryId) });
@@ -1698,10 +1794,20 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                             {item.affectedOrigins[0]?.cycleLabel ? `งวด ${item.affectedOrigins[0].cycleLabel}` : 'ไม่พบข้อมูลงวดบิล'}
                           </span>
                         )}
-                        <span className="inline-flex whitespace-nowrap shrink-0 px-3 py-1 bg-amber-50 text-amber-800 border border-amber-200 font-extrabold rounded-full text-[11px] items-center gap-1">
-                          <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                          <span>รอตรวจสลิป</span>
-                        </span>
+                        {Boolean(item.isGroup && item.affectedOrigins[0]?.cycleLabel) ? (
+                          <span
+                            className="inline-flex whitespace-nowrap shrink-0 p-1.5 bg-amber-50 text-amber-800 border border-amber-200 font-extrabold rounded-full text-[11px] items-center justify-center"
+                            title="รอตรวจสลิป"
+                            aria-label="รอตรวจสลิป"
+                          >
+                            <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0" aria-hidden="true" />
+                          </span>
+                        ) : (
+                          <span className="inline-flex whitespace-nowrap shrink-0 px-3 py-1 bg-amber-50 text-amber-800 border border-amber-200 font-extrabold rounded-full text-[11px] items-center gap-1" title="รอตรวจสลิป" aria-label="รอตรวจสลิป">
+                            <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0" aria-hidden="true" />
+                            <span>รอตรวจสลิป</span>
+                          </span>
+                        )}
                       </div>
                     </div>
 
@@ -1853,29 +1959,65 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                   <div className="text-[11px] text-slate-500 space-y-1 border-t border-slate-100 pt-2">
                     {(() => {
                       const nonZeroItems = filterNonZeroBillItems(b.items);
-                      return nonZeroItems.length > 0 ? (
-                        <>
-                          {nonZeroItems.slice(0, 3).map((it, idx) => (
-                            <div key={idx} className="flex justify-between items-center">
-                              <span className="truncate pr-1 text-slate-500 font-medium">{formatItemDescription(it.description)}:</span>
-                              <span className="font-semibold text-slate-700 shrink-0">{formatBahtDash(it.amount)}</span>
-                            </div>
-                          ))}
-                          {nonZeroItems.length > 3 && (
+                      const isExpanded = expandedBillDetails.has(b.id);
+                      const count = nonZeroItems.length;
+
+                      if (count === 0) {
+                        return (
+                          <div className="flex justify-between items-center">
+                            <span className="text-slate-500">ค่าเช่าและบริการ:</span>
+                            <span className="font-semibold text-slate-700">{formatBaht(amount)}</span>
+                          </div>
+                        );
+                      }
+
+                      if (count <= 3) {
+                        return (
+                          <div>
+                            {isExpanded && (
+                              <div className="space-y-1 mb-1.5">
+                                {nonZeroItems.map((it, idx) => (
+                                  <div key={idx} className="flex justify-between items-center">
+                                    <span className="truncate pr-1 text-slate-500 font-medium">{formatItemDescription(it.description)}:</span>
+                                    <span className="font-semibold text-slate-700 shrink-0">{formatBahtDash(it.amount)}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
                             <button
                               type="button"
-                              onClick={() => setViewingBillDetail({ bill: b, tenantName, roomNum })}
-                              className="text-[11px] font-bold text-indigo-600 hover:text-indigo-800 hover:underline flex items-center gap-1 pt-0.5 cursor-pointer"
+                              onClick={() => toggleBillDetail(b.id)}
+                              className="text-[11px] font-bold text-indigo-600 hover:text-indigo-800 flex items-center gap-1 pt-0.5 cursor-pointer"
                             >
-                              <FileText className="w-3 h-3" />
-                              ดูรายละเอียด +{nonZeroItems.length - 3} รายการ
+                              <span>{isExpanded ? 'ซ่อนรายละเอียด' : `ดูรายละเอียด +${count}`}</span>
+                              {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
                             </button>
-                          )}
-                        </>
-                      ) : (
-                        <div className="flex justify-between items-center">
-                          <span className="text-slate-500">ค่าเช่าและบริการ:</span>
-                          <span className="font-semibold text-slate-700">{formatBaht(amount)}</span>
+                          </div>
+                        );
+                      }
+
+                      // count > 3
+                      const visibleItems = isExpanded ? nonZeroItems : nonZeroItems.slice(0, 3);
+                      const hiddenCount = count - 3;
+
+                      return (
+                        <div>
+                          <div className="space-y-1 mb-1.5">
+                            {visibleItems.map((it, idx) => (
+                              <div key={idx} className="flex justify-between items-center">
+                                <span className="truncate pr-1 text-slate-500 font-medium">{formatItemDescription(it.description)}:</span>
+                                <span className="font-semibold text-slate-700 shrink-0">{formatBahtDash(it.amount)}</span>
+                              </div>
+                            ))}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => toggleBillDetail(b.id)}
+                            className="text-[11px] font-bold text-indigo-600 hover:text-indigo-800 flex items-center gap-1 pt-0.5 cursor-pointer"
+                          >
+                            <span>{isExpanded ? 'ซ่อนรายละเอียด' : `ดูรายละเอียด +${hiddenCount}`}</span>
+                            {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                          </button>
                         </div>
                       );
                     })()}
@@ -1898,18 +2040,6 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                   <div className="flex items-baseline justify-between pt-1 border-t border-slate-100">
                     <div className="flex items-center gap-1.5">
                       <span className="text-xs text-slate-400 font-bold">ยอดที่ต้องชำระ</span>
-                      {(() => {
-                        const nonZeroItems = filterNonZeroBillItems(b.items);
-                        return nonZeroItems.length > 0 && nonZeroItems.length <= 3 && (
-                          <button
-                            type="button"
-                            onClick={() => setViewingBillDetail({ bill: b, tenantName, roomNum })}
-                            className="text-[10px] text-indigo-600 hover:underline font-semibold cursor-pointer"
-                          >
-                            (ดูรายการ)
-                          </button>
-                        );
-                      })()}
                     </div>
                     <span className="text-lg font-black text-slate-900">{formatBaht(amount)}</span>
                   </div>
@@ -2053,7 +2183,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                         type="button"
                         disabled={isSubmittingCash}
                         onClick={() => startDailyCashPaymentWithCountdown(inv)}
-                        className="py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-1.5 shadow-xs transition-all cursor-pointer"
+                        className="py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-1.5 shadow-xs transition-all cursor-pointer"
                       >
                         <DollarSign className="w-4 h-4" />
                         รับเงินสด
@@ -2123,7 +2253,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                   <div className="flex items-baseline justify-between pt-1 border-t border-slate-100">
                     <div className="flex items-center gap-1.5">
                       <span className="text-xs text-slate-400 font-bold">ยอดชำระสำเร็จ</span>
-                      {group.payments.length > 1 ? (
+                      {group.payments.length > 1 && (
                         <button
                           type="button"
                           onClick={() => setViewingGroupDetail(group)}
@@ -2131,15 +2261,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                         >
                           ({group.payments.length} รายการ)
                         </button>
-                      ) : group.payments[0]?.bill ? (
-                        <button
-                          type="button"
-                          onClick={() => setViewingBillDetail({ bill: group.payments[0].bill, tenantName: group.tenantName, roomNum: group.roomNumber })}
-                          className="text-[10px] text-emerald-600 hover:underline font-semibold cursor-pointer"
-                        >
-                          (ดูรายการ)
-                        </button>
-                      ) : null}
+                      )}
                     </div>
                     <span className="text-lg font-black text-emerald-600">{formatBaht(group.totalAmount)}</span>
                   </div>
@@ -2168,7 +2290,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                         <Printer className="w-4 h-4" />
                         ใบเสร็จรับเงิน
                       </button>
-                    ) : (
+                    ) : group.payments.length > 1 ? (
                       <button
                         type="button"
                         onClick={() => setViewingGroupDetail(group)}
@@ -2177,6 +2299,10 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                         <FileText className="w-4 h-4" />
                         ดูใบเสร็จ ({group.payments.length})
                       </button>
+                    ) : (
+                      <div className="py-2.5 bg-slate-50 text-slate-400 font-bold text-xs rounded-xl flex items-center justify-center border border-slate-100">
+                        ปลอดค่าใช้จ่าย
+                      </div>
                     )}
                   </div>
                 </div>
@@ -2317,15 +2443,6 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                   <div className="flex items-baseline justify-between pt-1 border-t border-slate-100">
                     <div className="flex items-center gap-1.5">
                       <span className="text-xs text-slate-400 font-bold">ยอดค้างชำระ</span>
-                      {p.bill && (
-                        <button
-                          type="button"
-                          onClick={() => setViewingBillDetail({ bill: p.bill, tenantName, roomNum })}
-                          className="text-[10px] text-rose-600 hover:underline font-semibold cursor-pointer"
-                        >
-                          (ดูรายการ)
-                        </button>
-                      )}
                     </div>
                     <span className="text-lg font-black text-rose-600">{formatBaht(amount)}</span>
                   </div>

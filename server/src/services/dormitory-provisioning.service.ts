@@ -962,6 +962,19 @@ export class DormitoryProvisioningService {
 
             const rMaxOcc = (r as any).maximumOccupants ?? bMaxOcc;
 
+            const existingRoom = typeof tx.room.findFirst === 'function'
+              ? await tx.room.findFirst({ where: { dormitoryId: dormId, normalizedRoomNumber } })
+              : (typeof tx.room.findUnique === 'function'
+                ? await tx.room.findUnique({ where: { dormitoryId_normalizedRoomNumber: { dormitoryId: dormId, normalizedRoomNumber } } as any })
+                : null);
+            if (existingRoom && existingRoom.buildingId && existingRoom.buildingId !== createdBld.id) {
+              throw new AppError(
+                `เลขห้อง "${r.roomNumber}" ซ้ำกับอาคารอื่นในหอพัก`,
+                409,
+                'ROOM_NUMBER_ALREADY_EXISTS'
+              );
+            }
+
             await tx.room.upsert({
               where: {
                 dormitoryId_buildingId_normalizedRoomNumber: {

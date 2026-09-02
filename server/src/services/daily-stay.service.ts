@@ -597,6 +597,22 @@ export class DailyStayService {
       if (!invoice) {
         invoiceNumber = await this.generateNextDailyInvoiceNumber(dormitoryId, tx);
 
+        const isRentZero = toDecimal(totalRent).equals(toDecimal(0));
+        const isDepositZero = toDecimal(deposit).equals(toDecimal(0));
+        const isOutstandingZero = toDecimal(outstanding).equals(toDecimal(0));
+
+        const rentStatus = isRentZero ? 'SETTLED' : 'OUTSTANDING';
+        const depositStatus = isDepositZero
+          ? 'SETTLED'
+          : (stay.depositDeclaredStatus === 'PAID' ? 'DECLARED_PAID' : 'OUTSTANDING');
+        const depositPaidAt = (!isDepositZero && stay.depositDeclaredStatus === 'PAID')
+          ? new Date()
+          : null;
+
+        const invoiceStatus = isOutstandingZero
+          ? 'PAID'
+          : (depositStatus === 'DECLARED_PAID' || isDepositZero ? 'PARTIALLY_PAID' : 'ISSUED');
+
         invoice = await tx.dailyStayInvoice.create({
           data: {
             dormitoryId,
@@ -607,21 +623,22 @@ export class DailyStayService {
             totalAgreedAmount: toDecimal(totalAgreed),
             outstandingAmount: toDecimal(outstanding),
             depositDeclaredStatus: stay.depositDeclaredStatus,
-            status: 'ISSUED',
+            status: invoiceStatus,
             items: {
               create: [
                 {
                   itemType: 'DAILY_RENT',
                   description: `ค่าเช่าห้องพักรายวัน (${stay.inclusiveDayCount} วัน)`,
                   amount: toDecimal(totalRent),
-                  status: 'OUTSTANDING',
+                  status: rentStatus,
+                  paidAt: null,
                 },
                 {
                   itemType: 'DEPOSIT',
                   description: 'เงินประกัน/มัดจำรายวัน',
                   amount: toDecimal(deposit),
-                  status: stay.depositDeclaredStatus === 'PAID' ? 'DECLARED_PAID' : 'OUTSTANDING',
-                  paidAt: stay.depositDeclaredStatus === 'PAID' ? new Date() : null,
+                  status: depositStatus,
+                  paidAt: depositPaidAt,
                 },
               ],
             },
@@ -878,6 +895,22 @@ export class DailyStayService {
 
       const invoiceNumber = await this.generateNextDailyInvoiceNumber(dormitoryId, tx);
 
+      const isRentZero = toDecimal(totalRent).equals(toDecimal(0));
+      const isDepositZero = toDecimal(deposit).equals(toDecimal(0));
+      const isOutstandingZero = toDecimal(outstanding).equals(toDecimal(0));
+
+      const rentStatus = isRentZero ? 'SETTLED' : 'OUTSTANDING';
+      const depositStatus = isDepositZero
+        ? 'SETTLED'
+        : (depositDeclaredStatus === 'PAID' ? 'DECLARED_PAID' : 'OUTSTANDING');
+      const depositPaidAt = (!isDepositZero && depositDeclaredStatus === 'PAID')
+        ? new Date()
+        : null;
+
+      const invoiceStatus = isOutstandingZero
+        ? 'PAID'
+        : (depositStatus === 'DECLARED_PAID' || isDepositZero ? 'PARTIALLY_PAID' : 'ISSUED');
+
       const invoice = await tx.dailyStayInvoice.create({
         data: {
           dormitoryId,
@@ -888,21 +921,22 @@ export class DailyStayService {
           totalAgreedAmount: toDecimal(totalAgreed),
           outstandingAmount: toDecimal(outstanding),
           depositDeclaredStatus,
-          status: 'ISSUED',
+          status: invoiceStatus,
           items: {
             create: [
               {
                 itemType: 'DAILY_RENT',
                 description: `ค่าเช่าห้องพักรายวัน (${inclusiveDayCount} วัน)`,
                 amount: toDecimal(totalRent),
-                status: 'OUTSTANDING',
+                status: rentStatus,
+                paidAt: null,
               },
               {
                 itemType: 'DEPOSIT',
                 description: 'เงินประกัน/มัดจำรายวัน',
                 amount: toDecimal(deposit),
-                status: depositDeclaredStatus === 'PAID' ? 'DECLARED_PAID' : 'OUTSTANDING',
-                paidAt: depositDeclaredStatus === 'PAID' ? new Date() : null,
+                status: depositStatus,
+                paidAt: depositPaidAt,
               },
             ],
           },

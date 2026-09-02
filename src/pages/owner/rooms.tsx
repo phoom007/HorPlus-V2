@@ -214,11 +214,16 @@ export function resolveRoomTenantAction(
     return { kind: 'DISABLED', reason: 'ไม่สามารถตรวจสอบสถานะห้องได้ กรุณาโหลดข้อมูลใหม่' };
   }
 
+  const isConfiguredPrice = (val: any) =>
+    val !== undefined && val !== null && String(val).trim() !== '' && !isNaN(Number(val)) && Number(val) >= 0;
+
   const hasPricing = Boolean(
-    (room.monthlyRent && Number(room.monthlyRent) > 0) ||
-    (room.termRent && Number(room.termRent) > 0) ||
-    (room.dailyRent && Number(room.dailyRent) > 0) ||
-    ((room as any).effectiveValues?.monthlyRent && Number((room as any).effectiveValues.monthlyRent) > 0)
+    isConfiguredPrice(room.monthlyRent) ||
+    isConfiguredPrice(room.termRent) ||
+    isConfiguredPrice(room.dailyRent) ||
+    isConfiguredPrice((room as any).effectiveValues?.monthlyRent) ||
+    isConfiguredPrice((room as any).effectiveValues?.termRent) ||
+    isConfiguredPrice((room as any).effectiveValues?.dailyRent)
   );
   if (!hasPricing) {
     return { kind: 'DISABLED', reason: 'ข้อมูลค่าเช่าของห้องไม่ครบ' };
@@ -783,19 +788,23 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
           const existingBld = buildings.find(b => (b.code && b.code.toUpperCase() === normCode) || b.name.toUpperCase() === `อาคาร ${normCode}`.toUpperCase());
           if (existingBld) {
             effectiveBuildingId = existingBld.id;
+            setBuildingId(existingBld.id);
+            setInlineBuildingCode('');
           } else {
-            const createBldRes = await (dataProvider as any).dormitory.addBuilding({
+            const createBldRes = await propertyApi.createBuilding({
               name: `อาคาร ${normCode}`,
               code: normCode,
               floorCount: 1,
-            } as any);
+            });
             if (!createBldRes.success || !createBldRes.data) {
               setErrorText(createBldRes.error?.message || 'ไม่สามารถสร้างอาคารใหม่ได้');
               setIsSubmitting(false);
               return;
             }
             effectiveBuildingId = createBldRes.data.id;
-            buildings.push(createBldRes.data);
+            setBuildingId(createBldRes.data.id);
+            setInlineBuildingCode('');
+            queryClient.invalidateQueries({ queryKey: queryKeys.buildings(dormitoryId) });
           }
         }
         if (!effectiveBuildingId) {
@@ -836,6 +845,8 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
         const createdRoom = res.data;
         onAddLog('เพิ่มห้องพักใหม่', `สร้างเลขห้อง ${roomNumber} ใหม่ในระบบ`, 'Room', createdRoom?.id || '');
         onSaveRooms(rooms, { kind: 'create' });
+        queryClient.invalidateQueries({ queryKey: queryKeys.buildings(dormitoryId) });
+        queryClient.invalidateQueries({ queryKey: queryKeys.rooms(dormitoryId) });
         setIsModalOpen(false);
         setToastMessage(`เลขห้อง "${roomNumber.trim()}" นี้ได้รับการบันทึกในระบบแล้ว`);
         setTimeout(() => setToastMessage(null), 3500);
@@ -1813,7 +1824,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                             switch (cyclePresentation.state) {
                               case 'ACTIVE_AGREEMENT': {
                                 const agrType = cyclePresentation.occupancy?.agreementType;
-                                const unitSuffix = agrType === 'TERM' ? 'เทอม' : (agrType === 'DAILY' ? 'วัน' : 'ด.');
+                                const unitSuffix = agrType === 'TERM' ? 'เทอม' : (agrType === 'DAILY' ? 'วัน' : 'เดือน');
                                 return (
                                   <div
                                     key={room.id}
@@ -2019,7 +2030,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                               case 'NO_AGREEMENT_IN_CYCLE':
                               default: {
                                 const primaryCatalog = cyclePresentation.currentCatalogRates[0] || { amount: room.monthlyRent, label: 'รายเดือน', cycle: 'monthly' };
-                                const unitSuffix = primaryCatalog.cycle === 'term' ? 'เทอม' : (primaryCatalog.cycle === 'daily' ? 'วัน' : 'ด.');
+                                const unitSuffix = primaryCatalog.cycle === 'term' ? 'เทอม' : (primaryCatalog.cycle === 'daily' ? 'วัน' : 'เดือน');
                                 return (
                                   <div
                                     key={room.id}

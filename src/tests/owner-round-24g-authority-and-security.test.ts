@@ -267,7 +267,6 @@ describe('Owner Round 2.4G: Pre-UAT Authority & Security Closure Suite', () => {
   describe('4. Canonical HTTP Client Integration for Logo Mutations', () => {
     it('uses httpRequest with automatic CSRF token and X-Dormitory-Id for uploadLogo', async () => {
       const httpSpy = vi.spyOn(httpClientModule, 'httpRequest').mockResolvedValue({
-        success: true,
         data: { logoUrl: '/api/v1/dormitories/dorm-test/logo', hasLogo: true },
       } as any);
 
@@ -283,16 +282,15 @@ describe('Owner Round 2.4G: Pre-UAT Authority & Security Closure Suite', () => {
           headers: expect.objectContaining({ 'X-Dormitory-Id': 'dorm-test' }),
         })
       );
-      expect(res.success).toBe(true);
-      expect(res.data.hasLogo).toBe(true);
+      expect(res.hasLogo).toBe(true);
+      expect(res.logoUrl).toBe('/api/v1/dormitories/dorm-test/logo');
 
       httpSpy.mockRestore();
     });
 
     it('uses httpRequest with automatic CSRF token and X-Dormitory-Id for deleteLogo', async () => {
       const httpSpy = vi.spyOn(httpClientModule, 'httpRequest').mockResolvedValue({
-        success: true,
-        data: { logoUrl: null, hasLogo: false },
+        data: { success: true },
       } as any);
 
       const res = await onboardingClient.deleteLogo('dorm-test');
@@ -307,7 +305,6 @@ describe('Owner Round 2.4G: Pre-UAT Authority & Security Closure Suite', () => {
         })
       );
       expect(res.success).toBe(true);
-      expect(res.data.hasLogo).toBe(false);
 
       httpSpy.mockRestore();
     });

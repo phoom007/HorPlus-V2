@@ -264,11 +264,11 @@ export const DormitoryLogoUploader: React.FC<DormitoryLogoUploaderProps> = ({
       setIsUploading(true);
       const dormId = await ensureProvisionalDormitoryId();
       const res = await onboardingClient.uploadLogo(dormId, file);
-      if (!res.success || !res.data) {
+      if (!res?.logoUrl) {
         throw new Error('เกิดข้อผิดพลาดในการอัปโหลดรูปภาพ');
       }
 
-      onLogoChange(`${res.data.logoUrl}?t=${Date.now()}`);
+      onLogoChange(`${res.logoUrl}?t=${Date.now()}`);
     } catch (err: any) {
       console.error('[LOGO_UPLOAD_FAILED]', err);
       onError(err.message || 'ไม่สามารถอัปโหลดโลโก้ได้ กรุณาลองใหม่อีกครั้ง');
@@ -286,7 +286,7 @@ export const DormitoryLogoUploader: React.FC<DormitoryLogoUploaderProps> = ({
       onLogoChange(null);
     } catch (err: any) {
       console.error('[LOGO_DELETE_FAILED]', err);
-      onLogoChange(null);
+      onError(err.message || 'ไม่สามารถลบโลโก้ได้ กรุณาลองใหม่อีกครั้ง');
     } finally {
       setIsUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';

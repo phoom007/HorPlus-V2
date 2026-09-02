@@ -1322,8 +1322,8 @@ describe('OWNER R3.9-C.3.2: First-Cycle Meter Workspace Authority Closure & Blan
       const dupNumeric = {
         ...validBase,
         buildings: [
-          { id: 'bld-A', name: 'อาคาร A', floorsCount: 1 },
-          { id: 'bld-B', name: 'อาคาร B', floorsCount: 1 },
+          { id: 'bld-A', name: 'อาคาร A', floorsCount: 1, depositAmount: 0 },
+          { id: 'bld-B', name: 'อาคาร B', floorsCount: 1, depositAmount: 0 },
         ],
         rooms: [
           { buildingId: 'bld-A', roomNumber: '101' },
@@ -1337,8 +1337,8 @@ describe('OWNER R3.9-C.3.2: First-Cycle Meter Workspace Authority Closure & Blan
       const dupCase = {
         ...validBase,
         buildings: [
-          { id: 'bld-A', name: 'อาคาร A', floorsCount: 1 },
-          { id: 'bld-B', name: 'อาคาร B', floorsCount: 1 },
+          { id: 'bld-A', name: 'อาคาร A', floorsCount: 1, depositAmount: 0 },
+          { id: 'bld-B', name: 'อาคาร B', floorsCount: 1, depositAmount: 0 },
         ],
         rooms: [
           { buildingId: 'bld-A', roomNumber: 'A101' },
@@ -1352,8 +1352,8 @@ describe('OWNER R3.9-C.3.2: First-Cycle Meter Workspace Authority Closure & Blan
       const distinct = {
         ...validBase,
         buildings: [
-          { id: 'bld-A', name: 'อาคาร A', floorsCount: 1 },
-          { id: 'bld-B', name: 'อาคาร สมบูรณ์', floorsCount: 1 },
+          { id: 'bld-A', name: 'อาคาร A', floorsCount: 1, depositAmount: 0 },
+          { id: 'bld-B', name: 'อาคาร สมบูรณ์', floorsCount: 1, depositAmount: 0 },
         ],
         rooms: [
           { buildingId: 'bld-A', roomNumber: 'A101' },
@@ -1434,8 +1434,8 @@ describe('OWNER R3.9-C.3.2: First-Cycle Meter Workspace Authority Closure & Blan
           packageIntentId: 'intent-001',
           dormitory: { name: 'Dorm Conflict', estimatedRoomCount: 1 },
           billing: { dueDay: 5 },
-          buildings: [{ id: 'bld-B', name: 'อาคาร B', floorsCount: 1 }],
-          rooms: [{ buildingId: 'bld-B', roomNumber: '101', floor: 1 }],
+          buildings: [{ id: 'bld-B', name: 'อาคาร B', floorsCount: 1, depositAmount: 0 }],
+          rooms: [{ buildingId: 'bld-B', roomNumber: '101', floor: 1, monthlyRent: 3500 }],
         })
       ).rejects.toThrow(/ซ้ำกับอาคารอื่น/);
 
@@ -1513,7 +1513,7 @@ describe('OWNER R3.9-C.3.2: First-Cycle Meter Workspace Authority Closure & Blan
         packageIntentId: 'intent-001',
         dormitory: { name: 'Dorm Retry', estimatedRoomCount: 1 },
         billing: { dueDay: 5 },
-        buildings: [{ id: 'bld-A', name: 'อาคาร A', floorsCount: 1 }],
+        buildings: [{ id: 'bld-A', name: 'อาคาร A', floorsCount: 1, depositAmount: 0 }],
         rooms: [{ buildingId: 'bld-A', roomNumber: '101', floor: 1, monthlyRent: 3500 }],
       });
 

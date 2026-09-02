@@ -478,8 +478,13 @@ export function calculateMeterRowPreview(
     waterUsageScaled = parseScaled2(peopleCountStr);
   } else if (rawWaterMode === 'fixed' || rawWaterMode === 'room' || rawWaterMode === 'per_room') {
     waterStatus = 'VALID';
-    waterAmountSatang = waterRateSatang;
-    waterUsageScaled = 100n; // 1.00 room
+    if (peopleCount > 0) {
+      waterAmountSatang = waterRateSatang;
+      waterUsageScaled = 100n; // 1.00 room
+    } else {
+      waterAmountSatang = 0n;
+      waterUsageScaled = 0n;
+    }
   } else if (rawWaterMode === 'free' || rawWaterMode === 'none') {
     waterStatus = 'VALID';
     waterAmountSatang = 0n;
@@ -557,8 +562,13 @@ export function calculateMeterRowPreview(
     elecUsageScaled = parseScaled2(peopleCountStr);
   } else if (rawElecMode === 'fixed' || rawElecMode === 'room' || rawElecMode === 'per_room') {
     elecStatus = 'VALID';
-    elecAmountSatang = elecRateSatang;
-    elecUsageScaled = 100n; // 1.00 room
+    if (peopleCount > 0) {
+      elecAmountSatang = elecRateSatang;
+      elecUsageScaled = 100n; // 1.00 room
+    } else {
+      elecAmountSatang = 0n;
+      elecUsageScaled = 0n;
+    }
   } else if (rawElecMode === 'free' || rawElecMode === 'none') {
     elecStatus = 'VALID';
     elecAmountSatang = 0n;
@@ -622,12 +632,16 @@ export function calculateMeterRowPreview(
   const commonFeeSatang = parseSatang(rates?.commonFee);
   let commonAmountSatang = 0n;
 
-  if (commonMode === 'free' || commonMode === 'none') {
-    commonAmountSatang = 0n;
-  } else if (commonMode === 'per_person' || commonMode === 'person') {
-    commonAmountSatang = multiplyMoneyByQuantity(commonFeeSatang, peopleCountStr);
+  if (peopleCount > 0) {
+    if (commonMode === 'free' || commonMode === 'none') {
+      commonAmountSatang = 0n;
+    } else if (commonMode === 'per_person' || commonMode === 'person') {
+      commonAmountSatang = multiplyMoneyByQuantity(commonFeeSatang, peopleCountStr);
+    } else {
+      commonAmountSatang = commonFeeSatang;
+    }
   } else {
-    commonAmountSatang = commonFeeSatang;
+    commonAmountSatang = 0n;
   }
 
   // 4. Internet Fee Calculation
@@ -635,12 +649,16 @@ export function calculateMeterRowPreview(
   const internetFeeSatang = parseSatang(rates?.internetFee);
   let internetAmountSatang = 0n;
 
-  if (internetMode === 'free' || internetMode === 'none') {
-    internetAmountSatang = 0n;
-  } else if (internetMode === 'per_person' || internetMode === 'person') {
-    internetAmountSatang = multiplyMoneyByQuantity(internetFeeSatang, peopleCountStr);
+  if (peopleCount > 0) {
+    if (internetMode === 'free' || internetMode === 'none') {
+      internetAmountSatang = 0n;
+    } else if (internetMode === 'per_person' || internetMode === 'person') {
+      internetAmountSatang = multiplyMoneyByQuantity(internetFeeSatang, peopleCountStr);
+    } else {
+      internetAmountSatang = internetFeeSatang;
+    }
   } else {
-    internetAmountSatang = internetFeeSatang;
+    internetAmountSatang = 0n;
   }
 
   // 5. Parking Fee Calculation
@@ -648,16 +666,20 @@ export function calculateMeterRowPreview(
   const parkingFeeSatang = parseSatang(rates?.parkingFee);
   let parkingAmountSatang = 0n;
 
-  if (parkingMode === 'free' || parkingMode === 'none') {
-    parkingAmountSatang = 0n;
-  } else if (parkingMode === 'per_person' || parkingMode === 'person') {
-    parkingAmountSatang = multiplyMoneyByQuantity(parkingFeeSatang, peopleCountStr);
-  } else if (parkingMode === 'per_vehicle' || parkingMode === 'vehicle') {
-    const rawQty = roomCtx?.parkingQuantity;
-    const qty = rawQty === 'per_person' ? peopleCountStr : (rawQty ?? '1.00');
-    parkingAmountSatang = multiplyMoneyByQuantity(parkingFeeSatang, qty);
+  if (peopleCount > 0) {
+    if (parkingMode === 'free' || parkingMode === 'none') {
+      parkingAmountSatang = 0n;
+    } else if (parkingMode === 'per_person' || parkingMode === 'person') {
+      parkingAmountSatang = multiplyMoneyByQuantity(parkingFeeSatang, peopleCountStr);
+    } else if (parkingMode === 'per_vehicle' || parkingMode === 'vehicle') {
+      const rawQty = roomCtx?.parkingQuantity;
+      const qty = rawQty === 'per_person' ? peopleCountStr : (rawQty ?? '1.00');
+      parkingAmountSatang = multiplyMoneyByQuantity(parkingFeeSatang, qty);
+    } else {
+      parkingAmountSatang = parkingFeeSatang;
+    }
   } else {
-    parkingAmountSatang = parkingFeeSatang;
+    parkingAmountSatang = 0n;
   }
 
   // 6. Other Fees Calculation (direct sum of satangs)

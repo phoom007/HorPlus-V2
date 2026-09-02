@@ -400,6 +400,12 @@ export class ProvisionalRentalTermService {
               const pLabel = formatThaiPeriodLabel(pStr);
               const billNumber = await generateNextBillNumberInTx(tx, dormitoryId, earliestCycle.cycleCode);
 
+              const isZeroRent = unitRentDec.equals(new Prisma.Decimal('0.00'));
+              const effectiveStatus = (isPaid || isZeroRent) ? 'PAID' : 'ISSUED';
+              const effectivePaidAmount = isPaid ? unitRentDec : new Prisma.Decimal('0.00');
+              const effectiveOutstanding = (isPaid || isZeroRent) ? new Prisma.Decimal('0.00') : unitRentDec;
+              const effectivePaidAt = (isPaid && !isZeroRent) ? now : null;
+
               const bill = await tx.bill.create({
                 data: {
                   dormitoryId,
@@ -409,14 +415,14 @@ export class ProvisionalRentalTermService {
                   provisionalRentalTermId: provisionalTerm.id,
                   billKind: 'RENT',
                   billNumber,
-                  status: isPaid ? 'PAID' : 'ISSUED',
+                  status: effectiveStatus,
                   billingDate: new Date(earliestCycle.periodStart),
                   dueDate: earliestCycle.dueDate ? new Date(earliestCycle.dueDate) : new Date(earliestCycle.periodStart),
                   subtotal: unitRentDec,
                   totalAmount: unitRentDec,
-                  paidAmount: isPaid ? unitRentDec : new Prisma.Decimal('0.00'),
-                  outstandingAmount: isPaid ? new Prisma.Decimal('0.00') : unitRentDec,
-                  paidAt: isPaid ? now : null,
+                  paidAmount: effectivePaidAmount,
+                  outstandingAmount: effectiveOutstanding,
+                  paidAt: effectivePaidAt,
                   generatedByUserId: safeUserId,
                   generatedAt: now,
                   items: {
@@ -524,6 +530,12 @@ export class ProvisionalRentalTermService {
               const isPaid = Array.isArray(data.migratedPaidInstallments) && data.migratedPaidInstallments.includes(instNo);
               const billNumber = await generateNextBillNumberInTx(tx, dormitoryId, earliestCycle.cycleCode);
 
+              const isZeroRent = unitRentDec.equals(new Prisma.Decimal('0.00'));
+              const effectiveStatus = (isPaid || isZeroRent) ? 'PAID' : 'ISSUED';
+              const effectivePaidAmount = isPaid ? unitRentDec : new Prisma.Decimal('0.00');
+              const effectiveOutstanding = (isPaid || isZeroRent) ? new Prisma.Decimal('0.00') : unitRentDec;
+              const effectivePaidAt = (isPaid && !isZeroRent) ? now : null;
+
               const bill = await tx.bill.create({
                 data: {
                   dormitoryId,
@@ -533,14 +545,14 @@ export class ProvisionalRentalTermService {
                   provisionalRentalTermId: provisionalTerm.id,
                   billKind: 'RENT',
                   billNumber,
-                  status: isPaid ? 'PAID' : 'ISSUED',
+                  status: effectiveStatus,
                   billingDate: new Date(earliestCycle.periodStart),
                   dueDate: earliestCycle.dueDate ? new Date(earliestCycle.dueDate) : new Date(earliestCycle.periodStart),
                   subtotal: unitRentDec,
                   totalAmount: unitRentDec,
-                  paidAmount: isPaid ? unitRentDec : new Prisma.Decimal('0.00'),
-                  outstandingAmount: isPaid ? new Prisma.Decimal('0.00') : unitRentDec,
-                  paidAt: isPaid ? now : null,
+                  paidAmount: effectivePaidAmount,
+                  outstandingAmount: effectiveOutstanding,
+                  paidAt: effectivePaidAt,
                   generatedByUserId: safeUserId,
                   generatedAt: now,
                   items: {

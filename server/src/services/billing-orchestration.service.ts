@@ -364,8 +364,8 @@ export class BillingOrchestrationService {
             updatedMeta = { ...updatedMeta, mode: 'free' };
           } else {
             isPerPerson = false;
-            updatedQuantity = toDecimal(1);
-            updatedAmount = unitPrice;
+            updatedQuantity = toDecimal(newPeopleCount > 0 ? 1 : 0);
+            updatedAmount = newPeopleCount > 0 ? unitPrice : toDecimal('0.00');
             updatedDesc = 'ค่าส่วนกลาง';
             updatedMeta = { ...updatedMeta, mode: 'room' };
           }
@@ -382,8 +382,8 @@ export class BillingOrchestrationService {
             updatedMeta = { ...updatedMeta, mode: 'free' };
           } else {
             isPerPerson = false;
-            updatedQuantity = toDecimal(1);
-            updatedAmount = unitPrice;
+            updatedQuantity = toDecimal(newPeopleCount > 0 ? 1 : 0);
+            updatedAmount = newPeopleCount > 0 ? unitPrice : toDecimal('0.00');
             updatedDesc = 'ค่าอินเทอร์เน็ต';
             updatedMeta = { ...updatedMeta, mode: 'room' };
           }
@@ -400,16 +400,31 @@ export class BillingOrchestrationService {
             updatedMeta = { ...updatedMeta, mode: 'free' };
           } else {
             isPerPerson = false;
-            updatedAmount = mulDecimals(updatedQuantity, unitPrice);
+            updatedAmount = newPeopleCount > 0 ? mulDecimals(updatedQuantity, unitPrice) : toDecimal('0.00');
+            updatedQuantity = newPeopleCount > 0 ? updatedQuantity : toDecimal(0);
             updatedDesc = 'ค่าที่จอดรถ';
             updatedMeta = { ...updatedMeta, mode: rateSnapshot.parkingFeeMode };
           }
-        } else if (item.type === 'water' && (rateSnapshot.waterBillingType === 'person' || rateSnapshot.waterBillingType === 'per_person')) {
-          unitPrice = toDecimal(rateSnapshot.waterRate);
-          isPerPerson = true;
-        } else if (item.type === 'electricity' && (rateSnapshot.electricityBillingType === 'person' || rateSnapshot.electricityBillingType === 'per_person')) {
-          unitPrice = toDecimal(rateSnapshot.electricityRate);
-          isPerPerson = true;
+        } else if (item.type === 'water') {
+          if (rateSnapshot.waterBillingType === 'person' || rateSnapshot.waterBillingType === 'per_person') {
+            unitPrice = toDecimal(rateSnapshot.waterRate);
+            isPerPerson = true;
+          } else if (rateSnapshot.waterBillingType === 'fixed' || (item.metadata as any)?.mode === 'fixed') {
+            isPerPerson = false;
+            unitPrice = toDecimal(rateSnapshot.waterRate);
+            updatedQuantity = toDecimal(newPeopleCount > 0 ? 1 : 0);
+            updatedAmount = newPeopleCount > 0 ? unitPrice : toDecimal('0.00');
+          }
+        } else if (item.type === 'electricity') {
+          if (rateSnapshot.electricityBillingType === 'person' || rateSnapshot.electricityBillingType === 'per_person') {
+            unitPrice = toDecimal(rateSnapshot.electricityRate);
+            isPerPerson = true;
+          } else if (rateSnapshot.electricityBillingType === 'fixed' || (item.metadata as any)?.mode === 'fixed') {
+            isPerPerson = false;
+            unitPrice = toDecimal(rateSnapshot.electricityRate);
+            updatedQuantity = toDecimal(newPeopleCount > 0 ? 1 : 0);
+            updatedAmount = newPeopleCount > 0 ? unitPrice : toDecimal('0.00');
+          }
         }
       }
 

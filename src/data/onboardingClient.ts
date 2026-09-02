@@ -199,24 +199,31 @@ export const onboardingClient = {
     return httpRequest<any>('POST', `/dormitories/${dormitoryId}/signatures`, body, { headers });
   },
 
-  async uploadLogo(dormitoryId: string, file: File) {
+  async uploadLogo(dormitoryId: string, file: File): Promise<{ logoUrl: string; hasLogo: boolean }> {
     const fd = new FormData();
     fd.append('file', file);
-    return httpRequest<{ success: boolean; data: { logoUrl: string; hasLogo: boolean } }>(
+    const res = await httpRequest<{ data: { logoUrl: string; hasLogo?: boolean; dormitoryId?: string } }>(
       'POST',
       `/dormitories/${dormitoryId}/logo`,
       fd,
       { headers: { 'X-Dormitory-Id': dormitoryId }, dormitoryId }
     );
+    return {
+      logoUrl: res.data.logoUrl,
+      hasLogo: res.data.hasLogo ?? true,
+    };
   },
 
-  async deleteLogo(dormitoryId: string) {
-    return httpRequest<{ success: boolean; data: { logoUrl: null; hasLogo: boolean } }>(
+  async deleteLogo(dormitoryId: string): Promise<{ success: boolean }> {
+    const res = await httpRequest<{ data: { success?: boolean } }>(
       'DELETE',
       `/dormitories/${dormitoryId}/logo`,
       undefined,
       { headers: { 'X-Dormitory-Id': dormitoryId }, dormitoryId }
     );
+    return {
+      success: Boolean(res.data?.success),
+    };
   },
 
   async getLineConfig(dormitoryId: string) {

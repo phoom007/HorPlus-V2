@@ -84,7 +84,8 @@ export class ApiDormitoryAdapter implements DormitoryDataSource {
 
   async addBuilding(buildingData: Omit<Building, 'id' | 'createdAt' | 'updatedAt'>): Promise<DataResult<Building>> {
     try {
-      const data = await httpRequest<Building>('POST', '/buildings', buildingData);
+      const response = await httpRequest<any>('POST', '/properties/buildings', buildingData);
+      const data = response?.data || response;
       return { success: true, data };
     } catch (err: any) {
       return {
@@ -1294,6 +1295,26 @@ export class ApiPropertyAdapter implements PropertyDataSource {
       return { success: true, data };
     } catch (err: any) {
       return { success: false, error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message } };
+    }
+  }
+
+  async createBuilding(buildingData: {
+    name: string;
+    code?: string | null;
+    floorCount?: number;
+    description?: string | null;
+    displayOrder?: number;
+    numberingPattern?: string | null;
+  }): Promise<DataResult<Building>> {
+    try {
+      const response = await httpRequest<any>('POST', '/properties/buildings', buildingData);
+      const data = response?.data || response;
+      return { success: true, data };
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
+      };
     }
   }
 

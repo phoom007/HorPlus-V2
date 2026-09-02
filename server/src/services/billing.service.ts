@@ -718,6 +718,10 @@ export class BillingService {
       const discountDec = toDecimal(data.discountAmount || '0.00');
       const rawTotal = subDecimals(subtotalDec, discountDec);
       const totalDec = compareDecimals(rawTotal, '0.00') < 0 ? toDecimal('0.00') : rawTotal;
+      const isZeroTotal = isZeroDecimal(totalDec);
+      const effectiveStatus = isZeroTotal ? 'paid' : 'unpaid';
+      const effectiveOutstanding = isZeroTotal ? '0.00' : formatDecimal(totalDec);
+      const effectivePaidAmount = '0.00';
 
       const billNumber = await generateNextBillNumberInTx(tx, dormitoryId, cycle.cycleCode);
 
@@ -733,13 +737,14 @@ export class BillingService {
             tenantId: effectiveTenantId,
             billKind,
             billNumber,
-            status: 'unpaid',
+            status: effectiveStatus,
             billingDate,
             dueDate,
             subtotal: formatDecimal(subtotalDec),
             discountAmount: formatDecimal(discountDec),
             totalAmount: formatDecimal(totalDec),
-            outstandingAmount: formatDecimal(totalDec),
+            paidAmount: effectivePaidAmount,
+            outstandingAmount: effectiveOutstanding,
             rateSnapshotId: rateSnapshot?.id,
             generatedByUserId: userId,
             generatedAt: issuanceNow,
