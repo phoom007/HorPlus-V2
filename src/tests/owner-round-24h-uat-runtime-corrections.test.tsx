@@ -298,29 +298,41 @@ describe('Owner Round 2.4H & 2.4H.1: Product Owner UAT Runtime & Financial Seman
       expect(parseExplicitFiniteNumber(Infinity)).toBeNull();
     });
 
-    it('resolveAuthoritativeOutstandingAmount fails closed when missing/blank/malformed', () => {
+    it('resolveAuthoritativeOutstandingAmount strictly enforces outstanding precedence and never falls back when outstandingAmount is present-but-invalid', () => {
       expect(resolveAuthoritativeOutstandingAmount({ outstandingAmount: undefined, totalAmount: undefined })).toBeNull();
-      expect(resolveAuthoritativeOutstandingAmount({ outstandingAmount: '', totalAmount: '' })).toBeNull();
-      expect(resolveAuthoritativeOutstandingAmount({ outstandingAmount: 'abc' })).toBeNull();
+      expect(resolveAuthoritativeOutstandingAmount({ outstandingAmount: '', totalAmount: '0.00' })).toBeNull();
+      expect(resolveAuthoritativeOutstandingAmount({ outstandingAmount: 'abc', totalAmount: '0.00' })).toBeNull();
+      expect(resolveAuthoritativeOutstandingAmount({ outstandingAmount: '   ', totalAmount: '0.00' })).toBeNull();
       expect(resolveAuthoritativeOutstandingAmount(null)).toBeNull();
       expect(resolveAuthoritativeOutstandingAmount(undefined)).toBeNull();
 
-      expect(resolveAuthoritativeOutstandingAmount({ outstandingAmount: '0.00' })).toBe(0);
-      expect(resolveAuthoritativeOutstandingAmount({ outstandingAmount: null, totalAmount: '500' })).toBe(500);
+      // Explicit finite outstanding values
+      expect(resolveAuthoritativeOutstandingAmount({ outstandingAmount: '0.00', totalAmount: '500.00' })).toBe(0);
+      expect(resolveAuthoritativeOutstandingAmount({ outstandingAmount: '500.00', totalAmount: '0.00' })).toBe(500);
+
+      // Verified legacy compatibility when outstandingAmount is genuinely absent / null
+      expect(resolveAuthoritativeOutstandingAmount({ totalAmount: '0.00' })).toBe(0);
+      expect(resolveAuthoritativeOutstandingAmount({ totalAmount: '500.00' })).toBe(500);
+      expect(resolveAuthoritativeOutstandingAmount({ outstandingAmount: null, totalAmount: '500.00' })).toBe(500);
+      expect(resolveAuthoritativeOutstandingAmount({ totalAgreedAmount: '0.00' })).toBe(0);
+      expect(resolveAuthoritativeOutstandingAmount({ totalAgreedAmount: '800.00' })).toBe(800);
     });
 
-    it('isFinancialObligationSettled fails closed on missing, blank, or malformed authority', () => {
-      expect(isFinancialObligationSettled({ outstandingAmount: undefined, totalAmount: undefined })).toBe(false);
-      expect(isFinancialObligationSettled({ outstandingAmount: '' })).toBe(false);
-      expect(isFinancialObligationSettled({ outstandingAmount: 'abc' })).toBe(false);
+    it('isFinancialObligationSettled fails closed when outstandingAmount is present-but-invalid', () => {
+      expect(isFinancialObligationSettled({ outstandingAmount: '', totalAmount: '0.00' })).toBe(false);
+      expect(isFinancialObligationSettled({ outstandingAmount: 'abc', totalAmount: '0.00' })).toBe(false);
+      expect(isFinancialObligationSettled({ outstandingAmount: '   ', totalAmount: '0.00' })).toBe(false);
+      expect(isFinancialObligationSettled({ outstandingAmount: '500.00', totalAmount: '0.00' })).toBe(false);
       expect(isFinancialObligationSettled(null)).toBe(false);
     });
 
-    it('isFinancialObligationSettled succeeds on explicit finite zero', () => {
+    it('isFinancialObligationSettled succeeds on explicit finite zero and verified legacy absent authority', () => {
       expect(isFinancialObligationSettled({ outstandingAmount: 0 })).toBe(true);
       expect(isFinancialObligationSettled({ outstandingAmount: '0' })).toBe(true);
       expect(isFinancialObligationSettled({ outstandingAmount: '0.00' })).toBe(true);
+      expect(isFinancialObligationSettled({ outstandingAmount: '0.00', totalAmount: '500.00' })).toBe(true);
       expect(isFinancialObligationSettled({ totalAmount: '0.00' })).toBe(true);
+      expect(isFinancialObligationSettled({ totalAgreedAmount: '0.00' })).toBe(true);
     });
 
     it('isFinancialObligationInvalidated strictly covers CANCELLED, VOID, VOIDED, WITHDRAWN, SUPERSEDED', () => {

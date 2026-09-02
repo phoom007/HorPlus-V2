@@ -1352,11 +1352,15 @@ export class DailyStayService {
 
       const now = new Date();
       for (const item of targetItems) {
+        const isZeroAmount = Number(item.amount) === 0;
+        // Zero-value financial obligations remain SETTLED + paidAt=null forever.
+        // Genuine positive obligations set paidAt on first settlement and preserve it on retry.
+        const newPaidAt = isZeroAmount ? null : (item.paidAt || now);
         await tx.dailyStayInvoiceItem.update({
           where: { id: item.id },
           data: {
             status: 'SETTLED',
-            paidAt: item.paidAt || now, // First paid event sets paidAt; subsequent payment does not rewrite
+            paidAt: newPaidAt,
           },
         });
       }

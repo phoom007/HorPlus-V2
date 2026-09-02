@@ -15,6 +15,11 @@ describe('Owner Round 2.4H.1: Service-Level Daily Stay Invoice Classification & 
   let roomDId: string;
   let roomEId: string;
   let roomFId: string;
+  let room24H2_AId: string;
+  let room24H2_BId: string;
+  let room24H2_CId: string;
+  let room24H2_DId: string;
+  let createRoom: (roomNum: string, dailyRent?: number) => Promise<string>;
 
   const getBangkokDate = (offsetDays: number = 0) => {
     return new Date(Date.now() + 7 * 3600 * 1000 + offsetDays * 86400000).toISOString().slice(0, 10);
@@ -72,7 +77,7 @@ describe('Owner Round 2.4H.1: Service-Level Daily Stay Invoice Classification & 
         code: 'B24H1',
         name: 'อาคาร 24H1',
         floorCount: 2,
-        roomsPerFloor: 5,
+        roomsPerFloor: 10,
         monthlyRent: 4000.0,
         dailyRent: 800.0,
         depositAmount: 500.0,
@@ -80,8 +85,8 @@ describe('Owner Round 2.4H.1: Service-Level Daily Stay Invoice Classification & 
     });
     buildingId = building.id;
 
-    // 5. Create 6 distinct vacant rooms
-    const createRoom = async (roomNum: string, dailyRent: number = 800.0) => {
+    // 5. Room creation helper
+    createRoom = async (roomNum: string, dailyRent: number = 800.0) => {
       return (
         await prisma.room.create({
           data: {
@@ -111,6 +116,11 @@ describe('Owner Round 2.4H.1: Service-Level Daily Stay Invoice Classification & 
     roomDId = await createRoom(`24H1-D-${Date.now() % 10000}`);
     roomEId = await createRoom(`24H1-E-${Date.now() % 10000}`, 800.0);
     roomFId = await createRoom(`24H1-F-${Date.now() % 10000}`, 0.0);
+
+    room24H2_AId = await createRoom(`24H2-A-${Date.now() % 10000}`, 800.0);
+    room24H2_BId = await createRoom(`24H2-B-${Date.now() % 10000}`, 0.0);
+    room24H2_CId = await createRoom(`24H2-C-${Date.now() % 10000}`, 800.0);
+    room24H2_DId = await createRoom(`24H2-D-${Date.now() % 10000}`, 800.0);
   });
 
   afterAll(async () => {
@@ -327,5 +337,215 @@ describe('Owner Round 2.4H.1: Service-Level Daily Stay Invoice Classification & 
     expect(approvedB.invoice).toBeDefined();
     expect(approvedB.invoice.status).toBe('PAID');
     expect(Number(approvedB.invoice.outstandingAmount)).toBe(0.0);
+  });
+
+  describe('Round 2.4H.2: Zero Daily Items Never Acquire Fake paidAt & Settlement Idempotency', () => {
+    it('Case 2.4H.2-A: zero deposit SETTLED/null -> direct settle attempt -> still paidAt null', async () => {
+      const today = getBangkokDate(0);
+      const tomorrow = getBangkokDate(1);
+
+      const stayRes = await dailyStayService.ownerQuickAddDailyStay(
+        dormitoryId,
+        {
+          roomId: room24H2_AId,
+          fullName: 'นายทดสอบ เคส 2.4H.2-A',
+          phone: '087-777-8888',
+          startDate: today,
+          endDate: tomorrow,
+          dailyRateAmount: 800.0,
+          depositAmount: 0.0,
+          depositDeclaredStatus: 'UNPAID',
+        },
+        ownerUserId
+      );
+
+      const invoiceId = stayRes.invoice.id;
+
+      // Attempt to settle zero DEPOSIT directly
+      const updatedInvoice = await dailyStayService.settleDailyStayInvoiceItem(
+        dormitoryId,
+        invoiceId,
+        'DEPOSIT',
+        ownerUserId
+      );
+
+      const items = await prisma.dailyStayInvoiceItem.findMany({
+        where: { invoiceId },
+      });
+
+      const depositItem = items.find((i) => i.itemType === 'DEPOSIT');
+      const rentItem = items.find((i) => i.itemType === 'DAILY_RENT');
+
+      // Invariant: zero deposit MUST remain SETTLED with paidAt = null
+      expect(depositItem?.status).toBe('SETTLED');
+      expect(Number(depositItem?.amount)).toBe(0.0);
+      expect(depositItem?.paidAt).toBeNull();
+
+      // Rent remains outstanding
+      expect(rentItem?.status).toBe('OUTSTANDING');
+      expect(Number(rentItem?.amount)).toBe(800.0);
+      expect(rentItem?.paidAt).toBeNull();
+
+      // Invoice status remains ISSUED with outstanding = 800
+      expect(updatedInvoice.status).toBe('ISSUED');
+      expect(Number(updatedInvoice.outstandingAmount)).toBe(800.0);
+    });
+
+    it('Case 2.4H.2-B: zero rent SETTLED/null -> direct settle attempt -> still paidAt null', async () => {
+      const today = getBangkokDate(0);
+      const tomorrow = getBangkokDate(1);
+
+      const stayRes = await dailyStayService.ownerQuickAddDailyStay(
+        dormitoryId,
+        {
+          roomId: room24H2_BId,
+          fullName: 'นายทดสอบ เคส 2.4H.2-B',
+          phone: '088-888-9999',
+          startDate: today,
+          endDate: tomorrow,
+          dailyRateAmount: 0.0,
+          depositAmount: 500.0,
+          depositDeclaredStatus: 'UNPAID',
+        },
+        ownerUserId
+      );
+
+      const invoiceId = stayRes.invoice.id;
+
+      // Attempt to settle zero DAILY_RENT directly
+      const updatedInvoice = await dailyStayService.settleDailyStayInvoiceItem(
+        dormitoryId,
+        invoiceId,
+        'DAILY_RENT',
+        ownerUserId
+      );
+
+      const items = await prisma.dailyStayInvoiceItem.findMany({
+        where: { invoiceId },
+      });
+
+      const rentItem = items.find((i) => i.itemType === 'DAILY_RENT');
+      const depositItem = items.find((i) => i.itemType === 'DEPOSIT');
+
+      // Invariant: zero rent MUST remain SETTLED with paidAt = null
+      expect(rentItem?.status).toBe('SETTLED');
+      expect(Number(rentItem?.amount)).toBe(0.0);
+      expect(rentItem?.paidAt).toBeNull();
+
+      // Deposit remains outstanding
+      expect(depositItem?.status).toBe('OUTSTANDING');
+      expect(Number(depositItem?.amount)).toBe(500.0);
+      expect(depositItem?.paidAt).toBeNull();
+
+      // Invoice status remains ISSUED with outstanding = 500
+      expect(updatedInvoice.status).toBe('ISSUED');
+      expect(Number(updatedInvoice.outstandingAmount)).toBe(500.0);
+    });
+
+    it('Case 2.4H.2-C: positive rent OUTSTANDING -> settle -> SETTLED + real paidAt', async () => {
+      const today = getBangkokDate(0);
+      const tomorrow = getBangkokDate(1);
+
+      const stayRes = await dailyStayService.ownerQuickAddDailyStay(
+        dormitoryId,
+        {
+          roomId: room24H2_CId,
+          fullName: 'นายทดสอบ เคส 2.4H.2-C',
+          phone: '089-999-0000',
+          startDate: today,
+          endDate: tomorrow,
+          dailyRateAmount: 800.0,
+          depositAmount: 0.0,
+          depositDeclaredStatus: 'UNPAID',
+        },
+        ownerUserId
+      );
+
+      const invoiceId = stayRes.invoice.id;
+
+      // Settle positive DAILY_RENT
+      const updatedInvoice = await dailyStayService.settleDailyStayInvoiceItem(
+        dormitoryId,
+        invoiceId,
+        'DAILY_RENT',
+        ownerUserId
+      );
+
+      const items = await prisma.dailyStayInvoiceItem.findMany({
+        where: { invoiceId },
+      });
+
+      const rentItem = items.find((i) => i.itemType === 'DAILY_RENT');
+      const depositItem = items.find((i) => i.itemType === 'DEPOSIT');
+
+      // Invariant: positive rent becomes SETTLED and acquires real paidAt
+      expect(rentItem?.status).toBe('SETTLED');
+      expect(Number(rentItem?.amount)).toBe(800.0);
+      expect(rentItem?.paidAt).not.toBeNull();
+      expect(rentItem?.paidAt instanceof Date).toBe(true);
+
+      // Deposit was 0 -> remains SETTLED with paidAt = null
+      expect(depositItem?.status).toBe('SETTLED');
+      expect(depositItem?.paidAt).toBeNull();
+
+      // Aggregate invoice becomes PAID with outstanding = 0
+      expect(updatedInvoice.status).toBe('PAID');
+      expect(Number(updatedInvoice.outstandingAmount)).toBe(0.0);
+    });
+
+    it('Case 2.4H.2-D: repeated positive settle does not rewrite first paidAt', async () => {
+      const today = getBangkokDate(0);
+      const tomorrow = getBangkokDate(1);
+
+      const stayRes = await dailyStayService.ownerQuickAddDailyStay(
+        dormitoryId,
+        {
+          roomId: room24H2_DId,
+          fullName: 'นายทดสอบ เคส 2.4H.2-D',
+          phone: '080-000-1111',
+          startDate: today,
+          endDate: tomorrow,
+          dailyRateAmount: 800.0,
+          depositAmount: 0.0,
+          depositDeclaredStatus: 'UNPAID',
+        },
+        ownerUserId
+      );
+
+      const invoiceId = stayRes.invoice.id;
+
+      // First settlement
+      await dailyStayService.settleDailyStayInvoiceItem(
+        dormitoryId,
+        invoiceId,
+        'DAILY_RENT',
+        ownerUserId
+      );
+
+      const itemAfterFirst = await prisma.dailyStayInvoiceItem.findFirst({
+        where: { invoiceId, itemType: 'DAILY_RENT' },
+      });
+
+      expect(itemAfterFirst?.paidAt).not.toBeNull();
+      const firstPaidAtIso = itemAfterFirst!.paidAt!.toISOString();
+
+      // Small delay
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      // Repeated settlement attempt
+      await dailyStayService.settleDailyStayInvoiceItem(
+        dormitoryId,
+        invoiceId,
+        'DAILY_RENT',
+        ownerUserId
+      );
+
+      const itemAfterSecond = await prisma.dailyStayInvoiceItem.findFirst({
+        where: { invoiceId, itemType: 'DAILY_RENT' },
+      });
+
+      // Invariant: first paidAt timestamp is preserved, NOT overwritten
+      expect(itemAfterSecond?.paidAt?.toISOString()).toBe(firstPaidAtIso);
+    });
   });
 });

@@ -43,14 +43,22 @@ export function resolveAuthoritativeOutstandingAmount(record?: {
 } | null): number | null {
   if (!record) return null;
 
-  const fromOutstanding = parseExplicitFiniteNumber(record.outstandingAmount);
-  if (fromOutstanding !== null) return fromOutstanding;
+  // A. If the record HAS its own outstandingAmount property (not null/undefined):
+  // - explicit finite number/string -> use it
+  // - blank / malformed / non-finite -> return null (DO NOT fall back to totalAmount)
+  if (record.outstandingAmount !== undefined && record.outstandingAmount !== null) {
+    return parseExplicitFiniteNumber(record.outstandingAmount);
+  }
 
-  const fromTotal = parseExplicitFiniteNumber(record.totalAmount);
-  if (fromTotal !== null) return fromTotal;
+  // B. Only when outstandingAmount is genuinely absent/null because the legacy
+  // record does not provide outstanding authority may verified legacy fallback be considered.
+  if (record.totalAmount !== undefined && record.totalAmount !== null) {
+    return parseExplicitFiniteNumber(record.totalAmount);
+  }
 
-  const fromAgreed = parseExplicitFiniteNumber(record.totalAgreedAmount);
-  if (fromAgreed !== null) return fromAgreed;
+  if (record.totalAgreedAmount !== undefined && record.totalAgreedAmount !== null) {
+    return parseExplicitFiniteNumber(record.totalAgreedAmount);
+  }
 
   return null;
 }
