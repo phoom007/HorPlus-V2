@@ -18,6 +18,17 @@ export class ReceiptService {
             room: true
           }
         },
+        dailyStayInvoice: {
+          include: {
+            items: true,
+            dailyStay: {
+              include: {
+                room: true,
+                tenant: true,
+              },
+            },
+          },
+        },
         dormitory: true
       }
     });

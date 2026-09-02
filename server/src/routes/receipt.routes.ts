@@ -71,6 +71,14 @@ export function createReceiptRouter(authService: AuthenticationService) {
             if (targets.some(t => t.bill.tenantId === tenant.id)) {
               authorized = true;
             }
+          } else if (receiptRecord.dailyStayInvoiceId) {
+            const dinv = await prisma.dailyStayInvoice.findUnique({
+              where: { id: receiptRecord.dailyStayInvoiceId },
+              include: { dailyStay: true },
+            });
+            if (dinv?.dailyStay?.tenantId === tenant.id) {
+              authorized = true;
+            }
           }
         }
       }
@@ -118,6 +126,14 @@ export function createReceiptRouter(authService: AuthenticationService) {
               include: { bill: true },
             });
             if (targets.some(t => t.bill.tenantId === tenant.id)) {
+              authorized = true;
+            }
+          } else if (receiptRecord.dailyStayInvoiceId) {
+            const dinv = await prisma.dailyStayInvoice.findUnique({
+              where: { id: receiptRecord.dailyStayInvoiceId },
+              include: { dailyStay: true },
+            });
+            if (dinv?.dailyStay?.tenantId === tenant.id) {
               authorized = true;
             }
           }

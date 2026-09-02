@@ -1187,29 +1187,32 @@ model PaymentStatusHistory {
 }
 
 model Receipt {
-  id             String                @id @default(uuid()) @db.Uuid
-  dormitoryId    String                @map("dormitory_id") @db.Uuid
-  paymentId      String?               @unique @map("payment_id") @db.Uuid
-  paymentGroupId String?               @map("payment_group_id") @db.Uuid
-  billId         String?               @map("bill_id") @db.Uuid
-  receiptNumber  String                @map("receipt_number") @db.VarChar(100)
-  snapshotData   Json                  @map("snapshot_data")
-  isVoided       Boolean               @default(false) @map("is_voided")
-  voidedAt       DateTime?             @map("voided_at") @db.Timestamptz()
-  voidedByUserId String?               @map("voided_by_user_id") @db.Uuid
-  voidReason     String?               @map("void_reason") @db.Text
-  issuedAt       DateTime              @default(now()) @map("issued_at") @db.Timestamptz()
-  issuedByUserId String?               @map("issued_by_user_id") @db.Uuid
-  createdAt      DateTime              @default(now()) @map("created_at") @db.Timestamptz()
-  updatedAt      DateTime              @updatedAt @map("updated_at") @db.Timestamptz()
+  id                 String                @id @default(uuid()) @db.Uuid
+  dormitoryId        String                @map("dormitory_id") @db.Uuid
+  paymentId          String?               @unique @map("payment_id") @db.Uuid
+  paymentGroupId     String?               @map("payment_group_id") @db.Uuid
+  billId             String?               @map("bill_id") @db.Uuid
+  dailyStayInvoiceId String?               @map("daily_stay_invoice_id") @db.Uuid
+  receiptNumber      String                @map("receipt_number") @db.VarChar(100)
+  snapshotData       Json                  @map("snapshot_data")
+  isVoided           Boolean               @default(false) @map("is_voided")
+  voidedAt           DateTime?             @map("voided_at") @db.Timestamptz()
+  voidedByUserId     String?               @map("voided_by_user_id") @db.Uuid
+  voidReason         String?               @map("void_reason") @db.Text
+  issuedAt           DateTime              @default(now()) @map("issued_at") @db.Timestamptz()
+  issuedByUserId     String?               @map("issued_by_user_id") @db.Uuid
+  createdAt          DateTime              @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt          DateTime              @updatedAt @map("updated_at") @db.Timestamptz()
 
-  dormitory      Dormitory             @relation(fields: [dormitoryId], references: [id], onDelete: Restrict)
-  payment        Payment?              @relation(fields: [paymentId], references: [id], onDelete: Restrict)
-  paymentGroup   CombinedPaymentGroup? @relation(fields: [paymentGroupId], references: [id], onDelete: SetNull)
-  bill           Bill?                 @relation(fields: [billId], references: [id], onDelete: Restrict)
+  dormitory          Dormitory             @relation(fields: [dormitoryId], references: [id], onDelete: Restrict)
+  payment            Payment?              @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  paymentGroup       CombinedPaymentGroup? @relation(fields: [paymentGroupId], references: [id], onDelete: SetNull)
+  bill               Bill?                 @relation(fields: [billId], references: [id], onDelete: Restrict)
+  dailyStayInvoice   DailyStayInvoice?     @relation(fields: [dailyStayInvoiceId], references: [id], onDelete: SetNull)
 
   @@unique([dormitoryId, receiptNumber], name: "dormitory_receipt_number_unique")
   @@index([dormitoryId, paymentGroupId], name: "idx_receipts_dorm_group")
+  @@index([dormitoryId, dailyStayInvoiceId], name: "idx_receipts_dorm_daily_invoice")
   @@map("receipts")
 }
 
@@ -2000,6 +2003,7 @@ model DailyStayInvoice {
   dormitory Dormitory              @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
   dailyStay DailyStay              @relation(fields: [dailyStayId], references: [id], onDelete: Cascade)
   items     DailyStayInvoiceItem[]
+  receipts  Receipt[]
 
   @@unique([dormitoryId, invoiceNumber], name: "dormitory_daily_invoice_number_unique")
   @@index([dormitoryId])
