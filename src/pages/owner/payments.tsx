@@ -2601,7 +2601,12 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
               const roomNum = resolveAuthoritativeRoomNum(p.bill, p);
               const tenantName = p.bill?.tenant?.displayName || getTenantName(p.tenantId || p.bill?.tenantId);
               const slipUrl = getSlipEvidenceUrl(p);
-              const amount = Number(p.amount || p.bill?.totalAmount || 0);
+              const isBillSettled = Boolean(
+                p.bill && (p.bill.status === 'PAID' || p.bill.status === 'paid' || Number(p.bill.outstandingAmount ?? 0) <= 0)
+              );
+              const billOutstanding = isBillSettled ? 0 : Number(p.bill?.outstandingAmount ?? 0);
+              const rejectedSlipAmount = Number(p.amount || 0);
+              const amount = billOutstanding;
 
               const isDepositBill = p.bill?.billKind === 'DEPOSIT';
               const isRentBill = p.bill?.billKind === 'RENT' || p.bill?.items?.some((it: any) => it.type === 'RENT' || (it.description || '').includes('ค่าเช่า'));
@@ -2663,11 +2668,19 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                     </div>
                   )}
 
-                  <div className="flex items-baseline justify-between pt-1 border-t border-slate-100">
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-xs text-slate-400 font-bold">ยอดค้างชำระ</span>
+                  <div className="space-y-1 pt-1 border-t border-slate-100">
+                    <div className="flex items-baseline justify-between text-xs">
+                      <span className="text-slate-400 font-bold">ยอดสลิปที่ถูกปฏิเสธ:</span>
+                      <span className="font-bold text-slate-600">{formatBaht(rejectedSlipAmount)}</span>
                     </div>
-                    <span className="text-lg font-black text-rose-600">{formatBaht(amount)}</span>
+                    <div className="flex items-baseline justify-between">
+                      <span className="text-xs text-slate-700 font-extrabold">ยอดค้างชำระ:</span>
+                      {isBillSettled ? (
+                        <span className="text-sm font-black text-emerald-600">ชำระครบแล้ว</span>
+                      ) : (
+                        <span className="text-lg font-black text-rose-600">{formatBaht(billOutstanding)}</span>
+                      )}
+                    </div>
                   </div>
 
                   <div className="grid grid-cols-2 gap-2 pt-1">

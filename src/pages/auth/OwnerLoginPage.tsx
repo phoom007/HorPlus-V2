@@ -22,7 +22,7 @@ interface OwnerLoginPageProps {
   onLoginSuccess: (user: UserType) => void;
 }
 
-const DormitoryPickerLogo: React.FC<{ dormitoryId: string; name?: string; logoUrl?: string | null }> = ({
+export const DormitoryPickerLogo: React.FC<{ dormitoryId: string; name?: string; logoUrl?: string | null }> = ({
   dormitoryId,
   name,
   logoUrl,
@@ -30,16 +30,17 @@ const DormitoryPickerLogo: React.FC<{ dormitoryId: string; name?: string; logoUr
   const [hasError, setHasError] = useState(false);
   const [isLoaded, setIsLoaded] = useState(false);
 
-  // Amendment 3: Canonical current-logo authority is public endpoint GET /api/v1/dormitories/:dormitoryId/logo
-  const src = logoUrl || `/api/v1/dormitories/${dormitoryId}/logo`;
+  // Canonical current-logo authority is strictly the public endpoint GET /api/v1/dormitories/:dormitoryId/logo
+  // Stale cached logoUrl must never bypass the canonical authority endpoint
+  const src = `/api/v1/dormitories/${dormitoryId}/logo`;
 
   if (hasError) {
-    return <Building2 className="w-6 h-6 text-indigo-500" />;
+    return <Building2 className="w-6 h-6 text-indigo-500" data-testid="dormitory-fallback-icon" />;
   }
 
   return (
     <>
-      {!isLoaded && <Building2 className="w-6 h-6 text-indigo-500 animate-pulse" />}
+      {!isLoaded && <Building2 className="w-6 h-6 text-indigo-500 animate-pulse" data-testid="dormitory-fallback-icon" />}
       <img
         src={src}
         alt={name || 'Dormitory'}

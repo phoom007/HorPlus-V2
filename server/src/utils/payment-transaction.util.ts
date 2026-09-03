@@ -733,7 +733,7 @@ export async function generateReceiptInTx(
     dormitoryTaxId: bill?.dormitory?.taxId || null,
     dormitoryAddress: bill?.dormitory?.address || null,
     dormitoryPhone: bill?.dormitory?.phone || null,
-    paymentMethod: payment?.method || 'CASH',
+    paymentMethod: payment?.method || null,
     paymentDate: originalPaymentDate,
     isHistoricalImport: isHistoricalPayment,
     originalPaymentDateKnown,
@@ -1178,18 +1178,23 @@ export async function generateFinalSettlementReceiptForBillInTx(
   );
 
   const paymentEvents = contributingBills.flatMap((b: any) =>
-    ((b as any).Payment || []).map((p: any) => ({
-      paymentId: p.id,
-      billId: b.id,
-      paymentGroupId: p.paymentGroupId || null,
-      amount: new Decimal(p.amount.toString()).toFixed(2),
-      method: p.method || 'CASH',
-      effectivePaymentDate: p.paymentDate ? p.paymentDate.toISOString() : (p.reviewedAt ? p.reviewedAt.toISOString() : p.createdAt.toISOString()),
-      paymentDate: p.paymentDate ? p.paymentDate.toISOString() : (p.reviewedAt ? p.reviewedAt.toISOString() : p.createdAt.toISOString()),
-      evidenceReference: p.verification?.objectKey || p.evidenceUrl || null,
-      receiptNumber: p.receipt?.receiptNumber || null,
-      status: p.status,
-    }))
+    ((b as any).Payment || []).map((p: any) => {
+      if (!p.method || typeof p.method !== 'string' || p.method.trim().length === 0) {
+        throw new AppError('Approved Payment event lacks a valid canonical payment method.', 500, 'CANONICAL_PAYMENT_METHOD_MISSING');
+      }
+      return {
+        paymentId: p.id,
+        billId: b.id,
+        paymentGroupId: p.paymentGroupId || null,
+        amount: new Decimal(p.amount.toString()).toFixed(2),
+        method: p.method.trim(),
+        effectivePaymentDate: p.paymentDate ? p.paymentDate.toISOString() : (p.reviewedAt ? p.reviewedAt.toISOString() : p.createdAt.toISOString()),
+        paymentDate: p.paymentDate ? p.paymentDate.toISOString() : (p.reviewedAt ? p.reviewedAt.toISOString() : p.createdAt.toISOString()),
+        evidenceReference: p.verification?.objectKey || p.evidenceUrl || null,
+        receiptNumber: p.receipt?.receiptNumber || null,
+        status: p.status,
+      };
+    })
   );
 
   // 8. Snapshot Tenant Authority - populated only after tenant/rental compatibility passes (Requirement 8)

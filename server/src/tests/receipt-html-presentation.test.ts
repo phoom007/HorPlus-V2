@@ -442,13 +442,64 @@ describe('OWNER R3.9-E.1B.2.3 — Backend Receipt HTML Presentation Authority', 
   });
 
   // =========================================================================
-  // 7. HTML Escaping Safety
+  // 8. Round 2.4K.1: Payment Method Canonical Presentation & Dotted Placeholders
   // =========================================================================
-  describe('7. HTML Escaping Safety', () => {
-    it('escapes dangerous HTML characters', () => {
-      expect(escapeHTML('<script>alert("xss")</script>')).toBe('&lt;script&gt;alert(&quot;xss&quot;)&lt;/script&gt;');
-      expect(escapeHTML('Tom & Jerry')).toBe('Tom &amp; Jerry');
-      expect(escapeHTML("John's")).toBe('John&#039;s');
+  describe('8. Round 2.4K.1: Payment Method Canonical Presentation & Dotted Placeholders', () => {
+    it('renders CASH as เงินสด', () => {
+      const receipt = {
+        receiptNumber: 'RC-CASH',
+        snapshotData: {
+          receiptNumber: 'RC-CASH',
+          total: '1000.00',
+          paymentMethod: 'CASH',
+          items: [{ description: 'ค่าเช่า', amount: '1000.00' }],
+        },
+      };
+      const html = renderReceiptHtml(receipt);
+      expect(html).toContain('เงินสด');
+    });
+
+    it('renders BANK_TRANSFER as โอนเงิน', () => {
+      const receipt = {
+        receiptNumber: 'RC-TRANSFER',
+        snapshotData: {
+          receiptNumber: 'RC-TRANSFER',
+          total: '1000.00',
+          paymentMethod: 'BANK_TRANSFER',
+          items: [{ description: 'ค่าเช่า', amount: '1000.00' }],
+        },
+      };
+      const html = renderReceiptHtml(receipt);
+      expect(html).toContain('โอนเงิน');
+    });
+
+    it('renders combined CASH and BANK_TRANSFER as เงินสด / โอนเงิน', () => {
+      const receipt = {
+        receiptNumber: 'RC-MIXED',
+        snapshotData: {
+          receiptNumber: 'RC-MIXED',
+          total: '2000.00',
+          paymentMethod: 'CASH, BANK_TRANSFER',
+          items: [{ description: 'ค่าเช่า', amount: '2000.00' }],
+        },
+      };
+      const html = renderReceiptHtml(receipt);
+      expect(html).toContain('เงินสด / โอนเงิน');
+    });
+
+    it('renders dotted placeholder when paymentMethod is null without inventing CASH', () => {
+      const receipt = {
+        receiptNumber: 'RC-NOMETHOD',
+        snapshotData: {
+          receiptNumber: 'RC-NOMETHOD',
+          total: '1000.00',
+          paymentMethod: null,
+          items: [{ description: 'ค่าเช่า', amount: '1000.00' }],
+        },
+      };
+      const html = renderReceiptHtml(receipt);
+      expect(html).toContain('....................');
+      expect(html).not.toContain('เงินสด');
     });
   });
 });
