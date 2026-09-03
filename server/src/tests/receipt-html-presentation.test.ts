@@ -502,4 +502,80 @@ describe('OWNER R3.9-E.1B.2.3 — Backend Receipt HTML Presentation Authority', 
       expect(html).not.toContain('เงินสด');
     });
   });
+
+  // =========================================================================
+  // OWNER ROUND 2.4K.3: Print Button & Signature Layout Verification
+  // =========================================================================
+  describe('Owner Round 2.4K.3 — Print Button & Signature Layout Authority', () => {
+    const baseReceipt = {
+      id: 'rc-24k3-001',
+      receiptNumber: 'RC-202609-24K3-001',
+      dormitoryId: 'dorm-24k3',
+      issuedAt: new Date('2026-09-03T12:00:00Z'),
+      snapshotData: {
+        receiptNumber: 'RC-202609-24K3-001',
+        dormitoryName: 'สุขสบาย อพาร์ทเมนท์',
+        tenantName: 'สมชาย มั่นคง',
+        roomNumber: '101',
+        total: '4500.00',
+        paymentMethod: 'CASH',
+        items: [{ description: 'ค่าเช่า (รายเดือน)', amount: '4500.00' }],
+      },
+    };
+
+    it('A. Print HTML contains print button with id="printReceiptBtn" and NO inline onclick attribute', () => {
+      const html = renderReceiptHtml(baseReceipt);
+      expect(html).toContain('id="printReceiptBtn"');
+      expect(html).toContain('พิมพ์ใบเสร็จ');
+      expect(html).not.toContain('onclick="window.print()"');
+      expect(html).not.toContain('onclick=');
+    });
+
+    it('B. User-triggered print action script binds addEventListener and invokes window.focus() and window.print()', () => {
+      const html = renderReceiptHtml(baseReceipt);
+      expect(html).toContain("btn.addEventListener('click', function()");
+      expect(html).toContain('window.focus()');
+      expect(html).toContain('window.print()');
+    });
+
+    it('C. Print stylesheet keeps receipt inside A4 layout with page-break protection', () => {
+      const html = renderReceiptHtml(baseReceipt);
+      expect(html).toContain('@page { size: A4; margin: 10mm 12mm; }');
+      expect(html).toContain('.no-print { display: none !important; }');
+      expect(html).toContain('page-break-inside: avoid');
+    });
+
+    it('D. Two distinct signature areas exist: Tenant/Payer (left) and Owner/Receiver (right)', () => {
+      const html = renderReceiptHtml(baseReceipt);
+      expect(html).toContain('ผู้ชำระเงิน / ผู้เช่า');
+      expect(html).toContain('ผู้รับเงิน / เจ้าของหอพัก');
+      expect(html).toContain('ลงชื่อ ______________________________');
+      expect(html).toContain('(__________________________________)');
+    });
+
+    it('E & F. Tenant/payer and Owner/receiver date blanks exist with handwriting blanks', () => {
+      const html = renderReceiptHtml(baseReceipt);
+      const dateBlankCount = (html.match(/วันที่ ______ \/ ______ \/ ______/g) || []).length;
+      expect(dateBlankCount).toBe(2); // One on left, one on right
+    });
+
+    it('G. No broken-logo regression and no inline onerror attribute on logo image', () => {
+      const htmlWithLogo = renderReceiptHtml(baseReceipt, { hasCurrentLogo: true });
+      expect(htmlWithLogo).toContain('id="dormLogo"');
+      expect(htmlWithLogo).toContain('/api/v1/dormitories/dorm-24k3/logo');
+      expect(htmlWithLogo).not.toContain('onerror=');
+      expect(htmlWithLogo).toContain("logo.addEventListener('error'");
+    });
+
+    it('H. No NaN regression in financial totals or line items', () => {
+      const html = renderReceiptHtml(baseReceipt);
+      expect(html).not.toContain('NaN');
+      expect(html).toContain('4500.00 ฿');
+    });
+
+    it('I. Existing canonical payment-method Thai display remains correct', () => {
+      const html = renderReceiptHtml(baseReceipt);
+      expect(html).toContain('เงินสด');
+    });
+  });
 });

@@ -1004,10 +1004,9 @@ export const PrintView: React.FC<PrintViewProps> = ({ children, title = 'พิ�
 
     window.addEventListener('afterprint', cleanup);
 
-    // Trigger browser print on next frame after layout reflow
-    requestAnimationFrame(() => {
-      window.print();
-    });
+    // Synchronous print invocation within user gesture
+    window.focus();
+    window.print();
   };
 
   return (

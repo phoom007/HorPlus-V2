@@ -403,11 +403,11 @@ export function renderReceiptHtml(receiptRecord: any, options?: { hasCurrentLogo
 </head>
 <body>
   <div class="no-print" style="text-align: right; margin-bottom: 20px;">
-    <button onclick="window.print()" style="padding: 8px 16px; background: #4f46e5; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold;">พิมพ์ใบเสร็จ</button>
+    <button id="printReceiptBtn" type="button" style="padding: 8px 16px; background: #4f46e5; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold;">พิมพ์ใบเสร็จ</button>
   </div>
   ${receiptRecord.isVoided ? `<div class="void-banner">ยกเลิกแล้ว (VOIDED): ${escapeHTML(receiptRecord.voidReason || 'ไม่มีระบุเหตุผล')}</div>` : ''}
   <div class="header" style="display: flex; align-items: center; justify-content: center; gap: 16px; margin-bottom: 24px;">
-    ${hasCurrentLogo && receiptRecord.dormitoryId ? `<img src="/api/v1/dormitories/${escapeHTML(receiptRecord.dormitoryId)}/logo" alt="" style="max-height: 56px; max-width: 140px; object-fit: contain;" onerror="this.style.display='none'" />` : ''}
+    ${hasCurrentLogo && receiptRecord.dormitoryId ? `<img id="dormLogo" src="/api/v1/dormitories/${escapeHTML(receiptRecord.dormitoryId)}/logo" alt="" style="max-height: 56px; max-width: 140px; object-fit: contain;" />` : ''}
     <div>
       <h1 style="margin: 0; color: #4338ca; font-size: 24px;">ใบเสร็จรับเงิน (RECEIPT)</h1>
       <p style="margin: 4px 0 0; color: #64748b; font-size: 14px; font-weight: bold;">เลขที่ใบเสร็จ: ${escapeHTML(receiptRecord.receiptNumber)}</p>
@@ -547,6 +547,40 @@ export function renderReceiptHtml(receiptRecord: any, options?: { hasCurrentLogo
     ` : ''}
     <div class="total-row grand-total"><span>รวมรับสุทธิ:</span><span>${escapeHTML(grandTotalNum.toFixed(2))} ฿</span></div>
   </div>
+
+  <!-- Print-ready Two-Column Signature Area -->
+  <div class="signature-section" style="margin-top: 48px; display: grid; grid-template-columns: 1fr 1fr; gap: 40px; page-break-inside: avoid; break-inside: avoid;">
+    <div class="signature-box" style="text-align: center; font-size: 13px; line-height: 1.8;">
+      <p style="font-weight: bold; margin-bottom: 36px; color: #334155;">ผู้ชำระเงิน / ผู้เช่า</p>
+      <p style="margin: 0; color: #475569;">ลงชื่อ ______________________________</p>
+      <p style="margin: 4px 0 0; color: #475569;">(__________________________________)</p>
+      <p style="margin: 12px 0 0; color: #475569;">วันที่ ______ / ______ / ______</p>
+    </div>
+    <div class="signature-box" style="text-align: center; font-size: 13px; line-height: 1.8;">
+      <p style="font-weight: bold; margin-bottom: 36px; color: #334155;">ผู้รับเงิน / เจ้าของหอพัก</p>
+      <p style="margin: 0; color: #475569;">ลงชื่อ ______________________________</p>
+      <p style="margin: 4px 0 0; color: #475569;">(__________________________________)</p>
+      <p style="margin: 12px 0 0; color: #475569;">วันที่ ______ / ______ / ______</p>
+    </div>
+  </div>
+
+  <script>
+    (function() {
+      var btn = document.getElementById('printReceiptBtn');
+      if (btn) {
+        btn.addEventListener('click', function() {
+          window.focus();
+          window.print();
+        });
+      }
+      var logo = document.getElementById('dormLogo');
+      if (logo) {
+        logo.addEventListener('error', function() {
+          this.style.display = 'none';
+        });
+      }
+    })();
+  </script>
 </body>
 </html>
   `.trim();

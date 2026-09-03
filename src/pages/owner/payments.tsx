@@ -878,27 +878,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
     staleTime: 60000,
   });
 
-  // Partial Popover State (Anchored details inside yellow summary box)
-  const [openPartialPopoverId, setOpenPartialPopoverId] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!openPartialPopoverId) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpenPartialPopoverId(null);
-    };
-    const handleClickOutside = (e: MouseEvent) => {
-      const target = e.target as HTMLElement;
-      if (!target.closest(`[data-partial-popover="${openPartialPopoverId}"]`)) {
-        setOpenPartialPopoverId(null);
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    window.addEventListener('mousedown', handleClickOutside);
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-      window.removeEventListener('mousedown', handleClickOutside);
-    };
-  }, [openPartialPopoverId]);
 
   // Daily Detail Modal State
   const [isDailyDetailOpen, setIsDailyDetailOpen] = useState(false);
@@ -2156,67 +2136,52 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                       const count = sortedNonZero.length;
                       const isPartial = Number(b.paidAmount || 0) > 0;
 
-                      // PARTIAL PAYMENT CARD: Replace inline section with compact popover trigger inside yellow summary
+                      // PARTIAL PAYMENT CARD: Yellow summary contains ONLY financial summary; detail toggle is outside
                       if (isPartial) {
+                        const isExpanded = expandedBillDetails.has(b.id);
                         return (
-                          <div
-                            data-partial-popover={b.id}
-                            className="bg-amber-50/90 border border-amber-200/90 rounded-2xl p-3 text-[11px] space-y-1.5 text-amber-950 relative"
-                          >
-                            <div className="flex justify-between items-center text-slate-600">
-                              <span>ยอดรวมเดิม:</span>
-                              <span className="font-semibold text-slate-800">{formatBaht(Number(b.totalAmount))}</span>
-                            </div>
-                            <div className="flex justify-between items-center text-emerald-700">
-                              <span className="font-medium">ชำระแล้ว:</span>
-                              <span className="font-bold">-{formatBaht(Number(b.paidAmount))}</span>
-                            </div>
-                            <div className="flex justify-between items-center text-amber-900 border-t border-amber-200/60 pt-1">
-                              <span className="font-bold">ยอดที่ต้องชำระ:</span>
-                              <span className="font-black text-amber-950">{formatBaht(amount)}</span>
-                            </div>
-
-                            {/* Anchored popover toggle button inside yellow summary */}
-                            <div className="pt-1 flex items-center justify-between">
-                              <button
-                                type="button"
-                                onClick={() => setOpenPartialPopoverId(openPartialPopoverId === b.id ? null : b.id)}
-                                className="text-[11px] font-extrabold text-amber-900 hover:text-amber-950 bg-amber-200/60 hover:bg-amber-200 px-2.5 py-1 rounded-lg transition-all flex items-center gap-1 cursor-pointer"
-                              >
-                                <span>
-                                  {openPartialPopoverId === b.id ? 'ซ่อนรายละเอียด' : `ดูรายละเอียด +${count}`}
-                                </span>
-                                {openPartialPopoverId === b.id ? (
-                                  <ChevronUp className="w-3.5 h-3.5" />
-                                ) : (
-                                  <ChevronDown className="w-3.5 h-3.5" />
-                                )}
-                              </button>
+                          <div className="space-y-1.5">
+                            <div
+                              data-testid={`partial-summary-${b.id}`}
+                              className="bg-amber-50/90 border border-amber-200/90 rounded-2xl p-3 text-[11px] space-y-1.5 text-amber-950"
+                            >
+                              <div className="flex justify-between items-center text-slate-600">
+                                <span>ยอดรวมเดิม:</span>
+                                <span className="font-semibold text-slate-800">{formatBaht(Number(b.totalAmount))}</span>
+                              </div>
+                              <div className="flex justify-between items-center text-emerald-700">
+                                <span className="font-medium">ชำระแล้ว:</span>
+                                <span className="font-bold">-{formatBaht(Number(b.paidAmount))}</span>
+                              </div>
+                              <div className="flex justify-between items-center text-amber-900 border-t border-amber-200/60 pt-1">
+                                <span className="font-bold">ยอดที่ต้องชำระ:</span>
+                                <span className="font-black text-amber-950">{formatBaht(amount)}</span>
+                              </div>
                             </div>
 
-                            {/* Small Anchored Popover / Panel */}
-                            {openPartialPopoverId === b.id && (
-                              <div
-                                className="absolute left-0 right-0 top-full mt-1.5 z-30 bg-white border border-amber-300 rounded-2xl p-3 shadow-xl space-y-1.5 animate-in fade-in zoom-in-95 duration-100 text-xs"
-                              >
-                                <div className="flex items-center justify-between pb-1 border-b border-slate-100">
-                                  <span className="font-black text-slate-800 text-[11px]">รายการค่าใช้จ่าย</span>
-                                  <span className="text-[10px] text-slate-400 font-medium">({count} รายการ)</span>
-                                </div>
-                                <div className="space-y-1 max-h-48 overflow-y-auto">
-                                  {sortedNonZero.map((it, idx) => (
-                                    <div key={idx} className="flex justify-between items-center py-0.5">
-                                      <span className="truncate pr-2 text-slate-600 font-medium text-[11px]">
-                                        {formatCanonicalLineItemDescription(it)}
-                                      </span>
-                                      <span className="font-bold text-slate-900 shrink-0 font-mono text-[11px]">
-                                        {formatBaht(it.amount)}
-                                      </span>
-                                    </div>
-                                  ))}
-                                </div>
+                            {/* Canonical line items when expanded */}
+                            {isExpanded && (
+                              <div className="space-y-1 my-1.5 pt-1">
+                                {sortedNonZero.map((it, idx) => (
+                                  <div key={idx} className="flex justify-between items-center">
+                                    <span className="truncate pr-1 text-slate-500 font-medium">
+                                      {formatCanonicalLineItemDescription(it)}:
+                                    </span>
+                                    <span className="font-semibold text-slate-700 shrink-0">{formatBaht(it.amount)}</span>
+                                  </div>
+                                ))}
                               </div>
                             )}
+
+                            {/* Detail toggle OUTSIDE yellow box reusing approved presentation */}
+                            <button
+                              type="button"
+                              onClick={() => toggleBillDetail(b.id)}
+                              className="text-[11px] font-bold text-indigo-600 hover:text-indigo-800 flex items-center gap-1 pt-0.5 cursor-pointer"
+                            >
+                              <span>{isExpanded ? 'ซ่อนรายละเอียด' : `ดูรายละเอียด +${count}`}</span>
+                              {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                            </button>
                           </div>
                         );
                       }
@@ -2371,7 +2336,6 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                       const unsettledItems = (inv.items || []).filter(
                         (it: any) => it.status !== 'SETTLED' && Number(it.amount) > 0
                       );
-                      const hasMultipleUnsettled = unsettledItems.length > 1;
                       return unsettledItems.length > 0 ? (
                         unsettledItems.map((it: any, idx: number) => (
                           <div key={idx} className="flex justify-between items-center gap-1.5 py-0.5">
@@ -2392,29 +2356,6 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                             </div>
                             <div className="flex items-center gap-1 shrink-0">
                               <span className="font-semibold text-slate-700">{formatBaht(Number(it.amount))}</span>
-                              {/* Item-scoped settlement confirmation buttons (Amendment 3) */}
-                              {hasMultipleUnsettled && (
-                                <div className="flex items-center gap-0.5 ml-1">
-                                  <button
-                                    type="button"
-                                    disabled={isSubmittingCash}
-                                    onClick={() => handleSettleDailyInvoice(inv.id, it.itemType, 'CASH')}
-                                    className="px-1.5 py-0.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-[9px] font-bold rounded cursor-pointer"
-                                    title="รับเงินสดรายการนี้"
-                                  >
-                                    เงินสด
-                                  </button>
-                                  <button
-                                    type="button"
-                                    disabled={isSubmittingCash}
-                                    onClick={() => handleSettleDailyInvoice(inv.id, it.itemType, 'BANK_TRANSFER')}
-                                    className="px-1.5 py-0.5 bg-blue-50 hover:bg-blue-100 text-blue-700 text-[9px] font-bold rounded cursor-pointer"
-                                    title="ยืนยันโอนเงินรายการนี้"
-                                  >
-                                    โอนเงิน
-                                  </button>
-                                </div>
-                              )}
                             </div>
                           </div>
                         ))
@@ -2448,14 +2389,14 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                       </button>
                     </div>
                   ) : (
-                    <div className="grid grid-cols-3 gap-1.5 pt-1">
+                    <div className="grid grid-cols-2 gap-2 pt-1">
                       <button
                         type="button"
                         onClick={() => {
                           setTargetScrollTenantId(inv.dailyStay?.tenantId || inv.dailyStay?.tenant?.id || null);
                           setIsLineModalOpen(true);
                         }}
-                        className="py-2.5 bg-[#06C755] hover:bg-[#05b34c] text-white font-extrabold text-[11px] rounded-xl flex items-center justify-center gap-1 shadow-2xs transition-all cursor-pointer"
+                        className="py-2.5 bg-[#06C755] hover:bg-[#05b34c] text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-1.5 shadow-2xs transition-all cursor-pointer"
                       >
                         <LineIcon className="w-3.5 h-3.5" />
                         เตือน LINE
@@ -2463,19 +2404,10 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                       <button
                         type="button"
                         disabled={isSubmittingCash}
-                        onClick={() => handleSettleDailyInvoice(inv.id, 'ALL', 'BANK_TRANSFER')}
-                        className="py-2.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-extrabold text-[11px] rounded-xl flex items-center justify-center gap-1 shadow-xs transition-all cursor-pointer"
-                      >
-                        <CheckCircle2 className="w-3.5 h-3.5" />
-                        ยืนยันโอนเงิน
-                      </button>
-                      <button
-                        type="button"
-                        disabled={isSubmittingCash}
                         onClick={() => startDailyCashPaymentWithCountdown(inv)}
-                        className="py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-extrabold text-[11px] rounded-xl flex items-center justify-center gap-1 shadow-xs transition-all cursor-pointer"
+                        className="py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-1 shadow-xs transition-all cursor-pointer"
                       >
-                        <DollarSign className="w-3.5 h-3.5" />
+                        <DollarSign className="w-4 h-4" />
                         รับเงินสด
                       </button>
                     </div>
@@ -2756,30 +2688,19 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
 
                         if (pendingCashMap[p.bill.id] !== undefined) {
                           return (
-                            <div className="bg-amber-50 border border-amber-300 p-2 rounded-xl flex items-center justify-between gap-1 text-amber-900 shadow-2xs animate-in fade-in col-span-2 sm:col-span-1">
-                              <div className="flex items-center gap-1 text-[10px] font-bold">
-                                <RotateCw className="w-3 h-3 animate-spin text-amber-600 shrink-0" />
-                                <span>บันทึก ({pendingCashMap[p.bill.id]}s)</span>
+                            <div className="bg-amber-50 border border-amber-300 p-2.5 rounded-2xl flex items-center justify-between gap-2 text-amber-900 shadow-2xs col-span-2 sm:col-span-1">
+                              <div className="flex items-center gap-1.5 text-[11px] font-bold">
+                                <RotateCw className="w-3.5 h-3.5 animate-spin text-amber-600 shrink-0" />
+                                <span>บันทึกเงินสด ({pendingCashMap[p.bill.id]}s)</span>
                               </div>
-                              <div className="flex items-center gap-1">
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    cancelPendingCashPayment(p.bill.id);
-                                    handleConfirmCashPayment(p.bill as any);
-                                  }}
-                                  className="px-2 py-1 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-[10px] rounded-lg shadow-xs transition-all cursor-pointer shrink-0"
-                                >
-                                  ทันที
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => cancelPendingCashPayment(p.bill.id)}
-                                  className="px-1.5 py-1 bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-[10px] rounded-lg shadow-xs transition-all cursor-pointer shrink-0 flex items-center"
-                                >
-                                  <X className="w-3 h-3" />
-                                </button>
-                              </div>
+                              <button
+                                type="button"
+                                onClick={() => cancelPendingCashPayment(p.bill.id)}
+                                className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-[10px] rounded-lg shadow-xs transition-all cursor-pointer shrink-0 flex items-center gap-0.5"
+                              >
+                                <X className="w-3 h-3" />
+                                ยกเลิก
+                              </button>
                             </div>
                           );
                         }
@@ -2971,7 +2892,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                 <div className="flex items-center gap-2.5">
                   <div className="w-10 h-10 rounded-xl overflow-hidden border border-slate-200 bg-slate-50 flex items-center justify-center shrink-0">
                     <img
-                      src={selectedDormitory?.id ? `/api/v1/dormitories/${selectedDormitory.id}/logo` : '/favicon.ico'}
+                      src={viewingReceipt.dormitoryId || dormitoryId ? `/api/v1/dormitories/${viewingReceipt.dormitoryId || dormitoryId}/logo` : '/favicon.ico'}
                       alt="Logo"
                       className="w-full h-full object-contain"
                       onError={(e) => {
@@ -2981,10 +2902,10 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                   </div>
                   <div>
                     <h4 className="font-extrabold text-slate-900 text-sm leading-tight">
-                      {selectedDormitory?.name || viewingReceipt.dormitoryName || 'หอพัก HorPlus'}
+                      {viewingReceipt.dormitoryName || 'หอพัก HorPlus'}
                     </h4>
                     <p className="text-[11px] text-slate-500 font-medium mt-0.5">
-                      {selectedDormitory?.phone || viewingReceipt.dormitoryPhone ? `โทร. ${selectedDormitory?.phone || viewingReceipt.dormitoryPhone}` : 'โทร. 081-234-5678'}
+                      {viewingReceipt.dormitoryPhone ? `โทร. ${viewingReceipt.dormitoryPhone}` : 'โทร. 081-234-5678'}
                     </p>
                   </div>
                 </div>
@@ -3123,6 +3044,22 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
               <div className="grid grid-cols-2 gap-4 pt-4 text-[11px] text-slate-600 font-medium border-t border-dashed border-slate-300">
                 <p>ช่องทางรับชำระ: {viewingReceipt.paymentMethod}</p>
                 <p className="text-right">ผู้รับเงิน / พนักงาน: {viewingReceipt.receiverName}</p>
+              </div>
+
+              {/* Print-ready Two-Column Signature Area */}
+              <div className="grid grid-cols-2 gap-8 pt-6 border-t border-slate-300 text-center text-xs text-slate-700 leading-relaxed">
+                <div>
+                  <p className="font-bold mb-8 text-slate-800">ผู้ชำระเงิน / ผู้เช่า</p>
+                  <p className="text-slate-600">ลงชื่อ ______________________________</p>
+                  <p className="mt-1 text-slate-600">(__________________________________)</p>
+                  <p className="mt-3 text-slate-600">วันที่ ______ / ______ / ______</p>
+                </div>
+                <div>
+                  <p className="font-bold mb-8 text-slate-800">ผู้รับเงิน / เจ้าของหอพัก</p>
+                  <p className="text-slate-600">ลงชื่อ ______________________________</p>
+                  <p className="mt-1 text-slate-600">(__________________________________)</p>
+                  <p className="mt-3 text-slate-600">วันที่ ______ / ______ / ______</p>
+                </div>
               </div>
             </div>
           </PrintView>
