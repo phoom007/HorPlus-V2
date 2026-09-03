@@ -304,17 +304,19 @@ export async function runVerification() {
   if (cycleAugDb && room106Db) {
     const augPreview = await meterService.getMeterBillingPreviewContext(COMP_DORM.id, cycleAugDb.id);
     const r106Aug = augPreview.rooms.find(r => r.roomId === room106Db.id);
-    assert(r106Aug?.billingSource === 'DAILY_STAY', 'Room 106 is ACTIVE Daily stay in August 2026');
+    assert(r106Aug?.billingSource === 'DAILY_STAY', 'Room 106 has billingSource DAILY_STAY in August 2026');
     assert(r106Aug?.isDailyUnpaid === true, 'Room 106 has isDailyUnpaid = true in August 2026');
-    assert(r106Aug?.isDailyOverdue === false, 'Room 106 has isDailyOverdue = false in August 2026 (active before checkout)');
+    assert(r106Aug?.isDailyOverdue === true, 'Room 106 has isDailyOverdue = true in August 2026 (checked-out unpaid historical stay)');
+    assert(r106Aug?.isDailyActive === false, 'Room 106 has isDailyActive = false in August 2026 (today is after checkout)');
   }
 
   if (cycleAugDb && room206Db) {
     const augPreview = await meterService.getMeterBillingPreviewContext(COMP_DORM.id, cycleAugDb.id);
     const r206Aug = augPreview.rooms.find(r => r.roomId === room206Db.id);
-    assert(r206Aug?.billingSource === 'DAILY_STAY', 'Room 206 is ACTIVE Daily stay in August 2026');
-    assert(r206Aug?.isDailyRentPaid === true, 'Room 206 has isDailyRentPaid = true in August 2026 (active paid daily stay)');
+    assert(r206Aug?.billingSource === 'DAILY_STAY', 'Room 206 has billingSource DAILY_STAY in August 2026');
+    assert(r206Aug?.isDailyRentPaid === true, 'Room 206 has isDailyRentPaid = true in August 2026 (paid daily stay)');
     assert(r206Aug?.isDailyOverdue === false, 'Room 206 has isDailyOverdue = false in August 2026');
+    assert(r206Aug?.isDailyActive === false, 'Room 206 has isDailyActive = false in August 2026 (today is after checkout)');
   }
 
   if (cycleJulyDb && room205Db) {

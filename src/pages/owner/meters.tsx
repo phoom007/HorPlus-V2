@@ -385,6 +385,21 @@ export function formatComponentDetailAmount(amt: number | string): string {
   return num.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+export function calculateAutoScrollDelta(
+  clientY: number,
+  containerRect: { top: number; bottom: number },
+  edgeThreshold = 35,
+  scrollStep = 10
+): number {
+  if (clientY < containerRect.top + edgeThreshold) {
+    return -scrollStep;
+  }
+  if (clientY > containerRect.bottom - edgeThreshold) {
+    return scrollStep;
+  }
+  return 0;
+}
+
 export function isRowDraftDirty(row?: any, originalRow?: any): boolean {
   if (!row) return false;
   if (originalRow) {
@@ -1034,11 +1049,9 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     if (!container) return;
 
     const rect = container.getBoundingClientRect();
-    const edgeThreshold = 35;
-    if (e.clientY < rect.top + edgeThreshold) {
-      container.scrollTop -= 10;
-    } else if (e.clientY > rect.bottom - edgeThreshold) {
-      container.scrollTop += 10;
+    const delta = calculateAutoScrollDelta(e.clientY, rect, 35, 10);
+    if (delta !== 0) {
+      container.scrollTop += delta;
     }
 
     const rowElements = container.querySelectorAll<HTMLTableRowElement>('tr[data-row-index]');

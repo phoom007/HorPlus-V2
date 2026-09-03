@@ -1908,6 +1908,7 @@ export class MeterService {
       orderBy: [{ startDate: 'asc' }, { createdAt: 'desc' }],
     });
 
+    const cycleDailyStays: typeof allDailyStays = [];
     const activeDailyStays: typeof allDailyStays = [];
     const futureDailyStays: typeof allDailyStays = [];
 
@@ -1925,13 +1926,11 @@ export class MeterService {
       const belongsToCycle = checkInAt.getTime() < cycleEndExclusive.getTime() && effectiveCheckOutAt.getTime() > cycleStart.getTime();
       if (!belongsToCycle) continue;
 
-      const evalNow = now.getTime() > cycleEnd.getTime()
-        ? new Date(cycleEnd.getTime() - 2 * 24 * 60 * 60 * 1000)
-        : (now.getTime() < cycleStart.getTime() ? cycleStart : now);
+      cycleDailyStays.push(d);
 
-      if (evalNow.getTime() < checkInAt.getTime() && (d.status === 'ACTIVE' || d.status === 'RESERVED')) {
+      if (now.getTime() < checkInAt.getTime() && (d.status === 'ACTIVE' || d.status === 'RESERVED')) {
         futureDailyStays.push(d);
-      } else if (checkInAt.getTime() <= evalNow.getTime() && evalNow.getTime() < effectiveCheckOutAt.getTime() && (d.status === 'ACTIVE' || d.status === 'RESERVED')) {
+      } else if (checkInAt.getTime() <= now.getTime() && now.getTime() < effectiveCheckOutAt.getTime() && (d.status === 'ACTIVE' || d.status === 'RESERVED')) {
         activeDailyStays.push(d);
       }
     }
@@ -1995,9 +1994,18 @@ export class MeterService {
       if (!roomProvisionalMap.has(p.roomId)) roomProvisionalMap.set(p.roomId, p);
     }
 
-    const roomDailyStayMap = new Map<string, typeof activeDailyStays[0]>();
-    for (const d of activeDailyStays) {
-      if (!roomDailyStayMap.has(d.roomId)) roomDailyStayMap.set(d.roomId, d);
+    const roomDailyStayMap = new Map<string, typeof allDailyStays[0]>();
+    for (const d of cycleDailyStays) {
+      const existing = roomDailyStayMap.get(d.roomId);
+      if (!existing) {
+        roomDailyStayMap.set(d.roomId, d);
+      } else {
+        const isExistingActive = activeDailyStays.some(a => a.id === existing.id);
+        const isCurrentActive = activeDailyStays.some(a => a.id === d.id);
+        if (!isExistingActive && isCurrentActive) {
+          roomDailyStayMap.set(d.roomId, d);
+        }
+      }
     }
 
     const roomFutureContractMap = new Map<string, typeof futureContracts[0]>();
@@ -2303,9 +2311,6 @@ export class MeterService {
       const distinctDailyStayIds = new Set(roomDailyStaysInCycle.map((d) => d.id));
       const historicalDailyCount = distinctDailyStayIds.size;
 
-      const evalNow = now.getTime() > cycleEnd.getTime()
-        ? new Date(cycleEnd.getTime() - 2 * 24 * 60 * 60 * 1000)
-        : (now.getTime() < cycleStart.getTime() ? cycleStart : now);
       let isDailyRentPaid = false;
       let isDailyOverdue = false;
       let isDailyActive = false;
@@ -2317,7 +2322,7 @@ export class MeterService {
       if (billingSource === 'DAILY_STAY') {
         const activeDailyStay = roomDailyStaysInCycle.find(d => {
           const iv = getDailyStayPhysicalInterval(d);
-          return evalNow.getTime() >= iv.start.getTime() && evalNow.getTime() < iv.end.getTime();
+          return now.getTime() >= iv.start.getTime() && now.getTime() < iv.end.getTime();
         }) || roomDailyStaysInCycle[0];
 
         if (activeDailyStay) {
@@ -2325,13 +2330,13 @@ export class MeterService {
           const rentItem = activeDailyStay.invoice?.items.find((i) => i.itemType === 'RENT' || i.itemType === 'DAILY_RENT');
           const isPaid = rentItem
             ? (rentItem.status === 'SETTLED' || rentItem.status === 'DECLARED_PAID')
-            : (activeDailyStay.status === 'COMPLETED' || activeDailyStay.invoice?.status === 'PAID');
+            : (activeDailyStay.status === 'COMPLETED' || activeDailyStay.invoice?.status === 'PAID' || activeDailyStay.invoice?.status === 'SETTLED');
 
           const iv = getDailyStayPhysicalInterval(activeDailyStay);
-          const isOverdue = evalNow.getTime() > iv.end.getTime();
+          const isCheckedOut = now.getTime() > iv.end.getTime();
           isDailyRentPaid = isPaid;
-          isDailyOverdue = isOverdue && !isPaid;
-          isDailyActive = evalNow.getTime() <= iv.end.getTime();
+          isDailyOverdue = isCheckedOut && !isPaid;
+          isDailyActive = now.getTime() >= iv.start.getTime() && now.getTime() <= iv.end.getTime() && (activeDailyStay.status === 'ACTIVE' || activeDailyStay.status === 'RESERVED');
           isDailyUnpaid = !isPaid;
         }
       }
@@ -2340,10 +2345,10 @@ export class MeterService {
         const rentItem = d.invoice?.items.find((i) => i.itemType === 'RENT' || i.itemType === 'DAILY_RENT');
         const isRentPaid = rentItem
           ? (rentItem.status === 'SETTLED' || rentItem.status === 'DECLARED_PAID')
-          : (d.status === 'COMPLETED' || d.invoice?.status === 'PAID');
+          : (d.status === 'COMPLETED' || d.invoice?.status === 'PAID' || d.invoice?.status === 'SETTLED');
         if (!isRentPaid) {
           const iv = getDailyStayPhysicalInterval(d);
-          if (evalNow.getTime() > iv.end.getTime()) {
+          if (now.getTime() > iv.end.getTime()) {
             isDailyOverdue = true;
           }
           isDailyUnpaid = true;
