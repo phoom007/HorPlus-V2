@@ -1307,9 +1307,8 @@ export async function generateFinalSettlementReceiptForDailyInvoiceInTx(
   if (
     totalAgreed.lessThanOrEqualTo(0) ||
     totalAgreed.isNaN() ||
-    outDec.isNaN() ||
     !outDec.isZero() || // Authoritative outstanding MUST equal exactly zero
-    invoiceStatus !== 'PAID'
+    !['PAID', 'SETTLED'].includes(invoiceStatus)
   ) {
     return null;
   }

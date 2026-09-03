@@ -18,14 +18,29 @@ export const OnboardingDormitoryInputSchema = z.object({
   logoUrl: z.string().trim().optional().nullable(),
 }).strict();
 
-const normalizeMoneyField = (defaultVal = '0.00', msg = 'ต้องเป็นตัวเลขจำนวนเงินที่ถูกต้อง') =>
+export const normalizeMoneyField = (defaultVal = '0.00', msg = 'ต้องเป็นตัวเลขจำนวนเงินที่ถูกต้อง') =>
   z.union([z.string(), z.number(), z.null(), z.undefined()])
-    .transform((val) => {
-      if (val === null || val === undefined || val === '') return defaultVal;
+    .superRefine((val, ctx) => {
+      if (val === null || val === undefined) return;
+      if (typeof val === 'string' && val.trim() === '') return;
+      if (typeof val === 'number') {
+        if (isNaN(val) || val < 0) {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, message: msg });
+        }
+        return;
+      }
       const str = String(val).replace(/,/g, '').trim();
-      if (!str || isNaN(Number(str))) return defaultVal;
-      if (/^\d+(\.\d{1,2})?$/.test(str)) return str;
-      return Number(str).toFixed(2);
+      if (!/^\d+(\.\d{1,2})?$/.test(str)) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: msg });
+      }
+    })
+    .transform((val) => {
+      if (val === null || val === undefined) return defaultVal;
+      if (typeof val === 'string' && val.trim() === '') return defaultVal;
+      if (typeof val === 'number') return val.toFixed(2);
+      const str = String(val).replace(/,/g, '').trim();
+      const num = Number(str);
+      return isNaN(num) ? str : Number(num.toFixed(2)).toFixed(2);
     })
     .pipe(z.string().regex(/^\d+(\.\d{1,2})?$/, msg));
 

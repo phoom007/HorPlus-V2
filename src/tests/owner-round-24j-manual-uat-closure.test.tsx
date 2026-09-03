@@ -1,4 +1,4 @@
-﻿// @vitest-environment jsdom
+// @vitest-environment jsdom
 import React from 'react';
 import { describe, it, expect } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
@@ -62,14 +62,32 @@ describe('Owner Round 2.4J: Manual UAT Findings Closure', () => {
       }
     });
 
-    it('4. sanitizeDraftForStorage preserves ownerSignatureUrl across step navigation', () => {
-      const draft = {
-        step: 2,
+    it('4. sanitizeDraftForStorage strips raw data:image signature but preserves safe object-storage keys', () => {
+      const draftWithDataUrl = {
+        step: 5,
         dormName: 'หอพักทดสอบ',
         ownerSignatureUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+        formData: {
+          ownerSignatureUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+          lineChannelSecret: 'secret_12345',
+        },
       };
-      const sanitized = sanitizeDraftForStorage(draft as any);
-      expect(sanitized.ownerSignatureUrl).toBe(draft.ownerSignatureUrl);
+      const sanitized = sanitizeDraftForStorage(draftWithDataUrl as any);
+      expect(sanitized.ownerSignatureUrl).toBe('');
+      expect(sanitized.formData?.ownerSignatureUrl).toBe('');
+      expect(sanitized.ownerSignatureUrl.startsWith('data:')).toBe(false);
+
+      const draftWithObjectKey = {
+        step: 5,
+        dormName: 'หอพักทดสอบ',
+        ownerSignatureUrl: 'dormitories/dorm-1/signatures/sig-123.png',
+        formData: {
+          ownerSignatureUrl: 'dormitories/dorm-1/signatures/sig-123.png',
+        },
+      };
+      const sanitizedObj = sanitizeDraftForStorage(draftWithObjectKey as any);
+      expect(sanitizedObj.ownerSignatureUrl).toBe('dormitories/dorm-1/signatures/sig-123.png');
+      expect(sanitizedObj.formData?.ownerSignatureUrl).toBe('dormitories/dorm-1/signatures/sig-123.png');
     });
   });
 

@@ -1597,6 +1597,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
           email: null,
           estimatedBuildingCount: mappedBuildings.length,
           estimatedRoomCount: mappedRooms.length,
+          logoUrl: formData.logoUrl || null,
         },
         billing: {
           dueDay: Number(formData.deposits.dueDateDay) || 15,

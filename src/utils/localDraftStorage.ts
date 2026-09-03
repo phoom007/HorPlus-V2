@@ -40,7 +40,14 @@ export function sanitizeDraftForStorage(draft: any): any {
     safe.formData.lineOA.channelSecret = '';
   }
 
-  // 2. Security Invariant: LINE Channel Secret and other sensitive credentials MUST NEVER be persisted locally
+  // 2. Security Invariant: Raw base64/data URLs for signatures MUST NEVER be persisted locally in IndexedDB/localStorage
+  // Only safe object-storage references (e.g. object keys, https URLs, signed URLs) are permitted.
+  if (safe.formData?.ownerSignatureUrl && typeof safe.formData.ownerSignatureUrl === 'string' && safe.formData.ownerSignatureUrl.startsWith('data:')) {
+    safe.formData.ownerSignatureUrl = '';
+  }
+  if (safe.ownerSignatureUrl && typeof safe.ownerSignatureUrl === 'string' && safe.ownerSignatureUrl.startsWith('data:')) {
+    safe.ownerSignatureUrl = '';
+  }
 
   // 3. Building Code Invariant: English characters in roomPrefix/code are canonicalized to uppercase
   if (Array.isArray(safe.formData?.buildings)) {

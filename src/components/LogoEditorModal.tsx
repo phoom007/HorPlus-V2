@@ -25,8 +25,8 @@ export interface LogoEditorModalProps {
   isSubmitting?: boolean;
 }
 
-const CROP_SIZE = 280; // Size of the square crop preview workspace in px
-const EXPORT_SIZE = 512; // High-resolution export dimension in px
+export const CROP_SIZE = 320; // Size of the square crop preview workspace in px
+export const EXPORT_SIZE = 512; // High-resolution export dimension in px
 
 export function getClampedPan(
   pan: { x: number; y: number },
@@ -36,25 +36,18 @@ export function getClampedPan(
 ): { x: number; y: number } {
   if (!imageElement) return { x: 0, y: 0 };
 
-  const isRotated90or270 = rotation === 90 || rotation === 270;
-  const naturalW = isRotated90or270 ? imageElement.height : imageElement.width;
-  const naturalH = isRotated90or270 ? imageElement.width : imageElement.height;
-  const aspect = naturalW / naturalH;
+  const is90or270 = rotation === 90 || rotation === 270;
+  const wVis = is90or270 ? imageElement.height : imageElement.width;
+  const hVis = is90or270 ? imageElement.width : imageElement.height;
 
-  let baseW = CROP_SIZE;
-  let baseH = CROP_SIZE;
-  if (aspect > 1) {
-    baseW = CROP_SIZE * aspect;
-  } else {
-    baseH = CROP_SIZE / aspect;
-  }
+  const scaleCover = Math.max(CROP_SIZE / wVis, CROP_SIZE / hVis);
+  const z = Math.max(1, zoom / 100);
 
-  const scale = Math.max(1, zoom / 100);
-  const currentW = baseW * scale;
-  const currentH = baseH * scale;
+  const curVisW = wVis * scaleCover * z;
+  const curVisH = hVis * scaleCover * z;
 
-  const maxPanX = Math.max(0, (currentW - CROP_SIZE) / 2);
-  const maxPanY = Math.max(0, (currentH - CROP_SIZE) / 2);
+  const maxPanX = Math.max(0, (curVisW - CROP_SIZE) / 2);
+  const maxPanY = Math.max(0, (curVisH - CROP_SIZE) / 2);
 
   return {
     x: Math.min(maxPanX, Math.max(-maxPanX, pan.x)),
@@ -69,11 +62,10 @@ export const LogoEditorModal: React.FC<LogoEditorModalProps> = ({
   onConfirm,
   isSubmitting = false,
 }) => {
-  const [imageSrc, setImageSrc] = useState<string | null>(null);
   const [imageElement, setImageElement] = useState<HTMLImageElement | null>(null);
 
   // Transform states
-  const [zoom, setZoom] = useState<number>(100); // 50% to 300%
+  const [zoom, setZoom] = useState<number>(100); // 100% to 300%
   const [pan, setPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [rotation, setRotation] = useState<number>(0); // 0, 90, 180, 270
 
@@ -86,23 +78,21 @@ export const LogoEditorModal: React.FC<LogoEditorModalProps> = ({
     panY: 0,
   });
 
-  // Dedicated preview state (object URL generated from rendering)
+  // Dedicated preview state (data URL generated from rendering)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const prevPreviewUrlRef = useRef<string | null>(null);
 
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const workspaceCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const previewCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   // 1. Load image when file changes
   useEffect(() => {
     if (!imageFile) {
-      setImageSrc(null);
       setImageElement(null);
+      setPreviewUrl(null);
       return;
     }
 
     const objectUrl = URL.createObjectURL(imageFile);
-    setImageSrc(objectUrl);
-
     const img = new Image();
     img.crossOrigin = 'anonymous';
     img.onload = () => {
@@ -119,7 +109,7 @@ export const LogoEditorModal: React.FC<LogoEditorModalProps> = ({
     };
   }, [imageFile]);
 
-  // 2. Render canvas helper
+  // 2. Canonical render canvas helper: One authority for workspace, preview, and export
   const drawToCanvas = useCallback(
     (canvas: HTMLCanvasElement, targetSize: number) => {
       if (!imageElement) return;
@@ -132,75 +122,54 @@ export const LogoEditorModal: React.FC<LogoEditorModalProps> = ({
 
       ctx.clearRect(0, 0, targetSize, targetSize);
 
-      ctx.save();
-      // Move origin to center of target canvas
-      ctx.translate(targetSize / 2, targetSize / 2);
+      const is90or270 = rotation === 90 || rotation === 270;
+      const wVis = is90or270 ? imageElement.height : imageElement.width;
+      const hVis = is90or270 ? imageElement.width : imageElement.height;
 
+      // Exact cover geometry: ensures zero transparent edges regardless of aspect ratio
+      const scaleCover = Math.max(targetSize / wVis, targetSize / hVis);
+      const z = Math.max(1, zoom / 100);
+
+      const baseW = imageElement.width * scaleCover;
+      const baseH = imageElement.height * scaleCover;
+
+      const clamped = getClampedPan(pan, zoom, rotation, imageElement);
+      const panScale = targetSize / CROP_SIZE;
+
+      ctx.save();
+      // Move origin to center
+      ctx.translate(targetSize / 2, targetSize / 2);
+      // Apply screen-space pan (proportional to targetSize)
+      ctx.translate(clamped.x * panScale, clamped.y * panScale);
       // Apply rotation (degrees to radians)
       ctx.rotate((rotation * Math.PI) / 180);
-
       // Scale factor
-      const effectiveZoom = Math.max(100, zoom);
-      const scale = effectiveZoom / 100;
-      ctx.scale(scale, scale);
-
-      // Apply clamped pan scaled relative to targetSize vs CROP_SIZE
-      const clamped = getClampedPan(pan, effectiveZoom, rotation, imageElement);
-      const panScale = targetSize / CROP_SIZE;
-      const effectivePanX = (rotation === 90 ? clamped.y : rotation === 180 ? -clamped.x : rotation === 270 ? -clamped.y : clamped.x) * panScale;
-      const effectivePanY = (rotation === 90 ? -clamped.x : rotation === 180 ? -clamped.y : rotation === 270 ? clamped.x : clamped.y) * panScale;
-
-      // Calculate base image dimensions to fit/cover nicely
-      const imgAspect = imageElement.width / imageElement.height;
-      let drawW = targetSize;
-      let drawH = targetSize;
-
-      if (imgAspect > 1) {
-        drawW = targetSize * imgAspect;
-      } else {
-        drawH = targetSize / imgAspect;
-      }
-
-      ctx.drawImage(
-        imageElement,
-        -drawW / 2 + effectivePanX / scale,
-        -drawH / 2 + effectivePanY / scale,
-        drawW,
-        drawH
-      );
-
+      ctx.scale(z, z);
+      // Draw centered image
+      ctx.drawImage(imageElement, -baseW / 2, -baseH / 2, baseW, baseH);
       ctx.restore();
     },
     [imageElement, zoom, pan, rotation]
   );
 
-  // 3. Update dedicated preview when transform changes
+  // 3. Render workspace and preview synchronously whenever transforms or image change
   useEffect(() => {
     if (!imageElement || !isOpen) return;
 
-    if (!canvasRef.current) {
-      canvasRef.current = document.createElement('canvas');
+    if (workspaceCanvasRef.current) {
+      drawToCanvas(workspaceCanvasRef.current, CROP_SIZE);
     }
 
-    const canvas = canvasRef.current;
-    drawToCanvas(canvas, 200);
-
-    canvas.toBlob((blob) => {
-      if (!blob) return;
-      const url = URL.createObjectURL(blob);
-      if (prevPreviewUrlRef.current) {
-        URL.revokeObjectURL(prevPreviewUrlRef.current);
-      }
-      prevPreviewUrlRef.current = url;
-      setPreviewUrl(url);
-    }, 'image/png');
-
-    return () => {
-      if (prevPreviewUrlRef.current) {
-        URL.revokeObjectURL(prevPreviewUrlRef.current);
-        prevPreviewUrlRef.current = null;
-      }
-    };
+    if (!previewCanvasRef.current) {
+      previewCanvasRef.current = document.createElement('canvas');
+    }
+    const pCanvas = previewCanvasRef.current;
+    drawToCanvas(pCanvas, 200);
+    try {
+      setPreviewUrl(pCanvas.toDataURL('image/png'));
+    } catch {
+      // ignore
+    }
   }, [imageElement, zoom, pan, rotation, isOpen, drawToCanvas]);
 
   // Pointer event handlers for drag / pan
@@ -275,7 +244,7 @@ export const LogoEditorModal: React.FC<LogoEditorModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6 animate-in fade-in">
-      <div className="bg-white border border-slate-200 rounded-3xl max-w-2xl w-full p-5 sm:p-7 space-y-5 shadow-2xl relative text-slate-800 flex flex-col max-h-[92vh] overflow-y-auto">
+      <div className="bg-white border border-slate-200 rounded-3xl max-w-3xl w-full p-5 sm:p-7 space-y-5 shadow-2xl relative text-slate-800 flex flex-col max-h-[92vh] overflow-y-auto">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-slate-100 pb-3">
           <div className="flex items-center gap-2.5">
@@ -303,38 +272,24 @@ export const LogoEditorModal: React.FC<LogoEditorModalProps> = ({
 
         {/* Workspace & Previews Grid */}
         <div className="grid grid-cols-1 md:grid-cols-12 gap-6 items-start">
-          {/* Main Crop Workspace (Left Column) */}
+          {/* Main Crop Workspace (Left Column) - Canonical Canvas Authority */}
           <div className="md:col-span-7 flex flex-col items-center space-y-4">
             <div
               onPointerDown={handlePointerDown}
               onPointerMove={handlePointerMove}
               onPointerUp={handlePointerUp}
               onPointerCancel={handlePointerUp}
-              className={`relative overflow-hidden border-2 border-dashed border-indigo-400 rounded-2xl bg-slate-100 flex items-center justify-center select-none touch-none ${
+              className={`relative overflow-hidden border-2 border-dashed border-indigo-400 rounded-2xl bg-slate-900 flex items-center justify-center select-none touch-none shadow-inner ${
                 isDragging ? 'cursor-grabbing' : 'cursor-grab'
               }`}
               style={{ width: `${CROP_SIZE}px`, height: `${CROP_SIZE}px` }}
             >
-              {imageSrc && (
-                <div
-                  className="absolute transition-transform duration-75 ease-out origin-center"
-                  style={{
-                    transform: `translate(${pan.x}px, ${pan.y}px) rotate(${rotation}deg) scale(${zoom / 100})`,
-                  }}
-                >
-                  <img
-                    src={imageSrc}
-                    alt="Workspace"
-                    className="pointer-events-none max-w-none select-none"
-                    style={{
-                      width: `${CROP_SIZE}px`,
-                      height: `${CROP_SIZE}px`,
-                      objectFit: 'contain',
-                    }}
-                    draggable={false}
-                  />
-                </div>
-              )}
+              <canvas
+                ref={workspaceCanvasRef}
+                width={CROP_SIZE}
+                height={CROP_SIZE}
+                className="w-full h-full block pointer-events-none select-none"
+              />
 
               {/* Grid guide overlay */}
               <div className="absolute inset-0 pointer-events-none grid grid-cols-3 grid-rows-3 border border-indigo-300/40">
@@ -351,7 +306,7 @@ export const LogoEditorModal: React.FC<LogoEditorModalProps> = ({
             </div>
 
             {/* Controls Bar: Zoom, Rotate, Reset */}
-            <div className="w-full max-w-[280px] space-y-3">
+            <div className="w-full max-w-[320px] space-y-3">
               {/* Zoom Slider */}
               <div className="space-y-1">
                 <div className="flex items-center justify-between text-[11px] font-bold text-slate-600">

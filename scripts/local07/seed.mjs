@@ -898,8 +898,9 @@ export async function seedLocal07Data() {
     },
   });
 
-  // Dynamic Bangkok Reference Time for Active Daily Fixtures
-  const now = new Date();
+  // Deterministic Bangkok Reference Time for Active August Daily Fixtures
+  // Anchor to August 2026 cycle so active daily stays are deterministically situated in August
+  const now = new Date('2026-08-28T12:00:00.000+07:00');
   console.log(`\n📅 Seed-time Reference Instant (Bangkok): ${now.toISOString()}`);
 
   const checkIn106 = new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000);

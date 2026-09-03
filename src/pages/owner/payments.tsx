@@ -2036,11 +2036,11 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
               const amount = Number(b.outstandingAmount ?? b.totalAmount ?? 0);
               const isDepositBill = b.billKind === 'DEPOSIT';
               const isRentBill = b.billKind === 'RENT';
-
               const isDeposit = isDepositBill || b.items?.some((it: any) => it.type === 'DEPOSIT' || it.itemType === 'DEPOSIT' || (it.description || '').includes('ประกัน') || (it.description || '').includes('มัดจำ'));
+
               const allContracts = contractsData.length > 0 ? contractsData : (queryClient.getQueryData<any[]>(queryKeys.contracts(dormitoryId)) || []);
               const contract = allContracts.find((c: any) => (b.contractId && c.id === b.contractId) || (c.roomId === b.roomId && c.tenantId === b.tenantId));
-              const depositStartDate = (b as any).contractStartDate || (b as any).contract?.startDate || contract?.startDate || (b as any).provisionalRentalStartDate || b.dueDate;
+              const depositStartDate = (b as any).contractStartDate || (b as any).contract?.startDate || contract?.startDate || (b as any).provisionalRentalStartDate || (b as any).provisionalRentalTerm?.startDate || (b as any).occupancyStartDate || null;
 
               return (
                 <div key={b.id} className="bg-white rounded-3xl border border-slate-200/90 shadow-2xs hover:shadow-md transition-all p-5 flex flex-col justify-between space-y-4">
