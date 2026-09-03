@@ -22,6 +22,37 @@ interface OwnerLoginPageProps {
   onLoginSuccess: (user: UserType) => void;
 }
 
+const DormitoryPickerLogo: React.FC<{ dormitoryId: string; name?: string; logoUrl?: string | null }> = ({
+  dormitoryId,
+  name,
+  logoUrl,
+}) => {
+  const [hasError, setHasError] = useState(false);
+  const [isLoaded, setIsLoaded] = useState(false);
+
+  // Amendment 3: Canonical current-logo authority is public endpoint GET /api/v1/dormitories/:dormitoryId/logo
+  const src = logoUrl || `/api/v1/dormitories/${dormitoryId}/logo`;
+
+  if (hasError) {
+    return <Building2 className="w-6 h-6 text-indigo-500" />;
+  }
+
+  return (
+    <>
+      {!isLoaded && <Building2 className="w-6 h-6 text-indigo-500 animate-pulse" />}
+      <img
+        src={src}
+        alt={name || 'Dormitory'}
+        onLoad={() => setIsLoaded(true)}
+        onError={() => setHasError(true)}
+        className={`w-full h-full object-cover transition-opacity duration-200 ${
+          isLoaded ? 'opacity-100' : 'opacity-0 absolute'
+        }`}
+      />
+    </>
+  );
+};
+
 export const OwnerLoginPage: React.FC<OwnerLoginPageProps> = ({ onLoginSuccess }) => {
   const navigate = useNavigate();
   const [showPicker, setShowPicker] = useState(false);
@@ -293,12 +324,12 @@ export const OwnerLoginPage: React.FC<OwnerLoginPageProps> = ({ onLoginSuccess }
                     >
                       <div className="flex items-start gap-3">
                         <div className="relative shrink-0">
-                          <div className="w-12 h-12 rounded-xl overflow-hidden border border-indigo-100 shadow-2xs group-hover:scale-105 transition-transform bg-slate-50 flex items-center justify-center">
-                            {membership.logoUrl ? (
-                              <img src={membership.logoUrl} alt={membership.dormitoryName || membership.name} className="w-full h-full object-contain p-1" />
-                            ) : (
-                              <Building2 className="w-6 h-6 text-indigo-500" />
-                            )}
+                          <div className="w-12 h-12 rounded-xl overflow-hidden border border-indigo-100 shadow-2xs group-hover:scale-105 transition-transform bg-slate-50 flex items-center justify-center relative">
+                            <DormitoryPickerLogo
+                              dormitoryId={membership.dormitoryId || membership.id}
+                              name={membership.dormitoryName || membership.name}
+                              logoUrl={membership.logoUrl}
+                            />
                           </div>
                           <span className="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 bg-emerald-500 border-2 border-white rounded-full" title="เปิดใช้งานอยู่" />
                         </div>

@@ -439,4 +439,54 @@ describe('Round 2.4J.2: Quick Fill Drag-Fill Authority & Excel Mechanics', () =>
       expect(autoScrollProof.thresholdCalculationLayer).toBeDefined();
     });
   });
+
+  // =========================================================================
+  // 5. ROUND 2.4K: STACKING CONTEXT, DUAL-MODE PASTE & B1 CANONICAL VALIDATION
+  // =========================================================================
+  describe('Area 5: Round 2.4K Quick Fill Enhancements', () => {
+    it('verifies sticky thead includes z-30 stacking context so cells never bleed over header', async () => {
+      const { container } = await openSpreadsheetQuickFill();
+      const theads = container.querySelectorAll('thead');
+      const thead = theads[theads.length - 1];
+      expect(thead).toBeDefined();
+      expect(thead?.className).toContain('sticky');
+      expect(thead?.className).toContain('top-0');
+      expect(thead?.className).toContain('z-30');
+    });
+
+    it('Mode A: pastes relative to active spreadsheet cell, skips read-only columns, applies B1 normalization', async () => {
+      const { rows, container } = await openSpreadsheetQuickFill();
+      const gridContainer = container.querySelector('.flex.flex-col.gap-2.h-\\[340px\\]') as HTMLElement;
+      expect(gridContainer).toBeDefined();
+
+      // Focus cell on row 0, elecCurr (col index 3)
+      const row0ElecInput = rows[0].querySelectorAll('td')[3].querySelector('input')!;
+      fireEvent.focus(row0ElecInput);
+
+      // Paste 2 rows, each with 2 tab-separated values:
+      // Row 0: "0500\t0042" -> should fill elecCurr with "500", waterPrev with "42"
+      // Row 1: "0600\t0088" -> should fill elecCurr with "600", waterPrev with "88"
+      const pasteText = '0500\t0042\n0600\t0088';
+      fireEvent.paste(gridContainer, {
+        clipboardData: {
+          getData: (format: string) => (format === 'text' ? pasteText : ''),
+        },
+      });
+
+      // Verify B1 normalization stripped leading zeros and updated destination cells
+      const row0Cells = rows[0].querySelectorAll('td');
+      const row1Cells = rows[1].querySelectorAll('td');
+
+      expect(row0Cells[3].querySelector('input')!.value).toBe('500');
+      expect(row0Cells[4].querySelector('input')!.value).toBe('42');
+      expect(row1Cells[3].querySelector('input')!.value).toBe('600');
+      expect(row1Cells[4].querySelector('input')!.value).toBe('88');
+
+      // Building (Cell 0) and Room (Cell 1) remain strictly immutable
+      expect(row0Cells[0].textContent?.trim()).toBe('A');
+      expect(row0Cells[1].textContent?.trim()).toBe('101');
+      expect(row1Cells[0].textContent?.trim()).toBe('A');
+      expect(row1Cells[1].textContent?.trim()).toBe('102');
+    });
+  });
 });

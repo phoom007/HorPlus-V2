@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   TrendingUp,
   Save,
@@ -993,128 +993,6 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   const [templateMode, setTemplateMode] = useState<'FULL' | 'METER_ONLY'>('FULL');
   const [isSpreadsheetMode, setIsSpreadsheetMode] = useState(false);
 
-  // Spreadsheet Real Drag-Fill Handle State
-  const [activeSpreadsheetCell, setActiveSpreadsheetCell] = useState<{
-    rowIndex: number;
-    colKey: 'elecPrev' | 'elecCurr' | 'waterPrev' | 'waterCurr' | 'peopleCount';
-  } | null>(null);
-
-  const [dragFillRange, setDragFillRange] = useState<{
-    startRow: number;
-    targetRow: number;
-    colKey: 'elecPrev' | 'elecCurr' | 'waterPrev' | 'waterCurr' | 'peopleCount';
-  } | null>(null);
-
-  const isDraggingFillRef = useRef(false);
-  const dragFillStateRef = useRef<{
-    startRow: number;
-    targetRow: number;
-    colKey: 'elecPrev' | 'elecCurr' | 'waterPrev' | 'waterCurr' | 'peopleCount';
-  } | null>(null);
-
-  const spreadsheetScrollContainerRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && isDraggingFillRef.current) {
-        isDraggingFillRef.current = false;
-        dragFillStateRef.current = null;
-        setDragFillRange(null);
-        document.body.style.userSelect = '';
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
-
-  const handlePointerDownFillHandle = (
-    e: React.PointerEvent<HTMLDivElement>,
-    rowIndex: number,
-    colKey: 'elecPrev' | 'elecCurr' | 'waterPrev' | 'waterCurr' | 'peopleCount'
-  ) => {
-    e.preventDefault();
-    e.stopPropagation();
-    try {
-      (e.target as HTMLElement).setPointerCapture(e.pointerId);
-    } catch {}
-    isDraggingFillRef.current = true;
-    dragFillStateRef.current = { startRow: rowIndex, targetRow: rowIndex, colKey };
-    setDragFillRange({ startRow: rowIndex, targetRow: rowIndex, colKey });
-    document.body.style.userSelect = 'none';
-  };
-
-  const handlePointerMoveFillHandle = (e: React.PointerEvent) => {
-    if (!isDraggingFillRef.current || !dragFillStateRef.current) return;
-    const container = spreadsheetScrollContainerRef.current;
-    if (!container) return;
-
-    const rect = container.getBoundingClientRect();
-    const delta = calculateAutoScrollDelta(e.clientY, rect, 35, 10);
-    if (delta !== 0) {
-      container.scrollTop += delta;
-    }
-
-    const rowElements = container.querySelectorAll<HTMLTableRowElement>('tr[data-row-index]');
-    let foundRow = dragFillStateRef.current.targetRow;
-    rowElements.forEach((el) => {
-      const rRect = el.getBoundingClientRect();
-      if (e.clientY >= rRect.top && e.clientY <= rRect.bottom) {
-        const idx = parseInt(el.getAttribute('data-row-index') || '-1', 10);
-        if (idx >= 0) foundRow = idx;
-      }
-    });
-
-    if (rowElements.length > 0) {
-      const firstRect = rowElements[0].getBoundingClientRect();
-      const lastRect = rowElements[rowElements.length - 1].getBoundingClientRect();
-      if (e.clientY < firstRect.top) foundRow = 0;
-      else if (e.clientY > lastRect.bottom) foundRow = rowElements.length - 1;
-    }
-
-    if (foundRow !== dragFillStateRef.current.targetRow) {
-      dragFillStateRef.current.targetRow = foundRow;
-      setDragFillRange({ ...dragFillStateRef.current });
-    }
-  };
-
-  const handlePointerUpFillHandle = (e: React.PointerEvent) => {
-    if (!isDraggingFillRef.current) return;
-    try {
-      (e.target as HTMLElement).releasePointerCapture(e.pointerId);
-    } catch {}
-    isDraggingFillRef.current = false;
-    document.body.style.userSelect = '';
-
-    if (dragFillStateRef.current) {
-      const { startRow, targetRow, colKey } = dragFillStateRef.current;
-      const minRow = Math.min(startRow, targetRow);
-      const maxRow = Math.max(startRow, targetRow);
-      const sourceVal = meterRows[startRow]?.[colKey];
-
-      if (sourceVal !== undefined && minRow !== maxRow) {
-        const updated = [...meterRows];
-        for (let r = minRow; r <= maxRow; r++) {
-          if (colKey === 'peopleCount') {
-            updated[r] = {
-              ...updated[r],
-              peopleCount: typeof sourceVal === 'number' ? sourceVal : parseInt(String(sourceVal), 10) || 0,
-            };
-          } else {
-            updated[r] = {
-              ...updated[r],
-              [colKey]: String(sourceVal),
-            };
-          }
-        }
-        setMeterRows(updated);
-        pushHistory(updated);
-        showToast(`คัดลอกข้อมูล ${maxRow - minRow + 1} ห้อง เรียบร้อยแล้ว`);
-      }
-    }
-    setDragFillRange(null);
-    dragFillStateRef.current = null;
-  };
-
   const [quickAddModalOpen, setQuickAddModalOpen] = useState(false);
   const [selectedQuickAddContext, setSelectedQuickAddContext] = useState<QuickAddRoomContext | null>(null);
   const [quickAddLoadingRoomId, setQuickAddLoadingRoomId] = useState<string | null>(null);
@@ -1318,6 +1196,328 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   const isRateSnapshotReady = Boolean(previewContextQuery.isSuccess && rateSnapshot);
   const isWaterUnit = isRateSnapshotReady ? isMeterBasedUtilityMode(rateSnapshot.waterBillingType) : false;
   const isElecUnit = isRateSnapshotReady ? isMeterBasedUtilityMode(rateSnapshot.electricityBillingType) : false;
+
+  // Pure Canonical Normalization & Validation Authority for Meters & Spreadsheet (Amendment 4)
+  const sanitizeMeterReadingPure = (val: string): string => {
+    if (!val) return '';
+    return val.replace(/[^0-9]/g, '').slice(0, 5);
+  };
+
+  const normalizeMeterValuePure = (val: string): string => {
+    if (!val || val.trim() === '') return '';
+    const trimmed = val.trim().replace(/[^0-9]/g, '').slice(0, 5);
+    if (!trimmed) return '';
+    return trimmed.replace(/^0+(?=\d)/, '');
+  };
+
+  const validateAndNormalizeSpreadsheetValue = (
+    colKey: 'elecPrev' | 'elecCurr' | 'waterPrev' | 'waterCurr' | 'peopleCount',
+    rawVal: any
+  ): { valid: boolean; value: string | number } => {
+    if (colKey === 'peopleCount') {
+      const parsed = parseInt(String(rawVal ?? '').replace(/[^0-9]/g, ''), 10);
+      const count = isNaN(parsed) ? 0 : Math.max(0, Math.min(9, parsed));
+      return { valid: true, value: count };
+    } else {
+      const sanitized = sanitizeMeterReadingPure(String(rawVal ?? ''));
+      const normalized = normalizeMeterValuePure(sanitized);
+      return { valid: true, value: normalized };
+    }
+  };
+
+  // Spreadsheet Columns Authority
+  const spreadsheetColumns = useMemo(() => {
+    const cols: Array<{ key: 'buildingCode' | 'roomNumber' | 'elecPrev' | 'elecCurr' | 'waterPrev' | 'waterCurr' | 'peopleCount'; editable: boolean }> = [
+      { key: 'buildingCode', editable: false },
+      { key: 'roomNumber', editable: false },
+    ];
+    if (isElecUnit) {
+      cols.push({ key: 'elecPrev', editable: true });
+      cols.push({ key: 'elecCurr', editable: true });
+    }
+    if (isWaterUnit) {
+      cols.push({ key: 'waterPrev', editable: true });
+      cols.push({ key: 'waterCurr', editable: true });
+    }
+    cols.push({ key: 'peopleCount', editable: true });
+    return cols;
+  }, [isElecUnit, isWaterUnit]);
+
+  // Spreadsheet Real Drag-Fill Handle & Range Selection State
+  const [activeSpreadsheetCell, setActiveSpreadsheetCell] = useState<{
+    rowIndex: number;
+    colKey: 'elecPrev' | 'elecCurr' | 'waterPrev' | 'waterCurr' | 'peopleCount';
+  } | null>(null);
+
+  const [selectedSpreadsheetRange, setSelectedSpreadsheetRange] = useState<{
+    startRow: number;
+    endRow: number;
+    startCol: number;
+    endCol: number;
+  } | null>(null);
+  const isSelectingRangeRef = useRef(false);
+  const rangeAnchorRef = useRef<{ row: number; col: number } | null>(null);
+
+  const [dragFillRange, setDragFillRange] = useState<{
+    startRow: number;
+    targetRow: number;
+    startCol?: number;
+    targetCol?: number;
+    colKey: 'elecPrev' | 'elecCurr' | 'waterPrev' | 'waterCurr' | 'peopleCount';
+  } | null>(null);
+
+  const isDraggingFillRef = useRef(false);
+  const dragFillStateRef = useRef<{
+    startRow: number;
+    targetRow: number;
+    startCol: number;
+    targetCol: number;
+    colKey: 'elecPrev' | 'elecCurr' | 'waterPrev' | 'waterCurr' | 'peopleCount';
+  } | null>(null);
+
+  const spreadsheetScrollContainerRef = useRef<HTMLDivElement | null>(null);
+
+  const handleFocusCell = (rowIndex: number, colKey: 'elecPrev' | 'elecCurr' | 'waterPrev' | 'waterCurr' | 'peopleCount') => {
+    setActiveSpreadsheetCell({ rowIndex, colKey });
+    const colIdx = spreadsheetColumns.findIndex(c => c.key === colKey);
+    const validColIdx = colIdx >= 0 ? colIdx : 2;
+    setSelectedSpreadsheetRange({ startRow: rowIndex, endRow: rowIndex, startCol: validColIdx, endCol: validColIdx });
+  };
+
+  const handlePointerDownCell = (rowIndex: number, colKey: 'elecPrev' | 'elecCurr' | 'waterPrev' | 'waterCurr' | 'peopleCount') => {
+    const colIdx = spreadsheetColumns.findIndex(c => c.key === colKey);
+    const validColIdx = colIdx >= 0 ? colIdx : 2;
+    setActiveSpreadsheetCell({ rowIndex, colKey });
+    setSelectedSpreadsheetRange({ startRow: rowIndex, endRow: rowIndex, startCol: validColIdx, endCol: validColIdx });
+    isSelectingRangeRef.current = true;
+    rangeAnchorRef.current = { row: rowIndex, col: validColIdx };
+  };
+
+  const handlePointerEnterCell = (rowIndex: number, colKey: 'elecPrev' | 'elecCurr' | 'waterPrev' | 'waterCurr' | 'peopleCount') => {
+    if (!isSelectingRangeRef.current || !rangeAnchorRef.current) return;
+    const colIdx = spreadsheetColumns.findIndex(c => c.key === colKey);
+    const validColIdx = colIdx >= 0 ? colIdx : 2;
+    setSelectedSpreadsheetRange({
+      startRow: Math.min(rangeAnchorRef.current.row, rowIndex),
+      endRow: Math.max(rangeAnchorRef.current.row, rowIndex),
+      startCol: Math.min(rangeAnchorRef.current.col, validColIdx),
+      endCol: Math.max(rangeAnchorRef.current.col, validColIdx),
+    });
+  };
+
+  const isCellInRangeSelected = (r: number, cKey: string) => {
+    if (!selectedSpreadsheetRange) return false;
+    const minR = Math.min(selectedSpreadsheetRange.startRow, selectedSpreadsheetRange.endRow);
+    const maxR = Math.max(selectedSpreadsheetRange.startRow, selectedSpreadsheetRange.endRow);
+    if (r < minR || r > maxR) return false;
+    const minC = Math.min(selectedSpreadsheetRange.startCol, selectedSpreadsheetRange.endCol);
+    const maxC = Math.max(selectedSpreadsheetRange.startCol, selectedSpreadsheetRange.endCol);
+    const colIdx = spreadsheetColumns.findIndex(col => col.key === cKey);
+    return colIdx >= minC && colIdx <= maxC;
+  };
+
+  const isCellInFillPreview = (r: number, cKey: string) => {
+    if (!dragFillRange) return false;
+    const minR = Math.min(dragFillRange.startRow, dragFillRange.targetRow);
+    const maxR = Math.max(dragFillRange.startRow, dragFillRange.targetRow);
+    if (r < minR || r > maxR) return false;
+    if (dragFillRange.targetCol === undefined || dragFillRange.startCol === undefined) {
+      return dragFillRange.colKey === cKey;
+    }
+    const minC = Math.min(dragFillRange.startCol, dragFillRange.targetCol);
+    const maxC = Math.max(dragFillRange.startCol, dragFillRange.targetCol);
+    const colIdx = spreadsheetColumns.findIndex(col => col.key === cKey);
+    return colIdx >= minC && colIdx <= maxC;
+  };
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (isDraggingFillRef.current) {
+          isDraggingFillRef.current = false;
+          dragFillStateRef.current = null;
+          setDragFillRange(null);
+          document.body.style.userSelect = '';
+        }
+        isSelectingRangeRef.current = false;
+        rangeAnchorRef.current = null;
+        setSelectedSpreadsheetRange(null);
+      } else if (isSpreadsheetMode && (e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'C')) {
+        if (selectedSpreadsheetRange || activeSpreadsheetCell) {
+          const minR = selectedSpreadsheetRange ? Math.min(selectedSpreadsheetRange.startRow, selectedSpreadsheetRange.endRow) : activeSpreadsheetCell!.rowIndex;
+          const maxR = selectedSpreadsheetRange ? Math.max(selectedSpreadsheetRange.startRow, selectedSpreadsheetRange.endRow) : activeSpreadsheetCell!.rowIndex;
+          const anchorCol = activeSpreadsheetCell ? spreadsheetColumns.findIndex(c => c.key === activeSpreadsheetCell.colKey) : 2;
+          const minC = selectedSpreadsheetRange ? Math.min(selectedSpreadsheetRange.startCol, selectedSpreadsheetRange.endCol) : anchorCol;
+          const maxC = selectedSpreadsheetRange ? Math.max(selectedSpreadsheetRange.startCol, selectedSpreadsheetRange.endCol) : anchorCol;
+
+          const lines: string[] = [];
+          for (let r = minR; r <= maxR; r++) {
+            const cells: string[] = [];
+            for (let c = minC; c <= maxC; c++) {
+              const col = spreadsheetColumns[c];
+              if (col) {
+                cells.push(String(meterRows[r]?.[col.key as keyof MeterRowState] ?? ''));
+              }
+            }
+            lines.push(cells.join('\t'));
+          }
+          if (lines.length > 0 && navigator.clipboard?.writeText) {
+            navigator.clipboard.writeText(lines.join('\n'));
+          }
+        }
+      } else if (isSpreadsheetMode && (e.key === 'Delete' || e.key === 'Backspace') && !isDraggingFillRef.current) {
+        const activeTag = (document.activeElement as HTMLElement)?.tagName?.toLowerCase();
+        if (activeTag !== 'input' && selectedSpreadsheetRange) {
+          e.preventDefault();
+          const minR = Math.min(selectedSpreadsheetRange.startRow, selectedSpreadsheetRange.endRow);
+          const maxR = Math.max(selectedSpreadsheetRange.startRow, selectedSpreadsheetRange.endRow);
+          const minC = Math.min(selectedSpreadsheetRange.startCol, selectedSpreadsheetRange.endCol);
+          const maxC = Math.max(selectedSpreadsheetRange.startCol, selectedSpreadsheetRange.endCol);
+
+          const updated = [...meterRows];
+          for (let r = minR; r <= maxR; r++) {
+            for (let c = minC; c <= maxC; c++) {
+              const col = spreadsheetColumns[c];
+              if (col && col.editable) {
+                updated[r] = {
+                  ...updated[r],
+                  [col.key]: col.key === 'peopleCount' ? 0 : '',
+                };
+              }
+            }
+          }
+          setMeterRows(updated);
+          pushHistory(updated);
+        }
+      }
+    };
+    const handleGlobalPointerUp = () => {
+      isSelectingRangeRef.current = false;
+      rangeAnchorRef.current = null;
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('pointerup', handleGlobalPointerUp);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('pointerup', handleGlobalPointerUp);
+    };
+  }, [isSpreadsheetMode, selectedSpreadsheetRange, activeSpreadsheetCell, meterRows, spreadsheetColumns]);
+
+  const handlePointerDownFillHandle = (
+    e: React.PointerEvent<HTMLDivElement>,
+    rowIndex: number,
+    colKey: 'elecPrev' | 'elecCurr' | 'waterPrev' | 'waterCurr' | 'peopleCount'
+  ) => {
+    e.preventDefault();
+    e.stopPropagation();
+    try {
+      (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    } catch {}
+    isDraggingFillRef.current = true;
+    const colIdx = spreadsheetColumns.findIndex(c => c.key === colKey);
+    const validColIdx = colIdx >= 0 ? colIdx : 2;
+    dragFillStateRef.current = {
+      startRow: rowIndex,
+      targetRow: rowIndex,
+      startCol: validColIdx,
+      targetCol: validColIdx,
+      colKey,
+    };
+    setDragFillRange({
+      startRow: rowIndex,
+      targetRow: rowIndex,
+      startCol: validColIdx,
+      targetCol: validColIdx,
+      colKey,
+    });
+    document.body.style.userSelect = 'none';
+  };
+
+  const handlePointerMoveFillHandle = (e: React.PointerEvent) => {
+    if (!isDraggingFillRef.current || !dragFillStateRef.current) return;
+    const container = spreadsheetScrollContainerRef.current;
+    if (!container) return;
+
+    const rect = container.getBoundingClientRect();
+    const delta = calculateAutoScrollDelta(e.clientY, rect, 35, 10);
+    if (delta !== 0) {
+      container.scrollTop += delta;
+    }
+
+    const rowElements = container.querySelectorAll<HTMLTableRowElement>('tr[data-row-index]');
+    let foundRow = dragFillStateRef.current.targetRow;
+    rowElements.forEach((el) => {
+      const rRect = el.getBoundingClientRect();
+      if (e.clientY >= rRect.top && e.clientY <= rRect.bottom) {
+        const idx = parseInt(el.getAttribute('data-row-index') || '-1', 10);
+        if (idx >= 0) foundRow = idx;
+      }
+    });
+
+    if (rowElements.length > 0) {
+      const firstRect = rowElements[0].getBoundingClientRect();
+      const lastRect = rowElements[rowElements.length - 1].getBoundingClientRect();
+      if (e.clientY < firstRect.top) foundRow = 0;
+      else if (e.clientY > lastRect.bottom) foundRow = rowElements.length - 1;
+    }
+
+    let foundCol = dragFillStateRef.current.targetCol;
+    if (e.clientX !== undefined && e.clientX > 0) {
+      const thElements = container.querySelectorAll<HTMLTableCellElement>('thead th');
+      thElements.forEach((th, idx) => {
+        const cRect = th.getBoundingClientRect();
+        if (e.clientX >= cRect.left && e.clientX <= cRect.right) {
+          foundCol = idx;
+        }
+      });
+    }
+
+    if (foundRow !== dragFillStateRef.current.targetRow || foundCol !== dragFillStateRef.current.targetCol) {
+      dragFillStateRef.current.targetRow = foundRow;
+      dragFillStateRef.current.targetCol = foundCol;
+      setDragFillRange({ ...dragFillStateRef.current });
+    }
+  };
+
+  const handlePointerUpFillHandle = (e: React.PointerEvent) => {
+    if (!isDraggingFillRef.current) return;
+    try {
+      (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+    } catch {}
+    isDraggingFillRef.current = false;
+    document.body.style.userSelect = '';
+
+    if (dragFillStateRef.current) {
+      const { startRow, targetRow, startCol = 2, targetCol = 2, colKey } = dragFillStateRef.current;
+      const minRow = Math.min(startRow, targetRow);
+      const maxRow = Math.max(startRow, targetRow);
+      const minCol = Math.min(startCol, targetCol);
+      const maxCol = Math.max(startCol, targetCol);
+      const sourceVal = meterRows[startRow]?.[colKey];
+
+      if (sourceVal !== undefined && (minRow !== maxRow || minCol !== maxCol)) {
+        const updated = [...meterRows];
+        for (let r = minRow; r <= maxRow; r++) {
+          for (let c = minCol; c <= maxCol; c++) {
+            const col = spreadsheetColumns[c];
+            if (!col || !col.editable) continue;
+            const norm = validateAndNormalizeSpreadsheetValue(col.key as any, sourceVal);
+            if (norm.valid) {
+              updated[r] = {
+                ...updated[r],
+                [col.key]: norm.value,
+              };
+            }
+          }
+        }
+        setMeterRows(updated);
+        pushHistory(updated);
+        showToast(`คัดลอกข้อมูล ${maxRow - minRow + 1} ห้อง เรียบร้อยแล้ว`);
+      }
+    }
+    setDragFillRange(null);
+    dragFillStateRef.current = null;
+  };
 
   const isMeterWorkspaceReady = Boolean(meterWorkspaceQuery.isSuccess);
   const isSelectedCycleAuthorityReady = Boolean(
@@ -3890,6 +4090,50 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                   const lines = text.trim().split(/\r?\n/);
                   if (lines.length === 0) return;
 
+                  // Amendment 5:
+                  // MODE A: Active spreadsheet cell / range exists -> relative rectangular paste beginning at anchor
+                  if (activeSpreadsheetCell && activeSpreadsheetCell.rowIndex >= 0) {
+                    e.preventDefault();
+                    const anchorRow = activeSpreadsheetCell.rowIndex;
+                    const anchorColIndex = spreadsheetColumns.findIndex(c => c.key === activeSpreadsheetCell.colKey);
+                    const startCol = anchorColIndex >= 0 ? anchorColIndex : 2;
+
+                    const updated = [...meterRows];
+                    let pasteCount = 0;
+
+                    lines.forEach((line, lineOffset) => {
+                      const targetRow = anchorRow + lineOffset;
+                      if (targetRow >= updated.length) return;
+
+                      const cells = line.split('\t');
+                      cells.forEach((cellVal, colOffset) => {
+                        const targetCol = startCol + colOffset;
+                        if (targetCol >= spreadsheetColumns.length) return;
+
+                        const col = spreadsheetColumns[targetCol];
+                        // Building and Room remain strictly immutable
+                        if (!col || !col.editable) return;
+
+                        const norm = validateAndNormalizeSpreadsheetValue(col.key as any, cellVal);
+                        if (norm.valid) {
+                          updated[targetRow] = {
+                            ...updated[targetRow],
+                            [col.key]: norm.value,
+                          };
+                          pasteCount++;
+                        }
+                      });
+                    });
+
+                    if (pasteCount > 0) {
+                      setMeterRows(updated);
+                      pushHistory(updated);
+                      showToast(`วางข้อมูลสำเร็จ (${pasteCount} ช่อง)`);
+                    }
+                    return;
+                  }
+
+                  // MODE B: No active spreadsheet cell / external import -> row-matching Excel paste
                   let matchCount = 0;
                   const updated = [...meterRows];
                   lines.forEach(line => {
@@ -3925,11 +4169,21 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
 
                       if (rowIdx >= 0) {
                         matchCount++;
-                        if (elecPrevVal !== undefined && elecPrevVal !== '') updated[rowIdx].elecPrev = elecPrevVal;
-                        if (elecCurrVal !== undefined && elecCurrVal !== '') updated[rowIdx].elecCurr = elecCurrVal;
-                        if (waterPrevVal !== undefined && waterPrevVal !== '') updated[rowIdx].waterPrev = waterPrevVal;
-                        if (waterCurrVal !== undefined && waterCurrVal !== '') updated[rowIdx].waterCurr = waterCurrVal;
-                        if (peopleVal !== undefined && peopleVal !== '') updated[rowIdx].peopleCount = parseInt(peopleVal, 10) || 0;
+                        if (elecPrevVal !== undefined && elecPrevVal !== '') {
+                          updated[rowIdx].elecPrev = validateAndNormalizeSpreadsheetValue('elecPrev', elecPrevVal).value as string;
+                        }
+                        if (elecCurrVal !== undefined && elecCurrVal !== '') {
+                          updated[rowIdx].elecCurr = validateAndNormalizeSpreadsheetValue('elecCurr', elecCurrVal).value as string;
+                        }
+                        if (waterPrevVal !== undefined && waterPrevVal !== '') {
+                          updated[rowIdx].waterPrev = validateAndNormalizeSpreadsheetValue('waterPrev', waterPrevVal).value as string;
+                        }
+                        if (waterCurrVal !== undefined && waterCurrVal !== '') {
+                          updated[rowIdx].waterCurr = validateAndNormalizeSpreadsheetValue('waterCurr', waterCurrVal).value as string;
+                        }
+                        if (peopleVal !== undefined && peopleVal !== '') {
+                          updated[rowIdx].peopleCount = validateAndNormalizeSpreadsheetValue('peopleCount', peopleVal).value as number;
+                        }
                       }
                     }
                   });
@@ -3947,7 +4201,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                   onPointerUp={handlePointerUpFillHandle}
                 >
                   <table className="w-full text-left text-xs border-collapse border border-slate-300 font-sans">
-                    <thead className="bg-slate-100 text-slate-800 font-extrabold sticky top-0 border-b border-slate-300 select-none">
+                    <thead className="bg-slate-100 text-slate-800 font-extrabold sticky top-0 z-30 border-b border-slate-300 select-none shadow-xs">
                       <tr>
                         <th className="py-2 px-2.5 whitespace-nowrap border border-slate-300 text-center w-16">อาคาร</th>
                         <th className="py-2 px-2.5 whitespace-nowrap border border-slate-300 text-center w-20">ห้อง</th>
@@ -3969,14 +4223,17 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                           </td>
                           {isElecUnit && (() => {
                             const isActive = activeSpreadsheetCell?.rowIndex === rowIdx && activeSpreadsheetCell?.colKey === 'elecPrev';
-                            const isFillPreview = dragFillRange && dragFillRange.colKey === 'elecPrev' && rowIdx >= Math.min(dragFillRange.startRow, dragFillRange.targetRow) && rowIdx <= Math.max(dragFillRange.startRow, dragFillRange.targetRow);
+                            const isFillPreview = isCellInFillPreview(rowIdx, 'elecPrev');
+                            const isSelected = isCellInRangeSelected(rowIdx, 'elecPrev');
                             return (
-                              <td className={`p-0 border border-slate-300 relative ${isActive ? 'ring-2 ring-indigo-600 ring-inset z-10' : ''} ${isFillPreview ? 'bg-indigo-100/70 border-indigo-500' : ''}`}>
+                              <td className={`p-0 border border-slate-300 relative ${isActive ? 'ring-2 ring-indigo-600 ring-inset z-10' : ''} ${isSelected ? 'bg-indigo-50/70 border-indigo-400' : ''} ${isFillPreview ? 'bg-indigo-100/70 border-indigo-500' : ''}`}>
                                 <input
                                   type="text"
                                   value={row.elecPrev}
-                                  onFocus={() => setActiveSpreadsheetCell({ rowIndex: rowIdx, colKey: 'elecPrev' })}
-                                  onClick={() => setActiveSpreadsheetCell({ rowIndex: rowIdx, colKey: 'elecPrev' })}
+                                  onFocus={() => handleFocusCell(rowIdx, 'elecPrev')}
+                                  onClick={() => handleFocusCell(rowIdx, 'elecPrev')}
+                                  onPointerDown={() => handlePointerDownCell(rowIdx, 'elecPrev')}
+                                  onPointerEnter={() => handlePointerEnterCell(rowIdx, 'elecPrev')}
                                   onChange={(e) => {
                                     const v = e.target.value;
                                     setMeterRows(prev => prev.map(r => r.roomId === row.roomId ? { ...r, elecPrev: v } : r));
@@ -3996,14 +4253,17 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                           })()}
                           {isElecUnit && (() => {
                             const isActive = activeSpreadsheetCell?.rowIndex === rowIdx && activeSpreadsheetCell?.colKey === 'elecCurr';
-                            const isFillPreview = dragFillRange && dragFillRange.colKey === 'elecCurr' && rowIdx >= Math.min(dragFillRange.startRow, dragFillRange.targetRow) && rowIdx <= Math.max(dragFillRange.startRow, dragFillRange.targetRow);
+                            const isFillPreview = isCellInFillPreview(rowIdx, 'elecCurr');
+                            const isSelected = isCellInRangeSelected(rowIdx, 'elecCurr');
                             return (
-                              <td className={`p-0 border border-slate-300 relative bg-indigo-50/20 ${isActive ? 'ring-2 ring-indigo-600 ring-inset z-10' : ''} ${isFillPreview ? 'bg-indigo-100/70 border-indigo-500' : ''}`}>
+                              <td className={`p-0 border border-slate-300 relative bg-indigo-50/20 ${isActive ? 'ring-2 ring-indigo-600 ring-inset z-10' : ''} ${isSelected ? 'bg-indigo-50/70 border-indigo-400' : ''} ${isFillPreview ? 'bg-indigo-100/70 border-indigo-500' : ''}`}>
                                 <input
                                   type="text"
                                   value={row.elecCurr}
-                                  onFocus={() => setActiveSpreadsheetCell({ rowIndex: rowIdx, colKey: 'elecCurr' })}
-                                  onClick={() => setActiveSpreadsheetCell({ rowIndex: rowIdx, colKey: 'elecCurr' })}
+                                  onFocus={() => handleFocusCell(rowIdx, 'elecCurr')}
+                                  onClick={() => handleFocusCell(rowIdx, 'elecCurr')}
+                                  onPointerDown={() => handlePointerDownCell(rowIdx, 'elecCurr')}
+                                  onPointerEnter={() => handlePointerEnterCell(rowIdx, 'elecCurr')}
                                   onChange={(e) => {
                                     const v = e.target.value;
                                     setMeterRows(prev => prev.map(r => r.roomId === row.roomId ? { ...r, elecCurr: v } : r));
@@ -4023,14 +4283,17 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                           })()}
                           {isWaterUnit && (() => {
                             const isActive = activeSpreadsheetCell?.rowIndex === rowIdx && activeSpreadsheetCell?.colKey === 'waterPrev';
-                            const isFillPreview = dragFillRange && dragFillRange.colKey === 'waterPrev' && rowIdx >= Math.min(dragFillRange.startRow, dragFillRange.targetRow) && rowIdx <= Math.max(dragFillRange.startRow, dragFillRange.targetRow);
+                            const isFillPreview = isCellInFillPreview(rowIdx, 'waterPrev');
+                            const isSelected = isCellInRangeSelected(rowIdx, 'waterPrev');
                             return (
-                              <td className={`p-0 border border-slate-300 relative ${isActive ? 'ring-2 ring-indigo-600 ring-inset z-10' : ''} ${isFillPreview ? 'bg-indigo-100/70 border-indigo-500' : ''}`}>
+                              <td className={`p-0 border border-slate-300 relative ${isActive ? 'ring-2 ring-indigo-600 ring-inset z-10' : ''} ${isSelected ? 'bg-indigo-50/70 border-indigo-400' : ''} ${isFillPreview ? 'bg-indigo-100/70 border-indigo-500' : ''}`}>
                                 <input
                                   type="text"
                                   value={row.waterPrev}
-                                  onFocus={() => setActiveSpreadsheetCell({ rowIndex: rowIdx, colKey: 'waterPrev' })}
-                                  onClick={() => setActiveSpreadsheetCell({ rowIndex: rowIdx, colKey: 'waterPrev' })}
+                                  onFocus={() => handleFocusCell(rowIdx, 'waterPrev')}
+                                  onClick={() => handleFocusCell(rowIdx, 'waterPrev')}
+                                  onPointerDown={() => handlePointerDownCell(rowIdx, 'waterPrev')}
+                                  onPointerEnter={() => handlePointerEnterCell(rowIdx, 'waterPrev')}
                                   onChange={(e) => {
                                     const v = e.target.value;
                                     setMeterRows(prev => prev.map(r => r.roomId === row.roomId ? { ...r, waterPrev: v } : r));
@@ -4050,14 +4313,17 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                           })()}
                           {isWaterUnit && (() => {
                             const isActive = activeSpreadsheetCell?.rowIndex === rowIdx && activeSpreadsheetCell?.colKey === 'waterCurr';
-                            const isFillPreview = dragFillRange && dragFillRange.colKey === 'waterCurr' && rowIdx >= Math.min(dragFillRange.startRow, dragFillRange.targetRow) && rowIdx <= Math.max(dragFillRange.startRow, dragFillRange.targetRow);
+                            const isFillPreview = isCellInFillPreview(rowIdx, 'waterCurr');
+                            const isSelected = isCellInRangeSelected(rowIdx, 'waterCurr');
                             return (
-                              <td className={`p-0 border border-slate-300 relative bg-blue-50/20 ${isActive ? 'ring-2 ring-indigo-600 ring-inset z-10' : ''} ${isFillPreview ? 'bg-indigo-100/70 border-indigo-500' : ''}`}>
+                              <td className={`p-0 border border-slate-300 relative bg-blue-50/20 ${isActive ? 'ring-2 ring-indigo-600 ring-inset z-10' : ''} ${isSelected ? 'bg-indigo-50/70 border-indigo-400' : ''} ${isFillPreview ? 'bg-indigo-100/70 border-indigo-500' : ''}`}>
                                 <input
                                   type="text"
                                   value={row.waterCurr}
-                                  onFocus={() => setActiveSpreadsheetCell({ rowIndex: rowIdx, colKey: 'waterCurr' })}
-                                  onClick={() => setActiveSpreadsheetCell({ rowIndex: rowIdx, colKey: 'waterCurr' })}
+                                  onFocus={() => handleFocusCell(rowIdx, 'waterCurr')}
+                                  onClick={() => handleFocusCell(rowIdx, 'waterCurr')}
+                                  onPointerDown={() => handlePointerDownCell(rowIdx, 'waterCurr')}
+                                  onPointerEnter={() => handlePointerEnterCell(rowIdx, 'waterCurr')}
                                   onChange={(e) => {
                                     const v = e.target.value;
                                     setMeterRows(prev => prev.map(r => r.roomId === row.roomId ? { ...r, waterCurr: v } : r));
@@ -4077,15 +4343,18 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                           })()}
                           {(() => {
                             const isActive = activeSpreadsheetCell?.rowIndex === rowIdx && activeSpreadsheetCell?.colKey === 'peopleCount';
-                            const isFillPreview = dragFillRange && dragFillRange.colKey === 'peopleCount' && rowIdx >= Math.min(dragFillRange.startRow, dragFillRange.targetRow) && rowIdx <= Math.max(dragFillRange.startRow, dragFillRange.targetRow);
+                            const isFillPreview = isCellInFillPreview(rowIdx, 'peopleCount');
+                            const isSelected = isCellInRangeSelected(rowIdx, 'peopleCount');
                             return (
-                              <td className={`p-0 border border-slate-300 relative ${isActive ? 'ring-2 ring-indigo-600 ring-inset z-10' : ''} ${isFillPreview ? 'bg-indigo-100/70 border-indigo-500' : ''}`}>
+                              <td className={`p-0 border border-slate-300 relative ${isActive ? 'ring-2 ring-indigo-600 ring-inset z-10' : ''} ${isSelected ? 'bg-indigo-50/70 border-indigo-400' : ''} ${isFillPreview ? 'bg-indigo-100/70 border-indigo-500' : ''}`}>
                                 <input
                                   type="number"
                                   min={0}
                                   value={row.peopleCount}
-                                  onFocus={() => setActiveSpreadsheetCell({ rowIndex: rowIdx, colKey: 'peopleCount' })}
-                                  onClick={() => setActiveSpreadsheetCell({ rowIndex: rowIdx, colKey: 'peopleCount' })}
+                                  onFocus={() => handleFocusCell(rowIdx, 'peopleCount')}
+                                  onClick={() => handleFocusCell(rowIdx, 'peopleCount')}
+                                  onPointerDown={() => handlePointerDownCell(rowIdx, 'peopleCount')}
+                                  onPointerEnter={() => handlePointerEnterCell(rowIdx, 'peopleCount')}
                                   onChange={(e) => {
                                     const v = parseInt(e.target.value, 10);
                                     setMeterRows(prev => prev.map(r => r.roomId === row.roomId ? { ...r, peopleCount: isNaN(v) ? 0 : v } : r));

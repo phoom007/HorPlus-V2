@@ -3,6 +3,8 @@
  * OWNER R3.9-E.1B.2.3: Backend Immutable Receipt HTML Presentation Helper
  */
 
+import { AppError } from '../types/index.js';
+
 /**
  * Strict HTML Escaping Helper.
  */
@@ -307,15 +309,66 @@ export function renderTierBreakdownHtml(metadata: any, unit?: any): string {
   `;
 }
 
+function formatMetadataPlaceholder(val?: string | null): string {
+  if (val === undefined || val === null) return '....................';
+  const str = String(val).trim();
+  if (str === '' || str === 'null' || str === 'undefined') return '....................';
+  return escapeHTML(str);
+}
+
+function formatPaymentMethodThai(rawMethod?: string | null, paymentEvents?: any[]): string {
+  let methods: string[] = [];
+  if (Array.isArray(paymentEvents) && paymentEvents.length > 0) {
+    methods = paymentEvents
+      .map((e: any) => e?.method)
+      .filter((m: any) => typeof m === 'string' && m.trim().length > 0 && m !== 'SETTLED');
+  }
+
+  if (methods.length === 0 && rawMethod && rawMethod !== 'SETTLED') {
+    methods = rawMethod.split(',').map((s) => s.trim()).filter((m) => m && m !== 'SETTLED');
+  }
+
+  const uniqueMethods = Array.from(new Set(methods));
+  if (uniqueMethods.length === 0) {
+    return '....................';
+  }
+
+  const METHOD_THAI_MAP: Record<string, string> = {
+    CASH: 'เงินสด',
+    BANK_TRANSFER: 'โอนเงิน',
+    PROMPTPAY: 'พร้อมเพย์',
+    CREDIT_CARD: 'บัตรเครดิต',
+    QR_CODE: 'สแกน QR',
+    TRANSFER: 'โอนเงิน',
+  };
+
+  return uniqueMethods
+    .map((m) => METHOD_THAI_MAP[m.toUpperCase()] || m)
+    .join(' / ');
+}
+
 /**
  * Pure generator for full immutable HTML receipt string.
  */
-export function renderReceiptHtml(receiptRecord: any): string {
+export function renderReceiptHtml(receiptRecord: any, options?: { hasCurrentLogo?: boolean }): string {
   const data = (receiptRecord.snapshotData as any) || {};
   const isCombined = data.isCombinedReceipt === true || (Array.isArray(data.billGroups) && data.billGroups.length > 0);
   const issuedDateStr = receiptRecord.issuedAt
     ? new Date(receiptRecord.issuedAt).toLocaleDateString('th-TH')
     : '-';
+
+  const hasCurrentLogo = options?.hasCurrentLogo !== undefined
+    ? options.hasCurrentLogo
+    : Boolean(receiptRecord.dormitoryId && (receiptRecord.dormitory?.logoObjectKey || receiptRecord.hasLogo));
+
+  // Validate grand total fail-closed
+  if (data.total === undefined || data.total === null || String(data.total).trim() === '') {
+    throw new AppError('Receipt grand total missing', 500, 'CANONICAL_FINANCIAL_VALUE_MISSING');
+  }
+  const grandTotalNum = Number(data.total);
+  if (isNaN(grandTotalNum) || !isFinite(grandTotalNum)) {
+    throw new AppError(`Receipt grand total malformed: ${data.total}`, 500, 'CANONICAL_FINANCIAL_VALUE_MALFORMED');
+  }
 
   return `
 <!DOCTYPE html>
@@ -325,9 +378,9 @@ export function renderReceiptHtml(receiptRecord: any): string {
   <title>Receipt ${escapeHTML(receiptRecord.receiptNumber)}</title>
   <style>
     @media print {
-      @page { size: A4; margin: 20mm; }
-      body { margin: 0; font-family: sans-serif; }
-      .no-print { display: none; }
+      @page { size: A4; margin: 10mm 12mm; }
+      body { margin: 0 !important; padding: 0 !important; border: none !important; box-shadow: none !important; max-width: 100% !important; }
+      .no-print { display: none !important; }
     }
     body { font-family: 'Sarabun', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #1e293b; max-width: 800px; margin: 40px auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 12px; }
     .header { text-align: center; margin-bottom: 24px; }
@@ -350,11 +403,11 @@ export function renderReceiptHtml(receiptRecord: any): string {
 </head>
 <body>
   <div class="no-print" style="text-align: right; margin-bottom: 20px;">
-    <button onclick="window.print()" style="padding: 8px 16px; background: #4f46e5; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold;">พิมพ์ใบเสร็จ (Print Receipt)</button>
+    <button onclick="window.print()" style="padding: 8px 16px; background: #4f46e5; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold;">พิมพ์ใบเสร็จ</button>
   </div>
   ${receiptRecord.isVoided ? `<div class="void-banner">ยกเลิกแล้ว (VOIDED): ${escapeHTML(receiptRecord.voidReason || 'ไม่มีระบุเหตุผล')}</div>` : ''}
   <div class="header" style="display: flex; align-items: center; justify-content: center; gap: 16px; margin-bottom: 24px;">
-    ${receiptRecord.dormitoryId ? `<img src="/api/v1/dormitories/${escapeHTML(receiptRecord.dormitoryId)}/logo" alt="Dormitory Logo" style="max-height: 56px; max-width: 140px; object-fit: contain;" onerror="this.style.display='none'" />` : ''}
+    ${hasCurrentLogo && receiptRecord.dormitoryId ? `<img src="/api/v1/dormitories/${escapeHTML(receiptRecord.dormitoryId)}/logo" alt="" style="max-height: 56px; max-width: 140px; object-fit: contain;" onerror="this.style.display='none'" />` : ''}
     <div>
       <h1 style="margin: 0; color: #4338ca; font-size: 24px;">ใบเสร็จรับเงิน (RECEIPT)</h1>
       <p style="margin: 4px 0 0; color: #64748b; font-size: 14px; font-weight: bold;">เลขที่ใบเสร็จ: ${escapeHTML(receiptRecord.receiptNumber)}</p>
@@ -362,16 +415,16 @@ export function renderReceiptHtml(receiptRecord: any): string {
   </div>
   <div class="meta-grid">
     <div class="meta-card">
-      <p><strong>ผู้รับเงิน / หอพัก:</strong> ${escapeHTML(data.dormitoryName)}</p>
-      <p><strong>เลขประจำตัวผู้เสียภาษี:</strong> ${escapeHTML(data.dormitoryTaxId)}</p>
-      <p><strong>ที่อยู่:</strong> ${escapeHTML(data.dormitoryAddress)}</p>
-      <p><strong>โทรศัพท์:</strong> ${escapeHTML(data.dormitoryPhone)}</p>
+      <p><strong>ผู้รับเงิน / หอพัก:</strong> ${formatMetadataPlaceholder(data.dormitoryName)}</p>
+      <p><strong>เลขประจำตัวผู้เสียภาษี:</strong> ${formatMetadataPlaceholder(data.dormitoryTaxId)}</p>
+      <p><strong>ที่อยู่:</strong> ${formatMetadataPlaceholder(data.dormitoryAddress)}</p>
+      <p><strong>โทรศัพท์:</strong> ${formatMetadataPlaceholder(data.dormitoryPhone)}</p>
     </div>
     <div class="meta-card">
-      <p><strong>ผู้เช่า:</strong> ${escapeHTML(data.tenantName)}</p>
-      <p><strong>ห้องพัก:</strong> ${escapeHTML(data.roomNumber)}</p>
+      <p><strong>ผู้เช่า:</strong> ${formatMetadataPlaceholder(data.tenantName)}</p>
+      <p><strong>ห้องพัก:</strong> ${formatMetadataPlaceholder(data.roomNumber)}</p>
       ${!isCombined && data.billNumber ? `<p><strong>อ้างอิงบิล:</strong> ${escapeHTML(data.billNumber)}</p>` : ''}
-      <p><strong>ช่องทางชำระเงิน:</strong> ${escapeHTML(data.paymentMethod)}</p>
+      <p><strong>ช่องทางชำระเงิน:</strong> ${formatPaymentMethodThai(data.paymentMethod, data.paymentEvents)}</p>
       <p><strong>วันที่ออกใบเสร็จ:</strong> ${issuedDateStr}</p>
     </div>
   </div>
@@ -381,6 +434,32 @@ export function renderReceiptHtml(receiptRecord: any): string {
     ${data.billGroups.map((group: any) => {
       const nonZeroItems = (group.items || []).filter((i: any) => isNonZeroAmount(i.amount));
       const groupCycleLabel = group.cycleCode ? `รอบบิล ${escapeHTML(group.cycleCode)}` : (group.billKind === 'DEPOSIT' ? 'เงินประกันสัญญาเช่า' : 'บิลค่าใช้จ่าย');
+
+      // Amendment 1: For FINAL_SETTLEMENT, canonical settled field is paidAmount.
+      // Legacy allocatedAmount read only when legacy receipt snapshot contract.
+      const isFinalSettlement = Boolean(receiptRecord.isFinalSettlement || data.isFinalSettlement);
+      const canonicalSettledRaw = isFinalSettlement
+        ? group.paidAmount
+        : (group.paidAmount !== undefined && group.paidAmount !== null ? group.paidAmount : group.allocatedAmount);
+
+      if (canonicalSettledRaw === undefined || canonicalSettledRaw === null || String(canonicalSettledRaw).trim() === '') {
+        throw new AppError(`Receipt financial value missing for bill ${group.billNumber || group.billId}`, 500, 'CANONICAL_FINANCIAL_VALUE_MISSING');
+      }
+
+      const settledNum = Number(canonicalSettledRaw);
+      if (isNaN(settledNum) || !isFinite(settledNum)) {
+        throw new AppError(`Receipt financial value malformed for bill ${group.billNumber || group.billId}: ${canonicalSettledRaw}`, 500, 'CANONICAL_FINANCIAL_VALUE_MALFORMED');
+      }
+
+      if (group.billTotal === undefined || group.billTotal === null || String(group.billTotal).trim() === '') {
+        throw new AppError(`Receipt billTotal missing for bill ${group.billNumber || group.billId}`, 500, 'CANONICAL_FINANCIAL_VALUE_MISSING');
+      }
+
+      const billTotalNum = Number(group.billTotal);
+      if (isNaN(billTotalNum) || !isFinite(billTotalNum)) {
+        throw new AppError(`Receipt billTotal malformed for bill ${group.billNumber || group.billId}: ${group.billTotal}`, 500, 'CANONICAL_FINANCIAL_VALUE_MALFORMED');
+      }
+
       return `
         <div class="group-box">
           <div class="group-header">
@@ -412,11 +491,11 @@ export function renderReceiptHtml(receiptRecord: any): string {
               `).join('')}
               <tr style="background: #f8fafc; font-size: 12px;">
                 <td colspan="4" class="num" style="font-weight: bold;">ยอดบิล:</td>
-                <td class="num" style="font-weight: bold;">${escapeHTML(Number(group.billTotal).toFixed(2))} ฿</td>
+                <td class="num" style="font-weight: bold;">${escapeHTML(billTotalNum.toFixed(2))} ฿</td>
               </tr>
               <tr style="background: #f1f5f9; font-size: 12px; font-weight: bold;">
                 <td colspan="4" class="num" style="color: #4338ca;">ยอดรับชำระสำหรับรอบบิลนี้:</td>
-                <td class="num" style="color: #4338ca; font-weight: 900;">${escapeHTML(Number(group.allocatedAmount).toFixed(2))} ฿</td>
+                <td class="num" style="color: #4338ca; font-weight: 900;">${escapeHTML(settledNum.toFixed(2))} ฿</td>
               </tr>
             </tbody>
           </table>
@@ -462,11 +541,11 @@ export function renderReceiptHtml(receiptRecord: any): string {
   `}
 
   <div class="totals-area">
-    ${!isCombined && data.billTotal && Number(data.billTotal) !== Number(data.total) ? `
+    ${!isCombined && data.billTotal && Number(data.billTotal) !== grandTotalNum ? `
       <div class="total-row"><span>ยอดบิล:</span><span>${escapeHTML(Number(data.billTotal).toFixed(2))} ฿</span></div>
-      <div class="total-row"><span>ยอดรับชำระในใบเสร็จนี้:</span><span>${escapeHTML(Number(data.total).toFixed(2))} ฿</span></div>
+      <div class="total-row"><span>ยอดรับชำระในใบเสร็จนี้:</span><span>${escapeHTML(grandTotalNum.toFixed(2))} ฿</span></div>
     ` : ''}
-    <div class="total-row grand-total"><span>รวมรับสุทธิ:</span><span>${escapeHTML(Number(data.total).toFixed(2))} ฿</span></div>
+    <div class="total-row grand-total"><span>รวมรับสุทธิ:</span><span>${escapeHTML(grandTotalNum.toFixed(2))} ฿</span></div>
   </div>
 </body>
 </html>

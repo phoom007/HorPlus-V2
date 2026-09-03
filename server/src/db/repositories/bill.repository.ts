@@ -36,6 +36,11 @@ export interface BillEntity {
     paymentDate?: Date | null;
     metadata?: any;
   }>;
+  room?: { id: string; roomNumber: string };
+  roomNumber?: string;
+  tenant?: { id: string; displayName?: string | null; firstName?: string | null; lastName?: string | null };
+  contract?: { id: string; startDate?: Date | null; endDate?: Date | null };
+  startDate?: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -500,6 +505,24 @@ export class PrismaBillRepository implements IBillRepository {
             metadata: p.metadata || null,
           }))
         : undefined,
+      room: model.room ? { id: model.room.id, roomNumber: model.room.roomNumber } : undefined,
+      roomNumber: model.room?.roomNumber || undefined,
+      tenant: model.tenant
+        ? {
+            id: model.tenant.id,
+            displayName: model.tenant.displayName || null,
+            firstName: model.tenant.firstName || null,
+            lastName: model.tenant.lastName || null,
+          }
+        : undefined,
+      contract: model.contract
+        ? {
+            id: model.contract.id,
+            startDate: model.contract.startDate || null,
+            endDate: model.contract.endDate || null,
+          }
+        : undefined,
+      startDate: model.contract?.startDate || model.provisionalRentalTerm?.startDate || null,
       createdAt: model.createdAt,
       updatedAt: model.updatedAt,
     };
@@ -603,6 +626,10 @@ export class PrismaBillRepository implements IBillRepository {
             metadata: true,
           },
         },
+        room: { select: { id: true, roomNumber: true } },
+        tenant: { select: { id: true, displayName: true, firstName: true, lastName: true } },
+        contract: { select: { id: true, startDate: true, endDate: true } },
+        provisionalRentalTerm: { select: { id: true, startDate: true, endDate: true } },
       },
     });
     return bill ? this.mapBillToEntity(bill) : null;
@@ -720,6 +747,10 @@ export class PrismaBillRepository implements IBillRepository {
               metadata: true,
             },
           },
+          room: { select: { id: true, roomNumber: true } },
+          tenant: { select: { id: true, displayName: true, firstName: true, lastName: true } },
+          contract: { select: { id: true, startDate: true, endDate: true } },
+          provisionalRentalTerm: { select: { id: true, startDate: true, endDate: true } },
         },
         skip,
         take: pageSize,

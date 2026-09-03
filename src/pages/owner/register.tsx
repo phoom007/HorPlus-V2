@@ -627,20 +627,6 @@ export const DormitoryLogoUploader: React.FC<DormitoryLogoUploaderProps> = ({
         <label className="block text-xs font-bold text-slate-700">
           โลโก้หอพัก <span className="text-[10px] text-slate-400 font-normal">(ไม่บังคับ)</span>
         </label>
-        {logoUrl && (
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              handleRemove();
-            }}
-            disabled={isUploading}
-            className="text-[11px] font-bold text-rose-500 hover:text-rose-600 cursor-pointer flex items-center gap-1"
-          >
-            <Trash2 className="w-3 h-3" />
-            <span>ลบโลโก้</span>
-          </button>
-        )}
       </div>
 
       <input
@@ -700,8 +686,10 @@ export const DormitoryLogoUploader: React.FC<DormitoryLogoUploaderProps> = ({
               disabled={isUploading}
               className="p-1.5 text-rose-500 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition cursor-pointer shrink-0"
               title="ลบโลโก้"
+              aria-label="ลบโลโก้"
             >
               <Trash2 className="w-4 h-4" />
+              <span className="sr-only">ลบโลโก้</span>
             </button>
           </div>
         </div>
@@ -3219,18 +3207,13 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                     <h4 className="text-xs font-black text-slate-700 flex items-center gap-1.5 uppercase tracking-wide">
                       <PenTool className="w-4 h-4 text-blue-600" /> ลายเซ็นเจ้าของหอพักสำหรับเอกสารสัญญาเช่า
                     </h4>
-                    {formData.ownerSignatureUrl && (
-                      <span className="text-[10px] font-extrabold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
-                        บันทึกลายเซ็นแล้ว
-                      </span>
-                    )}
                   </div>
                   <button
                     type="button"
                     onClick={clearCanvas}
                     className="text-[11px] font-bold text-rose-500 hover:text-rose-700 hover:bg-rose-50 border border-rose-100 px-2.5 py-1 rounded-xl transition-all cursor-pointer"
                   >
-                    {formData.ownerSignatureUrl ? 'เซ็นใหม่ / ล้าง' : 'ล้างลายเซ็น'}
+                    ล้างลายเซ็น
                   </button>
                 </div>
 

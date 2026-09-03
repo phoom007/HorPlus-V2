@@ -978,6 +978,64 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
     return 'ไม่ระบุ';
   };
 
+  const resolveAuthoritativeRoomNum = (
+    bill?: any,
+    payment?: any,
+    dailyStay?: any,
+    fallback?: string
+  ): string => {
+    // 1. bill.room.roomNumber
+    if (bill?.room?.roomNumber && !isUuidString(bill.room.roomNumber)) {
+      return String(bill.room.roomNumber).trim();
+    }
+    if (bill?.roomNumber && !isUuidString(bill.roomNumber)) {
+      return String(bill.roomNumber).trim();
+    }
+    // 2. payment.bill.room.roomNumber
+    if (payment?.bill?.room?.roomNumber && !isUuidString(payment.bill.room.roomNumber)) {
+      return String(payment.bill.room.roomNumber).trim();
+    }
+    if (payment?.bill?.roomNumber && !isUuidString(payment.bill.roomNumber)) {
+      return String(payment.bill.roomNumber).trim();
+    }
+    // 3. dailyStay.room.roomNumber
+    if (dailyStay?.room?.roomNumber && !isUuidString(dailyStay.room.roomNumber)) {
+      return String(dailyStay.room.roomNumber).trim();
+    }
+    // 4. canonical rooms dataset by roomId
+    const targetRoomId = bill?.roomId || payment?.bill?.roomId || dailyStay?.roomId;
+    if (targetRoomId) {
+      const room = rooms.find(r => r.id === targetRoomId || r.roomNumber === targetRoomId);
+      if (room?.roomNumber && !isUuidString(room.roomNumber)) {
+        return room.roomNumber;
+      }
+    }
+    return getRoomNum(targetRoomId, fallback);
+  };
+
+  const resolveAuthoritativeStartDate = (
+    bill?: any,
+    payment?: any
+  ): string | null => {
+    const targetBill = bill || payment?.bill;
+    if (!targetBill) return null;
+    const allContracts = contractsData.length > 0 ? contractsData : (queryClient.getQueryData<any[]>(queryKeys.contracts(dormitoryId)) || []);
+    const contract = allContracts.find((c: any) =>
+      (targetBill.contractId && c.id === targetBill.contractId) ||
+      (c.roomId === targetBill.roomId && c.tenantId === targetBill.tenantId)
+    );
+    const dateVal =
+      targetBill.startDate ||
+      targetBill.contract?.startDate ||
+      targetBill.contractStartDate ||
+      contract?.startDate ||
+      targetBill.provisionalRentalTerm?.startDate ||
+      targetBill.provisionalRentalStartDate ||
+      targetBill.occupancyStartDate ||
+      null;
+    return dateVal ? String(dateVal) : null;
+  };
+
   const getTenantName = (tId?: string | null): string => {
     if (!tId) return 'ผู้เช่า';
     const t = tenants.find(item => item.id === tId);
@@ -1031,7 +1089,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
       if (p.paymentGroupId) {
         if (!groupsMap.has(p.paymentGroupId)) {
           const groupTotal = Number(p.paymentGroup?.totalAmount || p.amount || 0);
-          const roomNum = p.bill?.room?.roomNumber || getRoomNum(p.bill?.roomId || (p.bill as any)?.room?.id);
+          const roomNum = resolveAuthoritativeRoomNum(p.bill, p);
           const tenantName = p.bill?.tenant?.displayName || getTenantName(p.tenantId || p.bill?.tenantId);
           const slipUrl = getSlipEvidenceUrl(p);
 
@@ -1060,7 +1118,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
           bill: p.bill,
         });
       } else {
-        const roomNum = p.bill?.room?.roomNumber || getRoomNum(p.bill?.roomId || (p.bill as any)?.room?.id);
+        const roomNum = resolveAuthoritativeRoomNum(p.bill, p);
         const tenantName = p.bill?.tenant?.displayName || getTenantName(p.tenantId || p.bill?.tenantId);
         const slipUrl = getSlipEvidenceUrl(p);
         const cycleCode = getCycleCodeForCycleId(p.bill?.billingCycleId);
@@ -2030,17 +2088,16 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-4">
             {filterBillsByQuery(cashPendingBills).map(b => {
               const tenantName = getTenantName(b.tenantId);
-              const roomNum = getRoomNum(b.roomId);
+              const roomNum = resolveAuthoritativeRoomNum(b);
               const isOverdue = b.status === 'overdue' || (b.dueDate && new Date(b.dueDate) < new Date());
               const overdueDays = getBillOverdueDays(b.dueDate);
               const amount = Number(b.outstandingAmount ?? b.totalAmount ?? 0);
               const isDepositBill = b.billKind === 'DEPOSIT';
-              const isRentBill = b.billKind === 'RENT';
+              const isRentBill = b.billKind === 'RENT' || b.items?.some((it: any) => it.type === 'RENT' || (it.description || '').includes('ค่าเช่า'));
               const isDeposit = isDepositBill || b.items?.some((it: any) => it.type === 'DEPOSIT' || it.itemType === 'DEPOSIT' || (it.description || '').includes('ประกัน') || (it.description || '').includes('มัดจำ'));
+              const isDepositOrRent = isDeposit || isRentBill;
 
-              const allContracts = contractsData.length > 0 ? contractsData : (queryClient.getQueryData<any[]>(queryKeys.contracts(dormitoryId)) || []);
-              const contract = allContracts.find((c: any) => (b.contractId && c.id === b.contractId) || (c.roomId === b.roomId && c.tenantId === b.tenantId));
-              const depositStartDate = (b as any).contractStartDate || (b as any).contract?.startDate || contract?.startDate || (b as any).provisionalRentalStartDate || (b as any).provisionalRentalTerm?.startDate || (b as any).occupancyStartDate || null;
+              const startDate = resolveAuthoritativeStartDate(b);
 
               return (
                 <div key={b.id} className="bg-white rounded-3xl border border-slate-200/90 shadow-2xs hover:shadow-md transition-all p-5 flex flex-col justify-between space-y-4">
@@ -2080,8 +2137,8 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                     </p>
                     <p className="text-[11px] text-slate-500 flex items-center gap-1">
                       <Calendar className="w-3 h-3 text-slate-400" />
-                      {isDeposit ? (
-                        <>วันที่เริ่มเข้าพัก: <span className="font-bold text-slate-700">{depositStartDate ? formatThaiDate(depositStartDate) : '-'}</span></>
+                      {isDepositOrRent ? (
+                        <>วันที่เริ่มเข้าพัก: <span className="font-bold text-slate-700">{startDate ? formatThaiDate(startDate) : '-'}</span></>
                       ) : (
                         <>กำหนดชำระ: <span className="font-bold text-slate-700">{b.dueDate ? formatThaiDate(b.dueDate) : '-'}</span></>
                       )}
@@ -2541,10 +2598,16 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
         <div className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-4">
             {filterPaymentsByQuery(rejectedPayments).map(p => {
-              const roomNum = p.bill?.room?.roomNumber || getRoomNum(p.bill?.roomId || p.bill?.room?.id);
+              const roomNum = resolveAuthoritativeRoomNum(p.bill, p);
               const tenantName = p.bill?.tenant?.displayName || getTenantName(p.tenantId || p.bill?.tenantId);
               const slipUrl = getSlipEvidenceUrl(p);
               const amount = Number(p.amount || p.bill?.totalAmount || 0);
+
+              const isDepositBill = p.bill?.billKind === 'DEPOSIT';
+              const isRentBill = p.bill?.billKind === 'RENT' || p.bill?.items?.some((it: any) => it.type === 'RENT' || (it.description || '').includes('ค่าเช่า'));
+              const isDeposit = isDepositBill || p.bill?.items?.some((it: any) => it.type === 'DEPOSIT' || it.itemType === 'DEPOSIT' || (it.description || '').includes('ประกัน') || (it.description || '').includes('มัดจำ'));
+              const isDepositOrRent = isDeposit || isRentBill;
+              const startDate = resolveAuthoritativeStartDate(p.bill, p);
 
               return (
                 <div key={p.id} className="bg-white rounded-3xl border border-rose-200/90 shadow-2xs hover:shadow-md transition-all p-5 flex flex-col justify-between space-y-4">
@@ -2556,10 +2619,18 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                     </span>
                   </div>
 
-                  <div className="text-xs">
+                  <div className="text-xs space-y-1">
                     <p className="font-bold text-slate-800 flex items-center gap-1.5">
                       <User className="w-3.5 h-3.5 text-slate-400" />
                       {tenantName}
+                    </p>
+                    <p className="text-[11px] text-slate-500 flex items-center gap-1">
+                      <Calendar className="w-3 h-3 text-slate-400" />
+                      {isDepositOrRent ? (
+                        <>วันที่เริ่มเข้าพัก: <span className="font-bold text-slate-700">{startDate ? formatThaiDate(startDate) : '-'}</span></>
+                      ) : (
+                        <>กำหนดชำระ: <span className="font-bold text-slate-700">{p.bill?.dueDate ? formatThaiDate(p.bill.dueDate) : '-'}</span></>
+                      )}
                     </p>
                   </div>
 
@@ -2612,14 +2683,58 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                       ให้แนบใหม่
                     </button>
                     {p.bill && (
-                      <button
-                        type="button"
-                        onClick={() => startCashPaymentWithCountdown(p.bill as any)}
-                        className="py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-1 shadow-xs transition-all cursor-pointer"
-                      >
-                        <DollarSign className="w-4 h-4" />
-                        รับเงินสด
-                      </button>
+                      (() => {
+                        const isBillSettled = p.bill.status === 'PAID' || p.bill.status === 'paid' || Number(p.bill.outstandingAmount ?? 0) <= 0;
+                        if (isBillSettled) {
+                          return (
+                            <div className="py-2.5 bg-emerald-50 text-emerald-700 font-extrabold text-xs rounded-xl flex items-center justify-center gap-1 border border-emerald-200">
+                              <CheckCircle className="w-4 h-4 text-emerald-600" />
+                              ชำระครบแล้ว
+                            </div>
+                          );
+                        }
+
+                        if (pendingCashMap[p.bill.id] !== undefined) {
+                          return (
+                            <div className="bg-amber-50 border border-amber-300 p-2 rounded-xl flex items-center justify-between gap-1 text-amber-900 shadow-2xs animate-in fade-in col-span-2 sm:col-span-1">
+                              <div className="flex items-center gap-1 text-[10px] font-bold">
+                                <RotateCw className="w-3 h-3 animate-spin text-amber-600 shrink-0" />
+                                <span>บันทึก ({pendingCashMap[p.bill.id]}s)</span>
+                              </div>
+                              <div className="flex items-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    cancelPendingCashPayment(p.bill.id);
+                                    handleConfirmCashPayment(p.bill as any);
+                                  }}
+                                  className="px-2 py-1 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-[10px] rounded-lg shadow-xs transition-all cursor-pointer shrink-0"
+                                >
+                                  ทันที
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => cancelPendingCashPayment(p.bill.id)}
+                                  className="px-1.5 py-1 bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-[10px] rounded-lg shadow-xs transition-all cursor-pointer shrink-0 flex items-center"
+                                >
+                                  <X className="w-3 h-3" />
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        }
+
+                        return (
+                          <button
+                            type="button"
+                            onClick={() => startCashPaymentWithCountdown(p.bill as any)}
+                            className="py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-1 shadow-xs transition-all cursor-pointer"
+                          >
+                            <DollarSign className="w-4 h-4" />
+                            รับเงินสด
+                          </button>
+                        );
+                      })()
                     )}
                   </div>
                 </div>

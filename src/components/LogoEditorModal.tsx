@@ -41,13 +41,14 @@ export function getClampedPan(
   const hVis = is90or270 ? imageElement.width : imageElement.height;
 
   const scaleCover = Math.max(CROP_SIZE / wVis, CROP_SIZE / hVis);
-  const z = Math.max(1, zoom / 100);
+  const z = Math.max(0.25, zoom / 100);
 
   const curVisW = wVis * scaleCover * z;
   const curVisH = hVis * scaleCover * z;
 
-  const maxPanX = Math.max(0, (curVisW - CROP_SIZE) / 2);
-  const maxPanY = Math.max(0, (curVisH - CROP_SIZE) / 2);
+  // Support both image larger than canvas and image smaller than canvas
+  const maxPanX = Math.abs(curVisW - CROP_SIZE) / 2;
+  const maxPanY = Math.abs(curVisH - CROP_SIZE) / 2;
 
   return {
     x: Math.min(maxPanX, Math.max(-maxPanX, pan.x)),
@@ -83,6 +84,29 @@ export const LogoEditorModal: React.FC<LogoEditorModalProps> = ({
 
   const workspaceCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const previewCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const workspaceContainerRef = useRef<HTMLDivElement | null>(null);
+
+  // Wheel zoom with non-passive event listener inside editor workspace
+  useEffect(() => {
+    const el = workspaceContainerRef.current;
+    if (!el) return;
+
+    const handleWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      // Wheel up: zoom in (+5%), Wheel down: zoom out (-5%)
+      const step = e.deltaY < 0 ? 5 : -5;
+      setZoom((prev) => {
+        const nextZoom = Math.min(300, Math.max(25, prev + step));
+        setPan((p) => getClampedPan(p, nextZoom, rotation, imageElement));
+        return nextZoom;
+      });
+    };
+
+    el.addEventListener('wheel', handleWheel, { passive: false });
+    return () => {
+      el.removeEventListener('wheel', handleWheel);
+    };
+  }, [imageElement, rotation]);
 
   // 1. Load image when file changes
   useEffect(() => {
@@ -128,7 +152,7 @@ export const LogoEditorModal: React.FC<LogoEditorModalProps> = ({
 
       // Exact cover geometry: ensures zero transparent edges regardless of aspect ratio
       const scaleCover = Math.max(targetSize / wVis, targetSize / hVis);
-      const z = Math.max(1, zoom / 100);
+      const z = Math.max(0.25, zoom / 100);
 
       const baseW = imageElement.width * scaleCover;
       const baseH = imageElement.height * scaleCover;
@@ -275,6 +299,7 @@ export const LogoEditorModal: React.FC<LogoEditorModalProps> = ({
           {/* Main Crop Workspace (Left Column) - Canonical Canvas Authority */}
           <div className="md:col-span-7 flex flex-col items-center space-y-4">
             <div
+              ref={workspaceContainerRef}
               onPointerDown={handlePointerDown}
               onPointerMove={handlePointerMove}
               onPointerUp={handlePointerUp}
@@ -319,7 +344,7 @@ export const LogoEditorModal: React.FC<LogoEditorModalProps> = ({
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
-                    onClick={() => setZoom((prev) => Math.max(100, prev - 10))}
+                    onClick={() => setZoom((prev) => Math.max(25, prev - 10))}
                     className="p-1 text-slate-500 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
                     title="ย่อ"
                   >
@@ -327,7 +352,7 @@ export const LogoEditorModal: React.FC<LogoEditorModalProps> = ({
                   </button>
                   <input
                     type="range"
-                    min={100}
+                    min={25}
                     max={300}
                     step={1}
                     value={zoom}
@@ -399,7 +424,7 @@ export const LogoEditorModal: React.FC<LogoEditorModalProps> = ({
               <div className="flex items-center gap-3 bg-white p-2.5 rounded-xl border border-slate-200">
                 <div className="w-12 h-12 rounded-xl overflow-hidden border border-indigo-200 bg-slate-50 flex items-center justify-center shrink-0 shadow-2xs">
                   {previewUrl ? (
-                    <img src={previewUrl} alt="Square Preview" className="w-full h-full object-contain p-0.5" />
+                    <img src={previewUrl} alt="Square Preview" className="w-full h-full object-cover" />
                   ) : (
                     <Building2 className="w-6 h-6 text-slate-300" />
                   )}

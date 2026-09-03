@@ -1198,6 +1198,16 @@ export async function generateFinalSettlementReceiptForBillInTx(
   const resolvedTenantName = canonicalTenant?.displayName ||
     (canonicalTenant?.firstName ? `${canonicalTenant.firstName || ''} ${canonicalTenant.lastName || ''}`.trim() : 'ผู้เช่า');
 
+  // Derive canonical payment method presentation strictly from real paymentEvents
+  const canonicalMethods = Array.from(
+    new Set(
+      paymentEvents
+        .map((pe: any) => pe.method)
+        .filter((m: any) => typeof m === 'string' && m.trim().length > 0 && m !== 'SETTLED')
+    )
+  );
+  const derivedPaymentMethod = canonicalMethods.length > 0 ? canonicalMethods.join(', ') : null;
+
   const snapshotData = {
     receiptNumber,
     billNumber: contributingBills.map((b: any) => b.billNumber).filter(Boolean).join(', ') || firstBill.billNumber || null,
@@ -1219,7 +1229,8 @@ export async function generateFinalSettlementReceiptForBillInTx(
     dormitoryTaxId: firstBill.dormitory?.taxId || null,
     dormitoryAddress: firstBill.dormitory?.addressLine1 || firstBill.dormitory?.address || null,
     dormitoryPhone: firstBill.dormitory?.phone || null,
-    paymentMethod: 'SETTLED',
+    paymentMethod: derivedPaymentMethod,
+    settlementStatus: 'SETTLED',
     paymentDate: today.toISOString(),
     receiverName: receiverDisplayName,
     isFinalSettlement: true,

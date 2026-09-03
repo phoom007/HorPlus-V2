@@ -144,7 +144,17 @@ export function createReceiptRouter(authService: AuthenticationService) {
         return res.status(403).send('Forbidden');
       }
 
-      const html = renderReceiptHtml(receiptRecord);
+      // Amendment 6: Resolve whether a CURRENT dormitory logo exists at render/open time
+      let hasCurrentLogo = false;
+      if (receiptRecord.dormitoryId) {
+        const dorm = await prisma.dormitory.findUnique({
+          where: { id: receiptRecord.dormitoryId },
+          select: { logoObjectKey: true },
+        });
+        hasCurrentLogo = Boolean(dorm?.logoObjectKey);
+      }
+
+      const html = renderReceiptHtml(receiptRecord, { hasCurrentLogo });
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
       res.send(html);
     } catch (err: any) {
