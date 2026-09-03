@@ -46,6 +46,7 @@ import { MeterOtherFeesModal } from '../../components/meters/MeterOtherFeesModal
 import {
   calculateMeterRowPreview,
   calculateMeterUsageUnits,
+  parseMeterIntegerReading,
   isMeterBasedUtilityMode,
   calculateProgressiveTieredChargeLocal,
   RoomPreviewContext,
@@ -1212,30 +1213,56 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
 
   const validateAndNormalizeSpreadsheetValue = (
     colKey: 'elecPrev' | 'elecCurr' | 'waterPrev' | 'waterCurr' | 'peopleCount',
-    rawVal: any
-  ): { valid: boolean; value: string | number } => {
+    rawVal: any,
+    prevVal?: any
+  ): { valid: boolean; value: string | number; errorMessage?: string } => {
     if (rawVal === undefined || rawVal === null) {
-      return { valid: false, value: '' };
+      return { valid: false, value: '', errorMessage: 'กรุณาระบุค่า' };
     }
     const strVal = String(rawVal).trim();
 
     if (colKey === 'peopleCount') {
-      // Must be a single digit integer 0..9 without extraneous characters
+      if (strVal === '') {
+        return { valid: true, value: 0 };
+      }
       if (/^[0-9]$/.test(strVal)) {
         return { valid: true, value: parseInt(strVal, 10) };
       }
-      return { valid: false, value: rawVal };
+      return { valid: false, value: rawVal, errorMessage: 'จำนวนคนต้องเป็นตัวเลข 0 ถึง 9' };
     } else {
-      // Meter reading: must be empty string or digits only up to 5 digits
       if (strVal === '') {
         return { valid: true, value: '' };
       }
-      if (/^[0-9]{1,5}$/.test(strVal)) {
-        // Strip leading zeros unless it's just "0"
-        const normalized = strVal.replace(/^0+(?=\d)/, '');
-        return { valid: true, value: normalized };
+
+      // Canonical meter integer reading validation: 0..99999, non-numeric, negative, decimal rejection
+      const parsed = parseMeterIntegerReading(strVal);
+      if (!parsed.isValid) {
+        return { valid: false, value: rawVal, errorMessage: parsed.errorMessage || 'ค่ามิเตอร์ไม่ถูกต้อง' };
       }
-      return { valid: false, value: rawVal };
+
+      // Compare against previous reading using canonical rules & rollover
+      if (
+        (colKey === 'elecCurr' || colKey === 'waterCurr') &&
+        prevVal !== undefined &&
+        prevVal !== null &&
+        String(prevVal).trim() !== ''
+      ) {
+        const prevParsed = parseMeterIntegerReading(prevVal);
+        if (prevParsed.isValid) {
+          const usageRes = calculateMeterUsageUnits(prevParsed.value, parsed.value);
+          if (!usageRes.isValid) {
+            return {
+              valid: false,
+              value: rawVal,
+              errorMessage:
+                usageRes.errorMessage ||
+                `ค่ามิเตอร์ปัจจุบัน (${parsed.value}) ต้องไม่น้อยกว่าค่ามิเตอร์เดิม (${prevParsed.value})`,
+            };
+          }
+        }
+      }
+
+      return { valid: true, value: String(parsed.value) };
     }
   };
 
@@ -1271,7 +1298,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   } | null>(null);
   const isSelectingRangeRef = useRef(false);
   const rangeAnchorRef = useRef<{ row: number; col: number } | null>(null);
-  const [rejectedSpreadsheetCells, setRejectedSpreadsheetCells] = useState<Record<string, boolean>>({});
+  const [rejectedSpreadsheetCells, setRejectedSpreadsheetCells] = useState<Record<string, string | boolean>>({});
 
   const [dragFillRange, setDragFillRange] = useState<{
     startRow: number;
@@ -1545,10 +1572,15 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         const newRejectedCells = { ...rejectedSpreadsheetCells };
         let hasChanges = false;
         for (let r = minRow; r <= maxRow; r++) {
+          const targetRow = updated[r];
+          const isRowPaid = Boolean(targetRow?.isPaid || targetRow?.billStatus === 'paid' || targetRow?.isLocked);
+          if (isRowPaid) continue; // Locked/paid row preserved unchanged!
+
           for (let c = minCol; c <= maxCol; c++) {
             const col = spreadsheetColumns[c];
             if (!col || !col.editable) continue;
-            const norm = validateAndNormalizeSpreadsheetValue(col.key as any, sourceVal);
+            const prevVal = col.key === 'elecCurr' ? targetRow.elecPrev : (col.key === 'waterCurr' ? targetRow.waterPrev : undefined);
+            const norm = validateAndNormalizeSpreadsheetValue(col.key as any, sourceVal, prevVal);
             const cellKey = `${r}:${col.key}`;
             if (norm.valid) {
               updated[r] = {
@@ -1558,7 +1590,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
               delete newRejectedCells[cellKey];
               hasChanges = true;
             } else {
-              newRejectedCells[cellKey] = true;
+              newRejectedCells[cellKey] = norm.errorMessage || true;
             }
           }
         }
@@ -4161,6 +4193,10 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                       const targetRow = anchorRow + lineOffset;
                       if (targetRow >= updated.length) return;
 
+                      const targetRowObj = updated[targetRow];
+                      const isRowPaid = Boolean(targetRowObj?.isPaid || targetRowObj?.billStatus === 'paid' || targetRowObj?.isLocked);
+                      if (isRowPaid) return; // Locked/paid row preserved unchanged!
+
                       const cells = line.split('\t');
                       cells.forEach((cellVal, colOffset) => {
                         const targetCol = startCol + colOffset;
@@ -4171,17 +4207,18 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                         if (!col || !col.editable) return;
 
                         const cellKey = `${targetRow}:${col.key}`;
-                        const norm = validateAndNormalizeSpreadsheetValue(col.key as any, cellVal);
+                        const prevVal = col.key === 'elecCurr' ? updated[targetRow].elecPrev : (col.key === 'waterCurr' ? updated[targetRow].waterPrev : undefined);
+                        const norm = validateAndNormalizeSpreadsheetValue(col.key as any, cellVal, prevVal);
+                        updated[targetRow] = {
+                          ...updated[targetRow],
+                          [col.key]: norm.value,
+                        };
                         if (norm.valid) {
-                          updated[targetRow] = {
-                            ...updated[targetRow],
-                            [col.key]: norm.value,
-                          };
                           delete newRejectedCells[cellKey];
-                          pasteCount++;
                         } else {
-                          newRejectedCells[cellKey] = true;
+                          newRejectedCells[cellKey] = norm.errorMessage || true;
                         }
+                        pasteCount++;
                       });
                     });
 
@@ -4230,55 +4267,59 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                       }
 
                       if (rowIdx >= 0) {
+                        const targetRowObj = updated[rowIdx];
+                        const isRowPaid = Boolean(targetRowObj?.isPaid || targetRowObj?.billStatus === 'paid' || targetRowObj?.isLocked);
+                        if (isRowPaid) return; // Locked/paid row preserved unchanged!
+
                         matchCount++;
                         if (elecPrevVal !== undefined && elecPrevVal !== '') {
                           const cellKey = `${rowIdx}:elecPrev`;
                           const norm = validateAndNormalizeSpreadsheetValue('elecPrev', elecPrevVal);
+                          updated[rowIdx].elecPrev = norm.value as string;
                           if (norm.valid) {
-                            updated[rowIdx].elecPrev = norm.value as string;
                             delete newRejectedCells[cellKey];
                           } else {
-                            newRejectedCells[cellKey] = true;
+                            newRejectedCells[cellKey] = norm.errorMessage || true;
                           }
                         }
                         if (elecCurrVal !== undefined && elecCurrVal !== '') {
                           const cellKey = `${rowIdx}:elecCurr`;
-                          const norm = validateAndNormalizeSpreadsheetValue('elecCurr', elecCurrVal);
+                          const norm = validateAndNormalizeSpreadsheetValue('elecCurr', elecCurrVal, updated[rowIdx].elecPrev);
+                          updated[rowIdx].elecCurr = norm.value as string;
                           if (norm.valid) {
-                            updated[rowIdx].elecCurr = norm.value as string;
                             delete newRejectedCells[cellKey];
                           } else {
-                            newRejectedCells[cellKey] = true;
+                            newRejectedCells[cellKey] = norm.errorMessage || true;
                           }
                         }
                         if (waterPrevVal !== undefined && waterPrevVal !== '') {
                           const cellKey = `${rowIdx}:waterPrev`;
                           const norm = validateAndNormalizeSpreadsheetValue('waterPrev', waterPrevVal);
+                          updated[rowIdx].waterPrev = norm.value as string;
                           if (norm.valid) {
-                            updated[rowIdx].waterPrev = norm.value as string;
                             delete newRejectedCells[cellKey];
                           } else {
-                            newRejectedCells[cellKey] = true;
+                            newRejectedCells[cellKey] = norm.errorMessage || true;
                           }
                         }
                         if (waterCurrVal !== undefined && waterCurrVal !== '') {
                           const cellKey = `${rowIdx}:waterCurr`;
-                          const norm = validateAndNormalizeSpreadsheetValue('waterCurr', waterCurrVal);
+                          const norm = validateAndNormalizeSpreadsheetValue('waterCurr', waterCurrVal, updated[rowIdx].waterPrev);
+                          updated[rowIdx].waterCurr = norm.value as string;
                           if (norm.valid) {
-                            updated[rowIdx].waterCurr = norm.value as string;
                             delete newRejectedCells[cellKey];
                           } else {
-                            newRejectedCells[cellKey] = true;
+                            newRejectedCells[cellKey] = norm.errorMessage || true;
                           }
                         }
                         if (peopleVal !== undefined && peopleVal !== '') {
                           const cellKey = `${rowIdx}:peopleCount`;
                           const norm = validateAndNormalizeSpreadsheetValue('peopleCount', peopleVal);
+                          updated[rowIdx].peopleCount = norm.value as number;
                           if (norm.valid) {
-                            updated[rowIdx].peopleCount = norm.value as number;
                             delete newRejectedCells[cellKey];
                           } else {
-                            newRejectedCells[cellKey] = true;
+                            newRejectedCells[cellKey] = norm.errorMessage || true;
                           }
                         }
                       }
@@ -4311,8 +4352,10 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                       </tr>
                     </thead>
                     <tbody className="font-mono text-slate-800">
-                      {meterRows.map((row, rowIdx) => (
-                        <tr key={row.roomId} data-row-index={rowIdx} className="hover:bg-slate-50/80 transition-colors">
+                      {meterRows.map((row, rowIdx) => {
+                        const isRowPaid = Boolean(row.isPaid || row.billStatus === 'paid' || row.isLocked);
+                        return (
+                        <tr key={row.roomId} data-row-index={rowIdx} className={`hover:bg-slate-50/80 transition-colors ${isRowPaid ? 'bg-slate-50/60' : ''}`}>
                           <td
                             data-cell-row={rowIdx}
                             data-cell-col="buildingCode"
@@ -4335,30 +4378,43 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                             const isActive = activeSpreadsheetCell?.rowIndex === rowIdx && activeSpreadsheetCell?.colKey === 'elecPrev';
                             const isFillPreview = isCellInFillPreview(rowIdx, 'elecPrev');
                             const isSelected = isCellInRangeSelected(rowIdx, 'elecPrev');
-                            const isRejected = Boolean(rejectedSpreadsheetCells[`${rowIdx}:elecPrev`]);
+                            const cellKey = `${rowIdx}:elecPrev`;
+                            const isRejected = Boolean(rejectedSpreadsheetCells[cellKey]);
+                            const errTitle = typeof rejectedSpreadsheetCells[cellKey] === 'string' ? (rejectedSpreadsheetCells[cellKey] as string) : (isRejected ? 'ข้อมูลไม่ถูกต้องตามรูปแบบ (ถูกปฏิเสธ)' : undefined);
                             return (
                               <td
                                 data-cell-row={rowIdx}
                                 data-cell-col="elecPrev"
                                 onPointerDown={(e) => handlePointerDownCell(e, rowIdx, 'elecPrev')}
                                 onPointerEnter={() => handlePointerEnterCell(rowIdx, 'elecPrev')}
-                                title={isRejected ? 'ข้อมูลไม่ถูกต้องตามรูปแบบ (ถูกปฏิเสธ)' : undefined}
+                                title={errTitle}
                                 className={`p-0 border border-slate-300 relative ${isRejected ? 'bg-rose-50 border-rose-400 ring-2 ring-rose-500 ring-inset z-10' : (isActive ? 'ring-2 ring-indigo-600 ring-inset z-10' : '')} ${isSelected ? 'bg-indigo-50/70 border-indigo-400' : ''} ${isFillPreview ? 'bg-indigo-100/70 border-indigo-500' : ''}`}
                               >
                                 <input
                                   type="text"
                                   value={row.elecPrev}
+                                  disabled={isRowPaid}
                                   onFocus={() => handleFocusCell(rowIdx, 'elecPrev')}
                                   onClick={() => handleFocusCell(rowIdx, 'elecPrev')}
                                   onPointerDown={(e) => handlePointerDownCell(e, rowIdx, 'elecPrev')}
                                   onPointerEnter={() => handlePointerEnterCell(rowIdx, 'elecPrev')}
                                   onChange={(e) => {
                                     const v = e.target.value;
+                                    const norm = validateAndNormalizeSpreadsheetValue('elecPrev', v);
                                     setMeterRows(prev => prev.map(r => r.roomId === row.roomId ? { ...r, elecPrev: v } : r));
+                                    setRejectedSpreadsheetCells(prev => {
+                                      const next = { ...prev };
+                                      if (norm.valid) {
+                                        delete next[cellKey];
+                                      } else {
+                                        next[cellKey] = norm.errorMessage || true;
+                                      }
+                                      return next;
+                                    });
                                   }}
-                                  className="w-full h-8 px-2 text-center bg-transparent border-0 text-xs font-mono font-bold text-slate-700 focus:outline-none focus:bg-indigo-50/50 focus:ring-1 focus:ring-indigo-500"
+                                  className={`w-full h-8 px-2 text-center bg-transparent border-0 text-xs font-mono font-bold text-slate-700 focus:outline-none focus:bg-indigo-50/50 focus:ring-1 focus:ring-indigo-500 ${isRowPaid ? 'cursor-not-allowed opacity-60' : ''}`}
                                 />
-                                {isActive && (
+                                {isActive && !isRowPaid && (
                                   <div
                                     data-testid="drag-fill-handle"
                                     onPointerDown={(e) => handlePointerDownFillHandle(e, rowIdx, 'elecPrev')}
@@ -4373,30 +4429,43 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                             const isActive = activeSpreadsheetCell?.rowIndex === rowIdx && activeSpreadsheetCell?.colKey === 'elecCurr';
                             const isFillPreview = isCellInFillPreview(rowIdx, 'elecCurr');
                             const isSelected = isCellInRangeSelected(rowIdx, 'elecCurr');
-                            const isRejected = Boolean(rejectedSpreadsheetCells[`${rowIdx}:elecCurr`]);
+                            const cellKey = `${rowIdx}:elecCurr`;
+                            const isRejected = Boolean(rejectedSpreadsheetCells[cellKey]);
+                            const errTitle = typeof rejectedSpreadsheetCells[cellKey] === 'string' ? (rejectedSpreadsheetCells[cellKey] as string) : (isRejected ? 'ข้อมูลไม่ถูกต้องตามรูปแบบ (ถูกปฏิเสธ)' : undefined);
                             return (
                               <td
                                 data-cell-row={rowIdx}
                                 data-cell-col="elecCurr"
                                 onPointerDown={(e) => handlePointerDownCell(e, rowIdx, 'elecCurr')}
                                 onPointerEnter={() => handlePointerEnterCell(rowIdx, 'elecCurr')}
-                                title={isRejected ? 'ข้อมูลไม่ถูกต้องตามรูปแบบ (ถูกปฏิเสธ)' : undefined}
+                                title={errTitle}
                                 className={`p-0 border border-slate-300 relative bg-indigo-50/20 ${isRejected ? 'bg-rose-50 border-rose-400 ring-2 ring-rose-500 ring-inset z-10' : (isActive ? 'ring-2 ring-indigo-600 ring-inset z-10' : '')} ${isSelected ? 'bg-indigo-50/70 border-indigo-400' : ''} ${isFillPreview ? 'bg-indigo-100/70 border-indigo-500' : ''}`}
                               >
                                 <input
                                   type="text"
                                   value={row.elecCurr}
+                                  disabled={isRowPaid}
                                   onFocus={() => handleFocusCell(rowIdx, 'elecCurr')}
                                   onClick={() => handleFocusCell(rowIdx, 'elecCurr')}
                                   onPointerDown={(e) => handlePointerDownCell(e, rowIdx, 'elecCurr')}
                                   onPointerEnter={() => handlePointerEnterCell(rowIdx, 'elecCurr')}
                                   onChange={(e) => {
                                     const v = e.target.value;
+                                    const norm = validateAndNormalizeSpreadsheetValue('elecCurr', v, row.elecPrev);
                                     setMeterRows(prev => prev.map(r => r.roomId === row.roomId ? { ...r, elecCurr: v } : r));
+                                    setRejectedSpreadsheetCells(prev => {
+                                      const next = { ...prev };
+                                      if (norm.valid) {
+                                        delete next[cellKey];
+                                      } else {
+                                        next[cellKey] = norm.errorMessage || true;
+                                      }
+                                      return next;
+                                    });
                                   }}
-                                  className="w-full h-8 px-2 text-center bg-transparent border-0 text-xs font-mono font-bold text-indigo-950 focus:outline-none focus:bg-indigo-50 focus:ring-1 focus:ring-indigo-500"
+                                  className={`w-full h-8 px-2 text-center bg-transparent border-0 text-xs font-mono font-bold text-indigo-950 focus:outline-none focus:bg-indigo-50 focus:ring-1 focus:ring-indigo-500 ${isRowPaid ? 'cursor-not-allowed opacity-60' : ''}`}
                                 />
-                                {isActive && (
+                                {isActive && !isRowPaid && (
                                   <div
                                     data-testid="drag-fill-handle"
                                     onPointerDown={(e) => handlePointerDownFillHandle(e, rowIdx, 'elecCurr')}
@@ -4411,30 +4480,43 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                             const isActive = activeSpreadsheetCell?.rowIndex === rowIdx && activeSpreadsheetCell?.colKey === 'waterPrev';
                             const isFillPreview = isCellInFillPreview(rowIdx, 'waterPrev');
                             const isSelected = isCellInRangeSelected(rowIdx, 'waterPrev');
-                            const isRejected = Boolean(rejectedSpreadsheetCells[`${rowIdx}:waterPrev`]);
+                            const cellKey = `${rowIdx}:waterPrev`;
+                            const isRejected = Boolean(rejectedSpreadsheetCells[cellKey]);
+                            const errTitle = typeof rejectedSpreadsheetCells[cellKey] === 'string' ? (rejectedSpreadsheetCells[cellKey] as string) : (isRejected ? 'ข้อมูลไม่ถูกต้องตามรูปแบบ (ถูกปฏิเสธ)' : undefined);
                             return (
                               <td
                                 data-cell-row={rowIdx}
                                 data-cell-col="waterPrev"
                                 onPointerDown={(e) => handlePointerDownCell(e, rowIdx, 'waterPrev')}
                                 onPointerEnter={() => handlePointerEnterCell(rowIdx, 'waterPrev')}
-                                title={isRejected ? 'ข้อมูลไม่ถูกต้องตามรูปแบบ (ถูกปฏิเสธ)' : undefined}
+                                title={errTitle}
                                 className={`p-0 border border-slate-300 relative ${isRejected ? 'bg-rose-50 border-rose-400 ring-2 ring-rose-500 ring-inset z-10' : (isActive ? 'ring-2 ring-indigo-600 ring-inset z-10' : '')} ${isSelected ? 'bg-indigo-50/70 border-indigo-400' : ''} ${isFillPreview ? 'bg-indigo-100/70 border-indigo-500' : ''}`}
                               >
                                 <input
                                   type="text"
                                   value={row.waterPrev}
+                                  disabled={isRowPaid}
                                   onFocus={() => handleFocusCell(rowIdx, 'waterPrev')}
                                   onClick={() => handleFocusCell(rowIdx, 'waterPrev')}
                                   onPointerDown={(e) => handlePointerDownCell(e, rowIdx, 'waterPrev')}
                                   onPointerEnter={() => handlePointerEnterCell(rowIdx, 'waterPrev')}
                                   onChange={(e) => {
                                     const v = e.target.value;
+                                    const norm = validateAndNormalizeSpreadsheetValue('waterPrev', v);
                                     setMeterRows(prev => prev.map(r => r.roomId === row.roomId ? { ...r, waterPrev: v } : r));
+                                    setRejectedSpreadsheetCells(prev => {
+                                      const next = { ...prev };
+                                      if (norm.valid) {
+                                        delete next[cellKey];
+                                      } else {
+                                        next[cellKey] = norm.errorMessage || true;
+                                      }
+                                      return next;
+                                    });
                                   }}
-                                  className="w-full h-8 px-2 text-center bg-transparent border-0 text-xs font-mono font-bold text-slate-700 focus:outline-none focus:bg-blue-50/50 focus:ring-1 focus:ring-blue-500"
+                                  className={`w-full h-8 px-2 text-center bg-transparent border-0 text-xs font-mono font-bold text-slate-700 focus:outline-none focus:bg-blue-50/50 focus:ring-1 focus:ring-blue-500 ${isRowPaid ? 'cursor-not-allowed opacity-60' : ''}`}
                                 />
-                                {isActive && (
+                                {isActive && !isRowPaid && (
                                   <div
                                     data-testid="drag-fill-handle"
                                     onPointerDown={(e) => handlePointerDownFillHandle(e, rowIdx, 'waterPrev')}
@@ -4449,30 +4531,43 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                             const isActive = activeSpreadsheetCell?.rowIndex === rowIdx && activeSpreadsheetCell?.colKey === 'waterCurr';
                             const isFillPreview = isCellInFillPreview(rowIdx, 'waterCurr');
                             const isSelected = isCellInRangeSelected(rowIdx, 'waterCurr');
-                            const isRejected = Boolean(rejectedSpreadsheetCells[`${rowIdx}:waterCurr`]);
+                            const cellKey = `${rowIdx}:waterCurr`;
+                            const isRejected = Boolean(rejectedSpreadsheetCells[cellKey]);
+                            const errTitle = typeof rejectedSpreadsheetCells[cellKey] === 'string' ? (rejectedSpreadsheetCells[cellKey] as string) : (isRejected ? 'ข้อมูลไม่ถูกต้องตามรูปแบบ (ถูกปฏิเสธ)' : undefined);
                             return (
                               <td
                                 data-cell-row={rowIdx}
                                 data-cell-col="waterCurr"
                                 onPointerDown={(e) => handlePointerDownCell(e, rowIdx, 'waterCurr')}
                                 onPointerEnter={() => handlePointerEnterCell(rowIdx, 'waterCurr')}
-                                title={isRejected ? 'ข้อมูลไม่ถูกต้องตามรูปแบบ (ถูกปฏิเสธ)' : undefined}
+                                title={errTitle}
                                 className={`p-0 border border-slate-300 relative bg-blue-50/20 ${isRejected ? 'bg-rose-50 border-rose-400 ring-2 ring-rose-500 ring-inset z-10' : (isActive ? 'ring-2 ring-indigo-600 ring-inset z-10' : '')} ${isSelected ? 'bg-indigo-50/70 border-indigo-400' : ''} ${isFillPreview ? 'bg-indigo-100/70 border-indigo-500' : ''}`}
                               >
                                 <input
                                   type="text"
                                   value={row.waterCurr}
+                                  disabled={isRowPaid}
                                   onFocus={() => handleFocusCell(rowIdx, 'waterCurr')}
                                   onClick={() => handleFocusCell(rowIdx, 'waterCurr')}
                                   onPointerDown={(e) => handlePointerDownCell(e, rowIdx, 'waterCurr')}
                                   onPointerEnter={() => handlePointerEnterCell(rowIdx, 'waterCurr')}
                                   onChange={(e) => {
                                     const v = e.target.value;
+                                    const norm = validateAndNormalizeSpreadsheetValue('waterCurr', v, row.waterPrev);
                                     setMeterRows(prev => prev.map(r => r.roomId === row.roomId ? { ...r, waterCurr: v } : r));
+                                    setRejectedSpreadsheetCells(prev => {
+                                      const next = { ...prev };
+                                      if (norm.valid) {
+                                        delete next[cellKey];
+                                      } else {
+                                        next[cellKey] = norm.errorMessage || true;
+                                      }
+                                      return next;
+                                    });
                                   }}
-                                  className="w-full h-8 px-2 text-center bg-transparent border-0 text-xs font-mono font-bold text-blue-950 focus:outline-none focus:bg-blue-50 focus:ring-1 focus:ring-blue-500"
+                                  className={`w-full h-8 px-2 text-center bg-transparent border-0 text-xs font-mono font-bold text-blue-950 focus:outline-none focus:bg-blue-50 focus:ring-1 focus:ring-blue-500 ${isRowPaid ? 'cursor-not-allowed opacity-60' : ''}`}
                                 />
-                                {isActive && (
+                                {isActive && !isRowPaid && (
                                   <div
                                     data-testid="drag-fill-handle"
                                     onPointerDown={(e) => handlePointerDownFillHandle(e, rowIdx, 'waterCurr')}
@@ -4487,31 +4582,44 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                             const isActive = activeSpreadsheetCell?.rowIndex === rowIdx && activeSpreadsheetCell?.colKey === 'peopleCount';
                             const isFillPreview = isCellInFillPreview(rowIdx, 'peopleCount');
                             const isSelected = isCellInRangeSelected(rowIdx, 'peopleCount');
-                            const isRejected = Boolean(rejectedSpreadsheetCells[`${rowIdx}:peopleCount`]);
+                            const cellKey = `${rowIdx}:peopleCount`;
+                            const isRejected = Boolean(rejectedSpreadsheetCells[cellKey]);
+                            const errTitle = typeof rejectedSpreadsheetCells[cellKey] === 'string' ? (rejectedSpreadsheetCells[cellKey] as string) : (isRejected ? 'ข้อมูลไม่ถูกต้องตามรูปแบบ (ถูกปฏิเสธ)' : undefined);
                             return (
                               <td
                                 data-cell-row={rowIdx}
                                 data-cell-col="peopleCount"
                                 onPointerDown={(e) => handlePointerDownCell(e, rowIdx, 'peopleCount')}
                                 onPointerEnter={() => handlePointerEnterCell(rowIdx, 'peopleCount')}
-                                title={isRejected ? 'ข้อมูลไม่ถูกต้องตามรูปแบบ (ถูกปฏิเสธ)' : undefined}
+                                title={errTitle}
                                 className={`p-0 border border-slate-300 relative ${isRejected ? 'bg-rose-50 border-rose-400 ring-2 ring-rose-500 ring-inset z-10' : (isActive ? 'ring-2 ring-indigo-600 ring-inset z-10' : '')} ${isSelected ? 'bg-indigo-50/70 border-indigo-400' : ''} ${isFillPreview ? 'bg-indigo-100/70 border-indigo-500' : ''}`}
                               >
                                 <input
                                   type="number"
                                   min={0}
                                   value={row.peopleCount}
+                                  disabled={isRowPaid}
                                   onFocus={() => handleFocusCell(rowIdx, 'peopleCount')}
                                   onClick={() => handleFocusCell(rowIdx, 'peopleCount')}
                                   onPointerDown={(e) => handlePointerDownCell(e, rowIdx, 'peopleCount')}
                                   onPointerEnter={() => handlePointerEnterCell(rowIdx, 'peopleCount')}
                                   onChange={(e) => {
                                     const v = parseInt(e.target.value, 10);
-                                    setMeterRows(prev => prev.map(r => r.roomId === row.roomId ? { ...r, peopleCount: isNaN(v) ? 0 : v } : r));
+                                    const norm = validateAndNormalizeSpreadsheetValue('peopleCount', isNaN(v) ? '' : v);
+                                    setMeterRows(prev => prev.map(r => r.roomId === row.roomId ? { ...r, peopleCount: norm.valid ? (norm.value as number) : (v as any) } : r));
+                                    setRejectedSpreadsheetCells(prev => {
+                                      const next = { ...prev };
+                                      if (norm.valid) {
+                                        delete next[cellKey];
+                                      } else {
+                                        next[cellKey] = norm.errorMessage || true;
+                                      }
+                                      return next;
+                                    });
                                   }}
-                                  className="w-full h-8 px-2 text-center bg-transparent border-0 text-xs font-mono font-bold text-slate-800 focus:outline-none focus:bg-indigo-50/50 focus:ring-1 focus:ring-indigo-500"
+                                  className={`w-full h-8 px-2 text-center bg-transparent border-0 text-xs font-mono font-bold text-slate-800 focus:outline-none focus:bg-indigo-50/50 focus:ring-1 focus:ring-indigo-500 ${isRowPaid ? 'cursor-not-allowed opacity-60' : ''}`}
                                 />
-                                {isActive && (
+                                {isActive && !isRowPaid && (
                                   <div
                                     data-testid="drag-fill-handle"
                                     onPointerDown={(e) => handlePointerDownFillHandle(e, rowIdx, 'peopleCount')}
@@ -4523,7 +4631,8 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                             );
                           })()}
                         </tr>
-                      ))}
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>

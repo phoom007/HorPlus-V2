@@ -50,6 +50,7 @@ export interface OwnerQuickAddDailyStayDto {
   dailyRateAmount?: string | number;
   depositAmount?: string | number;
   depositDeclaredStatus?: 'PAID' | 'UNPAID';
+  depositPaymentMethod?: 'CASH' | 'BANK_TRANSFER' | null;
 }
 
 export interface UpdatePendingDailyStayDto {
@@ -650,11 +651,19 @@ export class DailyStayService {
         });
 
         if (invoiceStatus === 'PAID' && toDecimal(totalAgreed).greaterThan(0)) {
-          await generateFinalSettlementReceiptForDailyInvoiceInTx(tx, {
-            dormitoryId,
-            dailyStayInvoiceId: invoice.id,
-            userId,
+          const approvedPaymentsCount = await tx.payment.count({
+            where: { dailyStayInvoiceId: invoice.id, status: 'APPROVED' },
           });
+          const positiveObligationsCount = (invoice.items || []).filter(
+            (it: any) => Number(it.amount) > 0
+          ).length;
+          if (approvedPaymentsCount > 0 || positiveObligationsCount === 0) {
+            await generateFinalSettlementReceiptForDailyInvoiceInTx(tx, {
+              dormitoryId,
+              dailyStayInvoiceId: invoice.id,
+              userId,
+            });
+          }
         }
       }
 
@@ -834,6 +843,15 @@ export class DailyStayService {
       const totalRent = formatDecimal(mulDecimals(toDecimal(dailyRate), inclusiveDayCount.toString()));
       const depositDeclaredStatus = data.depositDeclaredStatus || 'UNPAID';
 
+      if (depositDeclaredStatus === 'PAID' && toDecimal(deposit).greaterThan(0)) {
+        if (!data.depositPaymentMethod || !['CASH', 'BANK_TRANSFER'].includes(data.depositPaymentMethod)) {
+          const err = new Error('กรุณาระบุช่องทางการชำระเงินประกัน (เงินสด หรือ โอนเงิน)');
+          (err as any).statusCode = 400;
+          (err as any).code = 'VALIDATION_ERROR';
+          throw err;
+        }
+      }
+
       // 3. Create Tenant losslessly
       const tenantNumber = await generateNextTenantNumber(dormitoryId, tx);
       const tenant = await tx.tenant.create({
@@ -913,12 +931,12 @@ export class DailyStayService {
       const rentStatus = isRentZero ? 'SETTLED' : 'OUTSTANDING';
       const depositStatus = isDepositZero
         ? 'SETTLED'
-        : (depositDeclaredStatus === 'PAID' ? 'DECLARED_PAID' : 'OUTSTANDING');
+        : (depositDeclaredStatus === 'PAID' ? 'SETTLED' : 'OUTSTANDING');
       const depositPaidAt = (!isDepositZero && depositDeclaredStatus === 'PAID')
         ? new Date()
         : null;
 
-      const hasPositiveSettledObligation = (!isDepositZero && depositStatus === 'DECLARED_PAID');
+      const hasPositiveSettledObligation = (!isDepositZero && depositStatus === 'SETTLED');
 
       const invoiceStatus = isOutstandingZero
         ? 'PAID'
@@ -956,6 +974,37 @@ export class DailyStayService {
         },
         include: { items: true },
       });
+
+      if (!isDepositZero && depositDeclaredStatus === 'PAID') {
+        const depositItem = invoice.items.find((it: any) => it.itemType === 'DEPOSIT');
+        const payment = await tx.payment.create({
+          data: {
+            dormitoryId,
+            dailyStayInvoiceId: invoice.id,
+            billId: null,
+            tenantId: tenant.id,
+            method: data.depositPaymentMethod!,
+            amount: toDecimal(deposit),
+            status: 'APPROVED',
+            paymentDate: new Date(),
+            reviewedByUserId: userId,
+            reviewedAt: new Date(),
+          },
+        });
+        if (depositItem) {
+          await tx.paymentAllocation.create({
+            data: {
+              dormitoryId,
+              paymentId: payment.id,
+              dailyStayInvoiceId: invoice.id,
+              dailyStayInvoiceItemId: depositItem.id,
+              allocatedAmount: toDecimal(deposit),
+              allocationOrder: 1,
+              billId: null,
+            },
+          });
+        }
+      }
 
       if (invoiceStatus === 'PAID' && toDecimal(totalAgreed).greaterThan(0)) {
         await generateFinalSettlementReceiptForDailyInvoiceInTx(tx, {
@@ -1336,9 +1385,44 @@ export class DailyStayService {
     invoiceId: string,
     itemType: 'DAILY_RENT' | 'RENT' | 'DEPOSIT' | 'OTHER_FEE' | 'ALL',
     actorUserId?: string,
+    options?: {
+      method?: 'CASH' | 'BANK_TRANSFER';
+      idempotencyKey?: string | null;
+      paymentDate?: Date | null;
+    },
     txClient?: any
   ) {
     const execute = async (tx: any) => {
+      // 1. Check idempotency replay first
+      if (options?.idempotencyKey) {
+        const existingPayment = await tx.payment.findFirst({
+          where: {
+            dormitoryId,
+            idempotencyKey: options.idempotencyKey,
+          },
+        });
+        if (existingPayment) {
+          const inv = await tx.dailyStayInvoice.findFirst({
+            where: { id: invoiceId, dormitoryId, deletedAt: null },
+            include: {
+              items: true,
+              dailyStay: {
+                include: { room: true, tenant: true },
+              },
+            },
+          });
+          if (inv) {
+            const totalPaid = inv.items
+              .filter((it: any) => it.status === 'SETTLED' || it.status === 'DECLARED_PAID')
+              .reduce((sum: number, it: any) => sum + Number(it.amount), 0);
+            return {
+              ...inv,
+              totalPaidAmount: toDecimal(totalPaid.toFixed(2)),
+            };
+          }
+        }
+      }
+
       const invoice = await tx.dailyStayInvoice.findFirst({
         where: { id: invoiceId, dormitoryId, deletedAt: null },
         include: { items: true, dailyStay: true },
@@ -1353,14 +1437,23 @@ export class DailyStayService {
 
       let targetItems: any[] = [];
       if (itemType === 'ALL') {
-        targetItems = invoice.items.filter((it: any) => it.status === 'OUTSTANDING');
+        targetItems = invoice.items.filter((it: any) => it.status !== 'SETTLED');
       } else {
         targetItems = invoice.items.filter(
-          (it: any) => it.itemType === itemType || (itemType === 'DAILY_RENT' && it.itemType === 'RENT')
+          (it: any) => (it.itemType === itemType || (itemType === 'DAILY_RENT' && it.itemType === 'RENT')) && it.status !== 'SETTLED'
         );
       }
 
       if (targetItems.length === 0) {
+        if (invoice.status === 'PAID') {
+          const totalPaid = invoice.items
+            .filter((it: any) => it.status === 'SETTLED' || it.status === 'DECLARED_PAID')
+            .reduce((sum: number, it: any) => sum + Number(it.amount), 0);
+          return {
+            ...invoice,
+            totalPaidAmount: toDecimal(totalPaid.toFixed(2)),
+          };
+        }
         const err = new Error(`ไม่พบรายการ ${itemType} ที่ค้างชำระในใบแจ้งหนี้`);
         (err as any).statusCode = 404;
         (err as any).code = 'INVOICE_ITEM_NOT_FOUND';
@@ -1368,6 +1461,43 @@ export class DailyStayService {
       }
 
       const now = new Date();
+      const method = options?.method || 'CASH';
+      const positiveItems = targetItems.filter((it: any) => Number(it.amount) > 0);
+      const positiveTotal = positiveItems.reduce((sum: number, it: any) => sum + Number(it.amount), 0);
+
+      if (positiveTotal > 0) {
+        const payment = await tx.payment.create({
+          data: {
+            dormitoryId,
+            dailyStayInvoiceId: invoice.id,
+            billId: null,
+            tenantId: invoice.dailyStay?.tenantId || null,
+            method,
+            amount: toDecimal(positiveTotal.toFixed(2)),
+            status: 'APPROVED',
+            paymentDate: options?.paymentDate || now,
+            reviewedByUserId: actorUserId || null,
+            reviewedAt: now,
+            idempotencyKey: options?.idempotencyKey || null,
+          },
+        });
+
+        let allocOrder = 1;
+        for (const it of positiveItems) {
+          await tx.paymentAllocation.create({
+            data: {
+              dormitoryId,
+              paymentId: payment.id,
+              dailyStayInvoiceId: invoice.id,
+              dailyStayInvoiceItemId: it.id,
+              allocatedAmount: toDecimal(Number(it.amount).toFixed(2)),
+              allocationOrder: allocOrder++,
+              billId: null,
+            },
+          });
+        }
+      }
+
       for (const item of targetItems) {
         const isZeroAmount = Number(item.amount) === 0;
         // Zero-value financial obligations remain SETTLED + paidAt=null forever.

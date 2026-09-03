@@ -1139,7 +1139,8 @@ model TenantMoveOutRequest {
 model Payment {
   id               String    @id @default(uuid()) @db.Uuid
   dormitoryId      String    @map("dormitory_id") @db.Uuid
-  billId           String    @map("bill_id") @db.Uuid
+  billId           String?   @map("bill_id") @db.Uuid
+  dailyStayInvoiceId String? @map("daily_stay_invoice_id") @db.Uuid
   tenantId         String?   @map("tenant_id") @db.Uuid
   paymentGroupId   String?   @map("payment_group_id") @db.Uuid
   method           String    @db.VarChar(50)
@@ -1159,16 +1160,18 @@ model Payment {
   createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz()
   updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
 
-  dormitory       Dormitory              @relation(fields: [dormitoryId], references: [id], onDelete: Restrict)
-  bill            Bill                   @relation(fields: [billId], references: [id], onDelete: Restrict)
-  tenant          Tenant?                @relation(fields: [tenantId], references: [id], onDelete: Restrict)
-  paymentGroup    CombinedPaymentGroup?  @relation(fields: [paymentGroupId], references: [id], onDelete: SetNull)
-  statusHistories PaymentStatusHistory[]
-  receipt         Receipt?
-  allocations     PaymentAllocation[]
-  verification    PaymentEvidenceVerification?
+  dormitory        Dormitory              @relation(fields: [dormitoryId], references: [id], onDelete: Restrict)
+  bill             Bill?                  @relation(fields: [billId], references: [id], onDelete: Restrict)
+  dailyStayInvoice DailyStayInvoice?      @relation(fields: [dailyStayInvoiceId], references: [id], onDelete: Restrict)
+  tenant           Tenant?                @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  paymentGroup     CombinedPaymentGroup?  @relation(fields: [paymentGroupId], references: [id], onDelete: SetNull)
+  statusHistories  PaymentStatusHistory[]
+  receipt          Receipt?
+  allocations      PaymentAllocation[]
+  verification     PaymentEvidenceVerification?
 
   @@unique([idempotencyKey], name: "payment_idempotency_key_unique")
+  @@index([dormitoryId, dailyStayInvoiceId], name: "idx_payments_dorm_daily_invoice")
   @@map("payments")
 }
 
@@ -2019,6 +2022,8 @@ model DailyStayInvoice {
   dailyStay DailyStay              @relation(fields: [dailyStayId], references: [id], onDelete: Cascade)
   items     DailyStayInvoiceItem[]
   receipts  Receipt[]
+  payments  Payment[]
+  allocations PaymentAllocation[]
 
   @@unique([dormitoryId, invoiceNumber], name: "dormitory_daily_invoice_number_unique")
   @@index([dormitoryId])
@@ -2037,7 +2042,8 @@ model DailyStayInvoiceItem {
   createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz()
   updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
 
-  invoice DailyStayInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  invoice     DailyStayInvoice    @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  allocations PaymentAllocation[]
 
   @@index([invoiceId])
   @@map("daily_stay_invoice_items")
@@ -2066,25 +2072,31 @@ model RoomOperationalStatusChange {
 }
 
 model PaymentAllocation {
-  id              String                @id @default(uuid()) @db.Uuid
-  dormitoryId     String                @map("dormitory_id") @db.Uuid
-  paymentGroupId  String?               @map("payment_group_id") @db.Uuid
-  paymentId       String?               @map("payment_id") @db.Uuid
-  billId          String                @map("bill_id") @db.Uuid
-  billItemId      String?               @map("bill_item_id") @db.Uuid
-  allocatedAmount Decimal               @map("allocated_amount") @db.Decimal(12, 2)
-  allocationOrder Int                   @default(0) @map("allocation_order")
-  createdAt       DateTime              @default(now()) @map("created_at") @db.Timestamptz()
+  id                     String                @id @default(uuid()) @db.Uuid
+  dormitoryId            String                @map("dormitory_id") @db.Uuid
+  paymentGroupId         String?               @map("payment_group_id") @db.Uuid
+  paymentId              String?               @map("payment_id") @db.Uuid
+  billId                 String?               @map("bill_id") @db.Uuid
+  billItemId             String?               @map("bill_item_id") @db.Uuid
+  dailyStayInvoiceId     String?               @map("daily_stay_invoice_id") @db.Uuid
+  dailyStayInvoiceItemId String?               @map("daily_stay_invoice_item_id") @db.Uuid
+  allocatedAmount        Decimal               @map("allocated_amount") @db.Decimal(12, 2)
+  allocationOrder        Int                   @default(0) @map("allocation_order")
+  createdAt              DateTime              @default(now()) @map("created_at") @db.Timestamptz()
 
-  dormitory       Dormitory             @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
-  paymentGroup    CombinedPaymentGroup? @relation(fields: [paymentGroupId], references: [id], onDelete: SetNull)
-  payment         Payment?              @relation(fields: [paymentId], references: [id], onDelete: SetNull)
-  bill            Bill                  @relation(fields: [billId], references: [id], onDelete: Cascade)
-  billItem        BillItem?             @relation(fields: [billItemId], references: [id], onDelete: SetNull)
+  dormitory              Dormitory             @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
+  paymentGroup           CombinedPaymentGroup? @relation(fields: [paymentGroupId], references: [id], onDelete: SetNull)
+  payment                Payment?              @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+  bill                   Bill?                 @relation(fields: [billId], references: [id], onDelete: Cascade)
+  billItem               BillItem?             @relation(fields: [billItemId], references: [id], onDelete: SetNull)
+  dailyStayInvoice       DailyStayInvoice?     @relation(fields: [dailyStayInvoiceId], references: [id], onDelete: Restrict)
+  dailyStayInvoiceItem   DailyStayInvoiceItem? @relation(fields: [dailyStayInvoiceItemId], references: [id], onDelete: SetNull)
 
   @@index([dormitoryId, billId], name: "idx_allocation_dorm_bill")
   @@index([dormitoryId, paymentGroupId], name: "idx_allocation_dorm_group")
   @@index([dormitoryId, paymentId], name: "idx_allocation_dorm_payment")
+  @@index([dormitoryId, dailyStayInvoiceId], name: "idx_allocations_dorm_daily_invoice")
+  @@index([dormitoryId, dailyStayInvoiceItemId], name: "idx_allocations_dorm_daily_item")
   @@map("payment_allocations")
 }
 

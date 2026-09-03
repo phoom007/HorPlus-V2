@@ -259,20 +259,34 @@ export function createDailyStayRouter(
     }
   });
 
-  // 2. Owner Quick Add Daily Stay (1-step atomic create & approve)
-  const OwnerQuickAddSchema = z.object({
-    dormitoryId: z.string().uuid().optional(),
-    roomId: z.string().min(1, 'กรุณาระบุห้องพัก'),
-    fullName: z.string().trim().min(1, 'กรุณาระบุชื่อ-นามสกุล'),
-    phone: z.string().trim().max(50).optional().nullable(),
-    startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'รูปแบบวันที่ไม่ถูกต้อง (YYYY-MM-DD)'),
-    endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'รูปแบบวันที่ไม่ถูกต้อง (YYYY-MM-DD)'),
-    checkInTime: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/, 'รูปแบบเวลาไม่ถูกต้อง (HH:mm)').optional().nullable(),
-    checkOutTime: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/, 'รูปแบบเวลาไม่ถูกต้อง (HH:mm)').optional().nullable(),
-    dailyRateAmount: MoneyDecimalStringSchema.optional(),
-    depositAmount: MoneyDecimalStringSchema.optional(),
-    depositDeclaredStatus: z.enum(['PAID', 'UNPAID']).optional(),
-  });
+  const OwnerQuickAddSchema = z
+    .object({
+      dormitoryId: z.string().uuid().optional(),
+      roomId: z.string().min(1, 'กรุณาระบุห้องพัก'),
+      fullName: z.string().trim().min(1, 'กรุณาระบุชื่อ-นามสกุล'),
+      phone: z.string().trim().max(50).optional().nullable(),
+      startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'รูปแบบวันที่ไม่ถูกต้อง (YYYY-MM-DD)'),
+      endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'รูปแบบวันที่ไม่ถูกต้อง (YYYY-MM-DD)'),
+      checkInTime: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/, 'รูปแบบเวลาไม่ถูกต้อง (HH:mm)').optional().nullable(),
+      checkOutTime: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/, 'รูปแบบเวลาไม่ถูกต้อง (HH:mm)').optional().nullable(),
+      dailyRateAmount: MoneyDecimalStringSchema.optional(),
+      depositAmount: MoneyDecimalStringSchema.optional(),
+      depositDeclaredStatus: z.enum(['PAID', 'UNPAID']).optional(),
+      depositPaymentMethod: z.enum(['CASH', 'BANK_TRANSFER']).optional().nullable(),
+    })
+    .refine(
+      (data) => {
+        const depAmt = Number(data.depositAmount || 0);
+        if (data.depositDeclaredStatus === 'PAID' && depAmt > 0) {
+          return !!data.depositPaymentMethod && ['CASH', 'BANK_TRANSFER'].includes(data.depositPaymentMethod);
+        }
+        return true;
+      },
+      {
+        message: 'กรุณาระบุช่องทางการชำระเงินประกัน (เงินสด หรือ โอนเงิน)',
+        path: ['depositPaymentMethod'],
+      }
+    );
 
   const upload = multer({
     storage: multer.memoryStorage(),
@@ -517,9 +531,10 @@ export function createDailyStayRouter(
     }
   );
 
-  // 9. Settle Daily Stay Invoice Item (Canonical Payment / Cash Collection Action)
+  // 9. Settle Daily Stay Invoice Item (Canonical Payment Action: CASH or BANK_TRANSFER)
   const SettleItemSchema = z.object({
     itemType: z.enum(['DAILY_RENT', 'RENT', 'DEPOSIT', 'OTHER_FEE', 'ALL']),
+    method: z.enum(['CASH', 'BANK_TRANSFER']).optional().default('CASH'),
   });
 
   router.post(
@@ -535,17 +550,22 @@ export function createDailyStayRouter(
         const invoiceId = req.params.id;
         const parsed = SettleItemSchema.parse(req.body);
         const userId = req.auth!.userId;
+        const idempotencyKey = (req.headers['x-idempotency-key'] as string)?.trim() || null;
 
         const result = await dailyStayService.settleDailyStayInvoiceItem(
           dormId,
           invoiceId,
           parsed.itemType,
-          userId
+          userId,
+          {
+            method: parsed.method,
+            idempotencyKey,
+          }
         );
 
         res.json({
           data: result,
-          message: `บันทึกการชำระเงิน ${parsed.itemType} สำเร็จ`,
+          message: `บันทึกการชำระเงิน ${parsed.itemType} (${parsed.method === 'BANK_TRANSFER' ? 'โอนเงิน' : 'เงินสด'}) สำเร็จ`,
         });
       } catch (err: any) {
         if (err instanceof z.ZodError) {

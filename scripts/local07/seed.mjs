@@ -1181,6 +1181,68 @@ export async function seedLocal07Data() {
     ],
   });
 
+  const payRent206 = await prisma.payment.create({
+    data: {
+      dormitoryId: compDorm.id,
+      dailyStayInvoiceId: dailyInvoice206.id,
+      billId: null,
+      tenantId: tenantDaily206.id,
+      method: 'CASH',
+      amount: 3850.0,
+      status: 'APPROVED',
+      paymentDate: new Date('2026-08-20T14:30:00.000+07:00'),
+      reviewedByUserId: COMP_DORM.owner.id,
+      reviewedAt: new Date('2026-08-20T14:30:00.000+07:00'),
+    },
+  });
+
+  const payDeposit206 = await prisma.payment.create({
+    data: {
+      dormitoryId: compDorm.id,
+      dailyStayInvoiceId: dailyInvoice206.id,
+      billId: null,
+      tenantId: tenantDaily206.id,
+      method: 'CASH',
+      amount: 500.0,
+      status: 'APPROVED',
+      paymentDate: new Date('2026-08-20T14:30:00.000+07:00'),
+      reviewedByUserId: COMP_DORM.owner.id,
+      reviewedAt: new Date('2026-08-20T14:30:00.000+07:00'),
+    },
+  });
+
+  const items206 = await prisma.dailyStayInvoiceItem.findMany({ where: { invoiceId: dailyInvoice206.id } });
+  const rentItem206 = items206.find((i) => i.itemType === 'DAILY_RENT');
+  const depItem206 = items206.find((i) => i.itemType === 'DEPOSIT');
+
+  if (rentItem206) {
+    await prisma.paymentAllocation.create({
+      data: {
+        dormitoryId: compDorm.id,
+        paymentId: payRent206.id,
+        dailyStayInvoiceId: dailyInvoice206.id,
+        dailyStayInvoiceItemId: rentItem206.id,
+        allocatedAmount: 3850.0,
+        allocationOrder: 1,
+        billId: null,
+      },
+    });
+  }
+
+  if (depItem206) {
+    await prisma.paymentAllocation.create({
+      data: {
+        dormitoryId: compDorm.id,
+        paymentId: payDeposit206.id,
+        dailyStayInvoiceId: dailyInvoice206.id,
+        dailyStayInvoiceItemId: depItem206.id,
+        allocatedAmount: 500.0,
+        allocationOrder: 1,
+        billId: null,
+      },
+    });
+  }
+
   // 5. Future Reservation on Room 205 starting Sept 15 (leaving Aug and Sept 1–14 as bookable gaps)
   const tenantResv205 = await prisma.tenant.create({
     data: {

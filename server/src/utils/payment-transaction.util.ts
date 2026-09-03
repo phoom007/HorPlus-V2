@@ -1399,19 +1399,68 @@ export async function generateFinalSettlementReceiptForDailyInvoiceInTx(
     metadata: null,
   }));
 
-  const paymentEvents = (invoice.items || [])
-    .filter((it: any) => it.paidAt)
-    .map((it: any) => ({
-      paymentId: `daily-item-${it.id}`,
-      itemType: it.itemType,
-      amount: new Decimal(it.amount.toString()).toFixed(2),
-      method: 'CASH',
-      effectivePaymentDate: it.paidAt.toISOString(),
-      paymentDate: it.paidAt.toISOString(),
-      evidenceReference: null,
-      receiptNumber: null,
+  const payments = await tx.payment.findMany({
+    where: {
+      dormitoryId,
+      dailyStayInvoiceId: invoice.id,
       status: 'APPROVED',
-    }));
+    },
+    orderBy: { createdAt: 'asc' },
+  });
+
+  const positivePaidItems = (invoice.items || []).filter(
+    (it: any) => Number(it.amount) > 0 && (it.status === 'SETTLED' || it.paidAt)
+  );
+
+  if (positivePaidItems.length > 0 && payments.length === 0) {
+    throw new AppError(
+      'Approved Payment event lacks a valid canonical payment method.',
+      500,
+      'CANONICAL_PAYMENT_METHOD_MISSING'
+    );
+  }
+
+  const paymentEvents = payments.map((p: any) => {
+    if (!p.method || typeof p.method !== 'string' || p.method.trim().length === 0) {
+      throw new AppError(
+        'Approved Payment event lacks a valid canonical payment method.',
+        500,
+        'CANONICAL_PAYMENT_METHOD_MISSING'
+      );
+    }
+    return {
+      paymentId: p.id,
+      dailyStayInvoiceId: invoice.id,
+      paymentGroupId: p.paymentGroupId || null,
+      amount: new Decimal(p.amount.toString()).toFixed(2),
+      method: p.method.trim(),
+      effectivePaymentDate: p.paymentDate
+        ? p.paymentDate.toISOString()
+        : p.reviewedAt
+        ? p.reviewedAt.toISOString()
+        : p.createdAt.toISOString(),
+      paymentDate: p.paymentDate
+        ? p.paymentDate.toISOString()
+        : p.reviewedAt
+        ? p.reviewedAt.toISOString()
+        : p.createdAt.toISOString(),
+      evidenceReference: p.evidenceUrl || null,
+      receiptNumber: null,
+      status: p.status,
+    };
+  });
+
+  const uniqueMethods = Array.from(new Set(paymentEvents.map((e: any) => e.method)));
+  let paymentMethodDisplay: string | null = null;
+  if (uniqueMethods.includes('CASH') && uniqueMethods.includes('BANK_TRANSFER')) {
+    paymentMethodDisplay = 'CASH, BANK_TRANSFER';
+  } else if (uniqueMethods.includes('BANK_TRANSFER')) {
+    paymentMethodDisplay = 'BANK_TRANSFER';
+  } else if (uniqueMethods.includes('CASH')) {
+    paymentMethodDisplay = 'CASH';
+  } else if (uniqueMethods.length > 0) {
+    paymentMethodDisplay = uniqueMethods.join(', ');
+  }
 
   const snapshotData = {
     receiptNumber,
@@ -1430,7 +1479,7 @@ export async function generateFinalSettlementReceiptForDailyInvoiceInTx(
     dormitoryTaxId: invoice.dormitory?.taxId || null,
     dormitoryAddress: invoice.dormitory?.addressLine1 || invoice.dormitory?.address || null,
     dormitoryPhone: invoice.dormitory?.phone || null,
-    paymentMethod: 'CASH',
+    paymentMethod: paymentMethodDisplay || null,
     paymentDate: invoice.updatedAt ? invoice.updatedAt.toISOString() : (invoice.issuedAt ? invoice.issuedAt.toISOString() : today.toISOString()),
     receiverName: receiverDisplayName,
     isFinalSettlement: true,

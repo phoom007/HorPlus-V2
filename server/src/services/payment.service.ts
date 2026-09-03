@@ -1249,6 +1249,10 @@ export class PaymentService {
             throw new AppError('สถานะรายการไม่ถูกต้อง', 400, 'INVALID_STATE');
           }
 
+          if (!payment.billId) {
+            throw new AppError('รายการนี้ไม่ได้เชื่อมโยงกับบิลรายเดือน', 400, 'INVALID_PAYMENT_TARGET');
+          }
+
           await tx.$executeRaw`SELECT "id" FROM "bills" WHERE "id" = ${payment.billId}::uuid FOR UPDATE`;
           const bill = await tx.bill.findUnique({
             where: { id: payment.billId },
@@ -1422,6 +1426,10 @@ export class PaymentService {
           if (payment.status === 'REJECTED') return payment;
           if (payment.status !== 'PENDING' && payment.status !== 'UNDER_REVIEW') throw new AppError('สถานะรายการไม่ถูกต้อง', 400, 'INVALID_STATE');
 
+          if (!payment.billId) {
+            throw new AppError('รายการนี้ไม่ได้เชื่อมโยงกับบิลรายเดือน', 400, 'INVALID_PAYMENT_TARGET');
+          }
+
           await tx.$executeRaw`SELECT "id" FROM "bills" WHERE "id" = ${payment.billId}::uuid FOR UPDATE`;
           const bill = await tx.bill.findUnique({ where: { id: payment.billId } });
           if (!bill) throw new AppError('ไม่พบข้อมูลบิลที่ระบุ', 404, 'BILL_NOT_FOUND');
@@ -1492,6 +1500,10 @@ export class PaymentService {
           }
 
           if (payment.status !== 'APPROVED') throw new AppError('สามารถยกเลิกได้เฉพาะรายการที่อนุมัติแล้วเท่านั้น', 400, 'INVALID_STATE');
+
+          if (!payment.billId) {
+            throw new AppError('รายการนี้ไม่ได้เชื่อมโยงกับบิลรายเดือน', 400, 'INVALID_PAYMENT_TARGET');
+          }
 
           await tx.$executeRaw`SELECT "id" FROM "bills" WHERE "id" = ${payment.billId}::uuid FOR UPDATE`;
           const bill = await tx.bill.findUnique({
