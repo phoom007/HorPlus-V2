@@ -33,6 +33,10 @@ export class IdempotencyService {
       return await fn();
     }
 
+    const effectiveUserId = (actorUserId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(actorUserId))
+      ? actorUserId
+      : '00000000-0000-0000-0000-000000000000';
+
     const requestHash = this.hashPayload(payload);
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours retention
 
@@ -40,7 +44,7 @@ export class IdempotencyService {
     const existing = await this.client.idempotencyKey.findUnique({
       where: {
         user_operation_idempotency_unique: {
-          userId: actorUserId,
+          userId: effectiveUserId,
           operation,
           idempotencyKey
         }
@@ -76,7 +80,7 @@ export class IdempotencyService {
       // Create new processing claim
       await this.client.idempotencyKey.create({
         data: {
-          userId: actorUserId,
+          userId: effectiveUserId,
           operation,
           idempotencyKey,
           requestHash,
@@ -96,7 +100,7 @@ export class IdempotencyService {
       await this.client.idempotencyKey.update({
         where: {
           user_operation_idempotency_unique: {
-            userId: actorUserId,
+            userId: effectiveUserId,
             operation,
             idempotencyKey
           }
@@ -113,7 +117,7 @@ export class IdempotencyService {
       await this.client.idempotencyKey.update({
         where: {
           user_operation_idempotency_unique: {
-            userId: actorUserId,
+            userId: effectiveUserId,
             operation,
             idempotencyKey
           }
@@ -123,7 +127,7 @@ export class IdempotencyService {
           responseStatus: 400,
           responseBody: { error: err.message || 'Operation failed' }
         }
-      }).catch(() => {});
+      });
 
       throw err;
     }

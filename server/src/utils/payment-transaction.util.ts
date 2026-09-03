@@ -1399,20 +1399,35 @@ export async function generateFinalSettlementReceiptForDailyInvoiceInTx(
     metadata: null,
   }));
 
-  const payments = await tx.payment.findMany({
+  const positiveItems = (invoice.items || []).filter((it: any) => Number(it.amount) > 0);
+  if (positiveItems.length === 0) {
+    return null;
+  }
+
+  // Amendment 4: Every positive item must be SETTLED (DECLARED_PAID contributes zero canonical coverage)
+  const hasUnsettledPositiveItem = positiveItems.some((it: any) => it.status !== 'SETTLED');
+  if (hasUnsettledPositiveItem) {
+    return null;
+  }
+
+  // Fetch all approved allocations for this invoice
+  const allocations = await tx.paymentAllocation.findMany({
     where: {
       dormitoryId,
       dailyStayInvoiceId: invoice.id,
-      status: 'APPROVED',
+      payment: {
+        status: 'APPROVED',
+        dailyStayInvoiceId: invoice.id,
+      },
     },
-    orderBy: { createdAt: 'asc' },
+    include: {
+      payment: true,
+    },
+    orderBy: { allocationOrder: 'asc' },
   });
 
-  const positivePaidItems = (invoice.items || []).filter(
-    (it: any) => Number(it.amount) > 0 && (it.status === 'SETTLED' || it.paidAt)
-  );
-
-  if (positivePaidItems.length > 0 && payments.length === 0) {
+  // Historical positive settled obligation with zero payments fails closed
+  if (allocations.length === 0) {
     throw new AppError(
       'Approved Payment event lacks a valid canonical payment method.',
       500,
@@ -1420,14 +1435,73 @@ export async function generateFinalSettlementReceiptForDailyInvoiceInTx(
     );
   }
 
-  const paymentEvents = payments.map((p: any) => {
-    if (!p.method || typeof p.method !== 'string' || p.method.trim().length === 0) {
+  // Allocation target coherence & Payment method validation
+  for (const a of allocations) {
+    if (a.billId !== null || a.billItemId !== null) return null;
+    if (a.dailyStayInvoiceId !== invoice.id) return null;
+    if (!a.dailyStayInvoiceItemId || !invoice.items.some((it: any) => it.id === a.dailyStayInvoiceItemId)) {
+      return null;
+    }
+    if (!a.paymentId || !a.payment) return null;
+    if (!a.payment.method || !['CASH', 'BANK_TRANSFER'].includes(a.payment.method.trim())) {
       throw new AppError(
         'Approved Payment event lacks a valid canonical payment method.',
         500,
         'CANONICAL_PAYMENT_METHOD_MISSING'
       );
     }
+  }
+
+  // Per-item approved allocations == item amount
+  for (const item of positiveItems) {
+    const itemAllocSum = allocations
+      .filter((a: any) => a.dailyStayInvoiceItemId === item.id)
+      .reduce((sum: Decimal, a: any) => sum.plus(new Decimal(a.allocatedAmount.toString())), new Decimal(0));
+    const itemAmountDec = new Decimal(item.amount.toString());
+    if (!itemAllocSum.equals(itemAmountDec)) {
+      return null;
+    }
+  }
+
+  // Per-Payment allocations == Payment.amount
+  const paymentAllocMap = new Map<string, Decimal>();
+  for (const a of allocations) {
+    const cur = paymentAllocMap.get(a.paymentId!) || new Decimal(0);
+    paymentAllocMap.set(a.paymentId!, cur.plus(new Decimal(a.allocatedAmount.toString())));
+  }
+
+  const contributingPayments = await tx.payment.findMany({
+    where: {
+      id: { in: Array.from(paymentAllocMap.keys()) },
+      dormitoryId,
+      dailyStayInvoiceId: invoice.id,
+      status: 'APPROVED',
+    },
+    orderBy: { createdAt: 'asc' },
+  });
+
+  for (const p of contributingPayments) {
+    const allocSum = paymentAllocMap.get(p.id) || new Decimal(0);
+    if (!allocSum.equals(new Decimal(p.amount.toString()))) {
+      return null;
+    }
+  }
+
+  // Total approved Payment amounts == total valid allocations == totalAgreed
+  const totalAllocated = allocations.reduce(
+    (sum: Decimal, a: any) => sum.plus(new Decimal(a.allocatedAmount.toString())),
+    new Decimal(0)
+  );
+  const totalPayments = contributingPayments.reduce(
+    (sum: Decimal, p: any) => sum.plus(new Decimal(p.amount.toString())),
+    new Decimal(0)
+  );
+
+  if (!totalAllocated.equals(totalAgreed) || !totalPayments.equals(totalAgreed)) {
+    return null;
+  }
+
+  const paymentEvents = contributingPayments.map((p: any) => {
     return {
       paymentId: p.id,
       dailyStayInvoiceId: invoice.id,

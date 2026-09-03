@@ -24,6 +24,7 @@ import {
   acquireRoomAvailabilityLock,
 } from '../utils/occupancy-interval.util.js';
 import { generateFinalSettlementReceiptForDailyInvoiceInTx } from '../utils/payment-transaction.util.js';
+import { idempotencyService } from './idempotency.service.js';
 
 export interface CreateTenantDailyStayRequestDto {
   roomId?: string;
@@ -585,10 +586,6 @@ export class DailyStayService {
       const totalRent = formatDecimal(stay.totalRentAmount);
       const deposit = formatDecimal(stay.depositAmount);
       const totalAgreed = formatDecimal(addDecimals(toDecimal(totalRent), toDecimal(deposit)));
-      const outstanding =
-        stay.depositDeclaredStatus === 'PAID'
-          ? totalRent
-          : totalAgreed;
 
       let invoice = await tx.dailyStayInvoice.findUnique({
         where: { dailyStayId: stay.id },
@@ -601,21 +598,24 @@ export class DailyStayService {
 
         const isRentZero = toDecimal(totalRent).equals(toDecimal(0));
         const isDepositZero = toDecimal(deposit).equals(toDecimal(0));
-        const isOutstandingZero = toDecimal(outstanding).equals(toDecimal(0));
 
         const rentStatus = isRentZero ? 'SETTLED' : 'OUTSTANDING';
         const depositStatus = isDepositZero
           ? 'SETTLED'
           : (stay.depositDeclaredStatus === 'PAID' ? 'DECLARED_PAID' : 'OUTSTANDING');
-        const depositPaidAt = (!isDepositZero && stay.depositDeclaredStatus === 'PAID')
-          ? new Date()
-          : null;
+        const depositPaidAt = null;
 
-        const hasPositiveSettledObligation = (!isDepositZero && depositStatus === 'DECLARED_PAID');
+        // Amendment 2: DECLARED_PAID is NOT canonical financial settlement.
+        // A positive DECLARED_PAID item without canonical Payment authority
+        // remains part of canonical outstanding and must not make invoice PAID.
+        // Only SETTLED positive obligations reduce canonical outstanding.
+        const outstanding = formatDecimal(addDecimals(
+          rentStatus === 'SETTLED' ? toDecimal(0) : toDecimal(totalRent),
+          depositStatus === 'SETTLED' ? toDecimal(0) : toDecimal(deposit)
+        ));
+        const isOutstandingZero = toDecimal(outstanding).equals(toDecimal(0));
 
-        const invoiceStatus = isOutstandingZero
-          ? 'PAID'
-          : (hasPositiveSettledObligation ? 'PARTIALLY_PAID' : 'ISSUED');
+        const invoiceStatus = isOutstandingZero ? 'PAID' : 'ISSUED';
 
         invoice = await tx.dailyStayInvoice.create({
           data: {
@@ -709,9 +709,9 @@ export class DailyStayService {
           details: {
             stayId: stay.id,
             roomId: stay.roomId,
-            invoiceNumber,
+            invoiceNumber: invoice?.invoiceNumber || invoiceNumber,
             totalAgreed,
-            outstanding,
+            outstanding: invoice?.outstandingAmount ? Number(invoice.outstandingAmount) : 0,
           },
         });
       }
@@ -732,14 +732,8 @@ export class DailyStayService {
     dormitoryId: string,
     data: OwnerQuickAddDailyStayDto,
     userId: string,
-    idCardData?: {
-      idCardObjectKey?: string | null;
-      idCardSha256?: string | null;
-      idCardMimeType?: string | null;
-      idCardByteSize?: number | null;
-      idCardUploadedAt?: Date | null;
-      idCardUploadedByUserId?: string | null;
-    } | null
+    idCardData?: any,
+    idempotencyKey?: string | null
   ) {
     const fullNameClean = data.fullName?.trim();
     if (!fullNameClean) {
@@ -751,12 +745,43 @@ export class DailyStayService {
 
     const phoneClean = data.phone && data.phone.trim() !== '' ? data.phone.trim() : null;
 
-    return this.prisma.$transaction(async (tx) => {
-      // 1. Advisory room lock
-      await acquireRoomAvailabilityLock(tx, dormitoryId, data.roomId);
+    const depDec = toDecimal(data.depositAmount || 0);
+    if (depDec.greaterThan(0) && data.depositDeclaredStatus === 'PAID') {
+      if (!data.depositPaymentMethod || !['CASH', 'BANK_TRANSFER'].includes(data.depositPaymentMethod)) {
+        const err = new Error('Deposit declared as paid requires an explicit payment method (CASH or BANK_TRANSFER)');
+        (err as any).statusCode = 400;
+        (err as any).code = 'CANONICAL_PAYMENT_METHOD_MISSING';
+        throw err;
+      }
+    }
 
-      // 2. Validate operational room entitlement
-      await this.entitlementService.assertRoomOperationalEntitlement(dormitoryId, data.roomId, new Date(), tx);
+    let effectiveIdempotencyKey = idempotencyKey;
+    let effectiveIdCardData = idCardData;
+    if (typeof idCardData === 'string' && !idempotencyKey) {
+      effectiveIdempotencyKey = idCardData;
+      effectiveIdCardData = null;
+    }
+    const opKey = effectiveIdempotencyKey?.trim() || null;
+    return await idempotencyService.runWithIdempotency({
+      actorUserId: userId,
+      operation: 'ownerQuickAddDailyStay',
+      idempotencyKey: opKey,
+      payload: {
+        dormitoryId,
+        roomId: data.roomId,
+        startDate: data.startDate,
+        endDate: data.endDate,
+        depositAmount: data.depositAmount,
+        depositDeclaredStatus: data.depositDeclaredStatus,
+        depositPaymentMethod: data.depositPaymentMethod,
+      },
+      fn: async () => {
+        return this.prisma.$transaction(async (tx) => {
+          // 1. Advisory room lock
+          await acquireRoomAvailabilityLock(tx, dormitoryId, data.roomId);
+
+          // 2. Validate operational room entitlement
+          await this.entitlementService.assertRoomOperationalEntitlement(dormitoryId, data.roomId, new Date(), tx);
 
       const room = await tx.room.findFirst({
         where: { id: data.roomId, dormitoryId, deletedAt: null },
@@ -864,12 +889,12 @@ export class DailyStayService {
           phone: phoneClean,
           status: 'active',
           linkedUserId: null,
-          idCardObjectKey: idCardData?.idCardObjectKey || null,
-          idCardSha256: idCardData?.idCardSha256 || null,
-          idCardMimeType: idCardData?.idCardMimeType || null,
-          idCardByteSize: idCardData?.idCardByteSize || null,
-          idCardUploadedAt: idCardData?.idCardUploadedAt || null,
-          idCardUploadedByUserId: idCardData?.idCardUploadedByUserId || null,
+          idCardObjectKey: effectiveIdCardData?.idCardObjectKey || null,
+          idCardSha256: effectiveIdCardData?.idCardSha256 || null,
+          idCardMimeType: effectiveIdCardData?.idCardMimeType || null,
+          idCardByteSize: effectiveIdCardData?.idCardByteSize || null,
+          idCardUploadedAt: effectiveIdCardData?.idCardUploadedAt || null,
+          idCardUploadedByUserId: effectiveIdCardData?.idCardUploadedByUserId || null,
         },
       });
 
@@ -989,6 +1014,7 @@ export class DailyStayService {
             paymentDate: new Date(),
             reviewedByUserId: userId,
             reviewedAt: new Date(),
+            idempotencyKey: opKey ? `${opKey}:dep` : null,
           },
         });
         if (depositItem) {
@@ -1001,6 +1027,7 @@ export class DailyStayService {
               allocatedAmount: toDecimal(deposit),
               allocationOrder: 1,
               billId: null,
+              billItemId: null,
             },
           });
         }
@@ -1050,7 +1077,9 @@ export class DailyStayService {
         invoice,
       };
     });
-  }
+    },
+  });
+}
 
   /**
    * Owner rejects pending Daily Stay request:
@@ -1392,37 +1421,51 @@ export class DailyStayService {
     },
     txClient?: any
   ) {
-    const execute = async (tx: any) => {
-      // 1. Check idempotency replay first
-      if (options?.idempotencyKey) {
-        const existingPayment = await tx.payment.findFirst({
-          where: {
-            dormitoryId,
-            idempotencyKey: options.idempotencyKey,
-          },
-        });
-        if (existingPayment) {
-          const inv = await tx.dailyStayInvoice.findFirst({
-            where: { id: invoiceId, dormitoryId, deletedAt: null },
-            include: {
-              items: true,
-              dailyStay: {
-                include: { room: true, tenant: true },
-              },
-            },
-          });
-          if (inv) {
-            const totalPaid = inv.items
-              .filter((it: any) => it.status === 'SETTLED' || it.status === 'DECLARED_PAID')
-              .reduce((sum: number, it: any) => sum + Number(it.amount), 0);
-            return {
-              ...inv,
-              totalPaidAmount: toDecimal(totalPaid.toFixed(2)),
-            };
-          }
-        }
-      }
+    const method = options?.method;
+    const idempotencyKey = options?.idempotencyKey?.trim() || null;
 
+    // Fast pre-check: inspect invoice and targeted items
+    const preCheckInvoice = await this.prisma.dailyStayInvoice.findFirst({
+      where: { id: invoiceId, dormitoryId, deletedAt: null },
+      include: { items: true },
+    });
+
+    if (!preCheckInvoice) {
+      const err = new Error('ไม่พบใบแจ้งหนี้รายวัน');
+      (err as any).statusCode = 404;
+      (err as any).code = 'INVOICE_NOT_FOUND';
+      throw err;
+    }
+
+    let targetItems: any[] = [];
+    if (itemType === 'ALL') {
+      targetItems = preCheckInvoice.items.filter((it: any) => it.status !== 'SETTLED');
+    } else {
+      targetItems = preCheckInvoice.items.filter(
+        (it: any) => (it.itemType === itemType || (itemType === 'DAILY_RENT' && it.itemType === 'RENT')) && it.status !== 'SETTLED'
+      );
+    }
+
+    const positiveItems = targetItems.filter((it: any) => Number(it.amount) > 0);
+    const positiveTotal = positiveItems.reduce((sum: number, it: any) => sum + Number(it.amount), 0);
+
+    // Section 1 & 7: Positive monetary settlement strictly requires method and idempotencyKey
+    if (positiveTotal > 0) {
+      if (!method || !['CASH', 'BANK_TRANSFER'].includes(method)) {
+        const err = new Error('Approved Payment event lacks a valid canonical payment method.');
+        (err as any).statusCode = 400;
+        (err as any).code = 'CANONICAL_PAYMENT_METHOD_MISSING';
+        throw err;
+      }
+      if (!idempotencyKey) {
+        const err = new Error('Idempotency key is required for positive monetary settlement.');
+        (err as any).statusCode = 400;
+        (err as any).code = 'IDEMPOTENCY_KEY_REQUIRED';
+        throw err;
+      }
+    }
+
+    const execute = async (tx: any) => {
       const invoice = await tx.dailyStayInvoice.findFirst({
         where: { id: invoiceId, dormitoryId, deletedAt: null },
         include: { items: true, dailyStay: true },
@@ -1435,19 +1478,19 @@ export class DailyStayService {
         throw err;
       }
 
-      let targetItems: any[] = [];
+      let innerTargetItems: any[] = [];
       if (itemType === 'ALL') {
-        targetItems = invoice.items.filter((it: any) => it.status !== 'SETTLED');
+        innerTargetItems = invoice.items.filter((it: any) => it.status !== 'SETTLED');
       } else {
-        targetItems = invoice.items.filter(
+        innerTargetItems = invoice.items.filter(
           (it: any) => (it.itemType === itemType || (itemType === 'DAILY_RENT' && it.itemType === 'RENT')) && it.status !== 'SETTLED'
         );
       }
 
-      if (targetItems.length === 0) {
+      if (innerTargetItems.length === 0) {
         if (invoice.status === 'PAID') {
           const totalPaid = invoice.items
-            .filter((it: any) => it.status === 'SETTLED' || it.status === 'DECLARED_PAID')
+            .filter((it: any) => it.status === 'SETTLED')
             .reduce((sum: number, it: any) => sum + Number(it.amount), 0);
           return {
             ...invoice,
@@ -1461,29 +1504,35 @@ export class DailyStayService {
       }
 
       const now = new Date();
-      const method = options?.method || 'CASH';
-      const positiveItems = targetItems.filter((it: any) => Number(it.amount) > 0);
-      const positiveTotal = positiveItems.reduce((sum: number, it: any) => sum + Number(it.amount), 0);
+      const innerPositiveItems = innerTargetItems.filter((it: any) => Number(it.amount) > 0);
+      const innerPositiveTotal = innerPositiveItems.reduce((sum: number, it: any) => sum + Number(it.amount), 0);
 
-      if (positiveTotal > 0) {
+      if (innerPositiveTotal > 0) {
         const payment = await tx.payment.create({
           data: {
             dormitoryId,
             dailyStayInvoiceId: invoice.id,
             billId: null,
             tenantId: invoice.dailyStay?.tenantId || null,
-            method,
-            amount: toDecimal(positiveTotal.toFixed(2)),
+            method: method!,
+            amount: toDecimal(innerPositiveTotal.toFixed(2)),
             status: 'APPROVED',
             paymentDate: options?.paymentDate || now,
             reviewedByUserId: actorUserId || null,
             reviewedAt: now,
-            idempotencyKey: options?.idempotencyKey || null,
+            idempotencyKey: idempotencyKey || null,
           },
         });
 
         let allocOrder = 1;
-        for (const it of positiveItems) {
+        for (const it of innerPositiveItems) {
+          // Parent item coherence check: item must belong to invoice
+          if (it.invoiceId !== invoice.id) {
+            const err = new Error('Invoice item does not belong to the target invoice.');
+            (err as any).statusCode = 400;
+            (err as any).code = 'INVOICE_ITEM_MISMATCH';
+            throw err;
+          }
           await tx.paymentAllocation.create({
             data: {
               dormitoryId,
@@ -1493,12 +1542,13 @@ export class DailyStayService {
               allocatedAmount: toDecimal(Number(it.amount).toFixed(2)),
               allocationOrder: allocOrder++,
               billId: null,
+              billItemId: null,
             },
           });
         }
       }
 
-      for (const item of targetItems) {
+      for (const item of innerTargetItems) {
         const isZeroAmount = Number(item.amount) === 0;
         // Zero-value financial obligations remain SETTLED + paidAt=null forever.
         // Genuine positive obligations set paidAt on first settlement and preserve it on retry.
@@ -1522,8 +1572,9 @@ export class DailyStayService {
         0
       );
 
+      // Amendment 2: Only SETTLED positive obligations reduce canonical outstanding
       const totalPaid = updatedItems
-        .filter((it: any) => it.status === 'SETTLED' || it.status === 'DECLARED_PAID')
+        .filter((it: any) => it.status === 'SETTLED')
         .reduce((sum: number, it: any) => sum + Number(it.amount), 0);
 
       const remainingOutstanding = Math.max(0, totalAgreed - totalPaid);
@@ -1538,7 +1589,7 @@ export class DailyStayService {
       }
 
       const isDepositSettled = updatedItems.some(
-        (it: any) => it.itemType === 'DEPOSIT' && (it.status === 'SETTLED' || it.status === 'DECLARED_PAID')
+        (it: any) => it.itemType === 'DEPOSIT' && it.status === 'SETTLED'
       );
 
       const updatedInvoice = await tx.dailyStayInvoice.update({
@@ -1574,10 +1625,24 @@ export class DailyStayService {
       };
     };
 
-    if (txClient) {
-      return execute(txClient);
+    const runWork = async (client: any) => {
+      if (client) {
+        return execute(client);
+      } else {
+        return this.prisma.$transaction(execute);
+      }
+    };
+
+    if (idempotencyKey) {
+      return await idempotencyService.runWithIdempotency({
+        actorUserId: actorUserId || 'SYSTEM',
+        operation: 'settleDailyStayInvoiceItem',
+        idempotencyKey,
+        payload: { invoiceId, itemType, method: method || null },
+        fn: () => runWork(txClient),
+      });
     } else {
-      return this.prisma.$transaction(execute);
+      return await runWork(txClient);
     }
   }
 }

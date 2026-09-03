@@ -1472,15 +1472,19 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
     }
   };
 
-  const handleSettleDailyInvoice = async (invoiceId: string) => {
-    const opId = `daily-cash:${invoiceId}`;
+  const handleSettleDailyInvoice = async (
+    invoiceId: string,
+    itemType: 'ALL' | 'DAILY_RENT' | 'RENT' | 'DEPOSIT' | 'OTHER_FEE' = 'ALL',
+    method: 'CASH' | 'BANK_TRANSFER' = 'CASH'
+  ) => {
+    const opId = `daily-${method.toLowerCase()}:${invoiceId}:${itemType}`;
     const idempotencyKey = getIdempotencyKey(opId);
     try {
       setIsSubmittingCash(true);
       await httpRequest(
         'POST',
         `/daily-stays/invoices/${invoiceId}/settle-item`,
-        { itemType: 'ALL' },
+        { itemType, method },
         {
           headers: {
             'x-dormitory-id': dormitoryId,
@@ -1489,7 +1493,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
         }
       );
       clearIdempotencyKey(opId);
-      triggerToast('บันทึกการชำระเงินรายวันสำเร็จ');
+      triggerToast(`บันทึกการชำระเงินรายวัน (${method === 'BANK_TRANSFER' ? 'โอนเงิน' : 'เงินสด'}) สำเร็จ`);
       queryClient.invalidateQueries({ queryKey: queryKeys.dailyInvoices(dormitoryId) });
       queryClient.invalidateQueries({ queryKey: queryKeys.payments(dormitoryId) });
       onUpdateBills();
@@ -1521,7 +1525,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
           delete next[inv.id];
           return next;
         });
-        handleSettleDailyInvoice(inv.id);
+        handleSettleDailyInvoice(inv.id, 'ALL', 'CASH');
       } else {
         setPendingCashMap(prev => ({ ...prev, [inv.id]: currentCount }));
       }
@@ -2361,23 +2365,57 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                   </div>
 
                   {/* Items summary */}
-                  <div className="text-[11px] text-slate-500 space-y-1 border-t border-slate-100 pt-2">
+                  <div className="text-[11px] text-slate-500 space-y-1.5 border-t border-slate-100 pt-2">
                     {(() => {
-                      const unpaidItems = (inv.items || []).filter(
-                        (it: any) => it.status !== 'SETTLED' && it.status !== 'DECLARED_PAID' && (it.status === 'OUTSTANDING' || !it.status)
+                      // Amendment 2: DECLARED_PAID is NOT canonical settlement. Only SETTLED items are settled.
+                      const unsettledItems = (inv.items || []).filter(
+                        (it: any) => it.status !== 'SETTLED' && Number(it.amount) > 0
                       );
-                      return unpaidItems.length > 0 ? (
-                        unpaidItems.map((it: any, idx: number) => (
-                          <div key={idx} className="flex justify-between items-center">
-                            <span className="truncate pr-1 text-slate-500 font-medium">
-                              {formatCanonicalLineItemDescription({
-                                description: it.description || (it.itemType === 'DAILY_RENT' ? 'ค่าเช่า (รายวัน)' : it.itemType),
-                                type: it.itemType === 'DAILY_RENT' ? 'rent' : it.itemType === 'DAILY_DEPOSIT' ? 'deposit' : it.itemType,
-                                quantity: it.quantity,
-                                unitPrice: it.unitPrice,
-                              }, { rentCycle: 'daily' })}:
-                            </span>
-                            <span className="font-semibold text-slate-700 shrink-0">{formatBaht(Number(it.amount))}</span>
+                      const hasMultipleUnsettled = unsettledItems.length > 1;
+                      return unsettledItems.length > 0 ? (
+                        unsettledItems.map((it: any, idx: number) => (
+                          <div key={idx} className="flex justify-between items-center gap-1.5 py-0.5">
+                            <div className="flex items-center gap-1 min-w-0 truncate">
+                              <span className="truncate text-slate-600 font-medium">
+                                {formatCanonicalLineItemDescription({
+                                  description: it.description || (it.itemType === 'DAILY_RENT' ? 'ค่าเช่า (รายวัน)' : it.itemType),
+                                  type: it.itemType === 'DAILY_RENT' ? 'rent' : it.itemType === 'DAILY_DEPOSIT' ? 'deposit' : it.itemType,
+                                  quantity: it.quantity,
+                                  unitPrice: it.unitPrice,
+                                }, { rentCycle: 'daily' })}:
+                              </span>
+                              {it.status === 'DECLARED_PAID' && (
+                                <span className="px-1.5 py-0.2 bg-blue-50 text-blue-700 border border-blue-200 rounded text-[9px] font-bold shrink-0">
+                                  รอยืนยันการชำระ
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-1 shrink-0">
+                              <span className="font-semibold text-slate-700">{formatBaht(Number(it.amount))}</span>
+                              {/* Item-scoped settlement confirmation buttons (Amendment 3) */}
+                              {hasMultipleUnsettled && (
+                                <div className="flex items-center gap-0.5 ml-1">
+                                  <button
+                                    type="button"
+                                    disabled={isSubmittingCash}
+                                    onClick={() => handleSettleDailyInvoice(inv.id, it.itemType, 'CASH')}
+                                    className="px-1.5 py-0.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-[9px] font-bold rounded cursor-pointer"
+                                    title="รับเงินสดรายการนี้"
+                                  >
+                                    เงินสด
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={isSubmittingCash}
+                                    onClick={() => handleSettleDailyInvoice(inv.id, it.itemType, 'BANK_TRANSFER')}
+                                    className="px-1.5 py-0.5 bg-blue-50 hover:bg-blue-100 text-blue-700 text-[9px] font-bold rounded cursor-pointer"
+                                    title="ยืนยันโอนเงินรายการนี้"
+                                  >
+                                    โอนเงิน
+                                  </button>
+                                </div>
+                              )}
+                            </div>
                           </div>
                         ))
                       ) : (
@@ -2410,14 +2448,14 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                       </button>
                     </div>
                   ) : (
-                    <div className="grid grid-cols-2 gap-2 pt-1">
+                    <div className="grid grid-cols-3 gap-1.5 pt-1">
                       <button
                         type="button"
                         onClick={() => {
                           setTargetScrollTenantId(inv.dailyStay?.tenantId || inv.dailyStay?.tenant?.id || null);
                           setIsLineModalOpen(true);
                         }}
-                        className="py-2.5 bg-[#06C755] hover:bg-[#05b34c] text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-1.5 shadow-2xs transition-all cursor-pointer"
+                        className="py-2.5 bg-[#06C755] hover:bg-[#05b34c] text-white font-extrabold text-[11px] rounded-xl flex items-center justify-center gap-1 shadow-2xs transition-all cursor-pointer"
                       >
                         <LineIcon className="w-3.5 h-3.5" />
                         เตือน LINE
@@ -2425,10 +2463,19 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                       <button
                         type="button"
                         disabled={isSubmittingCash}
-                        onClick={() => startDailyCashPaymentWithCountdown(inv)}
-                        className="py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-1.5 shadow-xs transition-all cursor-pointer"
+                        onClick={() => handleSettleDailyInvoice(inv.id, 'ALL', 'BANK_TRANSFER')}
+                        className="py-2.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-extrabold text-[11px] rounded-xl flex items-center justify-center gap-1 shadow-xs transition-all cursor-pointer"
                       >
-                        <DollarSign className="w-4 h-4" />
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        ยืนยันโอนเงิน
+                      </button>
+                      <button
+                        type="button"
+                        disabled={isSubmittingCash}
+                        onClick={() => startDailyCashPaymentWithCountdown(inv)}
+                        className="py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-extrabold text-[11px] rounded-xl flex items-center justify-center gap-1 shadow-xs transition-all cursor-pointer"
+                      >
+                        <DollarSign className="w-3.5 h-3.5" />
                         รับเงินสด
                       </button>
                     </div>
@@ -3152,11 +3199,13 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                       </td>
                       <td className="p-2.5 text-center">
                         <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                          it.status === 'SETTLED' || it.status === 'DECLARED_PAID'
+                          it.status === 'SETTLED'
                             ? 'bg-emerald-50 text-emerald-700'
+                            : it.status === 'DECLARED_PAID'
+                            ? 'bg-blue-50 text-blue-700'
                             : 'bg-amber-50 text-amber-700'
                         }`}>
-                          {it.status === 'SETTLED' || it.status === 'DECLARED_PAID' ? 'ชำระแล้ว' : 'ค้างชำระ'}
+                          {it.status === 'SETTLED' ? 'ชำระแล้ว' : it.status === 'DECLARED_PAID' ? 'รอยืนยันการชำระ' : 'ค้างชำระ'}
                         </span>
                       </td>
                       <td className="p-2.5 text-right font-extrabold text-slate-900">

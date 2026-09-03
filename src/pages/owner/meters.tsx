@@ -2367,10 +2367,13 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       const nextRows = prev.map(row => {
         if (row.roomId === roomId) {
           const currentVal = row[field];
-          const normalized = normalizeMeterValueOnBlur(String(currentVal ?? ''));
-          if (normalized !== currentVal) {
-            changed = true;
-            return { ...row, [field]: normalized };
+          if (field === 'elecCurr' || field === 'waterCurr' || field === 'elecPrev' || field === 'waterPrev') {
+            const prevVal = field === 'elecCurr' ? row.elecPrev : (field === 'waterCurr' ? row.waterPrev : undefined);
+            const norm = validateAndNormalizeSpreadsheetValue(field, currentVal, prevVal);
+            if (norm.valid && String(norm.value) !== String(currentVal ?? '')) {
+              changed = true;
+              return { ...row, [field]: norm.value };
+            }
           }
         }
         return row;
@@ -2477,9 +2480,13 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
           const field = editableFields[fieldIdx];
           const rawVal = cells[cellIdx].trim();
 
-          const val = field === 'peopleCount'
-            ? normalizeSingleDigitCount(rawVal)
-            : sanitizeMeterReadingTyping(rawVal);
+          let val = rawVal;
+          if (field === 'peopleCount' || field === 'elecPrev' || field === 'elecCurr' || field === 'waterPrev' || field === 'waterCurr') {
+            const prevVal = field === 'elecCurr' ? row.elecPrev : (field === 'waterCurr' ? row.waterPrev : undefined);
+            const norm = validateAndNormalizeSpreadsheetValue(field, rawVal, prevVal);
+            val = String(norm.value);
+          }
+
           if (row[field] !== val) {
             (row as any)[field] = val;
             newFlashing[`${row.roomId}-${field}`] = true;
@@ -3307,10 +3314,17 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
               </thead>
               <tbody className="divide-y divide-gray-100 font-semibold">
                 {filteredRows.map((row, idx) => {
-                  const waterUsageRes = (row.waterPrev !== '' && row.waterCurr !== '') ? calculateMeterUsageUnits(row.waterPrev, row.waterCurr) : { isValid: true, usageUnits: 0 };
-                  const elecUsageRes = (row.elecPrev !== '' && row.elecCurr !== '') ? calculateMeterUsageUnits(row.elecPrev, row.elecCurr) : { isValid: true, usageUnits: 0 };
-                  const waterUnits = row.isReplaced ? Number(row.waterCurr) : (waterUsageRes.isValid ? waterUsageRes.usageUnits : -1);
-                  const elecUnits = row.isReplaced ? Number(row.elecCurr) : (elecUsageRes.isValid ? elecUsageRes.usageUnits : -1);
+                  const waterNorm = (row.waterCurr !== '') ? validateAndNormalizeSpreadsheetValue('waterCurr', row.waterCurr, row.waterPrev) : { valid: true, value: '' };
+                  const elecNorm = (row.elecCurr !== '') ? validateAndNormalizeSpreadsheetValue('elecCurr', row.elecCurr, row.elecPrev) : { valid: true, value: '' };
+                  const isWaterInvalid = !waterNorm.valid && row.waterCurr !== '';
+                  const isElecInvalid = !elecNorm.valid && row.elecCurr !== '';
+                  const waterErrorTitle = isWaterInvalid ? waterNorm.errorMessage : undefined;
+                  const elecErrorTitle = isElecInvalid ? elecNorm.errorMessage : undefined;
+
+                  const waterUsageRes = (row.waterPrev !== '' && row.waterCurr !== '' && !isWaterInvalid) ? calculateMeterUsageUnits(row.waterPrev, row.waterCurr) : { isValid: !isWaterInvalid, usageUnits: 0 };
+                  const elecUsageRes = (row.elecPrev !== '' && row.elecCurr !== '' && !isElecInvalid) ? calculateMeterUsageUnits(row.elecPrev, row.elecCurr) : { isValid: !isElecInvalid, usageUnits: 0 };
+                  const waterUnits = row.isReplaced ? Number(row.waterCurr) : (isWaterInvalid ? -1 : waterUsageRes.usageUnits);
+                  const elecUnits = row.isReplaced ? Number(row.elecCurr) : (isElecInvalid ? -1 : elecUsageRes.usageUnits);
 
                   const waterCost = getWaterCost(row);
                   const elecCost = getElectricCost(row);
@@ -3460,10 +3474,11 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                               data-col="elecCurr"
                               className={`w-20 px-2 py-1 text-xs border rounded-lg bg-white text-slate-800 text-center font-bold focus:outline-indigo-500 transition-all duration-300 disabled:bg-slate-50 disabled:text-slate-500 disabled:border-transparent ${flashingCells[`${row.roomId}-elecCurr`]
                                 ? 'animate-vibrant-flash shadow-md z-10'
-                                : elecUnits < 0
-                                  ? 'border-rose-300 ring-2 ring-rose-100 bg-rose-50'
+                                : isElecInvalid
+                                  ? 'border-rose-400 ring-2 ring-rose-500 bg-rose-50'
                                   : 'border-gray-200'
                                 }`}
+                              title={elecErrorTitle}
                             />
                           </div>
                         </td>
@@ -3584,10 +3599,11 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                               data-col="waterCurr"
                               className={`w-20 px-2 py-1 text-xs border rounded-lg bg-white text-slate-800 text-center font-bold focus:outline-indigo-500 transition-all duration-300 disabled:bg-slate-50 disabled:text-slate-500 disabled:border-transparent ${flashingCells[`${row.roomId}-waterCurr`]
                                 ? 'animate-vibrant-flash shadow-md z-10'
-                                : waterUnits < 0
-                                  ? 'border-rose-300 ring-2 ring-rose-100 bg-rose-50'
+                                : isWaterInvalid
+                                  ? 'border-rose-400 ring-2 ring-rose-500 bg-rose-50'
                                   : 'border-gray-200'
                                 }`}
+                              title={waterErrorTitle}
                             />
                           </div>
                         </td>

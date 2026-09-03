@@ -92,6 +92,23 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
   const [dailyRate, setDailyRate] = useState<string | number | null>(null);
   const [dailyDeposit, setDailyDeposit] = useState<string | number>(0);
   const [dailyDepositDeclaredStatus, setDailyDepositDeclaredStatus] = useState<'PAID' | 'UNPAID'>('UNPAID');
+  const [dailyDepositPaymentMethod, setDailyDepositPaymentMethod] = useState<'CASH' | 'BANK_TRANSFER' | ''>('');
+
+  // Component-stable Idempotency Key Manager for Quick Add
+  const idempotencyKeysRef = useRef<Map<string, string>>(new Map());
+  const getIdempotencyKey = (opId: string): string => {
+    let key = idempotencyKeysRef.current.get(opId);
+    if (!key) {
+      key = typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `idem-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+      idempotencyKeysRef.current.set(opId, key);
+    }
+    return key;
+  };
+  const clearIdempotencyKey = (opId: string): void => {
+    idempotencyKeysRef.current.delete(opId);
+  };
 
   const [loading, setLoading] = useState(false);
   const [errorText, setErrorText] = useState<string | null>(null);
@@ -515,7 +532,17 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
         onSuccess(`เพิ่มผู้เช่ารายเทอม (${context.roomNumber}) เรียบร้อยแล้ว`, { rentalType: 'TERM', roomId: context.roomId });
         onClose();
       } else if (activeTab === 'DAILY') {
-        const payload = {
+        const depAmount = normalizeMoneyInput(dailyDeposit);
+        if (depAmount > 0 && dailyDepositDeclaredStatus === 'PAID' && !dailyDepositPaymentMethod) {
+          setErrorText('กรุณาเลือกวิธีการชำระเงินสำหรับเงินประกัน (เงินสด หรือ โอนเงิน)');
+          setLoading(false);
+          return;
+        }
+
+        const opId = `quick-add-daily:${context.dormitoryId}:${context.roomId}:${startDate}`;
+        const idempotencyKey = getIdempotencyKey(opId);
+
+        const payload: Record<string, any> = {
           dormitoryId: context.dormitoryId,
           roomId: context.roomId,
           fullName: fullName.trim(),
@@ -525,23 +552,34 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
           checkInTime: checkInTime || undefined,
           checkOutTime: checkOutTime || undefined,
           dailyRateAmount: normalizeMoneyInput(dailyRate).toFixed(2),
-          depositAmount: normalizeMoneyInput(dailyDeposit).toFixed(2),
+          depositAmount: depAmount.toFixed(2),
           depositDeclaredStatus: dailyDepositDeclaredStatus,
         };
+
+        if (depAmount > 0 && dailyDepositDeclaredStatus === 'PAID') {
+          payload.depositPaymentMethod = dailyDepositPaymentMethod;
+        }
 
         if (idCardFile) {
           const formData = new FormData();
           formData.append('data', JSON.stringify(payload));
           formData.append('idCardImage', idCardFile);
           await httpRequest('POST', '/api/v1/daily-stays/owner-quick-add', formData, {
-            headers: { 'x-dormitory-id': context.dormitoryId },
+            headers: {
+              'x-dormitory-id': context.dormitoryId,
+              'x-idempotency-key': idempotencyKey,
+            },
           });
         } else {
           await httpRequest('POST', '/api/v1/daily-stays/owner-quick-add', payload, {
-            headers: { 'x-dormitory-id': context.dormitoryId },
+            headers: {
+              'x-dormitory-id': context.dormitoryId,
+              'x-idempotency-key': idempotencyKey,
+            },
           });
         }
 
+        clearIdempotencyKey(opId);
         onSuccess('เพิ่มผู้เช่า รายวัน เรียบร้อยแล้ว', { rentalType: 'DAILY', roomId: context.roomId });
         onClose();
       }
@@ -1451,7 +1489,10 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
                 <div className="grid grid-cols-2 gap-2">
                   <button
                     type="button"
-                    onClick={() => setDailyDepositDeclaredStatus('UNPAID')}
+                    onClick={() => {
+                      setDailyDepositDeclaredStatus('UNPAID');
+                      setDailyDepositPaymentMethod('');
+                    }}
                     className={`py-2 text-xs font-bold rounded-xl border transition-all cursor-pointer ${
                       dailyDepositDeclaredStatus === 'UNPAID'
                         ? 'bg-amber-50 text-amber-800 border-amber-300 font-extrabold'
@@ -1472,6 +1513,43 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
                     ชำระแล้ว
                   </button>
                 </div>
+
+                {normalizeMoneyInput(dailyDeposit) > 0 && dailyDepositDeclaredStatus === 'PAID' && (
+                  <div className="mt-2.5 p-2.5 bg-indigo-50/50 border border-indigo-100 rounded-xl space-y-1.5">
+                    <label className="block text-[11px] font-bold text-indigo-900">
+                      วิธีชำระเงินประกัน <span className="text-rose-500">*</span>
+                    </label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setDailyDepositPaymentMethod('CASH')}
+                        className={`py-1.5 text-xs font-bold rounded-lg border transition-all cursor-pointer ${
+                          dailyDepositPaymentMethod === 'CASH'
+                            ? 'bg-indigo-600 text-white border-indigo-600 font-black shadow-xs'
+                            : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                        }`}
+                      >
+                        เงินสด
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setDailyDepositPaymentMethod('BANK_TRANSFER')}
+                        className={`py-1.5 text-xs font-bold rounded-lg border transition-all cursor-pointer ${
+                          dailyDepositPaymentMethod === 'BANK_TRANSFER'
+                            ? 'bg-indigo-600 text-white border-indigo-600 font-black shadow-xs'
+                            : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                        }`}
+                      >
+                        โอนเงิน
+                      </button>
+                    </div>
+                    {!dailyDepositPaymentMethod && (
+                      <p className="text-[10px] text-rose-500 font-semibold">
+                        * กรุณาระบุวิธีชำระเงินประกัน (เงินสด หรือ โอนเงิน)
+                      </p>
+                    )}
+                  </div>
+                )}
               </div>
 
               {/* Daily Live Financial Breakdown */}

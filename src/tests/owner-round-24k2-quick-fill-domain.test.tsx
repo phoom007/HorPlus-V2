@@ -228,6 +228,66 @@ describe('Round 2.4K.2: Meter Spreadsheet Domain Authority & Quick Fill Validati
     return { container, rows };
   };
 
+  const renderNormalEditor = async (customServerReadings?: any[]) => {
+    const dormId = 'dorm-test-24k2';
+    const cycleId = 'cycle-aug-2026';
+
+    const roomPreviewItems = mockRooms.map((r) => ({
+      roomId: r.id,
+      amountDue: '0.00',
+      chargeComponents: [],
+      isPaid: false,
+      billStatus: 'draft',
+      overallFinancialStatus: 'draft',
+    }));
+
+    queryClient.setQueryData(queryKeys.meterPreviewContext(dormId, cycleId), {
+      rateSnapshot: {
+        waterBillingType: 'per_unit',
+        waterRate: '18.00',
+        electricityBillingType: 'per_unit',
+        electricityRate: '8.00',
+        commonFee: '0.00',
+        commonFeeMode: 'free',
+      },
+      rooms: roomPreviewItems,
+    });
+
+    queryClient.setQueryData(queryKeys.meterWorkspace(dormId, cycleId), {
+      serverReadings: customServerReadings || [
+        { id: 'm1', billingCycleId: cycleId, roomId: 'r-101', meterType: 'water', previousReading: '100', currentReading: '' },
+        { id: 'm2', billingCycleId: cycleId, roomId: 'r-101', meterType: 'electricity', previousReading: '500', currentReading: '' },
+        { id: 'm3', billingCycleId: cycleId, roomId: 'r-102', meterType: 'water', previousReading: '99950', currentReading: '' },
+        { id: 'm4', billingCycleId: cycleId, roomId: 'r-102', meterType: 'electricity', previousReading: '9950', currentReading: '' },
+        { id: 'm5', billingCycleId: cycleId, roomId: 'r-103', meterType: 'water', previousReading: '80', currentReading: '80' },
+        { id: 'm6', billingCycleId: cycleId, roomId: 'r-103', meterType: 'electricity', previousReading: '420', currentReading: '420' },
+        { id: 'm7', billingCycleId: cycleId, roomId: 'r-104', meterType: 'water', previousReading: '300', currentReading: '' },
+        { id: 'm8', billingCycleId: cycleId, roomId: 'r-104', meterType: 'electricity', previousReading: '800', currentReading: '' },
+      ],
+      rooms: roomPreviewItems,
+      previewContext: {
+        rooms: roomPreviewItems,
+      },
+      cyclePeopleRes: { success: true, data: [] },
+    });
+
+    const result = render(
+      <QueryClientProvider client={queryClient}>
+        <OwnerMeters
+          dormitoryId={dormId}
+          rooms={mockRooms as any}
+          buildings={mockBuildings as any}
+          selectedBillingCycleId={cycleId}
+          selectedCycleCode="2026-08"
+          billingCycles={mockBillingCycles as any}
+        />
+      </QueryClientProvider>
+    );
+
+    await screen.findByText('101');
+    return result;
+  };
+
   // ─────────────────────────────────────────────────────────────────────────
   // Case A: Normal progressive entry (e.g. prev 500 -> curr 550)
   // ─────────────────────────────────────────────────────────────────────────
@@ -407,5 +467,64 @@ describe('Round 2.4K.2: Meter Spreadsheet Domain Authority & Quick Fill Validati
     const cell3_td = rows[3].querySelectorAll('td')[3];
     expect(cell3_td.querySelector('input')!.value).toBe('850');
     expect(cell3_td.classList.contains('ring-rose-500')).toBe(false);
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Case Q: Quick Fill rejects lower reading (prev 500 -> curr 400)
+  // ─────────────────────────────────────────────────────────────────────────
+  it('Case Q: Quick Fill rejects lower reading (prev 500 -> curr 400)', async () => {
+    const { rows } = await openSpreadsheet();
+    const elecCurrCell = rows[0].querySelectorAll('td')[3];
+    const input = elecCurrCell.querySelector('input')!;
+
+    // Previous is 500. Enter 400
+    fireEvent.change(input, { target: { value: '400' } });
+
+    expect(input.value).toBe('400');
+    expect(elecCurrCell.classList.contains('ring-rose-500')).toBe(true);
+    expect(elecCurrCell.getAttribute('title')).toContain('ต้องไม่น้อยกว่าค่ามิเตอร์เดิม');
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Case P: Normal editor rejects lower reading (prev 500 -> curr 400)
+  // ─────────────────────────────────────────────────────────────────────────
+  it('Case P: Normal editor rejects lower reading (prev 500 -> curr 400)', async () => {
+    const { container } = await renderNormalEditor();
+    const elecInput = container.querySelector('input[data-col="elecCurr"][data-row="0"]') as HTMLInputElement;
+    expect(elecInput).toBeDefined();
+
+    // Previous is 500. Enter 400 (lower without rollover)
+    fireEvent.change(elecInput, { target: { value: '400' } });
+    fireEvent.blur(elecInput);
+
+    expect(elecInput.classList.contains('ring-rose-500')).toBe(true);
+    expect(elecInput.getAttribute('title')).toContain('ต้องไม่น้อยกว่าค่ามิเตอร์เดิม');
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Case R: Meters normal edit and Quick Fill yield identical rollover behavior
+  // ─────────────────────────────────────────────────────────────────────────
+  it('Case R: Normal editor and Quick Fill yield identical rollover behavior', async () => {
+    // 1. Normal editor: room 102 has prev 9950. Enter curr 20 -> usage is 70
+    cleanup();
+    const { container } = await renderNormalEditor();
+    const elecInput102 = container.querySelector('input[data-col="elecCurr"][data-row="1"]') as HTMLInputElement;
+
+    fireEvent.change(elecInput102, { target: { value: '20' } });
+    fireEvent.blur(elecInput102);
+
+    expect(elecInput102.classList.contains('ring-rose-500')).toBe(false);
+    expect(elecInput102.getAttribute('title') || '').toBe('');
+
+    // 2. Quick Fill: room 102 has prev 9950. Enter curr 20 -> usage is 70
+    cleanup();
+    const { rows } = await openSpreadsheet();
+    const elecCurrCell102 = rows[1].querySelectorAll('td')[3];
+    const input102 = elecCurrCell102.querySelector('input')!;
+
+    fireEvent.change(input102, { target: { value: '20' } });
+
+    expect(elecCurrCell102.classList.contains('ring-rose-500')).toBe(false);
+    expect(elecCurrCell102.getAttribute('title') || '').toBe('');
   });
 });

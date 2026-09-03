@@ -341,7 +341,8 @@ export function createDailyStayRouter(
           };
         }
 
-        const result = await dailyStayService.ownerQuickAddDailyStay(dormId, parsed, userId, idCardData);
+        const idempotencyKey = ((req.headers['x-idempotency-key'] || req.headers['idempotency-key']) as string)?.trim() || null;
+        const result = await dailyStayService.ownerQuickAddDailyStay(dormId, parsed, userId, idCardData, idempotencyKey);
 
         res.status(201).json({
           data: result,
@@ -534,7 +535,7 @@ export function createDailyStayRouter(
   // 9. Settle Daily Stay Invoice Item (Canonical Payment Action: CASH or BANK_TRANSFER)
   const SettleItemSchema = z.object({
     itemType: z.enum(['DAILY_RENT', 'RENT', 'DEPOSIT', 'OTHER_FEE', 'ALL']),
-    method: z.enum(['CASH', 'BANK_TRANSFER']).optional().default('CASH'),
+    method: z.enum(['CASH', 'BANK_TRANSFER']).optional(),
   });
 
   router.post(
@@ -550,7 +551,7 @@ export function createDailyStayRouter(
         const invoiceId = req.params.id;
         const parsed = SettleItemSchema.parse(req.body);
         const userId = req.auth!.userId;
-        const idempotencyKey = (req.headers['x-idempotency-key'] as string)?.trim() || null;
+        const idempotencyKey = ((req.headers['x-idempotency-key'] || req.headers['idempotency-key']) as string)?.trim() || null;
 
         const result = await dailyStayService.settleDailyStayInvoiceItem(
           dormId,

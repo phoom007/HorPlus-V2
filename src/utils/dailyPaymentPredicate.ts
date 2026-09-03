@@ -68,9 +68,21 @@ export function isFinancialObligationSettled(record?: {
   outstandingAmount?: number | string | null;
   totalAmount?: number | string | null;
   totalAgreedAmount?: number | string | null;
+  items?: Array<{ status?: string | null; amount?: number | string | null }>;
 } | null): boolean {
   if (!record) return false;
   if (isFinancialObligationInvalidated(record.status)) return false;
+
+  // Amendment 2 & 5: DECLARED_PAID is NOT canonical settlement.
+  // If there are positive items in DECLARED_PAID, it cannot be considered canonically settled.
+  if (Array.isArray(record.items)) {
+    const hasDeclaredPaid = record.items.some((it) => {
+      const amt = Number(it.amount);
+      const status = (it.status || '').trim().toUpperCase();
+      return amt > 0 && status === 'DECLARED_PAID';
+    });
+    if (hasDeclaredPaid) return false;
+  }
 
   const outstanding = resolveAuthoritativeOutstandingAmount(record);
   if (outstanding === null) return false;
@@ -82,6 +94,7 @@ export function isDailyInvoiceFullyPaid(inv?: {
   status?: string | null;
   outstandingAmount?: number | string | null;
   totalAgreedAmount?: number | string | null;
+  items?: Array<{ status?: string | null; amount?: number | string | null }>;
 } | null): boolean {
   return isFinancialObligationSettled(inv);
 }
