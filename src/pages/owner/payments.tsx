@@ -1474,8 +1474,8 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
 
   const handleSettleDailyInvoice = async (
     invoiceId: string,
-    itemType: 'ALL' | 'DAILY_RENT' | 'RENT' | 'DEPOSIT' | 'OTHER_FEE' = 'ALL',
-    method: 'CASH' | 'BANK_TRANSFER' = 'CASH'
+    itemType: 'ALL' | 'DAILY_RENT' | 'RENT' | 'DEPOSIT' | 'OTHER_FEE',
+    method: 'CASH' | 'BANK_TRANSFER'
   ) => {
     const opId = `daily-${method.toLowerCase()}:${invoiceId}:${itemType}`;
     const idempotencyKey = getIdempotencyKey(opId);

@@ -762,6 +762,13 @@ export class DailyStayService {
       effectiveIdCardData = null;
     }
     const opKey = effectiveIdempotencyKey?.trim() || null;
+    if (!opKey) {
+      const err = new Error('Owner Quick Add requires a non-blank idempotency key.');
+      (err as any).statusCode = 400;
+      (err as any).code = 'IDEMPOTENCY_KEY_REQUIRED';
+      throw err;
+    }
+
     return await idempotencyService.runWithIdempotency({
       actorUserId: userId,
       operation: 'ownerQuickAddDailyStay',
@@ -769,11 +776,17 @@ export class DailyStayService {
       payload: {
         dormitoryId,
         roomId: data.roomId,
+        fullName: fullNameClean,
+        phone: phoneClean,
         startDate: data.startDate,
         endDate: data.endDate,
-        depositAmount: data.depositAmount,
-        depositDeclaredStatus: data.depositDeclaredStatus,
-        depositPaymentMethod: data.depositPaymentMethod,
+        checkInTime: data.checkInTime || null,
+        checkOutTime: data.checkOutTime || null,
+        dailyRateAmount: data.dailyRateAmount !== undefined && data.dailyRateAmount !== null ? Number(data.dailyRateAmount) : null,
+        depositAmount: data.depositAmount !== undefined && data.depositAmount !== null ? Number(data.depositAmount) : null,
+        depositDeclaredStatus: data.depositDeclaredStatus || null,
+        depositPaymentMethod: data.depositPaymentMethod || null,
+        idCardSha256: effectiveIdCardData?.idCardSha256 || null,
       },
       fn: async () => {
         return this.prisma.$transaction(async (tx) => {
@@ -1014,7 +1027,7 @@ export class DailyStayService {
             paymentDate: new Date(),
             reviewedByUserId: userId,
             reviewedAt: new Date(),
-            idempotencyKey: opKey ? `${opKey}:dep` : null,
+            idempotencyKey: opKey,
           },
         });
         if (depositItem) {
@@ -1634,8 +1647,14 @@ export class DailyStayService {
     };
 
     if (idempotencyKey) {
+      if (!actorUserId || typeof actorUserId !== 'string' || actorUserId.trim() === '') {
+        const err = new Error('Authenticated actor user ID is required for idempotent settlement.');
+        (err as any).statusCode = 400;
+        (err as any).code = 'ACTOR_USER_REQUIRED';
+        throw err;
+      }
       return await idempotencyService.runWithIdempotency({
-        actorUserId: actorUserId || 'SYSTEM',
+        actorUserId,
         operation: 'settleDailyStayInvoiceItem',
         idempotencyKey,
         payload: { invoiceId, itemType, method: method || null },

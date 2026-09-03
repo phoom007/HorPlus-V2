@@ -15,6 +15,7 @@ import { LocalStorageProvider } from '../services/local-storage.service.js';
 import { processAndSecureTenantIdCardImage } from '../services/image-security.service.js';
 import { resolveDormitoryContextMiddleware, requireDormitoryPermission } from '../middleware/permission.js';
 import { requireDormitoryWriteEntitlement } from '../middleware/entitlement.js';
+import { getPrismaClient } from '../db/prisma.js';
 
 export function createDailyStayRouter(
   authService: AuthenticationService,
@@ -313,8 +314,17 @@ export function createDailyStayRouter(
           } catch {}
         }
 
+        const idempotencyKey = ((req.headers['x-idempotency-key'] || req.headers['idempotency-key']) as string)?.trim() || null;
+        if (!idempotencyKey) {
+          const err = new Error('Owner Quick Add requires a non-blank idempotency key.');
+          (err as any).statusCode = 400;
+          (err as any).code = 'IDEMPOTENCY_KEY_REQUIRED';
+          throw err;
+        }
+
         const parsed = OwnerQuickAddSchema.parse(rawBody);
         const userId = req.auth!.userId;
+        const prisma = getPrismaClient();
 
         let idCardData: {
           idCardObjectKey: string;
@@ -327,22 +337,56 @@ export function createDailyStayRouter(
 
         if (req.file && req.file.buffer && req.file.buffer.length > 0) {
           const secured = await processAndSecureTenantIdCardImage(req.file.buffer);
-          const objectKey = `tenants/${dormId}/${uuidv4()}${secured.extension}`;
-          await localStorageProvider.saveFile(objectKey, secured.buffer);
-          writtenObjectKey = objectKey;
 
-          idCardData = {
-            idCardObjectKey: objectKey,
-            idCardSha256: secured.sha256,
-            idCardMimeType: secured.mimeType,
-            idCardByteSize: secured.byteSize,
-            idCardUploadedAt: new Date(),
-            idCardUploadedByUserId: req.auth?.userId || null,
-          };
+          // Check if there is already a completed idempotency claim for this request
+          const existingClaim = await prisma.idempotencyKey.findUnique({
+            where: {
+              user_operation_idempotency_unique: {
+                userId,
+                operation: 'ownerQuickAddDailyStay',
+                idempotencyKey,
+              },
+            },
+          });
+
+          if (existingClaim && existingClaim.status === 'completed' && existingClaim.responseBody) {
+            const cachedResult = existingClaim.responseBody as any;
+            const existingObjectKey = cachedResult?.tenant?.idCardObjectKey || null;
+            idCardData = {
+              idCardObjectKey: existingObjectKey || `cached-${dormId}`,
+              idCardSha256: secured.sha256,
+              idCardMimeType: secured.mimeType,
+              idCardByteSize: secured.byteSize,
+              idCardUploadedAt: new Date(),
+              idCardUploadedByUserId: req.auth?.userId || null,
+            };
+          } else {
+            const objectKey = `tenants/${dormId}/${uuidv4()}${secured.extension}`;
+            await localStorageProvider.saveFile(objectKey, secured.buffer);
+            writtenObjectKey = objectKey;
+
+            idCardData = {
+              idCardObjectKey: objectKey,
+              idCardSha256: secured.sha256,
+              idCardMimeType: secured.mimeType,
+              idCardByteSize: secured.byteSize,
+              idCardUploadedAt: new Date(),
+              idCardUploadedByUserId: req.auth?.userId || null,
+            };
+          }
         }
 
-        const idempotencyKey = ((req.headers['x-idempotency-key'] || req.headers['idempotency-key']) as string)?.trim() || null;
         const result = await dailyStayService.ownerQuickAddDailyStay(dormId, parsed, userId, idCardData, idempotencyKey);
+
+        // Replay cleanup: if a staged file was written but the returned tenant has a different objectKey, clean duplicate
+        if (writtenObjectKey && result?.tenant?.idCardObjectKey && result.tenant.idCardObjectKey !== writtenObjectKey) {
+          try {
+            await localStorageProvider.deleteFile(writtenObjectKey);
+          } catch (delErr) {
+            console.error('[CLEANUP REPLAY ERROR] Failed to unlink duplicate staged ID card file:', delErr);
+          }
+          writtenObjectKey = null;
+        }
 
         res.status(201).json({
           data: result,

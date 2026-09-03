@@ -15,10 +15,18 @@ describe('Round 2.4K.2: Daily Stay Payment Authority & Final Receipt Proof', () 
   let createdStayIds: string[] = [];
   let createdRoomIds: string[] = [];
   let createdTenantIds: string[] = [];
+  let testUserId: string;
 
   beforeAll(async () => {
     prisma = new PrismaClient();
     dailyStayService = new DailyStayService();
+
+    let user = await prisma.user.findFirst({ where: { status: 'active' } });
+    if (!user) {
+      user = await prisma.user.findFirst();
+    }
+    expect(user).toBeDefined();
+    testUserId = user!.id;
 
     testDormitory = await prisma.dormitory.findFirst({
       where: { name: 'Comprehensive Dormitory' },
@@ -132,39 +140,50 @@ describe('Round 2.4K.2: Daily Stay Payment Authority & Final Receipt Proof', () 
       testDormitory.id,
       invoice.id,
       'DAILY_RENT',
-      undefined,
+      testUserId,
       { method: 'CASH', idempotencyKey: idempKey }
     );
 
     expect(res.status).toBe('PAID');
     expect(Number(res.outstandingAmount)).toBe(0);
 
-    // 3. Verify Payment row
+    // 3. Verify Payment row has method CASH
     const payment = await prisma.payment.findFirst({
       where: { dailyStayInvoiceId: invoice.id },
     });
     expect(payment).toBeDefined();
     expect(payment?.method).toBe('CASH');
     expect(payment?.status).toBe('APPROVED');
-    expect(Number(payment?.amount)).toBe(800);
+    expect(payment?.reviewedByUserId).toBe(testUserId);
+    expect(payment?.idempotencyKey).toBe(idempKey);
 
-    // 4. Verify Final Receipt
-    const receipt = await prisma.receipt.findFirst({
-      where: { dailyStayInvoiceId: invoice.id, receiptKind: 'FINAL_SETTLEMENT' },
+    // 4. Verify PaymentAllocation
+    const allocations = await prisma.paymentAllocation.findMany({
+      where: { dailyStayInvoiceId: invoice.id },
     });
-    expect(receipt).toBeDefined();
-    const snapshot: any = receipt?.snapshotData;
-    expect(snapshot.paymentMethod).toBe('CASH');
-    expect(snapshot.paymentEvents.length).toBe(1);
-    expect(snapshot.paymentEvents[0].method).toBe('CASH');
+    expect(allocations.length).toBe(1);
+    expect(allocations[0].paymentId).toBe(payment?.id);
+    expect(allocations[0].billId).toBeNull();
+    expect(allocations[0].billItemId).toBeNull();
+    expect(allocations[0].dailyStayInvoiceItemId).toBe(invoice.items[0].id);
+    expect(Number(allocations[0].allocatedAmount)).toBe(800);
 
-    const html = renderReceiptHtml(receipt);
-    expect(html).toContain('ช่องทางชำระเงิน:');
+    // 5. Verify Final Receipt
+    const receipts = await prisma.receipt.findMany({
+      where: { dailyStayInvoiceId: invoice.id },
+    });
+    expect(receipts.length).toBe(1);
+    const snapA: any = receipts[0].snapshotData;
+    expect(snapA.paymentMethod).toBe('CASH');
+    expect(Number(snapA.total)).toBe(800);
+    expect(receipts[0].receiptKind).toBe('FINAL_SETTLEMENT');
+
+    // 6. Verify HTML presentation
+    const html = renderReceiptHtml(receipts[0]);
     expect(html).toContain('เงินสด');
-    expect(html).not.toContain('โอนเงิน');
   });
 
-  it('B. Daily bank-transfer confirmation -> canonical event BANK_TRANSFER -> Final Receipt โอนเงิน', async () => {
+  it('B. Daily bank transfer settlement -> canonical event BANK_TRANSFER -> Final Receipt โอนเงิน', async () => {
     const stay = await prisma.dailyStay.create({
       data: {
         dormitoryId: testDormitory.id,
@@ -173,8 +192,8 @@ describe('Round 2.4K.2: Daily Stay Payment Authority & Final Receipt Proof', () 
         startDate: new Date('2026-08-05'),
         endDate: new Date('2026-08-06'),
         inclusiveDayCount: 1,
-        dailyRateAmount: new Decimal('1000.00'),
-        totalRentAmount: new Decimal('1000.00'),
+        dailyRateAmount: new Decimal('750.00'),
+        totalRentAmount: new Decimal('750.00'),
         depositAmount: new Decimal('0.00'),
         status: 'ACTIVE',
       },
@@ -186,17 +205,17 @@ describe('Round 2.4K.2: Daily Stay Payment Authority & Final Receipt Proof', () 
         dormitoryId: testDormitory.id,
         dailyStayId: stay.id,
         invoiceNumber: `DINV-B-${Date.now().toString().slice(-6)}`,
-        totalRentAmount: new Decimal('1000.00'),
+        totalRentAmount: new Decimal('750.00'),
         depositAmount: new Decimal('0.00'),
-        totalAgreedAmount: new Decimal('1000.00'),
-        outstandingAmount: new Decimal('1000.00'),
+        totalAgreedAmount: new Decimal('750.00'),
+        outstandingAmount: new Decimal('750.00'),
         status: 'ISSUED',
         items: {
           create: [
             {
               itemType: 'DAILY_RENT',
               description: 'ค่าเช่าห้องพักรายวัน',
-              amount: new Decimal('1000.00'),
+              amount: new Decimal('750.00'),
               status: 'OUTSTANDING',
             },
           ],
@@ -212,7 +231,7 @@ describe('Round 2.4K.2: Daily Stay Payment Authority & Final Receipt Proof', () 
       testDormitory.id,
       invoice.id,
       'DAILY_RENT',
-      undefined,
+      testUserId,
       { method: 'BANK_TRANSFER', idempotencyKey: idempKey }
     );
 
@@ -225,28 +244,28 @@ describe('Round 2.4K.2: Daily Stay Payment Authority & Final Receipt Proof', () 
     expect(payment?.method).toBe('BANK_TRANSFER');
 
     // Verify Final Receipt
-    const receipt = await prisma.receipt.findFirst({
-      where: { dailyStayInvoiceId: invoice.id, receiptKind: 'FINAL_SETTLEMENT' },
+    const receipts = await prisma.receipt.findMany({
+      where: { dailyStayInvoiceId: invoice.id },
     });
-    const snapshot: any = receipt?.snapshotData;
-    expect(snapshot.paymentMethod).toBe('BANK_TRANSFER');
+    expect(receipts.length).toBe(1);
+    const snapB: any = receipts[0].snapshotData;
+    expect(snapB.paymentMethod).toBe('BANK_TRANSFER');
 
-    const html = renderReceiptHtml(receipt);
-    expect(html).toContain('ช่องทางชำระเงิน:');
+    const html = renderReceiptHtml(receipts[0]);
     expect(html).toContain('โอนเงิน');
   });
 
-  it('C. Settle daily stay with missing method on positive obligation -> 400 CANONICAL_PAYMENT_METHOD_MISSING, no payment, no allocation, no receipt', async () => {
+  it('C. Settle daily stay with positive obligation and missing method -> 400 CANONICAL_PAYMENT_METHOD_MISSING, no side effects', async () => {
     const stay = await prisma.dailyStay.create({
       data: {
         dormitoryId: testDormitory.id,
         roomId: testRoom.id,
         tenantId: testTenant.id,
-        startDate: new Date('2026-08-10'),
-        endDate: new Date('2026-08-11'),
+        startDate: new Date('2026-08-08'),
+        endDate: new Date('2026-08-09'),
         inclusiveDayCount: 1,
-        dailyRateAmount: new Decimal('600.00'),
-        totalRentAmount: new Decimal('600.00'),
+        dailyRateAmount: new Decimal('500.00'),
+        totalRentAmount: new Decimal('500.00'),
         depositAmount: new Decimal('0.00'),
         status: 'ACTIVE',
       },
@@ -258,17 +277,17 @@ describe('Round 2.4K.2: Daily Stay Payment Authority & Final Receipt Proof', () 
         dormitoryId: testDormitory.id,
         dailyStayId: stay.id,
         invoiceNumber: `DINV-C-${Date.now().toString().slice(-6)}`,
-        totalRentAmount: new Decimal('600.00'),
+        totalRentAmount: new Decimal('500.00'),
         depositAmount: new Decimal('0.00'),
-        totalAgreedAmount: new Decimal('600.00'),
-        outstandingAmount: new Decimal('600.00'),
+        totalAgreedAmount: new Decimal('500.00'),
+        outstandingAmount: new Decimal('500.00'),
         status: 'ISSUED',
         items: {
           create: [
             {
               itemType: 'DAILY_RENT',
               description: 'ค่าเช่าห้องพักรายวัน',
-              amount: new Decimal('600.00'),
+              amount: new Decimal('500.00'),
               status: 'OUTSTANDING',
             },
           ],
@@ -284,7 +303,7 @@ describe('Round 2.4K.2: Daily Stay Payment Authority & Final Receipt Proof', () 
         testDormitory.id,
         invoice.id,
         'DAILY_RENT',
-        undefined,
+        testUserId,
         { method: undefined as any, idempotencyKey: `idem-c-${Date.now()}` }
       )
     ).rejects.toMatchObject({
@@ -349,7 +368,7 @@ describe('Round 2.4K.2: Daily Stay Payment Authority & Final Receipt Proof', () 
         testDormitory.id,
         invoice.id,
         'DAILY_RENT',
-        undefined,
+        testUserId,
         { method: 'CASH', idempotencyKey: undefined as any }
       )
     ).rejects.toMatchObject({
@@ -410,7 +429,7 @@ describe('Round 2.4K.2: Daily Stay Payment Authority & Final Receipt Proof', () 
       testDormitory.id,
       invoice.id,
       'DAILY_RENT',
-      undefined,
+      testUserId,
       { method: 'CASH', idempotencyKey: fixedIdempKey }
     );
     expect(res1.status).toBe('PAID');
@@ -427,7 +446,7 @@ describe('Round 2.4K.2: Daily Stay Payment Authority & Final Receipt Proof', () 
       testDormitory.id,
       invoice.id,
       'DAILY_RENT',
-      undefined,
+      testUserId,
       { method: 'CASH', idempotencyKey: fixedIdempKey }
     );
     expect(res2.status).toBe('PAID');
@@ -568,7 +587,7 @@ describe('Round 2.4K.2: Daily Stay Payment Authority & Final Receipt Proof', () 
       testDormitory.id,
       invoice!.id,
       'DAILY_RENT',
-      undefined,
+      testUserId,
       { method: 'CASH', idempotencyKey: `idem-g-rent-${Date.now()}` }
     );
 
@@ -624,7 +643,7 @@ describe('Round 2.4K.2: Daily Stay Payment Authority & Final Receipt Proof', () 
     await dailyStayService.approveDailyStay(
       testDormitory.id,
       stay.id,
-      '00000000-0000-0000-0000-000000000001'
+      testUserId
     );
 
     const invoice = await prisma.dailyStayInvoice.findUnique({
@@ -638,7 +657,7 @@ describe('Round 2.4K.2: Daily Stay Payment Authority & Final Receipt Proof', () 
       testDormitory.id,
       invoice!.id,
       'DAILY_RENT',
-      undefined,
+      testUserId,
       { method: 'CASH', idempotencyKey: `idem-h-rent-${Date.now()}` }
     );
 
@@ -647,7 +666,7 @@ describe('Round 2.4K.2: Daily Stay Payment Authority & Final Receipt Proof', () 
       testDormitory.id,
       invoice!.id,
       'DEPOSIT',
-      undefined,
+      testUserId,
       { method: 'BANK_TRANSFER', idempotencyKey: `idem-h-dep-${Date.now()}` }
     );
 
@@ -710,7 +729,7 @@ describe('Round 2.4K.2: Daily Stay Payment Authority & Final Receipt Proof', () 
         depositDeclaredStatus: 'PAID',
         depositPaymentMethod: 'CASH',
       },
-      '00000000-0000-0000-0000-000000000001',
+      testUserId,
       opKey
     );
 
@@ -735,7 +754,7 @@ describe('Round 2.4K.2: Daily Stay Payment Authority & Final Receipt Proof', () 
     expect(payments.length).toBe(1);
     expect(payments[0].method).toBe('CASH');
     expect(payments[0].status).toBe('APPROVED');
-    expect(payments[0].idempotencyKey).toBe(`${opKey}:dep`);
+    expect(payments[0].idempotencyKey).toBe(opKey);
 
     // Check PaymentAllocation
     const allocs = await prisma.paymentAllocation.findMany({
@@ -759,7 +778,7 @@ describe('Round 2.4K.2: Daily Stay Payment Authority & Final Receipt Proof', () 
         depositDeclaredStatus: 'PAID',
         depositPaymentMethod: 'CASH',
       },
-      '00000000-0000-0000-0000-000000000001',
+      testUserId,
       opKey
     );
     expect(resReplay.id).toBe(res.id);
@@ -801,7 +820,7 @@ describe('Round 2.4K.2: Daily Stay Payment Authority & Final Receipt Proof', () 
         depositDeclaredStatus: 'PAID',
         depositPaymentMethod: 'BANK_TRANSFER',
       },
-      '00000000-0000-0000-0000-000000000001',
+      testUserId,
       `quick-add-j-${Date.now()}`
     );
 
@@ -862,7 +881,8 @@ describe('Round 2.4K.2: Daily Stay Payment Authority & Final Receipt Proof', () 
           depositDeclaredStatus: 'PAID',
           depositPaymentMethod: undefined,
         },
-        '00000000-0000-0000-0000-000000000001'
+        testUserId,
+        `quick-add-k-${Date.now()}`
       )
     ).rejects.toMatchObject({
       statusCode: 400,

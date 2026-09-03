@@ -1,5 +1,6 @@
 import { PrismaClient } from '@prisma/client';
 import crypto from 'crypto';
+import { AppError } from '../types/index.js';
 
 const prisma = new PrismaClient();
 
@@ -33,10 +34,6 @@ export class IdempotencyService {
       return await fn();
     }
 
-    const effectiveUserId = (actorUserId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(actorUserId))
-      ? actorUserId
-      : '00000000-0000-0000-0000-000000000000';
-
     const requestHash = this.hashPayload(payload);
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours retention
 
@@ -44,7 +41,7 @@ export class IdempotencyService {
     const existing = await this.client.idempotencyKey.findUnique({
       where: {
         user_operation_idempotency_unique: {
-          userId: effectiveUserId,
+          userId: actorUserId,
           operation,
           idempotencyKey
         }
@@ -53,7 +50,7 @@ export class IdempotencyService {
 
     if (existing) {
       if (existing.requestHash !== requestHash) {
-        throw new Error('IDEMPOTENCY_MISMATCH');
+        throw new AppError('IDEMPOTENCY_MISMATCH: Idempotency key payload mismatch.', 409, 'IDEMPOTENCY_MISMATCH');
       }
 
       if (existing.status === 'completed' && existing.responseBody) {
@@ -62,7 +59,7 @@ export class IdempotencyService {
       }
 
       if (existing.status === 'processing') {
-        throw new Error('CONCURRENT_REQUEST_IN_PROGRESS');
+        throw new AppError('CONCURRENT_REQUEST_IN_PROGRESS: A request with this idempotency key is already processing.', 409, 'CONCURRENT_REQUEST_IN_PROGRESS');
       }
 
       // If previously failed, allow clean retry by transitioning to processing
@@ -80,7 +77,7 @@ export class IdempotencyService {
       // Create new processing claim
       await this.client.idempotencyKey.create({
         data: {
-          userId: effectiveUserId,
+          userId: actorUserId,
           operation,
           idempotencyKey,
           requestHash,
@@ -100,7 +97,7 @@ export class IdempotencyService {
       await this.client.idempotencyKey.update({
         where: {
           user_operation_idempotency_unique: {
-            userId: effectiveUserId,
+            userId: actorUserId,
             operation,
             idempotencyKey
           }
@@ -117,7 +114,7 @@ export class IdempotencyService {
       await this.client.idempotencyKey.update({
         where: {
           user_operation_idempotency_unique: {
-            userId: effectiveUserId,
+            userId: actorUserId,
             operation,
             idempotencyKey
           }

@@ -99,7 +99,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
   const getIdempotencyKey = (opId: string): string => {
     let key = idempotencyKeysRef.current.get(opId);
     if (!key) {
-      key = typeof crypto !== 'undefined' && crypto.randomUUID
+      key = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
         ? crypto.randomUUID()
         : `idem-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
       idempotencyKeysRef.current.set(opId, key);
@@ -109,6 +109,23 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
   const clearIdempotencyKey = (opId: string): void => {
     idempotencyKeysRef.current.delete(opId);
   };
+
+  // Section 5: Material form edit after failed submission treats as new logical request
+  useEffect(() => {
+    idempotencyKeysRef.current.clear();
+  }, [
+    fullName,
+    phone,
+    startDate,
+    dailyEndDate,
+    checkInTime,
+    checkOutTime,
+    dailyRate,
+    dailyDeposit,
+    dailyDepositDeclaredStatus,
+    dailyDepositPaymentMethod,
+    idCardFile,
+  ]);
 
   const [loading, setLoading] = useState(false);
   const [errorText, setErrorText] = useState<string | null>(null);
