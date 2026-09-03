@@ -1053,9 +1053,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   const originalRowsRef = React.useRef<MeterRowState[]>(initialBuilt?.originalRows || []);
   const originalRowsCycleIdRef = React.useRef<string>(initialBuilt ? selectedBillingCycleId || '' : '');
   const meterRowsRef = React.useRef<MeterRowState[]>(meterRows);
-  useEffect(() => {
-    meterRowsRef.current = meterRows;
-  }, [meterRows]);
+  meterRowsRef.current = meterRows;
 
   const historyRef = React.useRef<MeterRowState[][]>([JSON.parse(JSON.stringify(initialBuilt?.rows || []))]);
   const historyIndexRef = React.useRef<number>(0);
@@ -1223,7 +1221,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
 
     if (colKey === 'peopleCount') {
       if (strVal === '') {
-        return { valid: true, value: 0 };
+        return { valid: true, value: '' };
       }
       if (/^[0-9]$/.test(strVal)) {
         return { valid: true, value: parseInt(strVal, 10) };
@@ -1395,7 +1393,37 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     return colIdx >= minC && colIdx <= maxC;
   };
 
+  const selectedSpreadsheetRangeRef = useRef(selectedSpreadsheetRange);
+  selectedSpreadsheetRangeRef.current = selectedSpreadsheetRange;
+  const activeSpreadsheetCellRef = useRef(activeSpreadsheetCell);
+  activeSpreadsheetCellRef.current = activeSpreadsheetCell;
+  const spreadsheetColumnsRef = useRef(spreadsheetColumns);
+  spreadsheetColumnsRef.current = spreadsheetColumns;
+
+  const dragRafIdRef = useRef<number | null>(null);
+  const isComponentMountedRef = useRef<boolean>(true);
+  const lastPointerCoordsRef = useRef<{ clientX: number; clientY: number } | null>(null);
+
   useEffect(() => {
+    isComponentMountedRef.current = true;
+    return () => {
+      isComponentMountedRef.current = false;
+      if (dragRafIdRef.current !== null) {
+        cancelAnimationFrame(dragRafIdRef.current);
+        dragRafIdRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isSpreadsheetMode) {
+      if (dragRafIdRef.current !== null) {
+        cancelAnimationFrame(dragRafIdRef.current);
+        dragRafIdRef.current = null;
+      }
+      return;
+    }
+
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         if (isDraggingFillRef.current) {
@@ -1408,21 +1436,26 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         rangeAnchorRef.current = null;
         setSelectedSpreadsheetRange(null);
         setRejectedSpreadsheetCells({});
-      } else if (isSpreadsheetMode && (e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'C')) {
-        if (selectedSpreadsheetRange || activeSpreadsheetCell) {
-          const minR = selectedSpreadsheetRange ? Math.min(selectedSpreadsheetRange.startRow, selectedSpreadsheetRange.endRow) : activeSpreadsheetCell!.rowIndex;
-          const maxR = selectedSpreadsheetRange ? Math.max(selectedSpreadsheetRange.startRow, selectedSpreadsheetRange.endRow) : activeSpreadsheetCell!.rowIndex;
-          const anchorCol = activeSpreadsheetCell ? spreadsheetColumns.findIndex(c => c.key === activeSpreadsheetCell.colKey) : 2;
-          const minC = selectedSpreadsheetRange ? Math.min(selectedSpreadsheetRange.startCol, selectedSpreadsheetRange.endCol) : anchorCol;
-          const maxC = selectedSpreadsheetRange ? Math.max(selectedSpreadsheetRange.startCol, selectedSpreadsheetRange.endCol) : anchorCol;
+      } else if ((e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'C')) {
+        const range = selectedSpreadsheetRangeRef.current;
+        const activeCell = activeSpreadsheetCellRef.current;
+        const cols = spreadsheetColumnsRef.current;
+        const rows = meterRowsRef.current;
+
+        if (range || activeCell) {
+          const minR = range ? Math.min(range.startRow, range.endRow) : activeCell!.rowIndex;
+          const maxR = range ? Math.max(range.startRow, range.endRow) : activeCell!.rowIndex;
+          const anchorCol = activeCell ? cols.findIndex(c => c.key === activeCell.colKey) : 2;
+          const minC = range ? Math.min(range.startCol, range.endCol) : anchorCol;
+          const maxC = range ? Math.max(range.startCol, range.endCol) : anchorCol;
 
           const lines: string[] = [];
           for (let r = minR; r <= maxR; r++) {
             const cells: string[] = [];
             for (let c = minC; c <= maxC; c++) {
-              const col = spreadsheetColumns[c];
+              const col = cols[c];
               if (col) {
-                cells.push(String(meterRows[r]?.[col.key as keyof MeterRowState] ?? ''));
+                cells.push(String(rows[r]?.[col.key as keyof MeterRowState] ?? ''));
               }
             }
             lines.push(cells.join('\t'));
@@ -1431,29 +1464,37 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
             navigator.clipboard.writeText(lines.join('\n'));
           }
         }
-      } else if (isSpreadsheetMode && (e.key === 'Delete' || e.key === 'Backspace') && !isDraggingFillRef.current) {
-        const activeTag = (document.activeElement as HTMLElement)?.tagName?.toLowerCase();
-        if (activeTag !== 'input' && selectedSpreadsheetRange) {
+      } else if ((e.key === 'Delete' || e.key === 'Backspace') && !isDraggingFillRef.current) {
+        const range = selectedSpreadsheetRangeRef.current;
+        if (range) {
           e.preventDefault();
-          const minR = Math.min(selectedSpreadsheetRange.startRow, selectedSpreadsheetRange.endRow);
-          const maxR = Math.max(selectedSpreadsheetRange.startRow, selectedSpreadsheetRange.endRow);
-          const minC = Math.min(selectedSpreadsheetRange.startCol, selectedSpreadsheetRange.endCol);
-          const maxC = Math.max(selectedSpreadsheetRange.startCol, selectedSpreadsheetRange.endCol);
+          const minR = Math.min(range.startRow, range.endRow);
+          const maxR = Math.max(range.startRow, range.endRow);
+          const minC = Math.min(range.startCol, range.endCol);
+          const maxC = Math.max(range.startCol, range.endCol);
 
-          const updated = [...meterRows];
+          const currentRows = meterRowsRef.current;
+          const cols = spreadsheetColumnsRef.current;
+          const updated = [...currentRows];
+          let hasChange = false;
           for (let r = minR; r <= maxR; r++) {
+            if (!updated[r]) continue;
+            const isRowPaid = Boolean(updated[r].isPaid || updated[r].billStatus === 'paid' || updated[r].isLocked);
+            if (isRowPaid) continue;
+            let rowCopy = { ...updated[r] };
             for (let c = minC; c <= maxC; c++) {
-              const col = spreadsheetColumns[c];
+              const col = cols[c];
               if (col && col.editable) {
-                updated[r] = {
-                  ...updated[r],
-                  [col.key]: col.key === 'peopleCount' ? 0 : '',
-                };
+                rowCopy[col.key as keyof MeterRowState] = '' as any;
+                hasChange = true;
               }
             }
+            updated[r] = rowCopy;
           }
-          setMeterRows(updated);
-          pushHistory(updated);
+          if (hasChange) {
+            setMeterRows(updated);
+            pushHistory(updated);
+          }
         }
       }
     };
@@ -1467,7 +1508,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('pointerup', handleGlobalPointerUp);
     };
-  }, [isSpreadsheetMode, selectedSpreadsheetRange, activeSpreadsheetCell, meterRows, spreadsheetColumns]);
+  }, [isSpreadsheetMode]);
 
   const handlePointerDownFillHandle = (
     e: React.PointerEvent<HTMLDivElement>,
@@ -1510,49 +1551,52 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       container.scrollTop += delta;
     }
 
-    const rowElements = container.querySelectorAll<HTMLTableRowElement>('tr[data-row-index]');
-    let foundRow = dragFillStateRef.current.targetRow;
-    rowElements.forEach((el) => {
-      const rRect = el.getBoundingClientRect();
-      if (e.clientY >= rRect.top && e.clientY <= rRect.bottom) {
-        const idx = parseInt(el.getAttribute('data-row-index') || '-1', 10);
-        if (idx >= 0) foundRow = idx;
-      }
-    });
+    lastPointerCoordsRef.current = { clientX: e.clientX, clientY: e.clientY };
 
-    if (rowElements.length > 0) {
-      const firstRect = rowElements[0].getBoundingClientRect();
-      const lastRect = rowElements[rowElements.length - 1].getBoundingClientRect();
-      if (e.clientY < firstRect.top) foundRow = 0;
-      else if (e.clientY > lastRect.bottom) foundRow = rowElements.length - 1;
-    }
+    if (dragRafIdRef.current === null) {
+      dragRafIdRef.current = requestAnimationFrame(() => {
+        dragRafIdRef.current = null;
+        if (!isComponentMountedRef.current || !isDraggingFillRef.current || !dragFillStateRef.current) return;
+        const coords = lastPointerCoordsRef.current;
+        if (!coords) return;
 
-    let foundCol = dragFillStateRef.current.targetCol;
-    if (e.clientX !== undefined && e.clientX > 0) {
-      const thElements = container.querySelectorAll<HTMLTableCellElement>('thead th');
-      thElements.forEach((th, idx) => {
-        const cRect = th.getBoundingClientRect();
-        if (e.clientX >= cRect.left && e.clientX <= cRect.right) {
-          foundCol = idx;
+        let foundRow = dragFillStateRef.current.targetRow;
+        let foundCol = dragFillStateRef.current.targetCol;
+
+        // O(1) point hit testing via elementFromPoint
+        const targetEl = document.elementFromPoint(coords.clientX, coords.clientY);
+        const cell = targetEl?.closest('td[data-cell-row]');
+        if (cell) {
+          const rIdx = parseInt(cell.getAttribute('data-cell-row') || '-1', 10);
+          const colKey = cell.getAttribute('data-cell-col');
+          if (rIdx >= 0) foundRow = rIdx;
+          if (colKey) {
+            const cIdx = spreadsheetColumnsRef.current.findIndex(c => c.key === colKey);
+            if (cIdx >= 0) foundCol = cIdx;
+          }
+        } else {
+          const rowEl = targetEl?.closest('tr[data-row-index]');
+          if (rowEl) {
+            const rIdx = parseInt(rowEl.getAttribute('data-row-index') || '-1', 10);
+            if (rIdx >= 0) foundRow = rIdx;
+          }
+        }
+
+        if (foundRow !== dragFillStateRef.current.targetRow || foundCol !== dragFillStateRef.current.targetCol) {
+          dragFillStateRef.current.targetRow = foundRow;
+          dragFillStateRef.current.targetCol = foundCol;
+          setDragFillRange({ ...dragFillStateRef.current });
         }
       });
-      if (thElements.length > 0) {
-        const firstColRect = thElements[0].getBoundingClientRect();
-        const lastColRect = thElements[thElements.length - 1].getBoundingClientRect();
-        if (e.clientX < firstColRect.left) foundCol = 0;
-        else if (e.clientX > lastColRect.right) foundCol = thElements.length - 1;
-      }
-    }
-
-    if (foundRow !== dragFillStateRef.current.targetRow || foundCol !== dragFillStateRef.current.targetCol) {
-      dragFillStateRef.current.targetRow = foundRow;
-      dragFillStateRef.current.targetCol = foundCol;
-      setDragFillRange({ ...dragFillStateRef.current });
     }
   };
 
   const handlePointerUpFillHandle = (e: React.PointerEvent) => {
     if (!isDraggingFillRef.current) return;
+    if (dragRafIdRef.current !== null) {
+      cancelAnimationFrame(dragRafIdRef.current);
+      dragRafIdRef.current = null;
+    }
     try {
       (e.target as HTMLElement).releasePointerCapture(e.pointerId);
     } catch {}
@@ -2802,8 +2846,17 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       showToast('ข้อมูลหรือสิทธิ์การคิดรอบบิลยังไม่พร้อมใช้งาน', 'error');
       return;
     }
-    
-    const rawDirtyRows: any[] = [];
+
+    // Option B: Fail closed if any row has blank peopleCount
+    for (let rIdx = 0; rIdx < meterRows.length; rIdx++) {
+      const row = meterRows[rIdx];
+      const isRowPaid = Boolean(row.isPaid || row.billStatus === 'paid' || row.isLocked);
+      if (isRowPaid) continue;
+      if (row.peopleCount === '' || row.peopleCount === undefined || row.peopleCount === null) {
+        showToast(`กรุณาระบุจำนวนผู้พักอาศัยห้อง ${row.roomNumber} ก่อนออกบิล`, 'error');
+        return;
+      }
+    }
     const previewRoomsList = previewContext?.rooms || [];
     for (const r of meterRows) {
         const roomCtx = previewRoomsList.find((ctx: any) => ctx.roomId === r.roomId);
@@ -2928,6 +2981,19 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     if (!selectedBillingCycleId) {
       showToast('ยังไม่ได้ตั้งค่ารอบคำนวณ', 'error');
       return;
+    }
+
+    // Option B: Fail closed if any row has blank peopleCount
+    for (let rIdx = 0; rIdx < meterRows.length; rIdx++) {
+      const row = meterRows[rIdx];
+      const isRowPaid = Boolean(row.isPaid || row.billStatus === 'paid' || row.isLocked);
+      if (isRowPaid) continue;
+      if (row.peopleCount === '' || row.peopleCount === undefined || row.peopleCount === null) {
+        showToast(`กรุณาระบุจำนวนผู้พักอาศัยห้อง ${row.roomNumber} ก่อนบันทึก`, 'error');
+        const el = document.querySelector(`input[data-row="${rIdx}"][data-col="peopleCount"], td[data-cell-row="${rIdx}"][data-cell-col="peopleCount"] input`) as HTMLInputElement | null;
+        el?.focus();
+        return;
+      }
     }
 
     // Missing baseline check for per_unit utilities

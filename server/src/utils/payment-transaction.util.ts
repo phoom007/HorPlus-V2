@@ -1141,11 +1141,16 @@ export async function generateFinalSettlementReceiptForBillInTx(
   const sequenceStr = String(seq.lastValue).padStart(4, '0');
   const receiptNumber = `RC-${yearMonth}-${normalizedRoom}-${sequenceStr}`;
 
-  let receiverDisplayName = 'ฝ่ายการเงิน หอพัก HorPlus';
-  if (userId) {
-    const user = await tx.user.findUnique({ where: { id: userId }, select: { name: true } });
-    if (user?.name) {
-      receiverDisplayName = user.name;
+  let receiverDisplayName: string | null = null;
+  if (tx.dormitoryBillingSettings?.findUnique) {
+    const billingSettings = await tx.dormitoryBillingSettings.findUnique({
+      where: { dormitoryId },
+      select: { bankAccountName: true, promptPayAccountName: true },
+    });
+    if (billingSettings?.bankAccountName && billingSettings.bankAccountName.trim().length > 0) {
+      receiverDisplayName = billingSettings.bankAccountName.trim();
+    } else if (billingSettings?.promptPayAccountName && billingSettings.promptPayAccountName.trim().length > 0) {
+      receiverDisplayName = billingSettings.promptPayAccountName.trim();
     }
   }
 
@@ -1381,11 +1386,16 @@ export async function generateFinalSettlementReceiptForDailyInvoiceInTx(
   const sequenceStr = String(seq.lastValue).padStart(4, '0');
   const receiptNumber = `RC-${yearMonth}-${normalizedRoom}-${sequenceStr}`;
 
-  let receiverDisplayName = 'ฝ่ายการเงิน หอพัก HorPlus';
-  if (userId) {
-    const user = await tx.user.findUnique({ where: { id: userId }, select: { name: true } });
-    if (user?.name) {
-      receiverDisplayName = user.name;
+  let receiverDisplayName: string | null = null;
+  if (tx.dormitoryBillingSettings?.findUnique) {
+    const billingSettings = await tx.dormitoryBillingSettings.findUnique({
+      where: { dormitoryId },
+      select: { bankAccountName: true, promptPayAccountName: true },
+    });
+    if (billingSettings?.bankAccountName && billingSettings.bankAccountName.trim().length > 0) {
+      receiverDisplayName = billingSettings.bankAccountName.trim();
+    } else if (billingSettings?.promptPayAccountName && billingSettings.promptPayAccountName.trim().length > 0) {
+      receiverDisplayName = billingSettings.promptPayAccountName.trim();
     }
   }
 

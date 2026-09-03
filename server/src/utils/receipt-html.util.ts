@@ -347,6 +347,27 @@ function formatPaymentMethodThai(rawMethod?: string | null, paymentEvents?: any[
     .join(' / ');
 }
 
+const THAI_MONTH_NAMES = [
+  'มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน',
+  'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม',
+];
+
+/**
+ * Converts cycleCode (e.g. "2026-08") to Thai month and Buddhist Era year (e.g. "สิงหาคม 2569").
+ * Malformed or non-matching cycle codes safely return the raw input without inventing a date.
+ */
+export function formatThaiBillingCycle(cycleCode?: string | null): string {
+  if (!cycleCode || typeof cycleCode !== 'string') return '';
+  const match = cycleCode.trim().match(/^(\d{4})-(\d{2})$/);
+  if (!match) return cycleCode;
+  const year = parseInt(match[1], 10);
+  const month = parseInt(match[2], 10);
+  if (month < 1 || month > 12) return cycleCode;
+  const thaiMonth = THAI_MONTH_NAMES[month - 1];
+  const buddhistYear = year + 543;
+  return `${thaiMonth} ${buddhistYear}`;
+}
+
 /**
  * Pure generator for full immutable HTML receipt string.
  */
@@ -415,7 +436,7 @@ export function renderReceiptHtml(receiptRecord: any, options?: { hasCurrentLogo
   </div>
   <div class="meta-grid">
     <div class="meta-card">
-      <p><strong>ผู้รับเงิน / หอพัก:</strong> ${formatMetadataPlaceholder(data.dormitoryName)}</p>
+      <p><strong>ผู้รับเงิน:</strong> ${formatMetadataPlaceholder(data.receiverName)}</p>
       <p><strong>เลขประจำตัวผู้เสียภาษี:</strong> ${formatMetadataPlaceholder(data.dormitoryTaxId)}</p>
       <p><strong>ที่อยู่:</strong> ${formatMetadataPlaceholder(data.dormitoryAddress)}</p>
       <p><strong>โทรศัพท์:</strong> ${formatMetadataPlaceholder(data.dormitoryPhone)}</p>
@@ -431,77 +452,173 @@ export function renderReceiptHtml(receiptRecord: any, options?: { hasCurrentLogo
 
   ${isCombined && Array.isArray(data.billGroups) && data.billGroups.length > 0 ? `
     <!-- Combined Multi-Bill Groups Section -->
-    ${data.billGroups.map((group: any) => {
-      const nonZeroItems = (group.items || []).filter((i: any) => isNonZeroAmount(i.amount));
-      const groupCycleLabel = group.cycleCode ? `รอบบิล ${escapeHTML(group.cycleCode)}` : (group.billKind === 'DEPOSIT' ? 'เงินประกันสัญญาเช่า' : 'บิลค่าใช้จ่าย');
+    ${(() => {
+      const isFinalSettlement = Boolean(receiptRecord.isFinalSettlement || data.isFinalSettlement || receiptRecord.receiptKind === 'FINAL_SETTLEMENT');
 
-      // Amendment 1: For FINAL_SETTLEMENT, canonical settled field is paidAmount.
-      // Legacy allocatedAmount read only when legacy receipt snapshot contract.
-      const isFinalSettlement = Boolean(receiptRecord.isFinalSettlement || data.isFinalSettlement);
-      const canonicalSettledRaw = isFinalSettlement
-        ? group.paidAmount
-        : (group.paidAmount !== undefined && group.paidAmount !== null ? group.paidAmount : group.allocatedAmount);
+      // Validate all billGroup financial values strictly first
+      const validatedGroups = data.billGroups.map((group: any) => {
+        const canonicalSettledRaw = isFinalSettlement
+          ? group.paidAmount
+          : (group.paidAmount !== undefined && group.paidAmount !== null ? group.paidAmount : group.allocatedAmount);
 
-      if (canonicalSettledRaw === undefined || canonicalSettledRaw === null || String(canonicalSettledRaw).trim() === '') {
-        throw new AppError(`Receipt financial value missing for bill ${group.billNumber || group.billId}`, 500, 'CANONICAL_FINANCIAL_VALUE_MISSING');
-      }
+        if (canonicalSettledRaw === undefined || canonicalSettledRaw === null || String(canonicalSettledRaw).trim() === '') {
+          throw new AppError(`Receipt financial value missing for bill ${group.billNumber || group.billId}`, 500, 'CANONICAL_FINANCIAL_VALUE_MISSING');
+        }
 
-      const settledNum = Number(canonicalSettledRaw);
-      if (isNaN(settledNum) || !isFinite(settledNum)) {
-        throw new AppError(`Receipt financial value malformed for bill ${group.billNumber || group.billId}: ${canonicalSettledRaw}`, 500, 'CANONICAL_FINANCIAL_VALUE_MALFORMED');
-      }
+        const settledNum = Number(canonicalSettledRaw);
+        if (isNaN(settledNum) || !isFinite(settledNum)) {
+          throw new AppError(`Receipt financial value malformed for bill ${group.billNumber || group.billId}: ${canonicalSettledRaw}`, 500, 'CANONICAL_FINANCIAL_VALUE_MALFORMED');
+        }
 
-      if (group.billTotal === undefined || group.billTotal === null || String(group.billTotal).trim() === '') {
-        throw new AppError(`Receipt billTotal missing for bill ${group.billNumber || group.billId}`, 500, 'CANONICAL_FINANCIAL_VALUE_MISSING');
-      }
+        if (group.billTotal === undefined || group.billTotal === null || String(group.billTotal).trim() === '') {
+          throw new AppError(`Receipt billTotal missing for bill ${group.billNumber || group.billId}`, 500, 'CANONICAL_FINANCIAL_VALUE_MISSING');
+        }
 
-      const billTotalNum = Number(group.billTotal);
-      if (isNaN(billTotalNum) || !isFinite(billTotalNum)) {
-        throw new AppError(`Receipt billTotal malformed for bill ${group.billNumber || group.billId}: ${group.billTotal}`, 500, 'CANONICAL_FINANCIAL_VALUE_MALFORMED');
-      }
+        const billTotalNum = Number(group.billTotal);
+        if (isNaN(billTotalNum) || !isFinite(billTotalNum)) {
+          throw new AppError(`Receipt billTotal malformed for bill ${group.billNumber || group.billId}: ${group.billTotal}`, 500, 'CANONICAL_FINANCIAL_VALUE_MALFORMED');
+        }
 
-      return `
-        <div class="group-box">
-          <div class="group-header">
-            <span>${groupCycleLabel}</span>
-            <span style="font-size: 12px; color: #64748b;">เลขที่บิล: ${escapeHTML(group.billNumber || group.billId)}</span>
-          </div>
-          <table>
-            <thead>
-              <tr>
-                <th style="width: 40px;">ลำดับ</th>
-                <th>รายการ</th>
-                <th class="num" style="width: 80px;">จำนวน</th>
-                <th class="num" style="width: 140px;">ราคา/หน่วย</th>
-                <th class="num" style="width: 120px;">จำนวนเงิน (บาท)</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${nonZeroItems.map((i: any, idx: number) => `
+        const nonZeroItems = (group.items || []).filter((i: any) => isNonZeroAmount(i.amount));
+        return {
+          ...group,
+          settledNum,
+          billTotalNum,
+          nonZeroItems,
+        };
+      });
+
+      if (isFinalSettlement) {
+        // Visual cycle consolidation for FINAL_SETTLEMENT (Sections 7, 8, 9, 10 & Amendment 3)
+        interface CycleContainer {
+          cycleKey: string;
+          cycleLabel: string;
+          billNumbers: string[];
+          items: any[];
+          totalBill: number;
+          totalSettled: number;
+        }
+
+        const containers: CycleContainer[] = [];
+        for (const g of validatedGroups) {
+          const rawCycle = g.cycleCode ? String(g.cycleCode).trim() : null;
+          const cycleKey = rawCycle || `__NO_CYCLE_${g.billId || Math.random()}__`;
+          let target = containers.find(c => c.cycleKey === cycleKey);
+          if (!target) {
+            let cycleLabel: string;
+            if (rawCycle) {
+              const thaiCycle = formatThaiBillingCycle(rawCycle);
+              cycleLabel = `รอบบิล ${thaiCycle}`;
+            } else {
+              cycleLabel = g.billKind === 'DEPOSIT' ? 'เงินประกันสัญญาเช่า' : 'บิลค่าใช้จ่าย';
+            }
+            target = {
+              cycleKey,
+              cycleLabel,
+              billNumbers: [],
+              items: [],
+              totalBill: 0,
+              totalSettled: 0,
+            };
+            containers.push(target);
+          }
+          if (g.billNumber || g.billId) {
+            target.billNumbers.push(g.billNumber || g.billId);
+          }
+          target.items.push(...g.nonZeroItems);
+          target.totalBill += g.billTotalNum;
+          target.totalSettled += g.settledNum;
+        }
+
+        return containers.map((container) => `
+          <div class="group-box">
+            <div class="group-header">
+              <span>${escapeHTML(container.cycleLabel)}</span>
+              <span style="font-size: 12px; color: #64748b;">เลขที่บิล: ${escapeHTML(container.billNumbers.filter(Boolean).join(', '))}</span>
+            </div>
+            <table>
+              <thead>
                 <tr>
-                  <td>${idx + 1}</td>
-                  <td>
-                    <div>${escapeHTML(String(i.description || '').replace(/น้ำประปา/g, 'น้ำ'))}</div>
-                    ${renderTierBreakdownHtml(i.metadata, i.unit)}
-                  </td>
-                  <td class="num">${escapeHTML(formatQuantityHtml(i.quantity, i.unit))}</td>
-                  <td class="num">${formatRateHtml(i.unitPrice, i.unit, i.metadata)}</td>
-                  <td class="num">${escapeHTML(Number(i.amount).toFixed(2))}</td>
+                  <th style="width: 40px;">ลำดับ</th>
+                  <th>รายการ</th>
+                  <th class="num" style="width: 80px;">จำนวน</th>
+                  <th class="num" style="width: 140px;">ราคา/หน่วย</th>
+                  <th class="num" style="width: 120px;">จำนวนเงิน (บาท)</th>
                 </tr>
-              `).join('')}
+              </thead>
+              <tbody>
+                ${container.items.map((i: any, idx: number) => `
+                  <tr>
+                    <td>${idx + 1}</td>
+                    <td>
+                      <div>${escapeHTML(String(i.description || '').replace(/น้ำประปา/g, 'น้ำ'))}</div>
+                      ${renderTierBreakdownHtml(i.metadata, i.unit)}
+                    </td>
+                    <td class="num">${escapeHTML(formatQuantityHtml(i.quantity, i.unit))}</td>
+                    <td class="num">${formatRateHtml(i.unitPrice, i.unit, i.metadata)}</td>
+                    <td class="num">${escapeHTML(Number(i.amount).toFixed(2))}</td>
+                  </tr>
+                `).join('')}
+                <tr style="background: #f8fafc; font-size: 12px;">
+                  <td colspan="4" class="num" style="font-weight: bold;">ยอดบิล:</td>
+                  <td class="num" style="font-weight: bold;">${escapeHTML(container.totalBill.toFixed(2))} ฿</td>
+                </tr>
+                <tr style="background: #f1f5f9; font-size: 12px; font-weight: bold;">
+                  <td colspan="4" class="num" style="color: #4338ca;">ยอดรับชำระสำหรับรอบบิลนี้:</td>
+                  <td class="num" style="color: #4338ca; font-weight: 900;">${escapeHTML(container.totalSettled.toFixed(2))} ฿</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        `).join('');
+      }
+
+      // Legacy / Event multi-bill rendering preserved exactly
+      return validatedGroups.map((group: any) => {
+        const groupCycleLabel = group.cycleCode ? `รอบบิล ${escapeHTML(group.cycleCode)}` : (group.billKind === 'DEPOSIT' ? 'เงินประกันสัญญาเช่า' : 'บิลค่าใช้จ่าย');
+        return `
+          <div class="group-box">
+            <div class="group-header">
+              <span>${groupCycleLabel}</span>
+              <span style="font-size: 12px; color: #64748b;">เลขที่บิล: ${escapeHTML(group.billNumber || group.billId)}</span>
+            </div>
+            <table>
+              <thead>
+                <tr>
+                  <th style="width: 40px;">ลำดับ</th>
+                  <th>รายการ</th>
+                  <th class="num" style="width: 80px;">จำนวน</th>
+                  <th class="num" style="width: 140px;">ราคา/หน่วย</th>
+                  <th class="num" style="width: 120px;">จำนวนเงิน (บาท)</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${group.nonZeroItems.map((i: any, idx: number) => `
+                  <tr>
+                    <td>${idx + 1}</td>
+                    <td>
+                      <div>${escapeHTML(String(i.description || '').replace(/น้ำประปา/g, 'น้ำ'))}</div>
+                      ${renderTierBreakdownHtml(i.metadata, i.unit)}
+                    </td>
+                    <td class="num">${escapeHTML(formatQuantityHtml(i.quantity, i.unit))}</td>
+                    <td class="num">${formatRateHtml(i.unitPrice, i.unit, i.metadata)}</td>
+                    <td class="num">${escapeHTML(Number(i.amount).toFixed(2))}</td>
+                  </tr>
+                `).join('')}
               <tr style="background: #f8fafc; font-size: 12px;">
                 <td colspan="4" class="num" style="font-weight: bold;">ยอดบิล:</td>
-                <td class="num" style="font-weight: bold;">${escapeHTML(billTotalNum.toFixed(2))} ฿</td>
+                <td class="num" style="font-weight: bold;">${escapeHTML(group.billTotalNum.toFixed(2))} ฿</td>
               </tr>
               <tr style="background: #f1f5f9; font-size: 12px; font-weight: bold;">
                 <td colspan="4" class="num" style="color: #4338ca;">ยอดรับชำระสำหรับรอบบิลนี้:</td>
-                <td class="num" style="color: #4338ca; font-weight: 900;">${escapeHTML(settledNum.toFixed(2))} ฿</td>
+                <td class="num" style="color: #4338ca; font-weight: 900;">${escapeHTML(group.settledNum.toFixed(2))} ฿</td>
               </tr>
             </tbody>
           </table>
         </div>
       `;
-    }).join('')}
+      }).join('');
+    })()}
   ` : `
     <!-- Single Bill Items Section -->
     <table>
