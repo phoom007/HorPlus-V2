@@ -160,6 +160,19 @@ export interface CoOccupant {
   phone: string;
   relationship?: string;
   citizenId?: string;
+  addedAt?: string;
+}
+
+export interface CoOccupantHistoryItem {
+  id: string;
+  coOccupantId?: string;
+  name: string;
+  phone: string;
+  relationship?: string;
+  citizenId?: string;
+  action: 'added' | 'removed' | string;
+  timestamp: string;
+  note?: string;
 }
 
 export interface EmergencyContact {
@@ -174,9 +187,23 @@ export interface Vehicle {
   brand?: string;
 }
 
+export interface VehicleItem {
+  id?: string;
+  type: 'car' | 'motorcycle' | 'none';
+  licensePlate: string;
+  brand?: string;
+}
+
 export interface Pet {
   hasPet: boolean;
   type?: string;
+  name?: string;
+}
+
+export interface PetItem {
+  id?: string;
+  type: string;
+  customType?: string;
   name?: string;
 }
 
@@ -195,6 +222,32 @@ export interface Tenant {
   status: 'active' | 'inactive' | 'pending';
   createdAt: string;
   updatedAt: string;
+  // Presentation-only view-model aggregate extensions (UI baseline compatibility):
+  // NOTE: These fields are UI-only aggregates and must NEVER be serialized directly to canonical backend PUT /tenants
+  vehicles?: VehicleItem[];
+  pets?: PetItem[];
+  coOccupantHistory?: CoOccupantHistoryItem[];
+}
+
+export interface TenantProfileViewModel extends Tenant {
+  // Explicit view model type documenting presentation-only aggregate collections
+  vehicles?: VehicleItem[];
+  pets?: PetItem[];
+  coOccupantHistory?: CoOccupantHistoryItem[];
+}
+
+export interface TenantReturnContext {
+  source: 'meters' | 'rooms';
+  tenantId: string;
+  roomId?: string;
+  cycleId?: string;
+  cycleCode?: string;
+  viewMode?: 'grid' | 'list' | 'floor';
+  selectedBuilding?: string;
+  selectedStatus?: string;
+  searchQuery?: string;
+  scrollTop?: number;
+  scrollY?: number;
 }
 
 export type ContractStatus = 'draft' | 'pending_signature' | 'active' | 'approved_scheduled' | 'scheduled' | 'SCHEDULED' | 'expiring_soon' | 'expired' | 'terminated' | 'waiting_extension' | 'checking_out';
@@ -209,6 +262,7 @@ export interface Contract {
   durationMonths: number;
   rentAmount: number;
   depositAmount: number;
+  advancePaymentAmount?: string | number; // Canonical field; backend may expose Decimal as string or number
   depositStatus?: 'paid' | 'unpaid';
   depositType?: 'refundable' | 'deduct_rent';
   terms: string;

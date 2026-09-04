@@ -1638,6 +1638,9 @@ export class ApiPropertyAdapter implements PropertyDataSource {
 
 export class ApiDataProvider implements HorPlusDataProvider {
   public dormitories = new ApiDormitoryAdapter();
+  public get dormitory() {
+    return this.dormitories;
+  }
   public rooms = new ApiRoomAdapter();
   public tenants = new ApiTenantAdapter();
   public contracts = new ApiContractAdapter();

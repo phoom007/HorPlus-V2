@@ -51,7 +51,7 @@ import {
   Coins
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { LineIcon } from '../../components/LineIcon';
+import { LineLogo as LineIcon } from '../../components/LineLogo';
 import {
   StatusBadge,
   Modal,
@@ -63,8 +63,8 @@ import {
   PrintView,
   SignaturePad
 } from '../../components/GlobalComponents';
-import { Tenant, Room, CoOccupant, CoOccupantHistoryItem, EmergencyContact, Contract, Bill, BillItem, BLOCKING_CONTRACT_STATUSES, PetItem, VehicleItem } from '../../types';
-import { getDormitory } from '../../data/mockData';
+import { Tenant, Room, CoOccupant, CoOccupantHistoryItem, EmergencyContact, Contract, Bill, BillItem, BLOCKING_CONTRACT_STATUSES, PetItem, VehicleItem, TenantReturnContext, Dormitory } from '../../types';
+import { getDataProvider } from '../../data/dataProvider';
 import { convertImageToWebP, UPLOAD_DROPZONE_TEXT } from '../../utils/imageUtils';
 
 interface OwnerTenantsProps {
@@ -84,6 +84,11 @@ interface OwnerTenantsProps {
   onBackToRooms?: (roomId?: string) => void;
   tenantOriginTab?: 'rooms' | 'meters' | string;
   onViewContract?: (contractId: string, tenantId?: string) => void;
+  returnContext?: TenantReturnContext | null;
+  onReturnToSource?: (context: TenantReturnContext) => void;
+  onDismissReturnContext?: () => void;
+  cameFromMeters?: boolean;
+  dormitory?: Dormitory | null;
 }
 
 const CAR_BRANDS = ["Toyota", "Honda", "Isuzu", "Mazda", "Nissan", "Mitsubishi", "Ford", "Benz", "BMW", "Audi", "MG", "BYD", "Suzuki", "อื่นๆ"];
@@ -108,27 +113,69 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
   onBackToMeters,
   onBackToRooms,
   tenantOriginTab,
-  onViewContract
+  onViewContract,
+  returnContext,
+  onReturnToSource,
+  onDismissReturnContext,
+  cameFromMeters: cameFromMetersProp,
+  dormitory
 }) => {
-  const dorm = getDormitory();
+  const [dorm, setDorm] = useState<Partial<Dormitory>>(() => {
+    if (dormitory) return dormitory;
+    try {
+      const saved = localStorage.getItem('registered_dorm_profile');
+      if (saved) return JSON.parse(saved);
+    } catch { }
+    return {};
+  });
+
+  React.useEffect(() => {
+    let isMounted = true;
+    if (dormitory) {
+      setDorm(dormitory);
+      return;
+    }
+    const loadDorm = async () => {
+      try {
+        const dormId = localStorage.getItem('selected_dormitory_id') || sessionStorage.getItem('active_dormitory_selected_for_session') || '';
+        if (dormId) {
+          const fetched = await getDataProvider().dormitories.getById(dormId);
+          if (isMounted && fetched) {
+            setDorm(prev => ({ ...prev, ...fetched }));
+          }
+        }
+      } catch (err) {
+        // Authority-safe fallback to registered_dorm_profile or existing state
+      }
+    };
+    loadDorm();
+    return () => { isMounted = false; };
+  }, [dormitory]);
+
   const [searchQuery, setSearchQuery] = useState('');
   const [activeStatusTab, setActiveStatusTab] = useState<'pending' | 'active' | 'inactive'>('active');
   const [selectedTenant, setSelectedTenant] = useState<Tenant | null>(null);
-  const [cameFromMeters, setCameFromMeters] = useState(false);
-  const [originTab, setOriginTab] = useState<'rooms' | 'meters' | string | null>(tenantOriginTab || null);
+  const [cameFromMeters, setCameFromMeters] = useState(Boolean(cameFromMetersProp));
+  const [originTab, setOriginTab] = useState<'rooms' | 'meters' | string | null>(tenantOriginTab || returnContext?.source || (cameFromMetersProp ? 'meters' : null));
 
   React.useEffect(() => {
-    if (tenantOriginTab) {
+    if (returnContext?.source) {
+      setOriginTab(returnContext.source);
+    } else if (cameFromMetersProp) {
+      setOriginTab('meters');
+      setCameFromMeters(true);
+    } else if (tenantOriginTab) {
       setOriginTab(tenantOriginTab);
     } else {
       setOriginTab(null);
     }
-  }, [tenantOriginTab]);
+  }, [tenantOriginTab, returnContext, cameFromMetersProp]);
 
-  // Auto select tenant on mount if initialTenantId provided
+  // Auto select tenant on mount if initialTenantId or returnContext.tenantId provided
   React.useEffect(() => {
-    if (initialTenantId) {
-      const tenant = tenants.find(t => t.id === initialTenantId);
+    const targetId = initialTenantId || returnContext?.tenantId;
+    if (targetId) {
+      const tenant = tenants.find(t => t.id === targetId);
       if (tenant) {
         setSelectedTenant(tenant);
         setProfileTab('info');
@@ -140,11 +187,11 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
           setActiveStatusTab('active');
         }
       }
-      if (onClearInitialTenantId) {
+      if (initialTenantId && onClearInitialTenantId) {
         onClearInitialTenantId();
       }
     }
-  }, [initialTenantId, tenants, onClearInitialTenantId]);
+  }, [initialTenantId, returnContext, tenants, onClearInitialTenantId]);
 
   const [profileTab, setProfileTab] = useState<'info' | 'contract' | 'history'>('info');
   const [isIdCardOpen, setIsIdCardOpen] = useState(false);
@@ -1659,7 +1706,6 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
       tenantId: selectedTenant.id,
       roomId: targetRoom.id,
       startDate: createContractStartDate,
-      stayDate: createContractStayDate,
       endDate: createContractEndDate || calculateContractEndDate(createContractStartDate, createContractDuration),
       durationMonths: createContractDuration,
       rentAmount: createContractRent,
@@ -2266,8 +2312,10 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                       type="button"
                       onClick={() => {
                         setOriginTab(null);
-                        const targetRoom = rooms.find(r => r.currentTenantId === selectedTenant.id || r.id === selectedTenant.roomId);
-                        if (onBackToRooms) {
+                        const targetRoom = rooms.find(r => r.currentTenantId === selectedTenant.id || r.id === (selectedTenant as any).roomId);
+                        if (returnContext && onReturnToSource) {
+                          onReturnToSource(returnContext);
+                        } else if (onBackToRooms) {
                           onBackToRooms(targetRoom?.id);
                         }
                       }}
@@ -2281,7 +2329,10 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
 
                     <button
                       type="button"
-                      onClick={() => setSelectedTenant(null)}
+                      onClick={() => {
+                        if (onDismissReturnContext) onDismissReturnContext();
+                        setSelectedTenant(null);
+                      }}
                       className="md:hidden inline-flex items-center gap-1 text-slate-500 hover:text-slate-700 text-xs font-bold px-2 py-1"
                     >
                       <span>ดูรายชื่อผู้เช่า</span>
@@ -2294,7 +2345,9 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                       setOriginTab(null);
                       setCameFromMeters(false);
                       setSelectedTenant(null);
-                      if (onBackToMeters) {
+                      if (returnContext && onReturnToSource) {
+                        onReturnToSource(returnContext);
+                      } else if (onBackToMeters) {
                         onBackToMeters();
                       }
                     }}
@@ -2306,7 +2359,10 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                 ) : (
                   <button
                     type="button"
-                    onClick={() => setSelectedTenant(null)}
+                    onClick={() => {
+                      if (onDismissReturnContext) onDismissReturnContext();
+                      setSelectedTenant(null);
+                    }}
                     className="md:hidden flex items-center gap-2 text-indigo-600 hover:text-indigo-700 font-extrabold text-xs mb-4 transition-all pb-2 border-b border-gray-100 w-full cursor-pointer"
                   >
                     <ArrowLeft className="w-4 h-4" />
@@ -3578,8 +3634,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                   <div className="flex justify-between items-center">
                     <label className="block text-xs font-semibold text-slate-700">ขออนุญาตนำสัตว์เลี้ยงเข้าพัก</label>
                     {(() => {
-                      const dormObj = getDormitory();
-                      let pPolicy = dormObj?.petPolicy;
+                      let pPolicy = dorm?.petPolicy;
                       if (!pPolicy) {
                         try {
                           const saved = localStorage.getItem('registered_dorm_profile');
@@ -3599,8 +3654,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                     })()}
                   </div>
                   {(() => {
-                    const dormObj = getDormitory();
-                    let pPolicy = dormObj?.petPolicy;
+                    let pPolicy = dorm?.petPolicy;
                     if (!pPolicy) {
                       try {
                         const saved = localStorage.getItem('registered_dorm_profile');
@@ -4434,8 +4488,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                   <div className="flex justify-between items-center">
                     <label className="block text-xs font-bold text-slate-700">ขอเลี้ยงสัตว์เลี้ยง</label>
                     {(() => {
-                      const dormObj = getDormitory();
-                      let pPolicy = dormObj?.petPolicy;
+                      let pPolicy = dorm?.petPolicy;
                       if (!pPolicy) {
                         try {
                           const saved = localStorage.getItem('registered_dorm_profile');
@@ -4455,8 +4508,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                     })()}
                   </div>
                   {(() => {
-                    const dormObj = getDormitory();
-                    let pPolicy = dormObj?.petPolicy;
+                    let pPolicy = dorm?.petPolicy;
                     if (!pPolicy) {
                       try {
                         const saved = localStorage.getItem('registered_dorm_profile');

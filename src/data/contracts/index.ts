@@ -268,6 +268,7 @@ export interface OccupancyDataSource {
 
 export interface HorPlusDataProvider {
   dormitories: DormitoryDataSource;
+  dormitory?: DormitoryDataSource;
   rooms: RoomDataSource;
   tenants: TenantDataSource;
   contracts: ContractDataSource;
