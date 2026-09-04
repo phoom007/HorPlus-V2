@@ -250,6 +250,11 @@ describe('Owner Round 2.4K.4 — Manual UAT Payment Motion & Rejected Countdown 
 
     await screen.findByText('ห้อง 201');
 
+    // 1. Proving card visible before success
+    let cardEl = screen.getByText('ห้อง 201').closest('div.rounded-3xl');
+    expect(cardEl?.className).toContain('opacity-100');
+    expect(cardEl?.className).not.toContain('opacity-0');
+
     vi.useFakeTimers();
 
     // Click [ รับเงินสด ]
@@ -266,10 +271,89 @@ describe('Owner Round 2.4K.4 — Manual UAT Payment Motion & Rejected Countdown 
       await Promise.resolve();
     });
 
-    // Card receives exiting class (opacity-0 -translate-y-2)
-    const cardEl = screen.getByText('ห้อง 201').closest('div.rounded-3xl');
+    // 2. Exit state after success: smooth exit + layout collapse classes
+    cardEl = screen.getByText('ห้อง 201').closest('div.rounded-3xl');
     expect(cardEl?.className).toContain('opacity-0');
     expect(cardEl?.className).toContain('-translate-y-2');
+    expect(cardEl?.className).toContain('max-h-0');
+    expect(cardEl?.className).toContain('overflow-hidden');
+
+    // 3. Card does NOT reappear while refetch is pending:
+    // Advance timer past exit animation duration (e.g. 500ms)
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    // Card remains suppressed at opacity-0 max-h-0 even though bills prop still has it
+    cardEl = screen.getByText('ห้อง 201').closest('div.rounded-3xl');
+    expect(cardEl?.className).toContain('opacity-0');
+    expect(cardEl?.className).toContain('max-h-0');
+
+    vi.useRealTimers();
+  });
+
+  it('D. Server failure never initiates exit motion or card suppression', async () => {
+    const failingBill = {
+      id: 'bill-fail-01',
+      dormitoryId: 'dorm-test-01',
+      billingCycleId: 'cycle-sep-2026',
+      cycleId: 'cycle-sep-2026',
+      totalAmount: 4000,
+      outstandingAmount: 4000,
+      status: 'pending',
+      billStatus: 'pending',
+      roomId: 'room-301',
+      roomNumber: '301',
+      tenantId: 'tenant-004',
+      tenant: { displayName: 'สมศักดิ์ ขยันยิ่ง' },
+      items: [{ type: 'rent', description: 'ค่าเช่าห้อง', amount: 4000 }],
+    };
+
+    vi.spyOn(httpClient, 'httpRequest').mockImplementation(async (method: string, url: string) => {
+      if (method === 'POST' && url.includes('/payments/cash')) {
+        throw new Error('Network offline or database conflict');
+      }
+      return [];
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <PaymentsOwnerView
+          dormitoryId="dorm-test-01"
+          bills={[failingBill] as any}
+          rooms={[{ id: 'room-301', roomNumber: '301' }] as any}
+          tenants={[{ id: 'tenant-004', displayName: 'สมศักดิ์ ขยันยิ่ง' }] as any}
+          selectedBillingCycleId="cycle-sep-2026"
+          selectedCycleCode="2026-09"
+          billingCycles={testBillingCycles as any}
+        />
+      </QueryClientProvider>
+    );
+
+    const unpaidTab = await screen.findByRole('button', { name: /ยังไม่ชำระ/i });
+    fireEvent.click(unpaidTab);
+
+    await screen.findByText('ห้อง 301');
+
+    vi.useFakeTimers();
+
+    const cashBtn = screen.getByRole('button', { name: /รับเงินสด/i });
+    fireEvent.click(cashBtn);
+
+    // Expire countdown
+    act(() => {
+      vi.advanceTimersByTime(5000);
+    });
+
+    // Flush promise resolution
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // Card NEVER received exiting classes on failure
+    const cardEl = screen.getByText('ห้อง 301').closest('div.rounded-3xl');
+    expect(cardEl?.className).toContain('opacity-100');
+    expect(cardEl?.className).not.toContain('opacity-0');
+    expect(cardEl?.className).not.toContain('max-h-0');
 
     vi.useRealTimers();
   });

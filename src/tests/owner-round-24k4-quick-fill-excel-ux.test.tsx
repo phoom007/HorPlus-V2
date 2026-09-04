@@ -176,6 +176,15 @@ describe('Owner Round 2.4K.4 — Quick Fill Excel Range Delete & Option B Semant
     const dormId = 'dorm-test-01';
     const cycleId = 'cycle-aug-2026';
 
+    const roomPreviewItems = mockRooms.map((r) => ({
+      roomId: r.id,
+      amountDue: '0.00',
+      chargeComponents: [],
+      isPaid: false,
+      billStatus: 'draft',
+      overallFinancialStatus: 'draft',
+    }));
+
     queryClient.setQueryData(queryKeys.meterPreviewContext(dormId, cycleId), {
       rateSnapshot: {
         waterBillingType: 'per_unit',
@@ -185,14 +194,7 @@ describe('Owner Round 2.4K.4 — Quick Fill Excel Range Delete & Option B Semant
         commonFee: '0.00',
         commonFeeMode: 'free',
       },
-      rooms: mockRooms.map((r) => ({
-        roomId: r.id,
-        amountDue: '0.00',
-        chargeComponents: [],
-        isPaid: false,
-        billStatus: 'draft',
-        overallFinancialStatus: 'draft',
-      })),
+      rooms: roomPreviewItems,
     });
 
     queryClient.setQueryData(queryKeys.meterWorkspace(dormId, cycleId), {
@@ -202,6 +204,11 @@ describe('Owner Round 2.4K.4 — Quick Fill Excel Range Delete & Option B Semant
         { id: 'm3', billingCycleId: cycleId, roomId: 'r-102', meterType: 'water', previousReading: '200', currentReading: '220' },
         { id: 'm4', billingCycleId: cycleId, roomId: 'r-102', meterType: 'electricity', previousReading: '600', currentReading: '660' },
       ],
+      rooms: roomPreviewItems,
+      previewContext: {
+        rooms: roomPreviewItems,
+      },
+      cyclePeopleRes: { success: true, data: [] },
     });
 
     render(
@@ -283,6 +290,161 @@ describe('Owner Round 2.4K.4 — Quick Fill Excel Range Delete & Option B Semant
     // Assert Thai fail-closed validation message appears
     await waitFor(() => {
       expect(screen.getByText(/กรุณาระบุจำนวนผู้พักอาศัยห้อง 101 ก่อนบันทึก/i)).toBeDefined();
+    });
+  });
+
+  // =========================================================================
+  // 4. SINGLE-ROOM ISSUE WITH BLANK PEOPLE COUNT FAILS CLOSED
+  // =========================================================================
+  it('D. Single-room issue with blank peopleCount fails closed before API call, shows Thai validation, and does not mutate bill', async () => {
+    const dormId = 'dorm-test-01';
+    const cycleId = 'cycle-aug-2026';
+
+    const roomPreviewItems = mockRooms.map((r) => ({
+      roomId: r.id,
+      amountDue: '0.00',
+      chargeComponents: [],
+      isPaid: false,
+      billStatus: 'draft',
+      overallFinancialStatus: 'draft',
+    }));
+
+    queryClient.setQueryData(queryKeys.meterPreviewContext(dormId, cycleId), {
+      rateSnapshot: {
+        waterBillingType: 'per_unit',
+        waterRate: '18.00',
+        electricityBillingType: 'per_unit',
+        electricityRate: '8.00',
+        commonFee: '0.00',
+        commonFeeMode: 'free',
+      },
+      rooms: roomPreviewItems,
+    });
+
+    queryClient.setQueryData(queryKeys.meterWorkspace(dormId, cycleId), {
+      serverReadings: [
+        { id: 'm1', billingCycleId: cycleId, roomId: 'r-101', meterType: 'water', previousReading: '100', currentReading: '110' },
+        { id: 'm2', billingCycleId: cycleId, roomId: 'r-101', meterType: 'electricity', previousReading: '500', currentReading: '550' },
+      ],
+      rooms: roomPreviewItems,
+      previewContext: {
+        rooms: roomPreviewItems,
+      },
+      cyclePeopleRes: { success: true, data: [] },
+    });
+
+    const toggleSwitchSpy = vi.fn();
+    // Spy on toggleRoomBillSwitch on the data provider
+    const { getDataProvider } = await import('../data/dataProvider');
+    const originalProvider = getDataProvider();
+    originalProvider.meters.toggleRoomBillSwitch = toggleSwitchSpy;
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <OwnerMeters
+          dormitoryId={dormId}
+          dormitoryName="หอพัก สุขใจ"
+          rooms={mockRooms as any}
+          buildings={mockBuildings as any}
+          billingCycles={mockBillingCycles as any}
+          currentCycle={mockBillingCycles[0] as any}
+          selectedBillingCycleId={cycleId}
+          selectedCycleCode="2026-08"
+        />
+      </QueryClientProvider>
+    );
+
+    await screen.findByText('101');
+
+    // Clear peopleCount of room 101 in table
+    const peopleInput = document.querySelector('input[data-row="0"][data-col="peopleCount"]') as HTMLInputElement;
+    expect(peopleInput).toBeDefined();
+    fireEvent.change(peopleInput, { target: { value: '' } });
+
+    // Click the single-room switch to issue bill
+    const switchBtns = screen.getAllByRole('switch');
+    expect(switchBtns.length).toBeGreaterThan(0);
+    fireEvent.click(switchBtns[0]);
+
+    // Assert: Thai validation error appears
+    await waitFor(() => {
+      expect(screen.getByText('กรุณาระบุจำนวนผู้พักอาศัยห้อง 101 ก่อนออกบิล')).toBeDefined();
+    });
+
+    // Assert: No API call was dispatched
+    expect(toggleSwitchSpy).not.toHaveBeenCalled();
+
+    // Assert: peopleCount input for room 101 was focused
+    expect(document.activeElement).toBe(peopleInput);
+  });
+
+  // =========================================================================
+  // 5. SINGLE FOCUSED CELL BACKSPACE/DELETE DOES NOT BLANK WHOLE CELL
+  // =========================================================================
+  it('E. User editing a single focused cell: Backspace/Delete behaves as normal input text editing without blanking whole cell', async () => {
+    await setupSpreadsheetMode();
+
+    // Focus single cell (row 0, elecCurr)
+    const elecCell = document.querySelector('td[data-cell-row="0"][data-cell-col="elecCurr"]') as HTMLElement;
+    const elecInput = elecCell.querySelector('input') as HTMLInputElement;
+
+    // Simulate typing '560' into the focused input
+    fireEvent.change(elecInput, { target: { value: '560' } });
+    expect(elecInput.value).toBe('560');
+
+    elecInput.focus();
+    fireEvent.pointerDown(elecCell);
+
+    // Fire Backspace event with cancelable: true
+    const backspaceEvent = new KeyboardEvent('keydown', {
+      key: 'Backspace',
+      code: 'Backspace',
+      bubbles: true,
+      cancelable: true,
+    });
+    const notPrevented = window.dispatchEvent(backspaceEvent);
+
+    // Assert event was NOT prevented (it is allowed to pass to the native input)
+    expect(notPrevented).toBe(true);
+    expect(backspaceEvent.defaultPrevented).toBe(false);
+
+    // The cell value remains intact at '560' (not wiped out to blank)
+    expect(elecInput.value).toBe('560');
+  });
+
+  // =========================================================================
+  // 6. RECTANGULAR RANGE DELETE CLEARS ERROR MARKERS (rejectedSpreadsheetCells)
+  // =========================================================================
+  it('F. Rectangular range delete clears error markers from rejectedSpreadsheetCells', async () => {
+    await setupSpreadsheetMode();
+
+    const elecCell = document.querySelector('td[data-cell-row="0"][data-cell-col="elecCurr"]') as HTMLElement;
+    const elecInput = elecCell.querySelector('input') as HTMLInputElement;
+
+    // Enter an invalid reading: previous is 500, new is 400 (lower without rollover)
+    fireEvent.change(elecInput, { target: { value: '400' } });
+
+    // Assert cell has rejected error indicator (ring-rose-500)
+    await waitFor(() => {
+      expect(elecCell.className).toContain('ring-rose-500');
+    });
+
+    // Drag-select a multi-cell range covering this cell and the next
+    const startCell = elecCell;
+    const endCell = document.querySelector('td[data-cell-row="1"][data-cell-col="elecCurr"]') as HTMLElement;
+
+    fireEvent.pointerDown(startCell);
+    fireEvent.pointerEnter(endCell);
+
+    // Press Delete key
+    fireEvent.keyDown(window, { key: 'Delete', code: 'Delete' });
+
+    // Cell value is cleared to blank
+    expect(elecInput.value).toBe('');
+
+    // Error marker (ring-rose-500) is completely removed!
+    await waitFor(() => {
+      expect(elecCell.className).not.toContain('ring-rose-500');
     });
   });
 });

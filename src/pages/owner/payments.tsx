@@ -817,20 +817,16 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
   // Smooth exit motion state for cards leaving current tab
   const [exitingCardIds, setExitingCardIds] = useState<Set<string>>(new Set());
 
-  const animateCardExit = async (cardId: string, onComplete: () => void) => {
-    const isReducedMotion = typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    if (isReducedMotion) {
-      onComplete();
-      return;
-    }
+  const animateCardExit = async (cardId: string, onComplete?: () => void | Promise<void>) => {
+    if (!cardId) return;
     setExitingCardIds(prev => new Set(prev).add(cardId));
-    await new Promise(r => setTimeout(r, 280));
-    onComplete();
-    setExitingCardIds(prev => {
-      const next = new Set(prev);
-      next.delete(cardId);
-      return next;
-    });
+    const isReducedMotion = typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (!isReducedMotion) {
+      await new Promise(r => setTimeout(r, 280));
+    }
+    if (onComplete) {
+      await onComplete();
+    }
   };
 
   // Clean up timers on unmount
@@ -1402,6 +1398,40 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
       })
       .sort((a, b) => new Date(b.reviewedAt || b.createdAt).getTime() - new Date(a.reviewedAt || a.createdAt).getTime());
   }, [paymentsData, effectiveCycleId, billingCycles]);
+
+  // Synchronize and prune exitingCardIds:
+  // Card remains suppressed while stale cache still contains it;
+  // Clear from exitingCardIds ONLY after authoritative server projection no longer contains that card.
+  useEffect(() => {
+    if (exitingCardIds.size === 0) return;
+    const currentActiveIds = new Set<string>();
+    checkingReviewItems.forEach(item => {
+      currentActiveIds.add(item.id);
+      if (item.groupId) currentActiveIds.add(item.groupId);
+      if (item.paymentId) currentActiveIds.add(item.paymentId);
+    });
+    cashPendingBills.forEach(b => currentActiveIds.add(b.id));
+    unpaidDailyInvoices.forEach(inv => currentActiveIds.add(inv.id));
+
+    let needsPrune = false;
+    exitingCardIds.forEach(id => {
+      if (!currentActiveIds.has(id)) {
+        needsPrune = true;
+      }
+    });
+
+    if (needsPrune) {
+      setExitingCardIds(prev => {
+        const next = new Set<string>();
+        prev.forEach(id => {
+          if (currentActiveIds.has(id)) {
+            next.add(id);
+          }
+        });
+        return next;
+      });
+    }
+  }, [checkingReviewItems, cashPendingBills, unpaidDailyInvoices, exitingCardIds]);
 
   // General search filter helpers
   const filterConsolidatedGroupsByQuery = (list: typeof consolidatedPaidGroups) => {
@@ -1977,7 +2007,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
               })
               .map(item => {
                 return (
-                  <div key={item.id} className={`bg-white rounded-3xl border border-amber-200 shadow-2xs hover:shadow-md transition-all duration-300 ease-in-out p-5 flex flex-col justify-between space-y-4 ${exitingCardIds.has(item.id) ? 'opacity-0 -translate-y-2 pointer-events-none scale-95' : 'opacity-100 translate-y-0'}`}>
+                  <div key={item.id} className={`bg-white rounded-3xl border border-amber-200 shadow-2xs hover:shadow-md transition-all duration-300 ease-in-out flex flex-col justify-between ${exitingCardIds.has(item.id) ? 'opacity-0 -translate-y-2 pointer-events-none scale-95 max-h-0 !p-0 !m-0 !border-0 overflow-hidden' : 'opacity-100 translate-y-0 max-h-[1200px] p-5 space-y-4'}`}>
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-xl font-black text-slate-900 shrink-0">ห้อง {item.roomNum}</span>
                       <div className="flex items-center gap-1.5 shrink-0 flex-nowrap">
@@ -2121,7 +2151,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
               const startDate = resolveAuthoritativeStartDate(b);
 
               return (
-                <div key={b.id} className={`bg-white rounded-3xl border border-slate-200/90 shadow-2xs hover:shadow-md transition-all duration-300 ease-in-out p-5 flex flex-col justify-between space-y-4 ${exitingCardIds.has(b.id) ? 'opacity-0 -translate-y-2 pointer-events-none scale-95' : 'opacity-100 translate-y-0'}`}>
+                <div key={b.id} className={`bg-white rounded-3xl border border-slate-200/90 shadow-2xs hover:shadow-md transition-all duration-300 ease-in-out flex flex-col justify-between ${exitingCardIds.has(b.id) ? 'opacity-0 -translate-y-2 pointer-events-none scale-95 max-h-0 !p-0 !m-0 !border-0 overflow-hidden' : 'opacity-100 translate-y-0 max-h-[1200px] p-5 space-y-4'}`}>
                   <div className="flex items-center justify-between">
                     <span className="text-xl font-black text-slate-900">ห้อง {roomNum}</span>
                     <div className="flex items-center gap-1">
@@ -2334,7 +2364,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
               const isPartiallyPaid = (inv.status || '').toUpperCase() === 'PARTIALLY_PAID';
 
               return (
-                <div key={inv.id} className={`bg-white rounded-3xl border border-emerald-200/90 shadow-2xs hover:shadow-md transition-all duration-300 ease-in-out p-5 flex flex-col justify-between space-y-4 ${exitingCardIds.has(inv.id) ? 'opacity-0 -translate-y-2 pointer-events-none scale-95' : 'opacity-100 translate-y-0'}`}>
+                <div key={inv.id} className={`bg-white rounded-3xl border border-emerald-200/90 shadow-2xs hover:shadow-md transition-all duration-300 ease-in-out flex flex-col justify-between ${exitingCardIds.has(inv.id) ? 'opacity-0 -translate-y-2 pointer-events-none scale-95 max-h-0 !p-0 !m-0 !border-0 overflow-hidden' : 'opacity-100 translate-y-0 max-h-[1200px] p-5 space-y-4'}`}>
                   <div className="flex items-center justify-between">
                     <span className="text-xl font-black text-slate-900">ห้อง {roomNum}</span>
                     <div className="flex items-center gap-1">

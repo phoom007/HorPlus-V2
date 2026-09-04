@@ -1399,6 +1399,8 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   activeSpreadsheetCellRef.current = activeSpreadsheetCell;
   const spreadsheetColumnsRef = useRef(spreadsheetColumns);
   spreadsheetColumnsRef.current = spreadsheetColumns;
+  const rejectedSpreadsheetCellsRef = useRef(rejectedSpreadsheetCells);
+  rejectedSpreadsheetCellsRef.current = rejectedSpreadsheetCells;
 
   const dragRafIdRef = useRef<number | null>(null);
   const isComponentMountedRef = useRef<boolean>(true);
@@ -1466,17 +1468,25 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         }
       } else if ((e.key === 'Delete' || e.key === 'Backspace') && !isDraggingFillRef.current) {
         const range = selectedSpreadsheetRangeRef.current;
-        if (range) {
+        const isMultiCellRange = Boolean(range && (range.startRow !== range.endRow || range.startCol !== range.endCol));
+        const activeTag = (document.activeElement as HTMLElement)?.tagName?.toLowerCase();
+        const isEditingInput = activeTag === 'input' || activeTag === 'textarea';
+
+        // Single cell input text editing must behave normally; range delete applies to multi-cell range or non-input selection
+        if (isMultiCellRange || (!isEditingInput && range)) {
           e.preventDefault();
-          const minR = Math.min(range.startRow, range.endRow);
-          const maxR = Math.max(range.startRow, range.endRow);
-          const minC = Math.min(range.startCol, range.endCol);
-          const maxC = Math.max(range.startCol, range.endCol);
+          const minR = Math.min(range!.startRow, range!.endRow);
+          const maxR = Math.max(range!.startRow, range!.endRow);
+          const minC = Math.min(range!.startCol, range!.endCol);
+          const maxC = Math.max(range!.startCol, range!.endCol);
 
           const currentRows = meterRowsRef.current;
           const cols = spreadsheetColumnsRef.current;
           const updated = [...currentRows];
+          const nextRejected = { ...rejectedSpreadsheetCellsRef.current };
           let hasChange = false;
+          let hasRejectedChange = false;
+
           for (let r = minR; r <= maxR; r++) {
             if (!updated[r]) continue;
             const isRowPaid = Boolean(updated[r].isPaid || updated[r].billStatus === 'paid' || updated[r].isLocked);
@@ -1487,13 +1497,22 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
               if (col && col.editable) {
                 rowCopy[col.key as keyof MeterRowState] = '' as any;
                 hasChange = true;
+                const cellKey = `${r}:${col.key}`;
+                if (nextRejected[cellKey] !== undefined) {
+                  delete nextRejected[cellKey];
+                  hasRejectedChange = true;
+                }
               }
             }
             updated[r] = rowCopy;
           }
+
           if (hasChange) {
             setMeterRows(updated);
             pushHistory(updated);
+          }
+          if (hasRejectedChange) {
+            setRejectedSpreadsheetCells(nextRejected);
           }
         }
       }
@@ -2797,6 +2816,19 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     const isCurrentlyIssued = muStatus !== 'draft' && muStatus !== 'cancelled';
     const targetAction = isCurrentlyIssued ? 'cancel' : 'issue';
 
+    if (targetAction === 'issue') {
+      const pCount = row.peopleCount;
+      if (pCount === '' || pCount === null || pCount === undefined) {
+        showToast(`กรุณาระบุจำนวนผู้พักอาศัยห้อง ${row.roomNumber} ก่อนออกบิล`, 'error');
+        const rIdx = meterRows.findIndex(r => r.roomId === row.roomId);
+        const el = document.querySelector(
+          `input[data-row="${rIdx}"][data-col="peopleCount"], td[data-cell-row="${rIdx}"][data-cell-col="peopleCount"] input, input[name="peopleCount-${row.roomId}"]`
+        ) as HTMLInputElement | null;
+        el?.focus();
+        return;
+      }
+    }
+
     let dirtyRowData: any = undefined;
     if (targetAction === 'issue') {
       const orig = (originalRowsRef.current || []).find(o => o.roomId === row.roomId);
@@ -2813,7 +2845,12 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       if (!orig || row.isReplaced !== orig.isReplaced) { dirtyObj.isReplaced = row.isReplaced; hasChanges = true; }
 
       if (hasChanges) {
-        dirtyRowData = serializeMeterWorkspaceDirtyRow(dirtyObj);
+        try {
+          dirtyRowData = serializeMeterWorkspaceDirtyRow(dirtyObj);
+        } catch (serErr: any) {
+          showToast(mapErrorMessageToThai(serErr) || serErr?.message || 'ข้อมูลมิเตอร์ไม่ถูกต้อง', 'error');
+          return;
+        }
       }
     }
 
