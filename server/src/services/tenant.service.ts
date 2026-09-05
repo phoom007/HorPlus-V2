@@ -608,7 +608,7 @@ export class TenantService {
     await localStorageProvider.saveFile(objectKey, secured.buffer);
 
     const uploadedAt = new Date();
-    let updatedTenant: any = null;
+    let updatedTenant: TenantEntity | null = null;
     try {
       updatedTenant = await this.tenantRepo.update(tenantId, dormitoryId, {
         idCardObjectKey: objectKey,
@@ -628,7 +628,20 @@ export class TenantService {
       throw repoErr;
     }
 
-    // Success: cleanup superseded old private file
+    if (!updatedTenant) {
+      // Compensation: delete newly written file so no orphan file remains
+      try {
+        await localStorageProvider.deleteFile(objectKey);
+      } catch (cleanupErr) {
+        logger.error({ cleanupErr, objectKey }, '[TenantDocument] Compensation cleanup failed after null repo update');
+      }
+      const err = new Error('ไม่พบข้อมูลผู้เช่าที่ระบุ');
+      (err as any).code = 'TENANT_NOT_FOUND';
+      (err as any).statusCode = 404;
+      throw err;
+    }
+
+    // Success: cleanup superseded old private file (fail-soft)
     if (oldObjectKey && oldObjectKey !== objectKey) {
       try {
         await localStorageProvider.deleteFile(oldObjectKey);
@@ -637,19 +650,24 @@ export class TenantService {
       }
     }
 
+    // Post-commit audit logging (fail-soft)
     if (this.auditService && actorUserId) {
-      await this.auditService.log({
-        userId: actorUserId,
-        action: 'TENANT_ID_CARD_UPLOADED',
-        source: 'tenant',
-        reason: `Uploaded ID card document for tenant ${tenant.displayName}`,
-        ipMetadata: { dormitoryId, tenantId, sha256: secured.sha256 },
-      });
+      try {
+        await this.auditService.log({
+          userId: actorUserId,
+          action: 'TENANT_ID_CARD_UPLOADED',
+          source: 'tenant',
+          reason: `Uploaded ID card document for tenant ${tenant.displayName}`,
+          ipMetadata: { dormitoryId, tenantId, sha256: secured.sha256 },
+        });
+      } catch (auditErr) {
+        logger.error({ auditErr, tenantId }, '[TenantDocument] Post-commit audit log failure (fail-soft)');
+      }
     }
 
     return {
       tenantId,
-      version: updatedTenant?.version,
+      version: updatedTenant.version,
       idCardUploadedAt: uploadedAt.toISOString(),
       idCardSha256: secured.sha256,
       idCardMimeType: secured.mimeType,

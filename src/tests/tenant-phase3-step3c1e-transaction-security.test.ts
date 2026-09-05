@@ -2139,4 +2139,182 @@ describe('TENANT PHASE 3 STEP 3C.1E: Atomic Profile Save, Document Security & Do
       expect(updated?.petInfo[0].name).toBe('หมาด่างแสนรู้');
     });
   });
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // PART 12: STEP 3C.1K IDENTITY DOCUMENT POST-COMMIT ACK & FAIL-SOFT AUDIT
+  // ──────────────────────────────────────────────────────────────────────────
+  describe('Part 12: Step 3C.1K Identity Document Post-Commit Ack & Fail-Soft Audit', () => {
+    it('1. Service test: auditService.log throws -> updateTenantIdentityDocument succeeds (fail-soft), returns version N+1', async () => {
+      // Seed existing document first
+      const firstUpload = await tenantService.updateTenantIdentityDocument(dormAId, testTenantAId, validPngBuffer, ownerUserId);
+      const tenantBefore = await tenantRepo.findById(testTenantAId, dormAId);
+      const oldKey = tenantBefore!.idCardObjectKey!;
+      const versionN = tenantBefore!.version;
+
+      const deleteSpy = vi.spyOn(localStorageProvider, 'deleteFile');
+      const auditSpy = vi.spyOn((tenantService as any).auditService, 'log').mockRejectedValueOnce(
+        new Error('Audit cluster transient connection drop')
+      );
+
+      try {
+        const result = await tenantService.updateTenantIdentityDocument(dormAId, testTenantAId, validPngBuffer, ownerUserId);
+
+        // Resolves SUCCESS despite audit failure
+        expect(result).toBeDefined();
+        expect(result.version).toBe(versionN + 1);
+        expect(result.tenantId).toBe(testTenantAId);
+
+        // Verify state in DB
+        const tenantAfter = await tenantRepo.findById(testTenantAId, dormAId);
+        expect(tenantAfter?.idCardObjectKey).toBeDefined();
+        expect(tenantAfter?.idCardObjectKey).not.toBe(oldKey);
+        expect(tenantAfter?.version).toBe(versionN + 1);
+
+        // Old document cleanup was executed
+        expect(deleteSpy).toHaveBeenCalledWith(oldKey);
+        // Audit was attempted
+        expect(auditSpy).toHaveBeenCalled();
+      } finally {
+        deleteSpy.mockRestore();
+        auditSpy.mockRestore();
+      }
+    });
+
+    it('2. Route test: POST /api/v1/tenants/:id/identity-document -> audit fails -> HTTP 200 (not 500) with new version', async () => {
+      const tenantBefore = await tenantRepo.findById(testTenantAId, dormAId);
+      const vBefore = tenantBefore!.version;
+
+      const auditSpy = vi.spyOn((tenantService as any).auditService, 'log').mockRejectedValueOnce(
+        new Error('Audit pipeline disk full')
+      );
+
+      try {
+        const res = await request(app)
+          .post(`/api/v1/tenants/${testTenantAId}/identity-document`)
+          .set(authHeaders(ownerAuth, dormAId))
+          .attach('file', validPngBuffer, 'id_card.png');
+
+        // HTTP 200, NOT 500
+        expect(res.status).toBe(200);
+        expect(res.body.data.tenantId).toBe(testTenantAId);
+        expect(res.body.data.version).toBe(vBefore + 1);
+        expect(res.body.data.hasIdentityDocument).toBe(true);
+        expect(res.body.data.idCardSha256).toBeDefined();
+
+        // No raw internal fields exposed
+        expect(res.body.data.idCardObjectKey).toBeUndefined();
+        expect(res.body.data.objectKey).toBeUndefined();
+        expect(res.body.data.nationalId).toBeUndefined();
+        expect(res.body.data.nationalIdEncrypted).toBeUndefined();
+      } finally {
+        auditSpy.mockRestore();
+      }
+    });
+
+    it('3. Null update test: tenantRepo.update returns null -> compensation deletes NEW object, OLD object untouched', async () => {
+      // Seed existing document
+      await tenantService.updateTenantIdentityDocument(dormAId, testTenantAId, validPngBuffer, ownerUserId);
+      const tenantBefore = await tenantRepo.findById(testTenantAId, dormAId);
+      const oldKey = tenantBefore!.idCardObjectKey!;
+      const oldSha = tenantBefore!.idCardSha256!;
+      const versionBefore = tenantBefore!.version;
+
+      const deletedKeys: string[] = [];
+      const originalDelete = localStorageProvider.deleteFile.bind(localStorageProvider);
+      const delSpy = vi.spyOn(localStorageProvider, 'deleteFile').mockImplementation(async (key: string) => {
+        deletedKeys.push(key);
+        return originalDelete(key);
+      });
+      const auditSpy = vi.spyOn((tenantService as any).auditService, 'log');
+      const updateSpy = vi.spyOn(tenantRepo, 'update').mockResolvedValueOnce(null as any);
+
+      try {
+        await expect(
+          tenantService.updateTenantIdentityDocument(dormAId, testTenantAId, validPngBuffer, ownerUserId)
+        ).rejects.toMatchObject({
+          code: 'TENANT_NOT_FOUND',
+          statusCode: 404,
+        });
+
+        // Compensation: NEW staged object was deleted
+        expect(deletedKeys.length).toBeGreaterThan(0);
+        const newDeletedKey = deletedKeys[0];
+        expect(newDeletedKey).toContain(`tenants/${dormAId}/${testTenantAId}/id-card-`);
+        expect(newDeletedKey).not.toBe(oldKey);
+
+        // OLD object remains untouched: deleteFile was NOT invoked with oldKey
+        expect(deletedKeys).not.toContain(oldKey);
+
+        // No audit logged on null update failure
+        expect(auditSpy).not.toHaveBeenCalled();
+
+        // Database pointer untouched
+        const tenantCurrent = await tenantRepo.findById(testTenantAId, dormAId);
+        expect(tenantCurrent?.idCardObjectKey).toBe(oldKey);
+        expect(tenantCurrent?.idCardSha256).toBe(oldSha);
+        expect(tenantCurrent?.version).toBe(versionBefore);
+      } finally {
+        delSpy.mockRestore();
+        auditSpy.mockRestore();
+        updateSpy.mockRestore();
+      }
+    });
+
+    it('4. Frontend regression proof: profile N->N+1, document N+1->N+2 with audit failure, next profile save uses N+2 without conflict', async () => {
+      const tenantInit = await tenantRepo.findById(testTenantAId, dormAId);
+      const versionN = tenantInit!.version;
+
+      // 1. Profile aggregate update: N -> N+1
+      const resProfile1 = await request(app)
+        .put(`/api/v1/tenants/${testTenantAId}/profile`)
+        .set(authHeaders(ownerAuth, dormAId))
+        .send({
+          displayName: 'สมชาย สเต็ปแรก',
+          phone: '0812345678',
+          version: versionN,
+        });
+      expect(resProfile1.status).toBe(200);
+      const versionN1 = resProfile1.body.data.tenant.version;
+      expect(versionN1).toBe(versionN + 1);
+
+      // 2. Document replacement with audit service failure: N+1 -> N+2
+      const auditSpy = vi.spyOn((tenantService as any).auditService, 'log').mockRejectedValueOnce(
+        new Error('Audit cluster failure during identity document upload')
+      );
+
+      let versionN2: number;
+      try {
+        const resDoc = await request(app)
+          .post(`/api/v1/tenants/${testTenantAId}/identity-document`)
+          .set(authHeaders(ownerAuth, dormAId))
+          .attach('file', validPngBuffer, 'id_card.png');
+
+        expect(resDoc.status).toBe(200);
+        versionN2 = resDoc.body.data.version;
+        expect(versionN2).toBe(versionN1 + 1);
+        expect(versionN2).toBe(versionN + 2);
+      } finally {
+        auditSpy.mockRestore();
+      }
+
+      // 3. Frontend consumes N+2: immediate next profile save uses version = N+2
+      const resProfile2 = await request(app)
+        .put(`/api/v1/tenants/${testTenantAId}/profile`)
+        .set(authHeaders(ownerAuth, dormAId))
+        .send({
+          displayName: 'สมชาย บันทึกรอบสองหลังเอกสาร',
+          phone: '0812345678',
+          version: versionN2,
+        });
+
+      // Assert NO RESOURCE_VERSION_CONFLICT
+      expect(resProfile2.status).toBe(200);
+      expect(resProfile2.body.data.tenant.version).toBe(versionN2 + 1);
+      expect(resProfile2.body.data.tenant.displayName).toBe('สมชาย บันทึกรอบสองหลังเอกสาร');
+
+      const tenantFinal = await tenantRepo.findById(testTenantAId, dormAId);
+      expect(tenantFinal?.displayName).toBe('สมชาย บันทึกรอบสองหลังเอกสาร');
+      expect(tenantFinal?.version).toBe(versionN + 3);
+    });
+  });
 });
