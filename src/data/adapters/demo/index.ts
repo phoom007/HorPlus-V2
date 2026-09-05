@@ -20,7 +20,8 @@ import {
   StaffRoleDataSource,
   TenantRegistrationDataSource,
   DataResult,
-  TenantProfileDetails
+  TenantProfileDetails,
+  UpdateTenantProfilePayload
 } from '../../contracts';
 
 import {
@@ -30,8 +31,6 @@ import {
   contractRepository,
   meterRepository,
   billingRepository,
-  
-  
   maintenanceRepository,
   announcementRepository,
   notificationRepository,
@@ -282,15 +281,75 @@ export class DemoTenantAdapter implements TenantDataSource {
     }
   }
 
-  getIdentityDocumentUrl(tenantId: string): string {
-    return `/api/v1/tenants/${encodeURIComponent(tenantId)}/identity-document`;
+  getIdentityDocumentUrl(tenantId: string, dormitoryId?: string): string {
+    const query = dormitoryId ? `?dormitoryId=${encodeURIComponent(dormitoryId)}` : '';
+    return `/api/v1/tenants/${encodeURIComponent(tenantId)}/identity-document${query}`;
+  }
+
+  async updateTenantProfile(tenantId: string, payload: UpdateTenantProfilePayload): Promise<DataResult<any>> {
+    try {
+      const tenant = tenantRepository.getById(tenantId);
+      if (!tenant) return { success: false, error: { code: 'RESOURCE_NOT_FOUND', message: 'ไม่พบผู้เช่า' } };
+
+      tenant.name = payload.displayName;
+      tenant.phone = payload.phone;
+      if (payload.email !== undefined) tenant.email = payload.email || '';
+      if (payload.nationalId !== undefined) tenant.citizenId = payload.nationalId || '';
+      tenant.version = (tenant.version || 1) + 1;
+
+      if (payload.emergencyContact) {
+        tenant.emergencyContact = {
+          name: payload.emergencyContact.name,
+          phone: payload.emergencyContact.phone,
+          relationship: payload.emergencyContact.relationship,
+        };
+      }
+
+      if (payload.vehicles) {
+        tenant.vehicles = payload.vehicles.map((v, idx) => ({
+          id: v.id || `veh-demo-${idx + 1}`,
+          type: v.type as any,
+          licensePlate: v.licensePlate,
+          brand: v.brand || '',
+          model: v.model || '',
+          color: v.color || '',
+          province: v.province || '',
+        }));
+      }
+
+      const submittedPets = payload.pets !== undefined ? payload.pets : (Array.isArray(payload.petInfo) ? payload.petInfo : []);
+      tenant.pets = submittedPets;
+      tenant.pet = {
+        hasPet: submittedPets.length > 0,
+        type: submittedPets[0]?.type || '',
+        name: submittedPets[0]?.name || '',
+      };
+
+      return {
+        success: true,
+        data: {
+          tenant,
+          emergencyContacts: tenant.emergencyContact ? [tenant.emergencyContact] : [],
+          vehicles: tenant.vehicles || [],
+        },
+      };
+    } catch {
+      return { success: false, error: { code: 'RESOURCE_NOT_FOUND', message: 'ไม่พบผู้เช่า' } };
+    }
   }
 
   async uploadIdentityDocument(tenantId: string, file: File | Blob): Promise<DataResult<any>> {
+    const tenant = tenantRepository.getById(tenantId);
+    let newVersion = 1;
+    if (tenant) {
+      tenant.version = (tenant.version || 1) + 1;
+      newVersion = tenant.version;
+    }
     return {
       success: true,
       data: {
         tenantId,
+        version: newVersion,
         idCardUploadedAt: new Date().toISOString(),
         idCardSha256: 'simulated-demo-sha256',
         idCardMimeType: 'image/webp',

@@ -25,7 +25,8 @@ import {
   TenantRegistrationDataSource,
   OccupancyDataSource,
   DataResult,
-  TenantProfileDetails
+  TenantProfileDetails,
+  UpdateTenantProfilePayload
 } from '../../contracts';
 
 import { httpRequest, HttpClientError } from '../../httpClient';
@@ -199,16 +200,38 @@ export class ApiRoomAdapter implements RoomDataSource {
   }
 }
 
+export interface TenantBasicProfileUpdateInput {
+  id: string;
+  displayName?: string;
+  name?: string;
+  phone?: string;
+  email?: string | null;
+  nationalId?: string;
+  citizenId?: string;
+  version?: number;
+}
+
 export class ApiTenantAdapter implements TenantDataSource {
   async getAll(): Promise<Tenant[]> {
     const rawData = await httpRequest<any>('GET', '/tenants');
-    return Array.isArray(rawData) ? rawData : (rawData?.data || []);
+    const items = Array.isArray(rawData) ? rawData : (rawData?.data || []);
+    return items.map((t: any) => ({
+      ...t,
+      name: t.name || t.displayName || '',
+      citizenId: t.nationalIdMasked ?? t.citizenId ?? '',
+    }));
   }
 
   async getById(id: string): Promise<Tenant | null> {
     try {
-      const res = await httpRequest<any>('GET', `/tenants/${id}`);
-      return (res?.data?.tenant || res?.data || res) as Tenant;
+      const res = await httpRequest<any>('GET', `/tenants/${encodeURIComponent(id)}`);
+      const raw = res?.data?.tenant || res?.data || res;
+      if (!raw) return null;
+      return {
+        ...raw,
+        name: raw.name || raw.displayName || '',
+        citizenId: raw.nationalIdMasked ?? raw.citizenId ?? '',
+      } as Tenant;
     } catch (err: any) {
       if (err instanceof HttpClientError && err.domainError.code === 'RESOURCE_NOT_FOUND') return null;
       throw err;
@@ -216,12 +239,8 @@ export class ApiTenantAdapter implements TenantDataSource {
   }
 
   async getByRoomId(roomId: string): Promise<Tenant | null> {
-    try {
-      return await httpRequest<Tenant>('GET', `/tenants/room/${roomId}`);
-    } catch (err: any) {
-      if (err instanceof HttpClientError && err.domainError.code === 'RESOURCE_NOT_FOUND') return null;
-      throw err;
-    }
+    const all = await this.getAll();
+    return all.find(t => t.roomId === roomId) || null;
   }
 
   async addTenant(tenantData: Omit<Tenant, 'id' | 'createdAt' | 'updatedAt'>): Promise<DataResult<Tenant>> {
@@ -247,28 +266,94 @@ export class ApiTenantAdapter implements TenantDataSource {
     }
   }
 
-  async updateTenant(tenant: Tenant): Promise<DataResult<Tenant>> {
+  async updateTenant(tenant: Tenant | TenantBasicProfileUpdateInput): Promise<DataResult<Tenant>> {
     try {
-      const rawName = (tenant.name || '').normalize('NFC').trim().replace(/\s+/g, ' ');
-      const cleanEmail = tenant.email && tenant.email.trim() !== '' ? tenant.email.trim() : undefined;
-      const rawNationalId = tenant.citizenId || (tenant as any).nationalId || '';
+      const payload: Record<string, any> = {};
 
-      const payload: any = {
-        ...tenant,
-        displayName: rawName || tenant.name,
-        email: cleanEmail,
-      };
+      // 1. Name: displayName must not be blank, send unsplit
+      const rawName = tenant.name !== undefined ? tenant.name : tenant.displayName;
+      if (rawName !== undefined) {
+        const normalizedName = String(rawName).normalize('NFC').trim().replace(/\s+/g, ' ');
+        if (normalizedName === '') {
+          return {
+            success: false,
+            error: { code: 'VALIDATION_ERROR', message: 'ชื่อจำเป็นต้องระบุ' },
+          };
+        }
+        payload.displayName = normalizedName;
+      }
 
-      if (rawNationalId.trim() !== '') {
-        const cleanNationalId = rawNationalId.replace(/\D/g, '');
-        const isMasked = /[xX]/.test(rawNationalId);
-        if (isMasked || cleanNationalId.length === 13) {
-          payload.nationalId = rawNationalId;
+      // 2. Phone: phone must not be blank
+      if (tenant.phone !== undefined) {
+        const cleanPhone = String(tenant.phone).trim();
+        if (cleanPhone === '') {
+          return {
+            success: false,
+            error: { code: 'VALIDATION_ERROR', message: 'เบอร์โทรศัพท์จำเป็นต้องระบุ' },
+          };
+        }
+        payload.phone = cleanPhone;
+      }
+
+      // 3. Email: optional, clear semantics (null if cleared, trimmed string if set, omit if undefined)
+      if (tenant.email !== undefined) {
+        if (tenant.email === null) {
+          payload.email = null;
+        } else {
+          const cleanEmail = String(tenant.email).trim();
+          payload.email = cleanEmail !== '' ? cleanEmail : null;
         }
       }
 
-      const data = await httpRequest<Tenant>('PUT', `/tenants/${tenant.id}`, payload);
-      return { success: true, data };
+      // 4. National ID handling:
+      // A. Existing masked value unchanged -> send masked value (backend preserves)
+      // B. Field omitted / undefined -> omit (backend preserves)
+      // C. Valid new 13-digit National ID -> send 13 digits (backend encrypts & masks)
+      // D. Blank string "" / null -> send "" (backend clears encrypted & masked values)
+      const rawNationalId = tenant.citizenId !== undefined
+        ? tenant.citizenId
+        : (tenant as any).nationalId;
+
+      if (rawNationalId !== undefined) {
+        if (rawNationalId === null) {
+          payload.nationalId = '';
+        } else {
+          const trimmedId = typeof rawNationalId === 'string' ? rawNationalId.trim() : '';
+          if (trimmedId === '') {
+            // D. Blank string -> CLEAR
+            payload.nationalId = '';
+          } else if (/[xX]/.test(trimmedId)) {
+            // A. Masked value -> preserve
+            payload.nationalId = trimmedId;
+          } else {
+            // Digits
+            const cleanDigits = trimmedId.replace(/\D/g, '');
+            payload.nationalId = cleanDigits;
+          }
+        }
+      }
+
+      // 5. Version (optimistic concurrency if provided)
+      if ((tenant as any).version !== undefined && typeof (tenant as any).version === 'number') {
+        payload.version = (tenant as any).version;
+      }
+
+      // STRICT SCOPE LOCK: For Step 3C.1 / 3C.1B, the Edit Tenant modal edits only:
+      // displayName, phone, email, nationalId (+ version).
+      // BANNED: dateOfBirth, birthDate, gender, address, notes, contracts, occupancies,
+      // bills, settlements, coOccupants, coOccupantHistory, idCardPhotoMock, vehicle,
+      // vehicles, pet, pets, emergencyContact, emergencyContacts, lineFriendId, room,
+      // rentalHistory, depositStatus, depositType, etc.
+
+      const res = await httpRequest<any>('PUT', `/tenants/${encodeURIComponent(tenant.id)}`, payload);
+      const data = res?.data || res;
+      return {
+        success: true,
+        data: {
+          ...data,
+          citizenId: data.nationalIdMasked ?? data.citizenId ?? '',
+        },
+      };
     } catch (err: any) {
       return {
         success: false,
@@ -397,9 +482,22 @@ export class ApiTenantAdapter implements TenantDataSource {
     }
   }
 
-  getIdentityDocumentUrl(tenantId: string): string {
+  getIdentityDocumentUrl(tenantId: string, dormitoryId?: string): string {
     const baseUrl = getApiBaseUrl();
-    return `${baseUrl}/tenants/${encodeURIComponent(tenantId)}/identity-document`;
+    const query = dormitoryId ? `?dormitoryId=${encodeURIComponent(dormitoryId)}` : '';
+    return `${baseUrl}/tenants/${encodeURIComponent(tenantId)}/identity-document${query}`;
+  }
+
+  async updateTenantProfile(tenantId: string, payload: UpdateTenantProfilePayload): Promise<DataResult<any>> {
+    try {
+      const res = await httpRequest<any>('PUT', `/tenants/${encodeURIComponent(tenantId)}/profile`, payload);
+      return { success: true, data: res?.data || res };
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
+      };
+    }
   }
 
   async uploadIdentityDocument(tenantId: string, file: File | Blob): Promise<DataResult<any>> {
@@ -432,19 +530,55 @@ export class ApiTenantAdapter implements TenantDataSource {
     try {
       const res = await httpRequest<any>('GET', `/tenants/${encodeURIComponent(id)}`);
       const details = res?.data || res;
+      const rawTenant = details.tenant || details;
+
+      const emergencyContacts = details.emergencyContacts ?? rawTenant?.emergencyContacts ?? [];
+      const primaryEmergency = emergencyContacts[0] || rawTenant?.emergencyContact || null;
+
+      const vehicles = details.vehicles ?? rawTenant?.vehicles ?? [];
+      const primaryVehicle = vehicles[0] || rawTenant?.vehicle || null;
+
+      const mappedPets = Array.isArray(rawTenant?.petInfo)
+        ? rawTenant.petInfo.map((p: any, idx: number) => ({
+            id: p.id || String(idx + 1),
+            type: p.type || '',
+            customType: p.customType || '',
+            name: p.name || '',
+          }))
+        : (rawTenant?.pets ?? []);
+
+      const mappedPet = rawTenant?.pet ?? {
+        hasPet: mappedPets.length > 0,
+        type: mappedPets[0]?.type || '',
+        name: mappedPets[0]?.name || '',
+      };
+
+      const idCardPhotoMock = rawTenant?.idCardPhotoMock ?? (rawTenant?.hasIdentityDocument ? this.getIdentityDocumentUrl(rawTenant.id, rawTenant?.dormitoryId) : undefined);
+
+      const tenant = {
+        ...rawTenant,
+        citizenId: rawTenant?.nationalIdMasked ?? rawTenant?.citizenId ?? '',
+        emergencyContact: primaryEmergency,
+        emergencyContacts,
+        vehicle: primaryVehicle,
+        vehicles,
+        pets: mappedPets,
+        pet: mappedPet,
+        idCardPhotoMock,
+      };
       return {
         success: true,
         data: {
-          tenant: details.tenant || details,
-          coOccupants: details.coOccupants || [],
-          coOccupantHistory: details.coOccupantHistory || [],
-          emergencyContacts: details.emergencyContacts || [],
-          vehicles: details.vehicles || [],
-          contracts: details.contracts || [],
-          occupancies: details.occupancies || [],
-          dailyStays: details.dailyStays || [],
-          bills: details.bills || [],
-          settlements: details.settlements || [],
+          tenant,
+          coOccupants: details.coOccupants ?? [],
+          coOccupantHistory: details.coOccupantHistory ?? [],
+          emergencyContacts,
+          vehicles,
+          contracts: details.contracts ?? [],
+          occupancies: details.occupancies ?? [],
+          dailyStays: details.dailyStays ?? [],
+          bills: details.bills ?? [],
+          settlements: details.settlements ?? [],
         },
       };
     } catch (err: any) {

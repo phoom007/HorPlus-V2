@@ -508,7 +508,13 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
   // Authoritative server state for tab consumption (reactive to query cache updates)
   const rooms: Room[] = queryResultMap.get(JSON.stringify(queryKeys.rooms(activeDormitoryId))) || queryClient.getQueryData<Room[]>(queryKeys.rooms(activeDormitoryId)) || [];
   const buildings: Building[] = queryResultMap.get(JSON.stringify(queryKeys.buildings(activeDormitoryId))) || queryClient.getQueryData<Building[]>(queryKeys.buildings(activeDormitoryId)) || [];
-  const tenants: Tenant[] = queryResultMap.get(JSON.stringify(queryKeys.tenants(activeDormitoryId))) || queryClient.getQueryData<Tenant[]>(queryKeys.tenants(activeDormitoryId)) || [];
+  const rawTenants: Tenant[] = queryResultMap.get(JSON.stringify(queryKeys.tenants(activeDormitoryId))) || queryClient.getQueryData<Tenant[]>(queryKeys.tenants(activeDormitoryId)) || [];
+  const tenants: Tenant[] = React.useMemo(() => {
+    return rawTenants.map(t => ({
+      ...t,
+      citizenId: (t as any).nationalIdMasked ?? t.citizenId ?? '',
+    }));
+  }, [rawTenants]);
   const contracts: Contract[] = queryResultMap.get(JSON.stringify(queryKeys.contracts(activeDormitoryId))) || queryClient.getQueryData<Contract[]>(queryKeys.contracts(activeDormitoryId)) || [];
   const bills: Bill[] = queryResultMap.get(JSON.stringify(queryKeys.bills(activeDormitoryId))) || queryClient.getQueryData<Bill[]>(queryKeys.bills(activeDormitoryId)) || [];
   const repairs: any[] = queryResultMap.get(JSON.stringify(queryKeys.maintenance(activeDormitoryId))) || queryClient.getQueryData(queryKeys.maintenance(activeDormitoryId)) || [];
@@ -1053,6 +1059,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
       case 'tenants':
         return (
           <OwnerTenants
+            dormitoryId={activeDormitoryId}
             tenants={tenants}
             rooms={rooms}
             bills={bills}

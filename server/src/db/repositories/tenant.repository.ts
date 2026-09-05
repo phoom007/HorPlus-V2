@@ -1,3 +1,4 @@
+import { AppError } from '../../types/index.js';
 import { randomUUID } from 'crypto';
 
 export interface TenantEntity {
@@ -141,6 +142,10 @@ export interface ITenantRepository {
   createVehicle(dormitoryId: string, tenantId: string, data: Partial<TenantVehicleEntity>): Promise<TenantVehicleEntity>;
   updateVehicle(id: string, dormitoryId: string, data: Partial<TenantVehicleEntity>, tenantId?: string): Promise<TenantVehicleEntity | null>;
   deleteVehicle(id: string, dormitoryId: string, tenantId?: string): Promise<boolean>;
+
+  // Transaction & Pet Policy
+  runInTransaction<T>(fn: (repo: ITenantRepository) => Promise<T>): Promise<T>;
+  getDormitoryPetPolicy(dormitoryId: string): Promise<any | null>;
 }
 
 export class InMemoryTenantRepository implements ITenantRepository {
@@ -148,6 +153,33 @@ export class InMemoryTenantRepository implements ITenantRepository {
   private coOccupants: Map<string, TenantCoOccupantEntity> = new Map();
   private emergencyContacts: Map<string, TenantEmergencyContactEntity> = new Map();
   private vehicles: Map<string, TenantVehicleEntity> = new Map();
+  private dormPetPolicies: Map<string, any> = new Map();
+
+  public setDormitoryPetPolicy(dormitoryId: string, policy: any): void {
+    this.dormPetPolicies.set(dormitoryId, policy);
+  }
+
+  public async getDormitoryPetPolicy(dormitoryId: string): Promise<any | null> {
+    return this.dormPetPolicies.get(dormitoryId) || null;
+  }
+
+  public async runInTransaction<T>(fn: (repo: ITenantRepository) => Promise<T>): Promise<T> {
+    const tenantsBackup = new Map(Array.from(this.tenants.entries()).map(([k, v]) => [k, { ...v }]));
+    const coOccupantsBackup = new Map(Array.from(this.coOccupants.entries()).map(([k, v]) => [k, { ...v }]));
+    const emergencyContactsBackup = new Map(Array.from(this.emergencyContacts.entries()).map(([k, v]) => [k, { ...v }]));
+    const vehiclesBackup = new Map(Array.from(this.vehicles.entries()).map(([k, v]) => [k, { ...v }]));
+    const dormPetPoliciesBackup = new Map(this.dormPetPolicies);
+    try {
+      return await fn(this);
+    } catch (err) {
+      this.tenants = tenantsBackup;
+      this.coOccupants = coOccupantsBackup;
+      this.emergencyContacts = emergencyContactsBackup;
+      this.vehicles = vehiclesBackup;
+      this.dormPetPolicies = dormPetPoliciesBackup;
+      throw err;
+    }
+  }
 
   public async findById(id: string, dormitoryId?: string): Promise<TenantEntity | null> {
     const t = this.tenants.get(id);
@@ -253,9 +285,7 @@ export class InMemoryTenantRepository implements ITenantRepository {
     if (!tenant) return null;
 
     if (expectedVersion !== undefined && tenant.version !== expectedVersion) {
-      const err = new Error('RESOURCE_VERSION_CONFLICT');
-      (err as any).code = 'RESOURCE_VERSION_CONFLICT';
-      throw err;
+      throw new AppError('Tenant profile has been modified by another process', 409, 'RESOURCE_VERSION_CONFLICT');
     }
 
     const updated: TenantEntity = {
@@ -569,14 +599,6 @@ export class PrismaTenantRepository implements ITenantRepository {
   }
 
   public async update(id: string, dormitoryId: string, data: Partial<TenantEntity>, expectedVersion?: number): Promise<TenantEntity | null> {
-    const existing = await this.findById(id, dormitoryId);
-    if (!existing) return null;
-    if (expectedVersion !== undefined && existing.version !== expectedVersion) {
-      const err = new Error('RESOURCE_VERSION_CONFLICT');
-      (err as any).code = 'RESOURCE_VERSION_CONFLICT';
-      throw err;
-    }
-
     const updatePayload: any = {
       version: { increment: 1 },
     };
@@ -601,6 +623,26 @@ export class PrismaTenantRepository implements ITenantRepository {
     if (data.idCardUploadedAt !== undefined) updatePayload.idCardUploadedAt = data.idCardUploadedAt;
     if (data.idCardUploadedByUserId !== undefined) updatePayload.idCardUploadedByUserId = data.idCardUploadedByUserId;
     if (data.linkedUserId !== undefined) updatePayload.linkedUserId = data.linkedUserId;
+
+    if (expectedVersion !== undefined) {
+      // Atomic compare-and-swap update
+      const res = await this.prisma.tenant.updateMany({
+        where: { id, dormitoryId, version: expectedVersion },
+        data: updatePayload,
+      });
+
+      if (res.count === 0) {
+        const exists = await this.prisma.tenant.findFirst({ where: { id, dormitoryId } });
+        if (!exists) return null;
+        throw new AppError('Tenant profile has been modified by another process', 409, 'RESOURCE_VERSION_CONFLICT');
+      }
+
+      const t = await this.prisma.tenant.findUnique({ where: { id } });
+      return t ? this.mapTenantToEntity(t) : null;
+    }
+
+    const existing = await this.findById(id, dormitoryId);
+    if (!existing) return null;
 
     const t = await this.prisma.tenant.update({
       where: { id },
@@ -888,5 +930,37 @@ export class PrismaTenantRepository implements ITenantRepository {
       },
     });
     return true;
+  }
+
+  public async runInTransaction<T>(fn: (repo: ITenantRepository) => Promise<T>): Promise<T> {
+    return (this.prisma as any).$transaction(async (tx: any) => {
+      const txRepo = new PrismaTenantRepository(tx);
+      return fn(txRepo);
+    });
+  }
+
+  public async getDormitoryPetPolicy(dormitoryId: string): Promise<any | null> {
+    const defaults = await (this.prisma as any).dormitoryPropertyDefaults.findUnique({
+      where: { dormitoryId },
+      select: { petPolicy: true },
+    });
+
+    if (!defaults || !defaults.petPolicy) {
+      return { allowed: 'none', allowedTypes: [] };
+    }
+
+    let parsed = defaults.petPolicy;
+    if (typeof parsed === 'string') {
+      try {
+        parsed = JSON.parse(parsed);
+      } catch {
+        return { allowed: 'none', allowedTypes: [] };
+      }
+    }
+
+    return {
+      allowed: parsed.allowed || 'none',
+      allowedTypes: Array.isArray(parsed.allowedTypes) ? parsed.allowedTypes : [],
+    };
   }
 }

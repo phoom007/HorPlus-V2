@@ -11,6 +11,7 @@ import { logger } from '../config/logger.js';
 import {
   CreateTenantSchema,
   UpdateTenantSchema,
+  UpdateTenantProfileAggregateSchema,
   CreateCoOccupantSchema,
   CreateEmergencyContactSchema,
   UpdateEmergencyContactSchema,
@@ -159,6 +160,12 @@ export function createTenantRouter(
     'CO_OCCUPANT_NOT_FOUND',
     'EMERGENCY_CONTACT_NOT_FOUND',
     'VEHICLE_NOT_FOUND',
+    'RESOURCE_VERSION_CONFLICT',
+    'PET_POLICY_UNAVAILABLE',
+    'PETS_NOT_ALLOWED',
+    'PET_NOT_ALLOWED',
+    'PET_TYPE_NOT_ALLOWED',
+    'INVALID_CHILD_OWNERSHIP',
   ]);
 
   const handleServiceError = (res: Response, err: any, req: Request) => {
@@ -166,7 +173,7 @@ export function createTenantRouter(
     const isClientError = statusCode >= 400 && statusCode < 500;
     const isKnownSafe = err.code && KNOWN_SAFE_ERROR_CODES.has(err.code);
 
-    if (isClientError && isKnownSafe) {
+    if (isKnownSafe) {
       return res.status(statusCode).json({
         error: {
           code: err.code,
@@ -307,6 +314,30 @@ export function createTenantRouter(
       }
       const tenant = await tenantService.createTenant(dormId, parsed.data as any, req.auth?.userId);
       res.status(201).json({ data: toTenantApiDTO(tenant) });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  });
+
+  // PUT /api/v1/tenants/:id/profile (Atomic aggregate profile mutation)
+  router.put('/:id/profile', mutationGuard('tenants:update'), async (req: Request, res: Response) => {
+    if (!verifyCsrf(req, res)) return;
+    try {
+      const dormId = getDormitoryId(req);
+      const parsed = UpdateTenantProfileAggregateSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'ข้อมูลการแก้ไขผู้เช่าไม่ถูกต้อง',
+            fieldErrors: parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+      const details = await tenantService.updateTenantProfileAggregate(dormId, req.params.id, parsed.data, req.auth?.userId);
+      res.json({ data: toTenantDetailsApiDTO(details) });
     } catch (err) {
       handleServiceError(res, err, req);
     }
@@ -568,6 +599,7 @@ export function createTenantRouter(
         res.status(200).json({
           data: {
             tenantId: result.tenantId,
+            version: result.version,
             hasIdentityDocument: true,
             idCardUploadedAt: result.idCardUploadedAt,
             idCardSha256: result.idCardSha256,

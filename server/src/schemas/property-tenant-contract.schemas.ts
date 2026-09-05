@@ -73,7 +73,6 @@ export const BaseCreateTenantSchema = z.object({
   gender: z.string().optional().nullable(),
   address: z.string().optional().nullable(),
   photoUrl: z.string().optional().nullable(),
-  petInfo: z.any().optional(),
   notes: z.string().optional().nullable(),
 });
 
@@ -104,6 +103,55 @@ export const UpdateTenantSchema = BaseCreateTenantSchema.partial().extend({
       { message: 'เลขประจำตัวประชาชนต้องมี 13 หลัก' }
     ),
 });
+
+export const UpdateTenantProfileAggregateSchema = z.object({
+  displayName: z.string().min(1, 'ชื่อผู้เช่าจำเป็นต้องระบุ').max(255),
+  phone: z.string().min(9, 'เบอร์โทรศัพท์ไม่ถูกต้อง').max(50),
+  email: z.string().email('อีเมลไม่ถูกต้อง').optional().nullable().or(z.literal('')),
+  nationalId: z
+    .string()
+    .optional()
+    .nullable()
+    .refine(
+      (val) => {
+        if (!val) return true;
+        const trimmed = val.trim();
+        if (trimmed === '') return true;
+        const digitsOnly = trimmed.replace(/\D/g, '');
+        const isMasked = /[xX]/.test(trimmed);
+        if (isMasked) return true;
+        return digitsOnly.length === 13;
+      },
+      { message: 'เลขประจำตัวประชาชนต้องมี 13 หลัก' }
+    ),
+  version: z.number().int().min(1, 'ต้องระบุเวอร์ชัน (version) ที่ถูกต้อง (ขั้นต่ำ 1)'),
+
+  emergencyContact: z.object({
+    id: z.string().optional().nullable(),
+    name: z.string().min(1, 'ชื่อผู้ติดต่อฉุกเฉินจำเป็นต้องระบุ').max(255),
+    phone: z.string().min(9, 'เบอร์โทรศัพท์ผู้ติดต่อฉุกเฉินไม่ถูกต้อง').max(50),
+    relationship: z.string().min(1, 'ความสัมพันธ์ผู้ติดต่อฉุกเฉินจำเป็นต้องระบุ').max(100),
+    isPrimary: z.boolean().default(true),
+  }).optional().nullable(),
+
+  vehicles: z.array(z.object({
+    id: z.string().optional().nullable(),
+    type: z.string().min(1).default('car'),
+    licensePlate: z.string().min(1, 'ทะเบียนรถจำเป็นต้องระบุ').max(100),
+    brand: z.string().optional().nullable(),
+    model: z.string().optional().nullable(),
+    color: z.string().optional().nullable(),
+    province: z.string().optional().nullable(),
+    status: z.string().optional(),
+  })).default([]),
+
+  pets: z.array(z.object({
+    id: z.string().optional().nullable(),
+    type: z.string().min(1, 'ต้องระบุประเภทสัตว์เลี้ยง'),
+    customType: z.string().optional().nullable(),
+    name: z.string().optional().nullable(),
+  })).default([]),
+}).strict();
 
 export const CreateCoOccupantSchema = z.object({
   name: z.string().min(1, 'ชื่อผู้พักร่วมจำเป็นต้องระบุ').max(255),

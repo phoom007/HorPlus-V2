@@ -154,6 +154,38 @@ export interface TenantProfileDetails {
   settlements: TenantSettlementRecord[];
 }
 
+export interface UpdateTenantProfilePayload {
+  displayName: string;
+  phone: string;
+  email?: string | null;
+  nationalId?: string | null;
+  version: number;
+  emergencyContact?: {
+    id?: string | null;
+    name: string;
+    phone: string;
+    relationship: string;
+    isPrimary?: boolean;
+  } | null;
+  vehicles?: Array<{
+    id?: string | null;
+    type: string;
+    licensePlate: string;
+    brand?: string | null;
+    model?: string | null;
+    color?: string | null;
+    province?: string | null;
+    status?: string;
+  }>;
+  pets?: Array<{
+    id?: string | null;
+    type: string;
+    customType?: string | null;
+    name?: string | null;
+  }>;
+  petInfo?: any;
+}
+
 export interface TenantDataSource {
   getAll(): Promise<Tenant[]>;
   getById(id: string): Promise<Tenant | null>;
@@ -169,10 +201,11 @@ export interface TenantDataSource {
   addVehicle(tenantId: string, vehicle: VehicleInput): Promise<DataResult<any>>;
   updateVehicle(tenantId: string, vehicleId: string, vehicle: Partial<VehicleInput>): Promise<DataResult<any>>;
   deleteVehicle(tenantId: string, vehicleId: string): Promise<DataResult<boolean>>;
-  getIdentityDocumentUrl(tenantId: string): string;
+  getIdentityDocumentUrl(tenantId: string, dormitoryId?: string): string;
   uploadIdentityDocument(tenantId: string, file: File | Blob): Promise<DataResult<any>>;
   updatePetInfo(tenantId: string, pets: PetItem[]): Promise<DataResult<Tenant>>;
   getTenantProfile(id: string): Promise<DataResult<TenantProfileDetails>>;
+  updateTenantProfile(tenantId: string, payload: UpdateTenantProfilePayload): Promise<DataResult<TenantProfileDetails | any>>;
 }
 
 export interface ContractDataSource {

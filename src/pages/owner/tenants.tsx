@@ -54,7 +54,10 @@ import { motion, AnimatePresence } from 'motion/react';
 import { LineLogo as LineIcon } from '../../components/LineLogo';
 import { QuickAddTenantModal, QuickAddSuccessResult } from '../../components/QuickAddTenantModal';
 import { httpRequest } from '../../data/httpClient';
-import { approveTenantRegistrationRequest, rejectTenantRegistrationRequest } from '../../data/adapters/api';
+import { approveTenantRegistrationRequest, rejectTenantRegistrationRequest, fetchTenantProfile, TenantBasicProfileUpdateInput } from '../../data/adapters/api';
+import { UpdateTenantProfilePayload } from '../../data/contracts';
+import { useQuery, QueryClientContext } from '@tanstack/react-query';
+import { queryKeys, STALE_TIMES } from '../../lib/queryClient';
 import {
   StatusBadge,
   Modal,
@@ -156,6 +159,7 @@ interface OwnerTenantsProps {
   onDismissReturnContext?: () => void;
   cameFromMeters?: boolean;
   dormitory?: Dormitory | null;
+  dormitoryId?: string;
 }
 
 const CAR_BRANDS = ["Toyota", "Honda", "Isuzu", "Mazda", "Nissan", "Mitsubishi", "Ford", "Benz", "BMW", "Audi", "MG", "BYD", "Suzuki", "อื่นๆ"];
@@ -164,7 +168,90 @@ const STANDARD_PET_OPTIONS = ["สุนัข", "แมว", "นก", "ปล�
 const PET_OPTIONS = ["สุนัข", "แมว", "นก", "ปลา", "กระต่าย", "หนูแฮมสเตอร์", "อื่นๆ"];
 const CO_OCCUPANT_RELATION_OPTIONS = ["แฟน", "เพื่อน", "ผู้ปกครอง", "พี่น้อง / ญาติ", "คู่สมรส", "อื่นๆ"];
 
+export function getEffectivePetPolicy(dorm?: Partial<Dormitory> | null): { allowed: string; allowedTypes?: string[] } | undefined {
+  if (dorm?.petPolicy) return dorm.petPolicy;
+  try {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('registered_dorm_profile');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed?.petPolicy) return parsed.petPolicy;
+      }
+    }
+  } catch { }
+  return undefined;
+}
+
+export function resolveAllowedPetOptions(petPolicy?: { allowed: string; allowedTypes?: string[] } | null): string[] {
+  if (!petPolicy) return PET_OPTIONS;
+  if (petPolicy.allowed === 'none') return [];
+  if (!petPolicy.allowedTypes || petPolicy.allowedTypes.length === 0) {
+    return PET_OPTIONS;
+  }
+  const result: string[] = [];
+  for (const t of petPolicy.allowedTypes) {
+    const lower = t.toLowerCase();
+    if (lower === 'dog' || lower === 'สุนัข') {
+      if (!result.includes('สุนัข')) result.push('สุนัข');
+    } else if (lower === 'cat' || lower === 'แมว') {
+      if (!result.includes('แมว')) result.push('แมว');
+    } else if (lower === 'small_pet') {
+      for (const sp of ['นก', 'ปลา', 'กระต่าย', 'หนูแฮมสเตอร์']) {
+        if (!result.includes(sp)) result.push(sp);
+      }
+    } else if (lower === 'bird' || lower === 'นก') {
+      if (!result.includes('นก')) result.push('นก');
+    } else if (lower === 'fish' || lower === 'ปลา') {
+      if (!result.includes('ปลา')) result.push('ปลา');
+    } else if (lower === 'rabbit' || lower === 'กระต่าย') {
+      if (!result.includes('กระต่าย')) result.push('กระต่าย');
+    } else if (lower === 'hamster' || lower === 'หนูแฮมสเตอร์') {
+      if (!result.includes('หนูแฮมสเตอร์')) result.push('หนูแฮมสเตอร์');
+    } else if (lower === 'other' || lower === 'อื่นๆ') {
+      if (!result.includes('อื่นๆ')) result.push('อื่นๆ');
+    } else if (!result.includes(t)) {
+      result.push(t);
+    }
+  }
+  return result;
+}
+
+interface TenantDetailsFetcherProps {
+  dormitoryId: string;
+  tenantId: string | null;
+  onDataLoaded: (data: any) => void;
+}
+
+const AuthoritativeTenantDetailsFetcher: React.FC<TenantDetailsFetcherProps> = ({
+  dormitoryId,
+  tenantId,
+  onDataLoaded,
+}) => {
+  const query = useQuery({
+    queryKey: ['owner', dormitoryId, 'tenants', tenantId],
+    queryFn: async () => {
+      if (!tenantId) return null;
+      const res = await fetchTenantProfile(tenantId);
+      if (!res.success) {
+        throw new Error(res.error?.message || 'Failed to fetch tenant details');
+      }
+      return res.data;
+    },
+    enabled: Boolean(tenantId && dormitoryId),
+    staleTime: STALE_TIMES.TENANTS,
+  });
+
+  React.useEffect(() => {
+    if (query.data) {
+      onDataLoaded(query.data);
+    }
+  }, [query.data, onDataLoaded]);
+
+  return null;
+};
+
 export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
+  dormitoryId,
   tenants,
   rooms,
   bills = [],
@@ -187,6 +274,10 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
   cameFromMeters: cameFromMetersProp,
   dormitory
 }) => {
+  const queryClient = React.useContext(QueryClientContext) || null;
+  const effectiveDormId = dormitoryId || dormitory?.id || (typeof window !== 'undefined' ? (localStorage.getItem('selected_dormitory_id') || sessionStorage.getItem('active_dormitory_selected_for_session')) : '') || '';
+  const [tenantDetailsData, setTenantDetailsData] = useState<any | null>(null);
+
   const [dorm, setDorm] = useState<Partial<Dormitory>>(() => {
     if (dormitory) return dormitory;
     try {
@@ -204,7 +295,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
     }
     const loadDorm = async () => {
       try {
-        const dormId = localStorage.getItem('selected_dormitory_id') || sessionStorage.getItem('active_dormitory_selected_for_session') || '';
+        const dormId = effectiveDormId;
         if (dormId) {
           const fetched = await getDataProvider().dormitories.getById(dormId);
           if (isMounted && fetched) {
@@ -217,11 +308,14 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
     };
     loadDorm();
     return () => { isMounted = false; };
-  }, [dormitory]);
+  }, [dormitory, effectiveDormId]);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [activeStatusTab, setActiveStatusTab] = useState<'pending' | 'active' | 'inactive'>('active');
   const [selectedTenant, setSelectedTenant] = useState<Tenant | null>(null);
+
+
+
   const [cameFromMeters, setCameFromMeters] = useState(Boolean(cameFromMetersProp));
   const [originTab, setOriginTab] = useState<'rooms' | 'meters' | string | null>(tenantOriginTab || returnContext?.source || (cameFromMetersProp ? 'meters' : null));
 
@@ -253,9 +347,9 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
         } else {
           setActiveStatusTab('active');
         }
-      }
-      if (initialTenantId && onClearInitialTenantId) {
-        onClearInitialTenantId();
+        if (initialTenantId && onClearInitialTenantId) {
+          onClearInitialTenantId();
+        }
       }
     }
   }, [initialTenantId, returnContext, tenants, onClearInitialTenantId]);
@@ -265,7 +359,71 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
   const idCardInputRef = useRef<HTMLInputElement>(null);
   const [isEditOpen, setIsEditOpen] = useState(false);
   const [idCardPhoto, setIdCardPhoto] = useState('');
+  const [pendingIdCardFile, setPendingIdCardFile] = useState<File | null>(null);
   const [docTab, setDocTab] = useState<'uploaded' | 'simulated'>('uploaded');
+
+  // Synchronize authoritative tenant details into selectedTenant, ensuring background refetches never overwrite unsaved form state
+  React.useEffect(() => {
+    if (tenantDetailsData?.tenant && selectedTenant && !isEditOpen) {
+      const serverTenant = tenantDetailsData.tenant;
+      if (serverTenant.id === selectedTenant.id) {
+        setSelectedTenant(prev => {
+          if (!prev || prev.id !== serverTenant.id) return prev;
+          const emergencyContacts = tenantDetailsData.emergencyContacts;
+          const coOccupants = tenantDetailsData.coOccupants;
+          const coOccupantHistory = tenantDetailsData.coOccupantHistory;
+          const vehicles = tenantDetailsData.vehicles;
+
+          const serverPets = serverTenant.pets ?? (Array.isArray(serverTenant.petInfo) ? serverTenant.petInfo : []);
+          const serverPet = serverTenant.pet ?? {
+            hasPet: serverPets.length > 0,
+            type: serverPets[0]?.type || '',
+            name: serverPets[0]?.name || '',
+          };
+
+          const hasIdDoc = Boolean(serverTenant.hasIdentityDocument);
+          const docUrl = hasIdDoc
+            ? (serverTenant.idCardPhotoMock || (effectiveDormId ? getDataProvider().tenants.getIdentityDocumentUrl(serverTenant.id) : undefined))
+            : undefined;
+
+          return {
+            ...prev,
+            ...serverTenant,
+            name: serverTenant.name || serverTenant.displayName || prev.name,
+            phone: serverTenant.phone || prev.phone,
+            email: serverTenant.email ?? '',
+            citizenId: serverTenant.nationalIdMasked ?? serverTenant.citizenId ?? '',
+            lineFriendId: serverTenant.lineFriendId ?? null,
+            emergencyContact: (emergencyContacts && emergencyContacts.length > 0)
+              ? {
+                  name: emergencyContacts[0].name || '',
+                  relationship: emergencyContacts[0].relationship || '',
+                  phone: emergencyContacts[0].phone || '',
+                }
+              : (serverTenant.emergencyContact && serverTenant.emergencyContact.name)
+                ? serverTenant.emergencyContact
+                : {
+                    name: '',
+                    relationship: '',
+                    phone: '',
+                  },
+            coOccupants: coOccupants ?? serverTenant.coOccupants ?? [],
+            coOccupantHistory: coOccupantHistory ?? serverTenant.coOccupantHistory ?? [],
+            vehicles: vehicles ?? serverTenant.vehicles ?? [],
+            vehicle: (vehicles && vehicles.length > 0)
+              ? vehicles[0]
+              : ((serverTenant.vehicles && serverTenant.vehicles.length > 0)
+                  ? serverTenant.vehicles[0]
+                  : { type: 'none' as const, licensePlate: '', brand: '' }),
+            pets: serverPets,
+            pet: serverPet,
+            hasIdentityDocument: hasIdDoc,
+            idCardPhotoMock: docUrl,
+          };
+        });
+      }
+    }
+  }, [tenantDetailsData, isEditOpen]);
 
   // Contract tab modals and interaction states
   const [selectedContractForPrint, setSelectedContractForPrint] = useState<Contract | null>(null);
@@ -1083,21 +1241,27 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
     setName(tenant.name);
     setPhone(tenant.phone);
     setEmail(tenant.email || '');
-    setCitizenId(tenant.citizenId);
-    setEmergencyName(tenant.emergencyContact.name);
-    setEmergencyRelation(tenant.emergencyContact.relationship);
-    setEmergencyPhone(tenant.emergencyContact.phone);
+    setCitizenId(tenant.citizenId ?? (tenant as any).nationalIdMasked ?? '');
+
+    const detailData = (tenantDetailsData?.tenant?.id === tenant.id) ? tenantDetailsData : null;
+    const contact = (tenant as any).emergencyContacts?.[0] || detailData?.emergencyContacts?.[0] || tenant.emergencyContact;
+    setEmergencyName(contact?.name || '');
+    setEmergencyRelation(contact?.relationship || '');
+    setEmergencyPhone(contact?.phone || '');
 
     // Multi vehicles initialization
-    const initialVehicles: VehicleItem[] = tenant.vehicles && tenant.vehicles.length > 0
-      ? tenant.vehicles.map(v => ({ ...v, id: v.id || Math.random().toString() }))
+    const sourceVehicles = (tenant.vehicles && tenant.vehicles.length > 0)
+      ? tenant.vehicles
+      : (detailData?.vehicles && detailData.vehicles.length > 0 ? detailData.vehicles : null);
+    const initialVehicles: VehicleItem[] = sourceVehicles
+      ? sourceVehicles.map((v: any) => ({ ...v, id: v.id || Math.random().toString() }))
       : (tenant.vehicle && tenant.vehicle.type !== 'none'
-        ? [{ id: '1', type: tenant.vehicle.type, licensePlate: tenant.vehicle.licensePlate || '', brand: tenant.vehicle.brand || '' }]
+        ? [{ id: (tenant.vehicle as any).id || '1', type: tenant.vehicle.type, licensePlate: tenant.vehicle.licensePlate || '', brand: tenant.vehicle.brand || '' }]
         : [{ id: '1', type: 'none', licensePlate: '', brand: '' }]);
     setVehiclesList(initialVehicles);
-    setVehicleType(tenant.vehicle.type);
-    setVehiclePlate(tenant.vehicle.licensePlate || '');
-    setVehicleBrand(tenant.vehicle.brand || '');
+    setVehicleType(tenant.vehicle?.type || 'none');
+    setVehiclePlate(tenant.vehicle?.licensePlate || '');
+    setVehicleBrand(tenant.vehicle?.brand || '');
 
     // Multi pets initialization
     const initialPets: PetItem[] = tenant.pets && tenant.pets.length > 0
@@ -1113,19 +1277,20 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
       : (tenant.pet?.hasPet
         ? [{
           id: '1',
-          type: STANDARD_PET_OPTIONS.includes(tenant.pet.type || '') ? (tenant.pet.type || '') : (tenant.pet.type ? 'อื่นๆ' : ''),
-          customType: STANDARD_PET_OPTIONS.includes(tenant.pet.type || '') ? '' : (tenant.pet.type || ''),
-          name: tenant.pet.name || ''
+          type: STANDARD_PET_OPTIONS.includes(tenant.pet?.type || '') ? (tenant.pet.type || '') : (tenant.pet?.type ? 'อื่นๆ' : ''),
+          customType: STANDARD_PET_OPTIONS.includes(tenant.pet?.type || '') ? '' : (tenant.pet?.type || ''),
+          name: tenant.pet?.name || ''
         }]
         : [{ id: '1', type: '', customType: '', name: '' }]);
     setPetsList(initialPets);
-    setHasPet(tenant.pet.hasPet || (tenant.pets && tenant.pets.length > 0) || false);
-    const isPrimaryStd = STANDARD_PET_OPTIONS.includes(tenant.pet.type || '');
-    setPetType(isPrimaryStd ? (tenant.pet.type || '') : (tenant.pet.type ? 'อื่นๆ' : ''));
-    setCustomPetType(isPrimaryStd ? '' : (tenant.pet.type || ''));
-    setPetName(tenant.pet.name || '');
+    setHasPet(tenant.pet?.hasPet || (tenant.pets && tenant.pets.length > 0) || false);
+    const isPrimaryStd = STANDARD_PET_OPTIONS.includes(tenant.pet?.type || '');
+    setPetType(isPrimaryStd ? (tenant.pet?.type || '') : (tenant.pet?.type ? 'อื่นๆ' : ''));
+    setCustomPetType(isPrimaryStd ? '' : (tenant.pet?.type || ''));
+    setPetName(tenant.pet?.name || '');
 
     setIdCardPhoto(tenant.idCardPhotoMock || '');
+    setPendingIdCardFile(null);
     setIsEditOpen(true);
   };
 
@@ -1133,6 +1298,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
     const file = e.target.files?.[0];
     if (file) {
       try {
+        setPendingIdCardFile(file);
         const webpUrl = await convertImageToWebP(file);
         setIdCardPhoto(webpUrl);
       } catch (err) {
@@ -1145,15 +1311,28 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
     const file = e.target.files?.[0];
     if (file && selectedTenant) {
       try {
-        const webpUrl = await convertImageToWebP(file);
-        const updatedTenants = tenants.map(t => t.id === selectedTenant.id ? {
-          ...t,
-          idCardPhotoMock: webpUrl,
+        const dataProvider = getDataProvider();
+        const uploadRes = await dataProvider.tenants.uploadIdentityDocument(selectedTenant.id, file);
+        if (!uploadRes.success) {
+          setErrorText(uploadRes.error?.message || 'ไม่สามารถอัปโหลดสำเนาบัตรประชาชนได้');
+          return;
+        }
+        if (queryClient && effectiveDormId) {
+          await queryClient.invalidateQueries({ queryKey: queryKeys.tenants(effectiveDormId) });
+          await queryClient.invalidateQueries({ queryKey: ['owner', effectiveDormId, 'tenants', selectedTenant.id] });
+        }
+        const docUrl = dataProvider.tenants.getIdentityDocumentUrl(selectedTenant.id, effectiveDormId);
+        const updatedTenant: Tenant = {
+          ...selectedTenant,
+          version: uploadRes.data?.version !== undefined ? uploadRes.data.version : (selectedTenant.version ?? 1) + 1,
+          hasIdentityDocument: true,
+          idCardPhotoMock: docUrl,
           updatedAt: new Date().toISOString()
-        } : t);
-        onSaveTenants(updatedTenants);
-        const updated = updatedTenants.find(t => t.id === selectedTenant.id);
-        if (updated) setSelectedTenant(updated);
+        };
+        setSelectedTenant(updatedTenant);
+        if (onSaveTenants) {
+          onSaveTenants(tenants.map(t => t.id === selectedTenant.id ? updatedTenant : t));
+        }
         onAddLog('อัปโหลดสำเนาบัตรประชาชน', `อัปโหลดเอกสารสำเนาบัตรประชาชนของผู้เช่า ${selectedTenant.name}`, 'Tenant', selectedTenant.id);
         setCopySuccessToast('อัปโหลดสำเนาบัตรประจำตัวประชาชนเรียบร้อยแล้ว');
         setTimeout(() => setCopySuccessToast(null), 3000);
@@ -1163,20 +1342,6 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
     }
     if (e.target) {
       e.target.value = '';
-    }
-  };
-
-  const handleDirectIdCardDelete = () => {
-    if (selectedTenant) {
-      const updatedTenants = tenants.map(t => t.id === selectedTenant.id ? {
-        ...t,
-        idCardPhotoMock: undefined,
-        updatedAt: new Date().toISOString()
-      } : t);
-      onSaveTenants(updatedTenants);
-      const updated = updatedTenants.find(t => t.id === selectedTenant.id);
-      if (updated) setSelectedTenant(updated);
-      onAddLog('ลบสำเนาบัตรประชาชน', `ลบเอกสารสำเนาบัตรประชาชนของผู้เช่า ${selectedTenant.name}`, 'Tenant', selectedTenant.id);
     }
   };
 
@@ -1251,64 +1416,181 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
     printWindow.document.close();
   };
 
-  const handleSaveEditTenant = (e: React.FormEvent) => {
+  const handleSaveEditTenant = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim() || !phone.trim() || !citizenId.trim()) {
+    setErrorText(null);
+
+    if (!name.trim() || !phone.trim()) {
       setErrorText('กรุณากรอกข้อมูลที่จำเป็น (*) ให้ครบถ้วน');
       return;
     }
 
-    if (selectedTenant) {
-      const validPets = hasPet ? petsList
-        .map(p => {
-          const finalType = p.type === 'อื่นๆ' ? (p.customType?.trim() || 'อื่นๆ') : p.type;
-          return {
-            id: p.id,
-            type: finalType,
-            customType: p.customType,
-            name: p.name
-          };
-        })
-        .filter(p => (p.type && p.type.trim() !== '') || (p.name && p.name.trim() !== ''))
-        : [];
-      const primaryPet = validPets.length > 0 ? { hasPet: true, type: validPets[0].type, name: validPets[0].name } : { hasPet: false };
+    if (!selectedTenant) return;
 
-      const validVehicles = vehiclesList.filter(v => v.type !== 'none');
-      const primaryVehicle = validVehicles.length > 0
-        ? { type: validVehicles[0].type, licensePlate: validVehicles[0].licensePlate || '', brand: validVehicles[0].brand || '' }
-        : { type: 'none' as const, licensePlate: '', brand: '' };
+    // Validate emergency contact: required name & phone
+    const trimmedEmergencyName = emergencyName.trim();
+    const trimmedEmergencyPhone = emergencyPhone.trim();
+    if (!trimmedEmergencyName || !trimmedEmergencyPhone) {
+      setErrorText('กรุณากรอกชื่อและเบอร์โทรศัพท์ผู้ติดต่อฉุกเฉินให้ครบถ้วน');
+      return;
+    }
 
-      const updatedTenants = tenants.map(t => t.id === selectedTenant.id ? {
-        ...t,
-        name: name.trim(),
-        phone: phone.trim(),
-        email: email.trim(),
-        citizenId: citizenId.trim(),
-        idCardPhotoMock: idCardPhoto || undefined,
-        emergencyContact: {
-          name: emergencyName.trim(),
-          relationship: emergencyRelation.trim(),
-          phone: emergencyPhone.trim()
-        },
-        vehicle: primaryVehicle,
-        vehicles: validVehicles,
-        pet: primaryPet,
-        pets: validPets,
-        updatedAt: new Date().toISOString()
-      } : t);
-
-      onSaveTenants(updatedTenants);
-      // Update selectedTenant state to reflect changes instantly
-      const updatedItem = updatedTenants.find(t => t.id === selectedTenant.id);
-      if (updatedItem) {
-        setSelectedTenant(updatedItem);
+    // Validate vehicles: license plate required if vehicle type is selected
+    for (const veh of vehiclesList) {
+      if (veh.type !== 'none' && !veh.licensePlate?.trim()) {
+        setErrorText('กรุณาระบุเลขทะเบียนสำหรับยานพาหนะที่เลือก');
+        return;
       }
+    }
+
+    // Validate pets against pet policy
+    const dormPolicy = getEffectivePetPolicy(dorm);
+    const isPetAllowed = dormPolicy ? dormPolicy.allowed !== 'none' : true;
+    if (hasPet && !isPetAllowed) {
+      setErrorText('หอพักมีนโยบายไม่อนุญาตให้เลี้ยงสัตว์');
+      return;
+    }
+
+    try {
+      const dataProvider = getDataProvider();
+
+      const existingEmergency = tenantDetailsData?.emergencyContacts?.[0] || (selectedTenant as any).emergencyContacts?.[0];
+      const eRel = emergencyRelation.trim() || 'ผู้ติดต่อฉุกเฉิน';
+
+      // Reconcile vehicles
+      const serverVehicles = (tenantDetailsData?.vehicles || (selectedTenant as any).vehicles || []).filter((v: any) => v.id && v.type !== 'none');
+      const serverVehIdSet = new Set(serverVehicles.map((v: any) => v.id));
+      const activeFormVehicles = vehiclesList.filter(v => v.type !== 'none' && v.licensePlate?.trim());
+
+      const payloadVehicles = activeFormVehicles.map(v => ({
+        id: (v.id && serverVehIdSet.has(v.id)) ? v.id : undefined,
+        type: v.type as 'car' | 'motorcycle' | 'other',
+        licensePlate: v.licensePlate.trim(),
+        brand: v.brand?.trim() || undefined,
+      }));
+
+      // Reconcile pets
+      const activePets = (hasPet && isPetAllowed)
+        ? petsList
+            .map(p => ({
+              id: (p.id && !p.id.startsWith('temp-') && p.id !== '1' && !/^\d{13}$/.test(p.id)) ? p.id : undefined,
+              type: (p.type === 'อื่นๆ' && p.customType ? p.customType : p.type)?.trim() || '',
+              name: p.name?.trim() || undefined,
+            }))
+            .filter(p => p.type || p.name)
+        : [];
+
+      // 1. One atomic database mutation
+      const aggregatePayload: UpdateTenantProfilePayload = {
+        displayName: name.trim(),
+        phone: phone.trim(),
+        email: email.trim() ? email.trim() : null,
+        nationalId: citizenId.trim(),
+        version: (selectedTenant as any).version,
+        emergencyContact: {
+          id: existingEmergency?.id,
+          name: trimmedEmergencyName,
+          phone: trimmedEmergencyPhone,
+          relationship: eRel,
+          isPrimary: true,
+        },
+        vehicles: payloadVehicles,
+        pets: activePets,
+      };
+
+      const result = await dataProvider.tenants.updateTenantProfile(selectedTenant.id, aggregatePayload);
+      if (!result.success || !result.data) {
+        setErrorText(result.error?.message || 'ไม่สามารถบันทึกข้อมูลผู้เช่าได้');
+        return; // Fail visibly: Preserve modal/input state, do NOT close modal, do NOT mutate local tenant array!
+      }
+
+      let authoritativeVersion = (result.data?.tenant?.version ?? result.data?.version ?? selectedTenant.version);
+
+      // 2. Identity Document Replace (Option B: replace/upload only, NO DELETE API)
+      if (pendingIdCardFile) {
+        const uploadRes = await dataProvider.tenants.uploadIdentityDocument(selectedTenant.id, pendingIdCardFile);
+        if (!uploadRes.success) {
+          // Refetch authoritative DB data after partial external storage failure
+          if (queryClient && effectiveDormId) {
+            await queryClient.invalidateQueries({ queryKey: queryKeys.tenants(effectiveDormId) });
+            await queryClient.invalidateQueries({ queryKey: ['owner', effectiveDormId, 'tenants', selectedTenant.id] });
+          }
+          const updatedVersion = result.data?.tenant?.version ?? result.data?.version;
+          const returnedTenant = result.data?.tenant || result.data;
+          if (result.data?.vehicles && result.data.vehicles.length > 0) {
+            setVehiclesList(prev => prev.map((v, i) => ({
+              ...v,
+              id: result.data.vehicles[i]?.id || v.id,
+            })));
+          }
+          setSelectedTenant(prev => {
+            if (!prev) return prev;
+            return {
+              ...prev,
+              ...(returnedTenant ? returnedTenant : {}),
+              version: updatedVersion !== undefined ? updatedVersion : prev.version,
+              emergencyContact: result.data?.emergencyContacts?.[0] || prev.emergencyContact,
+              emergencyContacts: result.data?.emergencyContacts || (prev as any).emergencyContacts,
+              vehicles: result.data?.vehicles || prev.vehicles,
+            };
+          });
+          setErrorText(uploadRes.error?.message || 'ไม่สามารถอัปโหลดเอกสารสำเนาบัตรประชาชนได้');
+          return;
+        }
+
+        if (uploadRes.data?.version !== undefined) {
+          authoritativeVersion = uploadRes.data.version;
+        }
+      }
+
+      // 3. Success! Authoritative Refresh:
+      const savedTenant = result.data?.tenant || result.data;
+      const normalizedSavedTenant: Tenant = {
+        ...selectedTenant,
+        ...savedTenant,
+        version: authoritativeVersion,
+        name: savedTenant.name || savedTenant.displayName || name.trim(),
+        phone: savedTenant.phone || phone.trim(),
+        email: savedTenant.email ?? '',
+        citizenId: savedTenant.nationalIdMasked ?? (savedTenant as any).citizenId ?? '',
+        emergencyContact: { name: trimmedEmergencyName, phone: trimmedEmergencyPhone, relationship: eRel },
+        vehicles: activeFormVehicles,
+        vehicle: activeFormVehicles[0] || { type: 'none', licensePlate: '', brand: '' },
+        pets: activePets,
+        pet: {
+          hasPet: activePets.length > 0,
+          type: activePets[0]?.type || '',
+          name: activePets[0]?.name || '',
+        },
+        hasIdentityDocument: pendingIdCardFile ? true : Boolean((selectedTenant as any).hasIdentityDocument),
+        idCardPhotoMock: pendingIdCardFile
+          ? dataProvider.tenants.getIdentityDocumentUrl(selectedTenant.id, effectiveDormId)
+          : selectedTenant.idCardPhotoMock,
+      };
+
+      // Invalidate React Query caches for tenants list and tenant detail
+      if (queryClient && effectiveDormId) {
+        await queryClient.invalidateQueries({ queryKey: queryKeys.tenants(effectiveDormId) });
+        await queryClient.invalidateQueries({ queryKey: ['owner', effectiveDormId, 'tenants', selectedTenant.id] });
+      }
+
+      // Synchronize UI presentation state with authoritative server response
+      setSelectedTenant(normalizedSavedTenant);
+
+      if (onSaveTenants) {
+        const syncedTenants = tenants.map(t => t.id === selectedTenant.id ? normalizedSavedTenant : t);
+        onSaveTenants(syncedTenants);
+      }
+
+      setPendingIdCardFile(null);
       setIsEditOpen(false);
       onAddLog('แก้ไขทะเบียนผู้เช่า', `แก้ไขข้อมูลผู้เช่าคุณ ${name.trim()}`, 'Tenant', selectedTenant.id);
+    } catch (err: any) {
+      setErrorText(err?.message || 'เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์');
     }
   };
 
-  const handleOpenApprove = (tenant: Tenant) => {
+    const handleOpenApprove = (tenant: Tenant) => {
     // Find if tenant is already tied to a room or find available rooms
     const existingRoom = rooms.find(r => r.currentTenantId === tenant.id);
     const vacantRoom = rooms.find(r => r.status === 'vacant');
@@ -1987,6 +2269,8 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
   };
 
   const formatCitizenIdInput = (val: string) => {
+    if (!val) return '';
+    if (/[xX]/.test(val)) return val;
     const clean = val.replace(/\D/g, '');
     if (!clean) return '';
     const parts = [];
@@ -2079,17 +2363,8 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
       return 'pending';
     }
 
-    // If status is active but has no current room assigned or waiting contract
-    const isCurrentlyInRoom = rooms.some(r => r.currentTenantId === t.id);
-    const tenantContracts = contracts.filter(c => c.tenantId === t.id);
-    const isPendingContract = tenantContracts.some(c => c.status === 'pending_signature' || c.status === 'draft');
-
-    if (isPendingContract && !isCurrentlyInRoom) {
-      return 'pending';
-    }
-
-    if (!isCurrentlyInRoom && (!t.rentalHistory || t.rentalHistory.length === 0)) {
-      return 'pending';
+    if (t.status === 'active') {
+      return 'active';
     }
 
     return 'active';
@@ -2262,6 +2537,13 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
 
   return (
     <div className="space-y-6">
+      {queryClient && (
+        <AuthoritativeTenantDetailsFetcher
+          dormitoryId={effectiveDormId}
+          tenantId={selectedTenant?.id || null}
+          onDataLoaded={setTenantDetailsData}
+        />
+      )}
 
       {/* Filter Tabs & Quick Action Row (Matching Payment UI Box) */}
       <div className="bg-white p-4 rounded-3xl border border-slate-100 shadow-xs space-y-4 shrink-0">
@@ -2607,6 +2889,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                 ) : cameFromMeters || originTab === 'meters' ? (
                   <button
                     type="button"
+                    data-testid="back-to-meters-btn"
                     onClick={() => {
                       setOriginTab(null);
                       setCameFromMeters(false);
@@ -3667,11 +3950,11 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                         <span>เอกสารจริงจากระบบ</span>
                       </div>
 
-                      {/* Direct change / delete buttons */}
-                      <div className="mt-2.5 pt-2 border-t border-gray-200 flex items-center justify-between px-1">
+                      {/* Direct change button */}
+                      <div className="mt-2.5 pt-2 border-t border-gray-200 flex items-center justify-end px-1">
                         <label className="text-[11px] font-bold text-indigo-600 hover:text-indigo-800 flex items-center gap-1 cursor-pointer transition-colors">
                           <Edit3 className="w-3.5 h-3.5" />
-                          <span>เปลี่ยนรูปภาพ</span>
+                          <span>เปลี่ยน</span>
                           <input
                             type="file"
                             accept="image/*"
@@ -3679,14 +3962,6 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                             className="hidden"
                           />
                         </label>
-                        <button
-                          type="button"
-                          onClick={handleDirectIdCardDelete}
-                          className="text-[11px] font-bold text-rose-500 hover:text-rose-700 flex items-center gap-1 cursor-pointer transition-colors"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                          <span>ลบรูปภาพ</span>
-                        </button>
                       </div>
                     </div>
                   ) : (
@@ -3943,13 +4218,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                   <div className="flex justify-between items-center">
                     <label className="block text-xs font-semibold text-slate-700">ขออนุญาตนำสัตว์เลี้ยงเข้าพัก</label>
                     {(() => {
-                      let pPolicy = dorm?.petPolicy;
-                      if (!pPolicy) {
-                        try {
-                          const saved = localStorage.getItem('registered_dorm_profile');
-                          if (saved) pPolicy = JSON.parse(saved).petPolicy;
-                        } catch { }
-                      }
+                      const pPolicy = getEffectivePetPolicy(dorm);
                       const isAllowed = pPolicy ? pPolicy.allowed !== 'none' : true;
                       return isAllowed ? (
                         <span className="text-[9px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-md">
@@ -3963,13 +4232,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                     })()}
                   </div>
                   {(() => {
-                    let pPolicy = dorm?.petPolicy;
-                    if (!pPolicy) {
-                      try {
-                        const saved = localStorage.getItem('registered_dorm_profile');
-                        if (saved) pPolicy = JSON.parse(saved).petPolicy;
-                      } catch { }
-                    }
+                    const pPolicy = getEffectivePetPolicy(dorm);
                     const isAllowed = pPolicy ? pPolicy.allowed !== 'none' : true;
                     if (!isAllowed) {
                       return (
@@ -4005,9 +4268,13 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                                 className="px-2 py-1.5 border border-gray-200 rounded-lg text-xs bg-white text-slate-800 font-medium"
                               >
                                 <option value="">-- เลือกประเภทสัตว์เลี้ยง --</option>
-                                {PET_OPTIONS.map(opt => (
-                                  <option key={opt} value={opt}>{opt}</option>
-                                ))}
+                                {(() => {
+                                  const allowed = resolveAllowedPetOptions(getEffectivePetPolicy(dorm));
+                                  const options = petType && !allowed.includes(petType) ? [petType, ...allowed] : allowed;
+                                  return options.map(opt => (
+                                    <option key={opt} value={opt}>{opt}</option>
+                                  ));
+                                })()}
                               </select>
                               <input
                                 type="text"
@@ -4706,15 +4973,20 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                     />
                   </div>
                   <div className="space-y-1">
-                    <label className="block text-[10px] font-bold text-slate-700">บัตรประจำตัวประชาชน *</label>
+                    <label htmlFor="citizenIdEdit" className="block text-[10px] font-bold text-slate-700">บัตรประจำตัวประชาชน</label>
                     <input
+                      id="citizenIdEdit"
                       type="text"
-                      required
                       maxLength={17}
                       value={formatCitizenIdInput(citizenId)}
                       onChange={(e) => {
-                        const clean = e.target.value.replace(/\D/g, '').slice(0, 13);
-                        setCitizenId(clean);
+                        const val = e.target.value;
+                        if (/[xX]/.test(val)) {
+                          setCitizenId(val);
+                        } else {
+                          const clean = val.replace(/\D/g, '').slice(0, 13);
+                          setCitizenId(clean);
+                        }
                       }}
                       className="w-full px-3 py-2 text-xs border border-gray-200 rounded-xl bg-white text-slate-800 focus:outline-indigo-500"
                     />
@@ -4753,10 +5025,10 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                 </h4>
                 <div className="space-y-3">
                   <div className="space-y-1">
-                    <label className="block text-[10px] font-bold text-slate-700">ชื่อผู้ติดต่อ *</label>
+                    <label htmlFor="emergencyNameEdit" className="block text-[10px] font-bold text-slate-700">ชื่อผู้ติดต่อ *</label>
                     <input
+                      id="emergencyNameEdit"
                       type="text"
-                      required
                       value={emergencyName}
                       onChange={(e) => setEmergencyName(e.target.value)}
                       className="w-full px-3 py-2 text-xs border border-gray-200 rounded-xl bg-white text-slate-800 focus:outline-indigo-500"
@@ -4764,8 +5036,9 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div className="space-y-1">
-                      <label className="block text-[10px] font-bold text-slate-700">ความสัมพันธ์</label>
+                      <label htmlFor="emergencyRelationEdit" className="block text-[10px] font-bold text-slate-700">ความสัมพันธ์</label>
                       <input
+                        id="emergencyRelationEdit"
                         type="text"
                         value={emergencyRelation}
                         onChange={(e) => setEmergencyRelation(e.target.value)}
@@ -4773,10 +5046,10 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                       />
                     </div>
                     <div className="space-y-1">
-                      <label className="block text-[10px] font-bold text-slate-700">เบอร์โทรศัพท์ *</label>
+                      <label htmlFor="emergencyPhoneEdit" className="block text-[10px] font-bold text-slate-700">เบอร์โทรศัพท์ *</label>
                       <input
+                        id="emergencyPhoneEdit"
                         type="tel"
-                        required
                         maxLength={12}
                         value={formatPhoneInput(emergencyPhone)}
                         onChange={(e) => {
@@ -4797,13 +5070,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                   <div className="flex justify-between items-center">
                     <label className="block text-xs font-bold text-slate-700">ขอเลี้ยงสัตว์เลี้ยง</label>
                     {(() => {
-                      let pPolicy = dorm?.petPolicy;
-                      if (!pPolicy) {
-                        try {
-                          const saved = localStorage.getItem('registered_dorm_profile');
-                          if (saved) pPolicy = JSON.parse(saved).petPolicy;
-                        } catch { }
-                      }
+                      const pPolicy = getEffectivePetPolicy(dorm);
                       const isAllowed = pPolicy ? pPolicy.allowed !== 'none' : true;
                       return isAllowed ? (
                         <span className="text-[9px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-md">
@@ -4817,13 +5084,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                     })()}
                   </div>
                   {(() => {
-                    let pPolicy = dorm?.petPolicy;
-                    if (!pPolicy) {
-                      try {
-                        const saved = localStorage.getItem('registered_dorm_profile');
-                        if (saved) pPolicy = JSON.parse(saved).petPolicy;
-                      } catch { }
-                    }
+                    const pPolicy = getEffectivePetPolicy(dorm);
                     const isAllowed = pPolicy ? pPolicy.allowed !== 'none' : true;
                     if (!isAllowed) {
                       return (
@@ -4880,9 +5141,13 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                                     className="px-2 py-1.5 border border-gray-200 rounded-lg text-xs bg-white text-slate-800 font-medium"
                                   >
                                     <option value="">-- ประเภท --</option>
-                                    {PET_OPTIONS.map(opt => (
-                                      <option key={opt} value={opt}>{opt}</option>
-                                    ))}
+                                    {(() => {
+                                      const allowed = resolveAllowedPetOptions(getEffectivePetPolicy(dorm));
+                                      const options = petItem.type && !allowed.includes(petItem.type) ? [petItem.type, ...allowed] : allowed;
+                                      return options.map(opt => (
+                                        <option key={opt} value={opt}>{opt}</option>
+                                      ));
+                                    })()}
                                   </select>
                                   <input
                                     type="text"
@@ -5003,16 +5268,6 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                     <FileText className="w-4 h-4 text-indigo-600" />
                     อัปโหลดรูปเอกสารประจำตัว (สำเนาบัตรประชาชน)
                   </label>
-                  {idCardPhoto && (
-                    <button
-                      type="button"
-                      onClick={() => setIdCardPhoto('')}
-                      className="text-xs text-rose-500 hover:text-rose-700 font-semibold flex items-center gap-1 transition-colors cursor-pointer"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                      <span>ลบรูปภาพ</span>
-                    </button>
-                  )}
                 </div>
 
                 {idCardPhoto ? (
@@ -5027,7 +5282,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                     <div className="flex items-center justify-end gap-2 pt-1 px-1">
                       <label className="px-3 py-1.5 bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 text-xs font-bold rounded-xl cursor-pointer flex items-center gap-1.5 transition-colors shadow-2xs">
                         <Upload className="w-3.5 h-3.5 text-indigo-600" />
-                        <span>เปลี่ยนรูปภาพ</span>
+                        <span>เปลี่ยน</span>
                         <input
                           type="file"
                           accept="image/*"
@@ -5071,17 +5326,21 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
               const vehiclesChanged = JSON.stringify(origVehicles.map(v => ({ type: v.type, plate: v.licensePlate || '', brand: v.brand || '' }))) !==
                 JSON.stringify(currentVehicles.map(v => ({ type: v.type, plate: v.licensePlate || '', brand: v.brand || '' })));
 
+              const origEmergency = (selectedTenant as any)?.emergencyContacts?.[0] || selectedTenant?.emergencyContact;
+              const emergencyChanged =
+                emergencyName.trim() !== (origEmergency?.name || '') ||
+                emergencyRelation.trim() !== (origEmergency?.relationship || '') ||
+                emergencyPhone.trim() !== (origEmergency?.phone || '');
+
               const isFormChanged = selectedTenant ? (
                 name.trim() !== selectedTenant.name ||
                 phone.trim() !== selectedTenant.phone ||
                 email.trim() !== (selectedTenant.email || '') ||
-                citizenId.trim() !== selectedTenant.citizenId ||
-                emergencyName.trim() !== selectedTenant.emergencyContact.name ||
-                emergencyRelation.trim() !== selectedTenant.emergencyContact.relationship ||
-                emergencyPhone.trim() !== selectedTenant.emergencyContact.phone ||
+                citizenId.trim() !== (selectedTenant.citizenId ?? '') ||
+                emergencyChanged ||
                 petsChanged ||
                 vehiclesChanged ||
-                idCardPhoto !== (selectedTenant.idCardPhotoMock || '')
+                Boolean(pendingIdCardFile)
               ) : false;
 
               return (

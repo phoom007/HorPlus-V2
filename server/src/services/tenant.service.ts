@@ -1,3 +1,4 @@
+import { AppError } from '../types/index.js';
 import { ITenantRepository, TenantEntity, TenantFilterQuery, CreateTenantData } from '../db/repositories/tenant.repository.js';
 import { IContractRepository } from '../db/repositories/contract.repository.js';
 import { SensitiveFieldService } from './sensitive-field.service.js';
@@ -5,8 +6,30 @@ import { AuditService } from './audit.service.js';
 import { parseAndNormalizeName, isMaskedNationalId } from '../utils/thai-identity.util.js';
 import { processAndSecureTenantIdCardImage } from './image-security.service.js';
 import { localStorageProvider } from './local-storage.service.js';
+import { logger } from '../config/logger.js';
 
 export interface TenantAggregateDataSource {
+  $transaction?<T>(fn: (tx: any) => Promise<T>): Promise<T>;
+  dormitoryPropertyDefaults?: {
+    findUnique(args: any): Promise<any | null>;
+  };
+  tenant?: {
+    findFirst(args: any): Promise<any | null>;
+    update(args: any): Promise<any>;
+  };
+  tenantEmergencyContact?: {
+    findFirst(args: any): Promise<any | null>;
+    findMany(args: any): Promise<any[]>;
+    create(args: any): Promise<any>;
+    update(args: any): Promise<any>;
+    delete?(args: any): Promise<any>;
+  };
+  tenantVehicle?: {
+    findFirst(args: any): Promise<any | null>;
+    findMany(args: any): Promise<any[]>;
+    create(args: any): Promise<any>;
+    update(args: any): Promise<any>;
+  };
   contract: {
     findMany(args: any): Promise<any[]>;
   };
@@ -23,6 +46,87 @@ export interface TenantAggregateDataSource {
   contractSettlement: {
     findMany(args: any): Promise<any[]>;
   };
+}
+
+export function normalizePetTypeKey(pet: { type?: string | null; customType?: string | null }): string {
+  const t = (pet.type || '').trim().toLowerCase();
+  if (t === 'อื่นๆ' || t === 'other' || t === 'others') {
+    const ct = (pet.customType || '').trim().toLowerCase();
+    return ct ? `other:${ct}` : 'other';
+  }
+  return t;
+}
+
+export function classifySubmittedPets(
+  existingPetInfo: any,
+  submittedPets: Array<{ id?: string | null; type: string; customType?: string | null; name?: string | null }>
+): {
+  grandfathered: Array<{ id?: string | null; type: string; customType?: string | null; name?: string | null }>;
+  newOrChanged: Array<{ id?: string | null; type: string; customType?: string | null; name?: string | null }>;
+} {
+  const existingList: any[] = Array.isArray(existingPetInfo)
+    ? existingPetInfo
+    : (existingPetInfo && typeof existingPetInfo === 'object' && existingPetInfo.type ? [existingPetInfo] : []);
+
+  const grandfathered: any[] = [];
+  const newOrChanged: any[] = [];
+
+  // 1. Stable ID matching where present
+  const existingById = new Map<string, any>();
+  const unmatchedExisting: any[] = [];
+
+  for (const ep of existingList) {
+    if (ep && typeof ep === 'object' && ep.id && typeof ep.id === 'string' && !ep.id.startsWith('temp-') && ep.id !== '1') {
+      existingById.set(ep.id, ep);
+    } else if (ep && typeof ep === 'object') {
+      unmatchedExisting.push(ep);
+    }
+  }
+
+  const unmatchedSubmitted: any[] = [];
+
+  for (const sp of submittedPets) {
+    if (sp.id && existingById.has(sp.id)) {
+      const existing = existingById.get(sp.id)!;
+      existingById.delete(sp.id); // consumed
+      const spKey = normalizePetTypeKey(sp);
+      const exKey = normalizePetTypeKey(existing);
+      if (spKey === exKey) {
+        grandfathered.push(sp);
+      } else {
+        newOrChanged.push(sp);
+      }
+    } else {
+      unmatchedSubmitted.push(sp);
+    }
+  }
+
+  // Any remaining ID-bearing existing pets that weren't matched by ID join unmatched existing
+  for (const ep of existingById.values()) {
+    unmatchedExisting.push(ep);
+  }
+
+  // 2. Deterministic multiset matching by normalized type authority
+  const existingPool = new Map<string, number>();
+  for (const ep of unmatchedExisting) {
+    const key = normalizePetTypeKey(ep);
+    if (key) {
+      existingPool.set(key, (existingPool.get(key) || 0) + 1);
+    }
+  }
+
+  for (const sp of unmatchedSubmitted) {
+    const key = normalizePetTypeKey(sp);
+    const count = existingPool.get(key) || 0;
+    if (count > 0) {
+      existingPool.set(key, count - 1);
+      grandfathered.push(sp);
+    } else {
+      newOrChanged.push(sp);
+    }
+  }
+
+  return { grandfathered, newOrChanged };
 }
 
 export class TenantService {
@@ -431,6 +535,7 @@ export class TenantService {
     actorUserId?: string
   ) {
     const tenant = await this.getTenantById(tenantId, dormitoryId);
+    const oldObjectKey = tenant.idCardObjectKey;
 
     // Process image through sharp pipeline
     const secured = await processAndSecureTenantIdCardImage(rawBuffer);
@@ -442,14 +547,34 @@ export class TenantService {
     await localStorageProvider.saveFile(objectKey, secured.buffer);
 
     const uploadedAt = new Date();
-    await this.tenantRepo.update(tenantId, dormitoryId, {
-      idCardObjectKey: objectKey,
-      idCardSha256: secured.sha256,
-      idCardMimeType: secured.mimeType,
-      idCardByteSize: secured.byteSize,
-      idCardUploadedAt: uploadedAt,
-      idCardUploadedByUserId: actorUserId || null,
-    });
+    let updatedTenant: any = null;
+    try {
+      updatedTenant = await this.tenantRepo.update(tenantId, dormitoryId, {
+        idCardObjectKey: objectKey,
+        idCardSha256: secured.sha256,
+        idCardMimeType: secured.mimeType,
+        idCardByteSize: secured.byteSize,
+        idCardUploadedAt: uploadedAt,
+        idCardUploadedByUserId: actorUserId || null,
+      });
+    } catch (repoErr) {
+      // Compensation: delete newly written file so no orphan file remains
+      try {
+        await localStorageProvider.deleteFile(objectKey);
+      } catch (cleanupErr) {
+        logger.error({ cleanupErr, objectKey }, '[TenantDocument] Compensation cleanup failed after repo update error');
+      }
+      throw repoErr;
+    }
+
+    // Success: cleanup superseded old private file
+    if (oldObjectKey && oldObjectKey !== objectKey) {
+      try {
+        await localStorageProvider.deleteFile(oldObjectKey);
+      } catch (cleanupErr) {
+        logger.error({ cleanupErr, oldObjectKey }, '[TenantDocument] Superseded old document cleanup failed');
+      }
+    }
 
     if (this.auditService && actorUserId) {
       await this.auditService.log({
@@ -463,10 +588,225 @@ export class TenantService {
 
     return {
       tenantId,
+      version: updatedTenant?.version,
       idCardUploadedAt: uploadedAt.toISOString(),
       idCardSha256: secured.sha256,
       idCardMimeType: secured.mimeType,
       idCardByteSize: secured.byteSize,
     };
+  }
+
+  public async updateTenantProfileAggregate(
+    dormitoryId: string,
+    tenantId: string,
+    data: {
+      displayName: string;
+      phone: string;
+      email?: string | null;
+      nationalId?: string | null;
+      version: number;
+      emergencyContact?: {
+        id?: string | null;
+        name: string;
+        phone: string;
+        relationship?: string | null;
+        isPrimary?: boolean;
+      } | null;
+      vehicles?: Array<{
+        id?: string | null;
+        type: string;
+        licensePlate: string;
+        brand?: string | null;
+        model?: string | null;
+        color?: string | null;
+        province?: string | null;
+        status?: string;
+      }>;
+      pets?: Array<{
+        id?: string | null;
+        type: string;
+        customType?: string | null;
+        name?: string | null;
+      }>;
+    },
+    actorUserId?: string
+  ) {
+    const result = await this.tenantRepo.runInTransaction(async (txRepo) => {
+      const tenant = await txRepo.findById(tenantId, dormitoryId);
+      if (!tenant) {
+        throw new AppError('Tenant not found', 404, 'TENANT_NOT_FOUND');
+      }
+
+      // 1. Optimistic concurrency check
+      if (tenant.version !== data.version) {
+        throw new AppError('ข้อมูลผู้เช่าถูกแก้ไขโดยผู้อื่นแล้ว กรุณารีเฟรชหน้าจอเพื่อรับข้อมูลล่าสุด', 409, 'RESOURCE_VERSION_CONFLICT');
+      }
+
+      // 2. Validate child ownership before mutating
+      if (data.emergencyContact?.id) {
+        const existingContacts = await txRepo.findEmergencyContacts(tenantId, dormitoryId);
+        const found = existingContacts.find((c) => c.id === data.emergencyContact!.id);
+        if (!found) {
+          throw new AppError('ไม่พบข้อมูลผู้ติดต่อฉุกเฉินที่ระบุ หรือไม่มีสิทธิ์เข้าถึง', 403, 'INVALID_CHILD_OWNERSHIP');
+        }
+      }
+
+      const submittedVehicles = data.vehicles || [];
+      if (submittedVehicles.length > 0) {
+        const existingVehicles = await txRepo.findVehicles(tenantId, dormitoryId);
+        const existingMap = new Map(existingVehicles.map((v) => [v.id, v]));
+        for (const sv of submittedVehicles) {
+          if (sv.id && !existingMap.has(sv.id)) {
+            throw new AppError('ไม่พบข้อมูลยานพาหนะที่ระบุ หรือไม่มีสิทธิ์เข้าถึง', 403, 'INVALID_CHILD_OWNERSHIP');
+          }
+        }
+      }
+
+      // 3. Server-Authoritative Grandfather Pet Policy Validation
+      const submittedPets = data.pets || [];
+      const { grandfathered, newOrChanged } = classifySubmittedPets(tenant.petInfo, submittedPets);
+
+      if (newOrChanged.length > 0) {
+        let petPolicy: any;
+        try {
+          petPolicy = await txRepo.getDormitoryPetPolicy(dormitoryId);
+        } catch (policyErr) {
+          throw new AppError('ไม่สามารถตรวจสอบนโยบายสัตว์เลี้ยงได้', 500, 'PET_POLICY_UNAVAILABLE');
+        }
+
+        if (!petPolicy || !petPolicy.allowed || petPolicy.allowed === 'none') {
+          throw new AppError('หอพักมีนโยบายไม่อนุญาตให้เลี้ยงสัตว์', 400, 'PET_NOT_ALLOWED');
+        }
+
+        if (petPolicy.allowed === 'conditional') {
+          const allowedTypes = (petPolicy.allowedTypes || []).map((t: string) => t.trim().toLowerCase());
+          for (const p of newOrChanged) {
+            const rawType = (p.type || '').trim().toLowerCase();
+            const customType = (p.customType || '').trim().toLowerCase();
+            const normKey = normalizePetTypeKey(p);
+
+            const isAllowed =
+              allowedTypes.includes(normKey) ||
+              allowedTypes.includes(rawType) ||
+              (customType && allowedTypes.includes(customType)) ||
+              (normKey.startsWith('other:') && allowedTypes.includes(normKey.slice(6)));
+
+            if (!isAllowed) {
+              throw new AppError(`ประเภทสัตว์เลี้ยง "${p.type}" ไม่อยู่ในรายการที่อนุญาต`, 400, 'PET_TYPE_NOT_ALLOWED');
+            }
+          }
+        } else if (petPolicy.allowed !== 'all') {
+          throw new AppError('หอพักมีนโยบายไม่อนุญาตให้เลี้ยงสัตว์', 400, 'PET_NOT_ALLOWED');
+        }
+      }
+
+      // 4a. Update basic profile using canonical name normalization
+      const parsedName = parseAndNormalizeName(data.displayName);
+      const updatePayload: Partial<TenantEntity> = {
+        displayName: parsedName.displayName,
+        firstName: parsedName.firstName,
+        lastName: parsedName.lastName,
+        phone: data.phone.trim(),
+        email: data.email !== undefined ? (data.email?.trim() ? data.email.trim() : null) : undefined,
+        petInfo: submittedPets,
+      };
+
+      // Canonical National ID handling
+      if (data.nationalId !== undefined && data.nationalId !== null) {
+        const trimmed = data.nationalId.trim();
+        if (trimmed === '') {
+          updatePayload.nationalIdEncrypted = null;
+          updatePayload.nationalIdMasked = null;
+        } else if (isMaskedNationalId(trimmed) || trimmed === tenant.nationalIdMasked) {
+          // Preserve existing encrypted/masked values unchanged
+        } else {
+          const rawDigits = trimmed.replace(/\D/g, '');
+          if (rawDigits.length === 13) {
+            updatePayload.nationalIdEncrypted = this.sensitiveFieldService.encrypt(rawDigits).ciphertext;
+            updatePayload.nationalIdMasked = this.sensitiveFieldService.maskNationalId(rawDigits);
+          }
+        }
+      }
+
+      const updatedTenant = await txRepo.update(tenantId, dormitoryId, updatePayload, data.version);
+      if (!updatedTenant) {
+        throw new AppError('ข้อมูลผู้เช่าถูกแก้ไขโดยผู้อื่นแล้ว', 409, 'RESOURCE_VERSION_CONFLICT');
+      }
+
+      // 4b. Emergency Contact (create or update, never delete from Edit modal)
+      let finalEmergency: any = null;
+      if (data.emergencyContact && data.emergencyContact.name?.trim() && data.emergencyContact.phone?.trim()) {
+        const eData = {
+          name: data.emergencyContact.name.trim(),
+          phone: data.emergencyContact.phone.trim(),
+          relationship: data.emergencyContact.relationship?.trim() || 'ผู้ติดต่อฉุกเฉิน',
+          isPrimary: true,
+        };
+        if (data.emergencyContact.id) {
+          finalEmergency = await txRepo.updateEmergencyContact(data.emergencyContact.id, dormitoryId, eData, tenantId);
+        } else {
+          const existing = await txRepo.findEmergencyContacts(tenantId, dormitoryId);
+          if (existing.length > 0) {
+            finalEmergency = await txRepo.updateEmergencyContact(existing[0].id, dormitoryId, eData, tenantId);
+          } else {
+            finalEmergency = await txRepo.createEmergencyContact(dormitoryId, tenantId, eData);
+          }
+        }
+      }
+
+      // 4c. Vehicles Reconciliation (preserve existing IDs, update in place, delete omitted, create new)
+      const currentVehicles = await txRepo.findVehicles(tenantId, dormitoryId);
+      const submittedIds = new Set(submittedVehicles.filter((v: any) => v.id).map((v: any) => v.id));
+
+      for (const cv of currentVehicles) {
+        if (!submittedIds.has(cv.id)) {
+          await txRepo.deleteVehicle(cv.id, dormitoryId, tenantId);
+        }
+      }
+
+      const finalVehicles: any[] = [];
+      for (const sv of submittedVehicles) {
+        if (sv.type === 'none') continue;
+        if (sv.id) {
+          const upd = await txRepo.updateVehicle(sv.id, dormitoryId, {
+            type: sv.type,
+            licensePlate: sv.licensePlate.trim(),
+            brand: sv.brand?.trim() || null,
+            model: sv.model?.trim() || null,
+            color: sv.color?.trim() || null,
+            province: sv.province?.trim() || null,
+          }, tenantId);
+          if (upd) finalVehicles.push(upd);
+        } else {
+          const crt = await txRepo.createVehicle(dormitoryId, tenantId, {
+            type: sv.type,
+            licensePlate: sv.licensePlate.trim(),
+            brand: sv.brand?.trim() || null,
+            model: sv.model?.trim() || null,
+            color: sv.color?.trim() || null,
+            province: sv.province?.trim() || null,
+          });
+          finalVehicles.push(crt);
+        }
+      }
+
+      return {
+        tenant: updatedTenant,
+        emergencyContact: finalEmergency,
+        vehicles: finalVehicles,
+      };
+    });
+
+    if (this.auditService && actorUserId && result?.tenant) {
+      await this.auditService.log({
+        userId: actorUserId,
+        action: 'TENANT_PROFILE_AGGREGATE_UPDATED',
+        source: 'tenant',
+        reason: `Aggregated profile update for tenant ${result.tenant.displayName}`,
+        ipMetadata: { dormitoryId, tenantId },
+      });
+    }
+
+    return this.getTenantDetails(tenantId, dormitoryId);
   }
 }
