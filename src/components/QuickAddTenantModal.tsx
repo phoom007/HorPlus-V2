@@ -14,7 +14,7 @@ import { TimeWheelPicker } from './TimeWheelPicker';
 import { calculateInstallmentSchedule } from '../utils/installmentCalculator';
 import { Task009ApiAdapter, LineOaConfigResponse } from '../data/adapters/task009';
 import { useQuery } from '@tanstack/react-query';
-import { queryKeys } from '../lib/queryClient';
+import { queryKeys, queryClient } from '../lib/queryClient';
 import { resolveLineFriendAddUrl } from '../utils/lineOa.util';
 import { LineLogo } from './LineLogo';
 
@@ -22,9 +22,11 @@ export interface QuickAddSuccessResult {
   rentalType: QuickAddMode;
   roomId?: string;
   tenantId?: string;
+  fullName?: string;
+  phone?: string;
 }
 
-interface QuickAddTenantModalProps {
+export interface QuickAddTenantModalProps {
   isOpen: boolean;
   onClose: () => void;
   context: QuickAddRoomContext | null;
@@ -32,6 +34,9 @@ interface QuickAddTenantModalProps {
   onNavigateToLineConfig?: () => void;
   onNavigate?: (tab: string) => void;
   defaultTab?: QuickAddMode;
+  availableRooms?: Array<{ id: string; roomNumber: string; monthlyRent?: number; floor?: number }>;
+  onSelectRoom?: (roomId: string) => void;
+  hideLineTab?: boolean;
 }
 
 export type QuickAddMode = 'TERM' | 'MONTHLY' | 'DAILY' | 'LINE';
@@ -57,8 +62,12 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
   onNavigateToLineConfig,
   onNavigate,
   defaultTab = 'LINE',
+  availableRooms,
+  onSelectRoom,
+  hideLineTab = false,
 }) => {
-  const [activeTab, setActiveTab] = useState<QuickAddMode>(defaultTab);
+  const initialTab = hideLineTab && defaultTab === 'LINE' ? 'MONTHLY' : defaultTab;
+  const [activeTab, setActiveTab] = useState<QuickAddMode>(initialTab);
   const [fullName, setFullName] = useState('');
   const [phone, setPhone] = useState('');
   const [startDate, setStartDate] = useState(() => new Date().toISOString().slice(0, 10));
@@ -133,10 +142,16 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
   // Billing Cycles & Go-Live Boundary Authority
   const billingCyclesQuery = useQuery({
     queryKey: queryKeys.billingCycles(context?.dormitoryId || ''),
-    queryFn: () => httpRequest<any>('GET', '/billing-cycles', { headers: { 'x-dormitory-id': context?.dormitoryId || '' } }),
+    queryFn: async () => {
+      try {
+        return await httpRequest<any>('GET', '/billing-cycles', { headers: { 'x-dormitory-id': context?.dormitoryId || '' } });
+      } catch {
+        return { success: true, data: [] };
+      }
+    },
     enabled: !!context?.dormitoryId && isOpen,
     staleTime: 30000,
-  });
+  }, queryClient);
 
   const billingCycles: any[] = Array.isArray(billingCyclesQuery.data?.data)
     ? billingCyclesQuery.data.data
@@ -359,7 +374,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
       setCheckInTime('');
       setCheckOutTime('');
 
-      setActiveTab(defaultTab || 'LINE');
+      setActiveTab(hideLineTab && (!defaultTab || defaultTab === 'LINE') ? 'MONTHLY' : (defaultTab || 'LINE'));
 
       // Clear ID card attachment on open
       if (idCardPreview) {
@@ -369,7 +384,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
       setIdCardPreview(null);
       setIdCardError(null);
     }
-  }, [context?.roomId, isOpen, defaultTab]);
+  }, [context?.roomId, isOpen, defaultTab, hideLineTab]);
 
   const handleFileSelect = (file: File | null) => {
     setIdCardError(null);
@@ -514,7 +529,12 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
           });
         }
 
-        onSuccess(`เพิ่มผู้เช่ารายเดือน (${context.roomNumber}) เรียบร้อยแล้ว`, { rentalType: 'MONTHLY', roomId: context.roomId });
+        const successResult: QuickAddSuccessResult = { rentalType: 'MONTHLY', roomId: context.roomId };
+        if (hideLineTab) {
+          successResult.fullName = fullName.trim();
+          if (phone.trim()) successResult.phone = phone.trim();
+        }
+        onSuccess(`เพิ่มผู้เช่ารายเดือน (${context.roomNumber}) เรียบร้อยแล้ว`, successResult);
         onClose();
       } else if (activeTab === 'TERM') {
         const payload = {
@@ -546,7 +566,12 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
           });
         }
 
-        onSuccess(`เพิ่มผู้เช่ารายเทอม (${context.roomNumber}) เรียบร้อยแล้ว`, { rentalType: 'TERM', roomId: context.roomId });
+        const successResult: QuickAddSuccessResult = { rentalType: 'TERM', roomId: context.roomId };
+        if (hideLineTab) {
+          successResult.fullName = fullName.trim();
+          if (phone.trim()) successResult.phone = phone.trim();
+        }
+        onSuccess(`เพิ่มผู้เช่ารายเทอม (${context.roomNumber}) เรียบร้อยแล้ว`, successResult);
         onClose();
       } else if (activeTab === 'DAILY') {
         const depAmount = normalizeMoneyInput(dailyDeposit);
@@ -597,7 +622,12 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
         }
 
         clearIdempotencyKey(opId);
-        onSuccess('เพิ่มผู้เช่า รายวัน เรียบร้อยแล้ว', { rentalType: 'DAILY', roomId: context.roomId });
+        const successResult: QuickAddSuccessResult = { rentalType: 'DAILY', roomId: context.roomId };
+        if (hideLineTab) {
+          successResult.fullName = fullName.trim();
+          if (phone.trim()) successResult.phone = phone.trim();
+        }
+        onSuccess('เพิ่มผู้เช่า รายวัน เรียบร้อยแล้ว', successResult);
         onClose();
       }
     } catch (err: any) {
@@ -652,6 +682,28 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
           </button>
         </div>
 
+        {/* Room selection switcher if multiple available rooms are provided */}
+        {availableRooms && availableRooms.length > 1 && onSelectRoom && (
+          <div className="px-5 py-2.5 bg-indigo-50/50 border-b border-indigo-100 flex items-center justify-between gap-2">
+            <label htmlFor="quick-add-room-select" className="text-xs font-semibold text-indigo-900 shrink-0">
+              เลือกห้องว่าง:
+            </label>
+            <select
+              id="quick-add-room-select"
+              data-testid="quick-add-room-select"
+              value={context.roomId}
+              onChange={(e) => onSelectRoom(e.target.value)}
+              className="text-xs font-bold bg-white text-indigo-900 border border-indigo-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            >
+              {availableRooms.map((r) => (
+                <option key={r.id} value={r.id}>
+                  ห้อง {r.roomNumber} {r.monthlyRent ? `(฿${Number(r.monthlyRent).toLocaleString()}/เดือน)` : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
         {/* 4-Mode Tabs: Row 1 = TERM / MONTHLY / DAILY, Row 2 = LINE */}
         <div className="p-4 bg-slate-50 border-b border-slate-100 space-y-2">
           {/* Row 1: Traditional Rental Types (TERM / MONTHLY / DAILY) */}
@@ -701,25 +753,27 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
             </button>
           </div>
 
-          {/* Row 2: Recommended LINE Onboarding */}
-          <button
-            type="button"
-            data-testid="tab-line"
-            onClick={() => setActiveTab('LINE')}
-            className={`w-full py-2.5 px-3 text-xs font-extrabold rounded-xl transition-all flex items-center justify-center gap-2 border cursor-pointer ${
-              activeTab === 'LINE'
-                ? 'bg-[#06C755] text-white border-[#05B34C] shadow-xs'
-                : 'bg-white text-slate-700 hover:text-slate-900 border-slate-200 hover:border-slate-300'
-            }`}
-          >
-            <LineLogo className="w-4 h-4 shrink-0 rounded-sm" />
-            <span>เพิ่มผู้เช่า LINE</span>
-            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${
-              activeTab === 'LINE' ? 'bg-white/20 text-white' : 'bg-emerald-50 text-emerald-700 border border-emerald-200/60'
-            }`}>
-              แนะนำ
-            </span>
-          </button>
+          {/* Row 2: Recommended LINE Onboarding (hidden when hideLineTab is true) */}
+          {!hideLineTab && (
+            <button
+              type="button"
+              data-testid="tab-line"
+              onClick={() => setActiveTab('LINE')}
+              className={`w-full py-2.5 px-3 text-xs font-extrabold rounded-xl transition-all flex items-center justify-center gap-2 border cursor-pointer ${
+                activeTab === 'LINE'
+                  ? 'bg-[#06C755] text-white border-[#05B34C] shadow-xs'
+                  : 'bg-white text-slate-700 hover:text-slate-900 border-slate-200 hover:border-slate-300'
+              }`}
+            >
+              <LineLogo className="w-4 h-4 shrink-0 rounded-sm" />
+              <span>เพิ่มผู้เช่า LINE</span>
+              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${
+                activeTab === 'LINE' ? 'bg-white/20 text-white' : 'bg-emerald-50 text-emerald-700 border border-emerald-200/60'
+              }`}>
+                แนะนำ
+              </span>
+            </button>
+          )}
         </div>
 
         {activeTab === 'LINE' ? (

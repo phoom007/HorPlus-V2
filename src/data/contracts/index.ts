@@ -15,7 +15,10 @@ import {
   MaintenanceRequest,
   Announcement,
   Notification,
-  AuditLog
+  AuditLog,
+  EmergencyContactInput,
+  VehicleInput,
+  PetItem
 } from '../../types';
 
 // Domain Error Types
@@ -76,6 +79,80 @@ export interface RoomDataSource {
   deleteRoom(roomId: string, actorUserId?: string): Promise<DataResult<boolean>>;
 }
 
+export interface TenantOccupancyRecord {
+  id: string;
+  dormitoryId: string;
+  roomId: string;
+  tenantId: string;
+  contractId?: string | null;
+  startedAt: string | Date;
+  endedAt?: string | Date | null;
+  status: string;
+  endedReason?: string | null;
+  createdAt: string | Date;
+  updatedAt: string | Date;
+  room?: Room | null;
+  contract?: Contract | null;
+}
+
+export interface TenantDailyStayRecord {
+  id: string;
+  dormitoryId: string;
+  roomId: string;
+  tenantId?: string | null;
+  occupancyId?: string | null;
+  requestSource?: string;
+  applicantFullName?: string | null;
+  applicantPhone?: string | null;
+  startDate: string | Date;
+  endDate: string | Date;
+  checkInAt?: string | Date | null;
+  checkOutAt?: string | Date | null;
+  inclusiveDayCount: number;
+  dailyRateAmount: string | number;
+  totalRentAmount: string | number;
+  depositAmount: string | number;
+  depositDeclaredStatus?: string;
+  status: string;
+  createdAt: string | Date;
+  updatedAt: string | Date;
+  room?: Room | null;
+  invoice?: any;
+}
+
+export interface TenantSettlementRecord {
+  id: string;
+  dormitoryId: string;
+  tenantId: string;
+  contractId: string;
+  roomId: string;
+  depositAmount: string | number;
+  unpaidBillAmount: string | number;
+  damageChargeTotal: string | number;
+  netSettlement: string | number;
+  settlementDirection: string;
+  settlementStatus: string;
+  confirmedAt?: string | Date | null;
+  confirmedByUserId?: string | null;
+  createdAt: string | Date;
+  updatedAt: string | Date;
+  items?: any[];
+  room?: Room | null;
+  contract?: Contract | null;
+}
+
+export interface TenantProfileDetails {
+  tenant: Tenant | any;
+  coOccupants: any[];
+  emergencyContacts: any[];
+  vehicles: any[];
+  contracts: any[];
+  occupancies: TenantOccupancyRecord[];
+  dailyStays: TenantDailyStayRecord[];
+  bills: any[];
+  settlements: TenantSettlementRecord[];
+}
+
 export interface TenantDataSource {
   getAll(): Promise<Tenant[]>;
   getById(id: string): Promise<Tenant | null>;
@@ -85,6 +162,11 @@ export interface TenantDataSource {
   addCoOccupant(tenantId: string, coOccupant: { name: string; phone?: string; relationship?: string }): Promise<DataResult<any>>;
   updateCoOccupant(tenantId: string, coOccupantId: string, coOccupant: { name?: string; phone?: string; relationship?: string }): Promise<DataResult<any>>;
   removeCoOccupant(tenantId: string, coOccupantId: string): Promise<DataResult<boolean>>;
+  addEmergencyContact(tenantId: string, contact: EmergencyContactInput): Promise<DataResult<any>>;
+  addVehicle(tenantId: string, vehicle: VehicleInput): Promise<DataResult<any>>;
+  getIdentityDocumentUrl(tenantId: string): string;
+  updatePetInfo(tenantId: string, pets: PetItem[]): Promise<DataResult<Tenant>>;
+  getTenantProfile?(id: string): Promise<DataResult<TenantProfileDetails>>;
 }
 
 export interface ContractDataSource {
@@ -173,6 +255,7 @@ export interface TenantRegistrationDataSource {
   approveRequest(params: { requestId: string; tenantId: string; contractId: string }): Promise<DataResult<any>>;
   rejectRequest(requestId: string, reason: string): Promise<DataResult<any>>;
   updateRequestRoom?(requestId: string, requestedRoomId: string): Promise<DataResult<any>>;
+  confirmRegistrationSignature?(requestId: string, signatureBase64: string): Promise<DataResult<any>>;
 }
 
 export interface CreateRoomPayload {

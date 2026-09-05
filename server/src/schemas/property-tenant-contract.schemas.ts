@@ -172,6 +172,8 @@ export const ApproveRegistrationSchema = z.object({
   ]),
   terms: z.string().optional().nullable(),
   confirmReplacement: z.boolean().optional(),
+  requireTenantConfirmation: z.boolean().optional(),
+  legacyDirectApproval: z.boolean().optional(),
 }).strict();
 
 export const PetPolicySchema = z.object({

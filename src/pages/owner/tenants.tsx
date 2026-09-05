@@ -52,6 +52,9 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { LineLogo as LineIcon } from '../../components/LineLogo';
+import { QuickAddTenantModal, QuickAddSuccessResult } from '../../components/QuickAddTenantModal';
+import { httpRequest } from '../../data/httpClient';
+import { approveTenantRegistrationRequest, rejectTenantRegistrationRequest } from '../../data/adapters/api';
 import {
   StatusBadge,
   Modal,
@@ -63,9 +66,73 @@ import {
   PrintView,
   SignaturePad
 } from '../../components/GlobalComponents';
-import { Tenant, Room, CoOccupant, CoOccupantHistoryItem, EmergencyContact, Contract, Bill, BillItem, BLOCKING_CONTRACT_STATUSES, PetItem, VehicleItem, TenantReturnContext, Dormitory } from '../../types';
+import { Tenant, Room, CoOccupant, CoOccupantHistoryItem, EmergencyContact, Contract, Bill, BillItem, BLOCKING_CONTRACT_STATUSES, PetItem, VehicleItem, TenantReturnContext, Dormitory, QuickAddRoomContext } from '../../types';
 import { getDataProvider } from '../../data/dataProvider';
 import { convertImageToWebP, UPLOAD_DROPZONE_TEXT } from '../../utils/imageUtils';
+
+export const getTrulyVacantRooms = (
+  rooms: Room[] = [],
+  contracts: Contract[] = [],
+  tenants: Tenant[] = [],
+  occupancies?: Array<{ roomId: string; status?: string }>
+): Room[] => {
+  return rooms.filter(room => {
+    // 1. Room level check:
+    // - Room status must be 'vacant'
+    // - Must not have currentTenantId
+    if (room.status !== 'vacant') return false;
+    if (room.currentTenantId) return false;
+
+    // 2. Active Occupancy check:
+    // - No tenant currently active in this room
+    const hasActiveTenant = tenants.some(
+      t => (t.roomId === room.id || (t as any).currentRoomId === room.id) && t.status === 'active'
+    );
+    if (hasActiveTenant) return false;
+
+    if (occupancies && occupancies.length > 0) {
+      const hasActiveOccupancy = occupancies.some(
+        o => o.roomId === room.id && (!o.status || o.status === 'ACTIVE' || o.status === 'active')
+      );
+      if (hasActiveOccupancy) return false;
+    }
+
+    // 3. Reservation / Booking / Blocking contract check:
+    // - No active or scheduled or reserved contracts for this room
+    const blockingStatuses = [
+      ...BLOCKING_CONTRACT_STATUSES,
+      'active', 'ACTIVE',
+      'scheduled', 'SCHEDULED',
+      'approved_scheduled', 'APPROVED_SCHEDULED',
+      'pending_signature', 'PENDING_SIGNATURE',
+      'waiting_extension', 'WAITING_EXTENSION',
+      'checking_out', 'CHECKING_OUT',
+      'reserved', 'RESERVED',
+      'draft', 'DRAFT'
+    ];
+    const hasBlockingContract = contracts.some(c => {
+      if (c.roomId !== room.id) return false;
+      return blockingStatuses.includes(c.status);
+    });
+    if (hasBlockingContract) return false;
+
+    return true;
+  });
+};
+
+export const getRentalTypeLabel = (tenant: Tenant, contracts: Contract[] = []): string | null => {
+  const rawType = tenant.rentalType || contracts.find(c => c.tenantId === tenant.id)?.rentalType;
+  if (!rawType) return null;
+  const upper = String(rawType).toUpperCase();
+  if (upper === 'MONTHLY') return 'รายเดือน';
+  if (upper === 'TERM') return 'รายเทอม';
+  if (upper === 'DAILY') return 'รายวัน';
+  return null;
+};
+
+export const isTenantLineBound = (tenant: Tenant): boolean => {
+  return !!(tenant.lineFriendId || (tenant as any).lineUserId || (tenant as any).isLineRegistered);
+};
 
 interface OwnerTenantsProps {
   tenants: Tenant[];
@@ -279,6 +346,11 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
   const [errorText, setErrorText] = useState<string | null>(null);
   const [copySuccessToast, setCopySuccessToast] = useState<string | null>(null);
 
+  // Quick Add Tenant Modal states (TERM / MONTHLY / DAILY)
+  const [quickAddModalOpen, setQuickAddModalOpen] = useState(false);
+  const [selectedQuickAddContext, setSelectedQuickAddContext] = useState<QuickAddRoomContext | null>(null);
+  const [quickAddLoading, setQuickAddLoading] = useState(false);
+
   // Form Fields
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
@@ -474,36 +546,160 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
     setDeleteCoReason('');
   };
 
-  // Handle open registration wizard
-  const handleOpenAddWizard = () => {
-    setErrorText(null);
-    setCurrentStep(0);
-    setName('');
-    setPhone('');
-    setEmail('');
-    setCitizenId('');
-    setCoOccupants([]);
-    setCoName('');
-    setCoPhone('');
-    setCoRelationship('แฟน');
-    setCoCustomRelationship('');
-    setEmergencyName('');
-    setEmergencyRelation('');
-    setEmergencyPhone('');
-    setVehicleType('none');
-    setVehiclePlate('');
-    setVehicleBrand('');
-    setVehiclesList([{ id: '1', type: 'none', licensePlate: '', brand: '' }]);
-    setHasPet(false);
-    setPetType('');
-    setCustomPetType('');
-    setPetName('');
-    setPetsList([{ id: '1', type: '', customType: '', name: '' }]);
+  const buildRoomContext = async (targetRoom: Room): Promise<QuickAddRoomContext> => {
+    const dormId = dormitory?.id || 'demo-dorm';
+    try {
+      const res = await httpRequest<{ data: QuickAddRoomContext }>(
+        'GET',
+        `/api/v1/properties/rooms/${targetRoom.id}/quick-add-context`,
+        undefined,
+        { headers: dormId ? { 'x-dormitory-id': dormId } : {} }
+      );
+      if (res.data && res.data.effective) {
+        return res.data;
+      }
+    } catch {
+      // Fallback below
+    }
 
-    // Auto select first vacant room
-    const firstVacant = rooms.find(r => r.status === 'vacant');
-    setSelectedRoomId(firstVacant ? firstVacant.id : '');
-    setIsAddOpen(true);
+    return {
+      roomId: targetRoom.id,
+      dormitoryId: dormId,
+      roomNumber: targetRoom.roomNumber,
+      buildingId: targetRoom.buildingId || undefined,
+      effective: {
+        monthlyRent: targetRoom.monthlyRent || 0,
+        monthlyDeposit: targetRoom.monthlyDeposit ?? targetRoom.depositAmount ?? 0,
+        termRent: targetRoom.termRent ?? ((targetRoom.monthlyRent || 0) * 4),
+        termDeposit: targetRoom.termDeposit ?? targetRoom.depositAmount ?? 0,
+        termMonths: 4,
+        dailyRate: targetRoom.dailyRent ?? 500,
+        dailyDeposit: targetRoom.dailyDeposit ?? 500,
+      },
+      building: {
+        id: targetRoom.buildingId || 'bld-1',
+        name: 'อาคารหลัก',
+        termMonths: 4,
+        maxInstallments: 1,
+      },
+      roomType: 'ห้องมาตรฐาน',
+      floor: targetRoom.floor,
+    };
+  };
+
+  // Handle open Quick Add Tenant modal
+  const handleOpenAddWizard = async () => {
+    setErrorText(null);
+    const vacantRooms = getTrulyVacantRooms(rooms, contracts || [], tenants);
+    if (vacantRooms.length === 0) {
+      alert('ไม่มีห้องว่างที่พร้อมให้เช่าในขณะนี้ (ทุกห้องมีผู้เช่าหรือมีสัญญาจองแล้ว)');
+      return;
+    }
+
+    const firstVacant = vacantRooms[0];
+    setQuickAddLoading(true);
+    try {
+      const ctx = await buildRoomContext(firstVacant);
+      setSelectedQuickAddContext(ctx);
+      setQuickAddModalOpen(true);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setQuickAddLoading(false);
+    }
+  };
+
+  const handleSelectQuickAddRoom = async (roomId: string) => {
+    const targetRoom = rooms.find(r => r.id === roomId);
+    if (!targetRoom) return;
+    const ctx = await buildRoomContext(targetRoom);
+    setSelectedQuickAddContext(ctx);
+  };
+
+  const handleQuickAddSuccess = (message: string, result?: QuickAddSuccessResult) => {
+    const targetRoomId = result?.roomId || selectedQuickAddContext?.roomId;
+    const targetRoom = rooms.find(r => r.id === targetRoomId);
+    const newTenantId = result?.tenantId || `tenant-${Date.now()}`;
+    const newTenantName = result?.fullName || 'ผู้เช่าใหม่';
+    const newTenantPhone = result?.phone || '';
+    const nowIso = new Date().toISOString();
+    const todayStr = nowIso.split('T')[0];
+
+    const newTenant: Tenant = {
+      id: newTenantId,
+      name: newTenantName,
+      phone: newTenantPhone,
+      email: '',
+      citizenId: '',
+      roomId: targetRoomId,
+      status: 'active',
+      lifecycleStage: 'OWNER_CREATED',
+      rentalType: result?.rentalType,
+      lineFriendId: null,
+      joinDate: todayStr,
+      depositPaid: true,
+      coOccupants: [],
+      vehicles: [],
+      pets: [],
+      emergencyContacts: [],
+      rentalHistory: targetRoom ? [
+        {
+          roomId: targetRoom.id,
+          roomNumber: targetRoom.roomNumber,
+          startDate: todayStr,
+          depositAmount: targetRoom.depositAmount || 0,
+          monthlyRent: targetRoom.monthlyRent || 0,
+        }
+      ] : []
+    };
+
+    // Update room occupancy
+    const updatedRooms = rooms.map(r => {
+      if (r.id === targetRoomId) {
+        return {
+          ...r,
+          status: 'occupied' as const,
+          currentTenantId: newTenant.id,
+        };
+      }
+      return r;
+    });
+
+    // Create contract record
+    if (targetRoom) {
+      const newContract: Contract = {
+        id: `contract-${Date.now()}`,
+        tenantId: newTenant.id,
+        roomId: targetRoom.id,
+        roomNumber: targetRoom.roomNumber,
+        startDate: todayStr,
+        status: 'active',
+        rentAmount: targetRoom.monthlyRent || 0,
+        depositAmount: targetRoom.depositAmount || 0,
+        rentalType: result?.rentalType === 'DAILY' ? 'daily' : (result?.rentalType === 'TERM' ? 'term' : 'monthly'),
+        createdAt: nowIso,
+      };
+      if (onSaveContracts && contracts) {
+        onSaveContracts([newContract, ...contracts]);
+      }
+    }
+
+    const updatedTenants = [newTenant, ...tenants];
+    onSaveTenants(updatedTenants);
+    onSaveRooms(updatedRooms);
+
+    onAddLog(
+      'เพิ่มผู้เช่าด่วน',
+      `เพิ่มผู้เช่าคุณ ${newTenant.name} เข้าห้อง ${targetRoom?.roomNumber || ''} (${result?.rentalType || 'MONTHLY'})`,
+      'Tenant',
+      newTenant.id
+    );
+
+    setActiveStatusTab('active');
+    setSelectedTenant(newTenant);
+    setSelectedContractForReview(null);
+    setQuickAddModalOpen(false);
+    setSelectedQuickAddContext(null);
   };
 
   const handleAddCoOccupant = () => {
@@ -1125,11 +1321,27 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
     setIsApproveOpen(true);
   };
 
-  const handleConfirmApprove = () => {
+  const handleConfirmApprove = async () => {
     if (!selectedTenant) return;
 
     const chosenRoom = rooms.find(r => r.id === approveRoomId);
     const roomNum = chosenRoom ? chosenRoom.roomNumber : '';
+
+    const reqId = (selectedTenant as any).registrationRequestId || (selectedTenant as any).requestId;
+    if (reqId) {
+      try {
+        await approveTenantRegistrationRequest(reqId, {
+          startDate: approveStartDate,
+          endDate: calculateContractEndDate(approveStartDate, 12),
+          durationMonths: 12,
+          rentAmount: Number(approveRent) || 0,
+          depositAmount: Number(approveDeposit) || 0,
+          advancePaymentAmount: Number(approveRent) || 0,
+        });
+      } catch (err) {
+        console.error('Failed to approve registration request via API:', err);
+      }
+    }
 
     // 1. Update tenant status to active and update rentalHistory
     const updatedTenants = tenants.map(t => {
@@ -1227,15 +1439,25 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
     setIsRejectOpen(true);
   };
 
-  const handleConfirmReject = () => {
+  const handleConfirmReject = async () => {
     if (!selectedTenant) return;
 
-    // Update tenant to inactive
+    const reqId = (selectedTenant as any).registrationRequestId || (selectedTenant as any).requestId;
+    if (reqId) {
+      try {
+        await rejectTenantRegistrationRequest(reqId, rejectReason);
+      } catch (err) {
+        console.error('Failed to reject registration request via API:', err);
+      }
+    }
+
+    // Option B: Non-terminal revision requested (กรุณาตรวจสอบอีกครั้ง)
     const updatedTenants = tenants.map(t => {
       if (t.id === selectedTenant.id) {
         return {
           ...t,
-          status: 'inactive' as const,
+          status: 'revision_requested' as any,
+          rejectedReason: rejectReason,
           updatedAt: new Date().toISOString()
         };
       }
@@ -1259,8 +1481,8 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
     onSaveRooms(updatedRooms);
     setIsRejectOpen(false);
     setSelectedTenant(null);
-    setCopySuccessToast(`ปฏิเสธคำขอของผู้เช่า ${selectedTenant.name} เรียบร้อยแล้ว`);
-    onAddLog('ปฏิเสธคำขอเช่า', `ปฏิเสธคำขอเช่าคุณ ${selectedTenant.name} (เหตุผล: ${rejectReason})`, 'Tenant', selectedTenant.id);
+    setCopySuccessToast(`ส่งกลับคำขอให้ผู้เช่าแก้ไขข้อมูลเรียบร้อยแล้ว (กรุณาตรวจสอบอีกครั้ง)`);
+    onAddLog('ส่งกลับคำขอเช่าเพื่อแก้ไข', `ส่งกลับคำขอคุณ ${selectedTenant.name} (เหตุผล: ${rejectReason})`, 'Tenant', selectedTenant.id);
   };
 
   const calculateContractEndDate = (start: string, duration: number) => {
@@ -1846,8 +2068,16 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
 
   // Helper to categorize each tenant into: pending, active, inactive
   const getTenantCategory = (t: Tenant): 'pending' | 'active' | 'inactive' => {
-    if (t.status === 'pending') return 'pending';
     if (t.status === 'inactive') return 'inactive';
+
+    // Quick Add tenants start with OWNER_CREATED or WAITING_LINE_BIND and must be in active
+    if (t.lifecycleStage === 'OWNER_CREATED' || t.lifecycleStage === 'WAITING_LINE_BIND') {
+      return 'active';
+    }
+
+    if (t.status === 'pending' || (t.status as any) === 'revision_requested' || (t as any).lifecycleStage === 'WAITING_OWNER_APPROVAL') {
+      return 'pending';
+    }
 
     // If status is active but has no current room assigned or waiting contract
     const isCurrentlyInRoom = rooms.some(r => r.currentTenantId === t.id);
@@ -2158,9 +2388,25 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                       </div>
                     </div>
 
-                    <span className="bg-amber-50 border border-amber-200 text-amber-700 font-extrabold text-[10px] px-2 py-0.5 rounded-lg shrink-0 flex items-center gap-1">
-                      <Clock className="w-3 h-3 text-amber-600" />
-                      <span>รอตรวจสอบ</span>
+                    <span className={`border font-extrabold text-[10px] px-2 py-0.5 rounded-lg shrink-0 flex items-center gap-1 ${
+                      (tenant as any).status === 'awaiting_tenant_confirmation' || (tenant as any).registrationRequestStatus === 'awaiting_tenant_confirmation'
+                        ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
+                        : (tenant as any).status === 'revision_requested'
+                        ? 'bg-rose-50 border-rose-200 text-rose-700'
+                        : 'bg-amber-50 border-amber-200 text-amber-700'
+                    }`}>
+                      {(tenant as any).status === 'awaiting_tenant_confirmation' || (tenant as any).registrationRequestStatus === 'awaiting_tenant_confirmation' ? (
+                        <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                      ) : (
+                        <Clock className={`w-3 h-3 ${(tenant as any).status === 'revision_requested' ? 'text-rose-600' : 'text-amber-600'}`} />
+                      )}
+                      <span>
+                        {(tenant as any).status === 'awaiting_tenant_confirmation' || (tenant as any).registrationRequestStatus === 'awaiting_tenant_confirmation'
+                          ? 'กรุณาตรวจสอบและยืนยัน'
+                          : (tenant as any).status === 'revision_requested'
+                          ? 'กรุณาตรวจสอบอีกครั้ง'
+                          : 'รออนุมัติคำขอผู้เช่า'}
+                      </span>
                     </span>
                   </div>
                 </div>
@@ -2261,6 +2507,23 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                       <div className="min-w-0">
                         <div className="flex items-center gap-1.5 flex-wrap">
                           <h4 className="font-bold text-slate-800 text-xs truncate leading-none">{tenant.name}</h4>
+                          {category === 'active' && !isTenantLineBound(tenant) && (
+                            <span
+                              data-testid="badge-unbound-line"
+                              className="bg-amber-50 border border-amber-200 text-amber-700 font-extrabold text-[9px] px-1.5 py-0.5 rounded-md shrink-0 flex items-center gap-1"
+                            >
+                              <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+                              <span>ยังไม่ผูก LINE</span>
+                            </span>
+                          )}
+                          {category === 'active' && getRentalTypeLabel(tenant, contracts) && (
+                            <span
+                              data-testid="badge-rental-type"
+                              className="bg-slate-100 border border-slate-200 text-slate-600 font-bold text-[9px] px-1.5 py-0.5 rounded-md shrink-0"
+                            >
+                              {getRentalTypeLabel(tenant, contracts)}
+                            </span>
+                          )}
                         </div>
                         <p className="text-[10px] text-gray-400 mt-1 leading-none">{formatPhone(tenant.phone)}</p>
                       </div>
@@ -2272,7 +2535,10 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                         <span>เลิกเช่าแล้ว</span>
                       </span>
                     ) : (
-                      <span className="bg-indigo-50 border border-indigo-100 text-indigo-700 font-extrabold text-[10px] px-2 py-1 rounded-lg shrink-0">
+                      <span
+                        data-testid="badge-room-number"
+                        className="bg-indigo-50 border border-indigo-100 text-indigo-700 font-extrabold text-[10px] px-2 py-1 rounded-lg shrink-0"
+                      >
                         ห้อง {roomNum}
                       </span>
                     )}
@@ -2425,9 +2691,13 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                                 </span>
                               )}
                               {!isExpiredContractReview && getTenantCategory(selectedTenant) === 'pending' && (
-                                <span className="bg-amber-100 text-amber-800 text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1">
-                                  <Clock className="w-3 h-3 text-amber-600" />
-                                  รออนุมัติ
+                                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 ${
+                                  (selectedTenant as any).status === 'revision_requested'
+                                    ? 'bg-rose-100 text-rose-800'
+                                    : 'bg-amber-100 text-amber-800'
+                                }`}>
+                                  <Clock className={`w-3 h-3 ${(selectedTenant as any).status === 'revision_requested' ? 'text-rose-600' : 'text-amber-600'}`} />
+                                  {(selectedTenant as any).status === 'revision_requested' ? 'กรุณาตรวจสอบอีกครั้ง' : 'รออนุมัติคำขอผู้เช่า'}
                                 </span>
                               )}
                               {!isExpiredContractReview && getTenantCategory(selectedTenant) === 'inactive' && (
@@ -2435,6 +2705,35 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                                   <XCircle className="w-3 h-3 text-rose-500" />
                                   เลิกเช่าแล้ว
                                 </span>
+                              )}
+                              {!isExpiredContractReview && getTenantCategory(selectedTenant) === 'active' && (
+                                <>
+                                  {!isTenantLineBound(selectedTenant) ? (
+                                    <span
+                                      data-testid="header-badge-unbound-line"
+                                      className="bg-amber-50 text-amber-800 border border-amber-200 text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1"
+                                    >
+                                      <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+                                      ยังไม่ผูก LINE
+                                    </span>
+                                  ) : (
+                                    <span
+                                      data-testid="header-badge-bound-line"
+                                      className="bg-emerald-50 text-emerald-800 border border-emerald-200 text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1"
+                                    >
+                                      <LineIcon className="w-3 h-3 text-[#06C755]" />
+                                      ผูก LINE แล้ว
+                                    </span>
+                                  )}
+                                  {getRentalTypeLabel(selectedTenant, contracts) && (
+                                    <span
+                                      data-testid="header-badge-rental-type"
+                                      className="bg-slate-100 text-slate-700 border border-slate-200 text-[10px] font-bold px-2 py-0.5 rounded-full"
+                                    >
+                                      {getRentalTypeLabel(selectedTenant, contracts)}
+                                    </span>
+                                  )}
+                                </>
                               )}
                             </div>
                             <p className="text-[11px] sm:text-xs text-gray-400 mt-0.5">เลขบัตรประชาชน: {formatCitizenId(selectedTenant.citizenId)}</p>
@@ -2624,15 +2923,15 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
                           <div className="flex flex-col gap-0.5">
                             <span className="text-gray-400 font-medium text-[10px]">ชื่อผู้ติดต่อ:</span>
-                            <p className="font-extrabold text-slate-800 text-[11px] sm:text-xs break-all">{selectedTenant.emergencyContact.name || '-'}</p>
+                            <p className="font-extrabold text-slate-800 text-[11px] sm:text-xs break-all">{selectedTenant.emergencyContact?.name || '-'}</p>
                           </div>
                           <div className="flex flex-col gap-0.5">
                             <span className="text-gray-400 font-medium text-[10px]">ความสัมพันธ์:</span>
-                            <p className="font-extrabold text-slate-800 text-[11px] sm:text-xs break-all">{selectedTenant.emergencyContact.relationship || '-'}</p>
+                            <p className="font-extrabold text-slate-800 text-[11px] sm:text-xs break-all">{selectedTenant.emergencyContact?.relationship || '-'}</p>
                           </div>
                           <div className="flex flex-col gap-0.5">
                             <span className="text-gray-400 font-medium text-[10px]">เบอร์โทรติดต่อ:</span>
-                            <p className="font-extrabold text-indigo-600 text-[11px] sm:text-xs break-all">{formatPhone(selectedTenant.emergencyContact.phone) || '-'}</p>
+                            <p className="font-extrabold text-indigo-600 text-[11px] sm:text-xs break-all">{formatPhone(selectedTenant.emergencyContact?.phone) || '-'}</p>
                           </div>
                         </div>
                       </div>
@@ -3323,7 +3622,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
               </div>
 
               <div className="pt-4 border-t border-gray-100 flex justify-between items-center text-[10px] text-gray-400 shrink-0">
-                <span>จดบันทึกเข้าระบบเมื่อ: {selectedTenant.createdAt.split('T')[0]}</span>
+                <span>จดบันทึกเข้าระบบเมื่อ: {selectedTenant.createdAt ? selectedTenant.createdAt.split('T')[0] : (selectedTenant.joinDate || '-')}</span>
                 <span>รหัสบันทึก: {selectedTenant.id}</span>
               </div>
             </div>
@@ -3435,12 +3734,22 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
         </Modal>
       )}
 
-      {/* Add Tenant Notice Modal */}
-      <Modal isOpen={isAddOpen} onClose={() => setIsAddOpen(false)} title="จดทะเบียนผู้เช่าและย้ายเข้า" size="md">
-        {/* ว่างเปล่าสำหรับเตรียมพัฒนาต่อ */}
-        <div className="min-h-[240px] flex items-center justify-center p-6 text-slate-300">
-        </div>
-      </Modal>
+      {/* Canonical Quick Add Tenant Modal (TERM / MONTHLY / DAILY) */}
+      {quickAddModalOpen && selectedQuickAddContext && (
+        <QuickAddTenantModal
+          isOpen={quickAddModalOpen}
+          onClose={() => {
+            setQuickAddModalOpen(false);
+            setSelectedQuickAddContext(null);
+          }}
+          context={selectedQuickAddContext}
+          availableRooms={getTrulyVacantRooms(rooms, contracts || [], tenants)}
+          onSelectRoom={handleSelectQuickAddRoom}
+          hideLineTab={true}
+          defaultTab="MONTHLY"
+          onSuccess={handleQuickAddSuccess}
+        />
+      )}
 
       {false && (
         <div>
@@ -4013,13 +4322,13 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                           <div>
                             <p className="text-gray-400 text-[10px] font-bold">วันที่เริ่มเข้าพัก:</p>
                             <p className="font-extrabold text-xs mt-0.5">
-                              {activeCon ? formatThaiDate(activeCon.startDate) : formatThaiDate(selectedTenant.createdAt.split('T')[0])}
+                              {activeCon ? formatThaiDate(activeCon.startDate) : (selectedTenant.createdAt ? formatThaiDate(selectedTenant.createdAt.split('T')[0]) : (selectedTenant.joinDate ? formatThaiDate(selectedTenant.joinDate) : '-'))}
                             </p>
                           </div>
                           <div>
                             <p className="text-gray-400 text-[10px] font-bold">ระยะเวลาที่อยู่อาศัย:</p>
                             <p className="font-extrabold text-xs text-indigo-700 mt-0.5">
-                              {getStayDurationText(activeCon ? activeCon.startDate : selectedTenant.createdAt.split('T')[0])}
+                              {getStayDurationText(activeCon ? activeCon.startDate : (selectedTenant.createdAt ? selectedTenant.createdAt.split('T')[0] : (selectedTenant.joinDate || '')))}
                             </p>
                           </div>
                         </div>

@@ -35,6 +35,13 @@ export const THAI_HONORIFIC_PREFIXES = [
   'ms.',
   'ms',
   'miss',
+  'นายแพทย์',
+  'พญ.',
+  'พ.ญ.',
+  'ดร.',
+  'ดร',
+  'dr.',
+  'dr',
 ];
 
 /**

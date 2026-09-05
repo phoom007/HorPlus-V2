@@ -426,6 +426,15 @@ export class PrismaTenantRepository implements ITenantRepository {
       gender: t.gender,
       address: t.address,
       status: t.status,
+      photoUrl: t.photoUrl ?? null,
+      idCardObjectKey: t.idCardObjectKey ?? null,
+      idCardSha256: t.idCardSha256 ?? null,
+      idCardMimeType: t.idCardMimeType ?? null,
+      idCardByteSize: t.idCardByteSize ?? null,
+      idCardUploadedAt: t.idCardUploadedAt ?? null,
+      idCardUploadedByUserId: t.idCardUploadedByUserId ?? null,
+      petInfo: t.petInfo ?? null,
+      notes: t.notes ?? null,
       version: t.version,
       coOccupants: Array.isArray(t.coOccupants) ? t.coOccupants.map((c: any) => ({
         id: c.id,
@@ -526,6 +535,18 @@ export class PrismaTenantRepository implements ITenantRepository {
         phone: data.phone,
         email: data.email || null,
         status: data.status || 'active',
+        dateOfBirth: data.dateOfBirth || null,
+        gender: data.gender || null,
+        address: data.address || null,
+        photoUrl: data.photoUrl || null,
+        idCardObjectKey: data.idCardObjectKey || null,
+        idCardSha256: data.idCardSha256 || null,
+        idCardMimeType: data.idCardMimeType || null,
+        idCardByteSize: data.idCardByteSize || null,
+        idCardUploadedAt: data.idCardUploadedAt || null,
+        idCardUploadedByUserId: data.idCardUploadedByUserId || null,
+        petInfo: data.petInfo || null,
+        notes: data.notes || null,
       },
     });
 
@@ -541,17 +562,34 @@ export class PrismaTenantRepository implements ITenantRepository {
       throw err;
     }
 
+    const updatePayload: any = {
+      version: { increment: 1 },
+    };
+    if (data.firstName !== undefined) updatePayload.firstName = data.firstName;
+    if (data.lastName !== undefined) updatePayload.lastName = data.lastName;
+    if (data.displayName !== undefined) updatePayload.displayName = data.displayName;
+    if (data.phone !== undefined) updatePayload.phone = data.phone;
+    if (data.email !== undefined) updatePayload.email = data.email;
+    if (data.status !== undefined) updatePayload.status = data.status;
+    if (data.address !== undefined) updatePayload.address = data.address;
+    if (data.gender !== undefined) updatePayload.gender = data.gender;
+    if (data.dateOfBirth !== undefined) updatePayload.dateOfBirth = data.dateOfBirth;
+    if (data.photoUrl !== undefined) updatePayload.photoUrl = data.photoUrl;
+    if (data.petInfo !== undefined) updatePayload.petInfo = data.petInfo;
+    if (data.notes !== undefined) updatePayload.notes = data.notes;
+    if (data.nationalIdEncrypted !== undefined) updatePayload.nationalIdEncrypted = data.nationalIdEncrypted;
+    if (data.nationalIdMasked !== undefined) updatePayload.nationalIdMasked = data.nationalIdMasked;
+    if (data.idCardObjectKey !== undefined) updatePayload.idCardObjectKey = data.idCardObjectKey;
+    if (data.idCardSha256 !== undefined) updatePayload.idCardSha256 = data.idCardSha256;
+    if (data.idCardMimeType !== undefined) updatePayload.idCardMimeType = data.idCardMimeType;
+    if (data.idCardByteSize !== undefined) updatePayload.idCardByteSize = data.idCardByteSize;
+    if (data.idCardUploadedAt !== undefined) updatePayload.idCardUploadedAt = data.idCardUploadedAt;
+    if (data.idCardUploadedByUserId !== undefined) updatePayload.idCardUploadedByUserId = data.idCardUploadedByUserId;
+    if (data.linkedUserId !== undefined) updatePayload.linkedUserId = data.linkedUserId;
+
     const t = await this.prisma.tenant.update({
       where: { id },
-      data: {
-        firstName: data.firstName,
-        lastName: data.lastName,
-        displayName: data.displayName,
-        phone: data.phone,
-        email: data.email,
-        status: data.status,
-        version: { increment: 1 },
-      },
+      data: updatePayload,
     });
 
     return this.mapTenantToEntity(t);

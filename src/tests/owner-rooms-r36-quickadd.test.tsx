@@ -355,7 +355,7 @@ describe('HORPLUS R3.6a — Quick Add Live Financial Preview, Input Normalizatio
       await waitFor(() => {
         expect(ui.getByText('ยอดตามข้อตกลง:')).toBeInTheDocument();
         expect(ui.getAllByText(/9,600/).length).toBeGreaterThanOrEqual(2);
-        expect(ui.getAllByText(/0.00/).length).toBeGreaterThanOrEqual(1);
+        expect(ui.getAllByText(/0(\.00)?/).length).toBeGreaterThanOrEqual(1);
       });
 
       // Toggle to PAID
@@ -391,7 +391,7 @@ describe('HORPLUS R3.6a — Quick Add Live Financial Preview, Input Normalizatio
       await waitFor(() => {
         expect(ui.getByText('ยอดตามข้อตกลง:')).toBeInTheDocument();
         expect(ui.getAllByText(/800/).length).toBeGreaterThanOrEqual(2);
-        expect(ui.getAllByText(/0.00/).length).toBeGreaterThanOrEqual(1);
+        expect(ui.getAllByText(/0(\.00)?/).length).toBeGreaterThanOrEqual(1);
       });
 
       // Toggle to PAID

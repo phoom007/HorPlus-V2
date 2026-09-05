@@ -220,6 +220,10 @@ export interface Tenant {
   pet: Pet;
   rentalHistory: string[]; // Room history IDs
   status: 'active' | 'inactive' | 'pending';
+  lifecycleStage?: TenantLifecycleStage;
+  rentalType?: 'MONTHLY' | 'TERM' | 'DAILY' | 'monthly' | 'term' | 'daily' | string;
+  roomId?: string;
+  lineFriendId?: string | null;
   createdAt: string;
   updatedAt: string;
   // Presentation-only view-model aggregate extensions (UI baseline compatibility):
@@ -234,6 +238,44 @@ export interface TenantProfileViewModel extends Tenant {
   vehicles?: VehicleItem[];
   pets?: PetItem[];
   coOccupantHistory?: CoOccupantHistoryItem[];
+}
+
+/**
+ * 6-Stage Registration Lifecycle for Tenant Domain (Phase 2)
+ */
+export type TenantLifecycleStage =
+  | 'OWNER_CREATED'
+  | 'WAITING_LINE_BIND'
+  | 'TENANT_FILLING_DATA'
+  | 'WAITING_OWNER_APPROVAL'
+  | 'WAITING_SIGNATURE'
+  | 'REGISTERED';
+
+export interface EmergencyContactInput {
+  name: string;
+  phone: string;
+  relationship: string;
+  isPrimary?: boolean;
+}
+
+export interface VehicleInput {
+  type: 'car' | 'motorcycle' | 'none' | 'other' | string;
+  licensePlate: string;
+  brand?: string | null;
+  model?: string | null;
+  color?: string | null;
+  province?: string | null;
+}
+
+export interface TenantStayHistoryItem {
+  id: string;
+  roomId: string;
+  roomNumber?: string;
+  startedAt: string;
+  endedAt?: string | null;
+  status: 'ACTIVE' | 'ENDED' | string;
+  endedReason?: string | null;
+  rentalType?: 'monthly' | 'term' | 'daily' | string;
 }
 
 export interface TenantReturnContext {

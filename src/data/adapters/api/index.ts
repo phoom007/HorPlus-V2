@@ -24,10 +24,12 @@ import {
   StaffRoleDataSource,
   TenantRegistrationDataSource,
   OccupancyDataSource,
-  DataResult
+  DataResult,
+  TenantProfileDetails
 } from '../../contracts';
 
 import { httpRequest, HttpClientError } from '../../httpClient';
+import { getApiBaseUrl } from '../../dataMode';
 import { normalizeAuthoritativeRoom, normalizeAuthoritativeRooms } from '../../../lib/roomNormalizer';
 import {
   serializeMeterWorkspaceDirtyRow,
@@ -45,7 +47,10 @@ import {
   MaintenanceRequest,
   Announcement,
   Notification,
-  AuditLog
+  AuditLog,
+  EmergencyContactInput,
+  VehicleInput,
+  PetItem
 } from '../../../types';
 
 export class ApiDormitoryAdapter implements DormitoryDataSource {
@@ -202,7 +207,8 @@ export class ApiTenantAdapter implements TenantDataSource {
 
   async getById(id: string): Promise<Tenant | null> {
     try {
-      return await httpRequest<Tenant>('GET', `/tenants/${id}`);
+      const res = await httpRequest<any>('GET', `/tenants/${id}`);
+      return (res?.data?.tenant || res?.data || res) as Tenant;
     } catch (err: any) {
       if (err instanceof HttpClientError && err.domainError.code === 'RESOURCE_NOT_FOUND') return null;
       throw err;
@@ -317,6 +323,78 @@ export class ApiTenantAdapter implements TenantDataSource {
       };
     }
   }
+
+  async addEmergencyContact(tenantId: string, contact: EmergencyContactInput): Promise<DataResult<any>> {
+    try {
+      const data = await httpRequest<any>('POST', `/tenants/${encodeURIComponent(tenantId)}/emergency-contacts`, contact);
+      return { success: true, data };
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
+      };
+    }
+  }
+
+  async addVehicle(tenantId: string, vehicle: VehicleInput): Promise<DataResult<any>> {
+    try {
+      const data = await httpRequest<any>('POST', `/tenants/${encodeURIComponent(tenantId)}/vehicles`, vehicle);
+      return { success: true, data };
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
+      };
+    }
+  }
+
+  getIdentityDocumentUrl(tenantId: string): string {
+    const baseUrl = getApiBaseUrl();
+    return `${baseUrl}/tenants/${encodeURIComponent(tenantId)}/identity-document`;
+  }
+
+  async updatePetInfo(tenantId: string, pets: PetItem[]): Promise<DataResult<Tenant>> {
+    try {
+      const data = await httpRequest<Tenant>('PUT', `/tenants/${encodeURIComponent(tenantId)}`, { petInfo: pets });
+      return { success: true, data };
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
+      };
+    }
+  }
+
+  async getTenantProfile(id: string): Promise<DataResult<TenantProfileDetails>> {
+    try {
+      const res = await httpRequest<any>('GET', `/tenants/${encodeURIComponent(id)}`);
+      const details = res?.data || res;
+      return {
+        success: true,
+        data: {
+          tenant: details.tenant || details,
+          coOccupants: details.coOccupants || [],
+          emergencyContacts: details.emergencyContacts || [],
+          vehicles: details.vehicles || [],
+          contracts: details.contracts || [],
+          occupancies: details.occupancies || [],
+          dailyStays: details.dailyStays || [],
+          bills: details.bills || [],
+          settlements: details.settlements || [],
+        },
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message },
+      };
+    }
+  }
+}
+
+export async function fetchTenantProfile(id: string): Promise<DataResult<TenantProfileDetails>> {
+  const adapter = new ApiTenantAdapter();
+  return adapter.getTenantProfile(id);
 }
 
 export async function getTenantRegistrationRequests(): Promise<DataResult<any[]>> {
@@ -332,7 +410,7 @@ export async function getTenantRegistrationRequests(): Promise<DataResult<any[]>
   }
 }
 
-export async function submitTenantRegistrationRequest(payload: {
+export interface SubmitRegistrationPayload {
   dormitoryId?: string;
   requestedRoomId: string;
   firstName: string;
@@ -343,7 +421,22 @@ export async function submitTenantRegistrationRequest(payload: {
   signatureBase64?: string;
   expectedPolicyVersion?: number;
   inviteToken?: string;
-}): Promise<DataResult<any>> {
+  rentalPlan?: 'monthly' | 'term' | 'daily';
+  proposedRent?: number | string;
+  proposedDeposit?: number | string;
+  durationMonths?: number;
+  startDate?: string;
+  citizenId?: string;
+  birthDate?: string;
+  address?: string;
+  idCardImageUrl?: string;
+  emergencyContact?: { name: string; relationship: string; phone: string };
+  coOccupants?: Array<{ name: string; phone?: string; citizenId?: string }>;
+  vehicle?: { type: string; licensePlate: string; brand?: string };
+  pet?: { hasPet: boolean; type?: string; name?: string; count?: number };
+}
+
+export async function submitTenantRegistrationRequest(payload: SubmitRegistrationPayload): Promise<DataResult<any>> {
   try {
     const activeDormId = payload.dormitoryId || (typeof window !== 'undefined' ? localStorage.getItem('selected_dormitory_id') : undefined) || undefined;
     const bodyPayload = {
@@ -352,6 +445,164 @@ export async function submitTenantRegistrationRequest(payload: {
       expectedPolicyVersion: typeof payload.expectedPolicyVersion === 'number' ? payload.expectedPolicyVersion : (Number(payload.expectedPolicyVersion) || 1),
     };
     const res = await httpRequest<any>('POST', '/tenant-registrations', bodyPayload);
+    const data = res?.data || res;
+    return { success: true, data };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
+    };
+  }
+}
+
+export async function getPublicRooms(dormitoryId?: string, inviteToken?: string): Promise<DataResult<any[]>> {
+  try {
+    const params = new URLSearchParams();
+    if (inviteToken) params.set('t', inviteToken);
+    if (dormitoryId) params.set('dormitoryId', dormitoryId);
+    const query = params.toString() ? `?${params.toString()}` : '';
+    const res = await httpRequest<any>('GET', `/tenant-registrations/public-rooms${query}`);
+    const data = Array.isArray(res) ? res : (res?.data || []);
+    return { success: true, data };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
+    };
+  }
+}
+
+export async function verifyTenantClaim(payload: {
+  dormitoryId?: string;
+  inviteToken?: string;
+  roomId: string;
+  claimInput: string;
+}): Promise<DataResult<{
+  verified: boolean;
+  tenantId: string;
+  displayName: string;
+  firstName: string;
+  lastName: string;
+  phone: string;
+  citizenId?: string | null;
+  room: { id: string; roomNumber: string; floor?: number };
+  lockedFinancials: {
+    monthlyRent: number;
+    depositAmount: number;
+    advancePaymentAmount: number;
+    durationMonths: number;
+    rentalType: string;
+    depositStatus: string;
+    terms: string;
+  };
+  emergencyContact?: any;
+  vehicles?: any[];
+  coOccupants?: any[];
+  pet?: any;
+}>> {
+  try {
+    const res = await httpRequest<any>('POST', '/tenant-registrations/verify-claim', payload);
+    const data = res?.data || res;
+    return { success: true, data };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
+    };
+  }
+}
+
+export async function completeTenantClaim(payload: {
+  dormitoryId?: string;
+  inviteToken?: string;
+  roomId: string;
+  tenantId: string;
+  signatureBase64: string;
+  displayName?: string;
+  firstName?: string;
+  lastName?: string;
+  phone?: string;
+  citizenId?: string;
+  birthDate?: string;
+  address?: string;
+  idCardImageUrl?: string;
+  emergencyContact?: { name: string; relationship: string; phone: string };
+  vehicle?: { type: string; licensePlate: string; brand?: string };
+  vehicles?: Array<{ type: string; licensePlate: string; brand?: string }>;
+  coOccupants?: Array<{ name: string; phone?: string; citizenId?: string }>;
+  pet?: { hasPet: boolean; type?: string; name?: string; count?: number };
+  lineFollowerId?: string;
+}): Promise<DataResult<{
+  success: boolean;
+  tenant: any;
+  contractId: string | null;
+  lifecycleStage: string;
+  message: string;
+}>> {
+  try {
+    const res = await httpRequest<any>('POST', '/tenant-registrations/complete-claim', payload);
+    const data = res?.data || res;
+    return { success: true, data };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
+    };
+  }
+}
+
+export async function resubmitTenantRegistrationRequest(id: string, payload: SubmitRegistrationPayload): Promise<DataResult<any>> {
+  try {
+    const res = await httpRequest<any>('POST', `/tenant-registrations/${id}/resubmit`, payload);
+    const data = res?.data || res;
+    return { success: true, data };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
+    };
+  }
+}
+
+export async function confirmApprovedRegistration(id: string, payload: {
+  signatureBase64: string;
+  dormitoryId?: string;
+}): Promise<DataResult<{
+  success: boolean;
+  tenant: any;
+  contractId: string;
+  occupancy: any;
+  lifecycleStage: string;
+  message: string;
+}>> {
+  try {
+    const res = await httpRequest<any>('POST', `/tenant-registrations/${id}/confirm-signature`, payload);
+    const data = res?.data || res;
+    return { success: true, data };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
+    };
+  }
+}
+
+export async function submitDailyStayRequest(payload: {
+  dormitoryId: string;
+  roomId?: string;
+  roomNumber?: string;
+  applicantFullName: string;
+  applicantPhone?: string;
+  startDate: string;
+  endDate: string;
+  dailyRateAmount?: string;
+  depositAmount?: string;
+  depositDeclaredStatus?: 'PAID' | 'UNPAID';
+}): Promise<DataResult<any>> {
+  try {
+    const res = await httpRequest<any>('POST', '/daily-stays/request', payload, {
+      headers: { 'x-dormitory-id': payload.dormitoryId }
+    });
     const data = res?.data || res;
     return { success: true, data };
   } catch (err: any) {
@@ -433,6 +684,19 @@ export interface ApproveRegistrationPayload {
 export async function approveTenantRegistrationRequest(id: string, payload: ApproveRegistrationPayload): Promise<DataResult<any>> {
   try {
     const data = await httpRequest<any>('POST', `/tenant-registrations/${id}/approve`, payload);
+    return { success: true, data };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
+    };
+  }
+}
+
+export async function getTenantRegistrationRequestById(id: string): Promise<DataResult<any>> {
+  try {
+    const res = await httpRequest<any>('GET', `/tenant-registrations/${id}`);
+    const data = res?.data || res;
     return { success: true, data };
   } catch (err: any) {
     return {
