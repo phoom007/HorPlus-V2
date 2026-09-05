@@ -159,7 +159,48 @@ export async function resolveAuthoritativeDormitoryContext(req: Request): Promis
   }
 
   const rawPerms = mem.rolePermissions ?? roleObj?.permissions ?? (mem as any).permissions;
-  const permissions = normalizeRolePermissions(rawPerms);
+  let permissions = normalizeRolePermissions(rawPerms);
+
+  // Centralized Tenant-domain role normalization policy
+  if (roleCode === 'MANAGER') {
+    const managerTenantPermissions = [
+      'tenants:view',
+      'tenants:create',
+      'tenants:update',
+      'tenants:archive',
+      'tenants:document:read',
+      'tenants:document:write',
+      'tenant:view',
+      'tenant:create',
+      'tenant:update',
+      'tenant:archive',
+      'tenant:document:read',
+      'tenant:document:write',
+    ];
+    const permSet = new Set(permissions);
+    for (const p of managerTenantPermissions) {
+      permSet.add(p);
+    }
+    permissions = Array.from(permSet);
+  } else if (roleCode === 'STAFF') {
+    // Remove all Tenant-domain mutation and document permissions, keeping only view/read
+    const permSet = new Set(permissions);
+    for (const p of Array.from(permSet)) {
+      if (p.startsWith('tenants:') || p.startsWith('tenant:')) {
+        if (!['tenants:view', 'tenant:view', 'tenants:read', 'tenant:read'].includes(p)) {
+          permSet.delete(p);
+        }
+      }
+    }
+    permSet.add('tenants:view');
+    permSet.add('tenant:view');
+    permissions = Array.from(permSet);
+  } else if (roleCode === 'TENANT') {
+    // Remove ALL Owner Tenant-domain permissions
+    permissions = permissions.filter(
+      (p) => !p.startsWith('tenants:') && !p.startsWith('tenant:')
+    );
+  }
 
   const context: AuthoritativeDormitoryContext = {
     dormitoryId: mem.dormitoryId,

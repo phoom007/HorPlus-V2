@@ -33,6 +33,7 @@ export interface SafeEmergencyContactApiDTO {
   name: string;
   phone: string;
   relationship: string;
+  isPrimary: boolean;
   createdAt?: string | Date;
   updatedAt?: string | Date;
 }
@@ -89,7 +90,182 @@ export interface SafeTenantApiDTO {
   coOccupants?: SafeCoOccupantApiDTO[];
   vehicles?: SafeVehicleApiDTO[];
   emergencyContacts?: SafeEmergencyContactApiDTO[];
-  contracts?: any[];
+  contracts?: SafeContractApiDTO[];
+}
+
+export interface SafeRoomSummaryApiDTO {
+  id: string;
+  roomNumber: string;
+  buildingId: string | null;
+  floor: number | null;
+  roomType: string | null;
+  status: string | null;
+}
+
+export interface SafeContractApiDTO {
+  id: string;
+  contractNumber: string;
+  tenantId: string;
+  dormitoryId: string;
+  roomId: string;
+  status: string;
+  startDate: string | Date;
+  endDate: string | Date;
+  durationMonths: number;
+  rentBillingType: string;
+  rentAmount: number | string;
+  depositAmount: number | string;
+  advancePaymentAmount: number | string;
+  depositStatus?: string | null;
+  depositType?: string | null;
+  terms?: string | null;
+  previousContractId?: string | null;
+  signedByOwnerAt?: string | Date | null;
+  signedByTenantAt?: string | Date | null;
+  activatedAt?: string | Date | null;
+  terminatedAt?: string | Date | null;
+  terminationEffectiveDate?: string | Date | null;
+  terminationReason?: string | null;
+  createdAt: string | Date;
+  updatedAt: string | Date;
+  room?: SafeRoomSummaryApiDTO | null;
+}
+
+export interface SafeOccupancyApiDTO {
+  id: string;
+  tenantId: string;
+  dormitoryId: string;
+  roomId: string;
+  contractId: string | null;
+  status: string;
+  startedAt: string | Date;
+  endedAt: string | Date | null;
+  endedReason?: string | null;
+  createdAt: string | Date;
+  updatedAt: string | Date;
+  room?: SafeRoomSummaryApiDTO | null;
+  contract?: {
+    id: string;
+    contractNumber: string;
+    status: string;
+  } | null;
+}
+
+export interface SafeDailyStayInvoiceSummaryApiDTO {
+  id: string;
+  invoiceNumber: string;
+  totalRentAmount: number | string;
+  depositAmount: number | string;
+  totalAmount: number | string;
+  status: string;
+}
+
+export interface SafeDailyStayApiDTO {
+  id: string;
+  tenantId: string | null;
+  dormitoryId: string;
+  roomId: string;
+  occupancyId?: string | null;
+  status: string;
+  startDate: string | Date;
+  endDate: string | Date;
+  checkInAt?: string | Date | null;
+  checkOutAt?: string | Date | null;
+  inclusiveDayCount: number;
+  dailyRateAmount: number | string;
+  totalRentAmount: number | string;
+  depositAmount: number | string;
+  depositDeclaredStatus: string;
+  createdAt: string | Date;
+  updatedAt: string | Date;
+  room?: SafeRoomSummaryApiDTO | null;
+  invoice?: SafeDailyStayInvoiceSummaryApiDTO | null;
+}
+
+export interface SafeBillItemApiDTO {
+  id: string;
+  billId: string;
+  type: string;
+  name: string;
+  amount: number | string;
+  quantity?: number | null;
+  unitPrice?: number | string | null;
+}
+
+export interface SafePaymentSummaryApiDTO {
+  id: string;
+  paymentNumber?: string | null;
+  amount: number | string;
+  status: string;
+  paymentMethod?: string | null;
+  paidAt?: string | Date | null;
+}
+
+export interface SafeReceiptSummaryApiDTO {
+  id: string;
+  receiptNumber: string;
+  totalAmount: number | string;
+  status: string;
+  issuedAt?: string | Date | null;
+}
+
+export interface SafeBillApiDTO {
+  id: string;
+  dormitoryId: string;
+  tenantId: string | null;
+  roomId: string;
+  contractId: string | null;
+  billingCycleId: string;
+  billNumber: string;
+  billKind: string;
+  billingDate: string | Date;
+  dueDate: string | Date;
+  status: string;
+  subtotal: number | string;
+  discountAmount: number | string;
+  fineAmount: number | string;
+  totalAmount: number | string;
+  paidAmount: number | string;
+  outstandingAmount: number | string;
+  paidAt?: string | Date | null;
+  createdAt: string | Date;
+  updatedAt: string | Date;
+  room?: SafeRoomSummaryApiDTO | null;
+  items?: SafeBillItemApiDTO[];
+  payments?: SafePaymentSummaryApiDTO[];
+  receipts?: SafeReceiptSummaryApiDTO[];
+}
+
+export interface SafeSettlementItemApiDTO {
+  id: string;
+  settlementId: string;
+  description: string;
+  amount: number | string;
+  evidenceUrl?: string | null;
+}
+
+export interface SafeSettlementApiDTO {
+  id: string;
+  tenantId: string;
+  dormitoryId: string;
+  contractId: string;
+  roomId: string;
+  depositAmount: number | string;
+  unpaidBillAmount: number | string;
+  damageChargeTotal: number | string;
+  netSettlement: number | string;
+  settlementDirection: string;
+  settlementStatus: string;
+  confirmedAt?: string | Date | null;
+  createdAt: string | Date;
+  updatedAt: string | Date;
+  items?: SafeSettlementItemApiDTO[];
+  room?: SafeRoomSummaryApiDTO | null;
+  contract?: {
+    id: string;
+    contractNumber: string;
+    status: string;
+  } | null;
 }
 
 export interface SafeTenantDetailsApiDTO {
@@ -98,11 +274,11 @@ export interface SafeTenantDetailsApiDTO {
   coOccupantHistory: SafeCoOccupantApiDTO[];
   emergencyContacts: SafeEmergencyContactApiDTO[];
   vehicles: SafeVehicleApiDTO[];
-  contracts: any[];
-  occupancies: any[];
-  dailyStays: any[];
-  bills: any[];
-  settlements: any[];
+  contracts: SafeContractApiDTO[];
+  occupancies: SafeOccupancyApiDTO[];
+  dailyStays: SafeDailyStayApiDTO[];
+  bills: SafeBillApiDTO[];
+  settlements: SafeSettlementApiDTO[];
 }
 
 /**
@@ -142,6 +318,7 @@ export function toEmergencyContactApiDTO(raw: any): SafeEmergencyContactApiDTO |
     name: raw.name || '',
     phone: raw.phone || '',
     relationship: raw.relationship || raw.relation || '',
+    isPrimary: Boolean(raw.isPrimary),
     createdAt: raw.createdAt,
     updatedAt: raw.updatedAt,
   };
@@ -223,10 +400,248 @@ export function toTenantApiDTO(raw: any): SafeTenantApiDTO | null {
     dto.emergencyContacts = raw.emergencyContacts.map(toEmergencyContactApiDTO).filter(Boolean) as SafeEmergencyContactApiDTO[];
   }
   if (Array.isArray(raw.contracts)) {
-    dto.contracts = raw.contracts;
+    dto.contracts = raw.contracts.map(toContractApiDTO).filter(Boolean) as SafeContractApiDTO[];
   }
 
   return dto;
+}
+
+/**
+ * Maps room entity to safe presentation summary.
+ */
+export function toRoomSummaryApiDTO(raw: any): SafeRoomSummaryApiDTO | null {
+  if (!raw || typeof raw !== 'object') return null;
+  return {
+    id: raw.id,
+    roomNumber: raw.roomNumber || '',
+    buildingId: raw.buildingId ?? null,
+    floor: raw.floor !== undefined && raw.floor !== null ? Number(raw.floor) : null,
+    roomType: raw.roomType ?? null,
+    status: raw.status ?? null,
+  };
+}
+
+/**
+ * Maps contract entity to safe browser DTO.
+ * Strictly eliminates internal audit user IDs, raw signature blobs, and internal snapshots.
+ */
+export function toContractApiDTO(raw: any): SafeContractApiDTO | null {
+  if (!raw || typeof raw !== 'object') return null;
+
+  const toAmount = (val: any) =>
+    val !== undefined ? (typeof val === 'object' && val !== null && 'toNumber' in val ? val.toNumber() : val) : 0;
+
+  return {
+    id: raw.id,
+    contractNumber: raw.contractNumber || '',
+    tenantId: raw.tenantId,
+    dormitoryId: raw.dormitoryId,
+    roomId: raw.roomId,
+    status: raw.status || 'draft',
+    startDate: raw.startDate,
+    endDate: raw.endDate,
+    durationMonths: typeof raw.durationMonths === 'number' ? raw.durationMonths : 1,
+    rentBillingType: raw.rentBillingType || 'monthly',
+    rentAmount: toAmount(raw.rentAmount),
+    depositAmount: toAmount(raw.depositAmount),
+    advancePaymentAmount: toAmount(raw.advancePaymentAmount),
+    depositStatus: raw.depositStatus ?? null,
+    depositType: raw.depositType ?? null,
+    terms: raw.terms ?? null,
+    previousContractId: raw.previousContractId ?? null,
+    signedByOwnerAt: raw.signedByOwnerAt ?? null,
+    signedByTenantAt: raw.signedByTenantAt ?? null,
+    activatedAt: raw.activatedAt ?? null,
+    terminatedAt: raw.terminatedAt ?? null,
+    terminationEffectiveDate: raw.terminationEffectiveDate ?? null,
+    terminationReason: raw.terminationReason ?? null,
+    createdAt: raw.createdAt,
+    updatedAt: raw.updatedAt,
+    room: toRoomSummaryApiDTO(raw.room),
+  };
+}
+
+/**
+ * Maps occupancy entity to safe browser DTO.
+ * Strictly eliminates endedByUserId and registration internals.
+ */
+export function toOccupancyApiDTO(raw: any): SafeOccupancyApiDTO | null {
+  if (!raw || typeof raw !== 'object') return null;
+  return {
+    id: raw.id,
+    tenantId: raw.tenantId,
+    dormitoryId: raw.dormitoryId,
+    roomId: raw.roomId,
+    contractId: raw.contractId ?? null,
+    status: raw.status || 'ACTIVE',
+    startedAt: raw.startedAt,
+    endedAt: raw.endedAt ?? null,
+    endedReason: raw.endedReason ?? null,
+    createdAt: raw.createdAt,
+    updatedAt: raw.updatedAt,
+    room: toRoomSummaryApiDTO(raw.room),
+    contract: raw.contract
+      ? {
+          id: raw.contract.id,
+          contractNumber: raw.contract.contractNumber || '',
+          status: raw.contract.status || '',
+        }
+      : null,
+  };
+}
+
+/**
+ * Maps daily stay entity to safe browser DTO.
+ * Strictly separates from contracts and omits operator actor IDs.
+ */
+export function toDailyStayApiDTO(raw: any): SafeDailyStayApiDTO | null {
+  if (!raw || typeof raw !== 'object') return null;
+
+  const toAmount = (val: any) =>
+    val !== undefined ? (typeof val === 'object' && val !== null && 'toNumber' in val ? val.toNumber() : val) : 0;
+
+  return {
+    id: raw.id,
+    tenantId: raw.tenantId ?? null,
+    dormitoryId: raw.dormitoryId,
+    roomId: raw.roomId,
+    occupancyId: raw.occupancyId ?? null,
+    status: raw.status || 'PENDING_APPROVAL',
+    startDate: raw.startDate,
+    endDate: raw.endDate,
+    checkInAt: raw.checkInAt ?? null,
+    checkOutAt: raw.checkOutAt ?? null,
+    inclusiveDayCount: typeof raw.inclusiveDayCount === 'number' ? raw.inclusiveDayCount : 1,
+    dailyRateAmount: toAmount(raw.dailyRateAmount),
+    totalRentAmount: toAmount(raw.totalRentAmount),
+    depositAmount: toAmount(raw.depositAmount),
+    depositDeclaredStatus: raw.depositDeclaredStatus || 'UNPAID',
+    createdAt: raw.createdAt,
+    updatedAt: raw.updatedAt,
+    room: toRoomSummaryApiDTO(raw.room),
+    invoice: raw.invoice
+      ? {
+          id: raw.invoice.id,
+          invoiceNumber: raw.invoice.invoiceNumber || '',
+          totalRentAmount: toAmount(raw.invoice.totalRentAmount),
+          depositAmount: toAmount(raw.invoice.depositAmount),
+          totalAmount: toAmount(raw.invoice.totalAmount),
+          status: raw.invoice.status || 'UNPAID',
+        }
+      : null,
+  };
+}
+
+/**
+ * Maps bill entity to safe browser DTO.
+ * Strictly eliminates provider secrets, internal slip object keys, and reviewer IDs.
+ */
+export function toBillApiDTO(raw: any): SafeBillApiDTO | null {
+  if (!raw || typeof raw !== 'object') return null;
+
+  const toAmount = (val: any) =>
+    val !== undefined ? (typeof val === 'object' && val !== null && 'toNumber' in val ? val.toNumber() : val) : 0;
+
+  return {
+    id: raw.id,
+    dormitoryId: raw.dormitoryId,
+    tenantId: raw.tenantId ?? null,
+    roomId: raw.roomId,
+    contractId: raw.contractId ?? null,
+    billingCycleId: raw.billingCycleId,
+    billNumber: raw.billNumber || '',
+    billKind: raw.billKind || 'MONTHLY_UTILITY',
+    billingDate: raw.billingDate,
+    dueDate: raw.dueDate,
+    status: raw.status || 'draft',
+    subtotal: toAmount(raw.subtotal),
+    discountAmount: toAmount(raw.discountAmount),
+    fineAmount: toAmount(raw.fineAmount),
+    totalAmount: toAmount(raw.totalAmount),
+    paidAmount: toAmount(raw.paidAmount),
+    outstandingAmount: toAmount(raw.outstandingAmount),
+    paidAt: raw.paidAt ?? null,
+    createdAt: raw.createdAt,
+    updatedAt: raw.updatedAt,
+    room: toRoomSummaryApiDTO(raw.room),
+    items: Array.isArray(raw.items)
+      ? raw.items.map((item: any) => ({
+          id: item.id,
+          billId: item.billId || raw.id,
+          type: item.type || item.itemType || 'other',
+          name: item.name || item.description || '',
+          amount: toAmount(item.amount),
+          quantity: item.quantity !== undefined && item.quantity !== null ? Number(item.quantity) : null,
+          unitPrice: item.unitPrice !== undefined && item.unitPrice !== null ? toAmount(item.unitPrice) : null,
+        }))
+      : [],
+    payments: Array.isArray(raw.Payment || raw.payments)
+      ? (raw.Payment || raw.payments).map((p: any) => ({
+          id: p.id,
+          paymentNumber: p.paymentNumber ?? null,
+          amount: toAmount(p.amount),
+          status: p.status || 'PENDING',
+          paymentMethod: p.paymentMethod ?? null,
+          paidAt: p.paidAt ?? null,
+        }))
+      : [],
+    receipts: Array.isArray(raw.Receipt || raw.receipts)
+      ? (raw.Receipt || raw.receipts).map((r: any) => ({
+          id: r.id,
+          receiptNumber: r.receiptNumber || '',
+          totalAmount: toAmount(r.totalAmount || r.amount),
+          status: r.status || 'ISSUED',
+          issuedAt: r.issuedAt ?? r.createdAt ?? null,
+        }))
+      : [],
+  };
+}
+
+/**
+ * Maps contract settlement entity to safe browser DTO.
+ * Strictly eliminates payment/bank accounts and provider secrets.
+ */
+export function toSettlementApiDTO(raw: any): SafeSettlementApiDTO | null {
+  if (!raw || typeof raw !== 'object') return null;
+
+  const toAmount = (val: any) =>
+    val !== undefined ? (typeof val === 'object' && val !== null && 'toNumber' in val ? val.toNumber() : val) : 0;
+
+  return {
+    id: raw.id,
+    tenantId: raw.tenantId,
+    dormitoryId: raw.dormitoryId,
+    contractId: raw.contractId,
+    roomId: raw.roomId,
+    depositAmount: toAmount(raw.depositAmount),
+    unpaidBillAmount: toAmount(raw.unpaidBillAmount),
+    damageChargeTotal: toAmount(raw.damageChargeTotal),
+    netSettlement: toAmount(raw.netSettlement),
+    settlementDirection: raw.settlementDirection || 'REFUND',
+    settlementStatus: raw.settlementStatus || 'PENDING_REFUND',
+    confirmedAt: raw.confirmedAt ?? null,
+    createdAt: raw.createdAt,
+    updatedAt: raw.updatedAt,
+    room: toRoomSummaryApiDTO(raw.room),
+    contract: raw.contract
+      ? {
+          id: raw.contract.id,
+          contractNumber: raw.contract.contractNumber || '',
+          status: raw.contract.status || '',
+        }
+      : null,
+    items: Array.isArray(raw.items)
+      ? raw.items
+          .filter((item: any) => !item.isDeleted)
+          .map((item: any) => ({
+            id: item.id,
+            settlementId: item.settlementId || raw.id,
+            description: item.description || '',
+            amount: toAmount(item.amount),
+            evidenceUrl: item.evidenceUrl ?? null,
+          }))
+      : [],
+  };
 }
 
 /**
@@ -249,10 +664,20 @@ export function toTenantDetailsApiDTO(details: any): SafeTenantDetailsApiDTO | n
     vehicles: Array.isArray(details.vehicles)
       ? (details.vehicles.map(toVehicleApiDTO).filter(Boolean) as SafeVehicleApiDTO[])
       : [],
-    contracts: Array.isArray(details.contracts) ? details.contracts : [],
-    occupancies: Array.isArray(details.occupancies) ? details.occupancies : [],
-    dailyStays: Array.isArray(details.dailyStays) ? details.dailyStays : [],
-    bills: Array.isArray(details.bills) ? details.bills : [],
-    settlements: Array.isArray(details.settlements) ? details.settlements : [],
+    contracts: Array.isArray(details.contracts)
+      ? (details.contracts.map(toContractApiDTO).filter(Boolean) as SafeContractApiDTO[])
+      : [],
+    occupancies: Array.isArray(details.occupancies)
+      ? (details.occupancies.map(toOccupancyApiDTO).filter(Boolean) as SafeOccupancyApiDTO[])
+      : [],
+    dailyStays: Array.isArray(details.dailyStays)
+      ? (details.dailyStays.map(toDailyStayApiDTO).filter(Boolean) as SafeDailyStayApiDTO[])
+      : [],
+    bills: Array.isArray(details.bills)
+      ? (details.bills.map(toBillApiDTO).filter(Boolean) as SafeBillApiDTO[])
+      : [],
+    settlements: Array.isArray(details.settlements)
+      ? (details.settlements.map(toSettlementApiDTO).filter(Boolean) as SafeSettlementApiDTO[])
+      : [],
   };
 }

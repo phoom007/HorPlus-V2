@@ -5,7 +5,9 @@ import { TenantService } from '../services/tenant.service.js';
 import { createRequireSessionMiddleware } from '../middleware/require-session.js';
 import { requireDormitoryPermission } from '../middleware/permission.js';
 import { requireDormitoryWriteEntitlement } from '../middleware/entitlement.js';
+import { resolveAuthoritativeDormitoryContext } from '../middleware/dormitory-context.js';
 import { LocalStorageProvider } from '../services/local-storage.service.js';
+import { logger } from '../config/logger.js';
 import {
   CreateTenantSchema,
   UpdateTenantSchema,
@@ -30,6 +32,30 @@ export function createTenantRouter(
 ): Router {
   const router = Router();
   const requireSession = createRequireSessionMiddleware(authService);
+
+  // Hard deny TENANT membership role from accessing any Owner Tenant API
+  router.use(async (req: Request, res: Response, next: any) => {
+    let context = (req as any).dormitoryContext;
+    if (!context && req.auth) {
+      try {
+        context = await resolveAuthoritativeDormitoryContext(req);
+        (req as any).dormitoryContext = context;
+      } catch {
+        // Fall through to downstream route guards
+      }
+    }
+    if (context?.roleCode === 'TENANT') {
+      return res.status(403).json({
+        error: {
+          code: 'FORBIDDEN',
+          message: 'ผู้เช่าไม่ได้รับอนุญาตให้เข้าถึง API จัดการผู้เช่าของเจ้าของหอพัก',
+          requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+          timestamp: new Date().toISOString(),
+        },
+      });
+    }
+    next();
+  });
 
   const uploadSingle = multer({
     storage: multer.memoryStorage(),
@@ -65,21 +91,22 @@ export function createTenantRouter(
             },
           });
         }
+        logger.warn({ err }, '[TenantUpload] Multer input rejection');
         return res.status(400).json({
           error: {
-            code: 'UPLOAD_ERROR',
-            message: 'การอัปโหลดไฟล์ไม่ถูกต้อง: ' + err.message,
+            code: 'INVALID_FILE_FIELD',
+            message: 'การอัปโหลดไฟล์ไม่ถูกต้องตามรูปแบบที่กำหนด',
             fieldErrors: null,
             requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
             timestamp: new Date().toISOString(),
           },
         });
       }
-      return res.status(400).json({
+      logger.error({ err }, '[TenantUpload] Unexpected multipart failure');
+      return res.status(500).json({
         error: {
-          code: 'UPLOAD_ERROR',
-          message: err.message || 'การอัปโหลดไฟล์ล้มเหลว',
-          fieldErrors: null,
+          code: 'TENANT_OPERATION_FAILED',
+          message: 'เกิดข้อผิดพลาดในการดำเนินการ กรุณาลองใหม่อีกครั้ง',
           requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
           timestamp: new Date().toISOString(),
         },
@@ -93,7 +120,7 @@ export function createTenantRouter(
   ];
 
   const getDormitoryId = (req: Request): string => {
-    return (req.headers['x-dormitory-id'] as string) || req.auth?.dormitoryId || 'dorm-001';
+    return (req as any).dormitoryContext?.dormitoryId || (req.headers['x-dormitory-id'] as string) || req.auth?.dormitoryId || 'dorm-001';
   };
 
   const verifyCsrf = (req: Request, res: Response): boolean => {
@@ -116,13 +143,56 @@ export function createTenantRouter(
     return true;
   };
 
+  const KNOWN_SAFE_ERROR_CODES = new Set([
+    'VALIDATION_ERROR',
+    'FILE_TOO_LARGE',
+    'INVALID_FILE_FIELD',
+    'NO_FILE_UPLOADED',
+    'CSRF_INVALID',
+    'FORBIDDEN',
+    'TENANT_NOT_FOUND',
+    'IDENTITY_DOCUMENT_NOT_FOUND',
+    'ROOM_NOT_FOUND',
+    'UNAUTHORIZED',
+    'TENANT_HAS_ACTIVE_CONTRACT',
+    'NO_ACTIVE_TENANCY',
+    'CO_OCCUPANT_NOT_FOUND',
+    'EMERGENCY_CONTACT_NOT_FOUND',
+    'VEHICLE_NOT_FOUND',
+  ]);
+
   const handleServiceError = (res: Response, err: any, req: Request) => {
     const statusCode = err.statusCode || err.status || 500;
-    res.status(statusCode).json({
+    const isClientError = statusCode >= 400 && statusCode < 500;
+    const isKnownSafe = err.code && KNOWN_SAFE_ERROR_CODES.has(err.code);
+
+    if (isClientError && isKnownSafe) {
+      return res.status(statusCode).json({
+        error: {
+          code: err.code,
+          message: err.message,
+          fieldErrors: err.fieldErrors || null,
+          requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+          timestamp: new Date().toISOString(),
+        },
+      });
+    }
+
+    logger.error(
+      {
+        err,
+        path: req.originalUrl,
+        method: req.method,
+        code: err.code,
+        message: err.message,
+      },
+      '[TenantService] Operation failure'
+    );
+
+    return res.status(500).json({
       error: {
-        code: err.code || 'TENANT_OPERATION_FAILED',
-        message: err.message || 'เกิดข้อผิดพลาดในการดำเนินการจัดการข้อมูลผู้เช่า',
-        fieldErrors: err.fieldErrors || null,
+        code: 'TENANT_OPERATION_FAILED',
+        message: 'เกิดข้อผิดพลาดในการดำเนินการ กรุณาลองใหม่อีกครั้ง',
         requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
         timestamp: new Date().toISOString(),
       },
@@ -130,7 +200,7 @@ export function createTenantRouter(
   };
 
   // GET /api/v1/tenants
-  router.get('/', async (req: Request, res: Response) => {
+  router.get('/', requireDormitoryPermission('tenants:view'), async (req: Request, res: Response) => {
     try {
       const dormId = getDormitoryId(req);
       const query = {
@@ -152,7 +222,7 @@ export function createTenantRouter(
   const localStorageProvider = new LocalStorageProvider();
 
   // GET /api/v1/tenants/:id
-  router.get('/:id', async (req: Request, res: Response) => {
+  router.get('/:id', requireDormitoryPermission('tenants:view'), async (req: Request, res: Response) => {
     try {
       const dormId = getDormitoryId(req);
       const tenantDetails = await tenantService.getTenantDetails(req.params.id, dormId);
@@ -166,7 +236,7 @@ export function createTenantRouter(
   router.get(
     '/:id/identity-document',
     requireSession,
-    requireDormitoryPermission('tenant:document:read'),
+    requireDormitoryPermission('tenants:document:read'),
     async (req: Request, res: Response) => {
       try {
         const dormId = getDormitoryId(req);
@@ -219,7 +289,7 @@ export function createTenantRouter(
   );
 
   // POST /api/v1/tenants
-  router.post('/', mutationGuard('tenant:write'), async (req: Request, res: Response) => {
+  router.post('/', mutationGuard('tenants:create'), async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getDormitoryId(req);
@@ -243,7 +313,7 @@ export function createTenantRouter(
   });
 
   // PUT /api/v1/tenants/:id
-  router.put('/:id', mutationGuard('tenant:write'), async (req: Request, res: Response) => {
+  router.put('/:id', mutationGuard('tenants:update'), async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getDormitoryId(req);
@@ -267,7 +337,7 @@ export function createTenantRouter(
   });
 
   // DELETE /api/v1/tenants/:id
-  router.delete('/:id', mutationGuard('tenant:write'), async (req: Request, res: Response) => {
+  router.delete('/:id', mutationGuard('tenants:archive'), async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getDormitoryId(req);
@@ -279,7 +349,7 @@ export function createTenantRouter(
   });
 
   // POST /api/v1/tenants/:id/co-occupants
-  router.post('/:id/co-occupants', mutationGuard('tenant:write'), async (req: Request, res: Response) => {
+  router.post('/:id/co-occupants', mutationGuard('tenants:update'), async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getDormitoryId(req);
@@ -308,7 +378,7 @@ export function createTenantRouter(
   });
 
   // PUT /api/v1/tenants/:id/co-occupants/:coOccupantId
-  router.put('/:id/co-occupants/:coOccupantId', mutationGuard('tenant:write'), async (req: Request, res: Response) => {
+  router.put('/:id/co-occupants/:coOccupantId', mutationGuard('tenants:update'), async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getDormitoryId(req);
@@ -326,7 +396,7 @@ export function createTenantRouter(
   });
 
   // DELETE /api/v1/tenants/:id/co-occupants/:coOccupantId
-  router.delete('/:id/co-occupants/:coOccupantId', mutationGuard('tenant:write'), async (req: Request, res: Response) => {
+  router.delete('/:id/co-occupants/:coOccupantId', mutationGuard('tenants:update'), async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getDormitoryId(req);
@@ -343,7 +413,7 @@ export function createTenantRouter(
   });
 
   // POST /api/v1/tenants/:id/emergency-contacts
-  router.post('/:id/emergency-contacts', mutationGuard('tenant:write'), async (req: Request, res: Response) => {
+  router.post('/:id/emergency-contacts', mutationGuard('tenants:update'), async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getDormitoryId(req);
@@ -368,7 +438,7 @@ export function createTenantRouter(
   });
 
   // PUT /api/v1/tenants/:id/emergency-contacts/:contactId
-  router.put('/:id/emergency-contacts/:contactId', mutationGuard('tenant:write'), async (req: Request, res: Response) => {
+  router.put('/:id/emergency-contacts/:contactId', mutationGuard('tenants:update'), async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getDormitoryId(req);
@@ -393,7 +463,7 @@ export function createTenantRouter(
   });
 
   // DELETE /api/v1/tenants/:id/emergency-contacts/:contactId
-  router.delete('/:id/emergency-contacts/:contactId', mutationGuard('tenant:write'), async (req: Request, res: Response) => {
+  router.delete('/:id/emergency-contacts/:contactId', mutationGuard('tenants:update'), async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getDormitoryId(req);
@@ -405,7 +475,7 @@ export function createTenantRouter(
   });
 
   // POST /api/v1/tenants/:id/vehicles
-  router.post('/:id/vehicles', mutationGuard('tenant:write'), async (req: Request, res: Response) => {
+  router.post('/:id/vehicles', mutationGuard('tenants:update'), async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getDormitoryId(req);
@@ -430,7 +500,7 @@ export function createTenantRouter(
   });
 
   // PUT /api/v1/tenants/:id/vehicles/:vehicleId
-  router.put('/:id/vehicles/:vehicleId', mutationGuard('tenant:write'), async (req: Request, res: Response) => {
+  router.put('/:id/vehicles/:vehicleId', mutationGuard('tenants:update'), async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getDormitoryId(req);
@@ -455,7 +525,7 @@ export function createTenantRouter(
   });
 
   // DELETE /api/v1/tenants/:id/vehicles/:vehicleId
-  router.delete('/:id/vehicles/:vehicleId', mutationGuard('tenant:write'), async (req: Request, res: Response) => {
+  router.delete('/:id/vehicles/:vehicleId', mutationGuard('tenants:update'), async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getDormitoryId(req);
@@ -469,7 +539,7 @@ export function createTenantRouter(
   // POST /api/v1/tenants/:id/identity-document
   router.post(
     '/:id/identity-document',
-    mutationGuard('tenant:write'),
+    mutationGuard('tenants:document:write'),
     handleUploadSingle,
     async (req: Request, res: Response) => {
       if (!verifyCsrf(req, res)) return;
