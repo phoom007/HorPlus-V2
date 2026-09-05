@@ -161,6 +161,11 @@ export async function resolveAuthoritativeDormitoryContext(req: Request): Promis
   const rawPerms = mem.rolePermissions ?? roleObj?.permissions ?? (mem as any).permissions;
   let permissions = normalizeRolePermissions(rawPerms);
 
+  // Non-OWNER roles must not retain global '*' wildcard authority
+  if (roleCode !== 'OWNER') {
+    permissions = permissions.filter((p) => p !== '*');
+  }
+
   // Centralized Tenant-domain role normalization policy
   if (roleCode === 'MANAGER') {
     const managerTenantPermissions = [

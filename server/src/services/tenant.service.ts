@@ -2,17 +2,36 @@ import { ITenantRepository, TenantEntity, TenantFilterQuery, CreateTenantData } 
 import { IContractRepository } from '../db/repositories/contract.repository.js';
 import { SensitiveFieldService } from './sensitive-field.service.js';
 import { AuditService } from './audit.service.js';
-import { getPrismaClient } from '../db/prisma.js';
 import { parseAndNormalizeName, isMaskedNationalId } from '../utils/thai-identity.util.js';
 import { processAndSecureTenantIdCardImage } from './image-security.service.js';
 import { localStorageProvider } from './local-storage.service.js';
+
+export interface TenantAggregateDataSource {
+  contract: {
+    findMany(args: any): Promise<any[]>;
+  };
+  occupancy: {
+    findMany(args: any): Promise<any[]>;
+    findFirst(args: any): Promise<any | null>;
+  };
+  dailyStay: {
+    findMany(args: any): Promise<any[]>;
+  };
+  bill: {
+    findMany(args: any): Promise<any[]>;
+  };
+  contractSettlement: {
+    findMany(args: any): Promise<any[]>;
+  };
+}
 
 export class TenantService {
   constructor(
     private tenantRepo: ITenantRepository,
     private contractRepo: IContractRepository,
     private sensitiveFieldService: SensitiveFieldService,
-    private auditService?: AuditService
+    private auditService?: AuditService,
+    private aggregatePrisma?: TenantAggregateDataSource | null
   ) {}
 
   public async getTenants(dormitoryId: string, filter?: TenantFilterQuery) {
@@ -45,65 +64,53 @@ export class TenantService {
     let settlements: any[] = [];
     let contracts = contractsResult.items;
 
-    const isUuid = (str?: string | null) => !!str && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
-    const hasPrismaRepo = Boolean((this.tenantRepo as any)?.prisma);
-    const prisma = getPrismaClient();
+    const prisma = this.aggregatePrisma ?? null;
 
-    // In production or when backed by Prisma repository / valid UUIDs, execute authoritative Prisma queries.
+    // In production or when backed by Prisma repository / aggregate dependency, execute authoritative Prisma queries.
     // If a database query fails, FAIL CLOSED — do NOT catch and swallow into empty arrays.
-    if (prisma && (hasPrismaRepo || (isUuid(id) && isUuid(dormitoryId)))) {
-      if (prisma.contract) {
-        const detailedContracts = await prisma.contract.findMany({
-          where: { tenantId: id, dormitoryId, deletedAt: null },
-          include: { room: true },
-          orderBy: { createdAt: 'desc' },
-        });
-        if (detailedContracts && detailedContracts.length > 0) {
-          contracts = detailedContracts as any;
-        }
+    if (prisma) {
+      const detailedContracts = await prisma.contract.findMany({
+        where: { tenantId: id, dormitoryId, deletedAt: null },
+        include: { room: true },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (detailedContracts && detailedContracts.length > 0) {
+        contracts = detailedContracts as any;
       }
-      if (prisma.occupancy) {
-        occupancies = await prisma.occupancy.findMany({
-          where: { tenantId: id, dormitoryId },
-          include: { room: true, contract: true },
-          orderBy: { startedAt: 'desc' },
-        });
-      }
-      if (prisma.dailyStay) {
-        dailyStays = await prisma.dailyStay.findMany({
-          where: { tenantId: id, dormitoryId, deletedAt: null },
-          include: {
-            room: true,
-            invoice: {
-              include: { items: true, receipts: true, payments: true },
-            },
+      occupancies = await prisma.occupancy.findMany({
+        where: { tenantId: id, dormitoryId },
+        include: { room: true, contract: true },
+        orderBy: { startedAt: 'desc' },
+      });
+      dailyStays = await prisma.dailyStay.findMany({
+        where: { tenantId: id, dormitoryId, deletedAt: null },
+        include: {
+          room: true,
+          invoice: {
+            include: { items: true, receipts: true, payments: true },
           },
-          orderBy: { startDate: 'desc' },
-        });
-      }
-      if (prisma.bill) {
-        bills = await prisma.bill.findMany({
-          where: { tenantId: id, dormitoryId },
-          include: {
-            room: true,
-            items: true,
-            Payment: true,
-            Receipt: true,
-          },
-          orderBy: { createdAt: 'desc' },
-        });
-      }
-      if (prisma.contractSettlement) {
-        settlements = await prisma.contractSettlement.findMany({
-          where: { tenantId: id, dormitoryId },
-          include: {
-            items: { where: { isDeleted: false } },
-            room: true,
-            contract: true,
-          },
-          orderBy: { createdAt: 'desc' },
-        });
-      }
+        },
+        orderBy: { startDate: 'desc' },
+      });
+      bills = await prisma.bill.findMany({
+        where: { tenantId: id, dormitoryId },
+        include: {
+          room: true,
+          items: true,
+          Payment: true,
+          Receipt: true,
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+      settlements = await prisma.contractSettlement.findMany({
+        where: { tenantId: id, dormitoryId },
+        include: {
+          items: { where: { isDeleted: false } },
+          room: true,
+          contract: true,
+        },
+        orderBy: { createdAt: 'desc' },
+      });
     }
 
     return {
@@ -262,35 +269,28 @@ export class TenantService {
   }
 
   public async verifyActiveTenancy(dormitoryId: string, tenantId: string) {
-    const isUuid = (str: string) =>
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
-
     // 1. Check active contracts using contractRepo (supports both in-memory and prisma adapters)
-    try {
-      const contractsRes = await this.contractRepo.findAll(dormitoryId, { tenantId, pageSize: 100 });
-      const hasActiveContract = contractsRes.items.some((c) =>
-        ['active', 'expiring_soon', 'pending_signature', 'waiting_extension', 'checking_out'].includes(c.status)
-      );
-      if (hasActiveContract) {
+    const contractsRes = await this.contractRepo.findAll(dormitoryId, { tenantId, pageSize: 100 });
+    const hasActiveContract = contractsRes.items.some((c) =>
+      ['active', 'expiring_soon', 'pending_signature', 'waiting_extension', 'checking_out'].includes(c.status)
+    );
+    if (hasActiveContract) {
+      return;
+    }
+
+    // 2. Check active occupancy using Prisma if explicit aggregate dependency is provided
+    const prisma = this.aggregatePrisma ?? null;
+    if (prisma) {
+      const activeOccupancy = await prisma.occupancy.findFirst({
+        where: {
+          dormitoryId,
+          tenantId,
+          status: 'ACTIVE',
+        },
+      });
+      if (activeOccupancy) {
         return;
       }
-    } catch {}
-
-    // 2. Check active occupancy using Prisma if UUID format is valid
-    if (isUuid(dormitoryId) && isUuid(tenantId)) {
-      try {
-        const prisma = getPrismaClient();
-        const activeOccupancy = await prisma.occupancy.findFirst({
-          where: {
-            dormitoryId,
-            tenantId,
-            status: 'ACTIVE',
-          },
-        });
-        if (activeOccupancy) {
-          return;
-        }
-      } catch {}
     }
 
     const err = new Error('ผู้เช่าไม่มีสัญญาหรือสถานะการพักอาศัยที่เปิดใช้งานอยู่');

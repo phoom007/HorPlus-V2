@@ -123,7 +123,7 @@ export function createApp(optionsOrAuth?: CreateAppOptions | AuthenticationServi
   const onboardingService = new OnboardingService(prisma!);
   const buildingService = new BuildingService(buildingRepo, roomRepo, auditService);
   const roomService = new RoomService(roomRepo, buildingRepo, subRepo, planRepo, contractRepo, auditService, entitlementService, prisma);
-  const tenantService = new TenantService(tenantRepo, contractRepo, sensitiveFieldService, auditService);
+  const tenantService = new TenantService(tenantRepo, contractRepo, sensitiveFieldService, auditService, useInMemoryRepos ? undefined : (prisma ?? undefined));
   const contractService = new ContractService(contractRepo, roomRepo, tenantRepo, auditService);
   const occupancyService = new OccupancyService(roomRepo, buildingRepo, tenantRepo, contractRepo);
   const billingCycleService = options.customBillingCycleService || new BillingCycleService(billingCycleRepo, auditService);

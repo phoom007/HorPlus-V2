@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express, { Express } from 'express';
 import request from '../../server/node_modules/supertest/index.js';
-import { TenantService } from '../../server/src/services/tenant.service.js';
+import { TenantService, TenantAggregateDataSource } from '../../server/src/services/tenant.service.js';
 import { InMemoryTenantRepository, PrismaTenantRepository } from '../../server/src/db/repositories/tenant.repository.js';
 import { InMemoryContractRepository } from '../../server/src/db/repositories/contract.repository.js';
 import { SensitiveFieldService } from '../../server/src/services/sensitive-field.service.js';
@@ -1127,20 +1127,60 @@ describe('TENANT PHASE 3 STEP 3B: Backend Security, Persistence & Canonical Prof
     });
   });
 
-  describe('13. Authoritative Database Error Fail-Closed Behavior', () => {
-    it('propagates authoritative database errors in getTenantDetails instead of silently returning empty aggregates', async () => {
-      const mockPrisma = {
-        occupancy: {
-          findMany: vi.fn().mockRejectedValue(new Error('Prisma database connection failure')),
-        },
+  describe('13. Authoritative Database Error Fail-Closed & Hermetic Aggregation Behavior', () => {
+    beforeEach(() => {
+      vi.spyOn(subscriptionEntitlementService, 'assertDormitoryWritable').mockResolvedValue(undefined as any);
+    });
+
+    it('hermetic profile aggregation: InMemoryTenantRepository with valid UUID IDs must NOT call Prisma', async () => {
+      const mockPrismaAggregate = {
+        contract: { findMany: vi.fn() },
+        occupancy: { findMany: vi.fn() },
+        dailyStay: { findMany: vi.fn() },
+        bill: { findMany: vi.fn() },
+        contractSettlement: { findMany: vi.fn() },
       };
 
-      setPrismaClient(mockPrisma as any);
-
+      // Construct TenantService with InMemory repository and NO aggregate Prisma dependency
       const tenantRepo = new InMemoryTenantRepository();
       const contractRepo = new InMemoryContractRepository();
       const sensitiveService = new SensitiveFieldService('12345678901234567890123456789012');
       const tenantService = new TenantService(tenantRepo, contractRepo, sensitiveService);
+
+      // Create tenant in in-memory repo (generates valid UUID)
+      const tenant = await tenantService.createTenant(dormId, {
+        displayName: 'ผู้เช่า ในความจำ',
+        phone: '0811112222',
+      });
+
+      // Calling getTenantDetails with valid UUIDs must remain hermetic and NEVER invoke Prisma aggregate methods
+      const details = await tenantService.getTenantDetails(tenant.id, dormId);
+      expect(details).toBeDefined();
+      expect(details.tenant.id).toBe(tenant.id);
+      expect(mockPrismaAggregate.contract.findMany).not.toHaveBeenCalled();
+      expect(mockPrismaAggregate.occupancy.findMany).not.toHaveBeenCalled();
+      expect(mockPrismaAggregate.dailyStay.findMany).not.toHaveBeenCalled();
+      expect(mockPrismaAggregate.bill.findMany).not.toHaveBeenCalled();
+      expect(mockPrismaAggregate.contractSettlement.findMany).not.toHaveBeenCalled();
+    });
+
+    it('propagates authoritative database errors in getTenantDetails instead of silently returning empty aggregates when backed by Prisma', async () => {
+      const mockPrisma: TenantAggregateDataSource = {
+        contract: { findMany: vi.fn().mockResolvedValue([]) },
+        occupancy: {
+          findMany: vi.fn().mockRejectedValue(new Error('Prisma database connection failure')),
+          findFirst: vi.fn().mockResolvedValue(null),
+        },
+        dailyStay: { findMany: vi.fn().mockResolvedValue([]) },
+        bill: { findMany: vi.fn().mockResolvedValue([]) },
+        contractSettlement: { findMany: vi.fn().mockResolvedValue([]) },
+      };
+
+      const tenantRepo = new InMemoryTenantRepository();
+      const contractRepo = new InMemoryContractRepository();
+      const sensitiveService = new SensitiveFieldService('12345678901234567890123456789012');
+      // Explicitly inject mockPrisma as aggregate Prisma dependency
+      const tenantService = new TenantService(tenantRepo, contractRepo, sensitiveService, undefined, mockPrisma);
 
       const tenant = await tenantService.createTenant(dormId, {
         displayName: 'สมศักดิ์ มั่นคง',
@@ -1158,8 +1198,165 @@ describe('TENANT PHASE 3 STEP 3B: Backend Security, Persistence & Canonical Prof
 
       expect(res.status).toBe(500);
       expect(res.body.error.code).toBe('TENANT_OPERATION_FAILED');
+    });
 
-      setPrismaClient(null);
+    it('verifyActiveTenancy remains hermetic in in-memory mode and ignores Prisma', async () => {
+      const tenantRepo = new InMemoryTenantRepository();
+      const contractRepo = new InMemoryContractRepository();
+      const sensitiveService = new SensitiveFieldService('12345678901234567890123456789012');
+
+      const hermeticService = new TenantService(tenantRepo, contractRepo, sensitiveService);
+      const tenant = await hermeticService.createTenant(dormId, {
+        displayName: 'ผู้เช่า สัญญาสมบูรณ์',
+        phone: '0812345678',
+      });
+      // Add active contract in in-memory contract repo
+      await contractRepo.create(dormId, {
+        tenantId: tenant.id,
+        contractNumber: 'CN-TEST-001',
+        roomId: 'room-1',
+        status: 'active',
+        startDate: new Date(),
+        endDate: new Date(Date.now() + 86400000 * 30),
+      } as any);
+
+      // Succeeded without touching Prisma or throwing
+      await expect(hermeticService.verifyActiveTenancy(dormId, tenant.id)).resolves.toBeUndefined();
+    });
+
+    it('verifyActiveTenancy fails closed when contractRepo.findAll rejects (both directly and via HTTP)', async () => {
+      const tenantRepo = new InMemoryTenantRepository();
+      const contractRepo = new InMemoryContractRepository();
+      vi.spyOn(contractRepo, 'findAll').mockRejectedValue(
+        new Error('DB_CONN_FAILURE: Connection to postgres://pg-prod:5432 lost')
+      );
+      const sensitiveService = new SensitiveFieldService('12345678901234567890123456789012');
+      const tenantService = new TenantService(tenantRepo, contractRepo, sensitiveService);
+
+      const tenant = await tenantService.createTenant(dormId, {
+        displayName: 'ผู้เช่า ตรวจสอบสัญญาขัดข้อง',
+        phone: '0812345678',
+      });
+      const co = await tenantRepo.createCoOccupant(dormId, tenant.id, {
+        name: 'ผู้พักร่วม เดิม',
+        relationship: 'เพื่อน',
+      });
+
+      // 1. Direct call MUST reject as internal error, and MUST NOT return 403 NO_ACTIVE_TENANCY
+      await expect(tenantService.verifyActiveTenancy(dormId, tenant.id)).rejects.toThrow(
+        'DB_CONN_FAILURE: Connection to postgres://pg-prod:5432 lost'
+      );
+
+      // 2. HTTP route invocation (PUT co-occupant) must return 500 TENANT_OPERATION_FAILED
+      const app = createTestTenantApp(tenantService, {
+        roleCode: 'OWNER',
+        permissions: ['*'],
+      });
+      const res = await request(app)
+        .put(`/api/v1/tenants/${tenant.id}/co-occupants/${co.id}`)
+        .set('x-csrf-token', 'test-csrf-token')
+        .send({ name: 'ผู้พักร่วม แก้ไข' });
+
+      expect(res.status).toBe(500);
+      expect(res.body.error.code).toBe('TENANT_OPERATION_FAILED');
+      // Must NOT leak internal exception details
+      expect(JSON.stringify(res.body)).not.toContain('DB_CONN_FAILURE');
+      expect(JSON.stringify(res.body)).not.toContain('postgres://pg-prod:5432');
+    });
+
+    it('verifyActiveTenancy fails closed when aggregatePrisma.occupancy.findFirst rejects (both directly and via HTTP)', async () => {
+      const mockPrisma: TenantAggregateDataSource = {
+        contract: { findMany: vi.fn().mockResolvedValue([]) },
+        occupancy: {
+          findMany: vi.fn().mockResolvedValue([]),
+          findFirst: vi.fn().mockRejectedValue(new Error('DB_QUERY_TIMEOUT: occupancy read timeout')),
+        },
+        dailyStay: { findMany: vi.fn().mockResolvedValue([]) },
+        bill: { findMany: vi.fn().mockResolvedValue([]) },
+        contractSettlement: { findMany: vi.fn().mockResolvedValue([]) },
+      };
+
+      const tenantRepo = new InMemoryTenantRepository();
+      const contractRepo = new InMemoryContractRepository();
+      const sensitiveService = new SensitiveFieldService('12345678901234567890123456789012');
+      const tenantService = new TenantService(tenantRepo, contractRepo, sensitiveService, undefined, mockPrisma);
+
+      const tenant = await tenantService.createTenant(dormId, {
+        displayName: 'ผู้เช่า ตรวจสอบพักอาศัยขัดข้อง',
+        phone: '0898765432',
+      });
+      const co = await tenantRepo.createCoOccupant(dormId, tenant.id, {
+        name: 'ผู้พักร่วม เดิม',
+        relationship: 'เพื่อน',
+      });
+
+      // 1. Direct call MUST reject with internal DB error, NOT swallow to 403 NO_ACTIVE_TENANCY
+      await expect(tenantService.verifyActiveTenancy(dormId, tenant.id)).rejects.toThrow(
+        'DB_QUERY_TIMEOUT: occupancy read timeout'
+      );
+
+      // 2. HTTP route invocation must return 500 TENANT_OPERATION_FAILED without leakage
+      const app = createTestTenantApp(tenantService, {
+        roleCode: 'OWNER',
+        permissions: ['*'],
+      });
+      const res = await request(app)
+        .put(`/api/v1/tenants/${tenant.id}/co-occupants/${co.id}`)
+        .set('x-csrf-token', 'test-csrf-token')
+        .send({ name: 'ผู้พักร่วม แก้ไข' });
+
+      expect(res.status).toBe(500);
+      expect(res.body.error.code).toBe('TENANT_OPERATION_FAILED');
+      expect(JSON.stringify(res.body)).not.toContain('DB_QUERY_TIMEOUT');
+    });
+
+    it('verifyActiveTenancy returns 403 NO_ACTIVE_TENANCY when contract and occupancy queries succeed with no active tenancy', async () => {
+      const mockPrisma: TenantAggregateDataSource = {
+        contract: { findMany: vi.fn().mockResolvedValue([]) },
+        occupancy: {
+          findMany: vi.fn().mockResolvedValue([]),
+          findFirst: vi.fn().mockResolvedValue(null),
+        },
+        dailyStay: { findMany: vi.fn().mockResolvedValue([]) },
+        bill: { findMany: vi.fn().mockResolvedValue([]) },
+        contractSettlement: { findMany: vi.fn().mockResolvedValue([]) },
+      };
+
+      const tenantRepo = new InMemoryTenantRepository();
+      const contractRepo = new InMemoryContractRepository();
+      const sensitiveService = new SensitiveFieldService('12345678901234567890123456789012');
+      const tenantService = new TenantService(tenantRepo, contractRepo, sensitiveService, undefined, mockPrisma);
+
+      const tenant = await tenantService.createTenant(dormId, {
+        displayName: 'ผู้เช่า ที่ไม่มีสัญญาเปิดใช้งาน',
+        phone: '0876543210',
+      });
+      const co = await tenantRepo.createCoOccupant(dormId, tenant.id, {
+        name: 'ผู้พักร่วม เดิม',
+        relationship: 'เพื่อน',
+      });
+
+      // 1. Direct call rejects with 403 NO_ACTIVE_TENANCY
+      try {
+        await tenantService.verifyActiveTenancy(dormId, tenant.id);
+        expect.unreachable('Should have thrown NO_ACTIVE_TENANCY');
+      } catch (err: any) {
+        expect(err.code).toBe('NO_ACTIVE_TENANCY');
+        expect(err.statusCode).toBe(403);
+      }
+
+      // 2. HTTP route invocation returns 403 with NO_ACTIVE_TENANCY
+      const app = createTestTenantApp(tenantService, {
+        roleCode: 'OWNER',
+        permissions: ['*'],
+      });
+      const res = await request(app)
+        .put(`/api/v1/tenants/${tenant.id}/co-occupants/${co.id}`)
+        .set('x-csrf-token', 'test-csrf-token')
+        .send({ name: 'ผู้พักร่วม แก้ไข' });
+
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe('NO_ACTIVE_TENANCY');
     });
   });
 });

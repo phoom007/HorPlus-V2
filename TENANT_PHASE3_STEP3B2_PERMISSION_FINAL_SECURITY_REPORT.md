@@ -1,242 +1,287 @@
-# HORPLUS-V2 — TENANT PHASE 3 STEP 3B.2 / 3B.2A
+# HORPLUS-V2 — TENANT PHASE 3 STEP 3B.2 / 3B.2A / 3B.2B / 3B.2C / 3B.2D
 # OWNER TENANT API PERMISSION & FINAL SECURITY CLOSURE REPORT
-## DIFF CLEANUP & SINGLE PERMISSION AUTHORITY CORRECTION
+## FAIL-CLOSED TENANCY & EXPLICIT AGGREGATE CONTRACT FINALIZATION
 
 - **Branch**: `review/tenant-ui-baseline-20260904`
-- **Committed Baseline SHA**: `42003e2a60141c4a487cb89e4274d56875efd143`
-- **Mode**: CORRECTION — BACKEND / TEST ONLY (Zero UI Changes)
+- **Committed Baseline SHA**: `e9e702f9364564595c5fb3bea96c82f456386cec`
+- **Mode**: BACKEND / TEST ONLY (Zero UI Changes, Zero Schema Changes, Zero Migrations)
 - **Status**: COMPLETE & VERIFIED
 
 ---
 
 ## 1. Executive Summary
 
-Tenant Phase 3 Step 3B.2A cleanly resolves all EOL/CRLF diff churn and establishes a single, unambiguous permission authority architecture for the Owner Tenant domain.
+Tenant Phase 3 Step 3B.2D finalizes the remaining pre-commit integrity requirements, removes all error swallowing across the tenancy verification and aggregation layers, establishes one unambiguous contract for `TenantAggregateDataSource`, reconciles the repository-wide constructor audit, and verifies the full regression suite:
 
-1. **EOL Churn Eliminated**: All repository files now strictly conform to their committed line-ending conventions (`i/lf w/lf` for LF files, `i/crlf w/crlf` for CRLF files). `git diff --check` passes with zero warnings or errors.
-2. **Single Permission Authority Architecture**:
-   - `context.permissions` resolved by `resolveAuthoritativeDormitoryContext()` is now the sole runtime permission authority.
-   - `requireDormitoryPermission()` in `permission.ts` has been stripped of direct role checks and restored to a purely generic permission checker.
-   - A centralized Tenant-domain role normalization policy in `resolveAuthoritativeDormitoryContext()` guarantees compatibility for legacy MANAGER records, enforces read-only lockdown for STAFF (stripping contaminated mutations), and strips all Owner Tenant permissions for TENANT.
-   - Top-level defense-in-depth guard in `tenant.routes.ts` remains purely as a non-granting deny guard for `roleCode === 'TENANT'`.
-3. **Zero Production Middleware Weakening**: Reverted test-only bypass in `require-dormitory.ts`. Tests now supply a valid minimal Prisma stub rather than compromising production code.
-4. **Tenant Portal Status**: Reported truthfully as `TENANT PORTAL REGRESSION PROOF PENDING` rather than claiming validation via stub routers.
-5. **Report & Test Alignment**: Explicitly corrected previous test count transcription error (actual counts: `step1-adapter` = 15 tests, `step2-api-adapter` = 7 tests). All 124 regression tests across 8 test suites pass cleanly.
-
----
-
-## 2. Single Permission Authority Architecture
-
-The system now enforces a clean, single-pipeline permission flow:
-
-```
-Persisted / Default Role Permissions (Role Repository)
-                 ↓
-resolveAuthoritativeDormitoryContext()
-                 ↓
-Centralized Tenant-Domain Role Normalization Policy
-                 ↓
-context.permissions (Authoritative Runtime Permission Authority)
-                 ↓
-generic requireDormitoryPermission() (Pure Permission Check)
-                 ↓
-Route Handler (Owner Tenant API)
-```
-
-### 2.1 Role Defaults (`role.repository.ts`)
-- **MANAGER**: System role default updated to include full Tenant authority:
-  `tenants: ['view', 'create', 'update', 'archive', 'document:read', 'document:write']`
-- **STAFF**: System role default remains read-only:
-  `tenants: ['view']`
-- **OWNER**: Existing global wildcard `*` retained.
-- **TENANT**: Does not receive Owner Tenant-management permissions.
-
-### 2.2 Centralized Tenant-Domain Role Normalization (`dormitory-context.ts`)
-`resolveAuthoritativeDormitoryContext()` is the **only** location that evaluates `roleCode` to adjust Tenant-domain permissions:
-- **MANAGER**: Ensures the resolved permission set contains all 6 canonical Tenant capabilities (`tenants:view`, `tenants:create`, `tenants:update`, `tenants:archive`, `tenants:document:read`, `tenants:document:write` and singular aliases).
-- **STAFF**: Strips all Tenant-domain mutation and document permissions (`tenants:create`, `tenants:update`, `tenants:archive`, `tenants:document:read`, `tenants:document:write`, `tenant:write`, etc.) from the resolved set, retaining exclusively `tenants:view` (and `tenant:view`).
-- **TENANT**: Strips all Owner Tenant-management permissions (`tenants:*` and `tenant:*`).
-- **OWNER**: Unchanged, preserves wildcard `*`.
-- **Scope**: Applied strictly to the Tenant domain; non-tenant resources (Rooms, Meters, Contracts, Billing, Maintenance, etc.) are 100% unaffected.
-
-### 2.3 Generic Permission Checker (`permission.ts`)
-`requireDormitoryPermission()` is restored to a pure generic permission checker:
-- Direct role checks (`roleCode === 'MANAGER'`, `roleCode === 'STAFF'`, `roleCode === 'TENANT'`) are **completely removed**.
-- Preserves:
-  - OWNER global wildcard shortcut (`roleCode === 'OWNER'`).
-  - Wildcard permission check (`*`).
-  - Exact permission matching (`normalizedPerms.includes(requiredPermission)`).
-  - Domain wildcard matching (`normalizedPerms.includes(`${domain}:*`)`).
-  - Generic backwards-compatibility aliases (`tenants:view` <-> `tenant:read`, and legacy write alias for non-staff).
-- Result:
-  - MANAGER is allowed because `context.permissions` contains the required permissions.
-  - STAFF is denied mutations (403) because `context.permissions` does not contain them.
-  - TENANT is denied (403) because `context.permissions` contains no Owner Tenant permissions.
-
-### 2.4 Defense-in-Depth Router Guard (`tenant.routes.ts`)
-The top-level router guard for `roleCode === 'TENANT'` in `tenant.routes.ts` acts strictly as defense-in-depth:
-- It **only denies** (403 Forbidden).
-- It never grants, injects, or modifies permissions.
+1. **Fail-Closed Tenancy Verification (`verifyActiveTenancy`)**:
+   - `contractRepo.findAll` authoritative query error: Fails closed immediately (no `try/catch` swallowing). Throws internal server error; HTTP route returns `500 TENANT_OPERATION_FAILED` with zero internal detail leakage.
+   - `aggregatePrisma.occupancy.findFirst` authoritative query error: Fails closed immediately. Throws internal server error; HTTP route returns `500 TENANT_OPERATION_FAILED` with zero internal detail leakage.
+   - Successful queries + no active tenancy: Only then returns `403 NO_ACTIVE_TENANCY`.
+2. **Single Unambiguous Contract (`TenantAggregateDataSource`)**:
+   - Established one canonical contract where all five aggregate delegates (`contract`, `occupancy`, `dailyStay`, `bill`, `contractSettlement`) are required (no optional `?`).
+   - `getTenantDetails` executes all required aggregate queries without skipping domains when `aggregatePrisma` is injected, and fails closed on query rejections.
+3. **Explicit Dependency Boundary**:
+   - `TenantService` uses `const prisma = this.aggregatePrisma ?? null;`.
+   - Never introspects repository private implementations (`(this.tenantRepo as any).prisma`).
+   - Does not use `getPrismaClient()`, `isUuid(...)`, or environment heuristics.
+4. **Reconciled Constructor Call Sites**:
+   - Raw repository search confirms exactly **17** `new TenantService(` constructor calls across the entire codebase.
+   - Exactly **1** is production (`server/src/app.ts:126`), **0** in-memory/demo runtimes outside tests, and **16** in automated test suites.
+5. **Canonical Aggregate DTOs Preserved (Step 3B.2B)**:
+   - Payment: `method`, `paymentDate`.
+   - Receipt: `receiptNumber`, `receiptKind`, `isVoided`, `issuedAt`.
+   - DailyStayInvoice: `totalAgreedAmount`, `outstandingAmount`, `depositDeclaredStatus`.
+   - Contract: `depositStatus` and `depositType` strictly omitted.
+6. **Role Permission Matrix Preserved (Step 3B.2B)**:
+   - OWNER: Global authority.
+   - MANAGER: Full Tenant domain only.
+   - STAFF: Tenant read-only.
+   - TENANT: Hard-blocked from Owner Tenant APIs (403 `FORBIDDEN`).
+   - Non-OWNER global `*` stripped in `resolveAuthoritativeDormitoryContext`.
+7. **Regression Tests (136 / 136 Passed across 8 Suites)**:
+   - All tests pass cleanly without errors or skips.
+8. **Build Verification**:
+   - Backend TypeScript (`npm --prefix server run build`): Exit code 0 (0 errors).
+   - Frontend Vite (`npm run build`): Exit code 0 (0 errors, built in 26.77s).
+9. **Zero Diff on Protected Files**:
+   - Zero changes to all 8 UI files, Prisma schema, and migrations.
+10. **Pre-Commit Diff & EOL Integrity**:
+    - `git diff --check` passes cleanly (exit code 0).
+    - Line endings strictly match baseline (`tenant.service.ts` is `i/crlf w/crlf`; all other modified files are `i/lf w/lf`).
 
 ---
 
-## 3. Production Middleware Integrity & Reversion
+## 2. Explicit Aggregate Authority & Fail-Closed Architecture
 
-The production middleware `createRequireActiveDormitoryMiddleware` in `server/src/middleware/require-dormitory.ts`:
-- Reverted the test-only bypass `if (!prisma || !prisma.dormitory) return next();`.
-- Production middleware remains 100% untouched against baseline `42003e2a60141c4a487cb89e4274d56875efd143` (`ZERO DIFF`).
-- Integration tests in `src/tests/tenant-phase3-step3b2-permission-security.test.ts` supply a minimal valid Prisma stub to satisfy the production middleware contract:
-  ```ts
-  const mockPrisma: any = {
-    dormitory: {
-      findUnique: async ({ where }: { where: { id: string } }) => {
-        if (where.id === dormAId) return { id: dormAId, name: 'Dormitory A', status: 'active', deletedAt: null };
-        if (where.id === dormBId) return { id: dormBId, name: 'Dormitory B', status: 'active', deletedAt: null };
-        return null;
-      },
-    },
+### 2.1 One Exact Contract (`TenantAggregateDataSource`)
+In `server/src/services/tenant.service.ts`:
+```ts
+export interface TenantAggregateDataSource {
+  contract: {
+    findMany(args: any): Promise<any[]>;
   };
-  const requireActiveDormitory = createRequireActiveDormitoryMiddleware(mockPrisma);
-  ```
-
----
-
-## 4. DTO Hardening & Terminology Audit
-
-All properties in `server/src/mappers/tenant-api.mapper.ts` were audited against canonical database models:
-- **`SafeEmergencyContactApiDTO`**: Includes `isPrimary: boolean`.
-- **`SafeBillApiDTO`**: Uses canonical `billNumber` (NOT fictional `invoiceNumber`), `billingDate`, `dueDate`, `subtotal`, `discountAmount`, `fineAmount`, `totalAmount`, `paidAmount`, `outstandingAmount`.
-- **`SafeSettlementApiDTO`**: Uses canonical `depositAmount`, `unpaidBillAmount`, `damageChargeTotal`, `netSettlement`, `settlementDirection`, `settlementStatus`. Strictly eliminates PromptPay IDs, bank accounts, refund transactions, and payment provider secrets.
-- **`SafeRoomSummaryApiDTO`**, **`SafeContractApiDTO`**, **`SafeOccupancyApiDTO`**, **`SafeDailyStayApiDTO`**: Whitelist-mapped, strictly stripping signatures, raw lock codes, and operator actor IDs.
-
----
-
-## 5. Tenant Portal Status
-
-- **Tenant Portal Integration**: **`TENANT PORTAL REGRESSION PROOF PENDING`**
-- The fake portal router stub previously present in the test file has been removed. No claim is made regarding full Tenant Portal verification until an authenticated production portal suite is exercised.
-- Hard deny for TENANT on all `/api/v1/tenants/**` routes is independently verified and passes.
-
----
-
-## 6. Test Suite & Report Alignment
-
-### 6.1 Transcription Discrepancy Correction
-- The previous Step 3B.2 report summary table contained a typographical transcription error (14 and 8).
-- The actual unchanged test counts are:
-  - `src/tests/tenant-phase2-step1-adapter.test.ts`: **15 tests**
-  - `src/tests/tenant-phase3-step2-api-adapter.test.ts`: **7 tests**
-- Neither existing test file was modified during Step 3B.2 or Step 3B.2A.
-
-### 6.2 Full Regression Execution (124 / 124 Passed across 8 Suites)
+  occupancy: {
+    findMany(args: any): Promise<any[]>;
+    findFirst(args: any): Promise<any | null>;
+  };
+  dailyStay: {
+    findMany(args: any): Promise<any[]>;
+  };
+  bill: {
+    findMany(args: any): Promise<any[]>;
+  };
+  contractSettlement: {
+    findMany(args: any): Promise<any[]>;
+  };
+}
 ```
- ✓ src/tests/tenant-phase2-step1-adapter.test.ts (15 tests)
- ✓ src/tests/tenant-phase2-step2-quickadd.test.tsx (10 tests)
- ✓ src/tests/tenant-phase2-step3-registration.test.tsx (9 tests)
- ✓ src/tests/tenant-phase2-step4-domain-correction.test.tsx (7 tests)
- ✓ src/tests/tenant-phase3-step2-api-adapter.test.ts (7 tests)
- ✓ src/tests/tenant-phase3-step3b-persistence-security.test.ts (31 tests)
- ✓ src/tests/tenant-phase3-step3b2-permission-security.test.ts (43 tests)
- ✓ src/tests/tenantFailClosed.test.ts (2 tests)
+All delegates are required. Missing delegates or configuration errors fail visibly instead of silently degrading into empty arrays.
 
+### 2.2 Fail-Closed `verifyActiveTenancy`
+In `server/src/services/tenant.service.ts`:
+```ts
+  public async verifyActiveTenancy(dormitoryId: string, tenantId: string) {
+    // 1. Check active contracts using contractRepo (supports both in-memory and prisma adapters)
+    const contractsRes = await this.contractRepo.findAll(dormitoryId, { tenantId, pageSize: 100 });
+    const hasActiveContract = contractsRes.items.some((c) =>
+      ['active', 'expiring_soon', 'pending_signature', 'waiting_extension', 'checking_out'].includes(c.status)
+    );
+    if (hasActiveContract) {
+      return;
+    }
+
+    // 2. Check active occupancy using Prisma if explicit aggregate dependency is provided
+    const prisma = this.aggregatePrisma ?? null;
+    if (prisma) {
+      const activeOccupancy = await prisma.occupancy.findFirst({
+        where: {
+          dormitoryId,
+          tenantId,
+          status: 'ACTIVE',
+        },
+      });
+      if (activeOccupancy) {
+        return;
+      }
+    }
+
+    const err = new Error('ผู้เช่าไม่มีสัญญาหรือสถานะการพักอาศัยที่เปิดใช้งานอยู่');
+    (err as any).code = 'NO_ACTIVE_TENANCY';
+    (err as any).statusCode = 403;
+    throw err;
+  }
+```
+
+- **Contract repository failure**: Propagates immediately as an internal/server error. Over HTTP, returns `500 TENANT_OPERATION_FAILED`.
+- **Occupancy query failure**: Propagates immediately as an internal/server error. Over HTTP, returns `500 TENANT_OPERATION_FAILED`.
+- **Successful queries + no active tenancy**: Throws `NO_ACTIVE_TENANCY` (403). Over HTTP, returns `403 NO_ACTIVE_TENANCY`.
+
+### 2.3 `getTenantDetails` Aggregate Execution
+When `aggregatePrisma` is provided, `getTenantDetails` queries all 5 domains sequentially without skipping:
+1. `prisma.contract.findMany(...)`
+2. `prisma.occupancy.findMany(...)`
+3. `prisma.dailyStay.findMany(...)`
+4. `prisma.bill.findMany(...)`
+5. `prisma.contractSettlement.findMany(...)`
+
+If any authoritative query rejects, `TenantService` rejects and the route returns `500 TENANT_OPERATION_FAILED`. When `aggregatePrisma` is `undefined` (in-memory mode), zero Prisma calls are made (100% hermetic).
+
+---
+
+## 3. Production Composition (`server/src/app.ts`)
+
+In `server/src/app.ts:126`:
+```ts
+const tenantService = new TenantService(
+  tenantRepo,
+  contractRepo,
+  sensitiveFieldService,
+  auditService,
+  useInMemoryRepos ? undefined : (prisma ?? undefined)
+);
+```
+
+- **Prisma mode (`useInMemoryRepos === false`)**: Injects the active `prisma` client instance as aggregate dependency.
+- **In-memory mode (`useInMemoryRepos === true`)**: Passes `undefined`, ensuring hermetic in-memory behavior.
+
+---
+
+## 4. Reconciled Repository-Wide `new TenantService(` Audit
+
+Raw repository search (`git grep -n -E "new TenantService\s*\("`) identified exactly **17** constructor invocations across all code files:
+
+| # | File & Line | Classification | Description |
+|---|---|---|---|
+| 1 | `server/src/app.ts:126` | **A. Production** | Primary application wiring: injects `prisma` (or `undefined` in memory). |
+| 2 | `server/tests/local01-tenant-onboarding-cooccupants.test.ts:45` | **C. Test Suite** | Backend integration test with in-memory repositories. |
+| 3 | `src/tests/tenant-phase3-step2-api-adapter.test.ts:33` | **C. Test Suite** | Adapter integration test with in-memory repositories. |
+| 4 | `src/tests/tenant-phase3-step3b-persistence-security.test.ts:201` | **C. Test Suite** | Direct service unit test (in-memory). |
+| 5 | `src/tests/tenant-phase3-step3b-persistence-security.test.ts:303` | **C. Test Suite** | Direct service unit test (in-memory). |
+| 6 | `src/tests/tenant-phase3-step3b-persistence-security.test.ts:361` | **C. Test Suite** | Direct service unit test (in-memory). |
+| 7 | `src/tests/tenant-phase3-step3b-persistence-security.test.ts:412` | **C. Test Suite** | Direct service unit test (in-memory). |
+| 8 | `src/tests/tenant-phase3-step3b-persistence-security.test.ts:893` | **C. Test Suite** | Direct service unit test (in-memory). |
+| 9 | `src/tests/tenant-phase3-step3b-persistence-security.test.ts:938` | **C. Test Suite** | Direct service unit test (in-memory). |
+| 10 | `src/tests/tenant-phase3-step3b-persistence-security.test.ts:1050` | **C. Test Suite** | Direct service unit test (in-memory). |
+| 11 | `src/tests/tenant-phase3-step3b-persistence-security.test.ts:1148` | **C. Test Suite** | Hermetic aggregation test (in-memory, no Prisma). |
+| 12 | `src/tests/tenant-phase3-step3b-persistence-security.test.ts:1183` | **C. Test Suite** | `getTenantDetails` fail-closed test (explicit mock Prisma). |
+| 13 | `src/tests/tenant-phase3-step3b-persistence-security.test.ts:1208` | **C. Test Suite** | `verifyActiveTenancy` hermetic test (in-memory). |
+| 14 | `src/tests/tenant-phase3-step3b-persistence-security.test.ts:1234` | **C. Test Suite** | `verifyActiveTenancy` contractRepo failure test (in-memory with spy). |
+| 15 | `src/tests/tenant-phase3-step3b-persistence-security.test.ts:1282` | **C. Test Suite** | `verifyActiveTenancy` occupancy DB failure test (explicit mock Prisma). |
+| 16 | `src/tests/tenant-phase3-step3b-persistence-security.test.ts:1328` | **C. Test Suite** | `verifyActiveTenancy` normal negative test (explicit mock Prisma). |
+| 17 | `src/tests/tenant-phase3-step3b2-permission-security.test.ts:133` | **C. Test Suite** | Permission matrix test suite with in-memory repositories. |
+
+- **Total call sites**: 17
+- **Production compositions**: 1 (`server/src/app.ts:126`)
+- **In-memory/demo runtimes outside tests**: 0
+- **Test suite constructions**: 16
+
+---
+
+## 5. Protected Files Audit (Zero Changes Confirmed)
+
+All 10 protected targets verified untouched against baseline `e9e702f`:
+- `src/pages/owner/tenants.tsx` — UNTOUCHED (Zero diff)
+- `src/pages/owner.tsx` — UNTOUCHED (Zero diff)
+- `src/pages/owner/contracts.tsx` — UNTOUCHED (Zero diff)
+- `src/pages/owner/rooms.tsx` — UNTOUCHED (Zero diff)
+- `src/pages/owner/meters.tsx` — UNTOUCHED (Zero diff)
+- `src/components/tenant/TenantRegisterView.tsx` — UNTOUCHED (Zero diff)
+- `src/pages/tenant/TenantRegisterPage.tsx` — UNTOUCHED (Zero diff)
+- `src/pages/tenant.tsx` — UNTOUCHED (Zero diff)
+- `server/prisma/schema.prisma` — UNTOUCHED (Zero diff)
+- `server/prisma/migrations/**` — UNTOUCHED (Zero diff)
+
+---
+
+## 6. Automated Test Suite Results (136 / 136 Passed)
+
+```
 Test Files  8 passed (8)
-     Tests  124 passed (124)
+     Tests  136 passed (136)
+  Duration  9.18s
 ```
 
-### 6.3 Dedicated Step 3B.2A Verification Tests (Section 9 in test suite)
-1. **PART 15**: Resolves MANAGER context with all 6 canonical Tenant capabilities in `context.permissions`.
-2. **PART 15**: Resolves STAFF context with `tenants:view` and NO mutation/document capabilities in `context.permissions`.
-3. **PART 15**: Resolves TENANT context with ZERO Owner Tenant permissions in `context.permissions`.
-4. **PART 16**: Grants full authority to legacy MANAGER role in DB intentionally lacking `archive` & `document:write`; verifies HTTP archive succeeds (200).
-5. **PART 17**: Strips mutation & doc permissions from contaminated STAFF role in DB, leaving only `tenants:view`; verifies HTTP mutation is rejected (403).
-6. **PART 18**: Strips all Owner Tenant permissions from contaminated TENANT role in DB, leaving zero surviving permissions; verifies HTTP access is rejected (403).
+| # | Test Suite File | Tests | Status |
+|---|---|---|---|
+| 1 | `src/tests/tenant-phase2-step1-adapter.test.ts` | 15 / 15 | **PASSED** |
+| 2 | `src/tests/tenant-phase2-step2-quickadd.test.tsx` | 10 / 10 | **PASSED** |
+| 3 | `src/tests/tenant-phase2-step3-registration.test.tsx` | 9 / 9 | **PASSED** |
+| 4 | `src/tests/tenant-phase2-step4-domain-correction.test.tsx` | 7 / 7 | **PASSED** |
+| 5 | `src/tests/tenant-phase3-step2-api-adapter.test.ts` | 7 / 7 | **PASSED** |
+| 6 | `src/tests/tenant-phase3-step3b-persistence-security.test.ts` | 36 / 36 | **PASSED** |
+| 7 | `src/tests/tenant-phase3-step3b2-permission-security.test.ts` | 50 / 50 | **PASSED** |
+| 8 | `src/tests/tenantFailClosed.test.ts` | 2 / 2 | **PASSED** |
 
 ---
 
-## 7. Protected Files Audit (Zero Changes)
+## 7. Build Verification Results
 
-The 10 protected targets have **ZERO DIFF** against baseline:
-
-| Protected Target | Diff Status |
-|---|:---:|
-| `server/prisma/schema.prisma` | **ZERO DIFF** |
-| `server/prisma/migrations/**` | **ZERO DIFF** |
-| `src/pages/owner/tenants.tsx` | **ZERO DIFF** |
-| `src/pages/owner.tsx` | **ZERO DIFF** |
-| `src/pages/owner/contracts.tsx` | **ZERO DIFF** |
-| `src/pages/owner/rooms.tsx` | **ZERO DIFF** |
-| `src/pages/owner/meters.tsx` | **ZERO DIFF** |
-| `src/components/tenant/TenantRegisterView.tsx` | **ZERO DIFF** |
-| `src/pages/tenant/TenantRegisterPage.tsx` | **ZERO DIFF** |
-| `src/pages/tenant.tsx` | **ZERO DIFF** |
+1. **Backend TypeScript Build (`npm --prefix server run build`)**:
+   - `tsc -p tsconfig.build.json`
+   - Exit code: 0 (0 compilation errors)
+2. **Frontend Vite Build (`npm run build`)**:
+   - `vite build`
+   - Exit code: 0 (2797 modules transformed, built in 26.77s)
 
 ---
 
-## 8. Final Git State & Line Ending Audit
+## 8. Pre-Commit Diff Integrity Audit
 
-### 8.1 `git ls-files --eol` Output
+### 8.1 `git status --short`
 ```
-i/lf    w/lf    attr/                 	server/src/db/repositories/role.repository.ts
-i/lf    w/lf    attr/                 	server/src/mappers/tenant-api.mapper.ts
-i/lf    w/lf    attr/                 	server/src/middleware/dormitory-context.ts
-i/lf    w/lf    attr/                 	server/src/middleware/permission.ts
-i/lf    w/lf    attr/                 	server/src/middleware/require-dormitory.ts
-i/crlf  w/crlf  attr/                 	server/src/routes/tenant.routes.ts
-```
-
-### 8.2 `git status --short`
-```
- M server/src/db/repositories/role.repository.ts
+ M TENANT_PHASE3_STEP3B2_PERMISSION_FINAL_SECURITY_REPORT.md
+ M server/src/app.ts
  M server/src/mappers/tenant-api.mapper.ts
  M server/src/middleware/dormitory-context.ts
- M server/src/middleware/permission.ts
- M server/src/routes/tenant.routes.ts
-?? TENANT_PHASE3_STEP3B2_PERMISSION_FINAL_SECURITY_REPORT.md
-?? src/tests/tenant-phase3-step3b2-permission-security.test.ts
-```
-*(Note: `server/src/middleware/require-dormitory.ts` has ZERO diff and is not modified).*
-
-### 8.3 `git diff --stat`
-```
- server/src/db/repositories/role.repository.ts |   2 +-
- server/src/mappers/tenant-api.mapper.ts       | 449 +++++++++++++++++++++++++-
- server/src/middleware/dormitory-context.ts    |  43 ++-
- server/src/middleware/permission.ts           |  16 +
- server/src/routes/tenant.routes.ts            | 124 +++++--
- 5 files changed, 593 insertions(+), 41 deletions(-)
+ M server/src/services/tenant.service.ts
+ M src/tests/tenant-phase3-step3b-persistence-security.test.ts
+ M src/tests/tenant-phase3-step3b2-permission-security.test.ts
 ```
 
-### 8.4 `git diff --ignore-space-at-eol --stat`
+### 8.2 `git diff --stat`
 ```
- server/src/db/repositories/role.repository.ts |   2 +-
- server/src/mappers/tenant-api.mapper.ts       | 449 +++++++++++++++++++++++++-
- server/src/middleware/dormitory-context.ts    |  43 ++-
- server/src/middleware/permission.ts           |  16 +
- server/src/routes/tenant.routes.ts            | 124 +++++--
- 5 files changed, 593 insertions(+), 41 deletions(-)
-```
-
-### 8.5 `git diff --numstat`
-```
-1	1	server/src/db/repositories/role.repository.ts
-437	12	server/src/mappers/tenant-api.mapper.ts
-42	1	server/src/middleware/dormitory-context.ts
-16	0	server/src/middleware/permission.ts
-97	27	server/src/routes/tenant.routes.ts
+ ...SE3_STEP3B2_PERMISSION_FINAL_SECURITY_REPORT.md | 347 +++++++++++----------
+ server/src/app.ts                                  |   2 +-
+ server/src/mappers/tenant-api.mapper.ts            |  38 +--
+ server/src/middleware/dormitory-context.ts         |   5 +
+ server/src/services/tenant.service.ts              | 166 +++++-----
+ ...nant-phase3-step3b-persistence-security.test.ts | 213 ++++++++++++-
+ ...nant-phase3-step3b2-permission-security.test.ts | 329 +++++++++++++++++++
+ 7 files changed, 826 insertions(+), 274 deletions(-)
 ```
 
-### 8.6 `git diff --check`
+### 8.3 `git diff --numstat`
 ```
-(Exit code 0 — Clean: 0 errors, 0 trailing whitespace warnings)
+184	163	TENANT_PHASE3_STEP3B2_PERMISSION_FINAL_SECURITY_REPORT.md
+1	1	server/src/app.ts
+19	19	server/src/mappers/tenant-api.mapper.ts
+5	0	server/src/middleware/dormitory-context.ts
+83	83	server/src/services/tenant.service.ts
+205	8	src/tests/tenant-phase3-step3b-persistence-security.test.ts
+329	0	src/tests/tenant-phase3-step3b2-permission-security.test.ts
 ```
 
----
+### 8.4 `git diff --check`
+```
+# Clean exit (code 0) - zero whitespace or line-ending errors
+```
 
-## 9. Build Verification
-
-- **Backend**: `npm --prefix server run build` → **SUCCESS** (Exit code 0, `tsc` passed with zero errors).
-- **Frontend**: `npm run build` → **SUCCESS** (Exit code 0, `vite build` passed cleanly).
+### 8.5 Line Endings (`git ls-files --eol`)
+```
+i/lf    w/lf    attr/    TENANT_PHASE3_STEP3B2_PERMISSION_FINAL_SECURITY_REPORT.md
+i/lf    w/lf    attr/    server/src/app.ts
+i/lf    w/lf    attr/    server/src/mappers/tenant-api.mapper.ts
+i/lf    w/lf    attr/    server/src/middleware/dormitory-context.ts
+i/crlf  w/crlf  attr/    server/src/services/tenant.service.ts
+i/lf    w/lf    attr/    src/tests/tenant-phase3-step3b-persistence-security.test.ts
+i/lf    w/lf    attr/    src/tests/tenant-phase3-step3b2-permission-security.test.ts
+```
+*Zero EOL churn. `tenant.service.ts` strictly preserves `i/crlf w/crlf`; all other modified files strictly preserve `i/lf w/lf`.*
 
 ---
 
-TENANT PHASE 3 STEP 3B.2A CLEANUP COMPLETE — DIFF CLEAN, SINGLE TENANT PERMISSION AUTHORITY ESTABLISHED — WAITING FOR PRODUCT OWNER / CHATGPT REVIEW.
+## 9. Tenant Portal Verification Status
+
+**TENANT PORTAL REGRESSION PROOF PENDING**
+
+*(Declared truthfully pending full end-to-end browser regression execution across the Tenant Portal surface).*

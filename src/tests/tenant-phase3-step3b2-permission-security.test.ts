@@ -997,6 +997,184 @@ describe('TENANT PHASE 3 STEP 3B.2: Owner Tenant API Permission & Final Security
       expect(jsonStr).not.toContain('smartLockDeviceId');
       expect(jsonStr).not.toContain('internalNote');
     });
+
+    it('toBillApiDTO maps canonical Payment fields (method, paymentDate) and strips evidence/hash/reviewer/secrets', () => {
+      const rawBill = {
+        id: 'bill-pay-test',
+        dormitoryId: dormAId,
+        tenantId: testTenantId,
+        roomId: 'r-001',
+        billingCycleId: 'bc-001',
+        billNumber: 'B-2026-09-999',
+        billKind: 'MONTHLY_UTILITY',
+        billingDate: '2026-09-01',
+        dueDate: '2026-09-05',
+        status: 'PAID',
+        subtotal: 5500,
+        discountAmount: 0,
+        fineAmount: 0,
+        totalAmount: 5500,
+        paidAmount: 5500,
+        outstandingAmount: 0,
+        Payment: [
+          {
+            id: 'pay-actual-01',
+            amount: 5500,
+            status: 'CONFIRMED',
+            method: 'PROMPTPAY',
+            paymentDate: new Date('2026-09-02T10:00:00Z'),
+            evidenceUrl: 'https://storage/secret/ev-01.jpg',
+            fileHash: 'sha256-secret-hash-999',
+            reviewedByUserId: 'usr-reviewer-id',
+            internalStorageKey: 'keys/internal/pay.bin',
+          },
+        ],
+      };
+
+      const dto = toBillApiDTO(rawBill);
+      expect(dto?.payments).toHaveLength(1);
+      const paymentDto = dto!.payments![0];
+      expect(paymentDto.id).toBe('pay-actual-01');
+      expect(paymentDto.amount).toBe(5500);
+      expect(paymentDto.status).toBe('CONFIRMED');
+      expect(paymentDto.method).toBe('PROMPTPAY');
+      expect(paymentDto.paymentDate).toEqual(new Date('2026-09-02T10:00:00Z'));
+
+      // Non-canonical / fictional fields must not exist
+      expect((paymentDto as any).paymentMethod).toBeUndefined();
+      expect((paymentDto as any).paidAt).toBeUndefined();
+      expect((paymentDto as any).paymentNumber).toBeUndefined();
+
+      // Stripped internals
+      const jsonStr = JSON.stringify(dto);
+      expect(jsonStr).not.toContain('evidenceUrl');
+      expect(jsonStr).not.toContain('fileHash');
+      expect(jsonStr).not.toContain('reviewedByUserId');
+      expect(jsonStr).not.toContain('internalStorageKey');
+    });
+
+    it('toBillApiDTO maps canonical Receipt fields (receiptNumber, receiptKind, isVoided, issuedAt) and strips snapshotData/status/total', () => {
+      const rawBill = {
+        id: 'bill-rec-test',
+        dormitoryId: dormAId,
+        tenantId: testTenantId,
+        roomId: 'r-001',
+        billingCycleId: 'bc-001',
+        billNumber: 'B-2026-09-888',
+        billKind: 'MONTHLY_UTILITY',
+        billingDate: '2026-09-01',
+        dueDate: '2026-09-05',
+        status: 'PAID',
+        subtotal: 5500,
+        discountAmount: 0,
+        fineAmount: 0,
+        totalAmount: 5500,
+        paidAmount: 5500,
+        outstandingAmount: 0,
+        Receipt: [
+          {
+            id: 'rec-actual-01',
+            receiptNumber: 'RC-2026-0001',
+            receiptKind: 'EVENT',
+            isVoided: false,
+            issuedAt: new Date('2026-09-02T10:05:00Z'),
+            snapshotData: { rawTaxId: '1234567890123', secretMemo: 'Internal only' },
+            totalAmount: 5500, // Non-canonical on Receipt model
+            status: 'ISSUED',  // Non-canonical on Receipt model
+          },
+        ],
+      };
+
+      const dto = toBillApiDTO(rawBill);
+      expect(dto?.receipts).toHaveLength(1);
+      const receiptDto = dto!.receipts![0];
+      expect(receiptDto.id).toBe('rec-actual-01');
+      expect(receiptDto.receiptNumber).toBe('RC-2026-0001');
+      expect(receiptDto.receiptKind).toBe('EVENT');
+      expect(receiptDto.isVoided).toBe(false);
+      expect(receiptDto.issuedAt).toEqual(new Date('2026-09-02T10:05:00Z'));
+
+      // Non-canonical / fictional fields must not exist
+      expect((receiptDto as any).totalAmount).toBeUndefined();
+      expect((receiptDto as any).status).toBeUndefined();
+
+      // Raw snapshotData must never leak
+      const jsonStr = JSON.stringify(dto);
+      expect(jsonStr).not.toContain('snapshotData');
+      expect(jsonStr).not.toContain('rawTaxId');
+      expect(jsonStr).not.toContain('secretMemo');
+    });
+
+    it('toDailyStayApiDTO maps canonical DailyStayInvoice fields (totalAgreedAmount, outstandingAmount, depositDeclaredStatus) without totalAmount', () => {
+      const rawDailyStay = {
+        id: 'ds-inv-test',
+        tenantId: testTenantId,
+        dormitoryId: dormAId,
+        roomId: 'r-001',
+        status: 'CHECKED_IN',
+        startDate: '2026-09-01',
+        endDate: '2026-09-05',
+        inclusiveDayCount: 4,
+        dailyRateAmount: 800,
+        totalRentAmount: 3200,
+        depositAmount: 500,
+        depositDeclaredStatus: 'PAID',
+        invoice: {
+          id: 'inv-actual-01',
+          invoiceNumber: 'DSI-2026-0001',
+          totalRentAmount: 3200,
+          depositAmount: 500,
+          totalAgreedAmount: 3700,
+          outstandingAmount: 0,
+          depositDeclaredStatus: 'PAID',
+          status: 'SETTLED',
+          issuedAt: new Date('2026-09-01T14:00:00Z'),
+          totalAmount: 3700, // Non-canonical authority
+        },
+      };
+
+      const dto = toDailyStayApiDTO(rawDailyStay);
+      expect(dto?.invoice).toBeDefined();
+      const invDto = dto!.invoice!;
+      expect(invDto.id).toBe('inv-actual-01');
+      expect(invDto.invoiceNumber).toBe('DSI-2026-0001');
+      expect(invDto.totalRentAmount).toBe(3200);
+      expect(invDto.depositAmount).toBe(500);
+      expect(invDto.totalAgreedAmount).toBe(3700);
+      expect(invDto.outstandingAmount).toBe(0);
+      expect(invDto.depositDeclaredStatus).toBe('PAID');
+      expect(invDto.status).toBe('SETTLED');
+      expect(invDto.issuedAt).toEqual(new Date('2026-09-01T14:00:00Z'));
+
+      // Non-canonical totalAmount must not exist
+      expect((invDto as any).totalAmount).toBeUndefined();
+    });
+
+    it('toContractApiDTO eliminates non-canonical depositStatus and depositType', () => {
+      const rawContract = {
+        id: 'c-canon-01',
+        contractNumber: 'CN-2026-0001',
+        tenantId: testTenantId,
+        dormitoryId: dormAId,
+        roomId: 'r-001',
+        status: 'active',
+        startDate: '2026-01-01',
+        endDate: '2026-12-31',
+        durationMonths: 12,
+        rentBillingType: 'monthly',
+        rentAmount: 5000,
+        depositAmount: 10000,
+        advancePaymentAmount: 5000,
+        depositStatus: 'paid',
+        depositType: 'fixed',
+      };
+
+      const dto = toContractApiDTO(rawContract);
+      expect(dto?.id).toBe('c-canon-01');
+      expect(dto?.depositAmount).toBe(10000);
+      expect((dto as any).depositStatus).toBeUndefined();
+      expect((dto as any).depositType).toBeUndefined();
+    });
   });
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -1181,6 +1359,157 @@ describe('TENANT PHASE 3 STEP 3B.2: Owner Tenant API Permission & Final Security
       const res = await request(app)
         .get('/api/v1/tenants')
         .set(authHeaders(rogueTenantAuth));
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe('FORBIDDEN');
+    });
+
+    it('PART 19 (Wildcard Hardening A): strips global wildcard from contaminated MANAGER role, preventing global owner escalation while preserving full Tenant domain', async () => {
+      const wildcardManagerRole = {
+        id: 'role-wildcard-manager-1',
+        dormitoryId: dormAId,
+        code: 'MANAGER',
+        name: 'Contaminated Wildcard Manager',
+        permissions: ['*'], // Contaminated with global wildcard!
+        isSystem: false,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      (roleRepo as any).roles.set(wildcardManagerRole.id, wildcardManagerRole);
+
+      const wcManagerUser = await userRepo.upsertFromGoogle({
+        email: 'wc-manager@example.com',
+        name: 'Wildcard Manager',
+        googleSubject: 'g-sub-wc-manager',
+      });
+      await membershipRepo.addMembership({
+        userId: wcManagerUser.id,
+        dormitoryId: dormAId,
+        roleId: wildcardManagerRole.id,
+        roleCode: 'MANAGER',
+        status: 'active',
+      });
+      const wcManagerAuth = await authService.authenticateTestUser(wcManagerUser.id);
+
+      const ctx = await resolveAuthoritativeDormitoryContext(await makeReq(wcManagerAuth, dormAId));
+      // Global '*' must NOT survive for MANAGER
+      expect(ctx.permissions).not.toContain('*');
+      // But full Tenant domain must be present
+      expect(ctx.permissions).toContain('tenants:view');
+      expect(ctx.permissions).toContain('tenants:create');
+      expect(ctx.permissions).toContain('tenants:update');
+      expect(ctx.permissions).toContain('tenants:archive');
+      expect(ctx.permissions).toContain('tenants:document:read');
+      expect(ctx.permissions).toContain('tenants:document:write');
+
+      // HTTP action inside Tenant domain succeeds
+      const tempTenant = await tenantRepo.create(dormAId, {
+        tenantNumber: 'T-WC-MGR',
+        firstName: 'ทดสอบ',
+        displayName: 'ทดสอบ ไวด์การ์ด',
+        phone: '0891114455',
+        status: 'active',
+      });
+      const res = await request(app)
+        .delete(`/api/v1/tenants/${tempTenant.id}`)
+        .set(authHeaders(wcManagerAuth));
+      expect(res.status).toBe(200);
+      expect(res.body.data.success).toBe(true);
+    });
+
+    it('PART 20 (Wildcard Hardening B): strips global wildcard from contaminated STAFF role, allowing tenants:view but strictly blocking Tenant mutations', async () => {
+      const wildcardStaffRole = {
+        id: 'role-wildcard-staff-1',
+        dormitoryId: dormAId,
+        code: 'STAFF',
+        name: 'Contaminated Wildcard Staff',
+        permissions: ['*'], // Contaminated with global wildcard!
+        isSystem: false,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      (roleRepo as any).roles.set(wildcardStaffRole.id, wildcardStaffRole);
+
+      const wcStaffUser = await userRepo.upsertFromGoogle({
+        email: 'wc-staff@example.com',
+        name: 'Wildcard Staff',
+        googleSubject: 'g-sub-wc-staff',
+      });
+      await membershipRepo.addMembership({
+        userId: wcStaffUser.id,
+        dormitoryId: dormAId,
+        roleId: wildcardStaffRole.id,
+        roleCode: 'STAFF',
+        status: 'active',
+      });
+      const wcStaffAuth = await authService.authenticateTestUser(wcStaffUser.id);
+
+      const ctx = await resolveAuthoritativeDormitoryContext(await makeReq(wcStaffAuth, dormAId));
+      // Global '*' must NOT survive for STAFF
+      expect(ctx.permissions).not.toContain('*');
+      // Must retain ONLY tenants:view / tenant:view in tenant domain
+      expect(ctx.permissions).toContain('tenants:view');
+      expect(ctx.permissions).not.toContain('tenants:create');
+      expect(ctx.permissions).not.toContain('tenants:update');
+      expect(ctx.permissions).not.toContain('tenants:archive');
+      expect(ctx.permissions).not.toContain('tenants:document:read');
+      expect(ctx.permissions).not.toContain('tenants:document:write');
+
+      // HTTP GET allowed
+      const getRes = await request(app)
+        .get('/api/v1/tenants')
+        .set(authHeaders(wcStaffAuth));
+      expect(getRes.status).toBe(200);
+
+      // HTTP POST mutation strictly rejected with 403 Forbidden
+      const postRes = await request(app)
+        .post('/api/v1/tenants')
+        .set(authHeaders(wcStaffAuth))
+        .send({
+          firstName: 'พนักงานไวด์การ์ด',
+          phone: '0812345678',
+        });
+      expect(postRes.status).toBe(403);
+      expect(postRes.body.error.code).toBe('FORBIDDEN');
+    });
+
+    it('PART 21 (Wildcard Hardening C): strips global wildcard from contaminated TENANT role, denying Owner Tenant API access completely', async () => {
+      const wildcardTenantRole = {
+        id: 'role-wildcard-tenant-1',
+        dormitoryId: dormAId,
+        code: 'TENANT',
+        name: 'Contaminated Wildcard Tenant',
+        permissions: ['*'], // Contaminated with global wildcard!
+        isSystem: false,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      (roleRepo as any).roles.set(wildcardTenantRole.id, wildcardTenantRole);
+
+      const wcTenantUser = await userRepo.upsertFromGoogle({
+        email: 'wc-tenant@example.com',
+        name: 'Wildcard Tenant',
+        googleSubject: 'g-sub-wc-tenant',
+      });
+      await membershipRepo.addMembership({
+        userId: wcTenantUser.id,
+        dormitoryId: dormAId,
+        roleId: wildcardTenantRole.id,
+        roleCode: 'TENANT',
+        status: 'active',
+      });
+      const wcTenantAuth = await authService.authenticateTestUser(wcTenantUser.id);
+
+      const ctx = await resolveAuthoritativeDormitoryContext(await makeReq(wcTenantAuth, dormAId));
+      // Global '*' must NOT survive
+      expect(ctx.permissions).not.toContain('*');
+      // ZERO Owner Tenant permissions survive
+      const survivingPerms = ctx.permissions.filter((p) => p.startsWith('tenants:') || p.startsWith('tenant:'));
+      expect(survivingPerms).toEqual([]);
+
+      // HTTP GET must be rejected with 403 Forbidden
+      const res = await request(app)
+        .get('/api/v1/tenants')
+        .set(authHeaders(wcTenantAuth));
       expect(res.status).toBe(403);
       expect(res.body.error.code).toBe('FORBIDDEN');
     });

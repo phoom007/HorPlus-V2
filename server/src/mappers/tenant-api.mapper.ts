@@ -116,8 +116,6 @@ export interface SafeContractApiDTO {
   rentAmount: number | string;
   depositAmount: number | string;
   advancePaymentAmount: number | string;
-  depositStatus?: string | null;
-  depositType?: string | null;
   terms?: string | null;
   previousContractId?: string | null;
   signedByOwnerAt?: string | Date | null;
@@ -156,8 +154,11 @@ export interface SafeDailyStayInvoiceSummaryApiDTO {
   invoiceNumber: string;
   totalRentAmount: number | string;
   depositAmount: number | string;
-  totalAmount: number | string;
+  totalAgreedAmount: number | string;
+  outstandingAmount: number | string;
+  depositDeclaredStatus: string;
   status: string;
+  issuedAt?: string | Date | null;
 }
 
 export interface SafeDailyStayApiDTO {
@@ -194,19 +195,18 @@ export interface SafeBillItemApiDTO {
 
 export interface SafePaymentSummaryApiDTO {
   id: string;
-  paymentNumber?: string | null;
   amount: number | string;
   status: string;
-  paymentMethod?: string | null;
-  paidAt?: string | Date | null;
+  method: string;
+  paymentDate?: string | Date | null;
 }
 
 export interface SafeReceiptSummaryApiDTO {
   id: string;
   receiptNumber: string;
-  totalAmount: number | string;
-  status: string;
-  issuedAt?: string | Date | null;
+  receiptKind: string;
+  isVoided: boolean;
+  issuedAt: string | Date;
 }
 
 export interface SafeBillApiDTO {
@@ -445,8 +445,6 @@ export function toContractApiDTO(raw: any): SafeContractApiDTO | null {
     rentAmount: toAmount(raw.rentAmount),
     depositAmount: toAmount(raw.depositAmount),
     advancePaymentAmount: toAmount(raw.advancePaymentAmount),
-    depositStatus: raw.depositStatus ?? null,
-    depositType: raw.depositType ?? null,
     terms: raw.terms ?? null,
     previousContractId: raw.previousContractId ?? null,
     signedByOwnerAt: raw.signedByOwnerAt ?? null,
@@ -525,8 +523,11 @@ export function toDailyStayApiDTO(raw: any): SafeDailyStayApiDTO | null {
           invoiceNumber: raw.invoice.invoiceNumber || '',
           totalRentAmount: toAmount(raw.invoice.totalRentAmount),
           depositAmount: toAmount(raw.invoice.depositAmount),
-          totalAmount: toAmount(raw.invoice.totalAmount),
-          status: raw.invoice.status || 'UNPAID',
+          totalAgreedAmount: toAmount(raw.invoice.totalAgreedAmount ?? raw.invoice.totalAmount),
+          outstandingAmount: toAmount(raw.invoice.outstandingAmount),
+          depositDeclaredStatus: raw.invoice.depositDeclaredStatus || 'UNPAID',
+          status: raw.invoice.status || 'ISSUED',
+          issuedAt: raw.invoice.issuedAt ?? null,
         }
       : null,
   };
@@ -578,20 +579,19 @@ export function toBillApiDTO(raw: any): SafeBillApiDTO | null {
     payments: Array.isArray(raw.Payment || raw.payments)
       ? (raw.Payment || raw.payments).map((p: any) => ({
           id: p.id,
-          paymentNumber: p.paymentNumber ?? null,
           amount: toAmount(p.amount),
           status: p.status || 'PENDING',
-          paymentMethod: p.paymentMethod ?? null,
-          paidAt: p.paidAt ?? null,
+          method: p.method || p.paymentMethod || 'CASH',
+          paymentDate: p.paymentDate ?? p.paidAt ?? null,
         }))
       : [],
     receipts: Array.isArray(raw.Receipt || raw.receipts)
       ? (raw.Receipt || raw.receipts).map((r: any) => ({
           id: r.id,
           receiptNumber: r.receiptNumber || '',
-          totalAmount: toAmount(r.totalAmount || r.amount),
-          status: r.status || 'ISSUED',
-          issuedAt: r.issuedAt ?? r.createdAt ?? null,
+          receiptKind: r.receiptKind || 'EVENT',
+          isVoided: typeof r.isVoided === 'boolean' ? r.isVoided : false,
+          issuedAt: r.issuedAt ?? r.createdAt ?? new Date(),
         }))
       : [],
   };
