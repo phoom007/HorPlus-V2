@@ -336,8 +336,14 @@ export function createTenantRouter(
           },
         });
       }
-      const details = await tenantService.updateTenantProfileAggregate(dormId, req.params.id, parsed.data, req.auth?.userId);
-      res.json({ data: toTenantDetailsApiDTO(details) });
+      const result = await tenantService.updateTenantProfileAggregate(dormId, req.params.id, parsed.data, req.auth?.userId);
+      res.json({
+        data: {
+          tenant: toTenantApiDTO(result.tenant),
+          emergencyContacts: (result.emergencyContacts || []).map(toEmergencyContactApiDTO).filter(Boolean),
+          vehicles: (result.vehicles || []).map(toVehicleApiDTO).filter(Boolean),
+        },
+      });
     } catch (err) {
       handleServiceError(res, err, req);
     }

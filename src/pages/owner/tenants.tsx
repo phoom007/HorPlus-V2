@@ -536,13 +536,13 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
   const [petsList, setPetsList] = useState<PetItem[]>([]);
 
   const handleAddPet = () => {
-    setPetsList(prev => [...prev, { id: Date.now().toString(), type: '', customType: '', name: '' }]);
+    setPetsList(prev => [...prev, { id: `temp-pet-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, type: '', customType: '', name: '' }]);
   };
 
   const handleRemovePet = (index: number) => {
     setPetsList(prev => {
       const updated = prev.filter((_, i) => i !== index);
-      return updated.length > 0 ? updated : [{ id: Date.now().toString(), type: '', customType: '', name: '' }];
+      return updated.length > 0 ? updated : [{ id: `temp-pet-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, type: '', customType: '', name: '' }];
     });
   };
 
@@ -1264,24 +1264,36 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
     setVehicleBrand(tenant.vehicle?.brand || '');
 
     // Multi pets initialization
+    const toStdThaiPet = (t: string): string => {
+      const lower = (t || '').trim().toLowerCase();
+      if (lower === 'dog' || lower === 'สุนัข' || lower === 'หมา') return 'สุนัข';
+      if (lower === 'cat' || lower === 'แมว') return 'แมว';
+      if (lower === 'bird' || lower === 'นก') return 'นก';
+      if (lower === 'fish' || lower === 'ปลา') return 'ปลา';
+      if (lower === 'rabbit' || lower === 'กระต่าย') return 'กระต่าย';
+      if (lower === 'hamster' || lower === 'หนู' || lower === 'หนูแฮมสเตอร์') return 'หนูแฮมสเตอร์';
+      return '';
+    };
+
     const initialPets: PetItem[] = tenant.pets && tenant.pets.length > 0
       ? tenant.pets.map(p => {
-        const isStd = STANDARD_PET_OPTIONS.includes(p.type);
+        const stdThai = toStdThaiPet(p.type);
+        const isOther = p.type === 'อื่นๆ' || p.type === 'other' || p.type === 'others';
         return {
-          id: p.id || Math.random().toString(),
-          type: isStd ? p.type : (p.type ? 'อื่นๆ' : ''),
-          customType: p.customType || (isStd ? '' : p.type),
+          id: p.id || undefined,
+          type: stdThai ? stdThai : (p.type ? 'อื่นๆ' : ''),
+          customType: p.customType || (!stdThai && !isOther ? p.type : ''),
           name: p.name || ''
         };
       })
       : (tenant.pet?.hasPet
         ? [{
-          id: '1',
-          type: STANDARD_PET_OPTIONS.includes(tenant.pet?.type || '') ? (tenant.pet.type || '') : (tenant.pet?.type ? 'อื่นๆ' : ''),
-          customType: STANDARD_PET_OPTIONS.includes(tenant.pet?.type || '') ? '' : (tenant.pet?.type || ''),
+          id: undefined,
+          type: toStdThaiPet(tenant.pet?.type || '') || (tenant.pet?.type ? 'อื่นๆ' : ''),
+          customType: toStdThaiPet(tenant.pet?.type || '') ? '' : (tenant.pet?.type || ''),
           name: tenant.pet?.name || ''
         }]
-        : [{ id: '1', type: '', customType: '', name: '' }]);
+        : [{ id: `temp-pet-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, type: '', customType: '', name: '' }]);
     setPetsList(initialPets);
     setHasPet(tenant.pet?.hasPet || (tenant.pets && tenant.pets.length > 0) || false);
     const isPrimaryStd = STANDARD_PET_OPTIONS.includes(tenant.pet?.type || '');
@@ -1443,13 +1455,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
       }
     }
 
-    // Validate pets against pet policy
-    const dormPolicy = getEffectivePetPolicy(dorm);
-    const isPetAllowed = dormPolicy ? dormPolicy.allowed !== 'none' : true;
-    if (hasPet && !isPetAllowed) {
-      setErrorText('หอพักมีนโยบายไม่อนุญาตให้เลี้ยงสัตว์');
-      return;
-    }
+
 
     try {
       const dataProvider = getDataProvider();
@@ -1464,20 +1470,37 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
 
       const payloadVehicles = activeFormVehicles.map(v => ({
         id: (v.id && serverVehIdSet.has(v.id)) ? v.id : undefined,
-        type: v.type as 'car' | 'motorcycle' | 'other',
+        type: (v.type === 'motorcycle' || v.type === 'car' || v.type === 'none' || v.type === 'other') ? v.type : ('other' as const),
         licensePlate: v.licensePlate.trim(),
         brand: v.brand?.trim() || undefined,
       }));
 
       // Reconcile pets
-      const activePets = (hasPet && isPetAllowed)
+      const authoritativeExistingPets: any[] = (
+        tenantDetailsData?.tenant?.pets ||
+        (Array.isArray(tenantDetailsData?.tenant?.petInfo) ? tenantDetailsData.tenant.petInfo : null) ||
+        (selectedTenant as any)?.pets ||
+        (Array.isArray((selectedTenant as any)?.petInfo) ? (selectedTenant as any).petInfo : null) ||
+        []
+      );
+      const canonicalPetIds = new Set(
+        authoritativeExistingPets
+          .map((p: any) => p?.id)
+          .filter((id): id is string => Boolean(id) && typeof id === 'string' && !id.startsWith('temp-'))
+      );
+
+      const activePets = hasPet
         ? petsList
-            .map(p => ({
-              id: (p.id && !p.id.startsWith('temp-') && p.id !== '1' && !/^\d{13}$/.test(p.id)) ? p.id : undefined,
-              type: (p.type === 'อื่นๆ' && p.customType ? p.customType : p.type)?.trim() || '',
-              name: p.name?.trim() || undefined,
-            }))
-            .filter(p => p.type || p.name)
+            .map(p => {
+              const isOther = p.type === 'อื่นๆ' || p.type === 'other' || p.type === 'others';
+              return {
+                id: (p.id && canonicalPetIds.has(p.id)) ? p.id : undefined,
+                type: isOther ? 'other' : (p.type?.trim() || ''),
+                customType: isOther ? (p.customType?.trim() || undefined) : undefined,
+                name: p.name?.trim() || undefined,
+              };
+            })
+            .filter(p => p.type || p.customType || p.name)
         : [];
 
       // 1. One atomic database mutation
@@ -1545,6 +1568,9 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
 
       // 3. Success! Authoritative Refresh:
       const savedTenant = result.data?.tenant || result.data;
+      const authoritativeEmergencyContacts = result.data?.emergencyContacts ?? [];
+      const authoritativeVehicles = result.data?.vehicles ?? [];
+
       const normalizedSavedTenant: Tenant = {
         ...selectedTenant,
         ...savedTenant,
@@ -1553,9 +1579,25 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
         phone: savedTenant.phone || phone.trim(),
         email: savedTenant.email ?? '',
         citizenId: savedTenant.nationalIdMasked ?? (savedTenant as any).citizenId ?? '',
-        emergencyContact: { name: trimmedEmergencyName, phone: trimmedEmergencyPhone, relationship: eRel },
-        vehicles: activeFormVehicles,
-        vehicle: activeFormVehicles[0] || { type: 'none', licensePlate: '', brand: '' },
+        emergencyContacts: authoritativeEmergencyContacts,
+        emergencyContact: authoritativeEmergencyContacts[0]
+          ? {
+              id: authoritativeEmergencyContacts[0].id,
+              name: authoritativeEmergencyContacts[0].name || '',
+              phone: authoritativeEmergencyContacts[0].phone || '',
+              relationship: authoritativeEmergencyContacts[0].relationship || '',
+              isPrimary: true,
+            }
+          : { name: '', phone: '', relationship: '' },
+        vehicles: authoritativeVehicles,
+        vehicle: authoritativeVehicles[0]
+          ? {
+              id: authoritativeVehicles[0].id,
+              type: authoritativeVehicles[0].type || 'none',
+              licensePlate: authoritativeVehicles[0].licensePlate || '',
+              brand: authoritativeVehicles[0].brand || '',
+            }
+          : { type: 'none', licensePlate: '', brand: '' },
         pets: activePets,
         pet: {
           hasPet: activePets.length > 0,
@@ -1568,14 +1610,17 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
           : selectedTenant.idCardPhotoMock,
       };
 
-      // Invalidate React Query caches for tenants list and tenant detail
-      if (queryClient && effectiveDormId) {
-        await queryClient.invalidateQueries({ queryKey: queryKeys.tenants(effectiveDormId) });
-        await queryClient.invalidateQueries({ queryKey: ['owner', effectiveDormId, 'tenants', selectedTenant.id] });
-      }
-
-      // Synchronize UI presentation state with authoritative server response
+      // Synchronize UI presentation state with authoritative server response immediately
       setSelectedTenant(normalizedSavedTenant);
+
+      if (tenantDetailsData && tenantDetailsData.tenant?.id === selectedTenant.id) {
+        setTenantDetailsData((prev: any) => prev ? {
+          ...prev,
+          tenant: { ...prev.tenant, ...savedTenant, version: authoritativeVersion },
+          emergencyContacts: authoritativeEmergencyContacts,
+          vehicles: authoritativeVehicles,
+        } : prev);
+      }
 
       if (onSaveTenants) {
         const syncedTenants = tenants.map(t => t.id === selectedTenant.id ? normalizedSavedTenant : t);
@@ -1585,6 +1630,16 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
       setPendingIdCardFile(null);
       setIsEditOpen(false);
       onAddLog('แก้ไขทะเบียนผู้เช่า', `แก้ไขข้อมูลผู้เช่าคุณ ${name.trim()}`, 'Tenant', selectedTenant.id);
+
+      // Invalidate React Query caches for tenants list and tenant detail independently without blocking or reverting success
+      if (queryClient && effectiveDormId) {
+        try {
+          await queryClient.invalidateQueries({ queryKey: queryKeys.tenants(effectiveDormId) });
+          await queryClient.invalidateQueries({ queryKey: ['owner', effectiveDormId, 'tenants', selectedTenant.id] });
+        } catch (refetchErr) {
+          console.warn('Background refetch failed:', refetchErr);
+        }
+      }
     } catch (err: any) {
       setErrorText(err?.message || 'เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์');
     }
@@ -5107,7 +5162,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                             onChange={(e) => {
                               setHasPet(e.target.checked);
                               if (e.target.checked && petsList.length === 0) {
-                                setPetsList([{ id: '1', type: '', name: '' }]);
+                                setPetsList([{ id: `temp-pet-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, type: '', name: '' }]);
                               }
                             }}
                             className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"

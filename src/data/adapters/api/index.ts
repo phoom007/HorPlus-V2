@@ -514,17 +514,6 @@ export class ApiTenantAdapter implements TenantDataSource {
     }
   }
 
-  async updatePetInfo(tenantId: string, pets: PetItem[]): Promise<DataResult<Tenant>> {
-    try {
-      const data = await httpRequest<Tenant>('PUT', `/tenants/${encodeURIComponent(tenantId)}`, { petInfo: pets });
-      return { success: true, data };
-    } catch (err: any) {
-      return {
-        success: false,
-        error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
-      };
-    }
-  }
 
   async getTenantProfile(id: string): Promise<DataResult<TenantProfileDetails>> {
     try {
@@ -539,8 +528,8 @@ export class ApiTenantAdapter implements TenantDataSource {
       const primaryVehicle = vehicles[0] || rawTenant?.vehicle || null;
 
       const mappedPets = Array.isArray(rawTenant?.petInfo)
-        ? rawTenant.petInfo.map((p: any, idx: number) => ({
-            id: p.id || String(idx + 1),
+        ? rawTenant.petInfo.map((p: any) => ({
+            id: p.id || undefined,
             type: p.type || '',
             customType: p.customType || '',
             name: p.name || '',

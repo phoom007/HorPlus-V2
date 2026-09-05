@@ -136,13 +136,12 @@ export const UpdateTenantProfileAggregateSchema = z.object({
 
   vehicles: z.array(z.object({
     id: z.string().optional().nullable(),
-    type: z.string().min(1).default('car'),
+    type: z.enum(['car', 'motorcycle', 'none', 'other']).default('car'),
     licensePlate: z.string().min(1, 'ทะเบียนรถจำเป็นต้องระบุ').max(100),
     brand: z.string().optional().nullable(),
     model: z.string().optional().nullable(),
     color: z.string().optional().nullable(),
     province: z.string().optional().nullable(),
-    status: z.string().optional(),
   })).default([]),
 
   pets: z.array(z.object({

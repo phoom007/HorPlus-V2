@@ -1567,4 +1567,576 @@ describe('TENANT PHASE 3 STEP 3C.1E: Atomic Profile Save, Document Security & Do
     });
   });
 
+  // ──────────────────────────────────────────────────────────────────────────
+  // PART 9: STEP 3C.1H REMOTE SOURCE REVIEW BLOCKER CLOSURE
+  // ──────────────────────────────────────────────────────────────────────────
+  describe('Part 9: Step 3C.1H Remote Source Review Blocker Closure', () => {
+    let customPetTenantId: string;
+
+    beforeEach(async () => {
+      const created = await tenantRepo.create(dormAId, {
+        tenantNumber: 'T-CUSTOM-PET-001',
+        firstName: 'ก้องเกียรติ',
+        lastName: 'คนเลี้ยงงู',
+        displayName: 'ก้องเกียรติ คนเลี้ยงงู',
+        phone: '0859998888',
+        status: 'active',
+      });
+      customPetTenantId = created.id;
+    });
+
+    it('1. Server: legacy direct custom type vs explicit other/custom is grandfather-equivalent', async () => {
+      // Legacy custom pet stored directly as { type: "งู", name: "เขียว" }
+      await tenantRepo.update(customPetTenantId, dormAId, {
+        petInfo: [{ type: 'งู', name: 'เขียว' }],
+      });
+      // Current policy is strictly none
+      tenantRepo.setDormitoryPetPolicy(dormAId, { allowed: 'none', allowedTypes: [] });
+
+      const tenant = await tenantRepo.findById(customPetTenantId, dormAId);
+
+      // User submits explicit { type: "other", customType: "งู", name: "เขียว" }
+      const res = await request(app)
+        .put(`/api/v1/tenants/${customPetTenantId}/profile`)
+        .set(authHeaders(ownerAuth, dormAId))
+        .send({
+          displayName: tenant!.displayName,
+          phone: '0811112222',
+          version: tenant!.version,
+          pets: [{ type: 'other', customType: 'งู', name: 'เขียว' }],
+        });
+
+      // Must be grandfathered and succeed, NOT rejected as new pet!
+      expect(res.status).toBe(200);
+      expect(res.body.data.tenant.phone).toBe('0811112222');
+      const updated = await tenantRepo.findById(customPetTenantId, dormAId);
+      expect(updated?.petInfo).toEqual([
+        expect.objectContaining({ type: 'other', customType: 'งู', name: 'เขียว' }),
+      ]);
+    });
+
+    it('2. Server: policy conditional allowedTypes=["other"] accepts new custom pet', async () => {
+      await tenantRepo.update(customPetTenantId, dormAId, { petInfo: [] });
+      tenantRepo.setDormitoryPetPolicy(dormAId, { allowed: 'conditional', allowedTypes: ['other'] });
+
+      const tenant = await tenantRepo.findById(customPetTenantId, dormAId);
+
+      const res = await request(app)
+        .put(`/api/v1/tenants/${customPetTenantId}/profile`)
+        .set(authHeaders(ownerAuth, dormAId))
+        .send({
+          displayName: tenant!.displayName,
+          phone: tenant!.phone,
+          version: tenant!.version,
+          pets: [{ type: 'other', customType: 'งู', name: 'น้องงู' }],
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.tenant.petInfo).toEqual([
+        expect.objectContaining({ type: 'other', customType: 'งู', name: 'น้องงู' }),
+      ]);
+    });
+
+    it('3. Server: policy conditional exact custom allowed value accepts it', async () => {
+      await tenantRepo.update(customPetTenantId, dormAId, { petInfo: [] });
+      tenantRepo.setDormitoryPetPolicy(dormAId, { allowed: 'conditional', allowedTypes: ['งู'] });
+
+      const tenant = await tenantRepo.findById(customPetTenantId, dormAId);
+
+      const res = await request(app)
+        .put(`/api/v1/tenants/${customPetTenantId}/profile`)
+        .set(authHeaders(ownerAuth, dormAId))
+        .send({
+          displayName: tenant!.displayName,
+          phone: tenant!.phone,
+          version: tenant!.version,
+          pets: [{ type: 'other', customType: 'งู', name: 'น้องงู' }],
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.tenant.petInfo).toEqual([
+        expect.objectContaining({ type: 'other', customType: 'งู', name: 'น้องงู' }),
+      ]);
+    });
+
+    it('4. Server: disallowed custom pet rejects atomically with PET_TYPE_NOT_ALLOWED', async () => {
+      await tenantRepo.update(customPetTenantId, dormAId, { petInfo: [] });
+      tenantRepo.setDormitoryPetPolicy(dormAId, { allowed: 'conditional', allowedTypes: ['cat', 'dog'] });
+
+      const tenant = await tenantRepo.findById(customPetTenantId, dormAId);
+      const originalVersion = tenant!.version;
+
+      const res = await request(app)
+        .put(`/api/v1/tenants/${customPetTenantId}/profile`)
+        .set(authHeaders(ownerAuth, dormAId))
+        .send({
+          displayName: 'ชื่อต้องไม่เปลี่ยน',
+          phone: tenant!.phone,
+          version: originalVersion,
+          pets: [{ type: 'other', customType: 'งู', name: 'น้องงู' }],
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('PET_TYPE_NOT_ALLOWED');
+
+      // Atomic rollback: version and name remain untouched
+      const current = await tenantRepo.findById(customPetTenantId, dormAId);
+      expect(current?.version).toBe(originalVersion);
+      expect(current?.displayName).toBe(tenant!.displayName);
+    });
+
+    it('5. Mutation transaction commits but unrelated full-detail dependency fails -> profile mutation still returns success', async () => {
+      // Spy on getTenantDetails to throw, simulating post-commit failure if it were called
+      const spy = vi.spyOn(tenantService, 'getTenantDetails').mockImplementation(async () => {
+        throw new Error('Unrelated full detail aggregation failure: contracts/bills DB unavailable');
+      });
+
+      try {
+        const tenant = await tenantRepo.findById(testTenantAId, dormAId);
+        const originalVersion = tenant!.version;
+
+        const res = await request(app)
+          .put(`/api/v1/tenants/${testTenantAId}/profile`)
+          .set(authHeaders(ownerAuth, dormAId))
+          .send({
+            displayName: 'นาย สมชาย แก้ไขสำเร็จแม้ดีเทลพัง',
+            phone: '0812345678',
+            version: originalVersion,
+          });
+
+        // SUCCESS! Must return 200 without invoking getTenantDetails
+        expect(res.status).toBe(200);
+        expect(res.body.data.tenant.version).toBe(originalVersion + 1);
+        expect(res.body.data.tenant.displayName).toBe('นาย สมชาย แก้ไขสำเร็จแม้ดีเทลพัง');
+
+        // Confirmed: getTenantDetails was NEVER called
+        expect(spy).not.toHaveBeenCalled();
+
+        const inDb = await tenantRepo.findById(testTenantAId, dormAId);
+        expect(inDb?.version).toBe(originalVersion + 1);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('6. Profile mutation response contains safe Tenant DTO only, no sensitive or internal fields', async () => {
+      // Pre-populate tenant with encrypted nationalId and internal id card object key
+      await tenantRepo.update(testTenantAId, dormAId, {
+        nationalIdEncrypted: 'enc:secret-cipher-bytes',
+        nationalIdMasked: '1-1004-XXXXX-55-5',
+        idCardObjectKey: 'private/dorms/dormA/internal-raw-key.webp',
+        idCardUploadedByUserId: 'user-actor-internal-id',
+      });
+
+      const tenant = await tenantRepo.findById(testTenantAId, dormAId);
+
+      const res = await request(app)
+        .put(`/api/v1/tenants/${testTenantAId}/profile`)
+        .set(authHeaders(ownerAuth, dormAId))
+        .send({
+          displayName: tenant!.displayName,
+          phone: tenant!.phone,
+          version: tenant!.version,
+        });
+
+      expect(res.status).toBe(200);
+      const data = res.body.data;
+      expect(data.tenant).toBeDefined();
+
+      // STRICT NEGATIVE ASSERTIONS on safe API DTO
+      expect(data.tenant.nationalIdEncrypted).toBeUndefined();
+      expect(data.tenant.idCardObjectKey).toBeUndefined();
+      expect(data.tenant.idCardUploadedByUserId).toBeUndefined();
+
+      // Raw body text search strictly confirms absence of leaked secrets
+      const rawBody = JSON.stringify(res.body);
+      expect(rawBody).not.toContain('enc:secret-cipher-bytes');
+      expect(rawBody).not.toContain('private/dorms/dormA/internal-raw-key.webp');
+      expect(rawBody).not.toContain('user-actor-internal-id');
+
+      // Safe presentation fields are present
+      expect(data.tenant.nationalIdMasked).toBe('1-1004-XXXXX-55-5');
+      expect(data.tenant.hasIdentityDocument).toBe(true);
+      expect(Array.isArray(data.emergencyContacts)).toBe(true);
+      expect(Array.isArray(data.vehicles)).toBe(true);
+    });
+  });
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // PART 10: STEP 3C.1I PET IDENTITY, STABLE-ID TYPE LOCK & FAIL-SOFT AUDIT
+  // ──────────────────────────────────────────────────────────────────────────
+  describe('Part 10: Step 3C.1I Pet Identity, Stable-ID Type Lock & Fail-Soft Audit', () => {
+    let petIdTenantId: string;
+
+    beforeEach(async () => {
+      const created = await tenantRepo.create(dormAId, {
+        tenantNumber: 'T-PET-ID-001',
+        firstName: 'สิทธิชัย',
+        lastName: 'เลี้ยงสัตว์ระเบียบ',
+        displayName: 'สิทธิชัย เลี้ยงสัตว์ระเบียบ',
+        phone: '0861112233',
+        status: 'active',
+      });
+      petIdTenantId = created.id;
+    });
+
+    it('A. existing id=pet-1 cat -> submitted id=pet-1 dog -> policy allows cat only -> PET_TYPE_NOT_ALLOWED', async () => {
+      // Existing cat with stable ID pet-1
+      await tenantRepo.update(petIdTenantId, dormAId, {
+        petInfo: [{ id: 'pet-1', type: 'cat', name: 'Milo' }],
+      });
+      // Dorm policy allows only cats
+      tenantRepo.setDormitoryPetPolicy(dormAId, { allowed: 'conditional', allowedTypes: ['cat'] });
+
+      const tenant = await tenantRepo.findById(petIdTenantId, dormAId);
+      const originalVersion = tenant!.version;
+
+      // User attempts to change pet type to 'dog' while keeping stable ID 'pet-1'
+      const res = await request(app)
+        .put(`/api/v1/tenants/${petIdTenantId}/profile`)
+        .set(authHeaders(ownerAuth, dormAId))
+        .send({
+          displayName: tenant!.displayName,
+          phone: tenant!.phone,
+          version: originalVersion,
+          pets: [{ id: 'pet-1', type: 'dog', name: 'Milo' }],
+        });
+
+      // Must be rejected! Stable ID proves record identity, not authority to change pet type
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('PET_TYPE_NOT_ALLOWED');
+
+      // Atomic rollback: version unchanged
+      const current = await tenantRepo.findById(petIdTenantId, dormAId);
+      expect(current?.version).toBe(originalVersion);
+    });
+
+    it('B. existing id=pet-1 cat -> submitted id=pet-1 cat, different name -> policy none -> PASS', async () => {
+      await tenantRepo.update(petIdTenantId, dormAId, {
+        petInfo: [{ id: 'pet-1', type: 'cat', name: 'มะลิ' }],
+      });
+      tenantRepo.setDormitoryPetPolicy(dormAId, { allowed: 'none', allowedTypes: [] });
+
+      const tenant = await tenantRepo.findById(petIdTenantId, dormAId);
+
+      // Name change only (มะลิ -> มะลิใหม่) with same ID and type
+      const res = await request(app)
+        .put(`/api/v1/tenants/${petIdTenantId}/profile`)
+        .set(authHeaders(ownerAuth, dormAId))
+        .send({
+          displayName: tenant!.displayName,
+          phone: tenant!.phone,
+          version: tenant!.version,
+          pets: [{ id: 'pet-1', type: 'cat', name: 'มะลิใหม่' }],
+        });
+
+      expect(res.status).toBe(200);
+      const updated = await tenantRepo.findById(petIdTenantId, dormAId);
+      expect(updated?.petInfo[0].name).toBe('มะลิใหม่');
+      expect(updated?.petInfo[0].type).toBe('cat');
+    });
+
+    it('C. legacy pet without id: cat name A -> cat name B -> policy none -> PASS', async () => {
+      await tenantRepo.update(petIdTenantId, dormAId, {
+        petInfo: [{ type: 'cat', name: 'Cat-Alpha' }],
+      });
+      tenantRepo.setDormitoryPetPolicy(dormAId, { allowed: 'none', allowedTypes: [] });
+
+      const tenant = await tenantRepo.findById(petIdTenantId, dormAId);
+
+      // Name change without stable ID
+      const res = await request(app)
+        .put(`/api/v1/tenants/${petIdTenantId}/profile`)
+        .set(authHeaders(ownerAuth, dormAId))
+        .send({
+          displayName: tenant!.displayName,
+          phone: tenant!.phone,
+          version: tenant!.version,
+          pets: [{ type: 'cat', name: 'Cat-Beta' }],
+        });
+
+      expect(res.status).toBe(200);
+      const updated = await tenantRepo.findById(petIdTenantId, dormAId);
+      expect(updated?.petInfo[0].name).toBe('Cat-Beta');
+    });
+
+    it('D. existing one cat -> submit two cats -> policy none -> second one classified new -> reject atomically', async () => {
+      await tenantRepo.update(petIdTenantId, dormAId, {
+        petInfo: [{ type: 'cat', name: 'Cat-Solo' }],
+      });
+      tenantRepo.setDormitoryPetPolicy(dormAId, { allowed: 'none', allowedTypes: [] });
+
+      const tenant = await tenantRepo.findById(petIdTenantId, dormAId);
+      const originalVersion = tenant!.version;
+
+      // Submit two cats when only one is grandfathered
+      const res = await request(app)
+        .put(`/api/v1/tenants/${petIdTenantId}/profile`)
+        .set(authHeaders(ownerAuth, dormAId))
+        .send({
+          displayName: tenant!.displayName,
+          phone: tenant!.phone,
+          version: originalVersion,
+          pets: [
+            { type: 'cat', name: 'Cat-Solo' },
+            { type: 'cat', name: 'Cat-Second-New' },
+          ],
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('PET_NOT_ALLOWED');
+
+      const current = await tenantRepo.findById(petIdTenantId, dormAId);
+      expect(current?.version).toBe(originalVersion);
+    });
+
+    it('E. existing custom: {type:"งู"} -> submitted: {type:"other", customType:"งู"} -> policy none -> PASS', async () => {
+      await tenantRepo.update(petIdTenantId, dormAId, {
+        petInfo: [{ type: 'งู', name: 'น้องงูเขียว' }],
+      });
+      tenantRepo.setDormitoryPetPolicy(dormAId, { allowed: 'none', allowedTypes: [] });
+
+      const tenant = await tenantRepo.findById(petIdTenantId, dormAId);
+
+      const res = await request(app)
+        .put(`/api/v1/tenants/${petIdTenantId}/profile`)
+        .set(authHeaders(ownerAuth, dormAId))
+        .send({
+          displayName: tenant!.displayName,
+          phone: tenant!.phone,
+          version: tenant!.version,
+          pets: [{ type: 'other', customType: 'งู', name: 'น้องงูเขียว' }],
+        });
+
+      expect(res.status).toBe(200);
+      const updated = await tenantRepo.findById(petIdTenantId, dormAId);
+      expect(updated?.petInfo[0].customType).toBe('งู');
+    });
+
+    it('11. profile transaction succeeds -> auditService.log throws -> PUT /profile returns success (fail-soft)', async () => {
+      const tenant = await tenantRepo.findById(petIdTenantId, dormAId);
+      const originalVersion = tenant!.version;
+
+      // Spy on auditService.log on tenantService to reject
+      const auditSpy = vi.spyOn((tenantService as any).auditService, 'log').mockRejectedValueOnce(
+        new Error('Audit Elasticsearch cluster unavailable')
+      );
+
+      try {
+        const res = await request(app)
+          .put(`/api/v1/tenants/${petIdTenantId}/profile`)
+          .set(authHeaders(ownerAuth, dormAId))
+          .send({
+            displayName: 'นาย สิทธิชัย เซฟสำเร็จแม้ออดิตพัง',
+            phone: '0869998877',
+            version: originalVersion,
+          });
+
+        // Fail-soft: Mutation succeeds with 200, no 500 error!
+        expect(res.status).toBe(200);
+        expect(res.body.data.tenant.displayName).toBe('นาย สิทธิชัย เซฟสำเร็จแม้ออดิตพัง');
+        expect(res.body.data.tenant.version).toBe(originalVersion + 1);
+
+        // Verify persisted state in DB
+        const updated = await tenantRepo.findById(petIdTenantId, dormAId);
+        expect(updated?.displayName).toBe('นาย สิทธิชัย เซฟสำเร็จแม้ออดิตพัง');
+        expect(updated?.phone).toBe('0869998877');
+        expect(updated?.version).toBe(originalVersion + 1);
+      } finally {
+        auditSpy.mockRestore();
+      }
+    });
+  });
+
+  describe('Part 11: Canonical Pet ID Defense & small_pet Policy Normalization (Step 3C.1J)', () => {
+    let testTenantId: string;
+
+    beforeEach(async () => {
+      tenantRepo.setDormitoryPetPolicy(dormAId, { allowed: 'all', allowedTypes: [] });
+      const created = await tenantRepo.create(dormAId, {
+        displayName: 'นาย สเต็ป เจ ทดสอบ',
+        phone: '0812345678',
+        status: 'active',
+        version: 1,
+        petInfo: [{ id: 'pet-canonical-101', type: 'cat', name: 'เหมียวมีชิพ' }],
+      });
+      testTenantId = created.id;
+    });
+
+    it('1. unknown submitted browser ID is stripped and NOT persisted into canonical stored petInfo', async () => {
+      const tenant = await tenantRepo.findById(testTenantId, dormAId);
+
+      const res = await request(app)
+        .put(`/api/v1/tenants/${testTenantId}/profile`)
+        .set(authHeaders(ownerAuth, dormAId))
+        .send({
+          displayName: tenant!.displayName,
+          phone: tenant!.phone,
+          version: tenant!.version,
+          pets: [
+            { id: 'pet-canonical-101', type: 'cat', name: 'เหมียวมีชิพ' },
+            { id: 'fabricated-browser-id-999', type: 'cat', name: 'เหมียวใหม่' },
+          ],
+        });
+
+      expect(res.status).toBe(200);
+      const updated = await tenantRepo.findById(testTenantId, dormAId);
+      expect(updated?.petInfo.length).toBe(2);
+      // Canonical ID is preserved
+      expect(updated?.petInfo[0].id).toBe('pet-canonical-101');
+      // Unknown browser ID is stripped!
+      expect(updated?.petInfo[1].id).toBeUndefined();
+    });
+
+    it('2. unknown submitted ID cannot bypass new/changed policy classification', async () => {
+      // Policy changed to 'none'
+      tenantRepo.setDormitoryPetPolicy(dormAId, { allowed: 'none', allowedTypes: [] });
+      const tenant = await tenantRepo.findById(testTenantId, dormAId);
+
+      // Attempt to submit a dog with a fabricated ID claim
+      const res = await request(app)
+        .put(`/api/v1/tenants/${testTenantId}/profile`)
+        .set(authHeaders(ownerAuth, dormAId))
+        .send({
+          displayName: tenant!.displayName,
+          phone: tenant!.phone,
+          version: tenant!.version,
+          pets: [
+            { id: 'pet-canonical-101', type: 'cat', name: 'เหมียวมีชิพ' },
+            { id: 'fake-id-bypass', type: 'dog', name: 'ด็อกกี้' },
+          ],
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('PET_NOT_ALLOWED');
+    });
+
+    it('3. small_pet policy authorizes new bird, fish, rabbit, hamster in English and Thai', async () => {
+      tenantRepo.setDormitoryPetPolicy(dormAId, {
+        allowed: 'conditional',
+        allowedTypes: ['small_pet'],
+      });
+
+      // Clear existing pets so all submitted are new
+      await tenantRepo.update(testTenantId, dormAId, { petInfo: [] });
+      let tenant = await tenantRepo.findById(testTenantId, dormAId);
+
+      // A. English: bird, fish, rabbit, hamster
+      const resEn = await request(app)
+        .put(`/api/v1/tenants/${testTenantId}/profile`)
+        .set(authHeaders(ownerAuth, dormAId))
+        .send({
+          displayName: tenant!.displayName,
+          phone: tenant!.phone,
+          version: tenant!.version,
+          pets: [
+            { type: 'bird', name: 'Tweety' },
+            { type: 'fish', name: 'Nemo' },
+            { type: 'rabbit', name: 'Bunny' },
+            { type: 'hamster', name: 'Hamtaro' },
+          ],
+        });
+
+      expect(resEn.status).toBe(200);
+      let updated = await tenantRepo.findById(testTenantId, dormAId);
+      expect(updated?.petInfo.length).toBe(4);
+
+      // B. Thai: นก, ปลา, กระต่าย, หนูแฮมสเตอร์
+      tenant = await tenantRepo.findById(testTenantId, dormAId);
+      const resTh = await request(app)
+        .put(`/api/v1/tenants/${testTenantId}/profile`)
+        .set(authHeaders(ownerAuth, dormAId))
+        .send({
+          displayName: tenant!.displayName,
+          phone: tenant!.phone,
+          version: tenant!.version,
+          pets: [
+            { type: 'นก', name: 'เจ้านก' },
+            { type: 'ปลา', name: 'เจ้าปลา' },
+            { type: 'กระต่าย', name: 'เจ้าต่าย' },
+            { type: 'หนูแฮมสเตอร์', name: 'เจ้าหนู' },
+          ],
+        });
+
+      expect(resTh.status).toBe(200);
+      updated = await tenantRepo.findById(testTenantId, dormAId);
+      expect(updated?.petInfo.length).toBe(4);
+    });
+
+    it('4. small_pet policy rejects new dog, cat, and arbitrary custom pets', async () => {
+      tenantRepo.setDormitoryPetPolicy(dormAId, {
+        allowed: 'conditional',
+        allowedTypes: ['small_pet'],
+      });
+      await tenantRepo.update(testTenantId, dormAId, { petInfo: [] });
+      const tenant = await tenantRepo.findById(testTenantId, dormAId);
+
+      // A. Dog is rejected
+      const resDog = await request(app)
+        .put(`/api/v1/tenants/${testTenantId}/profile`)
+        .set(authHeaders(ownerAuth, dormAId))
+        .send({
+          displayName: tenant!.displayName,
+          phone: tenant!.phone,
+          version: tenant!.version,
+          pets: [{ type: 'dog', name: 'Onyx' }],
+        });
+      expect(resDog.status).toBe(400);
+      expect(resDog.body.error.code).toBe('PET_TYPE_NOT_ALLOWED');
+
+      // B. Cat is rejected
+      const resCat = await request(app)
+        .put(`/api/v1/tenants/${testTenantId}/profile`)
+        .set(authHeaders(ownerAuth, dormAId))
+        .send({
+          displayName: tenant!.displayName,
+          phone: tenant!.phone,
+          version: tenant!.version,
+          pets: [{ type: 'cat', name: 'Milo' }],
+        });
+      expect(resCat.status).toBe(400);
+      expect(resCat.body.error.code).toBe('PET_TYPE_NOT_ALLOWED');
+
+      // C. Custom pet (e.g. งู) is rejected unless separately allowed
+      const resCustom = await request(app)
+        .put(`/api/v1/tenants/${testTenantId}/profile`)
+        .set(authHeaders(ownerAuth, dormAId))
+        .send({
+          displayName: tenant!.displayName,
+          phone: tenant!.phone,
+          version: tenant!.version,
+          pets: [{ type: 'other', customType: 'งู', name: 'เขียว' }],
+        });
+      expect(resCustom.status).toBe(400);
+      expect(resCustom.body.error.code).toBe('PET_TYPE_NOT_ALLOWED');
+    });
+
+    it('5. grandfathered dog remains allowed when policy changes to small_pet', async () => {
+      // Tenant already has a dog
+      await tenantRepo.update(testTenantId, dormAId, {
+        petInfo: [{ id: 'pet-dog-1', type: 'dog', name: 'หมาด่าง' }],
+      });
+      tenantRepo.setDormitoryPetPolicy(dormAId, {
+        allowed: 'conditional',
+        allowedTypes: ['small_pet'],
+      });
+
+      const tenant = await tenantRepo.findById(testTenantId, dormAId);
+      const res = await request(app)
+        .put(`/api/v1/tenants/${testTenantId}/profile`)
+        .set(authHeaders(ownerAuth, dormAId))
+        .send({
+          displayName: tenant!.displayName,
+          phone: tenant!.phone,
+          version: tenant!.version,
+          // Grandfathered dog type unchanged, only name modified
+          pets: [{ id: 'pet-dog-1', type: 'dog', name: 'หมาด่างแสนรู้' }],
+        });
+
+      expect(res.status).toBe(200);
+      const updated = await tenantRepo.findById(testTenantId, dormAId);
+      expect(updated?.petInfo[0].id).toBe('pet-dog-1');
+      expect(updated?.petInfo[0].name).toBe('หมาด่างแสนรู้');
+    });
+  });
 });

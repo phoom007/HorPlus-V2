@@ -49,12 +49,73 @@ export interface TenantAggregateDataSource {
 }
 
 export function normalizePetTypeKey(pet: { type?: string | null; customType?: string | null }): string {
-  const t = (pet.type || '').trim().toLowerCase();
-  if (t === 'อื่นๆ' || t === 'other' || t === 'others') {
-    const ct = (pet.customType || '').trim().toLowerCase();
-    return ct ? `other:${ct}` : 'other';
+  if (!pet) return '';
+  const rawType = (pet.type || '').trim().toLowerCase();
+  const rawCustom = (pet.customType || '').trim().toLowerCase();
+
+  // Canonical standard mappings (Thai & English)
+  if (rawType === 'dog' || rawType === 'สุนัข' || rawType === 'หมา') return 'dog';
+  if (rawType === 'cat' || rawType === 'แมว') return 'cat';
+  if (rawType === 'bird' || rawType === 'นก') return 'bird';
+  if (rawType === 'fish' || rawType === 'ปลา') return 'fish';
+  if (rawType === 'rabbit' || rawType === 'กระต่าย') return 'rabbit';
+  if (rawType === 'hamster' || rawType === 'หนู' || rawType === 'หนูแฮมสเตอร์') return 'hamster';
+
+  // Explicit other / custom types
+  if (rawType === 'other' || rawType === 'others' || rawType === 'อื่นๆ') {
+    if (rawCustom) {
+      if (rawCustom === 'dog' || rawCustom === 'สุนัข' || rawCustom === 'หมา') return 'dog';
+      if (rawCustom === 'cat' || rawCustom === 'แมว') return 'cat';
+      if (rawCustom === 'bird' || rawCustom === 'นก') return 'bird';
+      if (rawCustom === 'fish' || rawCustom === 'ปลา') return 'fish';
+      if (rawCustom === 'rabbit' || rawCustom === 'กระต่าย') return 'rabbit';
+      if (rawCustom === 'hamster' || rawCustom === 'หนู' || rawCustom === 'หนูแฮมสเตอร์') return 'hamster';
+      return `other:${rawCustom}`;
+    }
+    return 'other';
   }
-  return t;
+
+  // Legacy direct custom type (e.g. { type: "งู" } or { type: "snake" })
+  if (rawType) {
+    return `other:${rawType}`;
+  }
+
+  // If type was empty but customType provided
+  if (rawCustom) {
+    return `other:${rawCustom}`;
+  }
+
+  return '';
+}
+
+export function expandAllowedPetPolicyTypes(allowedTypes: string[]): {
+  allowedCanonicals: Set<string>;
+  allowedRawTerms: Set<string>;
+} {
+  const allowedCanonicals = new Set<string>();
+  const allowedRawTerms = new Set<string>();
+
+  for (const raw of allowedTypes) {
+    const t = (raw || '').trim().toLowerCase();
+    if (!t) continue;
+    allowedRawTerms.add(t);
+
+    if (t === 'small_pet' || t === 'small-pet' || t === 'small_pets') {
+      for (const sp of ['bird', 'fish', 'rabbit', 'hamster']) {
+        allowedCanonicals.add(sp);
+        allowedRawTerms.add(sp);
+      }
+      for (const th of ['นก', 'ปลา', 'กระต่าย', 'หนู', 'หนูแฮมสเตอร์']) {
+        allowedRawTerms.add(th);
+      }
+      continue;
+    }
+
+    const canon = normalizePetTypeKey({ type: t });
+    if (canon) allowedCanonicals.add(canon);
+  }
+
+  return { allowedCanonicals, allowedRawTerms };
 }
 
 export function classifySubmittedPets(
@@ -76,7 +137,7 @@ export function classifySubmittedPets(
   const unmatchedExisting: any[] = [];
 
   for (const ep of existingList) {
-    if (ep && typeof ep === 'object' && ep.id && typeof ep.id === 'string' && !ep.id.startsWith('temp-') && ep.id !== '1') {
+    if (ep && typeof ep === 'object' && ep.id && typeof ep.id === 'string' && !ep.id.startsWith('temp-')) {
       existingById.set(ep.id, ep);
     } else if (ep && typeof ep === 'object') {
       unmatchedExisting.push(ep);
@@ -614,13 +675,12 @@ export class TenantService {
       } | null;
       vehicles?: Array<{
         id?: string | null;
-        type: string;
+        type: 'car' | 'motorcycle' | 'none' | 'other' | string;
         licensePlate: string;
         brand?: string | null;
         model?: string | null;
         color?: string | null;
         province?: string | null;
-        status?: string;
       }>;
       pets?: Array<{
         id?: string | null;
@@ -663,8 +723,25 @@ export class TenantService {
       }
 
       // 3. Server-Authoritative Grandfather Pet Policy Validation
-      const submittedPets = data.pets || [];
-      const { grandfathered, newOrChanged } = classifySubmittedPets(tenant.petInfo, submittedPets);
+      // Canonical existing pet IDs from current Tenant.petInfo
+      const canonicalExistingPetIds = new Set<string>();
+      if (Array.isArray(tenant.petInfo)) {
+        for (const ep of tenant.petInfo) {
+          if (ep?.id && typeof ep.id === 'string' && !ep.id.startsWith('temp-')) {
+            canonicalExistingPetIds.add(ep.id);
+          }
+        }
+      } else if (tenant.petInfo?.id && typeof tenant.petInfo.id === 'string' && !tenant.petInfo.id.startsWith('temp-')) {
+        canonicalExistingPetIds.add(tenant.petInfo.id);
+      }
+
+      // Sanitize submitted pets: strip any unknown / untrusted client IDs
+      const sanitizedSubmittedPets = (data.pets || []).map((p) => ({
+        ...p,
+        id: (p.id && canonicalExistingPetIds.has(p.id)) ? p.id : undefined,
+      }));
+
+      const { grandfathered, newOrChanged } = classifySubmittedPets(tenant.petInfo, sanitizedSubmittedPets);
 
       if (newOrChanged.length > 0) {
         let petPolicy: any;
@@ -679,17 +756,30 @@ export class TenantService {
         }
 
         if (petPolicy.allowed === 'conditional') {
-          const allowedTypes = (petPolicy.allowedTypes || []).map((t: string) => t.trim().toLowerCase());
+          const { allowedCanonicals, allowedRawTerms } = expandAllowedPetPolicyTypes(petPolicy.allowedTypes || []);
+
           for (const p of newOrChanged) {
             const rawType = (p.type || '').trim().toLowerCase();
             const customType = (p.customType || '').trim().toLowerCase();
             const normKey = normalizePetTypeKey(p);
 
-            const isAllowed =
-              allowedTypes.includes(normKey) ||
-              allowedTypes.includes(rawType) ||
-              (customType && allowedTypes.includes(customType)) ||
-              (normKey.startsWith('other:') && allowedTypes.includes(normKey.slice(6)));
+            const isCustomPet = normKey.startsWith('other:') || normKey === 'other' || rawType === 'other' || rawType === 'อื่นๆ';
+            const customValue = normKey.startsWith('other:') ? normKey.slice(6) : customType;
+
+            let isAllowed = false;
+            if (isCustomPet) {
+              if (allowedRawTerms.has('other') || allowedRawTerms.has('อื่นๆ') || allowedCanonicals.has('other')) {
+                isAllowed = true;
+              } else if (customValue && (allowedRawTerms.has(customValue) || allowedCanonicals.has(`other:${customValue}`) || allowedCanonicals.has(normKey))) {
+                isAllowed = true;
+              } else if (allowedCanonicals.has(normKey)) {
+                isAllowed = true;
+              }
+            } else {
+              if (allowedCanonicals.has(normKey) || allowedRawTerms.has(rawType)) {
+                isAllowed = true;
+              }
+            }
 
             if (!isAllowed) {
               throw new AppError(`ประเภทสัตว์เลี้ยง "${p.type}" ไม่อยู่ในรายการที่อนุญาต`, 400, 'PET_TYPE_NOT_ALLOWED');
@@ -708,7 +798,7 @@ export class TenantService {
         lastName: parsedName.lastName,
         phone: data.phone.trim(),
         email: data.email !== undefined ? (data.email?.trim() ? data.email.trim() : null) : undefined,
-        petInfo: submittedPets,
+        petInfo: sanitizedSubmittedPets,
       };
 
       // Canonical National ID handling
@@ -792,21 +882,29 @@ export class TenantService {
 
       return {
         tenant: updatedTenant,
-        emergencyContact: finalEmergency,
+        emergencyContacts: finalEmergency ? [finalEmergency] : [],
         vehicles: finalVehicles,
       };
     });
 
     if (this.auditService && actorUserId && result?.tenant) {
-      await this.auditService.log({
-        userId: actorUserId,
-        action: 'TENANT_PROFILE_AGGREGATE_UPDATED',
-        source: 'tenant',
-        reason: `Aggregated profile update for tenant ${result.tenant.displayName}`,
-        ipMetadata: { dormitoryId, tenantId },
-      });
+      try {
+        await this.auditService.log({
+          userId: actorUserId,
+          action: 'TENANT_PROFILE_AGGREGATE_UPDATED',
+          source: 'tenant',
+          reason: `Aggregated profile update for tenant ${result.tenant.displayName}`,
+          ipMetadata: { dormitoryId, tenantId },
+        });
+      } catch (auditErr) {
+        logger.error({ auditErr, tenantId }, '[TenantService] Post-commit audit log failure (fail-soft)');
+      }
     }
 
-    return this.getTenantDetails(tenantId, dormitoryId);
+    return {
+      tenant: result.tenant,
+      emergencyContacts: result.emergencyContacts,
+      vehicles: result.vehicles,
+    };
   }
 }

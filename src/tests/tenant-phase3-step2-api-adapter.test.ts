@@ -205,6 +205,35 @@ describe('TENANT PHASE 3 STEP 2: Backend API & Adapter Alignment', () => {
       expect(standaloneRes.data?.tenant.id).toBe('t-api-1');
     });
 
+    it('ApiTenantAdapter.getTenantProfile does not create synthetic numeric index IDs (1, 2, 3) for petInfo without IDs', async () => {
+      const mockApiResponse = {
+        data: {
+          tenant: {
+            id: 't-api-pet-no-id',
+            name: 'No Id Pets',
+            petInfo: [
+              { type: 'cat', name: 'Mimi' },
+              { type: 'dog', name: 'Lucky' },
+            ],
+          },
+        },
+      };
+
+      vi.spyOn(httpClient, 'httpRequest').mockResolvedValue(mockApiResponse);
+
+      const adapter = new ApiTenantAdapter();
+      const res = await adapter.getTenantProfile('t-api-pet-no-id');
+
+      expect(res.success).toBe(true);
+      const pets = res.data?.tenant.pets;
+      expect(pets).toBeDefined();
+      expect(pets?.length).toBe(2);
+      expect(pets?.[0].id).toBeUndefined();
+      expect(pets?.[1].id).toBeUndefined();
+      expect(pets?.[0].id).not.toBe('1');
+      expect(pets?.[1].id).not.toBe('2');
+    });
+
     it('ApiTenantAdapter.getById unwraps tenant from composite response', async () => {
       const mockApiResponse = {
         data: {

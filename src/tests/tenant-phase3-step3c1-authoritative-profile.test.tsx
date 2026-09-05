@@ -1721,4 +1721,767 @@ describe('TENANT PHASE 3 STEP 3C.1B: Visible-Field Mutation Scope & Authoritativ
       expect(putProfileCalls[1].version).toBe(3);
     });
   });
+
+  describe('Part 6: Grandfather Pet Policy, Custom Pet Serialization & Independent Refetch (Step 3C.1H)', () => {
+    it('32. rendered OwnerTenants: grandfathered cat + client dorm policy allowed = none + phone edit -> Save works, PUT preserves cat, no error, modal closes, no LINE call', async () => {
+      let putProfilePayload: any = null;
+      let lineCallCount = 0;
+
+      const grandfatheredTenant: Tenant = {
+        ...sampleActiveTenant,
+        id: 'tenant-grandfathered-cat',
+        displayName: 'นาย นิรุตติ์ มั่นคง',
+        phone: '0812345678',
+        pets: [{ id: 'pet-cat-1', type: 'แมว', name: 'มีมี่' }],
+        pet: { hasPet: true, type: 'แมว', name: 'มีมี่' },
+        version: 1,
+      };
+
+      vi.spyOn(httpClient, 'httpRequest').mockImplementation(async (method, url, payload) => {
+        if (url?.includes('line')) {
+          lineCallCount++;
+        }
+        if (method === 'GET' && url?.includes('/tenants/tenant-grandfathered-cat')) {
+          return {
+            tenant: grandfatheredTenant,
+            emergencyContacts: [{ id: 'em-1', name: 'สมใจ', phone: '0891234567', relationship: 'ภรรยา' }],
+            coOccupants: [],
+            coOccupantHistory: [],
+            vehicles: [],
+            contracts: [],
+            occupancies: [],
+            dailyStays: [],
+            bills: [],
+            settlements: [],
+          };
+        }
+        if (method === 'PUT' && url?.includes('/tenants/tenant-grandfathered-cat/profile')) {
+          putProfilePayload = payload;
+          return {
+            tenant: {
+              ...grandfatheredTenant,
+              displayName: payload.displayName,
+              phone: payload.phone,
+              petInfo: payload.pets,
+              version: 2,
+            },
+            emergencyContacts: [{ id: 'em-1', name: 'สมใจ', phone: '0891234567', relationship: 'ภรรยา' }],
+            vehicles: [],
+          };
+        }
+        return {};
+      });
+
+      render(
+        <QueryClientProvider client={queryClient}>
+          <OwnerTenants
+            dormitoryId={mockDormitoryId}
+            dormitory={{ id: mockDormitoryId, name: 'หอพักไม่อนุญาตสัตว์', petPolicy: { allowed: 'none', allowedTypes: [] } } as any}
+            tenants={[grandfatheredTenant]}
+            rooms={[{ ...sampleRoom, currentTenantId: 'tenant-grandfathered-cat' }]}
+            contracts={[]}
+            onSaveTenants={vi.fn()}
+            onSaveRooms={vi.fn()}
+            onAddLog={vi.fn()}
+          />
+        </QueryClientProvider>
+      );
+
+      // Select tenant
+      fireEvent.click(screen.getByText('นาย นิรุตติ์ มั่นคง'));
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /แก้ไขข้อมูล/i })).toBeDefined();
+      });
+
+      // Open Edit Modal
+      fireEvent.click(screen.getByRole('button', { name: /แก้ไขข้อมูล/i }));
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /บันทึกการแก้ไข/i })).toBeDefined();
+      });
+
+      // User changes ONLY phone
+      const phoneInput = screen.getByDisplayValue('081-234-5678');
+      fireEvent.change(phoneInput, { target: { value: '0899999999' } });
+
+      // Save button clicked
+      const saveBtn = screen.getByRole('button', { name: /บันทึกการแก้ไข/i });
+      fireEvent.click(saveBtn);
+
+      // Modal closes successfully
+      await waitFor(() => {
+        expect(screen.queryByRole('button', { name: /บันทึกการแก้ไข/i })).toBeNull();
+      });
+
+      // Assertions
+      expect(putProfilePayload).not.toBeNull();
+      expect(putProfilePayload.phone).toBe('0899999999');
+      // Existing cat is preserved in PUT payload
+      expect(putProfilePayload.pets).toEqual([
+        expect.objectContaining({
+          type: 'แมว',
+          name: 'มีมี่',
+        }),
+      ]);
+      // Frontend did not block save or show error
+      expect(screen.queryByText(/หอพักมีนโยบายไม่อนุญาตให้เลี้ยงสัตว์/)).toBeNull();
+      // Zero real LINE calls
+      expect(lineCallCount).toBe(0);
+    });
+
+    it('33. new custom "other" pet serializes type="other" and preserves customType', async () => {
+      let putProfilePayload: any = null;
+
+      const tenantNoPets: Tenant = {
+        ...sampleActiveTenant,
+        id: 'tenant-no-pets',
+        name: 'นาย ปราโมทย์ ใจดี',
+        displayName: 'นาย ปราโมทย์ ใจดี',
+        phone: '0822222222',
+        pets: [],
+        pet: { hasPet: false },
+        version: 1,
+      };
+
+      vi.spyOn(httpClient, 'httpRequest').mockImplementation(async (method, url, payload) => {
+        if (method === 'GET' && url?.includes('/tenants/tenant-no-pets')) {
+          return {
+            tenant: tenantNoPets,
+            emergencyContacts: [{ id: 'em-1', name: 'สมใจ', phone: '0891234567', relationship: 'ภรรยา' }],
+            coOccupants: [],
+            coOccupantHistory: [],
+            vehicles: [],
+            contracts: [],
+            occupancies: [],
+            dailyStays: [],
+            bills: [],
+            settlements: [],
+          };
+        }
+        if (method === 'PUT' && url?.includes('/tenants/tenant-no-pets/profile')) {
+          putProfilePayload = payload;
+          return {
+            tenant: {
+              ...tenantNoPets,
+              displayName: payload.displayName,
+              petInfo: payload.pets,
+              version: 2,
+            },
+            emergencyContacts: [{ id: 'em-1', name: 'สมใจ', phone: '0891234567', relationship: 'ภรรยา' }],
+            vehicles: [],
+          };
+        }
+        return {};
+      });
+
+      render(
+        <QueryClientProvider client={queryClient}>
+          <OwnerTenants
+            dormitoryId={mockDormitoryId}
+            dormitory={{ id: mockDormitoryId, name: 'หอพักเงื่อนไข', petPolicy: { allowed: 'all', allowedTypes: [] } } as any}
+            tenants={[tenantNoPets]}
+            rooms={[{ ...sampleRoom, currentTenantId: 'tenant-no-pets' }]}
+            contracts={[]}
+            onSaveTenants={vi.fn()}
+            onSaveRooms={vi.fn()}
+            onAddLog={vi.fn()}
+          />
+        </QueryClientProvider>
+      );
+
+      // Select tenant
+      fireEvent.click(screen.getByText('นาย ปราโมทย์ ใจดี'));
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /แก้ไขข้อมูล/i })).toBeDefined();
+      });
+
+      // Open Edit Modal
+      fireEvent.click(screen.getByRole('button', { name: /แก้ไขข้อมูล/i }));
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /บันทึกการแก้ไข/i })).toBeDefined();
+      });
+
+      // Enable hasPet checkbox
+      const petCheckbox = screen.getByLabelText(/ประสงค์เลี้ยงสัตว์/i);
+      fireEvent.click(petCheckbox);
+
+      // Select type: 'อื่นๆ'
+      await waitFor(() => {
+        expect(screen.getByText('-- ประเภท --')).toBeDefined();
+      });
+      const petSelect = screen.getByText('-- ประเภท --').closest('select')!;
+      fireEvent.change(petSelect, { target: { value: 'อื่นๆ' } });
+
+      // Enter custom type and name
+      await waitFor(() => {
+        expect(screen.getByPlaceholderText(/ระบุประเภท เช่น/i)).toBeDefined();
+      });
+      fireEvent.change(screen.getByPlaceholderText(/ระบุประเภท เช่น/i), { target: { value: 'งู' } });
+      fireEvent.change(screen.getByPlaceholderText('ชื่อน้อง'), { target: { value: 'น้องงู' } });
+
+      // Save
+      const saveBtn = screen.getByRole('button', { name: /บันทึกการแก้ไข/i });
+      fireEvent.click(saveBtn);
+
+      await waitFor(() => {
+        expect(screen.queryByRole('button', { name: /บันทึกการแก้ไข/i })).toBeNull();
+      });
+
+      expect(putProfilePayload).not.toBeNull();
+      expect(putProfilePayload.pets).toEqual([
+        expect.objectContaining({
+          type: 'other',
+          customType: 'งู',
+          name: 'น้องงู',
+        }),
+      ]);
+    });
+
+    it('34. background refetch error after successful mutation does NOT reopen modal or report failure', async () => {
+      let putProfileCalled = false;
+
+      const activeTenant: Tenant = {
+        ...sampleActiveTenant,
+        id: 'tenant-refetch-test',
+        name: 'นาย วาริช รอดภัย',
+        displayName: 'นาย วาริช รอดภัย',
+        phone: '0833333333',
+        version: 1,
+      };
+
+      vi.spyOn(httpClient, 'httpRequest').mockImplementation(async (method, url, payload) => {
+        if (method === 'GET' && url?.includes('/tenants/tenant-refetch-test')) {
+          return {
+            tenant: activeTenant,
+            emergencyContacts: [{ id: 'em-1', name: 'สมใจ', phone: '0891234567', relationship: 'ภรรยา' }],
+            coOccupants: [],
+            coOccupantHistory: [],
+            vehicles: [],
+            contracts: [],
+            occupancies: [],
+            dailyStays: [],
+            bills: [],
+            settlements: [],
+          };
+        }
+        if (method === 'PUT' && url?.includes('/tenants/tenant-refetch-test/profile')) {
+          putProfileCalled = true;
+          return {
+            tenant: {
+              ...activeTenant,
+              displayName: payload.displayName,
+              phone: '0833333334',
+              version: 2,
+            },
+            emergencyContacts: [{ id: 'em-1', name: 'สมใจ', phone: '0891234567', relationship: 'ภรรยา' }],
+            vehicles: [],
+          };
+        }
+        return {};
+      });
+
+      // Mock queryClient.invalidateQueries to reject
+      vi.spyOn(queryClient, 'invalidateQueries').mockRejectedValue(new Error('Background network drop'));
+
+      render(
+        <QueryClientProvider client={queryClient}>
+          <OwnerTenants
+            dormitoryId={mockDormitoryId}
+            tenants={[activeTenant]}
+            rooms={[{ ...sampleRoom, currentTenantId: 'tenant-refetch-test' }]}
+            contracts={[]}
+            onSaveTenants={vi.fn()}
+            onSaveRooms={vi.fn()}
+            onAddLog={vi.fn()}
+          />
+        </QueryClientProvider>
+      );
+
+      fireEvent.click(screen.getByText('นาย วาริช รอดภัย'));
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /แก้ไขข้อมูล/i })).toBeDefined();
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: /แก้ไขข้อมูล/i }));
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /บันทึกการแก้ไข/i })).toBeDefined();
+      });
+      fireEvent.change(screen.getByDisplayValue('083-333-3333'), { target: { value: '0833333334' } });
+
+      fireEvent.click(screen.getByRole('button', { name: /บันทึกการแก้ไข/i }));
+
+      // Modal MUST close cleanly even though invalidateQueries rejected!
+      await waitFor(() => {
+        expect(screen.queryByRole('button', { name: /บันทึกการแก้ไข/i })).toBeNull();
+      });
+
+      expect(putProfileCalled).toBe(true);
+      expect(screen.queryByText(/เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์/)).toBeNull();
+    });
+
+    it('35. new vehicle added -> server returns vehicle ID -> background refetch fails -> second edit preserves returned server vehicle ID', async () => {
+      const putProfileCalls: any[] = [];
+      let currentVersion = 1;
+
+      const tenantNoVehicles: Tenant = {
+        ...sampleActiveTenant,
+        id: 'tenant-veh-ack-test',
+        name: 'นาย วิชัย ขับขี่ปลอดภัย',
+        displayName: 'นาย วิชัย ขับขี่ปลอดภัย',
+        vehicles: [],
+        vehicle: { type: 'none', licensePlate: '', brand: '' },
+        version: currentVersion,
+      };
+
+      vi.spyOn(httpClient, 'httpRequest').mockImplementation(async (method, url, payload) => {
+        if (method === 'GET' && (url as string).includes('/tenants/tenant-veh-ack-test')) {
+          if (putProfileCalls.length > 0) {
+            throw new Error('Background detail network timeout');
+          }
+          return {
+            tenant: { ...tenantNoVehicles, version: currentVersion },
+            emergencyContacts: [{ id: 'em-1', name: 'สมใจ', phone: '0891234567', relationship: 'ภรรยา' }],
+            vehicles: [],
+            pets: [],
+            coOccupants: [],
+          };
+        }
+        if (method === 'PUT' && (url as string).includes('/tenants/tenant-veh-ack-test/profile')) {
+          putProfileCalls.push(payload);
+          currentVersion += 1;
+          const returnedVehicles = (payload.vehicles || []).map((v: any) => ({
+            ...v,
+            id: v.id || 'veh-server-123',
+          }));
+          return {
+            tenant: {
+              ...tenantNoVehicles,
+              displayName: payload.displayName,
+              phone: payload.phone,
+              version: currentVersion,
+            },
+            emergencyContacts: payload.emergencyContact ? [{ id: payload.emergencyContact.id || 'em-1', ...payload.emergencyContact }] : [],
+            vehicles: returnedVehicles,
+            pets: payload.pets || [],
+          };
+        }
+        return {};
+      });
+
+      render(
+        <QueryClientProvider client={queryClient}>
+          <OwnerTenants
+            dormitoryId={mockDormitoryId}
+            tenants={[tenantNoVehicles]}
+            rooms={[{ ...sampleRoom, currentTenantId: 'tenant-veh-ack-test' }]}
+            contracts={[]}
+            onSaveTenants={vi.fn()}
+            onSaveRooms={vi.fn()}
+            onAddLog={vi.fn()}
+          />
+        </QueryClientProvider>
+      );
+
+      // Select tenant
+      fireEvent.click(screen.getByText('นาย วิชัย ขับขี่ปลอดภัย'));
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /แก้ไขข้อมูล/i })).toBeDefined();
+      });
+
+      // 1. Open edit modal
+      fireEvent.click(screen.getByRole('button', { name: /แก้ไขข้อมูล/i }));
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /บันทึกการแก้ไข/i })).toBeDefined();
+      });
+
+      // Select vehicle type: car
+      const vehSelect = screen.getByDisplayValue('ไม่มีพาหนะ');
+      fireEvent.change(vehSelect, { target: { value: 'car' } });
+
+      // Fill vehicle license plate
+      await waitFor(() => {
+        expect(screen.getByPlaceholderText('เลขทะเบียน')).toBeDefined();
+      });
+      fireEvent.change(screen.getByPlaceholderText('เลขทะเบียน'), { target: { value: 'กข-1234' } });
+
+      // Click save
+      fireEvent.click(screen.getByRole('button', { name: /บันทึกการแก้ไข/i }));
+      await waitFor(() => {
+        expect(screen.queryByRole('button', { name: /บันทึกการแก้ไข/i })).toBeNull();
+      });
+
+      expect(putProfileCalls.length).toBe(1);
+      expect(putProfileCalls[0].vehicles[0].id).toBeUndefined(); // First save has no ID
+      expect(putProfileCalls[0].vehicles[0].licensePlate).toBe('กข-1234');
+
+      // 2. Reopen edit modal after background refetch failed
+      fireEvent.click(screen.getByRole('button', { name: /แก้ไขข้อมูล/i }));
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /บันทึกการแก้ไข/i })).toBeDefined();
+      });
+
+      // Modify phone to dirty the form
+      const phoneInput = screen.getByDisplayValue('081-234-5678');
+      fireEvent.change(phoneInput, { target: { value: '0899991111' } });
+
+      // Save again
+      fireEvent.click(screen.getByRole('button', { name: /บันทึกการแก้ไข/i }));
+      await waitFor(() => {
+        expect(screen.queryByRole('button', { name: /บันทึกการแก้ไข/i })).toBeNull();
+      });
+
+      expect(putProfileCalls.length).toBe(2);
+      // CRITICAL ASSERTION: The second edit MUST preserve and send the returned server vehicle ID!
+      expect(putProfileCalls[1].vehicles[0].id).toBe('veh-server-123');
+      expect(putProfileCalls[1].vehicles[0].licensePlate).toBe('กข-1234');
+    });
+
+    it('36. new emergency contact added -> server returns contact ID -> background refetch fails -> second edit preserves returned server contact ID', async () => {
+      const putProfileCalls: any[] = [];
+      let currentVersion = 1;
+
+      const tenantNoEmergency: Tenant = {
+        ...sampleActiveTenant,
+        id: 'tenant-em-ack-test',
+        name: 'นาย ประสิทธิ์ ไม่มีญาติเดิม',
+        displayName: 'นาย ประสิทธิ์ ไม่มีญาติเดิม',
+        emergencyContacts: [],
+        emergencyContact: { name: '', phone: '', relationship: '' },
+        version: currentVersion,
+      };
+
+      vi.spyOn(httpClient, 'httpRequest').mockImplementation(async (method, url, payload) => {
+        if (method === 'GET' && (url as string).includes('/tenants/tenant-em-ack-test')) {
+          if (putProfileCalls.length > 0) {
+            throw new Error('Background detail network timeout');
+          }
+          return {
+            tenant: { ...tenantNoEmergency, version: currentVersion },
+            emergencyContacts: [],
+            vehicles: [],
+            pets: [],
+            coOccupants: [],
+          };
+        }
+        if (method === 'PUT' && (url as string).includes('/tenants/tenant-em-ack-test/profile')) {
+          putProfileCalls.push(payload);
+          currentVersion += 1;
+          const returnedEmergency = payload.emergencyContact ? [{
+            ...payload.emergencyContact,
+            id: payload.emergencyContact.id || 'em-server-123',
+          }] : [];
+          return {
+            tenant: {
+              ...tenantNoEmergency,
+              displayName: payload.displayName,
+              phone: payload.phone,
+              version: currentVersion,
+            },
+            emergencyContacts: returnedEmergency,
+            vehicles: [],
+            pets: payload.pets || [],
+          };
+        }
+        return {};
+      });
+
+      render(
+        <QueryClientProvider client={queryClient}>
+          <OwnerTenants
+            dormitoryId={mockDormitoryId}
+            tenants={[tenantNoEmergency]}
+            rooms={[{ ...sampleRoom, currentTenantId: 'tenant-em-ack-test' }]}
+            contracts={[]}
+            onSaveTenants={vi.fn()}
+            onSaveRooms={vi.fn()}
+            onAddLog={vi.fn()}
+          />
+        </QueryClientProvider>
+      );
+
+      fireEvent.click(screen.getByText('นาย ประสิทธิ์ ไม่มีญาติเดิม'));
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /แก้ไขข้อมูล/i })).toBeDefined();
+      });
+
+      // 1. Open edit modal
+      fireEvent.click(screen.getByRole('button', { name: /แก้ไขข้อมูล/i }));
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /บันทึกการแก้ไข/i })).toBeDefined();
+      });
+
+      // Fill emergency contact
+      const editModal = screen.getByRole('button', { name: /บันทึกการแก้ไข/i }).closest('form');
+      const nameInput = editModal!.querySelector('#emergencyNameEdit') as HTMLInputElement;
+      const relInput = editModal!.querySelector('#emergencyRelationEdit') as HTMLInputElement;
+      const phoneEditInput = editModal!.querySelector('#emergencyPhoneEdit') as HTMLInputElement;
+
+      fireEvent.change(nameInput, { target: { value: 'คุณแม่ปราณี' } });
+      fireEvent.change(relInput, { target: { value: 'มารดา' } });
+      fireEvent.change(phoneEditInput, { target: { value: '0811112222' } });
+
+      // Save
+      fireEvent.click(screen.getByRole('button', { name: /บันทึกการแก้ไข/i }));
+      await waitFor(() => {
+        expect(screen.queryByRole('button', { name: /บันทึกการแก้ไข/i })).toBeNull();
+      });
+
+      expect(putProfileCalls.length).toBe(1);
+      expect(putProfileCalls[0].emergencyContact?.id).toBeUndefined();
+      expect(putProfileCalls[0].emergencyContact?.name).toBe('คุณแม่ปราณี');
+
+      // 2. Reopen edit modal after background refetch fails
+      fireEvent.click(screen.getByRole('button', { name: /แก้ไขข้อมูล/i }));
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /บันทึกการแก้ไข/i })).toBeDefined();
+      });
+
+      // Modify tenant phone to trigger dirty form
+      const phoneInput = screen.getByDisplayValue('081-234-5678');
+      fireEvent.change(phoneInput, { target: { value: '0899992222' } });
+
+      // Save again
+      fireEvent.click(screen.getByRole('button', { name: /บันทึกการแก้ไข/i }));
+      await waitFor(() => {
+        expect(screen.queryByRole('button', { name: /บันทึกการแก้ไข/i })).toBeNull();
+      });
+
+      expect(putProfileCalls.length).toBe(2);
+      // CRITICAL ASSERTION: The second edit MUST send the returned server emergency contact ID!
+      expect(putProfileCalls[1].emergencyContact?.id).toBe('em-server-123');
+      expect(putProfileCalls[1].emergencyContact?.name).toBe('คุณแม่ปราณี');
+    });
+
+    it('37. legacy two-pet profile with no IDs -> Edit -> add pet -> Save -> payload contains no fabricated pet IDs -> Reopen -> Save -> still no fabricated IDs', async () => {
+      const putProfileCalls: any[] = [];
+      let currentVersion = 1;
+
+      const tenantLegacyPets: Tenant = {
+        ...sampleActiveTenant,
+        id: 'tenant-legacy-pets-test',
+        name: 'นาย วิศรุต มีแมวสองตัว',
+        displayName: 'นาย วิศรุต มีแมวสองตัว',
+        pets: [
+          { type: 'แมว', name: 'เหมียวหนึ่ง' },
+          { type: 'แมว', name: 'เหมียวสอง' },
+        ],
+        pet: {
+          hasPet: true,
+          type: 'แมว',
+          name: 'เหมียวหนึ่ง',
+        },
+        version: currentVersion,
+      };
+
+      let currentPets = [
+        { type: 'แมว', name: 'เหมียวหนึ่ง' },
+        { type: 'แมว', name: 'เหมียวสอง' },
+      ];
+
+      vi.spyOn(httpClient, 'httpRequest').mockImplementation(async (method, url, payload) => {
+        if (method === 'GET' && (url as string).includes('/tenants/tenant-legacy-pets-test')) {
+          return {
+            tenant: { ...tenantLegacyPets, pets: currentPets, petInfo: currentPets, version: currentVersion },
+            emergencyContacts: [{ id: 'ec-1', name: 'สมใจ', phone: '0891234567', relationship: 'ภรรยา' }],
+            vehicles: [],
+            coOccupants: [],
+            contracts: [],
+            occupancies: [],
+            bills: [],
+          };
+        }
+        if (method === 'PUT' && (url as string).includes('/tenants/tenant-legacy-pets-test/profile')) {
+          putProfileCalls.push(payload);
+          currentVersion += 1;
+          currentPets = (payload as any).pets || [];
+          return {
+            data: {
+              tenant: {
+                ...tenantLegacyPets,
+                phone: (payload as any).phone,
+                pets: currentPets,
+                petInfo: currentPets,
+                version: currentVersion,
+              },
+              emergencyContacts: [{ id: 'ec-1', name: 'สมใจ', phone: '0891234567', relationship: 'ภรรยา' }],
+              vehicles: [],
+            },
+          };
+        }
+        return { data: [] };
+      });
+
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false } },
+      });
+
+      render(
+        <QueryClientProvider client={queryClient}>
+          <OwnerTenants
+            dormitoryId={mockDormitoryId}
+            tenants={[tenantLegacyPets]}
+            rooms={[{ ...sampleRoom, currentTenantId: 'tenant-legacy-pets-test' }]}
+            contracts={[]}
+            onSaveTenants={vi.fn()}
+            onSaveRooms={vi.fn()}
+            onAddLog={vi.fn()}
+          />
+        </QueryClientProvider>
+      );
+
+      fireEvent.click(screen.getByText('นาย วิศรุต มีแมวสองตัว'));
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /แก้ไขข้อมูล/i })).toBeDefined();
+      });
+
+      // 1. Open edit modal
+      fireEvent.click(screen.getByRole('button', { name: /แก้ไขข้อมูล/i }));
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /บันทึกการแก้ไข/i })).toBeDefined();
+      });
+
+      // Add third pet via button
+      const addPetBtn = screen.getByRole('button', { name: /เพิ่มสัตว์เลี้ยงอีก 1 รายการ/i });
+      fireEvent.click(addPetBtn);
+
+      // Select type for third pet specifically from pet selects
+      const petSelects = screen.getAllByRole('combobox').filter(sel => sel.querySelector('option[value="แมว"]'));
+      const thirdPetSelect = petSelects[petSelects.length - 1];
+      fireEvent.change(thirdPetSelect, { target: { value: 'แมว' } });
+
+      // Click save
+      fireEvent.click(screen.getByRole('button', { name: /บันทึกการแก้ไข/i }));
+      await waitFor(() => {
+        expect(screen.queryByRole('button', { name: /บันทึกการแก้ไข/i })).toBeNull();
+      });
+
+      expect(putProfileCalls.length).toBe(1);
+      const firstPetsPayload = putProfileCalls[0].pets;
+      expect(firstPetsPayload.length).toBe(3);
+      // All 3 pets must have id: undefined (no "1", "2", no Math.random, no Date.now, no temp-pet-*)
+      expect(firstPetsPayload[0].id).toBeUndefined();
+      expect(firstPetsPayload[1].id).toBeUndefined();
+      expect(firstPetsPayload[2].id).toBeUndefined();
+      expect(firstPetsPayload[0].id).not.toBe('1');
+      expect(firstPetsPayload[1].id).not.toBe('2');
+
+      // 2. Reopen edit modal and save again
+      fireEvent.click(screen.getByRole('button', { name: /แก้ไขข้อมูล/i }));
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /บันทึกการแก้ไข/i })).toBeDefined();
+      });
+
+      const phoneInput = screen.getByDisplayValue('081-234-5678');
+      fireEvent.change(phoneInput, { target: { value: '0898887777' } });
+
+      fireEvent.click(screen.getByRole('button', { name: /บันทึกการแก้ไข/i }));
+      await waitFor(() => {
+        expect(screen.queryByRole('button', { name: /บันทึกการแก้ไข/i })).toBeNull();
+      });
+
+      expect(putProfileCalls.length).toBe(2);
+      const secondPetsPayload = putProfileCalls[1].pets;
+      expect(secondPetsPayload.length).toBe(3);
+      // Reopen-after-save does not turn presentation indexes or temp IDs into persistent IDs
+      expect(secondPetsPayload[0].id).toBeUndefined();
+      expect(secondPetsPayload[1].id).toBeUndefined();
+      expect(secondPetsPayload[2].id).toBeUndefined();
+    });
+
+    it('38. existing real canonical pet ID is preserved in mutation payload', async () => {
+      const putProfileCalls: any[] = [];
+      let currentVersion = 1;
+
+      const tenantWithCanonicalPetId: Tenant = {
+        ...sampleActiveTenant,
+        id: 'tenant-canon-pet-test',
+        name: 'นาย ธนพล รักแมวชิพ',
+        displayName: 'นาย ธนพล รักแมวชิพ',
+        pets: [
+          { id: 'pet-canonical-chip-999', type: 'แมว', name: 'ชิพโป้' },
+        ],
+        pet: {
+          hasPet: true,
+          type: 'แมว',
+          name: 'ชิพโป้',
+        },
+        version: currentVersion,
+      };
+
+      vi.spyOn(httpClient, 'httpRequest').mockImplementation(async (method, url, payload) => {
+        if (method === 'GET' && (url as string).includes('/tenants/tenant-canon-pet-test')) {
+          return {
+            tenant: { ...tenantWithCanonicalPetId, version: currentVersion },
+            emergencyContacts: [{ id: 'ec-1', name: 'สมใจ', phone: '0891234567', relationship: 'ภรรยา' }],
+            vehicles: [],
+            coOccupants: [],
+            contracts: [],
+            occupancies: [],
+            bills: [],
+          };
+        }
+        if (method === 'PUT' && (url as string).includes('/tenants/tenant-canon-pet-test/profile')) {
+          putProfileCalls.push(payload);
+          currentVersion += 1;
+          return {
+            data: {
+              tenant: {
+                ...tenantWithCanonicalPetId,
+                petInfo: (payload as any).pets,
+                version: currentVersion,
+              },
+              emergencyContacts: [{ id: 'ec-1', name: 'สมใจ', phone: '0891234567', relationship: 'ภรรยา' }],
+              vehicles: [],
+            },
+          };
+        }
+        return { data: [] };
+      });
+
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false } },
+      });
+
+      render(
+        <QueryClientProvider client={queryClient}>
+          <OwnerTenants
+            dormitoryId={mockDormitoryId}
+            tenants={[tenantWithCanonicalPetId]}
+            rooms={[{ ...sampleRoom, currentTenantId: 'tenant-canon-pet-test' }]}
+            contracts={[]}
+            onSaveTenants={vi.fn()}
+            onSaveRooms={vi.fn()}
+            onAddLog={vi.fn()}
+          />
+        </QueryClientProvider>
+      );
+
+      fireEvent.click(screen.getByText('นาย ธนพล รักแมวชิพ'));
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /แก้ไขข้อมูล/i })).toBeDefined();
+      });
+
+      // Open edit modal
+      fireEvent.click(screen.getByRole('button', { name: /แก้ไขข้อมูล/i }));
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /บันทึกการแก้ไข/i })).toBeDefined();
+      });
+
+      // Edit pet name
+      const petNameInput = screen.getByDisplayValue('ชิพโป้');
+      fireEvent.change(petNameInput, { target: { value: 'ชิพโป้จูเนียร์' } });
+
+      // Save
+      fireEvent.click(screen.getByRole('button', { name: /บันทึกการแก้ไข/i }));
+      await waitFor(() => {
+        expect(screen.queryByRole('button', { name: /บันทึกการแก้ไข/i })).toBeNull();
+      });
+
+      expect(putProfileCalls.length).toBe(1);
+      const petsPayload = putProfileCalls[0].pets;
+      expect(petsPayload.length).toBe(1);
+      // Canonical server ID MUST be preserved!
+      expect(petsPayload[0].id).toBe('pet-canonical-chip-999');
+      expect(petsPayload[0].name).toBe('ชิพโป้จูเนียร์');
+    });
+  });
 });

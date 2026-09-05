@@ -202,35 +202,8 @@ describe('Tenant Phase 2 Step 1 — Types & Adapter Extensions', () => {
       expect(url).toContain('/tenants/tenant%2F001/identity-document');
     });
 
-    it('updatePetInfo sends PUT to /tenants/:id with petInfo payload', async () => {
-      const mockUpdatedTenant = {
-        id: 't-100',
-        name: 'สมพงษ์',
-        pets: [{ type: 'cat', name: 'มีมี่' }],
-      };
-      vi.mocked(httpClientModule.httpRequest).mockResolvedValueOnce(mockUpdatedTenant);
-
-      const pets: PetItem[] = [{ type: 'cat', name: 'มีมี่' }];
-      const result = await adapter.updatePetInfo('t-100', pets);
-
-      expect(httpClientModule.httpRequest).toHaveBeenCalledWith(
-        'PUT',
-        '/tenants/t-100',
-        { petInfo: pets }
-      );
-      expect(result).toEqual({ success: true, data: mockUpdatedTenant });
-    });
-
-    it('updatePetInfo handles HttpClientError gracefully', async () => {
-      const httpErr = new HttpClientError({
-        code: 'INTERNAL_ERROR',
-        message: 'Database error',
-      });
-      vi.mocked(httpClientModule.httpRequest).mockRejectedValueOnce(httpErr);
-
-      const result = await adapter.updatePetInfo('t-100', []);
-      expect(result.success).toBe(false);
-      expect(result.error?.code).toBe('INTERNAL_ERROR');
+    it('updatePetInfo contract method is removed from ApiTenantAdapter (closed unvalidated bypass)', () => {
+      expect((adapter as any).updatePetInfo).toBeUndefined();
     });
   });
 
@@ -268,10 +241,8 @@ describe('Tenant Phase 2 Step 1 — Types & Adapter Extensions', () => {
       expect(result.error?.code).toBe('RESOURCE_NOT_FOUND');
     });
 
-    it('implements updatePetInfo on mock repository', async () => {
-      const result = await demoAdapter.updatePetInfo('non-existent', []);
-      expect(result.success).toBe(false);
-      expect(result.error?.code).toBe('RESOURCE_NOT_FOUND');
+    it('updatePetInfo contract method is removed from DemoTenantAdapter (closed unvalidated bypass)', () => {
+      expect((demoAdapter as any).updatePetInfo).toBeUndefined();
     });
   });
 });

@@ -317,7 +317,7 @@ export class DemoTenantAdapter implements TenantDataSource {
         }));
       }
 
-      const submittedPets = payload.pets !== undefined ? payload.pets : (Array.isArray(payload.petInfo) ? payload.petInfo : []);
+      const submittedPets = payload.pets || [];
       tenant.pets = submittedPets;
       tenant.pet = {
         hasPet: submittedPets.length > 0,
@@ -358,16 +358,6 @@ export class DemoTenantAdapter implements TenantDataSource {
     };
   }
 
-  async updatePetInfo(tenantId: string, pets: PetItem[]): Promise<DataResult<Tenant>> {
-    try {
-      const tenant = tenantRepository.getById(tenantId);
-      if (!tenant) return { success: false, error: { code: 'RESOURCE_NOT_FOUND', message: 'ไม่พบผู้เช่า' } };
-      tenant.pets = pets;
-      return { success: true, data: tenant };
-    } catch {
-      return { success: false, error: { code: 'RESOURCE_NOT_FOUND', message: 'ไม่พบผู้เช่า' } };
-    }
-  }
 
   async getTenantProfile(id: string): Promise<DataResult<TenantProfileDetails>> {
     const tenant = tenantRepository.getById(id);
