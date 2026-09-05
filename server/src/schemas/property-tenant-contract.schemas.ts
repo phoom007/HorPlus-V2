@@ -62,8 +62,8 @@ export const ClearRoomOverrideSchema = z.object({
   expectedVersion: z.number().int().min(1, 'ต้องระบุ expectedVersion ที่ถูกต้อง'),
 }).strict();
 
-export const CreateTenantSchema = z.object({
-  firstName: z.string().min(1, 'ชื่อจำเป็นต้องระบุ').max(255),
+export const BaseCreateTenantSchema = z.object({
+  firstName: z.string().max(255).optional(),
   lastName: z.string().max(255).optional().nullable(),
   displayName: z.string().max(255).optional(),
   phone: z.string().min(9, 'เบอร์โทรศัพท์ไม่ถูกต้อง').max(50),
@@ -77,7 +77,15 @@ export const CreateTenantSchema = z.object({
   notes: z.string().optional().nullable(),
 });
 
-export const UpdateTenantSchema = CreateTenantSchema.partial().extend({
+export const CreateTenantSchema = BaseCreateTenantSchema.refine(
+  (data) => Boolean((data.displayName && data.displayName.trim().length > 0) || (data.firstName && data.firstName.trim().length > 0)),
+  {
+    message: 'ชื่อจำเป็นต้องระบุ',
+    path: ['displayName'],
+  }
+);
+
+export const UpdateTenantSchema = BaseCreateTenantSchema.partial().extend({
   version: z.number().int().optional(),
   nationalId: z
     .string()

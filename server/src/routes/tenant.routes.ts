@@ -16,6 +16,13 @@ import {
   UpdateVehicleSchema,
 } from '../schemas/property-tenant-contract.schemas.js';
 import { billingOrchestrationService } from '../services/billing-orchestration.service.js';
+import {
+  toTenantApiDTO,
+  toCoOccupantApiDTO,
+  toTenantDetailsApiDTO,
+  toEmergencyContactApiDTO,
+  toVehicleApiDTO,
+} from '../mappers/tenant-api.mapper.js';
 
 export function createTenantRouter(
   authService: AuthenticationService,
@@ -24,29 +31,60 @@ export function createTenantRouter(
   const router = Router();
   const requireSession = createRequireSessionMiddleware(authService);
 
-  const upload = multer({
+  const uploadSingle = multer({
     storage: multer.memoryStorage(),
-    limits: { fileSize: 5 * 1024 * 1024 },
-  });
+    limits: {
+      fileSize: 5 * 1024 * 1024,
+      files: 1,
+    },
+  }).single('file');
 
-  const toSafeTenantDTO = <T extends Record<string, any>>(tenant: T | null | undefined): Omit<T, 'nationalIdEncrypted'> | null => {
-    if (!tenant) return null;
-    const { nationalIdEncrypted, ...safe } = tenant;
-    return safe as any;
-  };
-
-  const toSafeTenantDetailsResponse = (details: any) => {
-    if (!details) return details;
-    return {
-      ...details,
-      tenant: toSafeTenantDTO(details.tenant),
-      coOccupants: Array.isArray(details.coOccupants)
-        ? details.coOccupants.map((c: any) => toSafeTenantDTO(c))
-        : details.coOccupants,
-      coOccupantHistory: Array.isArray(details.coOccupantHistory)
-        ? details.coOccupantHistory.map((c: any) => toSafeTenantDTO(c))
-        : details.coOccupantHistory,
-    };
+  const handleUploadSingle = (req: Request, res: Response, next: any) => {
+    uploadSingle(req, res, (err: any) => {
+      if (!err) return next();
+      if (err instanceof multer.MulterError) {
+        if (err.code === 'LIMIT_FILE_SIZE') {
+          return res.status(400).json({
+            error: {
+              code: 'FILE_TOO_LARGE',
+              message: 'ขนาดไฟล์เกินขีดจำกัดที่กำหนด (สูงสุด 5MB)',
+              fieldErrors: null,
+              requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+              timestamp: new Date().toISOString(),
+            },
+          });
+        }
+        if (err.code === 'LIMIT_FILE_COUNT' || err.code === 'LIMIT_UNEXPECTED_FILE') {
+          return res.status(400).json({
+            error: {
+              code: 'INVALID_FILE_FIELD',
+              message: 'ต้องระบุไฟล์เพียงไฟล์เดียวในฟิลด์ "file"',
+              fieldErrors: null,
+              requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+              timestamp: new Date().toISOString(),
+            },
+          });
+        }
+        return res.status(400).json({
+          error: {
+            code: 'UPLOAD_ERROR',
+            message: 'การอัปโหลดไฟล์ไม่ถูกต้อง: ' + err.message,
+            fieldErrors: null,
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+      return res.status(400).json({
+        error: {
+          code: 'UPLOAD_ERROR',
+          message: err.message || 'การอัปโหลดไฟล์ล้มเหลว',
+          fieldErrors: null,
+          requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+          timestamp: new Date().toISOString(),
+        },
+      });
+    });
   };
 
   const mutationGuard = (permission: string) => [
@@ -105,7 +143,7 @@ export function createTenantRouter(
         sortDirection: req.query.sortDirection as 'asc' | 'desc',
       };
       const result = await tenantService.getTenants(dormId, query);
-      res.json({ data: result.items.map(toSafeTenantDTO), pagination: { total: result.total, page: query.page, pageSize: query.pageSize } });
+      res.json({ data: result.items.map(toTenantApiDTO), pagination: { total: result.total, page: query.page, pageSize: query.pageSize } });
     } catch (err) {
       handleServiceError(res, err, req);
     }
@@ -118,7 +156,7 @@ export function createTenantRouter(
     try {
       const dormId = getDormitoryId(req);
       const tenantDetails = await tenantService.getTenantDetails(req.params.id, dormId);
-      res.json({ data: toSafeTenantDetailsResponse(tenantDetails) });
+      res.json({ data: toTenantDetailsApiDTO(tenantDetails) });
     } catch (err) {
       handleServiceError(res, err, req);
     }
@@ -198,7 +236,7 @@ export function createTenantRouter(
         });
       }
       const tenant = await tenantService.createTenant(dormId, parsed.data as any, req.auth?.userId);
-      res.status(201).json({ data: toSafeTenantDTO(tenant) });
+      res.status(201).json({ data: toTenantApiDTO(tenant) });
     } catch (err) {
       handleServiceError(res, err, req);
     }
@@ -222,7 +260,7 @@ export function createTenantRouter(
         });
       }
       const tenant = await tenantService.updateTenant(req.params.id, dormId, parsed.data as any, req.auth?.userId);
-      res.json({ data: toSafeTenantDTO(tenant) });
+      res.json({ data: toTenantApiDTO(tenant) });
     } catch (err) {
       handleServiceError(res, err, req);
     }
@@ -234,7 +272,7 @@ export function createTenantRouter(
     try {
       const dormId = getDormitoryId(req);
       const tenant = await tenantService.archiveTenant(req.params.id, dormId, req.auth?.userId);
-      res.json({ data: { success: true, message: 'เก็บข้อมูลผู้เช่าเรียบร้อยแล้ว', tenant: toSafeTenantDTO(tenant) } });
+      res.json({ data: { success: true, message: 'เก็บข้อมูลผู้เช่าเรียบร้อยแล้ว', tenant: toTenantApiDTO(tenant) } });
     } catch (err) {
       handleServiceError(res, err, req);
     }
@@ -263,7 +301,7 @@ export function createTenantRouter(
         parsed.data,
         { userId: req.auth?.userId, isTenant: false }
       );
-      res.status(201).json({ data: toSafeTenantDTO(result.coOccupant), peopleCount: result.peopleCount, recalculation: result.recalculation });
+      res.status(201).json({ data: toCoOccupantApiDTO(result.coOccupant), peopleCount: result.peopleCount, recalculation: result.recalculation });
     } catch (err) {
       handleServiceError(res, err, req);
     }
@@ -281,7 +319,7 @@ export function createTenantRouter(
         req.body,
         req.auth?.userId
       );
-      res.json({ data: toSafeTenantDTO(coOccupant) });
+      res.json({ data: toCoOccupantApiDTO(coOccupant) });
     } catch (err) {
       handleServiceError(res, err, req);
     }
@@ -323,7 +361,7 @@ export function createTenantRouter(
       }
 
       const contact = await tenantService.addEmergencyContact(dormId, req.params.id, parsed.data);
-      res.status(201).json({ data: contact });
+      res.status(201).json({ data: toEmergencyContactApiDTO(contact) });
     } catch (err) {
       handleServiceError(res, err, req);
     }
@@ -348,7 +386,7 @@ export function createTenantRouter(
       }
 
       const contact = await tenantService.updateEmergencyContact(dormId, req.params.id, req.params.contactId, parsed.data);
-      res.json({ data: contact });
+      res.json({ data: toEmergencyContactApiDTO(contact) });
     } catch (err) {
       handleServiceError(res, err, req);
     }
@@ -385,7 +423,7 @@ export function createTenantRouter(
       }
 
       const vehicle = await tenantService.addVehicle(dormId, req.params.id, parsed.data);
-      res.status(201).json({ data: vehicle });
+      res.status(201).json({ data: toVehicleApiDTO(vehicle) });
     } catch (err) {
       handleServiceError(res, err, req);
     }
@@ -410,7 +448,7 @@ export function createTenantRouter(
       }
 
       const vehicle = await tenantService.updateVehicle(dormId, req.params.id, req.params.vehicleId, parsed.data);
-      res.json({ data: vehicle });
+      res.json({ data: toVehicleApiDTO(vehicle) });
     } catch (err) {
       handleServiceError(res, err, req);
     }
@@ -431,18 +469,18 @@ export function createTenantRouter(
   // POST /api/v1/tenants/:id/identity-document
   router.post(
     '/:id/identity-document',
-    upload.any(),
     mutationGuard('tenant:write'),
+    handleUploadSingle,
     async (req: Request, res: Response) => {
       if (!verifyCsrf(req, res)) return;
       try {
         const dormId = getDormitoryId(req);
-        const file = (req as any).file || ((req as any).files && (req as any).files[0]);
+        const file = req.file;
         if (!file || !file.buffer) {
           return res.status(400).json({
             error: {
               code: 'NO_FILE_UPLOADED',
-              message: 'กรุณาเลือกไฟล์เอกสารสำเนาบัตรประชาชน',
+              message: 'กรุณาเลือกไฟล์เอกสารสำเนาบัตรประชาชนในฟิลด์ "file"',
               fieldErrors: null,
               requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
               timestamp: new Date().toISOString(),
@@ -458,7 +496,14 @@ export function createTenantRouter(
         );
 
         res.status(200).json({
-          data: result,
+          data: {
+            tenantId: result.tenantId,
+            hasIdentityDocument: true,
+            idCardUploadedAt: result.idCardUploadedAt,
+            idCardSha256: result.idCardSha256,
+            idCardMimeType: result.idCardMimeType,
+            idCardByteSize: result.idCardByteSize,
+          },
           message: 'อัปโหลดและประมวลผลสำเนาบัตรประชาชนเรียบร้อยแล้ว',
         });
       } catch (err) {

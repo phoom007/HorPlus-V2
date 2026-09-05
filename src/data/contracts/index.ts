@@ -164,15 +164,15 @@ export interface TenantDataSource {
   updateCoOccupant(tenantId: string, coOccupantId: string, coOccupant: { name?: string; phone?: string; relationship?: string }): Promise<DataResult<any>>;
   removeCoOccupant(tenantId: string, coOccupantId: string): Promise<DataResult<boolean>>;
   addEmergencyContact(tenantId: string, contact: EmergencyContactInput): Promise<DataResult<any>>;
-  updateEmergencyContact?(tenantId: string, contactId: string, contact: Partial<EmergencyContactInput>): Promise<DataResult<any>>;
-  deleteEmergencyContact?(tenantId: string, contactId: string): Promise<DataResult<boolean>>;
+  updateEmergencyContact(tenantId: string, contactId: string, contact: Partial<EmergencyContactInput>): Promise<DataResult<any>>;
+  deleteEmergencyContact(tenantId: string, contactId: string): Promise<DataResult<boolean>>;
   addVehicle(tenantId: string, vehicle: VehicleInput): Promise<DataResult<any>>;
-  updateVehicle?(tenantId: string, vehicleId: string, vehicle: Partial<VehicleInput>): Promise<DataResult<any>>;
-  deleteVehicle?(tenantId: string, vehicleId: string): Promise<DataResult<boolean>>;
+  updateVehicle(tenantId: string, vehicleId: string, vehicle: Partial<VehicleInput>): Promise<DataResult<any>>;
+  deleteVehicle(tenantId: string, vehicleId: string): Promise<DataResult<boolean>>;
   getIdentityDocumentUrl(tenantId: string): string;
-  uploadIdentityDocument?(tenantId: string, file: File | Blob): Promise<DataResult<any>>;
+  uploadIdentityDocument(tenantId: string, file: File | Blob): Promise<DataResult<any>>;
   updatePetInfo(tenantId: string, pets: PetItem[]): Promise<DataResult<Tenant>>;
-  getTenantProfile?(id: string): Promise<DataResult<TenantProfileDetails>>;
+  getTenantProfile(id: string): Promise<DataResult<TenantProfileDetails>>;
 }
 
 export interface ContractDataSource {

@@ -224,6 +224,13 @@ export function parseAndNormalizeName(rawName?: string | null): {
   for (const prefix of sortedPrefixes) {
     // Case-insensitive prefix check for Latin prefixes (mr., mrs., etc.)
     if (remainder.toLowerCase().startsWith(prefix.toLowerCase())) {
+      const isLatinPrefix = /^[a-zA-Z.]+$/.test(prefix);
+      if (isLatinPrefix && !prefix.endsWith('.')) {
+        const nextChar = remainder.slice(prefix.length, prefix.length + 1);
+        if (nextChar && /[a-zA-Z]/.test(nextChar)) {
+          continue; // Word boundary check: don't match "Drew" as "Dr"
+        }
+      }
       const sliced = remainder.slice(prefix.length).trim();
       if (sliced.length > 0) {
         remainder = sliced;

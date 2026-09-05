@@ -45,65 +45,65 @@ export class TenantService {
     let settlements: any[] = [];
     let contracts = contractsResult.items;
 
-    try {
-      const isUuid = (str?: string | null) => !!str && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
-      const prisma = getPrismaClient();
-      if (prisma && isUuid(id) && isUuid(dormitoryId)) {
-        if (prisma.contract) {
-          const detailedContracts = await prisma.contract.findMany({
-            where: { tenantId: id, dormitoryId, deletedAt: null },
-            include: { room: true },
-            orderBy: { createdAt: 'desc' },
-          });
-          if (detailedContracts && detailedContracts.length > 0) {
-            contracts = detailedContracts as any;
-          }
-        }
-        if (prisma.occupancy) {
-          occupancies = await prisma.occupancy.findMany({
-            where: { tenantId: id, dormitoryId },
-            include: { room: true, contract: true },
-            orderBy: { startedAt: 'desc' },
-          });
-        }
-        if (prisma.dailyStay) {
-          dailyStays = await prisma.dailyStay.findMany({
-            where: { tenantId: id, dormitoryId, deletedAt: null },
-            include: {
-              room: true,
-              invoice: {
-                include: { items: true, receipts: true, payments: true },
-              },
-            },
-            orderBy: { startDate: 'desc' },
-          });
-        }
-        if (prisma.bill) {
-          bills = await prisma.bill.findMany({
-            where: { tenantId: id, dormitoryId },
-            include: {
-              room: true,
-              items: true,
-              Payment: true,
-              Receipt: true,
-            },
-            orderBy: { createdAt: 'desc' },
-          });
-        }
-        if (prisma.contractSettlement) {
-          settlements = await prisma.contractSettlement.findMany({
-            where: { tenantId: id, dormitoryId },
-            include: {
-              items: { where: { isDeleted: false } },
-              room: true,
-              contract: true,
-            },
-            orderBy: { createdAt: 'desc' },
-          });
+    const isUuid = (str?: string | null) => !!str && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
+    const hasPrismaRepo = Boolean((this.tenantRepo as any)?.prisma);
+    const prisma = getPrismaClient();
+
+    // In production or when backed by Prisma repository / valid UUIDs, execute authoritative Prisma queries.
+    // If a database query fails, FAIL CLOSED — do NOT catch and swallow into empty arrays.
+    if (prisma && (hasPrismaRepo || (isUuid(id) && isUuid(dormitoryId)))) {
+      if (prisma.contract) {
+        const detailedContracts = await prisma.contract.findMany({
+          where: { tenantId: id, dormitoryId, deletedAt: null },
+          include: { room: true },
+          orderBy: { createdAt: 'desc' },
+        });
+        if (detailedContracts && detailedContracts.length > 0) {
+          contracts = detailedContracts as any;
         }
       }
-    } catch {
-      // Graceful fallback for mock or uninitialized environments
+      if (prisma.occupancy) {
+        occupancies = await prisma.occupancy.findMany({
+          where: { tenantId: id, dormitoryId },
+          include: { room: true, contract: true },
+          orderBy: { startedAt: 'desc' },
+        });
+      }
+      if (prisma.dailyStay) {
+        dailyStays = await prisma.dailyStay.findMany({
+          where: { tenantId: id, dormitoryId, deletedAt: null },
+          include: {
+            room: true,
+            invoice: {
+              include: { items: true, receipts: true, payments: true },
+            },
+          },
+          orderBy: { startDate: 'desc' },
+        });
+      }
+      if (prisma.bill) {
+        bills = await prisma.bill.findMany({
+          where: { tenantId: id, dormitoryId },
+          include: {
+            room: true,
+            items: true,
+            Payment: true,
+            Receipt: true,
+          },
+          orderBy: { createdAt: 'desc' },
+        });
+      }
+      if (prisma.contractSettlement) {
+        settlements = await prisma.contractSettlement.findMany({
+          where: { tenantId: id, dormitoryId },
+          include: {
+            items: { where: { isDeleted: false } },
+            room: true,
+            contract: true,
+          },
+          orderBy: { createdAt: 'desc' },
+        });
+      }
     }
 
     return {

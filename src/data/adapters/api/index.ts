@@ -226,16 +226,13 @@ export class ApiTenantAdapter implements TenantDataSource {
 
   async addTenant(tenantData: Omit<Tenant, 'id' | 'createdAt' | 'updatedAt'>): Promise<DataResult<Tenant>> {
     try {
-      const nameParts = (tenantData.name || '').trim().split(/\s+/);
-      const firstName = nameParts[0] || tenantData.name || 'ผู้เช่า';
-      const lastName = nameParts.slice(1).join(' ') || undefined;
+      const rawName = (tenantData.name || '').normalize('NFC').trim().replace(/\s+/g, ' ');
       const cleanEmail = tenantData.email && tenantData.email.trim() !== '' ? tenantData.email.trim() : undefined;
       const cleanNationalId = (tenantData.citizenId || (tenantData as any).nationalId || '').replace(/\D/g, '');
 
       const payload = {
         ...tenantData,
-        firstName,
-        lastName,
+        displayName: rawName || tenantData.name || 'ผู้เช่า',
         email: cleanEmail,
         nationalId: cleanNationalId.length === 13 ? cleanNationalId : undefined,
       };
@@ -252,19 +249,23 @@ export class ApiTenantAdapter implements TenantDataSource {
 
   async updateTenant(tenant: Tenant): Promise<DataResult<Tenant>> {
     try {
-      const nameParts = (tenant.name || '').trim().split(/\s+/);
-      const firstName = nameParts[0] || tenant.name || 'ผู้เช่า';
-      const lastName = nameParts.slice(1).join(' ') || undefined;
+      const rawName = (tenant.name || '').normalize('NFC').trim().replace(/\s+/g, ' ');
       const cleanEmail = tenant.email && tenant.email.trim() !== '' ? tenant.email.trim() : undefined;
-      const cleanNationalId = (tenant.citizenId || (tenant as any).nationalId || '').replace(/\D/g, '');
+      const rawNationalId = tenant.citizenId || (tenant as any).nationalId || '';
 
-      const payload = {
+      const payload: any = {
         ...tenant,
-        firstName,
-        lastName,
+        displayName: rawName || tenant.name,
         email: cleanEmail,
-        nationalId: cleanNationalId.length === 13 ? cleanNationalId : undefined,
       };
+
+      if (rawNationalId.trim() !== '') {
+        const cleanNationalId = rawNationalId.replace(/\D/g, '');
+        const isMasked = /[xX]/.test(rawNationalId);
+        if (isMasked || cleanNationalId.length === 13) {
+          payload.nationalId = rawNationalId;
+        }
+      }
 
       const data = await httpRequest<Tenant>('PUT', `/tenants/${tenant.id}`, payload);
       return { success: true, data };
