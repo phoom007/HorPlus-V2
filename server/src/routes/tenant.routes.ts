@@ -1,4 +1,5 @@
 import { Router, Request, Response } from 'express';
+import multer from 'multer';
 import { AuthenticationService } from '../services/auth.service.js';
 import { TenantService } from '../services/tenant.service.js';
 import { createRequireSessionMiddleware } from '../middleware/require-session.js';
@@ -10,7 +11,9 @@ import {
   UpdateTenantSchema,
   CreateCoOccupantSchema,
   CreateEmergencyContactSchema,
+  UpdateEmergencyContactSchema,
   CreateVehicleSchema,
+  UpdateVehicleSchema,
 } from '../schemas/property-tenant-contract.schemas.js';
 import { billingOrchestrationService } from '../services/billing-orchestration.service.js';
 
@@ -20,6 +23,31 @@ export function createTenantRouter(
 ): Router {
   const router = Router();
   const requireSession = createRequireSessionMiddleware(authService);
+
+  const upload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 5 * 1024 * 1024 },
+  });
+
+  const toSafeTenantDTO = <T extends Record<string, any>>(tenant: T | null | undefined): Omit<T, 'nationalIdEncrypted'> | null => {
+    if (!tenant) return null;
+    const { nationalIdEncrypted, ...safe } = tenant;
+    return safe as any;
+  };
+
+  const toSafeTenantDetailsResponse = (details: any) => {
+    if (!details) return details;
+    return {
+      ...details,
+      tenant: toSafeTenantDTO(details.tenant),
+      coOccupants: Array.isArray(details.coOccupants)
+        ? details.coOccupants.map((c: any) => toSafeTenantDTO(c))
+        : details.coOccupants,
+      coOccupantHistory: Array.isArray(details.coOccupantHistory)
+        ? details.coOccupantHistory.map((c: any) => toSafeTenantDTO(c))
+        : details.coOccupantHistory,
+    };
+  };
 
   const mutationGuard = (permission: string) => [
     requireDormitoryPermission(permission),
@@ -77,7 +105,7 @@ export function createTenantRouter(
         sortDirection: req.query.sortDirection as 'asc' | 'desc',
       };
       const result = await tenantService.getTenants(dormId, query);
-      res.json({ data: result.items, pagination: { total: result.total, page: query.page, pageSize: query.pageSize } });
+      res.json({ data: result.items.map(toSafeTenantDTO), pagination: { total: result.total, page: query.page, pageSize: query.pageSize } });
     } catch (err) {
       handleServiceError(res, err, req);
     }
@@ -90,7 +118,7 @@ export function createTenantRouter(
     try {
       const dormId = getDormitoryId(req);
       const tenantDetails = await tenantService.getTenantDetails(req.params.id, dormId);
-      res.json({ data: tenantDetails });
+      res.json({ data: toSafeTenantDetailsResponse(tenantDetails) });
     } catch (err) {
       handleServiceError(res, err, req);
     }
@@ -170,7 +198,7 @@ export function createTenantRouter(
         });
       }
       const tenant = await tenantService.createTenant(dormId, parsed.data as any, req.auth?.userId);
-      res.status(201).json({ data: tenant });
+      res.status(201).json({ data: toSafeTenantDTO(tenant) });
     } catch (err) {
       handleServiceError(res, err, req);
     }
@@ -194,7 +222,7 @@ export function createTenantRouter(
         });
       }
       const tenant = await tenantService.updateTenant(req.params.id, dormId, parsed.data as any, req.auth?.userId);
-      res.json({ data: tenant });
+      res.json({ data: toSafeTenantDTO(tenant) });
     } catch (err) {
       handleServiceError(res, err, req);
     }
@@ -206,7 +234,7 @@ export function createTenantRouter(
     try {
       const dormId = getDormitoryId(req);
       const tenant = await tenantService.archiveTenant(req.params.id, dormId, req.auth?.userId);
-      res.json({ data: { success: true, message: 'เก็บข้อมูลผู้เช่าเรียบร้อยแล้ว', tenant } });
+      res.json({ data: { success: true, message: 'เก็บข้อมูลผู้เช่าเรียบร้อยแล้ว', tenant: toSafeTenantDTO(tenant) } });
     } catch (err) {
       handleServiceError(res, err, req);
     }
@@ -235,7 +263,7 @@ export function createTenantRouter(
         parsed.data,
         { userId: req.auth?.userId, isTenant: false }
       );
-      res.status(201).json({ data: result.coOccupant, peopleCount: result.peopleCount, recalculation: result.recalculation });
+      res.status(201).json({ data: toSafeTenantDTO(result.coOccupant), peopleCount: result.peopleCount, recalculation: result.recalculation });
     } catch (err) {
       handleServiceError(res, err, req);
     }
@@ -253,7 +281,7 @@ export function createTenantRouter(
         req.body,
         req.auth?.userId
       );
-      res.json({ data: coOccupant });
+      res.json({ data: toSafeTenantDTO(coOccupant) });
     } catch (err) {
       handleServiceError(res, err, req);
     }
@@ -301,6 +329,43 @@ export function createTenantRouter(
     }
   });
 
+  // PUT /api/v1/tenants/:id/emergency-contacts/:contactId
+  router.put('/:id/emergency-contacts/:contactId', mutationGuard('tenant:write'), async (req: Request, res: Response) => {
+    if (!verifyCsrf(req, res)) return;
+    try {
+      const dormId = getDormitoryId(req);
+      const parsed = UpdateEmergencyContactSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'ข้อมูลผู้ติดต่อฉุกเฉินไม่ถูกต้อง',
+            fieldErrors: parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+
+      const contact = await tenantService.updateEmergencyContact(dormId, req.params.id, req.params.contactId, parsed.data);
+      res.json({ data: contact });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  });
+
+  // DELETE /api/v1/tenants/:id/emergency-contacts/:contactId
+  router.delete('/:id/emergency-contacts/:contactId', mutationGuard('tenant:write'), async (req: Request, res: Response) => {
+    if (!verifyCsrf(req, res)) return;
+    try {
+      const dormId = getDormitoryId(req);
+      await tenantService.deleteEmergencyContact(dormId, req.params.id, req.params.contactId);
+      res.json({ data: { success: true, message: 'ลบข้อมูลผู้ติดต่อฉุกเฉินเรียบร้อยแล้ว' } });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  });
+
   // POST /api/v1/tenants/:id/vehicles
   router.post('/:id/vehicles', mutationGuard('tenant:write'), async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
@@ -325,6 +390,82 @@ export function createTenantRouter(
       handleServiceError(res, err, req);
     }
   });
+
+  // PUT /api/v1/tenants/:id/vehicles/:vehicleId
+  router.put('/:id/vehicles/:vehicleId', mutationGuard('tenant:write'), async (req: Request, res: Response) => {
+    if (!verifyCsrf(req, res)) return;
+    try {
+      const dormId = getDormitoryId(req);
+      const parsed = UpdateVehicleSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'ข้อมูลยานพาหนะไม่ถูกต้อง',
+            fieldErrors: parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+
+      const vehicle = await tenantService.updateVehicle(dormId, req.params.id, req.params.vehicleId, parsed.data);
+      res.json({ data: vehicle });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  });
+
+  // DELETE /api/v1/tenants/:id/vehicles/:vehicleId
+  router.delete('/:id/vehicles/:vehicleId', mutationGuard('tenant:write'), async (req: Request, res: Response) => {
+    if (!verifyCsrf(req, res)) return;
+    try {
+      const dormId = getDormitoryId(req);
+      await tenantService.deleteVehicle(dormId, req.params.id, req.params.vehicleId);
+      res.json({ data: { success: true, message: 'ลบข้อมูลยานพาหนะเรียบร้อยแล้ว' } });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  });
+
+  // POST /api/v1/tenants/:id/identity-document
+  router.post(
+    '/:id/identity-document',
+    upload.any(),
+    mutationGuard('tenant:write'),
+    async (req: Request, res: Response) => {
+      if (!verifyCsrf(req, res)) return;
+      try {
+        const dormId = getDormitoryId(req);
+        const file = (req as any).file || ((req as any).files && (req as any).files[0]);
+        if (!file || !file.buffer) {
+          return res.status(400).json({
+            error: {
+              code: 'NO_FILE_UPLOADED',
+              message: 'กรุณาเลือกไฟล์เอกสารสำเนาบัตรประชาชน',
+              fieldErrors: null,
+              requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+              timestamp: new Date().toISOString(),
+            },
+          });
+        }
+
+        const result = await tenantService.updateTenantIdentityDocument(
+          dormId,
+          req.params.id,
+          file.buffer,
+          req.auth?.userId
+        );
+
+        res.status(200).json({
+          data: result,
+          message: 'อัปโหลดและประมวลผลสำเนาบัตรประชาชนเรียบร้อยแล้ว',
+        });
+      } catch (err) {
+        handleServiceError(res, err, req);
+      }
+    }
+  );
 
   return router;
 }

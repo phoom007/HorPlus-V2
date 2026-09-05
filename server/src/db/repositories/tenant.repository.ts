@@ -125,6 +125,7 @@ export interface ITenantRepository {
 
   // Co-occupants
   findCoOccupants(tenantId: string, dormitoryId: string): Promise<TenantCoOccupantEntity[]>;
+  findCoOccupantHistory(tenantId: string, dormitoryId: string): Promise<TenantCoOccupantEntity[]>;
   createCoOccupant(dormitoryId: string, tenantId: string, data: Partial<TenantCoOccupantEntity>): Promise<TenantCoOccupantEntity>;
   updateCoOccupant(id: string, dormitoryId: string, tenantId: string, data: Partial<TenantCoOccupantEntity>): Promise<TenantCoOccupantEntity | null>;
   deleteCoOccupant(id: string, dormitoryId: string, tenantId: string): Promise<boolean>;
@@ -132,14 +133,14 @@ export interface ITenantRepository {
   // Emergency Contacts
   findEmergencyContacts(tenantId: string, dormitoryId: string): Promise<TenantEmergencyContactEntity[]>;
   createEmergencyContact(dormitoryId: string, tenantId: string, data: Partial<TenantEmergencyContactEntity>): Promise<TenantEmergencyContactEntity>;
-  updateEmergencyContact(id: string, dormitoryId: string, data: Partial<TenantEmergencyContactEntity>): Promise<TenantEmergencyContactEntity | null>;
-  deleteEmergencyContact(id: string, dormitoryId: string): Promise<boolean>;
+  updateEmergencyContact(id: string, dormitoryId: string, data: Partial<TenantEmergencyContactEntity>, tenantId?: string): Promise<TenantEmergencyContactEntity | null>;
+  deleteEmergencyContact(id: string, dormitoryId: string, tenantId?: string): Promise<boolean>;
 
   // Vehicles
   findVehicles(tenantId: string, dormitoryId: string): Promise<TenantVehicleEntity[]>;
   createVehicle(dormitoryId: string, tenantId: string, data: Partial<TenantVehicleEntity>): Promise<TenantVehicleEntity>;
-  updateVehicle(id: string, dormitoryId: string, data: Partial<TenantVehicleEntity>): Promise<TenantVehicleEntity | null>;
-  deleteVehicle(id: string, dormitoryId: string): Promise<boolean>;
+  updateVehicle(id: string, dormitoryId: string, data: Partial<TenantVehicleEntity>, tenantId?: string): Promise<TenantVehicleEntity | null>;
+  deleteVehicle(id: string, dormitoryId: string, tenantId?: string): Promise<boolean>;
 }
 
 export class InMemoryTenantRepository implements ITenantRepository {
@@ -274,8 +275,15 @@ export class InMemoryTenantRepository implements ITenantRepository {
   // Co-occupants
   public async findCoOccupants(tenantId: string, dormitoryId: string): Promise<TenantCoOccupantEntity[]> {
     return Array.from(this.coOccupants.values()).filter(
-      (c) => c.tenantId === tenantId && c.dormitoryId === dormitoryId && !c.deletedAt
+      (c) => c.tenantId === tenantId && c.dormitoryId === dormitoryId && !c.deletedAt && c.status === 'active'
     );
+  }
+
+  public async findCoOccupantHistory(tenantId: string, dormitoryId: string): Promise<TenantCoOccupantEntity[]> {
+    return Array.from(this.coOccupants.values())
+      .filter((c) => c.tenantId === tenantId && c.dormitoryId === dormitoryId)
+      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
+      .map((c) => ({ ...c, deletedAt: c.deletedAt || null }));
   }
 
   public async createCoOccupant(dormitoryId: string, tenantId: string, data: Partial<TenantCoOccupantEntity>): Promise<TenantCoOccupantEntity> {
@@ -295,6 +303,7 @@ export class InMemoryTenantRepository implements ITenantRepository {
       status: data.status || 'active',
       createdAt: now,
       updatedAt: now,
+      deletedAt: null,
     };
     this.coOccupants.set(id, item);
     return item;
@@ -312,6 +321,7 @@ export class InMemoryTenantRepository implements ITenantRepository {
     const item = this.coOccupants.get(id);
     if (!item || item.dormitoryId !== dormitoryId || item.tenantId !== tenantId) return false;
     item.deletedAt = new Date();
+    item.status = 'removed';
     return true;
   }
 
@@ -340,17 +350,19 @@ export class InMemoryTenantRepository implements ITenantRepository {
     return item;
   }
 
-  public async updateEmergencyContact(id: string, dormitoryId: string, data: Partial<TenantEmergencyContactEntity>): Promise<TenantEmergencyContactEntity | null> {
+  public async updateEmergencyContact(id: string, dormitoryId: string, data: Partial<TenantEmergencyContactEntity>, tenantId?: string): Promise<TenantEmergencyContactEntity | null> {
     const item = this.emergencyContacts.get(id);
     if (!item || item.dormitoryId !== dormitoryId) return null;
+    if (tenantId && item.tenantId !== tenantId) return null;
     const updated = { ...item, ...data, updatedAt: new Date() };
     this.emergencyContacts.set(id, updated);
     return updated;
   }
 
-  public async deleteEmergencyContact(id: string, dormitoryId: string): Promise<boolean> {
+  public async deleteEmergencyContact(id: string, dormitoryId: string, tenantId?: string): Promise<boolean> {
     const item = this.emergencyContacts.get(id);
     if (!item || item.dormitoryId !== dormitoryId) return false;
+    if (tenantId && item.tenantId !== tenantId) return false;
     this.emergencyContacts.delete(id);
     return true;
   }
@@ -383,18 +395,21 @@ export class InMemoryTenantRepository implements ITenantRepository {
     return item;
   }
 
-  public async updateVehicle(id: string, dormitoryId: string, data: Partial<TenantVehicleEntity>): Promise<TenantVehicleEntity | null> {
+  public async updateVehicle(id: string, dormitoryId: string, data: Partial<TenantVehicleEntity>, tenantId?: string): Promise<TenantVehicleEntity | null> {
     const item = this.vehicles.get(id);
     if (!item || item.dormitoryId !== dormitoryId || item.deletedAt) return null;
+    if (tenantId && item.tenantId !== tenantId) return null;
     const updated = { ...item, ...data, updatedAt: new Date() };
     this.vehicles.set(id, updated);
     return updated;
   }
 
-  public async deleteVehicle(id: string, dormitoryId: string): Promise<boolean> {
+  public async deleteVehicle(id: string, dormitoryId: string, tenantId?: string): Promise<boolean> {
     const item = this.vehicles.get(id);
     if (!item || item.dormitoryId !== dormitoryId) return false;
+    if (tenantId && item.tenantId !== tenantId) return false;
     item.deletedAt = new Date();
+    item.status = 'inactive';
     return true;
   }
 }
@@ -677,8 +692,33 @@ export class PrismaTenantRepository implements ITenantRepository {
     return true;
   }
 
+  public async findCoOccupantHistory(tenantId: string, dormitoryId: string): Promise<TenantCoOccupantEntity[]> {
+    const list = await this.prisma.tenantCoOccupant.findMany({
+      where: { tenantId, dormitoryId },
+      orderBy: { createdAt: 'asc' },
+    });
+    return list.map((c: any) => ({
+      id: c.id,
+      dormitoryId: c.dormitoryId,
+      tenantId: c.tenantId,
+      contractId: c.contractId || null,
+      name: c.name,
+      relationship: c.relationship || null,
+      phone: c.phone || null,
+      nationalIdMasked: c.nationalIdMasked || null,
+      dateOfBirth: c.dateOfBirth || null,
+      status: c.status || (c.deletedAt ? 'removed' : 'active'),
+      createdAt: c.createdAt,
+      updatedAt: c.updatedAt,
+      deletedAt: c.deletedAt || null,
+    } as any));
+  }
+
   public async findEmergencyContacts(tenantId: string, dormitoryId: string): Promise<TenantEmergencyContactEntity[]> {
-    const list = await this.prisma.tenantEmergencyContact.findMany({ where: { tenantId, dormitoryId } });
+    const list = await this.prisma.tenantEmergencyContact.findMany({
+      where: { tenantId, dormitoryId },
+      orderBy: { createdAt: 'asc' },
+    });
     return list.map((c) => ({
       id: c.id,
       dormitoryId: c.dormitoryId,
@@ -686,9 +726,9 @@ export class PrismaTenantRepository implements ITenantRepository {
       name: c.name,
       relationship: c.relationship,
       phone: c.phone,
-      isPrimary: true,
+      isPrimary: c.isPrimary ?? true,
       createdAt: c.createdAt,
-      updatedAt: c.createdAt,
+      updatedAt: c.updatedAt || c.createdAt,
     } as any));
   }
   public async createEmergencyContact(dormitoryId: string, tenantId: string, data: Partial<TenantEmergencyContactEntity>): Promise<TenantEmergencyContactEntity> {
@@ -700,6 +740,7 @@ export class PrismaTenantRepository implements ITenantRepository {
         name: data.name || '',
         relationship: data.relationship || '',
         phone: data.phone || '',
+        isPrimary: data.isPrimary ?? true,
       },
     });
     return {
@@ -709,17 +750,52 @@ export class PrismaTenantRepository implements ITenantRepository {
       name: c.name,
       relationship: c.relationship,
       phone: c.phone,
-      isPrimary: true,
+      isPrimary: c.isPrimary,
       createdAt: c.createdAt,
-      updatedAt: c.createdAt,
+      updatedAt: c.updatedAt,
     } as any;
   }
-  public async updateEmergencyContact(): Promise<any> { return null; }
-  public async deleteEmergencyContact(): Promise<boolean> { return true; }
+  public async updateEmergencyContact(id: string, dormitoryId: string, data: Partial<TenantEmergencyContactEntity>, tenantId?: string): Promise<TenantEmergencyContactEntity | null> {
+    const whereClause: any = { id, dormitoryId };
+    if (tenantId) whereClause.tenantId = tenantId;
+    const existing = await this.prisma.tenantEmergencyContact.findFirst({ where: whereClause });
+    if (!existing) return null;
+    const updated = await this.prisma.tenantEmergencyContact.update({
+      where: { id },
+      data: {
+        ...(data.name !== undefined && { name: data.name }),
+        ...(data.relationship !== undefined && { relationship: data.relationship }),
+        ...(data.phone !== undefined && { phone: data.phone }),
+        ...(data.isPrimary !== undefined && { isPrimary: data.isPrimary }),
+      },
+    });
+    return {
+      id: updated.id,
+      dormitoryId: updated.dormitoryId,
+      tenantId: updated.tenantId,
+      name: updated.name,
+      relationship: updated.relationship,
+      phone: updated.phone,
+      isPrimary: updated.isPrimary,
+      createdAt: updated.createdAt,
+      updatedAt: updated.updatedAt,
+    } as any;
+  }
+  public async deleteEmergencyContact(id: string, dormitoryId: string, tenantId?: string): Promise<boolean> {
+    const whereClause: any = { id, dormitoryId };
+    if (tenantId) whereClause.tenantId = tenantId;
+    const existing = await this.prisma.tenantEmergencyContact.findFirst({ where: whereClause });
+    if (!existing) return false;
+    await this.prisma.tenantEmergencyContact.delete({ where: { id } });
+    return true;
+  }
 
   public async findVehicles(tenantId: string, dormitoryId: string): Promise<TenantVehicleEntity[]> {
-    const list = await this.prisma.tenantVehicle.findMany({ where: { tenantId, dormitoryId } });
-    return list.map((c) => ({
+    const list = await this.prisma.tenantVehicle.findMany({
+      where: { tenantId, dormitoryId, deletedAt: null },
+      orderBy: { createdAt: 'asc' },
+    });
+    return list.map((c: any) => ({
       id: c.id,
       dormitoryId: c.dormitoryId,
       tenantId: c.tenantId,
@@ -728,9 +804,11 @@ export class PrismaTenantRepository implements ITenantRepository {
       brand: c.brand || null,
       model: c.model || null,
       color: c.color || null,
-      status: 'active',
+      province: c.province || null,
+      status: c.status || 'active',
       createdAt: c.createdAt,
-      updatedAt: c.createdAt,
+      updatedAt: c.updatedAt || c.createdAt,
+      deletedAt: c.deletedAt || null,
     } as any));
   }
   public async createVehicle(dormitoryId: string, tenantId: string, data: Partial<TenantVehicleEntity>): Promise<TenantVehicleEntity> {
@@ -744,6 +822,8 @@ export class PrismaTenantRepository implements ITenantRepository {
         brand: data.brand || null,
         model: data.model || null,
         color: data.color || null,
+        province: (data as any).province || null,
+        status: data.status || 'active',
       },
     });
     return {
@@ -755,11 +835,58 @@ export class PrismaTenantRepository implements ITenantRepository {
       brand: c.brand || null,
       model: c.model || null,
       color: c.color || null,
-      status: 'active',
+      province: c.province || null,
+      status: c.status,
       createdAt: c.createdAt,
-      updatedAt: c.createdAt,
+      updatedAt: c.updatedAt,
+      deletedAt: null,
     } as any;
   }
-  public async updateVehicle(): Promise<any> { return null; }
-  public async deleteVehicle(): Promise<boolean> { return true; }
+  public async updateVehicle(id: string, dormitoryId: string, data: Partial<TenantVehicleEntity>, tenantId?: string): Promise<TenantVehicleEntity | null> {
+    const whereClause: any = { id, dormitoryId, deletedAt: null };
+    if (tenantId) whereClause.tenantId = tenantId;
+    const existing = await this.prisma.tenantVehicle.findFirst({ where: whereClause });
+    if (!existing) return null;
+    const updated = await this.prisma.tenantVehicle.update({
+      where: { id },
+      data: {
+        ...(data.type !== undefined && { type: data.type }),
+        ...(data.licensePlate !== undefined && { licensePlate: data.licensePlate }),
+        ...(data.brand !== undefined && { brand: data.brand }),
+        ...(data.model !== undefined && { model: data.model }),
+        ...(data.color !== undefined && { color: data.color }),
+        ...(data.province !== undefined && { province: data.province }),
+        ...(data.status !== undefined && { status: data.status }),
+      },
+    });
+    return {
+      id: updated.id,
+      dormitoryId: updated.dormitoryId,
+      tenantId: updated.tenantId,
+      type: updated.type,
+      licensePlate: updated.licensePlate,
+      brand: updated.brand || null,
+      model: updated.model || null,
+      color: updated.color || null,
+      province: updated.province || null,
+      status: updated.status,
+      createdAt: updated.createdAt,
+      updatedAt: updated.updatedAt,
+      deletedAt: updated.deletedAt || null,
+    } as any;
+  }
+  public async deleteVehicle(id: string, dormitoryId: string, tenantId?: string): Promise<boolean> {
+    const whereClause: any = { id, dormitoryId, deletedAt: null };
+    if (tenantId) whereClause.tenantId = tenantId;
+    const existing = await this.prisma.tenantVehicle.findFirst({ where: whereClause });
+    if (!existing) return false;
+    await this.prisma.tenantVehicle.update({
+      where: { id },
+      data: {
+        status: 'inactive',
+        deletedAt: new Date(),
+      },
+    });
+    return true;
+  }
 }

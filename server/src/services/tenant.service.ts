@@ -3,6 +3,9 @@ import { IContractRepository } from '../db/repositories/contract.repository.js';
 import { SensitiveFieldService } from './sensitive-field.service.js';
 import { AuditService } from './audit.service.js';
 import { getPrismaClient } from '../db/prisma.js';
+import { parseAndNormalizeName, isMaskedNationalId } from '../utils/thai-identity.util.js';
+import { processAndSecureTenantIdCardImage } from './image-security.service.js';
+import { localStorageProvider } from './local-storage.service.js';
 
 export class TenantService {
   constructor(
@@ -31,6 +34,7 @@ export class TenantService {
   public async getTenantDetails(id: string, dormitoryId: string) {
     const tenant = await this.getTenantById(id, dormitoryId);
     const coOccupants = await this.tenantRepo.findCoOccupants(id, dormitoryId);
+    const coOccupantHistory = await this.tenantRepo.findCoOccupantHistory(id, dormitoryId);
     const emergencyContacts = await this.tenantRepo.findEmergencyContacts(id, dormitoryId);
     const vehicles = await this.tenantRepo.findVehicles(id, dormitoryId);
     const contractsResult = await this.contractRepo.findAll(dormitoryId, { tenantId: id, pageSize: 100 });
@@ -105,6 +109,7 @@ export class TenantService {
     return {
       tenant,
       coOccupants,
+      coOccupantHistory,
       emergencyContacts,
       vehicles,
       contracts,
@@ -116,18 +121,35 @@ export class TenantService {
   }
 
   public async createTenant(dormitoryId: string, data: CreateTenantData & { nationalId?: string }, actorUserId?: string) {
-    const tenant = await this.tenantRepo.create(dormitoryId, data);
+    let parsedNames: { displayName: string; firstName: string; lastName: string | null } | undefined;
+    if (data.displayName || (data as any).name) {
+      parsedNames = parseAndNormalizeName(data.displayName || (data as any).name);
+    } else if (data.firstName) {
+      parsedNames = parseAndNormalizeName(`${data.firstName} ${data.lastName || ''}`);
+    }
+
+    const createPayload: CreateTenantData = {
+      ...data,
+      displayName: parsedNames?.displayName || data.displayName || `${data.firstName || ''} ${data.lastName || ''}`.trim(),
+      firstName: parsedNames?.firstName || data.firstName || '',
+      lastName: parsedNames?.lastName !== undefined ? (parsedNames.lastName ?? '') : (data.lastName || ''),
+    };
+
+    const tenant = await this.tenantRepo.create(dormitoryId, createPayload);
 
     // Handle National ID encryption/masking
     if (data.nationalId && data.nationalId.trim().length > 0) {
-      const { ciphertext } = this.sensitiveFieldService.encrypt(data.nationalId.trim());
-      const masked = this.sensitiveFieldService.maskNationalId(data.nationalId.trim());
-      await this.tenantRepo.update(tenant.id, dormitoryId, {
-        nationalIdEncrypted: ciphertext,
-        nationalIdMasked: masked,
-      });
-      tenant.nationalIdEncrypted = ciphertext;
-      tenant.nationalIdMasked = masked;
+      const raw = data.nationalId.replace(/\D/g, '');
+      if (raw.length === 13) {
+        const { ciphertext } = this.sensitiveFieldService.encrypt(raw);
+        const masked = this.sensitiveFieldService.maskNationalId(raw);
+        await this.tenantRepo.update(tenant.id, dormitoryId, {
+          nationalIdEncrypted: ciphertext,
+          nationalIdMasked: masked,
+        });
+        tenant.nationalIdEncrypted = ciphertext;
+        tenant.nationalIdMasked = masked;
+      }
     }
 
     if (this.auditService && actorUserId) {
@@ -153,14 +175,19 @@ export class TenantService {
 
     const updatePayload: Partial<TenantEntity> = {};
 
-    if (data.firstName !== undefined) updatePayload.firstName = data.firstName;
-    if (data.lastName !== undefined) updatePayload.lastName = data.lastName;
-    if (data.displayName !== undefined) {
-      updatePayload.displayName = data.displayName;
-    } else if (data.firstName || data.lastName) {
-      const fn = data.firstName || tenant.firstName;
+    if (data.displayName !== undefined || (data as any).name !== undefined) {
+      const rawName = data.displayName !== undefined ? data.displayName : (data as any).name;
+      const parsed = parseAndNormalizeName(rawName);
+      updatePayload.displayName = parsed.displayName;
+      updatePayload.firstName = parsed.firstName;
+      updatePayload.lastName = parsed.lastName;
+    } else if (data.firstName !== undefined || data.lastName !== undefined) {
+      const fn = data.firstName !== undefined ? data.firstName : tenant.firstName;
       const ln = data.lastName !== undefined ? data.lastName : tenant.lastName;
-      updatePayload.displayName = `${fn} ${ln || ''}`.trim();
+      const parsed = parseAndNormalizeName(`${fn} ${ln}`.trim());
+      updatePayload.displayName = parsed.displayName;
+      updatePayload.firstName = parsed.firstName;
+      updatePayload.lastName = parsed.lastName;
     }
 
     if (data.phone !== undefined) updatePayload.phone = data.phone;
@@ -173,12 +200,18 @@ export class TenantService {
     if (data.notes !== undefined) updatePayload.notes = data.notes;
 
     if (data.nationalId !== undefined && data.nationalId !== null) {
-      if (data.nationalId.trim().length > 0) {
-        updatePayload.nationalIdEncrypted = this.sensitiveFieldService.encrypt(data.nationalId.trim()).ciphertext;
-        updatePayload.nationalIdMasked = this.sensitiveFieldService.maskNationalId(data.nationalId.trim());
-      } else {
+      const trimmed = data.nationalId.trim();
+      if (trimmed === '') {
         updatePayload.nationalIdEncrypted = null;
         updatePayload.nationalIdMasked = null;
+      } else if (isMaskedNationalId(trimmed) || trimmed === tenant.nationalIdMasked) {
+        // Masked value submitted from UI/form without edits - DO NOT overwrite!
+      } else {
+        const rawDigits = trimmed.replace(/\D/g, '');
+        if (rawDigits.length === 13) {
+          updatePayload.nationalIdEncrypted = this.sensitiveFieldService.encrypt(rawDigits).ciphertext;
+          updatePayload.nationalIdMasked = this.sensitiveFieldService.maskNationalId(rawDigits);
+        }
       }
     }
 
@@ -338,8 +371,102 @@ export class TenantService {
     return this.tenantRepo.createEmergencyContact(dormitoryId, tenantId, data);
   }
 
+  public async updateEmergencyContact(dormitoryId: string, tenantId: string, contactId: string, data: any) {
+    await this.getTenantById(tenantId, dormitoryId);
+    const updated = await this.tenantRepo.updateEmergencyContact(contactId, dormitoryId, data, tenantId);
+    if (!updated) {
+      const err = new Error('ไม่พบข้อมูลผู้ติดต่อฉุกเฉินที่ระบุ');
+      (err as any).code = 'EMERGENCY_CONTACT_NOT_FOUND';
+      (err as any).statusCode = 404;
+      throw err;
+    }
+    return updated;
+  }
+
+  public async deleteEmergencyContact(dormitoryId: string, tenantId: string, contactId: string) {
+    await this.getTenantById(tenantId, dormitoryId);
+    const success = await this.tenantRepo.deleteEmergencyContact(contactId, dormitoryId, tenantId);
+    if (!success) {
+      const err = new Error('ไม่พบข้อมูลผู้ติดต่อฉุกเฉินที่ระบุ');
+      (err as any).code = 'EMERGENCY_CONTACT_NOT_FOUND';
+      (err as any).statusCode = 404;
+      throw err;
+    }
+    return { success: true };
+  }
+
   public async addVehicle(dormitoryId: string, tenantId: string, data: any) {
     await this.getTenantById(tenantId, dormitoryId);
     return this.tenantRepo.createVehicle(dormitoryId, tenantId, data);
+  }
+
+  public async updateVehicle(dormitoryId: string, tenantId: string, vehicleId: string, data: any) {
+    await this.getTenantById(tenantId, dormitoryId);
+    const updated = await this.tenantRepo.updateVehicle(vehicleId, dormitoryId, data, tenantId);
+    if (!updated) {
+      const err = new Error('ไม่พบข้อมูลยานพาหนะที่ระบุ');
+      (err as any).code = 'VEHICLE_NOT_FOUND';
+      (err as any).statusCode = 404;
+      throw err;
+    }
+    return updated;
+  }
+
+  public async deleteVehicle(dormitoryId: string, tenantId: string, vehicleId: string) {
+    await this.getTenantById(tenantId, dormitoryId);
+    const success = await this.tenantRepo.deleteVehicle(vehicleId, dormitoryId, tenantId);
+    if (!success) {
+      const err = new Error('ไม่พบข้อมูลยานพาหนะที่ระบุ');
+      (err as any).code = 'VEHICLE_NOT_FOUND';
+      (err as any).statusCode = 404;
+      throw err;
+    }
+    return { success: true };
+  }
+
+  public async updateTenantIdentityDocument(
+    dormitoryId: string,
+    tenantId: string,
+    rawBuffer: Buffer,
+    actorUserId?: string
+  ) {
+    const tenant = await this.getTenantById(tenantId, dormitoryId);
+
+    // Process image through sharp pipeline
+    const secured = await processAndSecureTenantIdCardImage(rawBuffer);
+
+    // Generate safe object key
+    const objectKey = `tenants/${dormitoryId}/${tenantId}/id-card-${Date.now()}.webp`;
+
+    // Save to local storage
+    await localStorageProvider.saveFile(objectKey, secured.buffer);
+
+    const uploadedAt = new Date();
+    await this.tenantRepo.update(tenantId, dormitoryId, {
+      idCardObjectKey: objectKey,
+      idCardSha256: secured.sha256,
+      idCardMimeType: secured.mimeType,
+      idCardByteSize: secured.byteSize,
+      idCardUploadedAt: uploadedAt,
+      idCardUploadedByUserId: actorUserId || null,
+    });
+
+    if (this.auditService && actorUserId) {
+      await this.auditService.log({
+        userId: actorUserId,
+        action: 'TENANT_ID_CARD_UPLOADED',
+        source: 'tenant',
+        reason: `Uploaded ID card document for tenant ${tenant.displayName}`,
+        ipMetadata: { dormitoryId, tenantId, sha256: secured.sha256 },
+      });
+    }
+
+    return {
+      tenantId,
+      idCardUploadedAt: uploadedAt.toISOString(),
+      idCardSha256: secured.sha256,
+      idCardMimeType: secured.mimeType,
+      idCardByteSize: secured.byteSize,
+    };
   }
 }

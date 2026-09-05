@@ -336,6 +336,30 @@ export class ApiTenantAdapter implements TenantDataSource {
     }
   }
 
+  async updateEmergencyContact(tenantId: string, contactId: string, contact: Partial<EmergencyContactInput>): Promise<DataResult<any>> {
+    try {
+      const data = await httpRequest<any>('PUT', `/tenants/${encodeURIComponent(tenantId)}/emergency-contacts/${encodeURIComponent(contactId)}`, contact);
+      return { success: true, data };
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
+      };
+    }
+  }
+
+  async deleteEmergencyContact(tenantId: string, contactId: string): Promise<DataResult<boolean>> {
+    try {
+      await httpRequest<any>('DELETE', `/tenants/${encodeURIComponent(tenantId)}/emergency-contacts/${encodeURIComponent(contactId)}`);
+      return { success: true, data: true };
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
+      };
+    }
+  }
+
   async addVehicle(tenantId: string, vehicle: VehicleInput): Promise<DataResult<any>> {
     try {
       const data = await httpRequest<any>('POST', `/tenants/${encodeURIComponent(tenantId)}/vehicles`, vehicle);
@@ -348,9 +372,47 @@ export class ApiTenantAdapter implements TenantDataSource {
     }
   }
 
+  async updateVehicle(tenantId: string, vehicleId: string, vehicle: Partial<VehicleInput>): Promise<DataResult<any>> {
+    try {
+      const data = await httpRequest<any>('PUT', `/tenants/${encodeURIComponent(tenantId)}/vehicles/${encodeURIComponent(vehicleId)}`, vehicle);
+      return { success: true, data };
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
+      };
+    }
+  }
+
+  async deleteVehicle(tenantId: string, vehicleId: string): Promise<DataResult<boolean>> {
+    try {
+      await httpRequest<any>('DELETE', `/tenants/${encodeURIComponent(tenantId)}/vehicles/${encodeURIComponent(vehicleId)}`);
+      return { success: true, data: true };
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
+      };
+    }
+  }
+
   getIdentityDocumentUrl(tenantId: string): string {
     const baseUrl = getApiBaseUrl();
     return `${baseUrl}/tenants/${encodeURIComponent(tenantId)}/identity-document`;
+  }
+
+  async uploadIdentityDocument(tenantId: string, file: File | Blob): Promise<DataResult<any>> {
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await httpRequest<any>('POST', `/tenants/${encodeURIComponent(tenantId)}/identity-document`, formData);
+      return { success: true, data: res?.data || res };
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
+      };
+    }
   }
 
   async updatePetInfo(tenantId: string, pets: PetItem[]): Promise<DataResult<Tenant>> {
@@ -374,6 +436,7 @@ export class ApiTenantAdapter implements TenantDataSource {
         data: {
           tenant: details.tenant || details,
           coOccupants: details.coOccupants || [],
+          coOccupantHistory: details.coOccupantHistory || [],
           emergencyContacts: details.emergencyContacts || [],
           vehicles: details.vehicles || [],
           contracts: details.contracts || [],

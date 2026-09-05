@@ -18,6 +18,8 @@ export const THAI_HONORIFIC_PREFIXES = [
   'น.ส',
   'นส.',
   'นส',
+  'คุณ',
+  'ท่าน',
   'เด็กชาย',
   'เด็กหญิง',
   'ด.ช.',
@@ -181,3 +183,78 @@ export function maskPhone(rawPhone?: string | null): string | null {
   }
   return 'XXX-XXX-XXXX';
 }
+
+/**
+ * Checks if a given national ID string is a masked display value (e.g. "1-1004-XXXXX-XX-X" or contains 'x'/'X').
+ */
+export function isMaskedNationalId(id?: string | null): boolean {
+  if (!id) return false;
+  return /[xX]/.test(id);
+}
+
+/**
+ * Normalizes a single full name field, preserving the complete display value while
+ * intelligently deriving firstName and lastName.
+ *
+ * Requirements:
+ * 1. Always preserves the full normalized input in `displayName` (NFC, trimmed, collapsed whitespace).
+ * 2. Does NOT destructively rewrite or silently drop tokens.
+ * 3. Strips honorific prefix (Thai/English) only to derive `firstName` and `lastName`.
+ * 4. Handles single-token names safely (lastName = null).
+ */
+export function parseAndNormalizeName(rawName?: string | null): {
+  displayName: string;
+  firstName: string;
+  lastName: string | null;
+} {
+  if (!rawName || rawName.trim().length === 0) {
+    return { displayName: '', firstName: '', lastName: null };
+  }
+
+  // 1. Unicode NFC normalization and collapse repeated whitespace
+  const normalizedDisplay = rawName
+    .normalize('NFC')
+    .trim()
+    .replace(/\s+/g, ' ');
+
+  // 2. Identify and strip honorific prefix for firstName/lastName derivation
+  const sortedPrefixes = [...THAI_HONORIFIC_PREFIXES].sort((a, b) => b.length - a.length);
+  let remainder = normalizedDisplay;
+
+  for (const prefix of sortedPrefixes) {
+    // Case-insensitive prefix check for Latin prefixes (mr., mrs., etc.)
+    if (remainder.toLowerCase().startsWith(prefix.toLowerCase())) {
+      const sliced = remainder.slice(prefix.length).trim();
+      if (sliced.length > 0) {
+        remainder = sliced;
+        break;
+      }
+    }
+  }
+
+  // 3. Tokenize remainder into firstName and lastName
+  const tokens = remainder.split(' ').filter(Boolean);
+
+  if (tokens.length === 0) {
+    return {
+      displayName: normalizedDisplay,
+      firstName: normalizedDisplay,
+      lastName: null,
+    };
+  }
+
+  if (tokens.length === 1) {
+    return {
+      displayName: normalizedDisplay,
+      firstName: tokens[0],
+      lastName: null,
+    };
+  }
+
+  return {
+    displayName: normalizedDisplay,
+    firstName: tokens[0],
+    lastName: tokens.slice(1).join(' '),
+  };
+}
+

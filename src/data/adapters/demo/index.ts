@@ -215,6 +215,32 @@ export class DemoTenantAdapter implements TenantDataSource {
     }
   }
 
+  async updateEmergencyContact(tenantId: string, contactId: string, contact: Partial<EmergencyContactInput>): Promise<DataResult<any>> {
+    try {
+      const tenant = tenantRepository.getById(tenantId);
+      if (!tenant) return { success: false, error: { code: 'RESOURCE_NOT_FOUND', message: 'ไม่พบผู้เช่า' } };
+      if (tenant.emergencyContact) {
+        if (contact.name !== undefined) tenant.emergencyContact.name = contact.name;
+        if (contact.phone !== undefined) tenant.emergencyContact.phone = contact.phone;
+        if (contact.relationship !== undefined) tenant.emergencyContact.relation = contact.relationship;
+      }
+      return { success: true, data: { id: contactId, ...contact } };
+    } catch {
+      return { success: false, error: { code: 'RESOURCE_NOT_FOUND', message: 'ไม่พบผู้เช่า' } };
+    }
+  }
+
+  async deleteEmergencyContact(tenantId: string, _contactId: string): Promise<DataResult<boolean>> {
+    try {
+      const tenant = tenantRepository.getById(tenantId);
+      if (!tenant) return { success: false, error: { code: 'RESOURCE_NOT_FOUND', message: 'ไม่พบผู้เช่า' } };
+      tenant.emergencyContact = undefined as any;
+      return { success: true, data: true };
+    } catch {
+      return { success: false, error: { code: 'RESOURCE_NOT_FOUND', message: 'ไม่พบผู้เช่า' } };
+    }
+  }
+
   async addVehicle(tenantId: string, vehicle: VehicleInput): Promise<DataResult<any>> {
     try {
       const tenant = tenantRepository.getById(tenantId);
@@ -228,8 +254,49 @@ export class DemoTenantAdapter implements TenantDataSource {
     }
   }
 
+  async updateVehicle(tenantId: string, vehicleId: string, vehicle: Partial<VehicleInput>): Promise<DataResult<any>> {
+    try {
+      const tenant = tenantRepository.getById(tenantId);
+      if (!tenant) return { success: false, error: { code: 'RESOURCE_NOT_FOUND', message: 'ไม่พบผู้เช่า' } };
+      const list = tenant.vehicles || [];
+      const target = list.find((v: any) => v.id === vehicleId);
+      if (target) {
+        Object.assign(target, vehicle);
+      }
+      return { success: true, data: target || { id: vehicleId, ...vehicle } };
+    } catch {
+      return { success: false, error: { code: 'RESOURCE_NOT_FOUND', message: 'ไม่พบผู้เช่า' } };
+    }
+  }
+
+  async deleteVehicle(tenantId: string, vehicleId: string): Promise<DataResult<boolean>> {
+    try {
+      const tenant = tenantRepository.getById(tenantId);
+      if (!tenant) return { success: false, error: { code: 'RESOURCE_NOT_FOUND', message: 'ไม่พบผู้เช่า' } };
+      if (tenant.vehicles) {
+        tenant.vehicles = tenant.vehicles.filter((v: any) => v.id !== vehicleId);
+      }
+      return { success: true, data: true };
+    } catch {
+      return { success: false, error: { code: 'RESOURCE_NOT_FOUND', message: 'ไม่พบผู้เช่า' } };
+    }
+  }
+
   getIdentityDocumentUrl(tenantId: string): string {
     return `/api/v1/tenants/${encodeURIComponent(tenantId)}/identity-document`;
+  }
+
+  async uploadIdentityDocument(tenantId: string, file: File | Blob): Promise<DataResult<any>> {
+    return {
+      success: true,
+      data: {
+        tenantId,
+        idCardUploadedAt: new Date().toISOString(),
+        idCardSha256: 'simulated-demo-sha256',
+        idCardMimeType: 'image/webp',
+        idCardByteSize: (file as any).size || 1024,
+      },
+    };
   }
 
   async updatePetInfo(tenantId: string, pets: PetItem[]): Promise<DataResult<Tenant>> {
@@ -263,6 +330,7 @@ export class DemoTenantAdapter implements TenantDataSource {
       data: {
         tenant,
         coOccupants,
+        coOccupantHistory: coOccupants,
         emergencyContacts,
         vehicles,
         contracts,

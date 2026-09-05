@@ -79,6 +79,22 @@ export const CreateTenantSchema = z.object({
 
 export const UpdateTenantSchema = CreateTenantSchema.partial().extend({
   version: z.number().int().optional(),
+  nationalId: z
+    .string()
+    .optional()
+    .nullable()
+    .refine(
+      (val) => {
+        if (!val) return true;
+        const trimmed = val.trim();
+        if (trimmed === '') return true;
+        const digitsOnly = trimmed.replace(/\D/g, '');
+        const isMasked = /[xX]/.test(trimmed);
+        if (isMasked) return true;
+        return digitsOnly.length === 13;
+      },
+      { message: 'เลขประจำตัวประชาชนต้องมี 13 หลัก' }
+    ),
 });
 
 export const CreateCoOccupantSchema = z.object({
@@ -109,7 +125,9 @@ export const CreateVehicleSchema = z.object({
   province: z.string().optional().nullable(),
 });
 
-export const UpdateVehicleSchema = CreateVehicleSchema.partial();
+export const UpdateVehicleSchema = CreateVehicleSchema.partial().extend({
+  status: z.enum(['active', 'inactive']).optional(),
+});
 
 export const CreateContractSchema = z.object({
   roomId: z.string().min(1, 'รูปแบบ Room ID ไม่ถูกต้อง'),

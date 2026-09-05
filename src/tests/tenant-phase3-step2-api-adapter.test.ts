@@ -7,6 +7,16 @@ import { ApiTenantAdapter, fetchTenantProfile } from '../data/adapters/api';
 import { DemoTenantAdapter } from '../data/adapters/demo';
 import * as httpClient from '../data/httpClient';
 
+if (typeof localStorage === 'undefined') {
+  let store: Record<string, string> = {};
+  (globalThis as any).localStorage = {
+    getItem: (key: string) => store[key] || null,
+    setItem: (key: string, val: string) => { store[key] = String(val); },
+    removeItem: (key: string) => { delete store[key]; },
+    clear: () => { store = {}; },
+  };
+}
+
 describe('TENANT PHASE 3 STEP 2: Backend API & Adapter Alignment', () => {
   const dormId = '00000000-0000-0000-0000-000000000001';
 
