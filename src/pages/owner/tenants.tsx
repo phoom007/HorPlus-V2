@@ -168,52 +168,148 @@ const STANDARD_PET_OPTIONS = ["สุนัข", "แมว", "นก", "ปล�
 const PET_OPTIONS = ["สุนัข", "แมว", "นก", "ปลา", "กระต่าย", "หนูแฮมสเตอร์", "อื่นๆ"];
 const CO_OCCUPANT_RELATION_OPTIONS = ["แฟน", "เพื่อน", "ผู้ปกครอง", "พี่น้อง / ญาติ", "คู่สมรส", "อื่นๆ"];
 
-export function getEffectivePetPolicy(dorm?: Partial<Dormitory> | null): { allowed: string; allowedTypes?: string[] } | undefined {
-  if (dorm?.petPolicy) return dorm.petPolicy;
-  try {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('registered_dorm_profile');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed?.petPolicy) return parsed.petPolicy;
-      }
-    }
-  } catch { }
-  return undefined;
+export interface CanonicalPetGroupOption {
+  id: 'dog' | 'cat' | 'small_pet' | 'other';
+  label: string;
 }
 
-export function resolveAllowedPetOptions(petPolicy?: { allowed: string; allowedTypes?: string[] } | null): string[] {
-  if (!petPolicy) return PET_OPTIONS;
-  if (petPolicy.allowed === 'none') return [];
-  if (!petPolicy.allowedTypes || petPolicy.allowedTypes.length === 0) {
-    return PET_OPTIONS;
+export const CANONICAL_PET_GROUP_OPTIONS: readonly CanonicalPetGroupOption[] = [
+  { id: 'dog', label: 'สุนัข (Dog)' },
+  { id: 'cat', label: 'แมว (Cat)' },
+  { id: 'small_pet', label: 'สัตว์เล็ก (กระต่าย/หนู/นก)' },
+  { id: 'other', label: 'สัตว์แปลก (other)' },
+] as const;
+
+export const toCanonicalPetGroup = (t?: string): { type: 'dog' | 'cat' | 'small_pet' | 'other' | ''; customType?: string } => {
+  const raw = (t || '').trim();
+  const lower = raw.toLowerCase();
+  if (!raw) return { type: '' };
+  if (lower === 'dog' || lower === 'สุนัข' || lower === 'หมา') return { type: 'dog' };
+  if (lower === 'cat' || lower === 'แมว') return { type: 'cat' };
+  if (lower === 'small_pet' || lower === 'small-pet' || lower === 'small_pets' || lower === 'สัตว์เล็ก') return { type: 'small_pet' };
+  if (lower === 'bird' || lower === 'นก' || lower === 'rabbit' || lower === 'กระต่าย' || lower === 'hamster' || lower === 'หนู' || lower === 'หนูแฮมสเตอร์') {
+    return { type: 'small_pet' };
   }
-  const result: string[] = [];
+  if (lower === 'fish' || lower === 'ปลา') {
+    return { type: 'other', customType: raw };
+  }
+  if (lower === 'other' || lower === 'others' || lower === 'อื่นๆ' || lower === 'สัตว์แปลก') {
+    return { type: 'other' };
+  }
+  return { type: 'other', customType: raw };
+};
+
+export function getEffectivePetPolicy(
+  propertyDefaultsPolicy?:
+    | { allowed: string; allowedTypes?: string[] }
+    | null
+): { allowed: string; allowedTypes?: string[] } {
+  if (propertyDefaultsPolicy?.allowed) {
+    return propertyDefaultsPolicy;
+  }
+
+  return {
+    allowed: 'none',
+    allowedTypes: [],
+  };
+}
+
+export function resolveAllowedPetOptions(
+  petPolicy?: { allowed: string; allowedTypes?: string[] } | null
+): CanonicalPetGroupOption[] {
+  if (!petPolicy || petPolicy.allowed === 'none') return [];
+  if (petPolicy.allowed === 'all') {
+    return [...CANONICAL_PET_GROUP_OPTIONS];
+  }
+  if (!petPolicy.allowedTypes || petPolicy.allowedTypes.length === 0) {
+    return [];
+  }
+  const allowedIds = new Set<string>();
   for (const t of petPolicy.allowedTypes) {
-    const lower = t.toLowerCase();
-    if (lower === 'dog' || lower === 'สุนัข') {
-      if (!result.includes('สุนัข')) result.push('สุนัข');
-    } else if (lower === 'cat' || lower === 'แมว') {
-      if (!result.includes('แมว')) result.push('แมว');
-    } else if (lower === 'small_pet') {
-      for (const sp of ['นก', 'ปลา', 'กระต่าย', 'หนูแฮมสเตอร์']) {
-        if (!result.includes(sp)) result.push(sp);
-      }
-    } else if (lower === 'bird' || lower === 'นก') {
-      if (!result.includes('นก')) result.push('นก');
-    } else if (lower === 'fish' || lower === 'ปลา') {
-      if (!result.includes('ปลา')) result.push('ปลา');
-    } else if (lower === 'rabbit' || lower === 'กระต่าย') {
-      if (!result.includes('กระต่าย')) result.push('กระต่าย');
-    } else if (lower === 'hamster' || lower === 'หนูแฮมสเตอร์') {
-      if (!result.includes('หนูแฮมสเตอร์')) result.push('หนูแฮมสเตอร์');
-    } else if (lower === 'other' || lower === 'อื่นๆ') {
-      if (!result.includes('อื่นๆ')) result.push('อื่นๆ');
-    } else if (!result.includes(t)) {
-      result.push(t);
+    const lower = (t || '').trim().toLowerCase();
+    if (lower === 'dog' || lower === 'สุนัข' || lower === 'หมา') allowedIds.add('dog');
+    else if (lower === 'cat' || lower === 'แมว') allowedIds.add('cat');
+    else if (lower === 'small_pet' || lower === 'small-pet' || lower === 'small_pets' || lower === 'สัตว์เล็ก') allowedIds.add('small_pet');
+    else if (lower === 'other' || lower === 'others' || lower === 'อื่นๆ' || lower === 'สัตว์แปลก') allowedIds.add('other');
+  }
+  return CANONICAL_PET_GROUP_OPTIONS.filter(opt => allowedIds.has(opt.id));
+}
+
+export function deriveContractDepositPaymentState(
+  contractId: string,
+  billsList: any[]
+): { isPaid: boolean; depositBill?: any } {
+  if (!contractId || !Array.isArray(billsList) || billsList.length === 0) {
+    return { isPaid: false };
+  }
+
+  const depositBills = billsList.filter((b: any) => {
+    if (!b || typeof b !== 'object') return false;
+    const kind = String(b.billKind || '').toUpperCase();
+    if (kind !== 'DEPOSIT') return false;
+    if (b.contractId !== contractId) return false;
+
+    const st = String(b.status || '').toLowerCase();
+    if (st === 'cancelled' || st === 'canceled' || st === 'void' || b.isVoided) {
+      return false;
+    }
+    return true;
+  });
+
+  if (depositBills.length === 0) {
+    return { isPaid: false };
+  }
+
+  for (const bill of depositBills) {
+    const st = String(bill.status || '').toLowerCase();
+    if (st === 'paid') {
+      return { isPaid: true, depositBill: bill };
+    }
+
+    const total = Number(bill.totalAmount ?? bill.amount ?? 0);
+    const outstanding = Number(bill.outstandingAmount ?? 0);
+    const paid = Number(bill.paidAmount ?? 0);
+
+    if (total > 0 && outstanding <= 0 && paid >= total) {
+      return { isPaid: true, depositBill: bill };
     }
   }
-  return result;
+
+  return { isPaid: false, depositBill: depositBills[0] };
+}
+
+export function getContractStatusBadgeInfo(
+  status: string,
+  endDate?: string | Date | null
+): { label: string; bg: string; text: string; border: string } {
+  const getExpiringLabel = () => {
+    if (endDate) {
+      const today = new Date();
+      const curDay = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+      const endD = new Date(endDate);
+      const endDay = new Date(endD.getFullYear(), endD.getMonth(), endD.getDate());
+      const diffDays = Math.ceil((endDay.getTime() - curDay.getTime()) / (1000 * 60 * 60 * 24));
+      return diffDays > 0 ? `เหลือ ${diffDays} วัน` : 'หมดอายุแล้ว';
+    }
+    return 'ใกล้หมดอายุ';
+  };
+
+  const statusMap: Record<string, { label: string; bg: string; text: string; border: string }> = {
+    active: { label: 'กำลังใช้งาน', bg: 'bg-emerald-50', text: 'text-emerald-700', border: 'border-emerald-200' },
+    expiring_soon: { label: getExpiringLabel(), bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-200' },
+    expired: { label: 'หมดอายุแล้ว', bg: 'bg-slate-100', text: 'text-slate-600', border: 'border-slate-200' },
+    ended: { label: 'เลิกสัญญาแล้ว', bg: 'bg-rose-50', text: 'text-rose-700', border: 'border-rose-200' },
+    terminated: { label: 'เลิกสัญญาแล้ว', bg: 'bg-rose-50', text: 'text-rose-700', border: 'border-rose-200' },
+  };
+
+  const defaultFallbackStatus = {
+    label: status || 'ไม่ระบุสถานะ',
+    bg: 'bg-slate-100',
+    text: 'text-slate-600',
+    border: 'border-slate-200',
+  };
+
+  return statusMap[status] || defaultFallbackStatus;
 }
 
 interface TenantDetailsFetcherProps {
@@ -278,14 +374,46 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
   const effectiveDormId = dormitoryId || dormitory?.id || (typeof window !== 'undefined' ? (localStorage.getItem('selected_dormitory_id') || sessionStorage.getItem('active_dormitory_selected_for_session')) : '') || '';
   const [tenantDetailsData, setTenantDetailsData] = useState<any | null>(null);
 
+  const [propertyDefaultsPolicy, setPropertyDefaultsPolicy] = useState<{ allowed: string; allowedTypes?: string[] } | null | undefined>(undefined);
+
   const [dorm, setDorm] = useState<Partial<Dormitory>>(() => {
     if (dormitory) return dormitory;
     try {
       const saved = localStorage.getItem('registered_dorm_profile');
-      if (saved) return JSON.parse(saved);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && typeof parsed === 'object') {
+          // Explicitly strip petPolicy so localStorage / registered_dorm_profile is NEVER Pet Policy authority
+          const { petPolicy: _ignored, ...rest } = parsed;
+          return rest;
+        }
+      }
     } catch { }
     return {};
   });
+
+  React.useEffect(() => {
+    let isMounted = true;
+    const fetchDefaults = async () => {
+      try {
+        const dataProvider = getDataProvider();
+        const res = await dataProvider.properties.getDormitoryDefaults();
+        if (isMounted) {
+          if (res?.success && res?.data?.property?.petPolicy) {
+            setPropertyDefaultsPolicy(res.data.property.petPolicy);
+          } else {
+            setPropertyDefaultsPolicy({ allowed: 'none', allowedTypes: [] });
+          }
+        }
+      } catch {
+        if (isMounted) {
+          setPropertyDefaultsPolicy({ allowed: 'none', allowedTypes: [] });
+        }
+      }
+    };
+    fetchDefaults();
+    return () => { isMounted = false; };
+  }, [effectiveDormId]);
 
   React.useEffect(() => {
     let isMounted = true;
@@ -553,7 +681,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
         return {
           ...p,
           type: value,
-          customType: value === 'อื่นๆ' ? (p.customType || '') : ''
+          customType: (value === 'อื่นๆ' || value === 'other') ? (p.customType || '') : ''
         };
       }
       return { ...p, [field]: value };
@@ -1263,42 +1391,35 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
     setVehiclePlate(tenant.vehicle?.licensePlate || '');
     setVehicleBrand(tenant.vehicle?.brand || '');
 
-    // Multi pets initialization
-    const toStdThaiPet = (t: string): string => {
-      const lower = (t || '').trim().toLowerCase();
-      if (lower === 'dog' || lower === 'สุนัข' || lower === 'หมา') return 'สุนัข';
-      if (lower === 'cat' || lower === 'แมว') return 'แมว';
-      if (lower === 'bird' || lower === 'นก') return 'นก';
-      if (lower === 'fish' || lower === 'ปลา') return 'ปลา';
-      if (lower === 'rabbit' || lower === 'กระต่าย') return 'กระต่าย';
-      if (lower === 'hamster' || lower === 'หนู' || lower === 'หนูแฮมสเตอร์') return 'หนูแฮมสเตอร์';
-      return '';
-    };
-
+    // Canonical Pet Groups initialization
     const initialPets: PetItem[] = tenant.pets && tenant.pets.length > 0
       ? tenant.pets.map(p => {
-        const stdThai = toStdThaiPet(p.type);
-        const isOther = p.type === 'อื่นๆ' || p.type === 'other' || p.type === 'others';
+        const canonical = toCanonicalPetGroup(p.type);
+        const resolvedCustomType = p.customType || canonical.customType || (canonical.type === 'other' && p.type !== 'other' && p.type !== 'อื่นๆ' ? p.type : undefined);
         return {
           id: p.id || undefined,
-          type: stdThai ? stdThai : (p.type ? 'อื่นๆ' : ''),
-          customType: p.customType || (!stdThai && !isOther ? p.type : ''),
+          type: canonical.type,
+          customType: resolvedCustomType,
           name: p.name || ''
         };
       })
       : (tenant.pet?.hasPet
-        ? [{
-          id: undefined,
-          type: toStdThaiPet(tenant.pet?.type || '') || (tenant.pet?.type ? 'อื่นๆ' : ''),
-          customType: toStdThaiPet(tenant.pet?.type || '') ? '' : (tenant.pet?.type || ''),
-          name: tenant.pet?.name || ''
-        }]
+        ? (() => {
+          const canonical = toCanonicalPetGroup(tenant.pet?.type || '');
+          const resolvedCustomType = canonical.customType || (canonical.type === 'other' && tenant.pet?.type !== 'other' && tenant.pet?.type !== 'อื่นๆ' ? tenant.pet?.type : undefined);
+          return [{
+            id: undefined,
+            type: canonical.type,
+            customType: resolvedCustomType,
+            name: tenant.pet?.name || ''
+          }];
+        })()
         : [{ id: `temp-pet-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, type: '', customType: '', name: '' }]);
     setPetsList(initialPets);
     setHasPet(tenant.pet?.hasPet || (tenant.pets && tenant.pets.length > 0) || false);
-    const isPrimaryStd = STANDARD_PET_OPTIONS.includes(tenant.pet?.type || '');
-    setPetType(isPrimaryStd ? (tenant.pet?.type || '') : (tenant.pet?.type ? 'อื่นๆ' : ''));
-    setCustomPetType(isPrimaryStd ? '' : (tenant.pet?.type || ''));
+    const primaryCanonical = toCanonicalPetGroup(tenant.pet?.type || '');
+    setPetType(primaryCanonical.type);
+    setCustomPetType(primaryCanonical.customType || (primaryCanonical.type === 'other' && tenant.pet?.type !== 'other' && tenant.pet?.type !== 'อื่นๆ' ? (tenant.pet?.type || '') : ''));
     setPetName(tenant.pet?.name || '');
 
     setIdCardPhoto(tenant.idCardPhotoMock || '');
@@ -2407,7 +2528,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
 
   // Helper to categorize each tenant into: pending, active, inactive
   const getTenantCategory = (t: Tenant): 'pending' | 'active' | 'inactive' => {
-    if (t.status === 'inactive') return 'inactive';
+    if (t.status === 'inactive' || (t.status as any) === 'former' || (t.status as any) === 'terminated' || (t.status as any) === 'checked_out') return 'inactive';
 
     // Quick Add tenants start with OWNER_CREATED or WAITING_LINE_BIND and must be in active
     if (t.lifecycleStage === 'OWNER_CREATED' || t.lifecycleStage === 'WAITING_LINE_BIND') {
@@ -2588,6 +2709,13 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
       email.includes(q) ||
       roomNum.includes(q)
     );
+  }).sort((a, b) => {
+    if (activeStatusTab === 'active') {
+      const roomA = getRoomNumber(a.id) || a.roomNumber || '';
+      const roomB = getRoomNumber(b.id) || b.roomNumber || '';
+      return roomA.localeCompare(roomB, undefined, { numeric: true, sensitivity: 'base' });
+    }
+    return 0;
   });
 
   return (
@@ -3615,24 +3743,12 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                               const matchedRoom = rooms.find(r => r.id === contract.roomId || r.roomNumber === contract.roomId);
                               const roomDisplay = matchedRoom ? `ห้อง ${matchedRoom.roomNumber} (ชั้น ${matchedRoom.floor})` : `ห้อง ${contract.roomId}`;
 
-                              const getExpiringLabel = () => {
-                                if (contract.endDate) {
-                                  const today = new Date();
-                                  const curDay = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-                                  const endDay = new Date(new Date(contract.endDate).getFullYear(), new Date(contract.endDate).getMonth(), new Date(contract.endDate).getDate());
-                                  const diffDays = Math.ceil((endDay.getTime() - curDay.getTime()) / (1000 * 60 * 60 * 24));
-                                  return diffDays > 0 ? `เหลือ ${diffDays} วัน` : 'หมดอายุแล้ว';
-                                }
-                                return 'ใกล้หมดอายุ';
-                              };
+                              const statusInfo = getContractStatusBadgeInfo(contract.status, contract.endDate);
 
-                              const statusMap: Record<string, { label: string; bg: string; text: string; border: string }> = {
-                                active: { label: 'กำลังใช้งาน', bg: 'bg-emerald-50', text: 'text-emerald-700', border: 'border-emerald-200' },
-                                expiring_soon: { label: getExpiringLabel(), bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-200' },
-                                expired: { label: 'หมดอายุแล้ว', bg: 'bg-slate-100', text: 'text-slate-600', border: 'border-slate-200' },
-                                terminated: { label: 'เลิกสัญญาแล้ว', bg: 'bg-rose-50', text: 'text-rose-700', border: 'border-rose-200' },
-                              };
-                              const statusInfo = statusMap[contract.status] || statusMap.active;
+                              const billsPool = Array.isArray(tenantDetailsData?.bills) && tenantDetailsData.bills.length > 0
+                                ? tenantDetailsData.bills
+                                : (bills || []);
+                              const depositState = deriveContractDepositPaymentState(contract.id, billsPool);
 
                               return (
                                 <div
@@ -3699,8 +3815,8 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                                       </p>
                                       <p className="text-[11px] text-slate-600 font-semibold flex items-center gap-1.5">
                                         <span>เงินประกัน {formatBaht(contract.depositAmount)}</span>
-                                        <span className={`px-1.5 py-0.2 rounded text-[9px] font-bold ${contract.depositStatus === 'paid' ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}`}>
-                                          {contract.depositStatus === 'paid' ? 'จ่ายแล้ว' : 'ยังไม่จ่าย'}
+                                        <span className={`px-1.5 py-0.2 rounded text-[9px] font-bold ${depositState.isPaid ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}`}>
+                                          {depositState.isPaid ? 'จ่ายแล้ว' : 'ยังไม่จ่าย'}
                                         </span>
                                       </p>
                                     </div>
@@ -4273,7 +4389,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                   <div className="flex justify-between items-center">
                     <label className="block text-xs font-semibold text-slate-700">ขออนุญาตนำสัตว์เลี้ยงเข้าพัก</label>
                     {(() => {
-                      const pPolicy = getEffectivePetPolicy(dorm);
+                      const pPolicy = getEffectivePetPolicy(propertyDefaultsPolicy);
                       const isAllowed = pPolicy ? pPolicy.allowed !== 'none' : true;
                       return isAllowed ? (
                         <span className="text-[9px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-md">
@@ -4287,19 +4403,6 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                     })()}
                   </div>
                   {(() => {
-                    const pPolicy = getEffectivePetPolicy(dorm);
-                    const isAllowed = pPolicy ? pPolicy.allowed !== 'none' : true;
-                    if (!isAllowed) {
-                      return (
-                        <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-xl flex items-start gap-2 mt-1">
-                          <Dog className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                          <div>
-                            <p className="text-xs font-bold text-amber-900">ไม่อนุญาตให้เลี้ยงสัตว์ทุกชนิด</p>
-                            <p className="text-[10px] text-amber-700 mt-0.5">ตามตั้งค่าระเบียบหอพักที่ลงทะเบียนไว้</p>
-                          </div>
-                        </div>
-                      );
-                    }
                     return (
                       <>
                         <div className="flex items-center gap-2">
@@ -4318,16 +4421,19 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                                 value={petType}
                                 onChange={(e) => {
                                   setPetType(e.target.value);
-                                  if (e.target.value !== 'อื่นๆ') setCustomPetType('');
+                                  if (e.target.value !== 'อื่นๆ' && e.target.value !== 'other') setCustomPetType('');
                                 }}
                                 className="px-2 py-1.5 border border-gray-200 rounded-lg text-xs bg-white text-slate-800 font-medium"
                               >
                                 <option value="">-- เลือกประเภทสัตว์เลี้ยง --</option>
                                 {(() => {
-                                  const allowed = resolveAllowedPetOptions(getEffectivePetPolicy(dorm));
-                                  const options = petType && !allowed.includes(petType) ? [petType, ...allowed] : allowed;
+                                  const allowed = resolveAllowedPetOptions(getEffectivePetPolicy(propertyDefaultsPolicy));
+                                  const hasSelected = allowed.some(a => a.id === petType);
+                                  const options = (!petType || hasSelected)
+                                    ? allowed
+                                    : [{ id: petType as any, label: CANONICAL_PET_GROUP_OPTIONS.find(c => c.id === petType)?.label || petType }, ...allowed];
                                   return options.map(opt => (
-                                    <option key={opt} value={opt}>{opt}</option>
+                                    <option key={opt.id} value={opt.id}>{opt.label}</option>
                                   ));
                                 })()}
                               </select>
@@ -4339,7 +4445,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                                 className="px-2 py-1.5 border border-gray-200 rounded-lg text-xs bg-white text-slate-800"
                               />
                             </div>
-                            {petType === 'อื่นๆ' && (
+                            {(petType === 'อื่นๆ' || petType === 'other') && (
                               <div className="animate-in fade-in slide-in-from-top-1 space-y-1">
                                 <label className="block text-[10px] font-bold text-indigo-700">ระบุประเภทสัตว์เลี้ยง *</label>
                                 <input
@@ -5125,7 +5231,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                   <div className="flex justify-between items-center">
                     <label className="block text-xs font-bold text-slate-700">ขอเลี้ยงสัตว์เลี้ยง</label>
                     {(() => {
-                      const pPolicy = getEffectivePetPolicy(dorm);
+                      const pPolicy = getEffectivePetPolicy(propertyDefaultsPolicy);
                       const isAllowed = pPolicy ? pPolicy.allowed !== 'none' : true;
                       return isAllowed ? (
                         <span className="text-[9px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-md">
@@ -5139,19 +5245,6 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                     })()}
                   </div>
                   {(() => {
-                    const pPolicy = getEffectivePetPolicy(dorm);
-                    const isAllowed = pPolicy ? pPolicy.allowed !== 'none' : true;
-                    if (!isAllowed) {
-                      return (
-                        <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-xl flex items-start gap-2 mt-1">
-                          <Dog className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                          <div>
-                            <p className="text-xs font-bold text-amber-900">ไม่อนุญาตให้เลี้ยงสัตว์ทุกชนิด</p>
-                            <p className="text-[10px] text-amber-700 mt-0.5">ตามตั้งค่าระเบียบหอพักที่ลงทะเบียนไว้</p>
-                          </div>
-                        </div>
-                      );
-                    }
                     return (
                       <>
                         <div className="flex items-center gap-2">
@@ -5197,10 +5290,13 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                                   >
                                     <option value="">-- ประเภท --</option>
                                     {(() => {
-                                      const allowed = resolveAllowedPetOptions(getEffectivePetPolicy(dorm));
-                                      const options = petItem.type && !allowed.includes(petItem.type) ? [petItem.type, ...allowed] : allowed;
+                                      const allowed = resolveAllowedPetOptions(getEffectivePetPolicy(propertyDefaultsPolicy));
+                                      const hasSelected = allowed.some(a => a.id === petItem.type);
+                                      const options = (!petItem.type || hasSelected)
+                                        ? allowed
+                                        : [{ id: petItem.type as any, label: CANONICAL_PET_GROUP_OPTIONS.find(c => c.id === petItem.type)?.label || petItem.type }, ...allowed];
                                       return options.map(opt => (
-                                        <option key={opt} value={opt}>{opt}</option>
+                                        <option key={opt.id} value={opt.id}>{opt.label}</option>
                                       ));
                                     })()}
                                   </select>
@@ -5212,7 +5308,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                                     className="px-2 py-1.5 border border-gray-200 rounded-lg text-xs bg-white text-slate-800"
                                   />
                                 </div>
-                                {petItem.type === 'อื่นๆ' && (
+                                {(petItem.type === 'อื่นๆ' || petItem.type === 'other') && (
                                   <div className="animate-in fade-in slide-in-from-top-1 space-y-1">
                                     <label className="block text-[10px] font-bold text-indigo-700">ระบุประเภทสัตว์เลี้ยง *</label>
                                     <input

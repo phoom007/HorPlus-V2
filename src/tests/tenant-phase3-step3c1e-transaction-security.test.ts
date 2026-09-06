@@ -2011,7 +2011,7 @@ describe('TENANT PHASE 3 STEP 3C.1E: Atomic Profile Save, Document Security & Do
       expect(res.body.error.code).toBe('PET_NOT_ALLOWED');
     });
 
-    it('3. small_pet policy authorizes new bird, fish, rabbit, hamster in English and Thai', async () => {
+    it('3. small_pet policy authorizes new bird, rabbit, hamster in English and Thai, while rejecting fish', async () => {
       tenantRepo.setDormitoryPetPolicy(dormAId, {
         allowed: 'conditional',
         allowedTypes: ['small_pet'],
@@ -2021,7 +2021,7 @@ describe('TENANT PHASE 3 STEP 3C.1E: Atomic Profile Save, Document Security & Do
       await tenantRepo.update(testTenantId, dormAId, { petInfo: [] });
       let tenant = await tenantRepo.findById(testTenantId, dormAId);
 
-      // A. English: bird, fish, rabbit, hamster
+      // A. English: bird, rabbit, hamster, small_pet (all authorized under small_pet)
       const resEn = await request(app)
         .put(`/api/v1/tenants/${testTenantId}/profile`)
         .set(authHeaders(ownerAuth, dormAId))
@@ -2031,9 +2031,9 @@ describe('TENANT PHASE 3 STEP 3C.1E: Atomic Profile Save, Document Security & Do
           version: tenant!.version,
           pets: [
             { type: 'bird', name: 'Tweety' },
-            { type: 'fish', name: 'Nemo' },
             { type: 'rabbit', name: 'Bunny' },
             { type: 'hamster', name: 'Hamtaro' },
+            { type: 'small_pet', name: 'Pip' },
           ],
         });
 
@@ -2041,7 +2041,23 @@ describe('TENANT PHASE 3 STEP 3C.1E: Atomic Profile Save, Document Security & Do
       let updated = await tenantRepo.findById(testTenantId, dormAId);
       expect(updated?.petInfo.length).toBe(4);
 
-      // B. Thai: นก, ปลา, กระต่าย, หนูแฮมสเตอร์
+      // B. Fish / ปลา is NOT authorized by small_pet (canonical decision)
+      tenant = await tenantRepo.findById(testTenantId, dormAId);
+      const resFish = await request(app)
+        .put(`/api/v1/tenants/${testTenantId}/profile`)
+        .set(authHeaders(ownerAuth, dormAId))
+        .send({
+          displayName: tenant!.displayName,
+          phone: tenant!.phone,
+          version: tenant!.version,
+          pets: [
+            { type: 'fish', name: 'Nemo' },
+          ],
+        });
+      expect(resFish.status).toBe(400);
+      expect(resFish.body.error.code).toBe('PET_TYPE_NOT_ALLOWED');
+
+      // C. Thai: นก, กระต่าย, หนูแฮมสเตอร์
       tenant = await tenantRepo.findById(testTenantId, dormAId);
       const resTh = await request(app)
         .put(`/api/v1/tenants/${testTenantId}/profile`)
@@ -2052,7 +2068,6 @@ describe('TENANT PHASE 3 STEP 3C.1E: Atomic Profile Save, Document Security & Do
           version: tenant!.version,
           pets: [
             { type: 'นก', name: 'เจ้านก' },
-            { type: 'ปลา', name: 'เจ้าปลา' },
             { type: 'กระต่าย', name: 'เจ้าต่าย' },
             { type: 'หนูแฮมสเตอร์', name: 'เจ้าหนู' },
           ],
@@ -2060,7 +2075,7 @@ describe('TENANT PHASE 3 STEP 3C.1E: Atomic Profile Save, Document Security & Do
 
       expect(resTh.status).toBe(200);
       updated = await tenantRepo.findById(testTenantId, dormAId);
-      expect(updated?.petInfo.length).toBe(4);
+      expect(updated?.petInfo.length).toBe(3);
     });
 
     it('4. small_pet policy rejects new dog, cat, and arbitrary custom pets', async () => {

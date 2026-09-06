@@ -56,20 +56,50 @@ export function normalizePetTypeKey(pet: { type?: string | null; customType?: st
   // Canonical standard mappings (Thai & English)
   if (rawType === 'dog' || rawType === 'สุนัข' || rawType === 'หมา') return 'dog';
   if (rawType === 'cat' || rawType === 'แมว') return 'cat';
-  if (rawType === 'bird' || rawType === 'นก') return 'bird';
-  if (rawType === 'fish' || rawType === 'ปลา') return 'fish';
-  if (rawType === 'rabbit' || rawType === 'กระต่าย') return 'rabbit';
-  if (rawType === 'hamster' || rawType === 'หนู' || rawType === 'หนูแฮมสเตอร์') return 'hamster';
+  if (
+    rawType === 'small_pet' ||
+    rawType === 'small-pet' ||
+    rawType === 'small_pets' ||
+    rawType === 'สัตว์เล็ก' ||
+    rawType === 'bird' ||
+    rawType === 'นก' ||
+    rawType === 'rabbit' ||
+    rawType === 'กระต่าย' ||
+    rawType === 'hamster' ||
+    rawType === 'หนู' ||
+    rawType === 'หนูแฮมสเตอร์'
+  ) {
+    return 'small_pet';
+  }
+
+  // legacy fish/ปลา -> MUST NOT normalize to small_pet -> treat as legacy custom/exotic identity for grandfather preservation
+  if (rawType === 'fish' || rawType === 'ปลา') {
+    return 'other:fish';
+  }
 
   // Explicit other / custom types
-  if (rawType === 'other' || rawType === 'others' || rawType === 'อื่นๆ') {
+  if (rawType === 'other' || rawType === 'others' || rawType === 'อื่นๆ' || rawType === 'สัตว์แปลก') {
     if (rawCustom) {
       if (rawCustom === 'dog' || rawCustom === 'สุนัข' || rawCustom === 'หมา') return 'dog';
       if (rawCustom === 'cat' || rawCustom === 'แมว') return 'cat';
-      if (rawCustom === 'bird' || rawCustom === 'นก') return 'bird';
-      if (rawCustom === 'fish' || rawCustom === 'ปลา') return 'fish';
-      if (rawCustom === 'rabbit' || rawCustom === 'กระต่าย') return 'rabbit';
-      if (rawCustom === 'hamster' || rawCustom === 'หนู' || rawCustom === 'หนูแฮมสเตอร์') return 'hamster';
+      if (
+        rawCustom === 'small_pet' ||
+        rawCustom === 'small-pet' ||
+        rawCustom === 'small_pets' ||
+        rawCustom === 'สัตว์เล็ก' ||
+        rawCustom === 'bird' ||
+        rawCustom === 'นก' ||
+        rawCustom === 'rabbit' ||
+        rawCustom === 'กระต่าย' ||
+        rawCustom === 'hamster' ||
+        rawCustom === 'หนู' ||
+        rawCustom === 'หนูแฮมสเตอร์'
+      ) {
+        return 'small_pet';
+      }
+      if (rawCustom === 'fish' || rawCustom === 'ปลา') {
+        return 'other:fish';
+      }
       return `other:${rawCustom}`;
     }
     return 'other';
@@ -82,6 +112,7 @@ export function normalizePetTypeKey(pet: { type?: string | null; customType?: st
 
   // If type was empty but customType provided
   if (rawCustom) {
+    if (rawCustom === 'fish' || rawCustom === 'ปลา') return 'other:fish';
     return `other:${rawCustom}`;
   }
 
@@ -100,14 +131,40 @@ export function expandAllowedPetPolicyTypes(allowedTypes: string[]): {
     if (!t) continue;
     allowedRawTerms.add(t);
 
-    if (t === 'small_pet' || t === 'small-pet' || t === 'small_pets') {
-      for (const sp of ['bird', 'fish', 'rabbit', 'hamster']) {
+    if (t === 'dog' || t === 'สุนัข' || t === 'หมา') {
+      allowedCanonicals.add('dog');
+      allowedRawTerms.add('dog');
+      allowedRawTerms.add('สุนัข');
+      continue;
+    }
+
+    if (t === 'cat' || t === 'แมว') {
+      allowedCanonicals.add('cat');
+      allowedRawTerms.add('cat');
+      allowedRawTerms.add('แมว');
+      continue;
+    }
+
+    if (t === 'small_pet' || t === 'small-pet' || t === 'small_pets' || t === 'สัตว์เล็ก') {
+      allowedCanonicals.add('small_pet');
+      allowedRawTerms.add('small_pet');
+      allowedRawTerms.add('สัตว์เล็ก');
+      // legacy raw terms for small_pet (birds, rabbits, hamsters) - explicitly excluding fish
+      for (const sp of ['bird', 'rabbit', 'hamster']) {
         allowedCanonicals.add(sp);
         allowedRawTerms.add(sp);
       }
-      for (const th of ['นก', 'ปลา', 'กระต่าย', 'หนู', 'หนูแฮมสเตอร์']) {
+      for (const th of ['นก', 'กระต่าย', 'หนู', 'หนูแฮมสเตอร์']) {
         allowedRawTerms.add(th);
       }
+      continue;
+    }
+
+    if (t === 'other' || t === 'others' || t === 'อื่นๆ' || t === 'สัตว์แปลก') {
+      allowedCanonicals.add('other');
+      allowedRawTerms.add('other');
+      allowedRawTerms.add('อื่นๆ');
+      allowedRawTerms.add('สัตว์แปลก');
       continue;
     }
 

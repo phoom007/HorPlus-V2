@@ -691,6 +691,8 @@ export async function seedLocal07Data() {
     createdTenants[tc.num] = tenant;
 
     // Contract
+    const durationMonths = tc.durationMonths ? tc.durationMonths : (tc.isMovedOut ? 2 : 12);
+
     const contract = await prisma.contract.create({
       data: {
         dormitoryId: compDorm.id,
@@ -699,9 +701,14 @@ export async function seedLocal07Data() {
         contractNumber: `CTR-2026-${tc.num}`,
         startDate: contractStartDate,
         endDate: contractEndDate,
+        durationMonths,
+        rentBillingType: 'monthly',
         rentAmount: tc.rent,
         depositAmount: tc.deposit,
-        status: tc.isMovedOut ? 'ended' : 'active',
+        status: tc.isMovedOut ? 'terminated' : 'active',
+        terminatedAt: tc.isMovedOut ? contractEndDate : null,
+        terminationEffectiveDate: tc.isMovedOut ? contractEndDate : null,
+        terminationReason: tc.isMovedOut ? 'ย้ายออกตามกำหนดและส่งมอบห้องเรียบร้อย' : null,
         createdAt: contractCreatedAt,
       },
     });
@@ -713,8 +720,8 @@ export async function seedLocal07Data() {
         dormitoryId: compDorm.id,
         roomId: room.id,
         tenantId: tenant.id,
-        startedAt: tc.isMovedOut ? new Date('2025-08-01') : new Date('2026-01-01'),
-        endedAt: tc.isMovedOut ? new Date('2026-07-31') : null,
+        startedAt: tc.isMovedOut ? contractStartDate : new Date('2026-01-01'),
+        endedAt: tc.isMovedOut ? contractEndDate : null,
         status: tc.isMovedOut ? 'ENDED' : 'ACTIVE',
       },
     });
@@ -761,6 +768,8 @@ export async function seedLocal07Data() {
           contractNumber: `CTR-2027-202-EXT`,
           startDate: new Date('2027-01-01'),
           endDate: new Date('2027-12-31'),
+          durationMonths: 12,
+          rentBillingType: 'monthly',
           rentAmount: tc.rent,
           depositAmount: tc.deposit,
           status: 'active',
