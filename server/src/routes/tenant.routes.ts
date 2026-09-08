@@ -271,12 +271,13 @@ export function createTenantRouter(
         }
 
         const fileBuffer = await localStorageProvider.getFile(tenant.idCardObjectKey);
-        res.setHeader('Content-Type', tenant.idCardMimeType || 'image/webp');
+        const isPdf = tenant.idCardMimeType === 'application/pdf' || tenant.idCardObjectKey.endsWith('.pdf');
+        res.setHeader('Content-Type', isPdf ? 'application/pdf' : (tenant.idCardMimeType || 'image/webp'));
         res.setHeader('X-Content-Type-Options', 'nosniff');
         res.setHeader('Cache-Control', 'private, no-store, no-cache, must-revalidate');
         res.setHeader('Pragma', 'no-cache');
         res.setHeader('Expires', '0');
-        res.setHeader('Content-Disposition', 'inline; filename="tenant-id-document.webp"');
+        res.setHeader('Content-Disposition', `inline; filename="tenant-id-document.${isPdf ? 'pdf' : 'webp'}"`);
 
         return res.send(fileBuffer);
       } catch (err: any) {

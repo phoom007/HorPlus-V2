@@ -57,6 +57,8 @@ export function validateImageMagicBytes(buffer: Buffer): ValidatedImageInfo {
   throw new AppError('รองรับเฉพาะไฟล์รูปภาพประเภท PNG, JPG และ WebP เท่านั้น', 400, 'UNSUPPORTED_IMAGE_FORMAT');
 }
 
+import { getCanonicalLogosDir, resolveSafeLocalPath } from '../utils/storage-path.util.js';
+
 export interface DormitoryLogoStorageProvider {
   save(objectKey: string, buffer: Buffer, mimeType: string): Promise<void>;
   getStream(objectKey: string): Promise<Readable>;
@@ -67,14 +69,14 @@ export class LocalDormitoryLogoStorage implements DormitoryLogoStorageProvider {
   private storageDir: string;
 
   constructor(customStorageDir?: string) {
-    this.storageDir = customStorageDir || path.join(process.cwd(), 'storage', 'logos');
+    this.storageDir = customStorageDir ? path.resolve(customStorageDir) : getCanonicalLogosDir();
     if (!fs.existsSync(this.storageDir)) {
       fs.mkdirSync(this.storageDir, { recursive: true });
     }
   }
 
   async save(objectKey: string, buffer: Buffer): Promise<void> {
-    const fullPath = path.join(this.storageDir, ...objectKey.split('/'));
+    const fullPath = resolveSafeLocalPath(this.storageDir, objectKey);
     const dir = path.dirname(fullPath);
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
@@ -83,7 +85,7 @@ export class LocalDormitoryLogoStorage implements DormitoryLogoStorageProvider {
   }
 
   async getStream(objectKey: string): Promise<Readable> {
-    const fullPath = path.join(this.storageDir, ...objectKey.split('/'));
+    const fullPath = resolveSafeLocalPath(this.storageDir, objectKey);
     if (!fs.existsSync(fullPath)) {
       throw new AppError('Logo file not found', 404, 'LOGO_NOT_FOUND');
     }
@@ -91,7 +93,7 @@ export class LocalDormitoryLogoStorage implements DormitoryLogoStorageProvider {
   }
 
   async delete(objectKey: string): Promise<void> {
-    const fullPath = path.join(this.storageDir, ...objectKey.split('/'));
+    const fullPath = resolveSafeLocalPath(this.storageDir, objectKey);
     if (fs.existsSync(fullPath)) {
       await fs.promises.unlink(fullPath).catch(() => {});
     }

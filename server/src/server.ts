@@ -5,7 +5,8 @@ import { backfillRoomOperationalStatusBaseline } from './services/room-operation
 import { createApp } from './app.js';
 import { validateEnv, redactSecrets } from './config/env.js';
 import { logger } from './config/logger.js';
-import { disconnectPrisma, checkDatabaseConnection } from './db/prisma.js';
+import { disconnectPrisma, checkDatabaseConnection, pingDatabaseOrThrow } from './db/prisma.js';
+import { withDatabaseRetry } from './db/db-retry.js';
 import { disconnectRedis, checkRedisConnection, connectRedis } from './db/redis.js';
 
 async function startServer() {
@@ -22,28 +23,43 @@ async function startServer() {
 
   logger.info({ config: redactSecrets(env as Record<string, unknown>) }, 'Environment validated successfully. Starting HorPlus API server...');
 
-  // Pre-flight connection checks (non-blocking log warning if down on boot)
+  // Connect Redis and check connection
   await connectRedis().catch(() => { /* handled by checkRedisConnection failure log */ });
-  const [dbOk, redisOk] = await Promise.all([
-    checkDatabaseConnection(),
-    checkRedisConnection(),
-  ]);
-
-  if (!dbOk) {
-    logger.warn('Database connection check returned DOWN on server startup.');
-  }
+  const redisOk = await checkRedisConnection();
   if (!redisOk) {
     logger.warn('Redis connection check returned DOWN on server startup.');
+  }
+
+  // Database Preflight Gate: bounded retry for transient connection issues
+  try {
+    await withDatabaseRetry(() => pingDatabaseOrThrow(), {
+      maxAttempts: 5,
+      operationName: 'Database preflight',
+    });
+    logger.info('Database startup preflight check: READY');
+  } catch (err: any) {
+    logger.error(
+      { errCode: err.code || err.name, message: err.message },
+      'Fatal: Database is unavailable after bounded startup retries. Failing closed before accepting traffic.'
+    );
+    process.exit(1);
   }
 
   const app = createApp();
   const server = http.createServer(app);
 
   // Establish room operational status baseline synchronously before accepting traffic
+  // Protected with bounded retry for transient connection drops
   try {
-    await backfillRoomOperationalStatusBaseline();
+    await withDatabaseRetry(() => backfillRoomOperationalStatusBaseline(), {
+      maxAttempts: 5,
+      operationName: 'Room operational status baseline initialization',
+    });
   } catch (err: any) {
-    logger.error({ err }, 'Fatal: Failed to initialize room operational status baseline on startup.');
+    logger.error(
+      { errCode: err.code || err.name, message: err.message },
+      'Fatal: Failed to initialize room operational status baseline on startup.'
+    );
     process.exit(1);
   }
 

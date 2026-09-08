@@ -19,6 +19,8 @@
     "db:logs": "docker compose logs -f",
     "uat:infra:up": "docker compose -f docker-compose.windows-pilot.yml up -d db redis",
     "uat:infra:status": "docker compose -f docker-compose.windows-pilot.yml ps",
+    "uat:preflight": "node scripts/local07/preflight.mjs",
+    "uat:start": "node scripts/local07/start-stack.mjs",
     "uat:refresh": "tsx scripts/local07/refresh.mjs",
     "uat:reset": "tsx scripts/local07/reset.mjs",
     "uat:seed": "tsx scripts/local07/seed.mjs",

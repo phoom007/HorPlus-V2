@@ -12,6 +12,21 @@ import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } fro
 import { PrismaClient } from '@prisma/client';
 import { AppError } from '../types/index.js';
 
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+import {
+  findProjectRoot,
+  getCanonicalSignaturesDir,
+  resolveSafeLocalPath,
+} from '../utils/storage-path.util.js';
+
+export { findProjectRoot };
+export const getCanonicalSignatureStorageDir = getCanonicalSignaturesDir;
+export const resolveSafeSignaturePath = resolveSafeLocalPath;
+
 export interface SignatureUploadResult {
   id: string;
   dormitoryId: string;
@@ -35,19 +50,27 @@ export class LocalOwnerSignatureStorage implements OwnerSignatureStorageProvider
     if (process.env.NODE_ENV === 'production') {
       throw new AppError('LocalOwnerSignatureStorage cannot be used in production environment', 500, 'STORAGE_UNCONFIGURED');
     }
-    this.storageDir = customStorageDir || path.join(process.cwd(), 'storage', 'signatures');
+    this.storageDir = customStorageDir ? path.resolve(customStorageDir) : getCanonicalSignatureStorageDir();
     if (!fs.existsSync(this.storageDir)) {
       fs.mkdirSync(this.storageDir, { recursive: true });
     }
   }
 
+  public getStorageDir(): string {
+    return this.storageDir;
+  }
+
   async save(objectKey: string, buffer: Buffer): Promise<void> {
-    const filePath = path.join(this.storageDir, path.basename(objectKey));
+    const filePath = resolveSafeSignaturePath(this.storageDir, objectKey);
+    const parentDir = path.dirname(filePath);
+    if (!fs.existsSync(parentDir)) {
+      fs.mkdirSync(parentDir, { recursive: true });
+    }
     await fs.promises.writeFile(filePath, buffer);
   }
 
   async getStream(objectKey: string): Promise<Readable> {
-    const filePath = path.join(this.storageDir, path.basename(objectKey));
+    const filePath = resolveSafeSignaturePath(this.storageDir, objectKey);
     if (!fs.existsSync(filePath)) {
       throw new AppError('Signature file not found', 404, 'SIGNATURE_NOT_FOUND');
     }
@@ -55,9 +78,9 @@ export class LocalOwnerSignatureStorage implements OwnerSignatureStorageProvider
   }
 
   async delete(objectKey: string): Promise<void> {
-    const filePath = path.join(this.storageDir, path.basename(objectKey));
+    const filePath = resolveSafeSignaturePath(this.storageDir, objectKey);
     if (fs.existsSync(filePath)) {
-      await fs.promises.unlink(filePath);
+      await fs.promises.unlink(filePath).catch(() => {});
     }
   }
 }

@@ -141,8 +141,8 @@ export async function ensureGoldenBillingTimeline() {
     },
   });
 
-  // Seed deterministic August meter readings for all occupied rooms
-  const occupiedRooms = dorm.rooms.filter((r) => r.status === 'occupied');
+  // Seed deterministic August meter readings for all occupied monthly rooms (exclude Term 105 and Daily 106)
+  const occupiedRooms = dorm.rooms.filter((r) => r.status === 'occupied' && r.roomNumber !== '105' && r.roomNumber !== '106');
   let augustMetersCreated = 0;
 
   for (const r of occupiedRooms) {

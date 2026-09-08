@@ -33,6 +33,7 @@ import {
   doHalfOpenIntervalsOverlap,
   hasBookableGapInCycle,
 } from '../utils/occupancy-interval.util.js';
+import { resolveCycleAwareVehicleCount, resolveCurrentActiveVehicleCount } from '../utils/vehicle-billing.util.js';
 
 function addDays(dateStr: string, days: number): string {
   const [y, m, d] = dateStr.split('-').map(Number);
@@ -1115,7 +1116,7 @@ export class MeterService {
         roomId,
         tx,
         'MONTHLY_UTILITY',
-        new Date(),
+        activeBill.billingDate || new Date(),
         activeBill.dueDate
       );
     } catch (err: any) {
@@ -1849,7 +1850,7 @@ export class MeterService {
     const allContracts = await prisma.contract.findMany({
       where: {
         dormitoryId,
-        status: { in: ['active', 'approved', 'expiring_soon', 'pending_signature', 'waiting_extension', 'checking_out', 'ended', 'terminated'] },
+        status: { in: ['active', 'approved_scheduled', 'expiring_soon', 'pending_signature', 'waiting_extension', 'checking_out', 'ended', 'terminated'] },
         deletedAt: null,
       },
       include: {
@@ -1938,7 +1939,7 @@ export class MeterService {
     // 4. Future contracts & provisional terms starting strictly within this cycle
     const futureContracts = allContracts.filter((c) => {
       const startStr = toBangkokDateString(c.startDate);
-      return startStr >= cycleStartStr && startStr <= cycleEndStr && ['active', 'expiring_soon', 'pending_signature', 'waiting_extension'].includes(c.status);
+      return startStr >= cycleStartStr && startStr <= cycleEndStr && ['active', 'approved_scheduled', 'expiring_soon', 'pending_signature', 'waiting_extension'].includes(c.status);
     });
 
     const futureProvisionalTerms = allProvisionalTerms.filter((p) => {
@@ -1959,7 +1960,7 @@ export class MeterService {
     const householdCounts = await this.getHouseholdCountsByCycle(dormitoryId, billingCycleId);
     const householdMap = new Map(householdCounts.map((h) => [h.roomId, h.currentHouseholdPeopleCount]));
 
-    // Vehicles for per-vehicle parking mode
+    // Vehicles for per-vehicle parking mode (cycle-aware against explicit asOfBusinessDate)
     const allTenantIds = Array.from(
       new Set([
         ...visibleContracts.map((c) => c.tenantId),
@@ -1975,13 +1976,14 @@ export class MeterService {
           where: {
             dormitoryId,
             tenantId: { in: allTenantIds },
-            deletedAt: null,
           },
         })
       : [];
     const vehicleCountMap = new Map<string, number>();
-    for (const v of vehicles) {
-      vehicleCountMap.set(v.tenantId, (vehicleCountMap.get(v.tenantId) || 0) + 1);
+    for (const tid of allTenantIds) {
+      const tenantVehicles = vehicles.filter((v) => v.tenantId === tid);
+      const count = resolveCurrentActiveVehicleCount(tenantVehicles);
+      vehicleCountMap.set(tid, count);
     }
 
     const roomContractMap = new Map<string, typeof visibleContracts[0]>();

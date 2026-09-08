@@ -447,13 +447,6 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({
       bgClass: 'bg-purple-50 text-purple-600'
     },
     {
-      id: 'contracts',
-      title: 'สัญญาเช่า',
-      target: 'contracts',
-      icon: FileText,
-      bgClass: 'bg-amber-50 text-amber-600'
-    },
-    {
       id: 'maintenance',
       title: 'งานแจ้งซ่อม',
       target: 'maintenance',

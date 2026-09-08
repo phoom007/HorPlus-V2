@@ -22,6 +22,7 @@ import { calculateInstallmentSchedule } from '../utils/installment-calculator.ut
 import { normalizeUtilityBillingMode } from '../utils/billing-mode-normalizer.util.js';
 import { calculateCanonicalMonthlyUtility } from '../utils/monthly-utility-calculator.util.js';
 import { isAgreementEligibleForBillingCycle } from '../utils/calendar-date.util.js';
+import { resolveCycleAwareVehicleCount, resolveCurrentActiveVehicleCount } from '../utils/vehicle-billing.util.js';
 import { getPrismaClient } from '../db/prisma.js';
 
 /**
@@ -209,8 +210,10 @@ export class BillingService {
     billingCycle: { periodStart: Date | string; periodEnd: Date | string },
     tx?: any
   ): Promise<{ contract: any | null; provisionalTerm: any | null }> {
-    // 1. Fetch active contracts for room
-    const activeContracts = await this.contractRepo.findActiveContractsForRoom(dormitoryId, roomId);
+    // 1. Fetch cycle-eligible contracts for room (cleanly separated from physical-active semantics)
+    const activeContracts = typeof (this.contractRepo as any).findCycleEligibleContractsForRoom === 'function'
+      ? await (this.contractRepo as any).findCycleEligibleContractsForRoom(dormitoryId, roomId, tx)
+      : await this.contractRepo.findActiveContractsForRoom(dormitoryId, roomId);
 
     if (activeContracts && activeContracts.length > 0) {
       const overlappingContracts = activeContracts.filter((c: any) =>
@@ -470,8 +473,17 @@ export class BillingService {
       let vehicleCount = 0;
       const parkingMode = (rateSnapshot as any).parkingFeeMode || 'room';
       if (parkingMode === 'vehicle' || parkingMode === 'per_vehicle') {
-        const vehicles = tenantId ? await this.tenantRepo.findVehicles(tenantId, dormitoryId) : [];
-        vehicleCount = vehicles.length;
+        let vehicles: any[] = [];
+        if (tenantId) {
+          if (client?.tenantVehicle?.findMany) {
+            vehicles = await client.tenantVehicle.findMany({
+              where: { tenantId, dormitoryId, deletedAt: null },
+            });
+          } else {
+            vehicles = await this.tenantRepo.findVehicles(tenantId, dormitoryId);
+          }
+        }
+        vehicleCount = resolveCurrentActiveVehicleCount(vehicles);
       }
 
       const cycleSnapshot = await client.roomBillingCycleSnapshot.findUnique({
@@ -1137,6 +1149,186 @@ export class BillingService {
   ): Promise<BillRecalculationEligibilityResult> {
     return resolveBillDirectRecalculationEligibilityInTx(dormitoryId, billId, tx);
   }
+
+  /**
+   * Authoritative dynamic parking synchronization for completely open/unpaid Monthly Utility Bills.
+   * Product Owner Decisions:
+   * 1. Mutable parking requires BOTH:
+   *    - paidAmount === 0 (no payments received)
+   *    - canonical direct-recalculation eligibility = eligible (no submitted slips, payments under review, allocations, or receipts)
+   * 2. Price and mode are governed strictly by the bill's cycle BillingRateSnapshot.
+   * 3. Vehicle quantity dynamically reflects current active TenantVehicle records.
+   * 4. BillItem synchronization is idempotent using canonical item type ('parking') or code ('PARKING'),
+   *    preserving all other line items (rent, water, electricity, common, internet, custom).
+   * 5. Recomputes bill subtotal, fine, total, outstanding using canonical decimal math.
+   */
+  public async syncOpenUnpaidMonthlyBillParkingInTx(
+    dormitoryId: string,
+    tenantId: string,
+    tx?: any
+  ): Promise<void> {
+    const prisma = tx || getPrismaClient();
+
+    // Find candidate rooms for this tenant
+    const activeContracts = await prisma.contract.findMany({
+      where: { tenantId, dormitoryId, deletedAt: null },
+      select: { roomId: true },
+    });
+    const activeProvs = prisma.provisionalRentalTerm
+      ? await prisma.provisionalRentalTerm.findMany({
+          where: { tenantId, dormitoryId, deletedAt: null },
+          select: { roomId: true },
+        })
+      : [];
+    const roomIds = Array.from(
+      new Set([
+        ...activeContracts.map((c: any) => c.roomId),
+        ...activeProvs.map((p: any) => p.roomId),
+      ])
+    );
+
+    // Query open Monthly Utility bills for this tenant/room
+    const candidateBills = await prisma.bill.findMany({
+      where: {
+        dormitoryId,
+        billKind: 'MONTHLY_UTILITY',
+        status: { in: ['UNPAID', 'ISSUED', 'OVERDUE', 'DRAFT', 'PUBLISHED'] },
+        OR: [
+          { tenantId },
+          ...(roomIds.length > 0 ? [{ roomId: { in: roomIds } }] : []),
+        ],
+      },
+      include: {
+        items: true,
+      },
+    });
+
+    if (!candidateBills || candidateBills.length === 0) {
+      return;
+    }
+
+    // Query current active vehicles for this tenant
+    const rawVehicles = await prisma.tenantVehicle.findMany({
+      where: {
+        dormitoryId,
+        tenantId,
+        deletedAt: null,
+      },
+    });
+    const currentActiveCount = resolveCurrentActiveVehicleCount(rawVehicles);
+
+    for (const bill of candidateBills) {
+      // 1. Strict Payment Freeze Boundary: paidAmount must be strictly 0
+      const paidNum = Number(bill.paidAmount || 0);
+      if (paidNum > 0) {
+        continue; // FROZEN — money already received
+      }
+
+      // 2. Strict Financial Evidence Guard: must be eligible for direct recalculation
+      const eligibility = await resolveBillDirectRecalculationEligibilityInTx(dormitoryId, bill.id, tx);
+      if (!eligibility.eligible) {
+        continue; // FROZEN — pending slips, payment under review, allocations, etc.
+      }
+
+      // 3. Billing Rate Snapshot Authority: read rate and mode from snapshot
+      const rateSnapshot = await this.billingCycleRepo.findRateSnapshot(bill.billingCycleId, dormitoryId);
+      if (!rateSnapshot) {
+        continue;
+      }
+
+      const rawParkingMode = (rateSnapshot as any).parkingFeeMode || 'room';
+      // Only per_vehicle mode dynamically reacts to vehicle count changes
+      if (rawParkingMode !== 'vehicle' && rawParkingMode !== 'per_vehicle') {
+        continue;
+      }
+
+      const parkingRate = toDecimal((rateSnapshot as any).parkingFee ?? '0.00');
+      const vQtyDec = toDecimal(currentActiveCount.toString());
+      const newParkingAmountDec = mulDecimals(vQtyDec, parkingRate);
+
+      // 4. Idempotent BillItem synchronization using canonical type/code
+      await prisma.billItem.deleteMany({
+        where: {
+          billId: bill.id,
+          dormitoryId,
+          OR: [
+            { type: 'parking' },
+            { code: 'PARKING' },
+          ],
+        },
+      });
+
+      if (currentActiveCount > 0 && !isZeroDecimal(parkingRate)) {
+        await prisma.billItem.create({
+          data: {
+            dormitoryId,
+            billId: bill.id,
+            type: 'parking',
+            code: 'PARKING',
+            description: `ค่าที่จอดรถ (${currentActiveCount} คัน)`,
+            quantity: formatDecimal(vQtyDec),
+            unit: 'vehicle',
+            unitPrice: formatDecimal(parkingRate),
+            amount: formatDecimal(newParkingAmountDec),
+            metadata: {
+              mode: 'vehicle',
+              vehicleCount: currentActiveCount,
+              rateSnapshotId: rateSnapshot.id,
+            },
+            displayOrder: 5,
+          },
+        });
+      }
+
+      // 5. Recompute bill totals via existing billing authority math
+      const allCurrentItems = await prisma.billItem.findMany({
+        where: { billId: bill.id, dormitoryId },
+      });
+
+      let subtotalDec = toDecimal('0.00');
+      let fineDec = toDecimal('0.00');
+      for (const item of allCurrentItems) {
+        if (item.type === 'late_fee' || item.type === 'fine') {
+          fineDec = addDecimals(fineDec, item.amount);
+        } else {
+          subtotalDec = addDecimals(subtotalDec, item.amount);
+        }
+      }
+      const discountDec = toDecimal(bill.discountAmount || '0.00');
+      const rawTotal = subDecimals(addDecimals(subtotalDec, fineDec), discountDec);
+      const totalDec = compareDecimals(rawTotal, '0.00') < 0 ? toDecimal('0.00') : rawTotal;
+      const paidDec = toDecimal('0.00');
+      const outstandingDec = totalDec;
+
+      await prisma.bill.update({
+        where: { id: bill.id },
+        data: {
+          subtotal: formatDecimal(subtotalDec),
+          fineAmount: formatDecimal(fineDec),
+          totalAmount: formatDecimal(totalDec),
+          paidAmount: formatDecimal(paidDec),
+          outstandingAmount: formatDecimal(outstandingDec),
+          version: { increment: 1 },
+        },
+      });
+
+      if (this.auditService) {
+        await this.auditService.log({
+          dormitoryId,
+          actorUserId: 'system',
+          action: 'VEHICLE_MUTATION_PARKING_SYNC',
+          resourceType: 'bill',
+          resourceId: bill.id,
+          details: {
+            tenantId,
+            vehicleCount: currentActiveCount,
+            newParkingAmount: formatDecimal(newParkingAmountDec),
+            newTotal: formatDecimal(totalDec),
+          },
+        });
+      }
+    }
+  }
 }
 
 export interface BillRecalculationEligibilityResult {
@@ -1240,8 +1432,8 @@ export async function resolveBillDirectRecalculationEligibilityInTx(
     };
   }
 
-  // Allowed editable statuses: UNPAID, OVERDUE, DRAFT, PUBLISHED
-  if (!['UNPAID', 'OVERDUE', 'DRAFT', 'PUBLISHED'].includes(rawStatus)) {
+  // Allowed editable statuses: UNPAID, ISSUED, OVERDUE, DRAFT, PUBLISHED
+  if (!['UNPAID', 'ISSUED', 'OVERDUE', 'DRAFT', 'PUBLISHED'].includes(rawStatus)) {
     return {
       eligible: false,
       code: 'BILL_STATUS_NOT_ELIGIBLE',

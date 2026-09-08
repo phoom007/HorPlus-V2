@@ -250,6 +250,7 @@ export function getTargetQueriesForTab(targetTab: string, dormId: string, cycleI
       return [
         { queryKey: queryKeys.tenants(dormId), queryFn: () => fetchAllPaginated<Tenant>('/api/v1/tenants', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.TENANTS },
         { queryKey: queryKeys.rooms(dormId), queryFn: () => fetchAuthoritativeRooms(dormHeader), staleTime: STALE_TIMES.ROOMS },
+        { queryKey: queryKeys.buildings(dormId), queryFn: () => fetchAllPaginated<Building>('/api/v1/properties/buildings', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.BUILDINGS },
         { queryKey: queryKeys.contracts(dormId), queryFn: () => fetchAllPaginated<Contract>('/api/v1/contracts', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.CONTRACTS },
         { queryKey: queryKeys.bills(dormId), queryFn: () => fetchAllPaginated<Bill>('/api/v1/bills', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.BILLS },
       ];
@@ -257,6 +258,7 @@ export function getTargetQueriesForTab(targetTab: string, dormId: string, cycleI
       return [
         { queryKey: queryKeys.contracts(dormId), queryFn: () => fetchAllPaginated<Contract>('/api/v1/contracts', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.CONTRACTS },
         { queryKey: queryKeys.rooms(dormId), queryFn: () => fetchAuthoritativeRooms(dormHeader), staleTime: STALE_TIMES.ROOMS },
+        { queryKey: queryKeys.buildings(dormId), queryFn: () => fetchAllPaginated<Building>('/api/v1/properties/buildings', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.BUILDINGS },
         { queryKey: queryKeys.tenants(dormId), queryFn: () => fetchAllPaginated<Tenant>('/api/v1/tenants', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.TENANTS },
         { queryKey: queryKeys.bills(dormId), queryFn: () => fetchAllPaginated<Bill>('/api/v1/bills', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.BILLS },
       ];
@@ -472,6 +474,18 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
     enabled: isQueryEnabled,
     staleTime: STALE_TIMES.BILLING_CYCLES,
   });
+
+  const activeMembership = activeMemberships.find((m: any) => m.dormitoryId === activeDormitoryId) || activeMemberships[0];
+  const dormitoryQuery = useQuery({
+    queryKey: queryKeys.dormitory(activeDormitoryId),
+    queryFn: async () => {
+      const dataProvider = getDataProvider();
+      return await dataProvider.dormitories.getById(activeDormitoryId);
+    },
+    enabled: isQueryEnabled,
+    staleTime: STALE_TIMES.dormitory,
+  });
+  const currentDormitory = dormitoryQuery.data || activeMembership?.dormitory || null;
 
   const billingCycles: any[] = billingCyclesQuery.data?.data || [];
 
@@ -922,7 +936,6 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
     { id: 'payments', label: 'การชำระเงิน', icon: FileCheck2, roles: ['owner', 'manager'] },
     { id: 'rooms', label: 'ห้องพัก', icon: BuildingIcon, roles: ['owner', 'manager'] },
     { id: 'tenants', label: 'ผู้เช่า', icon: Users, roles: ['owner', 'manager'] },
-    { id: 'contracts', label: 'สัญญาเช่า', icon: FileText, roles: ['owner', 'manager'] },
     { id: 'maintenance', label: 'งานแจ้งซ่อม', icon: Wrench, roles: ['owner', 'manager', 'staff'] },
     { id: 'announcements', label: 'ประชาสัมพันธ์', icon: Megaphone, roles: ['owner', 'manager'] },
     { id: 'reports', label: 'รายงานสถิติ', icon: BarChart4, roles: ['owner', 'manager'] },
@@ -931,8 +944,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
     { id: 'settings', label: 'ตั้งค่าระบบ', icon: Settings, roles: ['owner'] }
   ];
 
-  // Find membership for active dormitory
-  const activeMembership = activeMemberships.find((m: any) => m.dormitoryId === activeDormitoryId) || activeMemberships[0];
+
 
   // Authoritative Role Normalization (Fail-Closed: returns null if unmapped)
   const rawRole = activeMembership?.roleCode || (typeof activeMembership?.role === 'object' ? activeMembership?.role?.code : activeMembership?.role) || authCtx.user?.roleCode || (typeof authCtx.user?.role === 'object' ? authCtx.user?.role?.code : authCtx.user?.role) || user?.roleId || user?.role || (authCtx.userType === 'owner' ? 'OWNER' : undefined) || 'OWNER';
@@ -1060,8 +1072,10 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
         return (
           <OwnerTenants
             dormitoryId={activeDormitoryId}
+            dormitory={currentDormitory}
             tenants={tenants}
             rooms={rooms}
+            buildings={buildings}
             bills={bills}
             contracts={contracts}
             selectedCycle={selectedCycleCode}
@@ -1139,6 +1153,8 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
       case 'contracts':
         return (
           <OwnerContracts
+            dormitoryId={activeDormitoryId}
+            buildings={buildings}
             contracts={contracts}
             tenants={tenants}
             rooms={rooms}

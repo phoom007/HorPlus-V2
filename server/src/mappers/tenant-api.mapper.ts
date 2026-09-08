@@ -78,6 +78,20 @@ export interface SafeTenantApiDTO {
   updatedAt: string | Date;
   deletedAt?: string | Date | null;
   lineFriendId?: string | null;
+  requestedRoomId?: string | null;
+  roomId?: string | null;
+  registrationRequestId?: string | null;
+  rentalType?: string | null;
+  rentalPlan?: string | null;
+  requestedRent?: number | null;
+  requestedDeposit?: number | null;
+  requestedStartDate?: string | null;
+  requestedEndDate?: string | null;
+  requestedDurationMonths?: number | null;
+  requestedDays?: number | null;
+  requestedDailyRate?: number | null;
+  requestedAttachments?: any[] | null;
+  acceptanceSnapshot?: any | null;
 
   // Safe Document Presentation Metadata (strictly NO internal object keys or uploaded-by ids)
   hasIdentityDocument: boolean;
@@ -277,6 +291,7 @@ export interface SafeTenantDetailsApiDTO {
   contracts: SafeContractApiDTO[];
   occupancies: SafeOccupancyApiDTO[];
   dailyStays: SafeDailyStayApiDTO[];
+  provisionalRentalTerms?: any[];
   bills: SafeBillApiDTO[];
   settlements: SafeSettlementApiDTO[];
 }
@@ -388,6 +403,21 @@ export function toTenantApiDTO(raw: any): SafeTenantApiDTO | null {
     idCardMimeType: raw.idCardMimeType ?? null,
     idCardByteSize: raw.idCardByteSize ?? null,
     idCardSha256: raw.idCardSha256 ?? null,
+
+    requestedRoomId: raw.requestedRoomId ?? null,
+    roomId: raw.roomId ?? raw.requestedRoomId ?? null,
+    registrationRequestId: raw.registrationRequestId ?? null,
+    rentalType: raw.rentalType ?? null,
+    rentalPlan: raw.rentalPlan ?? null,
+    requestedRent: raw.requestedRent !== undefined && raw.requestedRent !== null ? Number(raw.requestedRent) : null,
+    requestedDeposit: raw.requestedDeposit !== undefined && raw.requestedDeposit !== null ? Number(raw.requestedDeposit) : null,
+    requestedStartDate: raw.requestedStartDate ?? null,
+    requestedEndDate: raw.requestedEndDate ?? null,
+    requestedDurationMonths: raw.requestedDurationMonths !== undefined && raw.requestedDurationMonths !== null ? Number(raw.requestedDurationMonths) : null,
+    requestedDays: raw.requestedDays !== undefined && raw.requestedDays !== null ? Number(raw.requestedDays) : null,
+    requestedDailyRate: raw.requestedDailyRate !== undefined && raw.requestedDailyRate !== null ? Number(raw.requestedDailyRate) : null,
+    requestedAttachments: Array.isArray(raw.requestedAttachments) ? raw.requestedAttachments : null,
+    acceptanceSnapshot: raw.acceptanceSnapshot ?? null,
   };
 
   if (Array.isArray(raw.coOccupants)) {
@@ -672,6 +702,31 @@ export function toTenantDetailsApiDTO(details: any): SafeTenantDetailsApiDTO | n
       : [],
     dailyStays: Array.isArray(details.dailyStays)
       ? (details.dailyStays.map(toDailyStayApiDTO).filter(Boolean) as SafeDailyStayApiDTO[])
+      : [],
+    provisionalRentalTerms: Array.isArray(details.provisionalRentalTerms)
+      ? details.provisionalRentalTerms.map((p: any) => {
+          const regSnapshot = p.occupancy?.registration?.acceptanceSnapshot as any;
+          const terms = (regSnapshot && typeof regSnapshot === 'object')
+            ? (regSnapshot.defaultTerms || regSnapshot.terms || null)
+            : null;
+
+          return {
+            id: p.id,
+            dormitoryId: p.dormitoryId,
+            roomId: p.roomId,
+            tenantId: p.tenantId,
+            rentalType: p.rentalType || 'TERM',
+            startDate: p.startDate ? (p.startDate instanceof Date ? p.startDate.toISOString().slice(0, 10) : String(p.startDate).slice(0, 10)) : null,
+            endDate: p.endDate ? (p.endDate instanceof Date ? p.endDate.toISOString().slice(0, 10) : String(p.endDate).slice(0, 10)) : null,
+            durationMonths: p.durationMonths || 4,
+            unitRentAmount: p.unitRentAmount !== undefined ? (typeof p.unitRentAmount === 'object' && p.unitRentAmount !== null && 'toNumber' in p.unitRentAmount ? p.unitRentAmount.toNumber() : Number(p.unitRentAmount)) : 0,
+            totalRentAmount: p.totalRentAmount !== undefined ? (typeof p.totalRentAmount === 'object' && p.totalRentAmount !== null && 'toNumber' in p.totalRentAmount ? p.totalRentAmount.toNumber() : Number(p.totalRentAmount)) : 0,
+            depositAmount: p.depositAmount !== undefined ? (typeof p.depositAmount === 'object' && p.depositAmount !== null && 'toNumber' in p.depositAmount ? p.depositAmount.toNumber() : Number(p.depositAmount)) : 0,
+            status: p.status || 'ACTIVE',
+            room: toRoomSummaryApiDTO(p.room),
+            terms: terms || null,
+          };
+        })
       : [],
     bills: Array.isArray(details.bills)
       ? (details.bills.map(toBillApiDTO).filter(Boolean) as SafeBillApiDTO[])

@@ -62,7 +62,27 @@ export class SettlementService {
         new Prisma.Decimal(0)
       );
 
-      const deposit = new Prisma.Decimal(contract.depositAmount || 0);
+      // Deposit Management Authority (D5): Actual money received (billKind === 'DEPOSIT').
+      // If deposit is unpaid (paidAmount = 0) or absent, deposit credit is 0.
+      // If partially paid, max available deposit is the actual paid amount.
+      const depositBills = await prisma.bill.findMany({
+        where: {
+          dormitoryId,
+          contractId,
+          billKind: 'DEPOSIT',
+        },
+      });
+
+      let deposit = new Prisma.Decimal(0);
+      if (depositBills.length > 0) {
+        deposit = depositBills.reduce((sum, b) => {
+          const paid = b.paidAmount && !new Prisma.Decimal(b.paidAmount).isZero()
+            ? new Prisma.Decimal(b.paidAmount)
+            : (b.status === 'paid' ? new Prisma.Decimal(b.totalAmount || 0) : new Prisma.Decimal(0));
+          return sum.add(paid);
+        }, new Prisma.Decimal(0));
+      }
+
       const damageTotal = new Prisma.Decimal(0);
       const net = deposit.sub(unpaidBillTotal).sub(damageTotal);
 
@@ -115,7 +135,27 @@ export class SettlementService {
             new Prisma.Decimal(0)
           );
 
-        const deposit = new Prisma.Decimal(contract.depositAmount || 0);
+        // Recompute actual paid deposit authority
+        const depositBills = await prisma.bill.findMany({
+          where: {
+            dormitoryId,
+            contractId,
+            billKind: 'DEPOSIT',
+          },
+        });
+
+        let deposit = new Prisma.Decimal(0);
+        if (depositBills.length > 0) {
+          deposit = depositBills.reduce((sum, b) => {
+            const paid = b.paidAmount && !new Prisma.Decimal(b.paidAmount).isZero()
+              ? new Prisma.Decimal(b.paidAmount)
+              : (b.status === 'paid' ? new Prisma.Decimal(b.totalAmount || 0) : new Prisma.Decimal(0));
+            return sum.add(paid);
+          }, new Prisma.Decimal(0));
+        } else if (settlement.depositAmount) {
+          deposit = new Prisma.Decimal(settlement.depositAmount);
+        }
+
         const net = deposit.sub(unpaidBillTotal).sub(damageTotal);
 
         let direction = 'ZERO';

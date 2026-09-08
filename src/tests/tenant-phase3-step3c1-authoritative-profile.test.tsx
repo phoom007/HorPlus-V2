@@ -556,7 +556,7 @@ describe('TENANT PHASE 3 STEP 3C.1B: Visible-Field Mutation Scope & Authoritativ
   });
 
   describe('Part 3: Authoritative Null & Empty Detail State Closure (Step 3C.1C)', () => {
-    it('16. stale list email + detail null -> stale email removed and renders ไม่มีข้อมูล', async () => {
+    it('16. stale list email + detail null -> stale email removed and renders "-"', async () => {
       const staleTenant: Tenant = {
         ...sampleActiveTenant,
         email: 'old@example.com',
@@ -600,7 +600,7 @@ describe('TENANT PHASE 3 STEP 3C.1B: Visible-Field Mutation Scope & Authoritativ
       fireEvent.click(screen.getByText('นาย นิรุตติ์ มั่นคง'));
 
       await waitFor(() => {
-        expect(screen.getByText('ไม่มีข้อมูล')).toBeDefined();
+        expect(screen.getByText('-')).toBeDefined();
       });
       expect(screen.queryByText('old@example.com')).toBeNull();
     });
@@ -868,7 +868,7 @@ describe('TENANT PHASE 3 STEP 3C.1B: Visible-Field Mutation Scope & Authoritativ
 
       expect(putPayload.email).toBeNull();
       await waitFor(() => {
-        expect(screen.getByText('ไม่มีข้อมูล')).toBeDefined();
+        expect(screen.getByText('-')).toBeDefined();
       });
       expect(screen.queryByText('initial@example.com')).toBeNull();
     });

@@ -56,12 +56,14 @@ import {
 
 export class ApiDormitoryAdapter implements DormitoryDataSource {
   async getAll(): Promise<Dormitory[]> {
-    return httpRequest<Dormitory[]>('GET', '/dormitories');
+    const res = await httpRequest<any>('GET', '/dormitories');
+    return Array.isArray(res?.data) ? res.data : (Array.isArray(res) ? res : []);
   }
 
   async getById(id: string): Promise<Dormitory | null> {
     try {
-      return await httpRequest<Dormitory>('GET', `/dormitories/${id}`);
+      const res = await httpRequest<any>('GET', `/dormitories/${id}`);
+      return res?.data || res;
     } catch (err: any) {
       if (err instanceof HttpClientError && err.domainError.code === 'RESOURCE_NOT_FOUND') {
         return null;
@@ -566,6 +568,7 @@ export class ApiTenantAdapter implements TenantDataSource {
           contracts: details.contracts ?? [],
           occupancies: details.occupancies ?? [],
           dailyStays: details.dailyStays ?? [],
+          provisionalRentalTerms: details.provisionalRentalTerms ?? [],
           bills: details.bills ?? [],
           settlements: details.settlements ?? [],
         },
@@ -866,6 +869,7 @@ export interface ApproveRegistrationPayload {
   advancePaymentAmount: string | number;
   terms?: string;
   confirmReplacement?: boolean;
+  requireTenantConfirmation?: boolean;
 }
 
 export async function approveTenantRegistrationRequest(id: string, payload: ApproveRegistrationPayload): Promise<DataResult<any>> {

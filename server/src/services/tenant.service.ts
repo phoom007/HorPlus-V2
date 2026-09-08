@@ -6,6 +6,7 @@ import { AuditService } from './audit.service.js';
 import { parseAndNormalizeName, isMaskedNationalId } from '../utils/thai-identity.util.js';
 import { processAndSecureTenantIdCardImage } from './image-security.service.js';
 import { localStorageProvider } from './local-storage.service.js';
+import { billingService as defaultBillingService } from './billing.service.js';
 import { logger } from '../config/logger.js';
 
 export interface TenantAggregateDataSource {
@@ -44,6 +45,9 @@ export interface TenantAggregateDataSource {
     findMany(args: any): Promise<any[]>;
   };
   contractSettlement: {
+    findMany(args: any): Promise<any[]>;
+  };
+  provisionalRentalTerm?: {
     findMany(args: any): Promise<any[]>;
   };
 }
@@ -248,13 +252,22 @@ export function classifySubmittedPets(
 }
 
 export class TenantService {
+  private billingService?: any;
+
   constructor(
     private tenantRepo: ITenantRepository,
     private contractRepo: IContractRepository,
     private sensitiveFieldService: SensitiveFieldService,
     private auditService?: AuditService,
-    private aggregatePrisma?: TenantAggregateDataSource | null
-  ) {}
+    private aggregatePrisma?: TenantAggregateDataSource | null,
+    billingService?: any
+  ) {
+    this.billingService = billingService;
+  }
+
+  public setBillingService(billingService: any) {
+    this.billingService = billingService;
+  }
 
   public async getTenants(dormitoryId: string, filter?: TenantFilterQuery) {
     const result = await this.tenantRepo.findAll(dormitoryId, filter);
@@ -282,6 +295,7 @@ export class TenantService {
 
     let occupancies: any[] = [];
     let dailyStays: any[] = [];
+    let provisionalRentalTerms: any[] = [];
     let bills: any[] = [];
     let settlements: any[] = [];
     let contracts = contractsResult.items;
@@ -333,6 +347,20 @@ export class TenantService {
         },
         orderBy: { createdAt: 'desc' },
       });
+      if (prisma.provisionalRentalTerm) {
+        provisionalRentalTerms = await prisma.provisionalRentalTerm.findMany({
+          where: { tenantId: id, dormitoryId, deletedAt: null },
+          include: {
+            room: true,
+            occupancy: {
+              include: {
+                registration: true,
+              },
+            },
+          },
+          orderBy: { startDate: 'desc' },
+        });
+      }
     }
 
     return {
@@ -344,6 +372,7 @@ export class TenantService {
       contracts,
       occupancies,
       dailyStays,
+      provisionalRentalTerms,
       bills,
       settlements,
     };
@@ -619,31 +648,50 @@ export class TenantService {
 
   public async addVehicle(dormitoryId: string, tenantId: string, data: any) {
     await this.getTenantById(tenantId, dormitoryId);
-    return this.tenantRepo.createVehicle(dormitoryId, tenantId, data);
+    return this.tenantRepo.runInTransaction(async (txRepo) => {
+      const created = await txRepo.createVehicle(dormitoryId, tenantId, data);
+      const effectiveBillingService = this.billingService || defaultBillingService;
+      if (effectiveBillingService) {
+        await effectiveBillingService.syncOpenUnpaidMonthlyBillParkingInTx(dormitoryId, tenantId, (txRepo as any).prisma);
+      }
+      return created;
+    });
   }
 
   public async updateVehicle(dormitoryId: string, tenantId: string, vehicleId: string, data: any) {
     await this.getTenantById(tenantId, dormitoryId);
-    const updated = await this.tenantRepo.updateVehicle(vehicleId, dormitoryId, data, tenantId);
-    if (!updated) {
-      const err = new Error('ไม่พบข้อมูลยานพาหนะที่ระบุ');
-      (err as any).code = 'VEHICLE_NOT_FOUND';
-      (err as any).statusCode = 404;
-      throw err;
-    }
-    return updated;
+    return this.tenantRepo.runInTransaction(async (txRepo) => {
+      const updated = await txRepo.updateVehicle(vehicleId, dormitoryId, data, tenantId);
+      if (!updated) {
+        const err = new Error('ไม่พบข้อมูลยานพาหนะที่ระบุ');
+        (err as any).code = 'VEHICLE_NOT_FOUND';
+        (err as any).statusCode = 404;
+        throw err;
+      }
+      const effectiveBillingService = this.billingService || defaultBillingService;
+      if (effectiveBillingService) {
+        await effectiveBillingService.syncOpenUnpaidMonthlyBillParkingInTx(dormitoryId, tenantId, (txRepo as any).prisma);
+      }
+      return updated;
+    });
   }
 
   public async deleteVehicle(dormitoryId: string, tenantId: string, vehicleId: string) {
     await this.getTenantById(tenantId, dormitoryId);
-    const success = await this.tenantRepo.deleteVehicle(vehicleId, dormitoryId, tenantId);
-    if (!success) {
-      const err = new Error('ไม่พบข้อมูลยานพาหนะที่ระบุ');
-      (err as any).code = 'VEHICLE_NOT_FOUND';
-      (err as any).statusCode = 404;
-      throw err;
-    }
-    return { success: true };
+    return this.tenantRepo.runInTransaction(async (txRepo) => {
+      const success = await txRepo.deleteVehicle(vehicleId, dormitoryId, tenantId);
+      if (!success) {
+        const err = new Error('ไม่พบข้อมูลยานพาหนะที่ระบุ');
+        (err as any).code = 'VEHICLE_NOT_FOUND';
+        (err as any).statusCode = 404;
+        throw err;
+      }
+      const effectiveBillingService = this.billingService || defaultBillingService;
+      if (effectiveBillingService) {
+        await effectiveBillingService.syncOpenUnpaidMonthlyBillParkingInTx(dormitoryId, tenantId, (txRepo as any).prisma);
+      }
+      return { success: true };
+    });
   }
 
   public async updateTenantIdentityDocument(
@@ -659,7 +707,7 @@ export class TenantService {
     const secured = await processAndSecureTenantIdCardImage(rawBuffer);
 
     // Generate safe object key
-    const objectKey = `tenants/${dormitoryId}/${tenantId}/id-card-${Date.now()}.webp`;
+    const objectKey = `tenants/${dormitoryId}/${tenantId}/id-card-${Date.now()}${secured.extension}`;
 
     // Save to local storage
     await localStorageProvider.saveFile(objectKey, secured.buffer);
@@ -952,6 +1000,13 @@ export class TenantService {
             province: sv.province?.trim() || null,
           });
           finalVehicles.push(crt);
+        }
+      }
+
+      if (submittedVehicles.length > 0 || data.vehicles !== undefined) {
+        const effectiveBillingService = this.billingService || defaultBillingService;
+        if (effectiveBillingService) {
+          await effectiveBillingService.syncOpenUnpaidMonthlyBillParkingInTx(dormitoryId, tenantId, (txRepo as any).prisma);
         }
       }
 

@@ -150,6 +150,7 @@ export interface TenantProfileDetails {
   contracts: any[];
   occupancies: TenantOccupancyRecord[];
   dailyStays: TenantDailyStayRecord[];
+  provisionalRentalTerms?: any[];
   bills: any[];
   settlements: TenantSettlementRecord[];
 }

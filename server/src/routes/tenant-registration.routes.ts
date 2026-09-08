@@ -1,5 +1,7 @@
 import { Router, Request, Response } from 'express';
+import multer from 'multer';
 import { z } from 'zod';
+import { logger } from '../config/logger.js';
 import { AuthenticationService } from '../services/auth.service.js';
 import { TenantRegistrationService } from '../services/tenant-registration.service.js';
 import { tenantRegistrationInviteService } from '../services/tenant-registration-invite.service.js';
@@ -8,6 +10,7 @@ import { createRequireSessionMiddleware } from '../middleware/require-session.js
 import { requireDormitoryPermission, resolveDormitoryContextMiddleware } from '../middleware/permission.js';
 import { requireDormitoryWriteEntitlement } from '../middleware/entitlement.js';
 import { ApproveRegistrationSchema } from '../schemas/property-tenant-contract.schemas.js';
+import { SignatureStorageService } from '../services/signature-storage.service.js';
 
 export function createTenantRegistrationRouter(
   authService: AuthenticationService,
@@ -456,6 +459,61 @@ export function createTenantRegistrationRouter(
     requireDormitoryWriteEntitlement,
   ];
 
+  const uploadSingle = multer({
+    storage: multer.memoryStorage(),
+    limits: {
+      fileSize: 5 * 1024 * 1024,
+      files: 1,
+    },
+  }).single('file');
+
+  const handleUploadSingle = (req: Request, res: Response, next: any) => {
+    uploadSingle(req, res, (err: any) => {
+      if (!err) return next();
+      if (err instanceof multer.MulterError) {
+        if (err.code === 'LIMIT_FILE_SIZE') {
+          return res.status(400).json({
+            error: {
+              code: 'FILE_TOO_LARGE',
+              message: 'ขนาดไฟล์เกินขีดจำกัดที่กำหนด (สูงสุด 5MB)',
+              fieldErrors: null,
+              requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+              timestamp: new Date().toISOString(),
+            },
+          });
+        }
+        if (err.code === 'LIMIT_FILE_COUNT' || err.code === 'LIMIT_UNEXPECTED_FILE') {
+          return res.status(400).json({
+            error: {
+              code: 'INVALID_FILE_FIELD',
+              message: 'ต้องระบุไฟล์เพียงไฟล์เดียวในฟิลด์ "file"',
+              fieldErrors: null,
+              requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+              timestamp: new Date().toISOString(),
+            },
+          });
+        }
+        return res.status(400).json({
+          error: {
+            code: 'INVALID_FILE_FIELD',
+            message: 'การอัปโหลดไฟล์ไม่ถูกต้องตามรูปแบบที่กำหนด',
+            fieldErrors: null,
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+      return res.status(500).json({
+        error: {
+          code: 'REGISTRATION_OPERATION_FAILED',
+          message: 'เกิดข้อผิดพลาดในการดำเนินการ กรุณาลองใหม่อีกครั้ง',
+          requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+          timestamp: new Date().toISOString(),
+        },
+      });
+    });
+  };
+
   // GET /api/v1/tenant-registrations
   privateRouter.get('/', requireDormitoryPermission('tenant:read'), async (req: Request, res: Response) => {
     try {
@@ -550,6 +608,99 @@ export function createTenantRegistrationRouter(
       res.json({ data: result });
     } catch (err) {
       handleServiceError(res, err, req);
+    }
+  });
+
+  // GET /api/v1/tenant-registrations/:id/identity-document
+  privateRouter.get('/:id/identity-document', requireDormitoryPermission('tenant:read'), async (req: Request, res: Response) => {
+    try {
+      const dormId = getAuthoritativeDormitoryId(req);
+      const doc = await registrationService.getRegistrationIdentityDocument(dormId, req.params.id);
+      res.setHeader('Content-Type', doc.mimeType);
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('Cache-Control', 'private, no-store, no-cache, must-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+      res.setHeader('Content-Disposition', `inline; filename="${doc.filename}"`);
+      return res.send(doc.fileBuffer);
+    } catch (err: any) {
+      if (err?.code === 'IDENTITY_DOCUMENT_NOT_FOUND' || err?.code === 'FILE_NOT_FOUND') {
+        return res.status(404).json({
+          error: {
+            code: 'IDENTITY_DOCUMENT_NOT_FOUND',
+            message: err.message || 'ไม่พบไฟล์เอกสารสำเนาบัตรประชาชน',
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+      handleServiceError(res, err, req);
+    }
+  });
+
+  // POST /api/v1/tenant-registrations/:id/identity-document
+  privateRouter.post('/:id/identity-document', ...mutationGuard('tenant:write'), handleUploadSingle, async (req: Request, res: Response) => {
+    if (!verifyCsrf(req, res)) return;
+    try {
+      const dormId = getAuthoritativeDormitoryId(req);
+      const file = req.file;
+      if (!file || !file.buffer) {
+        return res.status(400).json({
+          error: {
+            code: 'NO_FILE_UPLOADED',
+            message: 'กรุณาเลือกไฟล์เอกสารสำเนาบัตรประชาชนในฟิลด์ "file"',
+            fieldErrors: null,
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+      const result = await registrationService.saveRegistrationIdentityDocument(
+        dormId,
+        req.params.id,
+        file.buffer,
+        req.auth?.userId
+      );
+      res.status(200).json({
+        data: result,
+        message: 'อัปโหลดและประมวลผลสำเนาบัตรประชาชนคำขอลงทะเบียนเรียบร้อยแล้ว',
+      });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  });
+
+  // GET /api/v1/tenant-registrations/:id/tenant-signature
+  privateRouter.get('/:id/tenant-signature', requireDormitoryPermission('tenant:read'), async (req: Request, res: Response) => {
+    try {
+      const dormId = getAuthoritativeDormitoryId(req);
+      const { id } = req.params;
+      const prisma = getPrismaClient();
+      const reg = await prisma.tenantRegistrationRequest.findFirst({
+        where: {
+          dormitoryId: dormId,
+          OR: [
+            { id },
+            { approvedTenantId: id },
+          ],
+        },
+      });
+      if (!reg || !reg.tenantSignatureObjectKey) {
+        return res.status(404).json({ error: { message: 'Tenant signature not found' } });
+      }
+      const signatureService = new SignatureStorageService(prisma);
+      const stream = await signatureService.getSignatureStream(reg.tenantSignatureObjectKey);
+      res.setHeader('Content-Type', 'image/png');
+      res.setHeader('Cache-Control', 'private, max-age=3600');
+      stream.pipe(res);
+    } catch (err: any) {
+      const statusCode = err.statusCode || (err.code === 'SIGNATURE_NOT_FOUND' ? 404 : 500);
+      res.status(statusCode).json({
+        error: {
+          code: err.code || 'SIGNATURE_STREAM_FAILED',
+          message: err.message || 'เกิดข้อผิดพลาดขณะเรียกลายเซ็นผู้เช่า',
+        },
+      });
     }
   });
 

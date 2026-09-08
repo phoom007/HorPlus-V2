@@ -25,10 +25,14 @@ export function setPrismaClient(mockInstance: PrismaClient | null): void {
   prismaInstance = mockInstance;
 }
 
+export async function pingDatabaseOrThrow(): Promise<void> {
+  const client = getPrismaClient();
+  await client.$queryRaw`SELECT 1`;
+}
+
 export async function checkDatabaseConnection(): Promise<boolean> {
   try {
-    const client = getPrismaClient();
-    await client.$queryRaw`SELECT 1`;
+    await pingDatabaseOrThrow();
     return true;
   } catch (err) {
     logger.error({ err }, 'Database ping check failed');

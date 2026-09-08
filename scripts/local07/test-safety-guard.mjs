@@ -55,20 +55,20 @@ console.log('===================================================================
 
 // 1. Positive PostgreSQL test
 assertAcceptance(
-  () => parseAndValidatePostgresUrl('postgresql://user:pass@127.0.0.1:5455/horplus_wave1d_fasttrack_test'),
-  '1. Valid 127.0.0.1:5455/horplus_wave1d_fasttrack_test URL is accepted'
+  () => parseAndValidatePostgresUrl(`postgresql://user:pass@127.0.0.1:${REQUIRED_SAFETY_CONFIG.DB_PORT}/horplus_wave1d_fasttrack_test`),
+  `1. Valid 127.0.0.1:${REQUIRED_SAFETY_CONFIG.DB_PORT}/horplus_wave1d_fasttrack_test URL is accepted`
 );
 
 // 2. Negative: Localhost rejected
 assertRejection(
-  () => parseAndValidatePostgresUrl('postgresql://user:pass@localhost:5455/horplus_wave1d_fasttrack_test'),
+  () => parseAndValidatePostgresUrl(`postgresql://user:pass@localhost:${REQUIRED_SAFETY_CONFIG.DB_PORT}/horplus_wave1d_fasttrack_test`),
   'host must be strictly',
   '2. Host "localhost" is rejected'
 );
 
 // 3. Negative: Remote host rejected
 assertRejection(
-  () => parseAndValidatePostgresUrl('postgresql://user:pass@192.168.1.100:5455/horplus_wave1d_fasttrack_test'),
+  () => parseAndValidatePostgresUrl(`postgresql://user:pass@192.168.1.100:${REQUIRED_SAFETY_CONFIG.DB_PORT}/horplus_wave1d_fasttrack_test`),
   'host must be strictly',
   '3. Remote IP host is rejected'
 );
@@ -89,14 +89,14 @@ assertRejection(
 
 // 6. Negative: Wrong DB name (horplus_pilot) rejected
 assertRejection(
-  () => parseAndValidatePostgresUrl('postgresql://user:pass@127.0.0.1:5455/horplus_pilot'),
+  () => parseAndValidatePostgresUrl(`postgresql://user:pass@127.0.0.1:${REQUIRED_SAFETY_CONFIG.DB_PORT}/horplus_pilot`),
   'database must be strictly',
   '6. Database "horplus_pilot" is rejected'
 );
 
 // 7. Negative: Query parameter trick rejected (target name in query string)
 assertRejection(
-  () => parseAndValidatePostgresUrl('postgresql://user:pass@127.0.0.1:5455/wrong_db?db=horplus_wave1d_fasttrack_test'),
+  () => parseAndValidatePostgresUrl(`postgresql://user:pass@127.0.0.1:${REQUIRED_SAFETY_CONFIG.DB_PORT}/wrong_db?db=horplus_wave1d_fasttrack_test`),
   'database must be strictly',
   '7. Target database hidden in query string is rejected'
 );

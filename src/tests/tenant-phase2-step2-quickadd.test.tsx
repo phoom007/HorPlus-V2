@@ -224,6 +224,73 @@ describe('Tenant Phase 2 Step 2: Quick Add Tenant Integration', () => {
       const result = getTrulyVacantRooms([pendingRoom], [pendingContract], []);
       expect(result).toHaveLength(0);
     });
+
+    it('strictly excludes active Term room from empty room selectors', () => {
+      const termRoom: Room = {
+        id: 'room-105',
+        roomNumber: '105',
+        floor: 1,
+        status: 'occupied',
+        currentTenantId: 'tenant-term-105',
+        monthlyRent: 4500,
+        termRent: 18000,
+        depositAmount: 4500,
+      };
+      const termTenant: Tenant = {
+        id: 'tenant-term-105',
+        name: 'นางสาวพิมพา สดใส',
+        phone: '0898887766',
+        email: '',
+        citizenId: '1-1004-XXXXX-88-8',
+        status: 'active',
+        roomId: 'room-105',
+        rentalType: 'TERM',
+      };
+      const result = getTrulyVacantRooms([termRoom], [], [termTenant]);
+      expect(result).toHaveLength(0);
+    });
+
+    it('strictly excludes active Daily room from empty room selectors', () => {
+      const dailyRoom: Room = {
+        id: 'room-106',
+        roomNumber: '106',
+        floor: 1,
+        status: 'occupied',
+        currentTenantId: 'tenant-daily-106',
+        monthlyRent: 4500,
+        dailyRent: 500,
+        depositAmount: 500,
+      };
+      const dailyTenant: Tenant = {
+        id: 'tenant-daily-106',
+        name: 'นายสมเกียรติ วันสบายกันยา',
+        phone: '088-777-9999',
+        email: '',
+        citizenId: '1-1004-XXXXX-99-9',
+        status: 'active',
+        roomId: 'room-106',
+        rentalType: 'DAILY',
+      };
+      const result = getTrulyVacantRooms([dailyRoom], [], [dailyTenant]);
+      expect(result).toHaveLength(0);
+    });
+
+    it('excludes room if active daily stay or provisional term is attached even if status was vacant', () => {
+      const roomWithDailyStay: any = {
+        id: 'room-attached-daily',
+        roomNumber: '205',
+        status: 'vacant',
+        dailyStays: [{ id: 'ds-1', status: 'ACTIVE' }],
+      };
+      const roomWithProvTerm: any = {
+        id: 'room-attached-term',
+        roomNumber: '105',
+        status: 'vacant',
+        provisionalRentalTerms: [{ id: 'pt-1', status: 'ACTIVE' }],
+      };
+      expect(getTrulyVacantRooms([roomWithDailyStay], [], [])).toHaveLength(0);
+      expect(getTrulyVacantRooms([roomWithProvTerm], [], [])).toHaveLength(0);
+    });
   });
 
   describe('2. QuickAddTenantModal: Rental Types & LINE exclusion', () => {
@@ -475,8 +542,8 @@ describe('Tenant Phase 2 Step 2: Quick Add Tenant Integration', () => {
 
       await waitFor(() => {
         expect(screen.getByText('เพิ่มผู้เช่าด่วน')).toBeDefined();
-        // LINE tab must be hidden
-        expect(screen.queryByTestId('tab-line')).toBeNull();
+        // LINE tab is supported in Quick Add (C2-6)
+        expect(screen.getByTestId('tab-line')).toBeDefined();
       });
     });
   });

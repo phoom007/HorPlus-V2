@@ -129,6 +129,7 @@ export function createApp(optionsOrAuth?: CreateAppOptions | AuthenticationServi
   const billingCycleService = options.customBillingCycleService || new BillingCycleService(billingCycleRepo, auditService);
   const meterService = new MeterService(meterRepo as any, billingCycleRepo, roomRepo, billRepo as any, auditService);
   const billingService = new BillingService(billRepo as any, billingCycleRepo, meterRepo as any, contractRepo, roomRepo, tenantRepo as any, auditService);
+  tenantService.setBillingService(billingService);
 
   const verifier = isTestEnv
     ? new MockGoogleIdentityVerifier()

@@ -14,7 +14,7 @@
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 const { PrismaClient } = require('../../server/node_modules/@prisma/client/index.js');
-import { assertSafeDatabaseTarget } from './db-safety-guard.mjs';
+import { assertSafeDatabaseTarget, REQUIRED_SAFETY_CONFIG } from './db-safety-guard.mjs';
 import { FRESH_DORM, COMP_DORM, REGISTRATION_OWNER } from './constants.mjs';
 import { CANONICAL_SUBSCRIPTION_CATALOG } from '../../server/src/config/subscription-catalog.js';
 import fs from 'fs';
@@ -56,7 +56,7 @@ export async function runVerification() {
   console.log('--- 1. Safety Guard Verification ---');
   try {
     const safety = assertSafeDatabaseTarget();
-    assert(safety.port === '5455' && safety.database === 'horplus_wave1d_fasttrack_test', 'Database strictly targets port 5455 & horplus_wave1d_fasttrack_test');
+    assert(safety.port === REQUIRED_SAFETY_CONFIG.DB_PORT && safety.database === 'horplus_wave1d_fasttrack_test', `Database strictly targets port ${REQUIRED_SAFETY_CONFIG.DB_PORT} & horplus_wave1d_fasttrack_test`);
     assert(safety.redisPort === '6380', 'Redis strictly targets port 6380');
   } catch (err) {
     assert(false, 'Database safety guard failed', err.message);
@@ -144,9 +144,10 @@ export async function runVerification() {
   assert(Boolean(compDormDb), 'Comprehensive Dormitory exists in DB');
   assert(Boolean(compDormDb?.propertyDefaults?.defaultTerms), 'Comprehensive Owner has defaultTerms');
   assert(compDormDb?.propertyDefaults?.petPolicy?.allowed === 'conditional', 'Comprehensive Owner has conditional petPolicy');
+  const sampleRegistrationRequest = compDormDb?.tenantRegistrationRequests?.find(r => r.status === 'pending_owner_approval') || compDormDb?.tenantRegistrationRequests?.[0];
   assert(compDormDb?.tenantRegistrationRequests?.length > 0, 'Comprehensive Owner has pending tenant registration request');
-  assert(Boolean(compDormDb?.tenantRegistrationRequests[0]?.acceptanceSnapshotSha256), 'Tenant registration request has canonical acceptanceSnapshotSha256');
-  assert(Boolean(compDormDb?.tenantRegistrationRequests[0]?.tenantSignatureObjectKey), 'Tenant registration request has tenantSignatureObjectKey');
+  assert(Boolean(sampleRegistrationRequest?.acceptanceSnapshotSha256), 'Tenant registration request has canonical acceptanceSnapshotSha256');
+  assert(Boolean(sampleRegistrationRequest?.tenantSignatureObjectKey), 'Tenant registration request has tenantSignatureObjectKey');
   const totalRooms = compDormDb?.buildings.reduce((sum, b) => sum + b.rooms.length, 0) || 0;
   assert(totalRooms === 18, 'Total room count is exactly 18', totalRooms);
 
@@ -156,8 +157,8 @@ export async function runVerification() {
   const reservedRooms = allRooms.filter(r => r.status === 'reserved');
   const maintenanceRooms = allRooms.filter(r => r.status === 'maintenance');
 
-  assert(occupiedRooms.length === 11, 'Occupied rooms count is exactly 11', occupiedRooms.length);
-  assert(vacantRooms.length === 6, 'Vacant rooms count is exactly 6', vacantRooms.length);
+  assert(occupiedRooms.length === 13, 'Occupied rooms count is exactly 13', occupiedRooms.length);
+  assert(vacantRooms.length === 4, 'Vacant rooms count is exactly 4', vacantRooms.length);
   assert(reservedRooms.length === 0, 'Reserved rooms count is exactly 0', reservedRooms.length);
   assert(maintenanceRooms.length === 1, 'Maintenance rooms count is exactly 1', maintenanceRooms.length);
 
@@ -221,7 +222,10 @@ export async function runVerification() {
   assert(Boolean(weeraContract), 'Comprehensive Monthly contract CTR-2026-204 exists');
   assert(weeraContract?.createdAt?.toISOString().startsWith('2026-07'), 'Room 204 Contract.createdAt is strictly in July 2026', weeraContract?.createdAt?.toISOString());
   assert(weeraContract?.startDate?.toISOString().startsWith('2026-06-01'), 'Room 204 Contract startDate is 2026-06-01', weeraContract?.startDate?.toISOString());
-  assert(weeraContract?.endDate?.toISOString().startsWith('2026-08-01'), 'Room 204 Contract endDate is 2026-08-01', weeraContract?.endDate?.toISOString());
+  assert(weeraContract?.endDate?.toISOString().startsWith('2026-07-31'), 'Room 204 Contract endDate is 2026-07-31 (canonical start + 2 months - 1 day)', weeraContract?.endDate?.toISOString());
+  assert(weeraContract?.durationMonths === 2, 'Room 204 Contract durationMonths is 2', weeraContract?.durationMonths);
+  assert(weeraContract?.terminationEffectiveDate?.toISOString().startsWith('2026-08-01'), 'Room 204 Contract terminationEffectiveDate is 2026-08-01 (handover date)', weeraContract?.terminationEffectiveDate?.toISOString());
+  assert(weeraContract?.status === 'terminated', 'Room 204 Contract status is terminated', weeraContract?.status);
 
   const { MeterService } = await import('../../server/src/services/meter.service.ts');
   const { BillingService } = await import('../../server/src/services/billing.service.ts');
@@ -274,6 +278,25 @@ export async function runVerification() {
     const r105July = julyPreview.rooms.find(r => r.roomId === room105Db?.id);
     assert(Boolean(r105July?.tenantId) && r105July?.billingSource === 'PROVISIONAL_TERM', 'Room 105 (Term) is visible in July 2026 as PROVISIONAL_TERM');
     assert(r105July?.tenantName === 'นางสาวพิมพา สดใส', 'Room 105 tenant name is นางสาวพิมพา สดใส in July');
+
+    const pimpaProv = await prisma.provisionalRentalTerm.findFirst({
+      where: { dormitoryId: COMP_DORM.id, roomId: room105Db?.id },
+      include: {
+        occupancy: {
+          include: {
+            registration: true,
+          },
+        },
+      },
+    });
+    const pimpaTerms = pimpaProv?.occupancy?.registration?.acceptanceSnapshot?.terms;
+    assert(Boolean(pimpaTerms) && pimpaTerms.includes('Term 4 เดือน'), 'Room 105 has authoritative frozen historical registration terms snapshot');
+
+    const c105 = await prisma.contract.findFirst({
+      where: { dormitoryId: COMP_DORM.id, contractNumber: 'CTR-2026-105-TERM' },
+    });
+    assert(Boolean(c105?.terms) && c105?.terms.includes('พ.ย. 2569 - ก.พ. 2570'), 'Room 105 future contract has authoritative frozen contract terms');
+    assert(c105?.terms !== pimpaTerms, 'Room 105 shows two distinct authoritative agreement terms sources');
   }
 
   if (cycleAugDb && room204Db) {
@@ -348,7 +371,14 @@ export async function runVerification() {
   if (cycleSeptDb && room205Db) {
     const septPreview = await meterService.getMeterBillingPreviewContext(COMP_DORM.id, cycleSeptDb.id);
     const r205Sept = septPreview.rooms.find(r => r.roomId === room205Db.id);
-    assert(r205Sept?.hasBookableGap === true, 'Room 205 has hasBookableGap = true in September 2026 (future reservation starts Sept 15)');
+    assert(r205Sept?.hasBookableGap === true, 'Room 205 has hasBookableGap = true in September 2026 (future reservation starts Oct 1)');
+  }
+
+  if (cycleSeptDb && room106Db) {
+    const septPreview = await meterService.getMeterBillingPreviewContext(COMP_DORM.id, cycleSeptDb.id);
+    const r106Sept = septPreview.rooms.find(r => r.roomId === room106Db.id);
+    assert(r106Sept?.billingSource === 'DAILY_STAY', 'Room 106 has billingSource DAILY_STAY in September 2026');
+    assert(r106Sept?.isDailyActive === true, 'Room 106 has isDailyActive = true on UAT date (active stay spans 2026-09-05 to 2026-09-10)');
   }
 
   // 8. Charge Component Matrix Verification (0, 1, 2, 3 components in August 2026)
@@ -755,12 +785,12 @@ export async function runVerification() {
       p106Aug?.agreementDepositPaymentStatus
     );
 
-    // Matrix Scenario J: RESERVED IN CYCLE (September 2026 Room 205)
-    const p205Sept = septPreview.rooms.find(r => r.roomId === r205Db?.id);
+    // Matrix Scenario J: RESERVED IN CYCLE (October 2026 Room 205)
+    const p205Oct = octPreview.rooms.find(r => r.roomId === r205Db?.id);
     assert(
-      p205Sept?.cyclePresentationState === 'RESERVED_IN_CYCLE' && p205Sept?.agreementRentPaymentStatus === 'NOT_ISSUED',
-      'Matrix J: RESERVED IN CYCLE -> Room 205 (2026-09) is RESERVED_IN_CYCLE with rent status NOT_ISSUED (ยังไม่ออกบิล)',
-      `State: ${p205Sept?.cyclePresentationState}, Rent: ${p205Sept?.agreementRentPaymentStatus}`
+      p205Oct?.cyclePresentationState === 'RESERVED_IN_CYCLE' && p205Oct?.agreementRentPaymentStatus === 'NOT_ISSUED',
+      'Matrix J: RESERVED IN CYCLE -> Room 205 (2026-10) is RESERVED_IN_CYCLE with rent status NOT_ISSUED (ยังไม่ออกบิล)',
+      `State: ${p205Oct?.cyclePresentationState}, Rent: ${p205Oct?.agreementRentPaymentStatus}`
     );
 
     // Matrix Scenario K: Ambiguous LEGACY_COMBINED Partial -> Room 104 (2026-08) combined partial bill resolves rent & deposit to UNKNOWN (ไม่พบข้อมูลการชำระ)

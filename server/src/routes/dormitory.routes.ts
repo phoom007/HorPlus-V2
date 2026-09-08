@@ -8,6 +8,7 @@ import { IPlanRepository } from '../db/repositories/plan.repository.js';
 import { SensitiveFieldService } from '../services/sensitive-field.service.js';
 import { SignatureStorageService } from '../services/signature-storage.service.js';
 import { dormitoryLogoService } from '../services/dormitory-logo.service.js';
+import { tenantRegistrationService } from '../services/tenant-registration.service.js';
 import { createRequireSessionMiddleware } from '../middleware/require-session.js';
 import { createRequireDormitoryContextMiddleware } from '../middleware/require-dormitory.js';
 import { createRequirePermissionMiddleware } from '../middleware/require-permission.js';
@@ -36,6 +37,7 @@ export function createDormitoryRouter(
   roleRepo: any
 ): Router {
   const router = Router();
+  const prisma = getPrismaClient();
   const requireSession = createRequireSessionMiddleware(authService);
   const requireDormitory = createRequireDormitoryContextMiddleware(membershipRepo, roleRepo);
 
@@ -811,6 +813,167 @@ export function createDormitoryRouter(
 
   router.get('/:dormitoryId/signature', requireSession, requireDormitory, requireDormitoryView, handleGetSignature);
   router.get('/:dormitoryId/signatures', requireSession, requireDormitory, requireDormitoryView, handleGetSignature);
+
+  // GET /api/v1/dormitories/:dormitoryId/contracts/:contractId/tenant-signature
+  router.get('/:dormitoryId/contracts/:contractId/tenant-signature', requireSession, requireDormitory, requireDormitoryView, async (req: Request, res: Response) => {
+    try {
+      const { dormitoryId, contractId } = req.params;
+      const contract = await prisma.contract.findFirst({
+        where: { id: contractId, dormitoryId },
+      });
+      if (!contract || !contract.tenantSignature) {
+        return res.status(404).json({ error: { message: 'Tenant signature not found' } });
+      }
+      const signatureService = new SignatureStorageService(prisma);
+      const stream = await signatureService.getSignatureStream(contract.tenantSignature);
+      res.setHeader('Content-Type', 'image/png');
+      res.setHeader('Cache-Control', 'private, max-age=3600');
+      stream.pipe(res);
+    } catch (err: any) {
+      const statusCode = err.statusCode || (err.code === 'SIGNATURE_NOT_FOUND' ? 404 : 500);
+      res.status(statusCode).json({
+        error: {
+          code: err.code || 'SIGNATURE_STREAM_FAILED',
+          message: err.message || 'เกิดข้อผิดพลาดขณะเรียกลายเซ็นผู้เช่า',
+        },
+      });
+    }
+  });
+
+  // GET /api/v1/dormitories/:dormitoryId/contracts/:contractId/owner-signature
+  router.get('/:dormitoryId/contracts/:contractId/owner-signature', requireSession, requireDormitory, requireDormitoryView, async (req: Request, res: Response) => {
+    try {
+      const { dormitoryId, contractId } = req.params;
+      const contract = await prisma.contract.findFirst({
+        where: { id: contractId, dormitoryId },
+      });
+      if (!contract) {
+        return res.status(404).json({ error: { message: 'Contract not found' } });
+      }
+      const signatureService = new SignatureStorageService(prisma);
+      let objectKey = contract.ownerSignature;
+      if (!objectKey) {
+        // Presentation fallback to current Settings signature without mutating contract
+        const latestOwnerSig = await signatureService.getLatestSignatureRecord(dormitoryId);
+        objectKey = latestOwnerSig?.objectKey || null;
+      }
+      if (!objectKey) {
+        return res.status(404).json({ error: { message: 'Owner signature not found' } });
+      }
+      const stream = await signatureService.getSignatureStream(objectKey);
+      res.setHeader('Content-Type', 'image/png');
+      res.setHeader('Cache-Control', 'private, max-age=3600');
+      stream.pipe(res);
+    } catch (err: any) {
+      const statusCode = err.statusCode || (err.code === 'SIGNATURE_NOT_FOUND' ? 404 : 500);
+      res.status(statusCode).json({
+        error: {
+          code: err.code || 'SIGNATURE_STREAM_FAILED',
+          message: err.message || 'เกิดข้อผิดพลาดขณะเรียกลายเซ็นเจ้าของหอพัก',
+        },
+      });
+    }
+  });
+
+  // GET /api/v1/dormitories/:dormitoryId/contracts/:contractId/signatures/:party
+  router.get('/:dormitoryId/contracts/:contractId/signatures/:party', requireSession, requireDormitory, requireDormitoryView, async (req: Request, res: Response) => {
+    try {
+      const { dormitoryId, contractId, party } = req.params;
+      if (party !== 'tenant' && party !== 'owner') {
+        return res.status(400).json({ error: { message: 'Invalid party parameter' } });
+      }
+      const contract = await prisma.contract.findFirst({
+        where: { id: contractId, dormitoryId },
+      });
+      if (!contract) {
+        return res.status(404).json({ error: { message: 'Contract not found' } });
+      }
+      const signatureService = new SignatureStorageService(prisma);
+      let objectKey = party === 'tenant' ? contract.tenantSignature : contract.ownerSignature;
+      if (party === 'owner' && !objectKey) {
+        // Presentation fallback to current Settings signature without mutating contract
+        const latestOwnerSig = await signatureService.getLatestSignatureRecord(dormitoryId);
+        objectKey = latestOwnerSig?.objectKey || null;
+      }
+      if (!objectKey) {
+        return res.status(404).json({ error: { message: `${party} signature not found` } });
+      }
+      const stream = await signatureService.getSignatureStream(objectKey);
+      res.setHeader('Content-Type', 'image/png');
+      res.setHeader('Cache-Control', 'private, max-age=3600');
+      stream.pipe(res);
+    } catch (err: any) {
+      const statusCode = err.statusCode || (err.code === 'SIGNATURE_NOT_FOUND' ? 404 : 500);
+      res.status(statusCode).json({
+        error: {
+          code: err.code || 'SIGNATURE_STREAM_FAILED',
+          message: err.message || 'เกิดข้อผิดพลาดขณะเรียกลายเซ็น',
+        },
+      });
+    }
+  });
+
+  // GET /api/v1/dormitories/:dormitoryId/tenant-registrations/:requestId/tenant-signature
+  router.get('/:dormitoryId/tenant-registrations/:requestId/tenant-signature', requireSession, requireDormitory, requireDormitoryView, async (req: Request, res: Response) => {
+    try {
+      const { dormitoryId, requestId } = req.params;
+      const reg = await prisma.tenantRegistrationRequest.findFirst({
+        where: {
+          dormitoryId,
+          OR: [
+            { id: requestId },
+            { approvedTenantId: requestId },
+          ],
+        },
+      });
+      if (!reg || !reg.tenantSignatureObjectKey) {
+        return res.status(404).json({ error: { message: 'Tenant signature not found' } });
+      }
+      const signatureService = new SignatureStorageService(prisma);
+      const stream = await signatureService.getSignatureStream(reg.tenantSignatureObjectKey);
+      res.setHeader('Content-Type', 'image/png');
+      res.setHeader('Cache-Control', 'private, max-age=3600');
+      stream.pipe(res);
+    } catch (err: any) {
+      const statusCode = err.statusCode || (err.code === 'SIGNATURE_NOT_FOUND' ? 404 : 500);
+      res.status(statusCode).json({
+        error: {
+          code: err.code || 'SIGNATURE_STREAM_FAILED',
+          message: err.message || 'เกิดข้อผิดพลาดขณะเรียกลายเซ็นผู้เช่า',
+        },
+      });
+    }
+  });
+
+  // GET /api/v1/dormitories/:dormitoryId/tenant-registrations/:requestId/identity-document
+  router.get('/:dormitoryId/tenant-registrations/:requestId/identity-document', requireSession, requireDormitory, requireDormitoryView, async (req: Request, res: Response) => {
+    try {
+      const { dormitoryId, requestId } = req.params;
+      const doc = await tenantRegistrationService.getRegistrationIdentityDocument(dormitoryId, requestId);
+      res.setHeader('Content-Type', doc.mimeType);
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('Cache-Control', 'private, no-store, no-cache, must-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+      res.setHeader('Content-Disposition', `inline; filename="${doc.filename}"`);
+      return res.send(doc.fileBuffer);
+    } catch (err: any) {
+      if (err?.code === 'IDENTITY_DOCUMENT_NOT_FOUND' || err?.code === 'FILE_NOT_FOUND' || err?.code === 'REGISTRATION_NOT_FOUND') {
+        return res.status(404).json({
+          error: {
+            code: 'IDENTITY_DOCUMENT_NOT_FOUND',
+            message: err.message || 'ไม่พบไฟล์เอกสารสำเนาบัตรประชาชน',
+          },
+        });
+      }
+      res.status(err.status || err.statusCode || 500).json({
+        error: {
+          code: err.code || 'IDENTITY_DOCUMENT_ERROR',
+          message: err.message || 'เกิดข้อผิดพลาดในการดึงเอกสาร',
+        },
+      });
+    }
+  });
 
   // POST /api/v1/dormitories/:dormitoryId/logo (Owner Round 2.4E Dormitory Logo Upload)
   const handlePostLogo = async (req: Request, res: Response) => {

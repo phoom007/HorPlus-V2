@@ -48,7 +48,9 @@ import {
   ShieldAlert,
   AlertTriangle,
   Receipt,
-  Coins
+  Coins,
+  Paperclip,
+  Image as ImageIcon
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { LineLogo as LineIcon } from '../../components/LineLogo';
@@ -67,11 +69,169 @@ import {
   ThaiDatePicker,
   CurrencyInput,
   PrintView,
-  SignaturePad
+  SignaturePad,
+  OwnerDateInput,
+  isoToThaiBe
 } from '../../components/GlobalComponents';
 import { Tenant, Room, CoOccupant, CoOccupantHistoryItem, EmergencyContact, Contract, Bill, BillItem, BLOCKING_CONTRACT_STATUSES, PetItem, VehicleItem, TenantReturnContext, Dormitory, QuickAddRoomContext } from '../../types';
 import { getDataProvider } from '../../data/dataProvider';
 import { convertImageToWebP, UPLOAD_DROPZONE_TEXT } from '../../utils/imageUtils';
+import { formatOwnerRoomOptionLabel } from '../../utils/room-label.util';
+import { resolveLandlordSignerName } from '../../utils/landlord-signer.util';
+import { getPaymentSettings, PaymentSettingsDTO } from '../../services/payment-settings.service';
+
+export function useAuthenticatedBlobUrl(url: string | null | undefined, dormitoryId?: string): string | null {
+  const [blobUrl, setBlobUrl] = useState<string | null>(() => {
+    if (!url) return null;
+    if (url.startsWith('data:') || url.startsWith('blob:')) return url;
+    return null;
+  });
+
+  React.useEffect(() => {
+    if (!url) {
+      setBlobUrl(null);
+      return;
+    }
+
+    if (url.startsWith('data:') || url.startsWith('blob:')) {
+      setBlobUrl(url);
+      return;
+    }
+
+    let isMounted = true;
+    let createdUrl: string | null = null;
+
+    const fetchBlob = async () => {
+      try {
+        const headers: Record<string, string> = {};
+        if (dormitoryId) {
+          headers['X-Dormitory-Id'] = dormitoryId;
+        }
+        const res = await fetch(url, {
+          credentials: 'include',
+          headers,
+        });
+        if (!res.ok) {
+          throw new Error(`Failed to fetch blob from ${url}, status: ${res.status}`);
+        }
+        const blob = await res.blob();
+        if (isMounted) {
+          if (typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
+            createdUrl = URL.createObjectURL(blob);
+            setBlobUrl(createdUrl);
+          } else {
+            setBlobUrl(url);
+          }
+        }
+      } catch {
+        if (isMounted) {
+          setBlobUrl(url);
+        }
+      }
+    };
+
+    fetchBlob();
+
+    return () => {
+      isMounted = false;
+      if (createdUrl && typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
+        URL.revokeObjectURL(createdUrl);
+      }
+    };
+  }, [url, dormitoryId]);
+
+  return blobUrl;
+}
+
+export const AuthenticatedSignatureImage: React.FC<{
+  url: string | null | undefined;
+  alt: string;
+  className?: string;
+  dormitoryId?: string;
+  testId?: string;
+}> = ({ url, alt, className, dormitoryId, testId }) => {
+  const blobUrl = useAuthenticatedBlobUrl(url, dormitoryId);
+  const [hasError, setHasError] = useState(false);
+
+  React.useEffect(() => {
+    setHasError(false);
+  }, [url]);
+
+  if (!url || hasError) {
+    return (
+      <div className="h-10" data-testid={testId ? `${testId}-unsigned` : undefined} />
+    );
+  }
+
+  if (!blobUrl) {
+    return (
+      <div className="h-10 flex items-center justify-center text-slate-300 text-xs animate-pulse">
+        กำลังโหลดลายมือชื่อ...
+      </div>
+    );
+  }
+
+  return (
+    <img
+      src={blobUrl}
+      alt={alt}
+      className={className || "h-10 mx-auto object-contain"}
+      onError={() => setHasError(true)}
+      data-testid={testId}
+    />
+  );
+};
+
+export const InlineIdDocumentPreview: React.FC<{
+  url: string | null | undefined;
+  filename?: string;
+  mimeType?: string;
+  byteSize?: number;
+  dormitoryId?: string;
+}> = ({ url, filename, mimeType, byteSize, dormitoryId }) => {
+  const blobUrl = useAuthenticatedBlobUrl(url, dormitoryId);
+  const isPdf = Boolean(
+    (mimeType && mimeType.includes('pdf')) ||
+    (filename && filename.toLowerCase().endsWith('.pdf')) ||
+    (url && url.toLowerCase().includes('.pdf'))
+  );
+
+  if (!url) return null;
+
+  return (
+    <div className="rounded-xl border border-indigo-200/80 overflow-hidden bg-slate-50 space-y-0" data-testid="inline-id-document-container">
+      <div className="flex items-center justify-between px-3 py-2 bg-indigo-50/70 border-b border-indigo-100 text-xs text-slate-700 font-medium">
+        <div className="flex items-center gap-2 min-w-0">
+          <FileText className="w-4 h-4 text-indigo-600 shrink-0" />
+          <span className="truncate font-bold text-slate-800 text-[11px]">{filename || (isPdf ? 'สำเนาบัตรประชาชน.pdf' : 'สำเนาบัตรประชาชน')}</span>
+        </div>
+        <span className="text-[10px] text-indigo-700 bg-white px-2 py-0.5 rounded border border-indigo-200 font-bold shrink-0">
+          {isPdf ? 'PDF' : 'รูปภาพ'} {byteSize ? `• ${Math.round(byteSize / 1024)} KB` : ''}
+        </span>
+      </div>
+
+      <div className="p-3 bg-white flex items-center justify-center min-h-[140px]">
+        {!blobUrl ? (
+          <div className="text-xs text-slate-400 py-6 animate-pulse">กำลังโหลดเอกสารสำเนาบัตรประชาชน...</div>
+        ) : isPdf ? (
+          <iframe
+            src={blobUrl}
+            title={filename || 'สำเนาบัตรประชาชน'}
+            className="w-full h-72 border-0 rounded-lg shadow-2xs"
+            data-testid="inline-id-pdf-iframe"
+          />
+        ) : (
+          <img
+            src={blobUrl}
+            alt={filename || 'สำเนาบัตรประชาชน'}
+            className="max-h-64 max-w-full rounded-lg object-contain border border-slate-100 shadow-2xs mx-auto"
+            data-testid="inline-id-image-preview"
+          />
+        )}
+      </div>
+    </div>
+  );
+};
 
 export const getTrulyVacantRooms = (
   rooms: Room[] = [],
@@ -86,10 +246,14 @@ export const getTrulyVacantRooms = (
     if (room.status !== 'vacant') return false;
     if (room.currentTenantId) return false;
 
-    // 2. Active Occupancy check:
-    // - No tenant currently active in this room
+    // Attached active daily stay or provisional term guard
+    if ((room as any).dailyStays?.some((ds: any) => ds.status === 'ACTIVE' || ds.status === 'active')) return false;
+    if ((room as any).provisionalRentalTerms?.some((pt: any) => pt.status === 'ACTIVE' || pt.status === 'active')) return false;
+
+    // 2. Active Occupancy & Resident check:
+    // - No tenant currently active in this room (Monthly, Term, Daily)
     const hasActiveTenant = tenants.some(
-      t => (t.roomId === room.id || (t as any).currentRoomId === room.id) && t.status === 'active'
+      t => (t.roomId === room.id || (t as any).currentRoomId === room.id || (t as any).roomNumber === room.roomNumber) && t.status === 'active'
     );
     if (hasActiveTenant) return false;
 
@@ -120,17 +284,81 @@ export const getTrulyVacantRooms = (
     if (hasBlockingContract) return false;
 
     return true;
-  });
+  }).sort((a, b) => (a.roomNumber || '').localeCompare(b.roomNumber || '', undefined, { numeric: true }));
 };
 
 export const getRentalTypeLabel = (tenant: Tenant, contracts: Contract[] = []): string | null => {
-  const rawType = tenant.rentalType || contracts.find(c => c.tenantId === tenant.id)?.rentalType;
+  const rawType = tenant.rentalType || tenant.rentalPlan || contracts.find(c => c.tenantId === tenant.id)?.rentBillingType || contracts.find(c => c.tenantId === tenant.id)?.rentalType;
   if (!rawType) return null;
   const upper = String(rawType).toUpperCase();
   if (upper === 'MONTHLY') return 'รายเดือน';
   if (upper === 'TERM') return 'รายเทอม';
   if (upper === 'DAILY') return 'รายวัน';
   return null;
+};
+
+export const getRentalTypeBadge = (tenant: Tenant, contracts: Contract[] = []): { label: string; className: string } | null => {
+  const rawType = tenant.rentalType || tenant.rentalPlan || contracts.find(c => c.tenantId === tenant.id)?.rentBillingType || contracts.find(c => c.tenantId === tenant.id)?.rentalType;
+  if (!rawType) return null;
+  const upper = String(rawType).toUpperCase();
+  if (upper === 'MONTHLY' || upper === 'รายเดือน') {
+    return { label: 'รายเดือน', className: 'bg-blue-50 text-blue-700 border-blue-200' };
+  }
+  if (upper === 'TERM' || upper === 'รายเทอม') {
+    return { label: 'รายเทอม', className: 'bg-purple-50 text-purple-700 border-purple-200' };
+  }
+  if (upper === 'DAILY' || upper === 'รายวัน') {
+    return { label: 'รายวัน', className: 'bg-emerald-50 text-emerald-700 border-emerald-200' };
+  }
+  return { label: rawType, className: 'bg-slate-100 text-slate-700 border-slate-200' };
+};
+
+export const formatPendingDuration = (tenant: Tenant): string | null => {
+  const upperType = String(tenant.rentalType || tenant.rentalPlan || '').toUpperCase();
+  const formatDate = (d?: string | null) => {
+    if (!d) return '';
+    try {
+      const parts = String(d).split('T')[0].split('-');
+      if (parts.length === 3) {
+        const y = Number(parts[0]);
+        const beYear = y > 2400 ? y : y + 543;
+        return `${String(parts[2]).padStart(2, '0')}/${String(parts[1]).padStart(2, '0')}/${beYear}`;
+      }
+      return d;
+    } catch {
+      return d;
+    }
+  };
+
+  const startStr = formatDate(tenant.requestedStartDate);
+  const endStr = formatDate(tenant.requestedEndDate);
+  const dateRange = startStr && endStr ? ` (${startStr} - ${endStr})` : (startStr ? ` (เริ่ม ${startStr})` : '');
+
+  if (upperType === 'DAILY') {
+    const days = tenant.requestedDays || (tenant.requestedStartDate && tenant.requestedEndDate ? Math.max(1, Math.round((new Date(tenant.requestedEndDate).getTime() - new Date(tenant.requestedStartDate).getTime()) / (24 * 3600 * 1000))) : 1);
+    const dailyRate = tenant.requestedDailyRate || (tenant.requestedDays && tenant.requestedRent ? Math.round(Number(tenant.requestedRent) / tenant.requestedDays) : tenant.requestedRent);
+    const rentPart = dailyRate ? ` • ค่าเช่า ฿ ${Number(dailyRate).toLocaleString()}/วัน` : (tenant.requestedRent ? ` • ค่าเช่า ฿ ${Number(tenant.requestedRent).toLocaleString()}` : '');
+    return `${days} วัน •${dateRange}${rentPart}`;
+  }
+  if (upperType === 'TERM') {
+    const months = tenant.requestedDurationMonths || 4;
+    const rentPart = tenant.requestedRent ? ` • ค่าเช่า ฿ ${Number(tenant.requestedRent).toLocaleString()}/เทอม` : '';
+    return `${months} เดือน •${dateRange}${rentPart}`;
+  }
+  const months = tenant.requestedDurationMonths || 12;
+  const rentPart = tenant.requestedRent ? ` • ค่าเช่า ฿ ${Number(tenant.requestedRent).toLocaleString()}/เดือน` : '';
+  return `${months} เดือน •${dateRange}${rentPart}`;
+};
+
+export const isDailyTenant = (tenant: Tenant, contracts: Contract[] = []): boolean => {
+  if (!tenant) return false;
+  const rawType = String(tenant.rentalType || tenant.rentalPlan || '').toUpperCase();
+  if (rawType === 'DAILY') return true;
+  const contract = contracts.find(c => c.tenantId === tenant.id);
+  if (contract && (String(contract.rentBillingType).toUpperCase() === 'DAILY' || String((contract as any).rentalType).toUpperCase() === 'DAILY')) return true;
+  if ((tenant as any).dailyStays && (tenant as any).dailyStays.length > 0 && (!contracts || contracts.length === 0)) return true;
+  if (tenant.name && tenant.name.includes('รายวัน') && (!contracts || contracts.length === 0)) return true;
+  return false;
 };
 
 export const isTenantLineBound = (tenant: Tenant): boolean => {
@@ -160,6 +388,7 @@ interface OwnerTenantsProps {
   cameFromMeters?: boolean;
   dormitory?: Dormitory | null;
   dormitoryId?: string;
+  buildings?: Array<{ id: string; name: string }>;
 }
 
 const CAR_BRANDS = ["Toyota", "Honda", "Isuzu", "Mazda", "Nissan", "Mitsubishi", "Ford", "Benz", "BMW", "Audi", "MG", "BYD", "Suzuki", "อื่นๆ"];
@@ -278,6 +507,53 @@ export function deriveContractDepositPaymentState(
   return { isPaid: false, depositBill: depositBills[0] };
 }
 
+export function getDepositFinancialState(
+  contractId?: string,
+  billsList: any[] = [],
+  nominalDeposit: number = 0
+): {
+  isPaid: boolean;
+  actualPaidDeposit: number;
+  nominalDeposit: number;
+  depositBill?: any;
+} {
+  if (!contractId || !Array.isArray(billsList) || billsList.length === 0) {
+    return {
+      isPaid: false,
+      actualPaidDeposit: 0,
+      nominalDeposit,
+    };
+  }
+
+  const depositBills = billsList.filter((b: any) => {
+    if (!b || typeof b !== 'object') return false;
+    const kind = String(b.billKind || '').toUpperCase();
+    if (kind !== 'DEPOSIT') return false;
+    if (b.contractId !== contractId) return false;
+
+    const st = String(b.status || '').toLowerCase();
+    if (st === 'cancelled' || st === 'canceled' || st === 'void' || b.isVoided) {
+      return false;
+    }
+    return true;
+  });
+
+  let totalPaid = 0;
+  for (const bill of depositBills) {
+    const st = String(bill.status || '').toLowerCase();
+    const total = Number(bill.totalAmount ?? bill.amount ?? 0);
+    const paid = Number(bill.paidAmount ?? (st === 'paid' ? total : 0));
+    totalPaid += paid;
+  }
+
+  return {
+    isPaid: totalPaid > 0,
+    actualPaidDeposit: totalPaid,
+    nominalDeposit,
+    depositBill: depositBills[0],
+  };
+}
+
 export function getContractStatusBadgeInfo(
   status: string,
   endDate?: string | Date | null
@@ -311,6 +587,159 @@ export function getContractStatusBadgeInfo(
 
   return statusMap[status] || defaultFallbackStatus;
 }
+
+export function resolveTenantDisplayAgreements(
+  selectedTenant: any,
+  contracts: any[] = [],
+  tenantDetailsData: any = null,
+  rooms: any[] = [],
+  effectiveDormId: string = ''
+): any[] {
+  if (!selectedTenant) return [];
+  const tenantContracts = (contracts || []).filter(c => c.tenantId === selectedTenant.id && !c.deletedAt);
+  const provTermsList = tenantDetailsData?.provisionalRentalTerms || [];
+  const activeProvTerm = provTermsList.find((p: any) => p.status === 'ACTIVE' || p.status === 'active');
+  const isTermResident = (selectedTenant.rentalType === 'TERM' || selectedTenant.rentalPlan === 'term' || Boolean(activeProvTerm));
+  const hasCurrentProvAgreement = Boolean(activeProvTerm) || (
+    isTermResident &&
+    tenantContracts.length > 0 &&
+    tenantContracts.every(c => new Date(c.startDate).getTime() > new Date('2026-09-30').getTime())
+  );
+
+  const displayAgreements: any[] = [];
+  if (hasCurrentProvAgreement && selectedTenant.status === 'active') {
+    const targetRoom = rooms.find(r => r.id === (activeProvTerm?.roomId || selectedTenant.roomId) || r.roomNumber === (activeProvTerm?.roomId || selectedTenant.roomId));
+    const provTerms = activeProvTerm?.terms || null;
+    const currentTermAgreement: any = {
+      id: activeProvTerm?.id || 'PROV-TERM-CURRENT-105',
+      isCurrentTermAgreement: true,
+      contractNumber: 'สัญญา/ข้อตกลงปัจจุบัน (ภาค 1/2569)',
+      dormitoryId: effectiveDormId,
+      roomId: activeProvTerm?.roomId || selectedTenant.roomId || (targetRoom ? targetRoom.id : '105'),
+      tenantId: selectedTenant.id,
+      startDate: activeProvTerm?.startDate || selectedTenant.requestedStartDate || '2026-07-01',
+      endDate: activeProvTerm?.endDate || selectedTenant.requestedEndDate || '2026-10-31',
+      durationMonths: activeProvTerm?.durationMonths || selectedTenant.requestedDurationMonths || 4,
+      rentBillingType: 'term',
+      rentalType: 'TERM',
+      rentalPlan: 'term',
+      rentAmount: activeProvTerm?.totalRentAmount || selectedTenant.requestedRent || 18000,
+      depositAmount: activeProvTerm?.depositAmount || selectedTenant.requestedDeposit || 4500,
+      tenantSignature: tenantContracts[0]?.tenantSignature || null,
+      ownerSignature: tenantContracts[0]?.ownerSignature || null,
+      status: 'active',
+      createdAt: activeProvTerm?.createdAt || '2026-07-01T09:00:00.000Z',
+      terms: provTerms,
+    };
+    displayAgreements.push(currentTermAgreement);
+  }
+
+  displayAgreements.push(...tenantContracts);
+
+  // Normalized agreement ordering: newest → oldest (startDate DESC, createdAt DESC, ID tie-breaker)
+  displayAgreements.sort((a, b) => {
+    const aStart = a.startDate ? new Date(a.startDate).getTime() : 0;
+    const bStart = b.startDate ? new Date(b.startDate).getTime() : 0;
+    if (aStart !== bStart) return bStart - aStart; // newest first
+
+    const aCreated = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+    const bCreated = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+    if (aCreated !== bCreated) return bCreated - aCreated; // newest first
+
+    return String(b.id || '').localeCompare(String(a.id || ''));
+  });
+
+  return displayAgreements;
+}
+
+/**
+ * Evaluates whether an agreement is canonically eligible for contract renewal.
+ * Invariant Rules:
+ * 1. Never on Daily stays
+ * 2. Never on non-renewable provisional agreements
+ * 3. Never on obsolete predecessors (contracts already renewed or superseded by newer contract)
+ * 4. Contract must be in valid active/scheduled renewal status
+ */
+/**
+ * Canonical predicate: Is an agreement a renewable contract candidate?
+ * Requirements:
+ * 1. Must be a CONTRACT (agreementType === 'CONTRACT', never provisional, never daily stay)
+ * 2. Rental type Monthly or Term
+ * 3. Status must be in canonical backend renewal eligibility
+ * 4. Not cancelled, terminated, ended, or archived
+ */
+export function isCanonicalRenewableContract(agr: any): boolean {
+  if (!agr || !agr.id) return false;
+  // Never on provisional
+  if (agr.isCurrentTermAgreement || agr.agreementType === 'PROVISIONAL' || agr.isProvisional || String(agr.id).startsWith('PROV-')) {
+    return false;
+  }
+  // Must be contract
+  if (agr.agreementType && agr.agreementType !== 'CONTRACT') {
+    return false;
+  }
+  if (agr.isDailyStay || String(agr.id).startsWith('DAILY-')) {
+    return false;
+  }
+  // Never on Daily
+  const isDaily = agr.rentBillingType === 'daily' ||
+    agr.durationMonths === 0 ||
+    agr.rentalPlan === 'daily' ||
+    agr.rentalType === 'DAILY';
+  if (isDaily) {
+    return false;
+  }
+  // Allowed statuses: active, approved_scheduled, expiring_soon, waiting_extension, pending_signature
+  const allowedStatuses = ['active', 'approved_scheduled', 'expiring_soon', 'waiting_extension', 'pending_signature'];
+  const status = (agr.status || '').toLowerCase();
+  if (!allowedStatuses.includes(status)) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Canonical chain-tip predicate:
+ * Determined strictly from the real previousContractId successor chain.
+ * Dates are for display ordering only.
+ * A contract is NOT the chain tip if another active/valid contract exists whose previousContractId equals agr.id.
+ */
+export function isContractChainTip(agr: any, allAgreements: any[] = []): boolean {
+  if (!isCanonicalRenewableContract(agr)) return false;
+
+  const hasSuccessor = allAgreements.some((other) => {
+    if (!other || other.id === agr.id || other.deletedAt) return false;
+    const st = (other.status || '').toLowerCase();
+    if (['cancelled', 'terminated', 'ended', 'archived'].includes(st)) return false;
+    // Strict chain successor check:
+    return other.previousContractId === agr.id;
+  });
+
+  return !hasSuccessor;
+}
+
+export function isAgreementEligibleForRenewal(agr: any, allAgreements: any[] = []): boolean {
+  return isContractChainTip(agr, allAgreements);
+}
+
+/**
+ * Returns the single newest renewable agreement ID from the newest→oldest list,
+ * or null if no agreement is eligible.
+ * Display ordering sorts newest -> oldest by date, but chain tip is determined strictly by previousContractId.
+ */
+export function resolveNewestRenewableAgreementId(displayAgreements: any[] = []): string | null {
+  const renewableCandidates = displayAgreements
+    .filter(isCanonicalRenewableContract)
+    .filter((agr) => isContractChainTip(agr, displayAgreements))
+    .sort((a, b) => {
+      const timeB = b.startDate ? new Date(b.startDate).getTime() : 0;
+      const timeA = a.startDate ? new Date(a.startDate).getTime() : 0;
+      return timeB - timeA;
+    });
+
+  return renewableCandidates[0]?.id ?? null;
+}
+
 
 interface TenantDetailsFetcherProps {
   dormitoryId: string;
@@ -368,27 +797,40 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
   onReturnToSource,
   onDismissReturnContext,
   cameFromMeters: cameFromMetersProp,
-  dormitory
+  dormitory,
+  buildings: propBuildings = []
 }) => {
   const queryClient = React.useContext(QueryClientContext) || null;
   const effectiveDormId = dormitoryId || dormitory?.id || (typeof window !== 'undefined' ? (localStorage.getItem('selected_dormitory_id') || sessionStorage.getItem('active_dormitory_selected_for_session')) : '') || '';
   const [tenantDetailsData, setTenantDetailsData] = useState<any | null>(null);
+  const [paymentSettings, setPaymentSettings] = useState<PaymentSettingsDTO | null>(null);
+  const [fetchedBuildings, setFetchedBuildings] = useState<Array<{ id: string; name: string }>>([]);
+
+  React.useEffect(() => {
+    if (!effectiveDormId) return;
+    getPaymentSettings(effectiveDormId)
+      .then(setPaymentSettings)
+      .catch((err) => console.warn('Failed to load payment settings for landlord signature:', err));
+  }, [effectiveDormId]);
+
+  React.useEffect(() => {
+    if (propBuildings && propBuildings.length > 0) return;
+    if (!effectiveDormId) return;
+    getDataProvider().properties.getBuildings?.()
+      .then((res: any) => {
+        if (res?.data && Array.isArray(res.data)) {
+          setFetchedBuildings(res.data);
+        }
+      })
+      .catch(() => { });
+  }, [effectiveDormId, propBuildings]);
+
+  const localBuildings = (propBuildings && propBuildings.length > 0) ? propBuildings : fetchedBuildings;
 
   const [propertyDefaultsPolicy, setPropertyDefaultsPolicy] = useState<{ allowed: string; allowedTypes?: string[] } | null | undefined>(undefined);
 
   const [dorm, setDorm] = useState<Partial<Dormitory>>(() => {
     if (dormitory) return dormitory;
-    try {
-      const saved = localStorage.getItem('registered_dorm_profile');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed && typeof parsed === 'object') {
-          // Explicitly strip petPolicy so localStorage / registered_dorm_profile is NEVER Pet Policy authority
-          const { petPolicy: _ignored, ...rest } = parsed;
-          return rest;
-        }
-      }
-    } catch { }
     return {};
   });
 
@@ -431,7 +873,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
           }
         }
       } catch (err) {
-        // Authority-safe fallback to registered_dorm_profile or existing state
+        // Authority-safe fallback to existing state
       }
     };
     loadDorm();
@@ -483,6 +925,13 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
   }, [initialTenantId, returnContext, tenants, onClearInitialTenantId]);
 
   const [profileTab, setProfileTab] = useState<'info' | 'contract' | 'history'>('info');
+
+  // Daily tenants do not have a contract tab; automatically redirect to info tab
+  React.useEffect(() => {
+    if (selectedTenant && isDailyTenant(selectedTenant, contracts) && profileTab === 'contract') {
+      setProfileTab('info');
+    }
+  }, [selectedTenant, contracts, profileTab]);
   const [isIdCardOpen, setIsIdCardOpen] = useState(false);
   const idCardInputRef = useRef<HTMLInputElement>(null);
   const [isEditOpen, setIsEditOpen] = useState(false);
@@ -524,25 +973,25 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
             lineFriendId: serverTenant.lineFriendId ?? null,
             emergencyContact: (emergencyContacts && emergencyContacts.length > 0)
               ? {
-                  name: emergencyContacts[0].name || '',
-                  relationship: emergencyContacts[0].relationship || '',
-                  phone: emergencyContacts[0].phone || '',
-                }
+                name: emergencyContacts[0].name || '',
+                relationship: emergencyContacts[0].relationship || '',
+                phone: emergencyContacts[0].phone || '',
+              }
               : (serverTenant.emergencyContact && serverTenant.emergencyContact.name)
                 ? serverTenant.emergencyContact
                 : {
-                    name: '',
-                    relationship: '',
-                    phone: '',
-                  },
+                  name: '',
+                  relationship: '',
+                  phone: '',
+                },
             coOccupants: coOccupants ?? serverTenant.coOccupants ?? [],
             coOccupantHistory: coOccupantHistory ?? serverTenant.coOccupantHistory ?? [],
             vehicles: vehicles ?? serverTenant.vehicles ?? [],
             vehicle: (vehicles && vehicles.length > 0)
               ? vehicles[0]
               : ((serverTenant.vehicles && serverTenant.vehicles.length > 0)
-                  ? serverTenant.vehicles[0]
-                  : { type: 'none' as const, licensePlate: '', brand: '' }),
+                ? serverTenant.vehicles[0]
+                : { type: 'none' as const, licensePlate: '', brand: '' }),
             pets: serverPets,
             pet: serverPet,
             hasIdentityDocument: hasIdDoc,
@@ -601,9 +1050,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
   const [createContractTerms, setCreateContractTerms] = useState(
     `1. ผู้เช่าต้องชำระค่าเช่าห้องพักภายในวันที่ 5 ของทุกเดือน หากล่าช้ามีค่าปรับวันละ 100 บาท\n2. เงินประกันความเสียหายจะคืนให้เมื่อสิ้นสุดสัญญาเช่าและหักลบค่าเสียหาย/ค่าน้ำ-ไฟแล้ว\n3. ห้ามส่งเสียงดังรบกวนผู้พักอาศัยห้องอื่นหลังเวลา 22:00 น.\n4. ห้ามเลี้ยงสัตว์เลี้ยงชนิดที่ส่งเสียงดังหรือทำสิ่งผิดกฎหมายในอาคารหอพัก`
   );
-  const [createContractTenantSig, setCreateContractTenantSig] = useState<string | undefined>(
-    'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="40"><path d="M10,20 Q30,10 50,25 T90,15" stroke="black" stroke-width="2" fill="none"/></svg>'
-  );
+  const [createContractTenantSig, setCreateContractTenantSig] = useState<string | undefined>(undefined);
   const [contractToast, setContractToast] = useState<string | null>(null);
 
   // Lease termination states
@@ -612,25 +1059,117 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
   const [terminateReason, setTerminateReason] = useState<'early' | 'normal' | 'prepare_vacant'>('normal');
   const [refundDeposit, setRefundDeposit] = useState(true);
   const [damageFee, setDamageFee] = useState<string>('0');
-  const [additionalNote, setAdditionalNote] = useState<string>('');
   const [deductionItems, setDeductionItems] = useState<Array<{ id: string; title: string; amount: number | string }>>([]);
-  const [refundMethod, setRefundMethod] = useState<'promptpay' | 'bank_transfer' | 'cash'>('promptpay');
-  const [refundAccountInfo, setRefundAccountInfo] = useState<string>('');
 
   // Pending tenant approve / reject states
   const [isApproveOpen, setIsApproveOpen] = useState(false);
   const [isRejectOpen, setIsRejectOpen] = useState(false);
   const [approveRoomId, setApproveRoomId] = useState('');
+  const [approveRentalType, setApproveRentalType] = useState<'MONTHLY' | 'TERM' | 'DAILY'>('MONTHLY');
   const [approveStartDate, setApproveStartDate] = useState(new Date().toISOString().split('T')[0]);
+  const [approveEndDate, setApproveEndDate] = useState<string>('');
+  const [approveDurationMonths, setApproveDurationMonths] = useState<number>(12);
+  const [approveDays, setApproveDays] = useState<number>(1);
+  const [approveDailyRate, setApproveDailyRate] = useState<string>('0');
   const [approveDeposit, setApproveDeposit] = useState<string>('');
   const [approveRent, setApproveRent] = useState<string>('');
+  const [approveDepositDeclaredStatus, setApproveDepositDeclaredStatus] = useState<'UNPAID' | 'PAID'>('UNPAID');
+  const [approveIdCardFile, setApproveIdCardFile] = useState<File | null>(null);
+  const [approveIdCardPreview, setApproveIdCardPreview] = useState<string | null>(null);
+  const [approveIdCardError, setApproveIdCardError] = useState<string | null>(null);
+  const [approveAttachments, setApproveAttachments] = useState<any[]>([]);
+  const [isReplacingIdDoc, setIsReplacingIdDoc] = useState(false);
+  const [ownerAttachmentName, setOwnerAttachmentName] = useState<string>('');
+  const [ownerAttachmentFile, setOwnerAttachmentFile] = useState<File | null>(null);
+  const [previewAttachmentUrl, setPreviewAttachmentUrl] = useState<string | null>(null);
+  const [previewAttachmentTitle, setPreviewAttachmentTitle] = useState<string>('');
   const [rejectReason, setRejectReason] = useState('');
+
+  // Daily stay extension modal states
+  const [isDailyExtendOpen, setIsDailyExtendOpen] = useState(false);
+  const [dailyExtendTenant, setDailyExtendTenant] = useState<Tenant | null>(null);
+  const [dailyExtendCurrentCheckOut, setDailyExtendCurrentCheckOut] = useState<string>('');
+  const [dailyExtendNewCheckOut, setDailyExtendNewCheckOut] = useState<string>('');
+  const [dailyExtendDays, setDailyExtendDays] = useState<number>(1);
+  const [dailyExtendRate, setDailyExtendRate] = useState<number>(550);
+  const [dailyExtendTotal, setDailyExtendTotal] = useState<number>(550);
 
   // Multi-step form state for adding new tenant
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [currentStep, setCurrentStep] = useState(0);
   const [errorText, setErrorText] = useState<string | null>(null);
   const [copySuccessToast, setCopySuccessToast] = useState<string | null>(null);
+  const [tenantActionToast, setTenantActionToast] = useState<string | null>(null);
+  const [isTenantActionToastFading, setIsTenantActionToastFading] = useState(false);
+
+  React.useEffect(() => {
+    if (tenantActionToast) {
+      setIsTenantActionToastFading(false);
+      const fadeTimer = setTimeout(() => {
+        setIsTenantActionToastFading(true);
+      }, 2900);
+      const removeTimer = setTimeout(() => {
+        setTenantActionToast(null);
+        setIsTenantActionToastFading(false);
+      }, 3500);
+
+      return () => {
+        clearTimeout(fadeTimer);
+        clearTimeout(removeTimer);
+      };
+    }
+  }, [tenantActionToast]);
+
+  React.useEffect(() => {
+    if (!copySuccessToast) return;
+    const timer = setTimeout(() => {
+      setCopySuccessToast(null);
+    }, 3000);
+    return () => clearTimeout(timer);
+  }, [copySuccessToast]);
+
+  const eligibleRoomsForApproval = React.useMemo(() => {
+    if (!selectedTenant) return rooms;
+    const reqStart = approveStartDate ? new Date(approveStartDate).getTime() : 0;
+    const reqEnd = approveEndDate
+      ? new Date(approveEndDate).getTime()
+      : (reqStart + (approveRentalType === 'DAILY' ? approveDays * 24 * 60 * 60 * 1000 : approveDurationMonths * 30 * 24 * 60 * 60 * 1000));
+
+    return rooms.filter(r => {
+      // 1. Filter out maintenance rooms
+      if (r.status === 'maintenance') return false;
+
+      // 2. Filter out rooms occupied by active tenants with conflicting dates
+      const hasConflictingContract = (contracts || []).some(c => {
+        if (c.roomId !== r.id && c.roomId !== r.roomNumber) return false;
+        if (c.status !== 'active' && c.status !== 'expiring_soon' && c.status !== 'waiting_extension') return false;
+        if (c.tenantId === selectedTenant.id) return false;
+        const cStart = new Date(c.startDate).getTime();
+        const cEnd = new Date(c.endDate).getTime();
+        if (isNaN(cStart) || isNaN(cEnd)) return true;
+        return reqStart < cEnd && reqEnd > cStart;
+      });
+      if (hasConflictingContract) return false;
+
+      const hasActiveTenant = tenants.some(t => {
+        if (t.id === selectedTenant.id) return false;
+        if (t.roomId !== r.id && t.roomId !== r.roomNumber) return false;
+        return t.status === 'active';
+      });
+      if (hasActiveTenant) return false;
+
+      return true;
+    });
+  }, [rooms, contracts, tenants, selectedTenant, approveStartDate, approveEndDate, approveRentalType, approveDays, approveDurationMonths]);
+
+  const approvalRoomOptions = React.useMemo(() => {
+    const list = [...eligibleRoomsForApproval];
+    if (approveRoomId && !list.some(r => r.id === approveRoomId)) {
+      const selected = rooms.find(r => r.id === approveRoomId);
+      if (selected) list.push(selected);
+    }
+    return list.sort((a, b) => (a.roomNumber || '').localeCompare(b.roomNumber || '', undefined, { numeric: true }));
+  }, [eligibleRoomsForApproval, approveRoomId, rooms]);
 
   // Quick Add Tenant Modal states (TERM / MONTHLY / DAILY)
   const [quickAddModalOpen, setQuickAddModalOpen] = useState(false);
@@ -754,7 +1293,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
     const finalRel = newCoRelationship === 'อื่นๆ' ? (newCoCustomRelationship.trim() || 'อื่นๆ') : newCoRelationship;
 
     const newCo: CoOccupant = {
-      id: `co-${Date.now()}`,
+      id: `co-tmp-${Date.now()}`,
       name: newCoName.trim(),
       phone: newCoPhone.trim(),
       relationship: finalRel,
@@ -992,7 +1531,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
     if (coName.trim() && coPhone.trim()) {
       const finalRel = coRelationship === 'อื่นๆ' ? (coCustomRelationship.trim() || 'อื่นๆ') : coRelationship;
       const newCo: CoOccupant = {
-        id: `co-${Date.now()}`,
+        id: `co-tmp-${Date.now()}`,
         name: coName.trim(),
         phone: coPhone.trim(),
         relationship: finalRel,
@@ -1171,9 +1710,6 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
     setTerminateReason('normal');
     setRefundDeposit(true);
     setDamageFee('0');
-    setAdditionalNote('');
-    setRefundMethod('promptpay');
-    setRefundAccountInfo(tenant.phone || '');
     setDeductionItems([]);
     setIsSuccessAnimating(false);
     setIsTerminateOpen(true);
@@ -1194,14 +1730,18 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
       const tenantContracts = (contracts || []).filter(c => c.tenantId === tenantId);
       const activeContract = tenantContracts.find(c => c.status === 'active' || c.status === 'expiring_soon' || c.status === 'checking_out') || tenantContracts[0];
       const origDeposit = activeContract?.depositAmount ?? room?.depositAmount ?? 0;
+      const depFinancial = getDepositFinancialState(activeContract?.id, bills, origDeposit);
+      const actualPaidDeposit = depFinancial.actualPaidDeposit;
+      const hasPaidDeposit = depFinancial.isPaid && actualPaidDeposit > 0;
 
       // Filter valid deductions
       const validDeductions = deductionItems.filter(item => (Number(item.amount) || 0) > 0 || (item.title && item.title.trim() !== ''));
       const totalDeductions = validDeductions.reduce((sum, it) => sum + (Number(it.amount) || 0), 0);
 
-      // Financial outcome
-      const netRefundAmount = refundDeposit ? Math.max(0, origDeposit - totalDeductions) : 0;
-      const netExcessToPay = refundDeposit ? Math.max(0, totalDeductions - origDeposit) : totalDeductions;
+      // Financial outcome (D5 & D6 Authority: only actual money received can be refunded or offset)
+      const effectiveDeposit = (hasPaidDeposit && refundDeposit) ? actualPaidDeposit : 0;
+      const netRefundAmount = (hasPaidDeposit && refundDeposit) ? Math.max(0, actualPaidDeposit - totalDeductions) : 0;
+      const netExcessToPay = totalDeductions > effectiveDeposit ? (totalDeductions - effectiveDeposit) : 0;
 
       const deductionsSummaryText = validDeductions.length > 0
         ? validDeductions.map(d => `${d.title || 'ค่าใช้จ่าย'}: ${Number(d.amount) || 0} บาท`).join(', ')
@@ -1232,16 +1772,17 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
 
       // 3. Update contract status to 'expired' and record audit trail in terms
       const settlementRecord = `[ระบบนิติ] เลิกเช่าคืนห้องพักเมื่อ ${new Date().toLocaleDateString('th-TH')}` +
-        ` | เงินประกันตามสัญญา: ${origDeposit.toLocaleString()} บาท` +
-        ` | การจัดการเงินประกัน: ${refundDeposit ? 'คืนเงินประกัน (นำมาหักลดค่าใช้จ่าย)' : 'ไม่คืนเงินประกัน (ยึดเงินประกัน)'}` +
+        ` | เงินประกันตามสัญญา: ${origDeposit.toLocaleString()} บาท (ชำระจริง: ${actualPaidDeposit.toLocaleString()} บาท)` +
+        ` | การจัดการเงินประกัน: ${!hasPaidDeposit ? 'ไม่มีเงินประกันที่ชำระแล้ว' : (refundDeposit ? 'คืนเงินประกัน (นำมาหักลดค่าใช้จ่าย)' : 'ไม่คืนเงินประกัน (ยึดเงินประกัน)')}` +
         ` | รายการค่าใช้จ่ายที่หัก: ${deductionsSummaryText}` +
         ` | รวมค่าใช้จ่ายที่หัก: ${totalDeductions.toLocaleString()} บาท` +
-        (refundDeposit
-          ? (origDeposit >= totalDeductions
-            ? ` | เงินประกันคืนผู้เช่าสุทธิ: ${netRefundAmount.toLocaleString()} บาท (${refundAccountInfo ? `${refundMethod}: ${refundAccountInfo}` : refundMethod})`
-            : ` | เงินประกันช่วยลดค่าใช้จ่ายแล้ว มียอดต้องชำระเพิ่ม: ${netExcessToPay.toLocaleString()} บาท`)
-          : ` | ผู้เช่าต้องชำระค่าใช้จ่ายทั้งหมด: ${netExcessToPay.toLocaleString()} บาท`) +
-        (additionalNote ? ` | หมายเหตุ: ${additionalNote}` : '');
+        (!hasPaidDeposit
+          ? ` | ผู้เช่าต้องชำระค่าใช้จ่ายทั้งหมด: ${totalDeductions.toLocaleString()} บาท`
+          : (refundDeposit
+            ? (actualPaidDeposit >= totalDeductions
+              ? ` | เงินประกันคืนผู้เช่าสุทธิ: ${netRefundAmount.toLocaleString()} บาท`
+              : ` | เงินประกันช่วยลดค่าใช้จ่ายแล้ว มียอดต้องชำระเพิ่ม: ${netExcessToPay.toLocaleString()} บาท`)
+            : ` | ผู้เช่าต้องชำระค่าใช้จ่ายทั้งหมด: ${totalDeductions.toLocaleString()} บาท`));
 
       const updatedContracts = contracts.map(c => {
         if (c.tenantId === tenantId && (c.status === 'active' || c.status === 'expiring_soon' || c.status === 'checking_out' || c.status === 'pending_signature' || c.status === 'expired' || c.status === 'waiting_extension')) {
@@ -1266,15 +1807,15 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
 
       const currentCycle = selectedCycle || new Date().toISOString().slice(0, 7);
 
-      if (refundDeposit) {
+      if (hasPaidDeposit && refundDeposit) {
         if (netExcessToPay > 0) {
           // Deposit covered partially, remaining excess billed to tenant
           const billItems: BillItem[] = [
             ...deductionBillItems,
             {
               id: `item-deposit-credit-${Date.now()}`,
-              description: `หักชำระจากเงินประกันสัญญา (-${origDeposit.toLocaleString()} บาท)`,
-              amount: -origDeposit,
+              description: `หักชำระจากเงินประกันสัญญา (-${actualPaidDeposit.toLocaleString()} บาท)`,
+              amount: -actualPaidDeposit,
               category: 'other'
             }
           ];
@@ -1319,7 +1860,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
           updatedBills.push(settledBill);
         }
       } else {
-        // Did not refund deposit: tenant must pay all deductions if any
+        // No paid deposit or deposit forfeited: tenant must pay all deductions if any
         if (validDeductions.length > 0) {
           const newFinalBill: Bill = {
             id: `bill-final-${tenantId}-${Date.now()}`,
@@ -1349,7 +1890,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
       }
 
       // 6. Add action log
-      const detailLog = `ผู้เช่า ${tenantName} เลิกเช่าคืนห้องพัก (ห้อง ${roomNumber}) - สถานะห้อง: ว่าง, สัญญา: หมดอายุ, เงินประกัน: ${origDeposit.toLocaleString()} บาท, การจัดการเงินประกัน: ${refundDeposit ? 'คืนเงินประกัน (หักลดค่าใช้จ่าย)' : 'ไม่คืนเงินประกัน (ยึด)'}, รายการหัก: ${deductionsSummaryText}, รวมหัก: ${totalDeductions.toLocaleString()} บาท, ${refundDeposit ? (origDeposit >= totalDeductions ? `คืนเงินประกัน ${netRefundAmount.toLocaleString()} บาท` : `จ่ายเพิ่ม ${netExcessToPay.toLocaleString()} บาท`) : `จ่ายเต็ม ${netExcessToPay.toLocaleString()} บาท`}`;
+      const detailLog = `ผู้เช่า ${tenantName} เลิกเช่าคืนห้องพัก (ห้อง ${roomNumber}) - สถานะห้อง: ว่าง, สัญญา: หมดอายุ, เงินประกันสัญญา: ${origDeposit.toLocaleString()} บาท (ชำระจริง: ${actualPaidDeposit.toLocaleString()} บาท), การจัดการเงินประกัน: ${!hasPaidDeposit ? 'ไม่มีเงินประกันที่ชำระแล้ว' : (refundDeposit ? 'คืนเงินประกัน (หักลดค่าใช้จ่าย)' : 'ไม่คืนเงินประกัน (ยึด)')}, รายการหัก: ${deductionsSummaryText}, รวมหัก: ${totalDeductions.toLocaleString()} บาท, ${!hasPaidDeposit ? `จ่ายเต็ม ${totalDeductions.toLocaleString()} บาท` : (refundDeposit ? (actualPaidDeposit >= totalDeductions ? `คืนเงินประกัน ${netRefundAmount.toLocaleString()} บาท` : `จ่ายเพิ่ม ${netExcessToPay.toLocaleString()} บาท`) : `จ่ายเต็ม ${totalDeductions.toLocaleString()} บาท`)}`;
       onAddLog('เลิกเช่าคืนห้อง', detailLog, 'Tenant', tenantId);
 
       // 7. Close modals and switch directly to inactive tab with this tenant selected
@@ -1612,16 +2153,16 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
 
       const activePets = hasPet
         ? petsList
-            .map(p => {
-              const isOther = p.type === 'อื่นๆ' || p.type === 'other' || p.type === 'others';
-              return {
-                id: (p.id && canonicalPetIds.has(p.id)) ? p.id : undefined,
-                type: isOther ? 'other' : (p.type?.trim() || ''),
-                customType: isOther ? (p.customType?.trim() || undefined) : undefined,
-                name: p.name?.trim() || undefined,
-              };
-            })
-            .filter(p => p.type || p.customType || p.name)
+          .map(p => {
+            const isOther = p.type === 'อื่นๆ' || p.type === 'other' || p.type === 'others';
+            return {
+              id: (p.id && canonicalPetIds.has(p.id)) ? p.id : undefined,
+              type: isOther ? 'other' : (p.type?.trim() || ''),
+              customType: isOther ? (p.customType?.trim() || undefined) : undefined,
+              name: p.name?.trim() || undefined,
+            };
+          })
+          .filter(p => p.type || p.customType || p.name)
         : [];
 
       // 1. One atomic database mutation
@@ -1703,21 +2244,21 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
         emergencyContacts: authoritativeEmergencyContacts,
         emergencyContact: authoritativeEmergencyContacts[0]
           ? {
-              id: authoritativeEmergencyContacts[0].id,
-              name: authoritativeEmergencyContacts[0].name || '',
-              phone: authoritativeEmergencyContacts[0].phone || '',
-              relationship: authoritativeEmergencyContacts[0].relationship || '',
-              isPrimary: true,
-            }
+            id: authoritativeEmergencyContacts[0].id,
+            name: authoritativeEmergencyContacts[0].name || '',
+            phone: authoritativeEmergencyContacts[0].phone || '',
+            relationship: authoritativeEmergencyContacts[0].relationship || '',
+            isPrimary: true,
+          }
           : { name: '', phone: '', relationship: '' },
         vehicles: authoritativeVehicles,
         vehicle: authoritativeVehicles[0]
           ? {
-              id: authoritativeVehicles[0].id,
-              type: authoritativeVehicles[0].type || 'none',
-              licensePlate: authoritativeVehicles[0].licensePlate || '',
-              brand: authoritativeVehicles[0].brand || '',
-            }
+            id: authoritativeVehicles[0].id,
+            type: authoritativeVehicles[0].type || 'none',
+            licensePlate: authoritativeVehicles[0].licensePlate || '',
+            brand: authoritativeVehicles[0].brand || '',
+          }
           : { type: 'none', licensePlate: '', brand: '' },
         pets: activePets,
         pet: {
@@ -1766,16 +2307,80 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
     }
   };
 
-    const handleOpenApprove = (tenant: Tenant) => {
-    // Find if tenant is already tied to a room or find available rooms
+  const handleOpenApprove = (tenant: Tenant) => {
+    const rawType = String(tenant.rentalType || tenant.rentalPlan || 'MONTHLY').toUpperCase();
+    const rType: 'MONTHLY' | 'TERM' | 'DAILY' = rawType === 'DAILY' ? 'DAILY' : rawType === 'TERM' ? 'TERM' : 'MONTHLY';
+    setApproveRentalType(rType);
+
+    // Target Room: Default to requested room if available, else current tenant room, else vacant room
+    const reqRoom = rooms.find(r => r.id === tenant.requestedRoomId || r.roomNumber === tenant.requestedRoomId);
     const existingRoom = rooms.find(r => r.currentTenantId === tenant.id);
     const vacantRoom = rooms.find(r => r.status === 'vacant');
-    const targetRoom = existingRoom || vacantRoom || rooms[0];
+    const targetRoom = reqRoom || existingRoom || vacantRoom || rooms[0];
 
     setApproveRoomId(targetRoom ? targetRoom.id : '');
-    setApproveStartDate(new Date().toISOString().split('T')[0]);
-    setApproveDeposit(targetRoom ? String(targetRoom.deposit || targetRoom.price * 2 || 0) : '0');
-    setApproveRent(targetRoom ? String(targetRoom.price || 0) : '0');
+
+    const startDate = tenant.requestedStartDate || new Date().toISOString().split('T')[0];
+    setApproveStartDate(startDate);
+
+    if (rType === 'DAILY') {
+      const days = tenant.requestedDays || (tenant.requestedStartDate && tenant.requestedEndDate ? Math.max(1, Math.round((new Date(tenant.requestedEndDate).getTime() - new Date(tenant.requestedStartDate).getTime()) / (24 * 3600 * 1000))) : 5);
+      const rate = tenant.requestedDailyRate || targetRoom?.dailyRent || 550;
+      const computedRent = tenant.requestedRent || (Number(rate) * days);
+      const computedDeposit = tenant.requestedDeposit !== undefined && tenant.requestedDeposit !== null ? tenant.requestedDeposit : 500;
+      setApproveDays(days);
+      setApproveDailyRate(String(rate));
+      setApproveRent(String(computedRent));
+      setApproveDeposit(String(computedDeposit));
+
+      if (tenant.requestedEndDate) {
+        setApproveEndDate(tenant.requestedEndDate);
+      } else {
+        const d = new Date(startDate);
+        d.setDate(d.getDate() + days);
+        setApproveEndDate(d.toISOString().split('T')[0]);
+      }
+    } else if (rType === 'TERM') {
+      const derivedDuration = tenant.requestedDurationMonths || (
+        tenant.requestedStartDate && tenant.requestedEndDate
+          ? Math.max(1, Math.round((new Date(tenant.requestedEndDate).getTime() - new Date(tenant.requestedStartDate).getTime()) / (30.4375 * 24 * 3600 * 1000)))
+          : (targetRoom?.termDurationMonths || (tenant.rentalPlanDetails as any)?.durationMonths || 4)
+      );
+      setApproveDurationMonths(derivedDuration);
+      const rent = tenant.requestedRent || targetRoom?.termRent || 22000;
+      const dep = tenant.requestedDeposit !== undefined && tenant.requestedDeposit !== null ? tenant.requestedDeposit : (targetRoom?.termDeposit || 5500);
+      setApproveRent(String(rent));
+      setApproveDeposit(String(dep));
+      if (tenant.requestedEndDate) {
+        setApproveEndDate(tenant.requestedEndDate);
+      } else {
+        setApproveEndDate(calculateContractEndDate(startDate, derivedDuration));
+      }
+    } else {
+      // MONTHLY
+      const duration = tenant.requestedDurationMonths || 12;
+      setApproveDurationMonths(duration);
+      const rent = tenant.requestedRent || targetRoom?.monthlyRent || targetRoom?.price || 5000;
+      const dep = tenant.requestedDeposit !== undefined && tenant.requestedDeposit !== null ? tenant.requestedDeposit : (targetRoom?.deposit || targetRoom?.monthlyDeposit || (Number(rent) * 2));
+      setApproveRent(String(rent));
+      setApproveDeposit(String(dep));
+      if (tenant.requestedEndDate) {
+        setApproveEndDate(tenant.requestedEndDate);
+      } else {
+        setApproveEndDate(calculateContractEndDate(startDate, duration));
+      }
+    }
+
+    // Attachments
+    const rawAtts = tenant.requestedAttachments || tenant.acceptanceSnapshot?.attachments || [];
+    setApproveAttachments(rawAtts);
+    setApproveDepositDeclaredStatus((tenant as any).depositDeclaredStatus || 'UNPAID');
+    setApproveIdCardFile(null);
+    setApproveIdCardPreview(null);
+    setApproveIdCardError(null);
+    setOwnerAttachmentFile(null);
+    setOwnerAttachmentName('');
+
     setIsApproveOpen(true);
   };
 
@@ -1786,22 +2391,51 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
     const roomNum = chosenRoom ? chosenRoom.roomNumber : '';
 
     const reqId = (selectedTenant as any).registrationRequestId || (selectedTenant as any).requestId;
+    let effectiveTenantId = selectedTenant.id;
     if (reqId) {
       try {
-        await approveTenantRegistrationRequest(reqId, {
+        const payload: any = {
+          roomId: approveRoomId,
+          rentalType: approveRentalType,
+          rentalPlan: approveRentalType.toLowerCase(),
           startDate: approveStartDate,
-          endDate: calculateContractEndDate(approveStartDate, 12),
-          durationMonths: 12,
+          endDate: approveEndDate || (approveRentalType === 'DAILY'
+            ? calculateContractEndDate(approveStartDate, 1)
+            : calculateContractEndDate(approveStartDate, approveDurationMonths)),
           rentAmount: Number(approveRent) || 0,
           depositAmount: Number(approveDeposit) || 0,
-          advancePaymentAmount: Number(approveRent) || 0,
-        });
+          depositDeclaredStatus: approveDepositDeclaredStatus,
+          advancePaymentAmount: approveRentalType === 'DAILY' ? 0 : (Number(approveRent) || 0),
+          requireTenantConfirmation: false,
+        };
+
+        if (approveRentalType === 'DAILY') {
+          payload.totalDays = Number(approveDays) || 1;
+          payload.dailyRate = Number(approveDailyRate) || Number(approveRent);
+        } else {
+          payload.durationMonths = Number(approveDurationMonths) || (approveRentalType === 'TERM' ? 4 : 12);
+        }
+
+        const approveRes = await approveTenantRegistrationRequest(reqId, payload);
+        if (approveRes?.data?.tenantId) {
+          effectiveTenantId = approveRes.data.tenantId;
+        }
       } catch (err) {
         console.error('Failed to approve registration request via API:', err);
       }
     }
 
-    // 1. Update tenant status to active and update rentalHistory
+    // Persist optional owner/approved identity document via document upload API
+    const docToUpload = approveIdCardFile || ownerAttachmentFile;
+    if (docToUpload && effectiveTenantId) {
+      try {
+        await dataProvider.tenants.uploadIdentityDocument(effectiveTenantId, docToUpload);
+      } catch (uploadErr) {
+        console.warn('Failed to upload identity document:', uploadErr);
+      }
+    }
+
+    // 1. Update tenant status to active and update rentalHistory & rentalType
     const updatedTenants = tenants.map(t => {
       if (t.id === selectedTenant.id) {
         const existingHistory = t.rentalHistory || [];
@@ -1812,28 +2446,38 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
           ...t,
           status: 'active' as const,
           rentalHistory: newHistory,
+          roomId: approveRoomId,
+          rentalType: approveRentalType,
+          rentalPlan: approveRentalType.toLowerCase(),
+          requestedRent: Number(approveRent) || t.requestedRent,
+          requestedDeposit: Number(approveDeposit) || t.requestedDeposit,
+          requestedStartDate: approveStartDate,
+          requestedEndDate: approveEndDate,
+          requestedDays: approveRentalType === 'DAILY' ? approveDays : undefined,
+          requestedDailyRate: approveRentalType === 'DAILY' ? Number(approveDailyRate) : undefined,
+          requestedDurationMonths: approveRentalType !== 'DAILY' ? approveDurationMonths : undefined,
           updatedAt: new Date().toISOString()
         };
       }
       return t;
     });
 
-    // 2. Update room occupied status and currentTenantId
+    // 2. Update room occupied/reserved status and currentTenantId
+    const isFuture = Boolean(approveStartDate && new Date(approveStartDate) > new Date(new Date().toISOString().split('T')[0]));
     let updatedRooms = [...rooms];
     if (chosenRoom) {
       updatedRooms = rooms.map(r => {
         if (r.id === chosenRoom.id) {
           return {
             ...r,
-            status: 'occupied' as const,
-            currentTenantId: selectedTenant.id,
+            status: isFuture ? (r.status === 'vacant' ? ('reserved' as const) : r.status) : ('occupied' as const),
+            currentTenantId: isFuture ? (r.currentTenantId || null) : selectedTenant.id,
             deposit: Number(approveDeposit) || r.deposit,
             price: Number(approveRent) || r.price,
             updatedAt: new Date().toISOString()
           };
         }
-        // If tenant was previously attached to another room, free that room
-        if (r.currentTenantId === selectedTenant.id && r.id !== chosenRoom.id) {
+        if (!isFuture && r.currentTenantId === selectedTenant.id && r.id !== chosenRoom.id) {
           return {
             ...r,
             status: 'vacant' as const,
@@ -1846,15 +2490,18 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
       onSaveRooms(updatedRooms);
     }
 
-    // 3. Update or create contract
-    if (onSaveContracts) {
+    // 3. For Term or Monthly, create or update contract; for Daily, do not create contract
+    if (onSaveContracts && approveRentalType !== 'DAILY') {
       const existingContract = contracts.find(c => c.tenantId === selectedTenant.id);
       if (existingContract) {
         const updatedContracts = contracts.map(c => c.id === existingContract.id ? {
           ...c,
-          status: 'active' as const,
+          status: isFuture ? ('approved_scheduled' as any) : ('active' as const),
           roomId: chosenRoom ? chosenRoom.id : c.roomId,
           startDate: approveStartDate || c.startDate,
+          endDate: approveEndDate || c.endDate,
+          durationMonths: approveDurationMonths || c.durationMonths,
+          rentBillingType: approveRentalType === 'TERM' ? 'term' : 'monthly',
           rentAmount: Number(approveRent) || c.rentAmount,
           depositAmount: Number(approveDeposit) || c.depositAmount,
           updatedAt: new Date().toISOString()
@@ -1867,15 +2514,16 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
           tenantId: selectedTenant.id,
           roomId: chosenRoom.id,
           startDate: approveStartDate,
-          endDate: new Date(new Date(approveStartDate).setFullYear(new Date(approveStartDate).getFullYear() + 1)).toISOString().split('T')[0],
-          durationMonths: 12,
+          endDate: approveEndDate || calculateContractEndDate(approveStartDate, approveDurationMonths),
+          durationMonths: approveDurationMonths,
+          rentBillingType: approveRentalType === 'TERM' ? 'term' : 'monthly',
           rentAmount: Number(approveRent) || chosenRoom.price,
           depositAmount: Number(approveDeposit) || chosenRoom.deposit || chosenRoom.price * 2,
           depositStatus: 'paid',
           depositType: 'refundable',
           advancePaymentAmount: Number(approveRent) || chosenRoom.price,
-          status: 'active',
-          terms: 'สัญญาเช่าห้องพักมาตรฐาน',
+          status: isFuture ? ('approved_scheduled' as any) : ('active' as const),
+          terms: approveRentalType === 'TERM' ? 'สัญญาเช่าห้องพักรายเทอม' : 'สัญญาเช่าห้องพักมาตรฐาน',
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString()
         };
@@ -1888,8 +2536,50 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
     setSelectedTenant(updatedSelected);
     setIsApproveOpen(false);
     setActiveStatusTab('active');
-    setCopySuccessToast(`อนุมัติผู้เช่า ${selectedTenant.name} เข้าพักห้อง ${roomNum || 'เรียบร้อย'} แล้ว`);
+    setTenantActionToast('อนุมัติคำขอเรียบร้อยแล้ว');
     onAddLog('อนุมัติผู้เช่า', `อนุมัติคำขอเช่าคุณ ${selectedTenant.name} เข้าห้องพัก ${roomNum}`, 'Tenant', selectedTenant.id);
+  };
+
+  const handleOpenDailyExtend = (tenant: Tenant) => {
+    setDailyExtendTenant(tenant);
+    const checkOut = tenant.requestedEndDate || new Date().toISOString().split('T')[0];
+    setDailyExtendCurrentCheckOut(checkOut);
+    const nextOut = new Date(checkOut);
+    nextOut.setDate(nextOut.getDate() + 1);
+    setDailyExtendNewCheckOut(nextOut.toISOString().split('T')[0]);
+    setDailyExtendDays(1);
+    const rate = Number(tenant.requestedDailyRate || 550);
+    setDailyExtendRate(rate);
+    setDailyExtendTotal(rate);
+    setIsDailyExtendOpen(true);
+  };
+
+  const handleConfirmDailyExtend = () => {
+    if (!dailyExtendTenant) return;
+    const updatedTenants = tenants.map(t => {
+      if (t.id === dailyExtendTenant.id) {
+        return {
+          ...t,
+          requestedEndDate: dailyExtendNewCheckOut,
+          requestedDays: (t.requestedDays || 1) + dailyExtendDays,
+          requestedRent: (t.requestedRent || 0) + dailyExtendTotal,
+          updatedAt: new Date().toISOString(),
+        };
+      }
+      return t;
+    });
+    onSaveTenants(updatedTenants);
+    if (selectedTenant && selectedTenant.id === dailyExtendTenant.id) {
+      setSelectedTenant(prev => prev ? {
+        ...prev,
+        requestedEndDate: dailyExtendNewCheckOut,
+        requestedDays: (prev.requestedDays || 1) + dailyExtendDays,
+        requestedRent: (prev.requestedRent || 0) + dailyExtendTotal,
+      } : prev);
+    }
+    setIsDailyExtendOpen(false);
+    setDailyExtendTenant(null);
+    setCopySuccessToast(`ขยายระยะเวลาเข้าพักรายวันเรียบร้อยแล้ว (ถึงวันที่ ${dailyExtendNewCheckOut})`);
   };
 
   const handleOpenReject = (tenant: Tenant) => {
@@ -1939,7 +2629,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
     onSaveRooms(updatedRooms);
     setIsRejectOpen(false);
     setSelectedTenant(null);
-    setCopySuccessToast(`ส่งกลับคำขอให้ผู้เช่าแก้ไขข้อมูลเรียบร้อยแล้ว (กรุณาตรวจสอบอีกครั้ง)`);
+    setTenantActionToast('ส่งคำขอให้ผู้เช่าแก้ไขแล้ว');
     onAddLog('ส่งกลับคำขอเช่าเพื่อแก้ไข', `ส่งกลับคำขอคุณ ${selectedTenant.name} (เหตุผล: ${rejectReason})`, 'Tenant', selectedTenant.id);
   };
 
@@ -1965,6 +2655,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
   };
 
   const handleOpenPrintContract = (contract: Contract) => {
+    const resolvedLandlord = resolveLandlordSignerName(paymentSettings);
     const conTenant = tenants.find(t => t.id === contract.tenantId) || selectedTenant;
     const conRoom = rooms.find(r => r.id === contract.roomId || r.roomNumber === contract.roomId);
     const tenantName = conTenant ? conTenant.name : 'ผู้เช่า';
@@ -1973,15 +2664,29 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
     const roomNum = conRoom ? conRoom.roomNumber : contract.roomId;
     const roomFloor = conRoom?.floor ? ` (ชั้น ${conRoom.floor})` : '';
     const createdDate = contract.createdAt ? contract.createdAt.split('T')[0] : contract.startDate;
-    const dormName = dorm.name || 'HorPlus';
-    const dormAddress = dorm.address || 'ที่อยู่หอพัก';
-    const dormOwner = dorm.ownerName || 'ผู้จัดการหอพัก';
-    const tenantSig = contract.tenantSignature
-      ? `<img src="${contract.tenantSignature}" style="height: 44px; max-width: 140px; object-fit: contain;" alt="ลายเซ็นผู้เช่า" />`
-      : '<div style="height: 44px; display: flex; align-items: center; justify-content: center; color: #94a3b8; font-size: 11px; border-bottom: 1px dashed #cbd5e1;">( ลายมือชื่อผู้เช่า )</div>';
-    const ownerSig = (contract.ownerSignature || dorm.ownerSignature)
-      ? `<img src="${contract.ownerSignature || dorm.ownerSignature}" style="height: 44px; max-width: 140px; object-fit: contain;" alt="ลายเซ็นผู้ให้เช่า" />`
-      : '<div style="height: 44px; display: flex; align-items: center; justify-content: center; color: #94a3b8; font-size: 11px; border-bottom: 1px dashed #cbd5e1;">( ลายมือชื่อผู้ให้เช่า )</div>';
+    const dormName = dorm?.name || 'หอพัก';
+    const dormAddress = [
+      dorm.addressLine1,
+      dorm.subdistrict ? `ต.${dorm.subdistrict}` : '',
+      dorm.district ? `อ.${dorm.district}` : '',
+      dorm.province ? `จ.${dorm.province}` : '',
+      dorm.postalCode
+    ].filter(Boolean).join(' ') || (dorm as any).address || '-';
+    const dormOwner = resolvedLandlord || dorm?.name || 'ผู้ให้เช่า';
+    const isTermContract = contract.rentBillingType === 'term' || (contract as any).rentalType === 'TERM' || (contract as any).rentalPlan === 'term';
+    const tenantSigUrl = (contract.tenantSignature && (contract.tenantSignature.startsWith('http') || contract.tenantSignature.startsWith('data:') || contract.tenantSignature.startsWith('/api/')))
+      ? contract.tenantSignature
+      : (contract.tenantSignature && dorm?.id ? `/api/v1/dormitories/${dorm.id}/contracts/${contract.id}/tenant-signature` : null);
+    const ownerSigUrl = (contract.ownerSignature && (contract.ownerSignature.startsWith('http') || contract.ownerSignature.startsWith('data:') || contract.ownerSignature.startsWith('/api/')))
+      ? contract.ownerSignature
+      : (dorm?.id ? (contract.ownerSignature ? `/api/v1/dormitories/${dorm.id}/contracts/${contract.id}/owner-signature` : `/api/v1/dormitories/${dorm.id}/signature`) : null);
+
+    const tenantSig = tenantSigUrl
+      ? `<img src="${tenantSigUrl}" style="max-height: 44px; max-width: 140px; object-fit: contain;" alt="ลายเซ็นผู้เช่า" onerror="this.style.display='none';" />`
+      : '<div style="height: 44px;"></div>';
+    const ownerSig = ownerSigUrl
+      ? `<img src="${ownerSigUrl}" style="max-height: 44px; max-width: 140px; object-fit: contain;" alt="ลายเซ็นผู้ให้เช่า" onerror="this.style.display='none';" />`
+      : '<div style="height: 44px;"></div>';
 
     try {
       const printWindow = window.open('', '_blank', 'width=850,height=950');
@@ -2075,27 +2780,41 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                 padding-top: 24px;
                 border-top: 1px dashed #cbd5e1;
                 page-break-inside: avoid;
+                width: 100%;
+                box-sizing: border-box;
               }
               .signature-block {
                 text-align: center;
+                max-width: 100%;
+                overflow: hidden;
               }
               .signature-label {
                 font-size: 12px;
                 font-weight: 600;
                 color: #64748b;
-                margin-bottom: 12px;
+                margin-bottom: 8px;
               }
               .signature-space {
-                min-height: 48px;
+                height: 48px;
                 display: flex;
                 align-items: center;
                 justify-content: center;
-                margin-bottom: 8px;
+                margin-bottom: 6px;
+                overflow: hidden;
+              }
+              .signature-space img {
+                max-height: 44px;
+                max-width: 140px;
+                object-fit: contain;
               }
               .signer-name {
                 font-weight: 700;
                 font-size: 13px;
                 color: #0f172a;
+                margin-top: 4px;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
               }
               .no-print-bar {
                 margin-bottom: 24px;
@@ -2167,9 +2886,9 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                 <ul>
                   <li><strong>ห้องพักที่ตกลงเช่า:</strong> ผู้เช่าตกลงเช่าห้องพักหมายเลข <strong>ห้อง ${roomNum}${roomFloor}</strong> ของอาคาร ${dormName}</li>
                   <li><strong>ระยะเวลาสัญญาเช่า:</strong> กำหนดเวลาเช่าอาศัย <strong>${contract.durationMonths} เดือน</strong> เริ่มต้นตั้งแต่วันที่ <strong>${formatThaiDate(contract.startDate)}</strong> ถึงวันที่ <strong>${formatThaiDate(contract.endDate)}</strong></li>
-                  <li><strong>อัตราค่าบริการเช่าห้องพัก:</strong> อัตราเดือนละ <strong>${formatBaht(contract.rentAmount)}</strong> โดยผู้เช่าตกลงชำระค่าเช่าล่วงหน้าตามกำหนดของทุกเดือน</li>
+                  <li><strong>อัตราค่าบริการเช่าห้องพัก:</strong> ${isTermContract ? 'อัตราเทอมละ' : 'อัตราเดือนละ'} <strong>${formatBaht(contract.rentAmount)}</strong> โดยผู้เช่าตกลงชำระค่าเช่าตามกำหนด</li>
                   <li><strong>เงินประกันความเสียหายแรกเข้า:</strong> ผู้เช่าได้วางเงินประกันความเสียหายไว้จำนวน <strong>${formatBaht(contract.depositAmount)}</strong> (${contract.depositType === 'deduct_rent' ? 'นำไปหักชำระกับค่าเช่างวดสุดท้าย' : 'คืนให้เต็มจำนวนเมื่อสิ้นสุดสัญญาโดยไม่มีสิ่งของชำรุดเสียหาย'})</li>
-                  ${contract.advancePaymentAmount ? `<li><strong>เงินชำระล่วงหน้า:</strong> ชำระค่าเช่าล่วงหน้าจำนวน <strong>${formatBaht(contract.advancePaymentAmount)}</strong></li>` : ''}
+                  ${Number(contract.advancePaymentAmount) > 0 ? `<li><strong>เงินชำระล่วงหน้า:</strong> ชำระค่าเช่าล่วงหน้าจำนวน <strong>${formatBaht(contract.advancePaymentAmount)}</strong></li>` : ''}
                 </ul>
               </div>
 
@@ -2194,7 +2913,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                 <div class="signature-block">
                   <div class="signature-label">ลงชื่อ นิติหอพัก / ผู้ให้เช่า</div>
                   <div class="signature-space">${ownerSig}</div>
-                  <div class="signer-name">(${dormOwner})</div>
+                  <div class="signer-name">${resolvedLandlord ? `(${resolvedLandlord})` : ''}</div>
                 </div>
               </div>
             </div>
@@ -2265,12 +2984,26 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
       setSelectedTenant(targetTenant);
     }
 
-    const currentEnd = contract.endDate || contract.startDate || new Date().toISOString().split('T')[0];
-    const nextStart = new Date(currentEnd);
-    nextStart.setDate(nextStart.getDate() + 1);
-    const nextStartStr = nextStart.toISOString().split('T')[0];
+    const currentEnd = (contract.endDate ? String(contract.endDate).split('T')[0] : '') || (contract.startDate ? String(contract.startDate).split('T')[0] : '') || new Date().toISOString().split('T')[0];
+    let nextStartStr = '';
+    if (/^\d{4}-\d{2}-\d{2}$/.test(currentEnd)) {
+      const [y, m, d] = currentEnd.split('-').map(Number);
+      const dt = new Date(y, m - 1, d + 1);
+      const ny = dt.getFullYear();
+      const nm = String(dt.getMonth() + 1).padStart(2, '0');
+      const nd = String(dt.getDate()).padStart(2, '0');
+      nextStartStr = `${ny}-${nm}-${nd}`;
+    } else {
+      const nextStart = new Date(currentEnd);
+      nextStart.setDate(nextStart.getDate() + 1);
+      nextStartStr = nextStart.toISOString().split('T')[0];
+    }
 
-    const defaultDuration = 6;
+    const isTerm = String(contract.rentBillingType).toLowerCase() === 'term' ||
+      String((contract as any).rentalType).toLowerCase() === 'term' ||
+      String(targetTenant?.rentalType).toLowerCase() === 'term';
+
+    const defaultDuration = contract.durationMonths || (isTerm ? 4 : 12);
     setRenewContractUnit('month');
     setRenewContractMonths(defaultDuration);
     setRenewContractDays(0);
@@ -2280,9 +3013,11 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
     setRenewContractDepositAmount(contract.depositAmount || 0);
     setRenewContractDepositOption('rollover');
     setRenewContractNote(
-      contract.status === 'waiting_extension'
-        ? 'อนุมัติคำขอต่ออายุสัญญาเช่า 6 เดือน ตามความประสงค์ของผู้เช่า'
-        : 'อนุมัติต่ออายุสัญญาเช่าฉบับใหม่'
+      isTerm
+        ? `อนุมัติคำขอต่ออายุสัญญาเช่ารายเทอม (${defaultDuration} เดือน)`
+        : (contract.status === 'waiting_extension'
+          ? `อนุมัติคำขอต่ออายุสัญญาเช่า ${defaultDuration} เดือน ตามความประสงค์ของผู้เช่า`
+          : 'อนุมัติต่ออายุสัญญาเช่าฉบับใหม่')
     );
     setIsRenewContractModalOpen(true);
   };
@@ -2319,6 +3054,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
       startDate: finalStartDate,
       endDate: finalEndDate,
       durationMonths: nextDuration,
+      rentBillingType: selectedContractForRenew.rentBillingType || 'monthly',
       rentAmount: finalRent,
       depositAmount: finalDeposit,
       depositStatus: selectedContractForRenew.depositStatus || 'paid',
@@ -2395,7 +3131,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
       advancePaymentAmount: createContractAdvancePayment,
       terms: createContractTerms,
       tenantSignature: createContractTenantSig,
-      ownerSignature: dorm.ownerSignature || 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="40"><path d="M10,25 Q40,5 60,30 T90,20" stroke="blue" stroke-width="2" fill="none"/></svg>',
+      ownerSignature: dorm.ownerSignature || undefined,
       status: 'active',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
@@ -2517,9 +3253,32 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
     });
     if (hasContract) return true;
 
-    // 3. Fallback: If they are active now, and this is the latest cycle, they are in!
+    // 3. Check requested / provisional / stay dates (e.g. Daily stay or Term provisional term)
+    const startDate = tenant.requestedStartDate || (tenant as any).startDate;
+    const endDate = tenant.requestedEndDate || (tenant as any).endDate;
+    if (startDate && endDate) {
+      const [cy, cm] = selectedCycle.split('-').map(Number);
+      const [sy, sm] = String(startDate).slice(0, 10).split('-').map(Number);
+      const [ey, em] = String(endDate).slice(0, 10).split('-').map(Number);
+      if (!isNaN(cy) && !isNaN(cm) && !isNaN(sy) && !isNaN(sm) && !isNaN(ey) && !isNaN(em)) {
+        const cycleVal = cy * 12 + (cm - 1);
+        const startVal = sy * 12 + (sm - 1);
+        const endVal = ey * 12 + (em - 1);
+        if (cycleVal >= startVal && cycleVal <= endVal) {
+          return true;
+        }
+      }
+    }
+
+    // 4. Fallback: If they are active now, and this is the latest cycle, they are in!
     const isCurrentResident = rooms?.some(r => r.currentTenantId === tenant.id);
     if (isCurrentResident && tenant.status === 'active' && isLatestCycle) {
+      return true;
+    }
+
+    // 5. Check active Term or Daily tenants in recent cycles
+    const isDailyOrTerm = ((tenant as any).rentalType === 'DAILY' || (tenant as any).rentalPlan === 'daily' || (tenant as any).rentalType === 'TERM' || (tenant as any).rentalPlan === 'term');
+    if (isDailyOrTerm && getTenantCategory(tenant) === 'active' && isRecent2Cycles) {
       return true;
     }
 
@@ -2528,7 +3287,28 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
 
   // Helper to categorize each tenant into: pending, active, inactive
   const getTenantCategory = (t: Tenant): 'pending' | 'active' | 'inactive' => {
-    if (t.status === 'inactive' || (t.status as any) === 'former' || (t.status as any) === 'terminated' || (t.status as any) === 'checked_out') return 'inactive';
+    if (
+      t.status === 'inactive' ||
+      (t.status as any) === 'former' ||
+      (t.status as any) === 'terminated' ||
+      (t.status as any) === 'checked_out' ||
+      (t.status as any) === 'ended' ||
+      (t.status as any) === 'completed'
+    ) return 'inactive';
+
+    // Daily tenant stay check: if stay has ended or checked out, it is inactive regardless of billing cycle
+    const isDaily = t.rentalType === 'DAILY' || (t as any).rentalPlan === 'daily';
+    if (isDaily) {
+      const stayEnd = t.requestedEndDate || (t as any).endDate;
+      if (stayEnd) {
+        const todayStr = new Date().toISOString().slice(0, 10);
+        const endStr = String(stayEnd).slice(0, 10);
+        const isCurrentOccupant = rooms?.some(r => r.currentTenantId === t.id && r.status === 'occupied');
+        if (endStr < todayStr && !isCurrentOccupant) {
+          return 'inactive';
+        }
+      }
+    }
 
     // Quick Add tenants start with OWNER_CREATED or WAITING_LINE_BIND and must be in active
     if (t.lifecycleStage === 'OWNER_CREATED' || t.lifecycleStage === 'WAITING_LINE_BIND') {
@@ -2671,9 +3451,12 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
 
     // 4. Fallback to rentalHistory or applied room (e.g. for pending applicants)
     const t = tenants.find(item => item.id === tenantId);
-    if (t && t.rentalHistory && t.rentalHistory.length > 0) {
-      const r = rooms.find(room => room.id === t.rentalHistory[0]);
-      if (r) return r.roomNumber;
+    if (t) {
+      const appliedRoomId = (t as any).requestedRoomId || (t as any).roomId || (t.rentalHistory && t.rentalHistory.length > 0 ? t.rentalHistory[0] : null);
+      if (appliedRoomId) {
+        const r = rooms.find(room => room.id === appliedRoomId || room.roomNumber === appliedRoomId);
+        if (r) return r.roomNumber;
+      }
     }
 
     return 'ไม่ระบุห้อง';
@@ -2736,8 +3519,8 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
               type="button"
               onClick={() => { setActiveStatusTab('pending'); setSelectedTenant(null); setSelectedContractForReview(null); setProfileTab('contract'); setOriginTab(null); setCameFromMeters(false); }}
               className={`col-span-2 sm:col-span-1 px-2.5 sm:px-3 py-2 sm:py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 w-full text-center ${activeStatusTab === 'pending'
-                  ? 'bg-white text-indigo-600 shadow-2xs font-extrabold'
-                  : 'text-slate-500 hover:text-slate-800'
+                ? 'bg-white text-indigo-600 shadow-2xs font-extrabold'
+                : 'text-slate-500 hover:text-slate-800'
                 }`}
             >
               <Clock className="w-4 h-4 text-amber-500 animate-pulse shrink-0" />
@@ -2747,8 +3530,8 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
               type="button"
               onClick={() => { setActiveStatusTab('active'); setSelectedTenant(null); setSelectedContractForReview(null); setOriginTab(null); setCameFromMeters(false); }}
               className={`col-span-1 px-2.5 sm:px-3 py-2 sm:py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 w-full text-center ${activeStatusTab === 'active'
-                  ? 'bg-white text-indigo-600 shadow-2xs font-extrabold'
-                  : 'text-slate-500 hover:text-slate-800'
+                ? 'bg-white text-indigo-600 shadow-2xs font-extrabold'
+                : 'text-slate-500 hover:text-slate-800'
                 }`}
             >
               <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
@@ -2758,8 +3541,8 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
               type="button"
               onClick={() => { setActiveStatusTab('inactive'); setSelectedTenant(null); setSelectedContractForReview(null); setOriginTab(null); setCameFromMeters(false); }}
               className={`col-span-1 px-2.5 sm:px-3 py-2 sm:py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 w-full text-center ${activeStatusTab === 'inactive'
-                  ? 'bg-white text-indigo-600 shadow-2xs font-extrabold'
-                  : 'text-slate-500 hover:text-slate-800'
+                ? 'bg-white text-indigo-600 shadow-2xs font-extrabold'
+                : 'text-slate-500 hover:text-slate-800'
                 }`}
             >
               <XCircle className="w-4 h-4 text-rose-500 shrink-0" />
@@ -2828,7 +3611,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                   onClick={() => {
                     setSelectedTenant(tenant);
                     setSelectedContractForReview(null);
-                    setProfileTab('contract');
+                    setProfileTab(isDailyTenant(tenant, contracts) ? 'info' : 'contract');
                     setOriginTab(null);
                     setCameFromMeters(false);
                   }}
@@ -2848,18 +3631,29 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                               ห้อง {roomNum}
                             </span>
                           )}
+                          {(() => {
+                            const badge = getRentalTypeBadge(tenant, contracts);
+                            if (!badge) return null;
+                            return (
+                              <span className={`text-[10px] font-extrabold px-1.5 py-0.5 rounded-md border leading-none ${badge.className}`}>
+                                {badge.label}
+                              </span>
+                            );
+                          })()}
                         </div>
                         <p className="text-[10px] text-gray-400 mt-1 leading-none">{formatPhone(tenant.phone)}</p>
+                        {formatPendingDuration(tenant) && (
+                          <p className="text-[10px] text-slate-500 font-medium mt-1 leading-tight line-clamp-1">{formatPendingDuration(tenant)}</p>
+                        )}
                       </div>
                     </div>
 
-                    <span className={`border font-extrabold text-[10px] px-2 py-0.5 rounded-lg shrink-0 flex items-center gap-1 ${
-                      (tenant as any).status === 'awaiting_tenant_confirmation' || (tenant as any).registrationRequestStatus === 'awaiting_tenant_confirmation'
-                        ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
-                        : (tenant as any).status === 'revision_requested'
+                    <span className={`border font-extrabold text-[10px] px-2 py-0.5 rounded-lg shrink-0 flex items-center gap-1 ${(tenant as any).status === 'awaiting_tenant_confirmation' || (tenant as any).registrationRequestStatus === 'awaiting_tenant_confirmation'
+                      ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
+                      : (tenant as any).status === 'revision_requested'
                         ? 'bg-rose-50 border-rose-200 text-rose-700'
                         : 'bg-amber-50 border-amber-200 text-amber-700'
-                    }`}>
+                      }`}>
                       {(tenant as any).status === 'awaiting_tenant_confirmation' || (tenant as any).registrationRequestStatus === 'awaiting_tenant_confirmation' ? (
                         <CheckCircle2 className="w-3 h-3 text-emerald-600" />
                       ) : (
@@ -2869,8 +3663,8 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                         {(tenant as any).status === 'awaiting_tenant_confirmation' || (tenant as any).registrationRequestStatus === 'awaiting_tenant_confirmation'
                           ? 'กรุณาตรวจสอบและยืนยัน'
                           : (tenant as any).status === 'revision_requested'
-                          ? 'กรุณาตรวจสอบอีกครั้ง'
-                          : 'รออนุมัติคำขอผู้เช่า'}
+                            ? 'กรุณาตรวจสอบอีกครั้ง'
+                            : 'รออนุมัติคำขอผู้เช่า'}
                       </span>
                     </span>
                   </div>
@@ -2896,18 +3690,18 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                         setCameFromMeters(false);
                       }}
                       className={`p-3.5 rounded-2xl cursor-pointer transition-all mb-2 border ${isSelected
-                          ? (entry.statusType === 'expiring_soon' || entry.statusType === 'waiting_extension'
-                            ? 'bg-amber-50/70 border-amber-200 shadow-2xs'
-                            : 'bg-rose-50/70 border-rose-200 shadow-2xs')
-                          : 'bg-white hover:bg-slate-50/90 border-slate-200/80 shadow-3xs'
+                        ? (entry.statusType === 'expiring_soon' || entry.statusType === 'waiting_extension'
+                          ? 'bg-amber-50/70 border-amber-200 shadow-2xs'
+                          : 'bg-rose-50/70 border-rose-200 shadow-2xs')
+                        : 'bg-white hover:bg-slate-50/90 border-slate-200/80 shadow-3xs'
                         }`}
                     >
                       {/* Top Row: Tenant & Room */}
                       <div className="flex justify-between items-start gap-2">
                         <div className="flex gap-2.5 items-center min-w-0">
                           <div className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 font-bold text-xs ${entry.statusType === 'waiting_extension' || entry.statusType === 'expiring_soon'
-                              ? 'bg-amber-100 text-amber-700'
-                              : 'bg-rose-100 text-rose-700'
+                            ? 'bg-amber-100 text-amber-700'
+                            : 'bg-rose-100 text-rose-700'
                             }`}>
                             {entry.tenant.name.charAt(0)}
                           </div>
@@ -2925,8 +3719,8 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                         {/* Status Badge & Expiration date underneath */}
                         <div className="flex flex-col items-end shrink-0 gap-1">
                           <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded-lg shrink-0 flex items-center gap-1 border ${entry.statusType === 'waiting_extension' || entry.statusType === 'expiring_soon'
-                              ? 'bg-amber-50 text-amber-700 border-amber-200'
-                              : 'bg-rose-50 text-rose-700 border-rose-200'
+                            ? 'bg-amber-50 text-amber-700 border-amber-200'
+                            : 'bg-rose-50 text-rose-700 border-rose-200'
                             }`}>
                             <AlertCircle className="w-3 h-3 shrink-0" />
                             <span>{entry.statusLabel}</span>
@@ -2965,7 +3759,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                   <div className="flex justify-between items-center gap-2">
                     <div className="flex gap-3 items-center min-w-0">
                       <div className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 font-bold text-sm ${category === 'inactive' ? 'bg-slate-100 text-slate-500' :
-                          'bg-indigo-50 text-indigo-700'
+                        'bg-indigo-50 text-indigo-700'
                         }`}>
                         {tenant.name.charAt(0)}
                       </div>
@@ -2981,14 +3775,18 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                               <span>ยังไม่ผูก LINE</span>
                             </span>
                           )}
-                          {category === 'active' && getRentalTypeLabel(tenant, contracts) && (
-                            <span
-                              data-testid="badge-rental-type"
-                              className="bg-slate-100 border border-slate-200 text-slate-600 font-bold text-[9px] px-1.5 py-0.5 rounded-md shrink-0"
-                            >
-                              {getRentalTypeLabel(tenant, contracts)}
-                            </span>
-                          )}
+                          {category === 'active' && (() => {
+                            const badge = getRentalTypeBadge(tenant, contracts);
+                            if (!badge) return null;
+                            return (
+                              <span
+                                data-testid="badge-rental-type"
+                                className={`border font-bold text-[9px] px-1.5 py-0.5 rounded-md shrink-0 ${badge.className}`}
+                              >
+                                {badge.label}
+                              </span>
+                            );
+                          })()}
                         </div>
                         <p className="text-[10px] text-gray-400 mt-1 leading-none">{formatPhone(tenant.phone)}</p>
                       </div>
@@ -3119,12 +3917,12 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 border-b border-gray-100 pb-5">
                         <div className="flex gap-3.5 items-center">
                           <div className={`w-12 h-12 sm:w-14 sm:h-14 rounded-full flex items-center justify-center font-extrabold text-base sm:text-lg shadow-sm border shrink-0 ${isExpiredContractReview
-                              ? 'bg-rose-50 text-rose-700 border-rose-200'
-                              : getTenantCategory(selectedTenant) === 'pending'
-                                ? 'bg-amber-50 text-amber-700 border-amber-200'
-                                : getTenantCategory(selectedTenant) === 'inactive'
-                                  ? 'bg-slate-100 text-slate-600 border-slate-200'
-                                  : 'bg-indigo-50 text-indigo-700 border-indigo-100'
+                            ? 'bg-rose-50 text-rose-700 border-rose-200'
+                            : getTenantCategory(selectedTenant) === 'pending'
+                              ? 'bg-amber-50 text-amber-700 border-amber-200'
+                              : getTenantCategory(selectedTenant) === 'inactive'
+                                ? 'bg-slate-100 text-slate-600 border-slate-200'
+                                : 'bg-indigo-50 text-indigo-700 border-indigo-100'
                             }`}>
                             {selectedTenant.name.charAt(0)}
                           </div>
@@ -3133,13 +3931,13 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                               <h2 className="text-base sm:text-lg font-bold text-slate-900 tracking-tight leading-tight">{selectedTenant.name}</h2>
                               {isExpiredContractReview && (
                                 <span className={`text-[10px] font-extrabold px-2.5 py-0.5 rounded-full flex items-center gap-1 border ${tenantReviewContract.status === 'waiting_extension' || (tenantReviewContract.endDate && (() => {
-                                    const today = new Date();
-                                    const curDay = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-                                    const endDay = new Date(new Date(tenantReviewContract.endDate).getFullYear(), new Date(tenantReviewContract.endDate).getMonth(), new Date(tenantReviewContract.endDate).getDate());
-                                    return Math.ceil((endDay.getTime() - curDay.getTime()) / (1000 * 60 * 60 * 24)) > 0;
-                                  })())
-                                    ? 'bg-amber-100 text-amber-800 border-amber-200'
-                                    : 'bg-rose-100 text-rose-800 border-rose-200'
+                                  const today = new Date();
+                                  const curDay = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+                                  const endDay = new Date(new Date(tenantReviewContract.endDate).getFullYear(), new Date(tenantReviewContract.endDate).getMonth(), new Date(tenantReviewContract.endDate).getDate());
+                                  return Math.ceil((endDay.getTime() - curDay.getTime()) / (1000 * 60 * 60 * 24)) > 0;
+                                })())
+                                  ? 'bg-amber-100 text-amber-800 border-amber-200'
+                                  : 'bg-rose-100 text-rose-800 border-rose-200'
                                   }`}>
                                   <AlertCircle className="w-3 h-3" />
                                   {tenantReviewContract.status === 'waiting_extension'
@@ -3157,14 +3955,24 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                                 </span>
                               )}
                               {!isExpiredContractReview && getTenantCategory(selectedTenant) === 'pending' && (
-                                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 ${
-                                  (selectedTenant as any).status === 'revision_requested'
+                                <>
+                                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 ${(selectedTenant as any).status === 'revision_requested'
                                     ? 'bg-rose-100 text-rose-800'
                                     : 'bg-amber-100 text-amber-800'
-                                }`}>
-                                  <Clock className={`w-3 h-3 ${(selectedTenant as any).status === 'revision_requested' ? 'text-rose-600' : 'text-amber-600'}`} />
-                                  {(selectedTenant as any).status === 'revision_requested' ? 'กรุณาตรวจสอบอีกครั้ง' : 'รออนุมัติคำขอผู้เช่า'}
-                                </span>
+                                    }`}>
+                                    <Clock className={`w-3 h-3 ${(selectedTenant as any).status === 'revision_requested' ? 'text-rose-600' : 'text-amber-600'}`} />
+                                    {(selectedTenant as any).status === 'revision_requested' ? 'กรุณาตรวจสอบอีกครั้ง' : 'รออนุมัติคำขอผู้เช่า'}
+                                  </span>
+                                  {(() => {
+                                    const badge = getRentalTypeBadge(selectedTenant, contracts);
+                                    if (!badge) return null;
+                                    return (
+                                      <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full border ${badge.className}`}>
+                                        {badge.label}
+                                      </span>
+                                    );
+                                  })()}
+                                </>
                               )}
                               {!isExpiredContractReview && getTenantCategory(selectedTenant) === 'inactive' && (
                                 <span className="bg-slate-100 text-slate-600 text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1">
@@ -3207,7 +4015,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                               {isExpiredContractReview
                                 ? `ห้อง ${getRoomNumber(selectedTenant.id)} (เลิกเช่า หรือ ต่อสัญญา)`
                                 : getTenantCategory(selectedTenant) === 'pending'
-                                  ? 'สถานะ: รอทำสัญญาและส่งมอบห้อง'
+                                  ? (formatPendingDuration(selectedTenant) || 'สถานะ: รอทำสัญญาและส่งมอบห้อง')
                                   : getTenantCategory(selectedTenant) === 'inactive'
                                     ? 'สถานะ: สิ้นสุดสัญญาเช่าแล้ว'
                                     : `ห้องพักปัจจุบัน: ห้อง ${getRoomNumber(selectedTenant.id)}`}
@@ -3226,15 +4034,27 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
 
                           {isExpiredContractReview ? (
                             <>
-                              <button
-                                type="button"
-                                onClick={() => handleOpenRenewContract(tenantReviewContract, selectedTenant)}
-                                className="px-3.5 py-1.5 bg-transparent hover:bg-amber-50 active:scale-95 text-amber-700 font-bold text-xs rounded-xl transition-all cursor-pointer flex items-center gap-1.5 border border-amber-400 shadow-3xs"
-                                title="ต่ออายุสัญญาเช่า"
-                              >
-                                <RotateCw className="w-3.5 h-3.5 text-amber-600" />
-                                <span>ต่อสัญญา</span>
-                              </button>
+                              {isDailyTenant(selectedTenant, contracts) ? (
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenDailyExtend(selectedTenant)}
+                                  className="px-3.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 active:scale-95 text-emerald-700 font-bold text-xs rounded-xl transition-all cursor-pointer flex items-center gap-1.5 border border-emerald-300 shadow-3xs"
+                                  title="ขยายระยะเวลาเข้าพักรายวัน"
+                                >
+                                  <Calendar className="w-3.5 h-3.5 text-emerald-600" />
+                                  <span>ขยายวันเข้าพัก</span>
+                                </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenRenewContract(tenantReviewContract, selectedTenant)}
+                                  className="px-3.5 py-1.5 bg-transparent hover:bg-amber-50 active:scale-95 text-amber-700 font-bold text-xs rounded-xl transition-all cursor-pointer flex items-center gap-1.5 border border-amber-400 shadow-3xs"
+                                  title="ต่ออายุสัญญาเช่า"
+                                >
+                                  <RotateCw className="w-3.5 h-3.5 text-amber-600" />
+                                  <span>ต่ออายุสัญญา</span>
+                                </button>
+                              )}
                               <button
                                 type="button"
                                 onClick={() => handleOpenTerminate(selectedTenant)}
@@ -3267,15 +4087,28 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                               </button>
                             </>
                           ) : getTenantCategory(selectedTenant) === 'active' ? (
-                            <button
-                              type="button"
-                              onClick={() => handleOpenTerminate(selectedTenant)}
-                              className="px-3 py-1.5 font-bold text-xs rounded-xl transition-all shrink-0 border bg-rose-50 border-rose-200 hover:bg-rose-100 text-rose-700 cursor-pointer flex items-center gap-1.5 shadow-2xs"
-                              title="ทำเรื่องเลิกเช่าคืนห้องพัก"
-                            >
-                              <LogOut className="w-3.5 h-3.5 text-rose-600" />
-                              <span>เลิกเช่า</span>
-                            </button>
+                            <div className="flex items-center gap-2">
+                              {isDailyTenant(selectedTenant, contracts) && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenDailyExtend(selectedTenant)}
+                                  className="px-3 py-1.5 font-bold text-xs rounded-xl transition-all shrink-0 border bg-emerald-50 border-emerald-200 hover:bg-emerald-100 text-emerald-700 cursor-pointer flex items-center gap-1.5 shadow-2xs"
+                                  title="ขยายระยะเวลาเข้าพักรายวัน"
+                                >
+                                  <Calendar className="w-3.5 h-3.5 text-emerald-600" />
+                                  <span>ขยายวันเข้าพัก</span>
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => handleOpenTerminate(selectedTenant)}
+                                className="px-3 py-1.5 font-bold text-xs rounded-xl transition-all shrink-0 border bg-rose-50 border-rose-200 hover:bg-rose-100 text-rose-700 cursor-pointer flex items-center gap-1.5 shadow-2xs"
+                                title="ทำเรื่องเลิกเช่าคืนห้องพัก"
+                              >
+                                <LogOut className="w-3.5 h-3.5 text-rose-600" />
+                                <span>เลิกเช่า</span>
+                              </button>
+                            </div>
                           ) : null}
                         </div>
                       </div>
@@ -3293,12 +4126,12 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                     );
 
                     return (
-                      <div className="grid grid-cols-3 gap-1 text-xs">
+                      <div className={`grid ${isDailyTenant(selectedTenant, contracts) ? 'grid-cols-2' : 'grid-cols-3'} gap-1 text-xs`}>
                         <button
                           onClick={() => setProfileTab('info')}
                           className={`py-2 px-1 sm:px-3.5 border-b-2 font-bold transition-all flex items-center justify-center gap-1 sm:gap-1.5 text-xs rounded-t-lg cursor-pointer ${profileTab === 'info'
-                              ? 'border-indigo-600 text-indigo-600 font-bold bg-indigo-50/50'
-                              : 'border-transparent text-gray-500 hover:text-slate-700 hover:bg-slate-50'
+                            ? 'border-indigo-600 text-indigo-600 font-bold bg-indigo-50/50'
+                            : 'border-transparent text-gray-500 hover:text-slate-700 hover:bg-slate-50'
                             }`}
                         >
                           <User className="w-3.5 h-3.5 shrink-0" />
@@ -3314,30 +4147,39 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                           )}
                         </button>
 
-                        <button
-                          onClick={() => setProfileTab('contract')}
-                          className={`py-2 px-1 sm:px-3.5 border-b-2 font-bold transition-all flex items-center justify-center gap-1 sm:gap-1.5 text-xs rounded-t-lg cursor-pointer ${profileTab === 'contract'
+                        {!isDailyTenant(selectedTenant, contracts) && (
+                          <button
+                            onClick={() => setProfileTab('contract')}
+                            className={`py-2 px-1 sm:px-3.5 border-b-2 font-bold transition-all flex items-center justify-center gap-1 sm:gap-1.5 text-xs rounded-t-lg cursor-pointer ${profileTab === 'contract'
                               ? 'border-indigo-600 text-indigo-600 font-bold bg-indigo-50/50'
                               : 'border-transparent text-gray-500 hover:text-slate-700 hover:bg-slate-50'
-                            }`}
-                        >
-                          <FileText className="w-3.5 h-3.5 shrink-0" />
-                          <span className="truncate">สัญญาเช่า</span>
-                          {(() => {
-                            const count = (contracts || []).filter(c => c.tenantId === selectedTenant.id).length;
-                            return count > 0 ? (
-                              <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold shrink-0 ${profileTab === 'contract' ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-500'}`}>
-                                {count}
-                              </span>
-                            ) : null;
-                          })()}
-                        </button>
+                              }`}
+                          >
+                            <FileText className="w-3.5 h-3.5 shrink-0" />
+                            <span className="truncate">สัญญาเช่า</span>
+                            {(() => {
+                              const agrs = resolveTenantDisplayAgreements(
+                                selectedTenant,
+                                contracts,
+                                tenantDetailsData,
+                                rooms,
+                                effectiveDormId
+                              );
+                              const count = agrs.length;
+                              return count > 0 ? (
+                                <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold shrink-0 ${profileTab === 'contract' ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-500'}`}>
+                                  {count}
+                                </span>
+                              ) : null;
+                            })()}
+                          </button>
+                        )}
 
                         <button
                           onClick={() => setProfileTab('history')}
                           className={`py-2 px-1 sm:px-3.5 border-b-2 font-bold transition-all flex items-center justify-center gap-1 sm:gap-1.5 text-xs rounded-t-lg cursor-pointer ${profileTab === 'history'
-                              ? 'border-indigo-600 text-indigo-600 font-bold bg-indigo-50/50'
-                              : 'border-transparent text-gray-500 hover:text-slate-700 hover:bg-slate-50'
+                            ? 'border-indigo-600 text-indigo-600 font-bold bg-indigo-50/50'
+                            : 'border-transparent text-gray-500 hover:text-slate-700 hover:bg-slate-50'
                             }`}
                         >
                           <Users className="w-3.5 h-3.5 shrink-0" />
@@ -3375,7 +4217,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                           <span className="text-gray-400 font-bold text-[10px] uppercase tracking-wider">อีเมลติดต่อ</span>
                           <p className="font-extrabold text-slate-800 flex items-center gap-1.5 text-xs sm:text-sm min-w-0">
                             <Mail className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
-                            <span className="break-all truncate" title={selectedTenant.email}>{selectedTenant.email || 'ไม่มีข้อมูล'}</span>
+                            <span className="break-all truncate" title={selectedTenant.email}>{selectedTenant.email || '-'}</span>
                           </p>
                         </div>
                       </div>
@@ -3605,8 +4447,8 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                                 }
                               }}
                               className={`p-3 rounded-xl flex items-center justify-between cursor-pointer transition-all group ${hasIdCard
-                                  ? 'bg-slate-50/80 hover:bg-indigo-50/50 border border-transparent'
-                                  : 'bg-amber-50/30 border border-amber-200/70 hover:bg-amber-50/60'
+                                ? 'bg-slate-50/80 hover:bg-indigo-50/50 border border-transparent'
+                                : 'bg-amber-50/30 border border-amber-200/70 hover:bg-amber-50/60'
                                 }`}
                               title={hasIdCard ? "คลิกเพื่อเปิดดูภาพสำเนาบัตรประชาชน" : "คลิกเพื่อเลือกไฟล์และอัปโหลดทันที"}
                             >
@@ -3655,8 +4497,60 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                           );
                         })()}
 
-                        {/* Lease Contracts */}
-                        {(() => {
+                        {/* Daily Stay Details for Daily Tenants or Lease Contracts for Monthly/Term */}
+                        {isDailyTenant(selectedTenant, contracts) ? (
+                          <div className="p-4 bg-emerald-50/50 border border-emerald-100 rounded-2xl space-y-3 mt-2">
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-2">
+                                <Calendar className="w-4 h-4 text-emerald-600" />
+                                <h4 className="font-bold text-slate-800 text-xs">ข้อมูลการเข้าพักรายวัน</h4>
+                              </div>
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                พักรายวัน
+                              </span>
+                            </div>
+
+                            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs pt-1">
+                              <div>
+                                <span className="text-[10px] text-gray-400 block font-medium">ห้องพัก:</span>
+                                <strong className="text-slate-800 font-bold">ห้อง {getRoomNumber(selectedTenant.id)}</strong>
+                              </div>
+                              <div>
+                                <span className="text-[10px] text-gray-400 block font-medium">วันที่เข้าพัก:</span>
+                                <strong className="text-slate-800 font-bold">{formatThaiDate(selectedTenant.requestedStartDate || (selectedTenant as any).startDate) || '-'}</strong>
+                              </div>
+                              <div>
+                                <span className="text-[10px] text-gray-400 block font-medium">วันที่เช็คเอาท์:</span>
+                                <strong className="text-emerald-700 font-bold">{formatThaiDate(selectedTenant.requestedEndDate || (selectedTenant as any).endDate) || '-'}</strong>
+                              </div>
+                              <div>
+                                <span className="text-[10px] text-gray-400 block font-medium">จำนวนวันที่พัก:</span>
+                                <strong className="text-slate-800 font-bold">{selectedTenant.requestedDays || 1} วัน</strong>
+                              </div>
+                              <div>
+                                <span className="text-[10px] text-gray-400 block font-medium">อัตราค่าเช่า:</span>
+                                <strong className="text-slate-800 font-bold">{formatBaht(selectedTenant.requestedDailyRate || selectedTenant.requestedRent || 550)} / วัน</strong>
+                              </div>
+                              <div>
+                                <span className="text-[10px] text-gray-400 block font-medium">เงินประกัน/มัดจำ:</span>
+                                <strong className="text-slate-800 font-bold">{formatBaht(selectedTenant.requestedDeposit || 0)}</strong>
+                              </div>
+                            </div>
+
+                            {activeStatusTab === 'active' && (
+                              <div className="pt-2 flex justify-end">
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenDailyExtend(selectedTenant)}
+                                  className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl flex items-center gap-1.5 transition-all cursor-pointer shadow-xs"
+                                >
+                                  <Calendar className="w-3.5 h-3.5" />
+                                  <span>ขยายวันเข้าพัก</span>
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        ) : (() => {
                           const tenantContracts = contracts || [];
                           const matchedContracts = tenantContracts.filter(c => c.tenantId === selectedTenant.id);
                           if (matchedContracts.length === 0) {
@@ -3717,6 +4611,109 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                         const tenantContracts = (contracts || []).filter(c => c.tenantId === selectedTenant.id);
 
                         if (tenantContracts.length === 0) {
+                          const isPendingCategory = getTenantCategory(selectedTenant) === 'pending' || selectedTenant.status === 'pending';
+                          const rawType = String(selectedTenant.rentalType || selectedTenant.rentalPlan || '').toUpperCase();
+                          const isPendingMonthlyOrTerm = isPendingCategory && (rawType === 'MONTHLY' || rawType === 'TERM');
+
+                          if (isPendingMonthlyOrTerm) {
+                            const isTerm = rawType === 'TERM';
+                            const targetRoom = rooms.find(r => r.id === selectedTenant.requestedRoomId || r.roomNumber === selectedTenant.requestedRoomId || r.id === selectedTenant.roomId);
+                            const roomNum = targetRoom ? targetRoom.roomNumber : (selectedTenant.requestedRoomId || 'ยังไม่ระบุห้อง');
+                            const startStr = formatThaiDate(selectedTenant.requestedStartDate);
+                            const endStr = formatThaiDate(selectedTenant.requestedEndDate);
+                            const duration = selectedTenant.requestedDurationMonths || (isTerm ? 4 : 12);
+                            const rentVal = selectedTenant.requestedRent || (targetRoom ? (isTerm ? targetRoom.termRent : targetRoom.monthlyRent) : (isTerm ? 22000 : 5000));
+                            const depositVal = selectedTenant.requestedDeposit !== undefined && selectedTenant.requestedDeposit !== null
+                              ? selectedTenant.requestedDeposit
+                              : (targetRoom ? (isTerm ? targetRoom.termDeposit : targetRoom.monthlyDeposit) : (isTerm ? 5500 : 10000));
+
+                            const regId = (selectedTenant as any).registrationRequestId || selectedTenant.id;
+                            const rawRegSig = selectedTenant.tenantSignature || (selectedTenant as any).signatureUrl || (selectedTenant as any).tenantSignatureUrl;
+                            const regSigUrl = (rawRegSig && (rawRegSig.startsWith('http') || rawRegSig.startsWith('data:') || rawRegSig.startsWith('/api/')))
+                              ? rawRegSig
+                              : (dormitoryId && regId ? `/api/v1/dormitories/${dormitoryId}/tenant-registrations/${regId}/tenant-signature` : null);
+
+                            const agreedTerms = (selectedTenant as any).defaultTerms || (selectedTenant as any).terms || (selectedTenant as any).acceptanceSnapshot?.defaultTerms || (selectedTenant as any).acceptanceSnapshot?.terms || `1. ผู้เช่าต้องชำระค่าเช่าห้องพักตรงตามกำหนดเวลา\n2. เงินประกันความเสียหายจะคืนให้เมื่อสิ้นสุดสัญญาเช่าและหักลบค่าเสียหายแล้ว\n3. รักษาความสงบเรียบร้อยและปฏิบัติตามระเบียบข้อบังคับของหอพักอย่างเคร่งครัด`;
+
+                            return (
+                              <div className="space-y-4">
+                                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pb-3 border-b border-gray-100">
+                                  <div className="space-y-0.5">
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                      <span className="font-extrabold text-slate-900 text-sm">
+                                        สัญญาเช่า (คำขอลงทะเบียน)
+                                      </span>
+                                      <span className="px-2 py-0.5 text-[10px] font-bold rounded-lg border bg-amber-50 text-amber-700 border-amber-200">
+                                        รออนุมัติ
+                                      </span>
+                                    </div>
+                                    <p className="text-[11px] text-gray-500 font-medium">
+                                      ห้อง {roomNum} &bull; {isTerm ? 'สัญญาเช่ารายเทอม' : 'สัญญาเช่ารายเดือน'}
+                                    </p>
+                                  </div>
+                                </div>
+
+                                {/* Contract Details - Matching Active Contract Flat Clean Layout */}
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs py-1">
+                                  <div className="space-y-1">
+                                    <span className="text-[10px] text-gray-400 font-bold uppercase tracking-wider block">ระยะเวลาสัญญา</span>
+                                    <p className="font-extrabold text-slate-800 text-xs sm:text-sm">
+                                      {startStr} - {endStr}
+                                    </p>
+                                    <p className="text-[11px] text-indigo-600 font-semibold">
+                                      ระยะเวลา: {duration} เดือน
+                                    </p>
+                                  </div>
+
+                                  <div className="space-y-1">
+                                    <span className="text-[10px] text-gray-400 font-bold uppercase tracking-wider block">อัตราค่าเช่า & เงินประกัน</span>
+                                    <p className="font-extrabold text-slate-800 text-xs sm:text-sm">
+                                      ค่าเช่า {formatBaht(rentVal)} {isTerm ? '/เทอม' : '/เดือน'}
+                                    </p>
+                                    <p className="text-[11px] text-slate-600 font-semibold flex items-center gap-1.5">
+                                      <span>เงินประกัน {formatBaht(depositVal)}</span>
+                                      <span className={`px-1.5 py-0.2 rounded text-[9px] font-bold ${(selectedTenant.depositPaymentStatus === 'paid' || (selectedTenant as any).depositDeclaredStatus === 'paid')
+                                        ? 'bg-emerald-100 text-emerald-800'
+                                        : 'bg-rose-100 text-rose-800'
+                                        }`}>
+                                        {(selectedTenant.depositPaymentStatus === 'paid' || (selectedTenant as any).depositDeclaredStatus === 'paid') ? 'จ่ายแล้ว' : 'ยังไม่จ่าย'}
+                                      </span>
+                                    </p>
+                                  </div>
+                                </div>
+
+                                {/* Terms snippet */}
+                                {agreedTerms && (
+                                  <div className="pt-2 text-xs">
+                                    <p className="font-bold text-slate-700 text-[11px] mb-1">ข้อกำหนดสำคัญในสัญญา:</p>
+                                    <p className="text-gray-600 text-[11px] leading-relaxed whitespace-pre-line bg-slate-50/70 p-3 rounded-xl">
+                                      {agreedTerms}
+                                    </p>
+                                  </div>
+                                )}
+
+                                {/* Tenant Registration Signature */}
+                                <div className="pt-4 border-t border-dashed border-slate-200">
+                                  <div className="max-w-xs space-y-1.5">
+                                    <span className="text-[10px] text-gray-400 font-bold uppercase tracking-wider block">
+                                      ลงชื่อ ผู้เช่าห้องพัก (คำขอลงทะเบียน)
+                                    </span>
+                                    <div className="h-12 flex items-center justify-start">
+                                      <AuthenticatedSignatureImage
+                                        url={regSigUrl}
+                                        alt="ลายมือชื่อผู้เช่า"
+                                        className="max-h-12 max-w-[140px] object-contain"
+                                        dormitoryId={dormitoryId}
+                                        testId="pending-tenant-signature"
+                                      />
+                                    </div>
+                                    <p className="font-extrabold text-slate-800 text-xs">(คุณ{selectedTenant.name})</p>
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          }
+
                           return (
                             <div className="text-center py-12 bg-slate-50/70 rounded-2xl p-6 space-y-2">
                               <div className="w-10 h-10 bg-white rounded-xl border border-gray-100 flex items-center justify-center mx-auto text-gray-400">
@@ -3730,29 +4727,66 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                           );
                         }
 
-                        // Sort active first, then newest
-                        const sortedContracts = [...tenantContracts].sort((a, b) => {
-                          if (a.status === 'active' && b.status !== 'active') return -1;
-                          if (b.status === 'active' && a.status !== 'active') return 1;
-                          return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-                        });
+                        const displayAgreements = resolveTenantDisplayAgreements(
+                          selectedTenant,
+                          contracts,
+                          tenantDetailsData,
+                          rooms,
+                          effectiveDormId
+                        );
+
+                        const newestRenewableAgreementId = (activeStatusTab === 'active' || selectedTenant?.status === 'active')
+                          ? resolveNewestRenewableAgreementId(displayAgreements)
+                          : null;
 
                         return (
                           <div className="divide-y divide-gray-100">
-                            {sortedContracts.map((contract, index) => {
+                            {displayAgreements.map((contract, index) => {
+                              const isTermContract = contract.rentBillingType === 'term' || (contract as any).rentalType === 'TERM' || (contract as any).rentalPlan === 'term';
                               const matchedRoom = rooms.find(r => r.id === contract.roomId || r.roomNumber === contract.roomId);
                               const roomDisplay = matchedRoom ? `ห้อง ${matchedRoom.roomNumber} (ชั้น ${matchedRoom.floor})` : `ห้อง ${contract.roomId}`;
 
-                              const statusInfo = getContractStatusBadgeInfo(contract.status, contract.endDate);
+                              const isFutureAgreement = !contract.isCurrentTermAgreement && (
+                                contract.status === 'scheduled' ||
+                                contract.status === 'approved_scheduled' ||
+                                contract.status === 'SCHEDULED' ||
+                                (contract.contractNumber && contract.contractNumber.includes('EXT')) ||
+                                (contract.contractNumber && contract.contractNumber.includes('RNW')) ||
+                                new Date(contract.startDate).getTime() > new Date('2026-09-30').getTime()
+                              );
+
+                              const statusInfo = contract.isCurrentTermAgreement
+                                ? { label: 'สัญญา/ข้อตกลงปัจจุบัน', bg: 'bg-emerald-50', text: 'text-emerald-700', border: 'border-emerald-200' }
+                                : (isFutureAgreement
+                                  ? { label: 'สัญญาถัดไป', bg: 'bg-blue-50', text: 'text-blue-700', border: 'border-blue-200' }
+                                  : getContractStatusBadgeInfo(contract.status, contract.endDate));
 
                               const billsPool = Array.isArray(tenantDetailsData?.bills) && tenantDetailsData.bills.length > 0
                                 ? tenantDetailsData.bills
                                 : (bills || []);
-                              const depositState = deriveContractDepositPaymentState(contract.id, billsPool);
+                              const depositState = (contract.isCurrentTermAgreement || isFutureAgreement)
+                                ? { isPaid: true }
+                                : deriveContractDepositPaymentState(contract.id, billsPool);
+
+                              const headerTitle = contract.isCurrentTermAgreement
+                                ? 'สัญญาเช่ารายเทอม (ปัจจุบัน)'
+                                : `สัญญาเลขที่: ${contract.contractNumber}`;
+
+                              const headerSubtitle = contract.isCurrentTermAgreement
+                                ? `${roomDisplay} • ภาคการศึกษา/รอบเทอมปัจจุบัน (ทำสัญญาเมื่อ ${formatThaiDate(contract.createdAt)})`
+                                : (isFutureAgreement
+                                  ? `${roomDisplay} • สัญญาถัดไป เริ่ม ${formatThaiDate(contract.startDate)}`
+                                  : `${roomDisplay} • ทำสัญญาเมื่อ ${formatThaiDate(contract.createdAt)}`);
+
+                              const agreementTerms = contract.terms || null;
+
+                              const canRenewThisAgreement = Boolean(
+                                newestRenewableAgreementId && contract.id === newestRenewableAgreementId
+                              );
 
                               return (
                                 <div
-                                  key={contract.id}
+                                  key={contract.id || `agreement-${index}`}
                                   className={`space-y-3.5 ${index > 0 ? 'pt-5' : ''}`}
                                 >
                                   {/* Contract Header */}
@@ -3760,14 +4794,14 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                                     <div className="space-y-0.5">
                                       <div className="flex items-center gap-2 flex-wrap">
                                         <span className="font-extrabold text-slate-900 text-sm">
-                                          สัญญาเลขที่: {contract.contractNumber}
+                                          {headerTitle}
                                         </span>
                                         <span className={`px-2 py-0.5 text-[10px] font-bold rounded-lg border ${statusInfo.bg} ${statusInfo.text} ${statusInfo.border}`}>
                                           {statusInfo.label}
                                         </span>
                                       </div>
                                       <p className="text-[11px] text-gray-500 font-medium">
-                                        {roomDisplay} &bull; ทำสัญญาเมื่อ {formatThaiDate(contract.createdAt)}
+                                        {headerSubtitle}
                                       </p>
                                     </div>
 
@@ -3782,15 +4816,15 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                                         <Printer className="w-3.5 h-3.5" />
                                         <span>พิมพ์สัญญา</span>
                                       </button>
-                                      {activeStatusTab === 'active' && contract.status === 'active' && (
+                                      {canRenewThisAgreement && (
                                         <button
                                           type="button"
-                                          onClick={() => handleOpenRenewContract(contract)}
+                                          onClick={() => handleOpenRenewContract(contract, selectedTenant)}
                                           className="px-3 py-1.5 bg-transparent hover:bg-amber-50 active:scale-95 text-amber-700 font-bold text-xs rounded-xl transition-all flex items-center gap-1.5 cursor-pointer border border-amber-400 shadow-3xs"
                                           title="ต่ออายุสัญญาเช่า"
                                         >
                                           <RotateCw className="w-3.5 h-3.5 text-amber-600" />
-                                          <span>ต่อสัญญา</span>
+                                          <span>ต่ออายุสัญญา</span>
                                         </button>
                                       )}
                                     </div>
@@ -3811,23 +4845,23 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                                     <div className="space-y-1">
                                       <span className="text-[10px] text-gray-400 font-bold uppercase tracking-wider block">อัตราค่าเช่า & เงินประกัน</span>
                                       <p className="font-extrabold text-slate-800 text-xs sm:text-sm">
-                                        ค่าเช่า {formatBaht(contract.rentAmount)} / เดือน
+                                        ค่าเช่า {formatBaht(contract.rentAmount)} {isTermContract ? '/เทอม' : '/เดือน'}
                                       </p>
                                       <p className="text-[11px] text-slate-600 font-semibold flex items-center gap-1.5">
                                         <span>เงินประกัน {formatBaht(contract.depositAmount)}</span>
                                         <span className={`px-1.5 py-0.2 rounded text-[9px] font-bold ${depositState.isPaid ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}`}>
-                                          {depositState.isPaid ? 'จ่ายแล้ว' : 'ยังไม่จ่าย'}
+                                          {isFutureAgreement ? 'ยกยอดเงินประกัน' : (depositState.isPaid ? 'จ่ายแล้ว' : 'ยังไม่จ่าย')}
                                         </span>
                                       </p>
                                     </div>
                                   </div>
 
                                   {/* Terms snippet */}
-                                  {contract.terms && (
+                                  {agreementTerms && (
                                     <div className="pt-2 text-xs">
                                       <p className="font-bold text-slate-700 text-[11px] mb-1">ข้อกำหนดสำคัญในสัญญา:</p>
                                       <p className="text-gray-600 text-[11px] leading-relaxed whitespace-pre-line bg-slate-50/70 p-3 rounded-xl">
-                                        {contract.terms}
+                                        {agreementTerms}
                                       </p>
                                     </div>
                                   )}
@@ -3878,11 +4912,11 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
 
                               {/* List of active co-occupants */}
                               {(selectedTenant.coOccupants || []).length > 0 ? (
-                                <div className="space-y-2.5">
+                                <div className="divide-y divide-slate-100">
                                   {(selectedTenant.coOccupants || []).map((co, index) => (
                                     <div
                                       key={co.id || index}
-                                      className="p-3.5 bg-white border border-gray-150 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs hover:border-indigo-200 transition-all"
+                                      className="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
                                     >
                                       <div className="space-y-1 min-w-0">
                                         <div className="flex items-center gap-2 flex-wrap">
@@ -4003,10 +5037,10 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                                           <div className="flex items-center gap-2 flex-wrap">
                                             <span
                                               className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${isOld
-                                                  ? 'bg-slate-100 text-slate-600'
-                                                  : isAdded
-                                                    ? 'bg-emerald-50 text-emerald-700 border border-emerald-200/60'
-                                                    : 'bg-rose-50 text-rose-700 border border-rose-200/60'
+                                                ? 'bg-slate-100 text-slate-600'
+                                                : isAdded
+                                                  ? 'bg-emerald-50 text-emerald-700 border border-emerald-200/60'
+                                                  : 'bg-rose-50 text-rose-700 border border-rose-200/60'
                                                 }`}
                                             >
                                               {isAdded ? (
@@ -4046,10 +5080,10 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                                         <div className="text-right shrink-0">
                                           <span
                                             className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-bold ${isOld
-                                                ? 'text-slate-500 bg-slate-50'
-                                                : isAdded
-                                                  ? 'bg-emerald-50 text-emerald-800'
-                                                  : 'bg-rose-50 text-rose-800'
+                                              ? 'text-slate-500 bg-slate-50'
+                                              : isAdded
+                                                ? 'bg-emerald-50 text-emerald-800'
+                                                : 'bg-rose-50 text-rose-800'
                                               }`}
                                           >
                                             <Clock className={`w-3 h-3 ${isOld ? 'text-slate-400' : 'opacity-70'}`} />
@@ -4116,10 +5150,6 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                         alt="เอกสารประจำตัวผู้เช่า"
                         className="w-full h-auto max-h-[280px] object-contain rounded-lg mx-auto bg-white"
                       />
-                      <div className="absolute top-4 right-4 bg-emerald-600 text-white text-[9px] font-bold px-2.5 py-1 rounded-full shadow flex items-center gap-1">
-                        <CheckCircle2 className="w-3 h-3" />
-                        <span>เอกสารจริงจากระบบ</span>
-                      </div>
 
                       {/* Direct change button */}
                       <div className="mt-2.5 pt-2 border-t border-gray-200 flex items-center justify-end px-1">
@@ -4190,9 +5220,10 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
           }}
           context={selectedQuickAddContext}
           availableRooms={getTrulyVacantRooms(rooms, contracts || [], tenants)}
+          buildings={localBuildings}
           onSelectRoom={handleSelectQuickAddRoom}
-          hideLineTab={true}
-          defaultTab="MONTHLY"
+          hideLineTab={false}
+          defaultTab="LINE"
           onSuccess={handleQuickAddSuccess}
         />
       )}
@@ -4356,8 +5387,8 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                     onClick={handleAddCoOccupant}
                     disabled={!coName.trim() || !coPhone.trim() || (coRelationship === 'อื่นๆ' && !coCustomRelationship.trim())}
                     className={`px-3 py-1.5 font-bold text-[10px] rounded-lg transition-all ${coName.trim() && coPhone.trim() && (coRelationship !== 'อื่นๆ' || coCustomRelationship.trim())
-                        ? 'bg-indigo-600 hover:bg-indigo-700 text-white cursor-pointer'
-                        : 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                      ? 'bg-indigo-600 hover:bg-indigo-700 text-white cursor-pointer'
+                      : 'bg-slate-200 text-slate-400 cursor-not-allowed'
                       }`}
                   >
                     เพิ่มผู้ร่วมตึก
@@ -4522,9 +5553,11 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                 className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white text-slate-700 font-bold"
               >
                 <option value="">-- กรุณาเลือกห้องเช่า --</option>
-                {rooms.filter(r => r.status === 'vacant').map(r => (
-                  <option key={r.id} value={r.id}>ห้อง {r.roomNumber} (ค่าเช่า: {formatBaht(r.monthlyRent)})</option>
-                ))}
+                {[...rooms.filter(r => r.status === 'vacant')]
+                  .sort((a, b) => (a.roomNumber || '').localeCompare(b.roomNumber || '', undefined, { numeric: true }))
+                  .map(r => (
+                    <option key={r.id} value={r.id}>{formatOwnerRoomOptionLabel(r, localBuildings)}</option>
+                  ))}
               </select>
 
               {selectedRoomId && (
@@ -4682,26 +5715,29 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                   const activeCon = tContracts.find(c => c.status === 'active' || c.status === 'expiring_soon' || c.status === 'checking_out') || tContracts[0];
                   const rm = rooms.find(r => r.currentTenantId === selectedTenant.id || r.id === activeCon?.roomId);
                   const origDeposit = activeCon?.depositAmount ?? rm?.depositAmount ?? 0;
+                  const depFinancial = getDepositFinancialState(activeCon?.id, bills, origDeposit);
+                  const actualPaidDeposit = depFinancial.actualPaidDeposit;
+                  const hasPaidDeposit = depFinancial.isPaid && actualPaidDeposit > 0;
                   const totalDeductions = deductionItems.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
-                  const netRefund = refundDeposit ? Math.max(0, origDeposit - totalDeductions) : 0;
-                  const netExcess = refundDeposit ? Math.max(0, totalDeductions - origDeposit) : totalDeductions;
+                  const netRefund = hasPaidDeposit && refundDeposit ? Math.max(0, actualPaidDeposit - totalDeductions) : 0;
+                  const netExcess = hasPaidDeposit && refundDeposit ? Math.max(0, totalDeductions - actualPaidDeposit) : totalDeductions;
 
                   const PRESET_DEDUCTIONS = [
-                    { title: 'ค่าทำความสะอาดห้องพัก', amount: 500 },
-                    { title: 'ค่าน้ำประปาค้างชำระ', amount: 150 },
-                    { title: 'ค่าไฟฟ้าค้างชำระ', amount: 450 },
-                    { title: 'ค่าล้างเครื่องปรับอากาศ', amount: 500 },
-                    { title: 'ค่าซ่อมแซม/ทาสีผนัง', amount: 600 },
-                    { title: 'ค่ากุญแจ/คีย์การ์ดสูญหาย', amount: 300 }
+                    { title: 'ค่าทำความสะอาดห้องพัก' },
+                    { title: 'ค่าน้ำประปาค้างชำระ' },
+                    { title: 'ค่าไฟฟ้าค้างชำระ' },
+                    { title: 'ค่าล้างเครื่องปรับอากาศ' },
+                    { title: 'ค่าซ่อมแซม/ทาสีผนัง' },
+                    { title: 'ค่ากุญแจ/คีย์การ์ดสูญหาย' }
                   ];
 
-                  const handleAddPreset = (preset: { title: string; amount: number }) => {
+                  const handleAddPreset = (preset: { title: string }) => {
                     setDeductionItems(prev => [
                       ...prev,
                       {
                         id: `deduct-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
                         title: preset.title,
-                        amount: preset.amount
+                        amount: ''
                       }
                     ]);
                   };
@@ -4734,9 +5770,6 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                             <AlertCircle className="w-4 h-4 text-amber-500 shrink-0" />
                             <span>ข้อมูลผู้เช่าและสัญญาห้อง {getRoomNumber(selectedTenant.id)}</span>
                           </h4>
-                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-amber-50 text-amber-800 border border-amber-200/80">
-                            เงินประกันในสัญญา: {formatBaht(origDeposit)}
-                          </span>
                         </div>
                         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-slate-800 pt-0.5">
                           <div>
@@ -4770,133 +5803,96 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                             <span className="font-bold text-slate-800 text-xs sm:text-sm">การจัดการเงินประกัน</span>
                           </div>
                           <span className="text-xs font-extrabold text-slate-800">
-                            เงินประกัน: {formatBaht(origDeposit)}
+                            {hasPaidDeposit ? (
+                              <span>เงินประกันที่ชำระแล้ว: <span className="text-indigo-600">{formatBaht(actualPaidDeposit)}</span></span>
+                            ) : (
+                              <span className="text-slate-500">เงินประกันตามสัญญา: {formatBaht(origDeposit)}</span>
+                            )}
                           </span>
                         </div>
 
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                          {/* Option 1: Refund Deposit (deduct from deposit) */}
-                          <div
-                            onClick={() => setRefundDeposit(true)}
-                            className={`p-3.5 rounded-2xl border-2 transition-all cursor-pointer flex flex-col justify-between ${refundDeposit
+                        {!hasPaidDeposit ? (
+                          <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-2xl flex items-start gap-3">
+                            <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                            <div className="space-y-1">
+                              <p className="font-bold text-xs text-amber-900">
+                                ยังไม่มีเงินประกันที่ชำระแล้วให้จัดการ (ยอดชำระแล้ว: 0 บาท)
+                              </p>
+                              <p className="text-[11px] text-amber-700 leading-relaxed">
+                                สัญญาห้องนี้ยังไม่มียอดเงินประกันที่ชำระเข้ามา ({formatBaht(origDeposit)}) จึงไม่สามารถเลือกคืนหรือยึดเงินประกันได้ หากมีค่าใช้จ่ายหรือค่าเสียหายเกิดขึ้น ผู้เช่าจะต้องชำระค่าใช้จ่ายทั้งหมดเต็มจำนวน
+                              </p>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            {/* Option 1: Refund Deposit (deduct from deposit) */}
+                            <div
+                              onClick={() => setRefundDeposit(true)}
+                              className={`p-3.5 rounded-2xl border-2 transition-all cursor-pointer flex flex-col justify-between ${refundDeposit
                                 ? 'border-emerald-500 bg-emerald-50/40 shadow-xs'
                                 : 'border-gray-200 hover:border-gray-300 bg-white'
-                              }`}
-                          >
-                            <div className="space-y-1.5">
-                              <div className="flex items-center justify-between gap-2">
-                                <div className="flex items-center gap-2">
-                                  <div className={`w-7 h-7 rounded-xl flex items-center justify-center shrink-0 ${refundDeposit ? 'bg-emerald-500 text-white' : 'bg-gray-100 text-gray-500'
-                                    }`}>
-                                    <ShieldCheck className="w-4 h-4" />
+                                }`}
+                            >
+                              <div className="space-y-1.5">
+                                <div className="flex items-center justify-between gap-2">
+                                  <div className="flex items-center gap-2">
+                                    <div className={`w-7 h-7 rounded-xl flex items-center justify-center shrink-0 ${refundDeposit ? 'bg-emerald-500 text-white' : 'bg-gray-100 text-gray-500'
+                                      }`}>
+                                      <ShieldCheck className="w-4 h-4" />
+                                    </div>
+                                    <span className="font-bold text-xs text-slate-900">
+                                      คืนเงินประกัน (นำมาหักลดค่าใช้จ่าย)
+                                    </span>
                                   </div>
-                                  <span className="font-bold text-xs text-slate-900">
-                                    คืนเงินประกัน (นำมาหักลดค่าใช้จ่าย)
-                                  </span>
+                                  <input
+                                    type="radio"
+                                    name="refundDepositOption"
+                                    checked={refundDeposit}
+                                    onChange={() => setRefundDeposit(true)}
+                                    className="text-emerald-600 focus:ring-emerald-500 w-4 h-4 pointer-events-none"
+                                  />
                                 </div>
-                                <input
-                                  type="radio"
-                                  name="refundDepositOption"
-                                  checked={refundDeposit}
-                                  onChange={() => setRefundDeposit(true)}
-                                  className="text-emerald-600 focus:ring-emerald-500 w-4 h-4 pointer-events-none"
-                                />
+                                <p className="text-[11px] text-gray-500 leading-relaxed pl-9">
+                                  นำเงินประกันที่ชำระแล้ว ({formatBaht(actualPaidDeposit)}) มาหักลดค่าใช้จ่าย หากเงินประกันเหลือ ผู้เช่าจะได้รับเงินคืนหลังเลิกเช่า หากค่าใช้จ่ายเกิน ผู้เช่าจ่ายเฉพาะส่วนต่าง
+                                </p>
                               </div>
-                              <p className="text-[11px] text-gray-500 leading-relaxed pl-9">
-                                นำเงินประกัน ({formatBaht(origDeposit)}) มาหักลดค่าใช้จ่าย หากเงินประกันเหลือ ผู้เช่าจะได้รับเงินคืนหลังเลิกเช่า หากค่าใช้จ่ายเกิน ผู้เช่าจ่ายเฉพาะส่วนต่าง
-                              </p>
                             </div>
-                          </div>
 
-                          {/* Option 2: Forfeit Deposit */}
-                          <div
-                            onClick={() => setRefundDeposit(false)}
-                            className={`p-3.5 rounded-2xl border-2 transition-all cursor-pointer flex flex-col justify-between ${!refundDeposit
+                            {/* Option 2: Forfeit Deposit */}
+                            <div
+                              onClick={() => setRefundDeposit(false)}
+                              className={`p-3.5 rounded-2xl border-2 transition-all cursor-pointer flex flex-col justify-between ${!refundDeposit
                                 ? 'border-rose-500 bg-rose-50/40 shadow-xs'
                                 : 'border-gray-200 hover:border-gray-300 bg-white'
-                              }`}
-                          >
-                            <div className="space-y-1.5">
-                              <div className="flex items-center justify-between gap-2">
-                                <div className="flex items-center gap-2">
-                                  <div className={`w-7 h-7 rounded-xl flex items-center justify-center shrink-0 ${!refundDeposit ? 'bg-rose-500 text-white' : 'bg-gray-100 text-gray-500'
-                                    }`}>
-                                    <ShieldAlert className="w-4 h-4" />
+                                }`}
+                            >
+                              <div className="space-y-1.5">
+                                <div className="flex items-center justify-between gap-2">
+                                  <div className="flex items-center gap-2">
+                                    <div className={`w-7 h-7 rounded-xl flex items-center justify-center shrink-0 ${!refundDeposit ? 'bg-rose-500 text-white' : 'bg-gray-100 text-gray-500'
+                                      }`}>
+                                      <ShieldAlert className="w-4 h-4" />
+                                    </div>
+                                    <span className="font-bold text-xs text-slate-900">
+                                      ไม่คืนเงินประกัน (ยึดเงินประกัน)
+                                    </span>
                                   </div>
-                                  <span className="font-bold text-xs text-slate-900">
-                                    ไม่คืนเงินประกัน (ยึดเงินประกัน)
-                                  </span>
+                                  <input
+                                    type="radio"
+                                    name="refundDepositOption"
+                                    checked={!refundDeposit}
+                                    onChange={() => setRefundDeposit(false)}
+                                    className="text-rose-600 focus:ring-rose-500 w-4 h-4 pointer-events-none"
+                                  />
                                 </div>
-                                <input
-                                  type="radio"
-                                  name="refundDepositOption"
-                                  checked={!refundDeposit}
-                                  onChange={() => setRefundDeposit(false)}
-                                  className="text-rose-600 focus:ring-rose-500 w-4 h-4 pointer-events-none"
-                                />
+                                <p className="text-[11px] text-gray-500 leading-relaxed pl-9">
+                                  ยึดเงินประกันทั้งหมดตามเงื่อนไข ผู้เช่าจะไม่ได้รับเงินประกันคืน และต้องชำระค่าใช้จ่ายที่เกิดขึ้นแยกต่างหากเต็มจำนวน
+                                </p>
                               </div>
-                              <p className="text-[11px] text-gray-500 leading-relaxed pl-9">
-                                ยึดเงินประกันทั้งหมดตามเงื่อนไข ผู้เช่าจะไม่ได้รับเงินประกันคืน และต้องชำระค่าใช้จ่ายที่เกิดขึ้นแยกต่างหากเต็มจำนวน
-                              </p>
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* If refunding and net refund is positive, prompt for bank/account info */}
-                        {refundDeposit && origDeposit > totalDeductions && (
-                          <div className="p-3 bg-slate-50 border border-gray-200 rounded-xl space-y-2.5 mt-2">
-                            <span className="text-[11px] font-bold text-slate-700 block">
-                              ช่องทางคืนเงินประกันให้ผู้เช่า (ยอดคืน: {formatBaht(origDeposit - totalDeductions)}):
-                            </span>
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                              <div className="flex gap-1.5">
-                                <button
-                                  type="button"
-                                  onClick={() => setRefundMethod('promptpay')}
-                                  className={`flex-1 py-1.5 px-2 rounded-lg text-xs font-bold border transition-all cursor-pointer ${refundMethod === 'promptpay'
-                                      ? 'bg-indigo-50 border-indigo-300 text-indigo-700 shadow-2xs'
-                                      : 'bg-white border-gray-200 text-gray-600'
-                                    }`}
-                                >
-                                  พร้อมเพย์
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => setRefundMethod('bank_transfer')}
-                                  className={`flex-1 py-1.5 px-2 rounded-lg text-xs font-bold border transition-all cursor-pointer ${refundMethod === 'bank_transfer'
-                                      ? 'bg-indigo-50 border-indigo-300 text-indigo-700 shadow-2xs'
-                                      : 'bg-white border-gray-200 text-gray-600'
-                                    }`}
-                                >
-                                  โอนธนาคาร
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => setRefundMethod('cash')}
-                                  className={`flex-1 py-1.5 px-2 rounded-lg text-xs font-bold border transition-all cursor-pointer ${refundMethod === 'cash'
-                                      ? 'bg-indigo-50 border-indigo-300 text-indigo-700 shadow-2xs'
-                                      : 'bg-white border-gray-200 text-gray-600'
-                                    }`}
-                                >
-                                  เงินสด
-                                </button>
-                              </div>
-                              <input
-                                type="text"
-                                value={refundAccountInfo}
-                                onChange={(e) => setRefundAccountInfo(e.target.value)}
-                                placeholder={
-                                  refundMethod === 'promptpay'
-                                    ? 'เบอร์พร้อมเพย์ หรือเลขบัตร ปชช.'
-                                    : refundMethod === 'bank_transfer'
-                                      ? 'ระบุชื่อธนาคาร และเลขที่บัญชี'
-                                      : 'หมายเหตุการจ่ายเงินสด (ถ้ามี)'
-                                }
-                                className="px-3 py-1.5 text-xs bg-white border border-gray-200 rounded-lg text-slate-800"
-                              />
                             </div>
                           </div>
                         )}
+
                       </div>
 
                       {/* Section 3: Itemized Deductions (รายการค่าใช้จ่าย / ค่าเสียหายที่ต้องหักก่อนออก) */}
@@ -4905,7 +5901,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                           <div className="flex items-center gap-2">
                             <Receipt className="w-4 h-4 text-indigo-600" />
                             <span className="font-bold text-slate-800 text-xs sm:text-sm">
-                              รายการค่าใช้จ่าย / ค่าเสียหายที่ต้องหักก่อนออก
+                              รายการค่าใช้จ่าย / ค่าเสียหายที่ต้องหัก
                             </span>
                             <span className="text-[10px] font-bold px-2 py-0.2 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100">
                               {deductionItems.length} รายการ
@@ -4933,7 +5929,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                                 className="px-2.5 py-1 bg-slate-50 hover:bg-slate-100 text-slate-700 border border-gray-200 hover:border-gray-300 rounded-lg text-[11px] font-medium transition-all cursor-pointer flex items-center gap-1 shadow-2xs"
                               >
                                 <Plus className="w-3 h-3 text-gray-400" />
-                                <span>{preset.title} ({formatBaht(preset.amount)})</span>
+                                <span>{preset.title}</span>
                               </button>
                             ))}
                           </div>
@@ -5002,10 +5998,12 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                         <div className="space-y-1.5 text-xs">
                           <div className="flex justify-between items-center text-slate-600">
                             <span>เงินประกันสัญญา:</span>
-                            <span className="font-bold text-slate-800">+{formatBaht(origDeposit)}</span>
+                            <span className="font-bold text-slate-800">
+                              {hasPaidDeposit ? `+${formatBaht(actualPaidDeposit)}` : '0 บาท'}
+                            </span>
                           </div>
                           <div className="flex justify-between items-center text-slate-600">
-                            <span>ยอดรวมค่าใช้จ่ายที่ต้องหัก ({deductionItems.length} รายการ):</span>
+                            <span>ยอดรวมค่าใช้จ่าย ({deductionItems.length} รายการ):</span>
                             <span className="font-bold text-rose-600">
                               {totalDeductions > 0 ? `-${formatBaht(totalDeductions)}` : '0 บาท'}
                             </span>
@@ -5013,8 +6011,30 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                         </div>
 
                         {/* Result Highlight Box */}
-                        {refundDeposit ? (
-                          origDeposit >= totalDeductions ? (
+                        {!hasPaidDeposit ? (
+                          <div className="p-3.5 bg-rose-500/10 border border-rose-300 rounded-xl flex items-center justify-between gap-3">
+                            <div className="flex items-center gap-2.5">
+                              <Receipt className="w-5 h-5 text-rose-600 shrink-0" />
+                              <div>
+                                <p className="font-extrabold text-rose-950 text-xs sm:text-sm">
+                                  {totalDeductions > 0 ? 'ผู้เช่าต้องชำระค่าใช้จ่ายทั้งหมด' : 'ไม่มีเงินประกันและไม่มีค่าใช้จ่ายค้างชำระ'}
+                                </p>
+                                <p className="text-[11px] text-rose-700 font-medium">
+                                  {totalDeductions > 0
+                                    ? 'ไม่มีเงินประกันที่ชำระแล้วนำมาหักลด ผู้เช่าต้องชำระยอดค่าใช้จ่ายเต็มจำนวน'
+                                    : 'ไม่มีเงินประกันที่ต้องคืนหรือหัก และไม่มีค่าเสียหายที่ต้องชำระ'}
+                                </p>
+                              </div>
+                            </div>
+                            <div className="text-right shrink-0">
+                              <span className="font-black text-rose-700 text-base sm:text-xl block">
+                                {formatBaht(totalDeductions)}
+                              </span>
+                              <span className="text-[10px] text-rose-600 font-semibold">ยอดต้องชำระ</span>
+                            </div>
+                          </div>
+                        ) : refundDeposit ? (
+                          actualPaidDeposit >= totalDeductions ? (
                             <div className="p-3.5 bg-emerald-500/10 border border-emerald-300 rounded-xl flex items-center justify-between gap-3">
                               <div className="flex items-center gap-2.5">
                                 <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
@@ -5029,7 +6049,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                               </div>
                               <div className="text-right shrink-0">
                                 <span className="font-black text-emerald-700 text-base sm:text-xl block">
-                                  +{formatBaht(origDeposit - totalDeductions)}
+                                  +{formatBaht(actualPaidDeposit - totalDeductions)}
                                 </span>
                                 <span className="text-[10px] text-emerald-600 font-semibold">ยอดโอนคืนสุทธิ</span>
                               </div>
@@ -5043,13 +6063,13 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                                     เงินประกันช่วยลดค่าใช้จ่ายแล้ว (ผู้เช่าต้องชำระเพิ่ม)
                                   </p>
                                   <p className="text-[11px] text-amber-700 font-medium">
-                                    นำเงินประกัน {formatBaht(origDeposit)} มาหักลดค่าใช้จ่ายจนหมด ผู้เช่าต้องชำระส่วนเกินเพิ่ม
+                                    นำเงินประกันที่ชำระแล้ว {formatBaht(actualPaidDeposit)} มาหักลดค่าใช้จ่ายจนหมด ผู้เช่าต้องชำระส่วนเกินเพิ่ม
                                   </p>
                                 </div>
                               </div>
                               <div className="text-right shrink-0">
                                 <span className="font-black text-amber-800 text-base sm:text-xl block">
-                                  {formatBaht(totalDeductions - origDeposit)}
+                                  {formatBaht(totalDeductions - actualPaidDeposit)}
                                 </span>
                                 <span className="text-[10px] text-amber-600 font-semibold">ออกบิลเรียกเก็บ</span>
                               </div>
@@ -5076,20 +6096,6 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                             </div>
                           </div>
                         )}
-                      </div>
-
-                      {/* Section 5: Additional Notes */}
-                      <div className="space-y-1">
-                        <label className="block text-[11px] font-bold text-slate-700" htmlFor="addNoteInput">
-                          หมายเหตุบันทึกเพิ่มเติม (ถ้ามี)
-                        </label>
-                        <textarea
-                          id="addNoteInput"
-                          value={additionalNote}
-                          onChange={(e) => setAdditionalNote(e.target.value)}
-                          className="w-full px-3 py-2 text-xs border border-gray-200 rounded-xl bg-white text-slate-800 h-16 resize-none focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                          placeholder="ระบุสภาพห้องพัก, วันที่ส่งมอบกุญแจ, หรือข้อตกลงเพิ่มเติม..."
-                        />
                       </div>
                     </div>
                   );
@@ -5507,8 +6513,8 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                     type="submit"
                     disabled={!isFormChanged}
                     className={`px-5 py-2 font-bold text-xs rounded-xl shadow-sm transition-all ${isFormChanged
-                        ? 'bg-indigo-600 hover:bg-indigo-700 text-white cursor-pointer animate-in fade-in duration-200'
-                        : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                      ? 'bg-indigo-600 hover:bg-indigo-700 text-white cursor-pointer animate-in fade-in duration-200'
+                      : 'bg-gray-200 text-gray-400 cursor-not-allowed'
                       }`}
                   >
                     บันทึกการแก้ไข
@@ -5526,85 +6532,553 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
           isOpen={isApproveOpen}
           onClose={() => setIsApproveOpen(false)}
           title="ยืนยันอนุมัติและรับผู้เช่าเข้าพัก"
-          size="md"
+          size="lg"
         >
           <div className="space-y-4">
-            <div className="p-3.5 bg-emerald-50/80 border border-emerald-200/80 rounded-2xl flex items-center gap-3">
-              <div className="w-10 h-10 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold text-base shrink-0">
-                <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+            <div className="p-3.5 bg-emerald-50/80 border border-emerald-200/80 rounded-2xl flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold text-base shrink-0">
+                  <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+                </div>
+                <div>
+                  <h4 className="text-xs font-bold text-emerald-950">อนุมัติคุณ {selectedTenant.name}</h4>
+                  <p className="text-[11px] text-emerald-700 mt-0.5">
+                    เบอร์โทร: {formatPhone(selectedTenant.phone)} • บัตรประชาชน: {formatCitizenId(selectedTenant.citizenId)}
+                  </p>
+                </div>
               </div>
-              <div>
-                <h4 className="text-xs font-bold text-emerald-950">อนุมัติคุณ {selectedTenant.name}</h4>
-                <p className="text-[11px] text-emerald-700 mt-0.5">
-                  เบอร์โทร: {formatPhone(selectedTenant.phone)} • บัตรประชาชน: {formatCitizenId(selectedTenant.citizenId)}
-                </p>
-              </div>
+              <span className={`text-[11px] font-extrabold px-2.5 py-1 rounded-xl border shrink-0 ${approveRentalType === 'DAILY'
+                ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                : approveRentalType === 'TERM'
+                  ? 'bg-purple-100 text-purple-800 border-purple-300'
+                  : 'bg-blue-100 text-blue-800 border-blue-300'
+                }`}>
+                {approveRentalType === 'DAILY' ? 'การเข้าพักรายวัน' : approveRentalType === 'TERM' ? 'สัญญาเช่ารายเทอม' : 'สัญญาเช่ารายเดือน'}
+              </span>
             </div>
 
             <div className="space-y-3 pt-1">
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
+                <label htmlFor="approve-room-select" className="block text-xs font-bold text-slate-700 mb-1">
                   เลือกห้องพักที่ต้องการจัดสรร <span className="text-rose-500">*</span>
                 </label>
                 <select
+                  id="approve-room-select"
                   value={approveRoomId}
                   onChange={(e) => {
                     const rId = e.target.value;
                     setApproveRoomId(rId);
                     const rm = rooms.find(r => r.id === rId);
                     if (rm) {
-                      setApproveRent(String(rm.price || 0));
-                      setApproveDeposit(String(rm.deposit || rm.price * 2 || 0));
+                      if (approveRentalType === 'DAILY') {
+                        const rate = rm.dailyRent || 550;
+                        setApproveDailyRate(String(rate));
+                        setApproveRent(String(rate * approveDays));
+                        setApproveDeposit(String(rm.deposit || 500));
+                      } else if (approveRentalType === 'TERM') {
+                        setApproveRent(String(rm.termRent || 22000));
+                        setApproveDeposit(String(rm.termDeposit || rm.deposit || 5500));
+                        setApproveEndDate(calculateContractEndDate(approveStartDate, approveDurationMonths));
+                      } else {
+                        setApproveRent(String(rm.price || rm.monthlyRent || 5000));
+                        setApproveDeposit(String(rm.deposit || rm.monthlyDeposit || (rm.price * 2) || 10000));
+                        setApproveEndDate(calculateContractEndDate(approveStartDate, approveDurationMonths));
+                      }
                     }
                   }}
                   className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
                 >
                   <option value="">-- เลือกห้องพัก --</option>
-                  {rooms.map(r => (
+                  {approvalRoomOptions.map(r => (
                     <option key={r.id} value={r.id}>
-                      ห้อง {r.roomNumber} ({r.status === 'vacant' ? 'ห้องว่าง' : (selectedTenant && r.currentTenantId === selectedTenant.id) ? 'ระบุไว้แล้ว' : `มีผู้เช่า (${r.status})`}) - ฿{(r.price ?? 0).toLocaleString()}/ด.
+                      {formatOwnerRoomOptionLabel(r, localBuildings)}
                     </option>
                   ))}
                 </select>
+                {(() => {
+                  const reqRoom = rooms.find(r => r.id === selectedTenant.requestedRoomId || r.roomNumber === selectedTenant.requestedRoomId);
+                  if (!reqRoom) return null;
+                  return (
+                    <div className="mt-1.5 flex items-center gap-1.5 text-[11px] text-indigo-700 bg-indigo-50/70 border border-indigo-150 px-2.5 py-1 rounded-lg">
+                      <span className="font-semibold">ห้องที่ผู้เช่าขอ:</span>
+                      <strong className="font-bold">ห้อง {reqRoom.roomNumber}</strong>
+                    </div>
+                  );
+                })()}
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    วันที่เริ่มสัญญา / เข้าพัก
-                  </label>
-                  <input
-                    type="date"
-                    value={approveStartDate}
-                    onChange={(e) => setApproveStartDate(e.target.value)}
-                    className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-medium"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    ค่าเช่าต่อเดือน (บาท)
-                  </label>
-                  <input
-                    type="number"
-                    value={approveRent}
-                    onChange={(e) => setApproveRent(e.target.value)}
-                    className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-medium"
-                    placeholder="เช่น 4500"
-                  />
-                </div>
-              </div>
+              {/* Type-aware input fields */}
+              {approveRentalType === 'DAILY' ? (
+                <>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+                    <div>
+                      <label className="block font-bold text-slate-700 mb-1">
+                        วันที่เข้าพัก (Check-in) *
+                      </label>
+                      <OwnerDateInput
+                        value={approveStartDate}
+                        onChange={(val) => {
+                          setApproveStartDate(val);
+                          if (val) {
+                            const d = new Date(val);
+                            d.setDate(d.getDate() + approveDays);
+                            setApproveEndDate(d.toISOString().split('T')[0]);
+                          }
+                        }}
+                        required
+                        className="w-full"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-bold text-slate-700 mb-1">
+                        จำนวนวันที่พัก (วัน) *
+                      </label>
+                      <input
+                        type="number"
+                        min={1}
+                        value={approveDays}
+                        onChange={(e) => {
+                          const days = Math.max(1, Number(e.target.value) || 1);
+                          setApproveDays(days);
+                          if (approveStartDate) {
+                            const d = new Date(approveStartDate);
+                            d.setDate(d.getDate() + days);
+                            setApproveEndDate(d.toISOString().split('T')[0]);
+                          }
+                          setApproveRent(String(days * Number(approveDailyRate)));
+                        }}
+                        className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-medium"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-bold text-slate-700 mb-1">
+                        วันที่ออก (Check-out) *
+                      </label>
+                      <div className="px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-700 font-bold min-h-[38px] flex items-center">
+                        {approveEndDate ? isoToThaiBe(approveEndDate) : '-'}
+                      </div>
+                    </div>
+                  </div>
 
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  เงินประกันห้อง (บาท)
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                    <div>
+                      <label className="block font-bold text-slate-700 mb-1">
+                        ค่าเช่าต่อวัน (บาท) *
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={approveDailyRate}
+                        onChange={(e) => {
+                          const rate = Number(e.target.value) || 0;
+                          setApproveDailyRate(String(rate));
+                          setApproveRent(String(rate * approveDays));
+                        }}
+                        className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-medium"
+                        placeholder="เช่น 550"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-bold text-slate-700 mb-1">
+                        ค่าเช่ารวมทั้งหมด (บาท)
+                      </label>
+                      <div className="px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-800 font-extrabold min-h-[38px] flex items-center">
+                        {formatBaht(Number(approveDailyRate) * approveDays)}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                    <div>
+                      <label className="block font-bold text-slate-700 mb-1">
+                        เงินประกัน / มัดจำ (บาท)
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={approveDeposit}
+                        onChange={(e) => setApproveDeposit(e.target.value)}
+                        className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-medium"
+                        placeholder="เช่น 500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-bold text-slate-700 mb-1">
+                        สถานะเงินประกัน
+                      </label>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setApproveDepositDeclaredStatus('UNPAID')}
+                          className={`py-2 text-xs font-bold rounded-xl border transition-all cursor-pointer ${approveDepositDeclaredStatus === 'UNPAID'
+                            ? 'bg-amber-50 text-amber-800 border-amber-300 font-extrabold shadow-xs'
+                            : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                            }`}
+                        >
+                          ยังไม่ชำระ
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setApproveDepositDeclaredStatus('PAID')}
+                          className={`py-2 text-xs font-bold rounded-xl border transition-all cursor-pointer ${approveDepositDeclaredStatus === 'PAID'
+                            ? 'bg-emerald-50 text-emerald-800 border-emerald-300 font-extrabold shadow-xs'
+                            : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                            }`}
+                        >
+                          ชำระแล้ว
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </>
+              ) : approveRentalType === 'TERM' ? (
+                <>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+                    <div>
+                      <label className="block font-bold text-slate-700 mb-1">
+                        วันที่เริ่มสัญญา *
+                      </label>
+                      <OwnerDateInput
+                        value={approveStartDate}
+                        onChange={(val) => {
+                          setApproveStartDate(val);
+                          setApproveEndDate(calculateContractEndDate(val, approveDurationMonths));
+                        }}
+                        required
+                        className="w-full"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-bold text-slate-700 mb-1">
+                        ระยะเวลาตามเทอม (เดือน) *
+                      </label>
+                      <input
+                        type="number"
+                        min={1}
+                        value={approveDurationMonths}
+                        onChange={(e) => {
+                          const dur = Math.max(1, Number(e.target.value) || 1);
+                          setApproveDurationMonths(dur);
+                          setApproveEndDate(calculateContractEndDate(approveStartDate, dur));
+                        }}
+                        className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-medium"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-bold text-slate-700 mb-1">
+                        วันที่สิ้นสุดสัญญา *
+                      </label>
+                      <div className="px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-700 font-bold min-h-[38px] flex items-center">
+                        {approveEndDate ? isoToThaiBe(approveEndDate) : '-'}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                    <div>
+                      <label className="block font-bold text-slate-700 mb-1">
+                        ค่าเช่าต่อเทอม (บาท) *
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={approveRent}
+                        onChange={(e) => setApproveRent(e.target.value)}
+                        className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-medium"
+                        placeholder="เช่น 22000"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-bold text-slate-700 mb-1">
+                        ค่าเช่ารวมทั้งหมด (บาท)
+                      </label>
+                      <div className="px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-800 font-extrabold min-h-[38px] flex items-center">
+                        {formatBaht(Number(approveRent) || 0)}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                    <div>
+                      <label className="block font-bold text-slate-700 mb-1">
+                        เงินประกันห้อง (บาท) *
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={approveDeposit}
+                        onChange={(e) => setApproveDeposit(e.target.value)}
+                        className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-medium"
+                        placeholder="เช่น 5500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-bold text-slate-700 mb-1">
+                        สถานะเงินประกัน
+                      </label>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setApproveDepositDeclaredStatus('UNPAID')}
+                          className={`py-2 text-xs font-bold rounded-xl border transition-all cursor-pointer ${approveDepositDeclaredStatus === 'UNPAID'
+                            ? 'bg-amber-50 text-amber-800 border-amber-300 font-extrabold shadow-xs'
+                            : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                            }`}
+                        >
+                          ยังไม่ชำระ
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setApproveDepositDeclaredStatus('PAID')}
+                          className={`py-2 text-xs font-bold rounded-xl border transition-all cursor-pointer ${approveDepositDeclaredStatus === 'PAID'
+                            ? 'bg-emerald-50 text-emerald-800 border-emerald-300 font-extrabold shadow-xs'
+                            : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                            }`}
+                        >
+                          ชำระแล้ว
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+                    <div>
+                      <label className="block font-bold text-slate-700 mb-1">
+                        วันที่เริ่มสัญญา *
+                      </label>
+                      <OwnerDateInput
+                        value={approveStartDate}
+                        onChange={(val) => {
+                          setApproveStartDate(val);
+                          setApproveEndDate(calculateContractEndDate(val, approveDurationMonths));
+                        }}
+                        required
+                        className="w-full"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-bold text-slate-700 mb-1">
+                        ระยะเวลาสัญญา (เดือน) *
+                      </label>
+                      <input
+                        type="number"
+                        min={1}
+                        value={approveDurationMonths}
+                        onChange={(e) => {
+                          const dur = Math.max(1, Number(e.target.value) || 1);
+                          setApproveDurationMonths(dur);
+                          setApproveEndDate(calculateContractEndDate(approveStartDate, dur));
+                        }}
+                        className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-medium"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-bold text-slate-700 mb-1">
+                        วันที่สิ้นสุดสัญญา *
+                      </label>
+                      <div className="px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-700 font-bold min-h-[38px] flex items-center">
+                        {approveEndDate ? isoToThaiBe(approveEndDate) : '-'}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                    <div>
+                      <label className="block font-bold text-slate-700 mb-1">
+                        ค่าเช่ารายเดือน (บาท) *
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={approveRent}
+                        onChange={(e) => setApproveRent(e.target.value)}
+                        className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-medium"
+                        placeholder="เช่น 5000"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-bold text-slate-700 mb-1">
+                        ค่าเช่ารวมทั้งหมด (บาท)
+                      </label>
+                      <div className="px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-800 font-extrabold min-h-[38px] flex items-center">
+                        {formatBaht((Number(approveRent) || 0) * approveDurationMonths)}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                    <div>
+                      <label className="block font-bold text-slate-700 mb-1">
+                        เงินประกันห้อง (บาท) *
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={approveDeposit}
+                        onChange={(e) => setApproveDeposit(e.target.value)}
+                        className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-medium"
+                        placeholder="เช่น 10000"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-bold text-slate-700 mb-1">
+                        สถานะเงินประกัน
+                      </label>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setApproveDepositDeclaredStatus('UNPAID')}
+                          className={`py-2 text-xs font-bold rounded-xl border transition-all cursor-pointer ${approveDepositDeclaredStatus === 'UNPAID'
+                            ? 'bg-amber-50 text-amber-800 border-amber-300 font-extrabold shadow-xs'
+                            : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                            }`}
+                        >
+                          ยังไม่ชำระ
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setApproveDepositDeclaredStatus('PAID')}
+                          className={`py-2 text-xs font-bold rounded-xl border transition-all cursor-pointer ${approveDepositDeclaredStatus === 'PAID'
+                            ? 'bg-emerald-50 text-emerald-800 border-emerald-300 font-extrabold shadow-xs'
+                            : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                            }`}
+                        >
+                          ชำระแล้ว
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {/* ID-Card Document Section (0-1 file, PDF/JPG/PNG/WebP <= 5MB) */}
+              <div className="pt-3 border-t border-slate-100 space-y-2.5">
+                <label className="block text-xs font-bold text-slate-800">
+                  รูปเอกสารสำเนาบัตรประชาชน (ถ้ามี)
                 </label>
-                <input
-                  type="number"
-                  value={approveDeposit}
-                  onChange={(e) => setApproveDeposit(e.target.value)}
-                  className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-medium"
-                  placeholder="เช่น 9000"
-                />
+
+                {/* Existing applicant ID document if present */}
+                {(() => {
+                  const existingDoc = approveAttachments?.find((att: any) =>
+                    (att.name && (att.name.includes('บัตรประชาชน') || att.name.includes('citizen') || att.name.includes('id-card') || att.name.includes('id_card'))) ||
+                    att.isIdCard
+                  ) || ((selectedTenant as any).acceptanceSnapshot?.idCardDocument ? {
+                    name: (selectedTenant as any).acceptanceSnapshot.idCardDocument.originalFilename || 'สำเนาบัตรประชาชน.pdf',
+                    type: (selectedTenant as any).acceptanceSnapshot.idCardDocument.mimeType || 'application/pdf',
+                    size: (selectedTenant as any).acceptanceSnapshot.idCardDocument.byteSize,
+                    url: `/api/v1/tenant-registrations/${(selectedTenant as any).registrationRequestId || selectedTenant.id}/identity-document`
+                  } : null);
+
+                  const showUploadZone = !existingDoc || isReplacingIdDoc || approveIdCardFile;
+
+                  return (
+                    <div className="space-y-2.5">
+                      {existingDoc && (
+                        <div className="space-y-2">
+                          <InlineIdDocumentPreview
+                            url={existingDoc.url || `/api/v1/tenant-registrations/${(selectedTenant as any).registrationRequestId || selectedTenant.id}/identity-document`}
+                            filename={existingDoc.name || 'สำเนาบัตรประชาชน'}
+                            mimeType={existingDoc.type || 'application/pdf'}
+                            byteSize={existingDoc.size}
+                            dormitoryId={dormitoryId}
+                          />
+                          <div className="flex justify-end">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setIsReplacingIdDoc(!isReplacingIdDoc);
+                                if (isReplacingIdDoc) {
+                                  setApproveIdCardFile(null);
+                                  setApproveIdCardPreview(null);
+                                  setApproveIdCardError(null);
+                                }
+                              }}
+                              className="px-3 py-1 bg-slate-100 hover:bg-indigo-50 text-slate-700 hover:text-indigo-600 border border-slate-200 hover:border-indigo-200 rounded-lg text-xs font-bold transition-all flex items-center gap-1 cursor-pointer"
+                            >
+                              <Edit2 className="w-3.5 h-3.5" />
+                              <span>{isReplacingIdDoc ? 'ยกเลิกการเปลี่ยน' : 'เปลี่ยน'}</span>
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Owner 0 or 1 ID Document Upload Zone */}
+                      {showUploadZone && (
+                        <div>
+                          {!approveIdCardFile ? (
+                            <label className="border-2 border-dashed border-slate-200 hover:border-indigo-400 bg-slate-50/60 hover:bg-indigo-50/30 rounded-2xl p-3.5 flex flex-col items-center justify-center cursor-pointer transition-all group">
+                              <input
+                                type="file"
+                                accept="image/jpeg,image/png,image/webp,application/pdf"
+                                className="hidden"
+                                onChange={(e) => {
+                                  const f = e.target.files?.[0] || null;
+                                  if (f) {
+                                    if (f.size > 5 * 1024 * 1024) {
+                                      setApproveIdCardError('ขนาดไฟล์ต้องไม่เกิน 5 MB');
+                                      e.target.value = '';
+                                      return;
+                                    }
+                                    setApproveIdCardError(null);
+                                    setApproveIdCardFile(f);
+                                    if (f.type.startsWith('image/')) {
+                                      setApproveIdCardPreview(URL.createObjectURL(f));
+                                    } else {
+                                      setApproveIdCardPreview(null);
+                                    }
+                                  }
+                                }}
+                              />
+                              <div className="flex items-center gap-2 text-slate-500 group-hover:text-indigo-600">
+                                <ImageIcon className="w-4 h-4" />
+                                <span className="text-xs font-bold">{existingDoc ? 'แนบเอกสารสำเนาบัตรประชาชนใหม่ (JPG, PNG, WebP, PDF)' : 'แนบเอกสารสำเนาบัตรประชาชน (JPG, PNG, WebP, PDF)'}</span>
+                              </div>
+                              <span className="text-[10px] text-slate-400 mt-0.5">สูงสุด 1 ไฟล์ ขนาดไม่เกิน 5 MB (ไม่บังคับ)</span>
+                            </label>
+                          ) : (
+                            <div className="flex items-center justify-between p-2.5 bg-indigo-50/60 border border-indigo-100 rounded-2xl">
+                              <div className="flex items-center gap-2.5 min-w-0">
+                                {approveIdCardPreview ? (
+                                  <img
+                                    src={approveIdCardPreview}
+                                    alt="ID Card Preview"
+                                    className="w-10 h-10 object-cover rounded-xl border border-indigo-200 shrink-0"
+                                  />
+                                ) : (
+                                  <FileText className="w-8 h-8 text-indigo-600 shrink-0" />
+                                )}
+                                <div className="min-w-0">
+                                  <p className="text-xs font-bold text-slate-800 truncate">{approveIdCardFile.name}</p>
+                                  <p className="text-[10px] text-slate-500">{(approveIdCardFile.size / 1024).toFixed(0)} KB</p>
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setApproveIdCardFile(null);
+                                  setApproveIdCardPreview(null);
+                                  setApproveIdCardError(null);
+                                }}
+                                className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-colors shrink-0 cursor-pointer"
+                                title="ลบไฟล์"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+                {approveIdCardError && (
+                  <p className="text-[11px] font-bold text-rose-600 flex items-center gap-1">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    {approveIdCardError}
+                  </p>
+                )}
               </div>
             </div>
 
@@ -5621,12 +7095,145 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                 onClick={handleConfirmApprove}
                 disabled={!approveRoomId}
                 className={`px-5 py-2 font-bold text-xs rounded-xl flex items-center gap-1.5 shadow-sm transition-all ${approveRoomId
-                    ? 'bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer'
-                    : 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                  ? 'bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer'
+                  : 'bg-slate-200 text-slate-400 cursor-not-allowed'
                   }`}
               >
                 <CheckCircle2 className="w-4 h-4" />
-                <span>ยืนยันยอมรับและเข้าพัก</span>
+                <span>ยืนยันอนุมัติและรับผู้เช่าเข้าพัก</span>
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Daily Stay Extension Modal */}
+      {isDailyExtendOpen && dailyExtendTenant && (
+        <Modal
+          isOpen={isDailyExtendOpen}
+          onClose={() => {
+            setIsDailyExtendOpen(false);
+            setDailyExtendTenant(null);
+          }}
+          title="ขยายระยะเวลาเข้าพักรายวัน"
+          size="md"
+        >
+          <div className="space-y-4">
+            <div className="p-3.5 bg-emerald-50/80 border border-emerald-200/80 rounded-2xl flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold text-base shrink-0">
+                <Calendar className="w-5 h-5 text-emerald-600" />
+              </div>
+              <div>
+                <h4 className="text-xs font-bold text-emerald-950">ขยายวันเข้าพัก: คุณ{dailyExtendTenant.name}</h4>
+                <p className="text-[11px] text-emerald-700 mt-0.5">
+                  ห้องพัก: {getRoomNumber(dailyExtendTenant.id)} • อัตราค่าห้องรายวัน: {formatBaht(dailyExtendRate)}/วัน
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200/80 space-y-1 text-xs">
+              <div className="flex justify-between">
+                <span className="text-slate-500">วันเช็คเอาท์ปัจจุบัน:</span>
+                <strong className="text-slate-800 font-bold">{formatThaiDate(dailyExtendCurrentCheckOut) || dailyExtendCurrentCheckOut || 'วันนี้'}</strong>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">วันเช็คเอาท์ใหม่:</span>
+                <strong className="text-emerald-700 font-bold">{formatThaiDate(dailyExtendNewCheckOut) || dailyExtendNewCheckOut}</strong>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 text-xs">
+              <div>
+                <label className="block text-slate-700 font-bold mb-1">
+                  จำนวนวันที่ต้องการขยาย (วัน) *
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  value={dailyExtendDays}
+                  onChange={(e) => {
+                    const days = Math.max(1, Number(e.target.value) || 1);
+                    setDailyExtendDays(days);
+                    const baseDate = dailyExtendCurrentCheckOut ? new Date(dailyExtendCurrentCheckOut) : new Date();
+                    const newDate = new Date(baseDate);
+                    newDate.setDate(newDate.getDate() + days);
+                    setDailyExtendNewCheckOut(newDate.toISOString().split('T')[0]);
+                    setDailyExtendTotal(days * dailyExtendRate);
+                  }}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl bg-white font-semibold focus:outline-none focus:border-emerald-600"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-700 font-bold mb-1">
+                  อัตราค่าบริการต่อวัน (บาท)
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  value={dailyExtendRate}
+                  onChange={(e) => {
+                    const r = Number(e.target.value) || 0;
+                    setDailyExtendRate(r);
+                    setDailyExtendTotal(dailyExtendDays * r);
+                  }}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl bg-white font-semibold focus:outline-none focus:border-emerald-600"
+                />
+              </div>
+            </div>
+
+            <div className="p-3 bg-indigo-50/50 rounded-2xl border border-indigo-100 flex items-center justify-between text-xs">
+              <span className="font-bold text-indigo-900">ค่าบริการเพิ่มเติมทั้งหมด:</span>
+              <span className="font-extrabold text-sm text-indigo-700">{formatBaht(dailyExtendTotal)}</span>
+            </div>
+
+            <div className="p-5 -mx-6 -mb-6 bg-slate-50 border-t border-slate-100 flex justify-end gap-2 rounded-b-3xl mt-4">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsDailyExtendOpen(false);
+                  setDailyExtendTenant(null);
+                }}
+                className="px-4 py-2 border border-slate-200 bg-white hover:bg-slate-100 text-slate-600 rounded-xl text-xs font-bold transition-all cursor-pointer"
+              >
+                ยกเลิก
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDailyExtend}
+                className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl flex items-center gap-1.5 shadow-sm transition-all cursor-pointer active:scale-95"
+              >
+                <Calendar className="w-4 h-4" />
+                <span>ยืนยันขยายเวลาเข้าพัก</span>
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Preview Attachment Modal */}
+      {previewAttachmentUrl && (
+        <Modal
+          isOpen={!!previewAttachmentUrl}
+          onClose={() => setPreviewAttachmentUrl(null)}
+          title={previewAttachmentTitle || 'ดูตัวอย่างเอกสารแนบ'}
+          size="md"
+        >
+          <div className="space-y-4">
+            <div className="p-3 bg-slate-100 rounded-2xl flex items-center justify-center min-h-[260px] max-h-[460px] overflow-auto">
+              <img
+                src={previewAttachmentUrl}
+                alt={previewAttachmentTitle}
+                className="max-w-full max-h-[420px] object-contain rounded-xl shadow-xs"
+              />
+            </div>
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={() => setPreviewAttachmentUrl(null)}
+                className="px-4 py-2 bg-slate-900 text-white font-bold text-xs rounded-xl hover:bg-slate-800 transition-all cursor-pointer"
+              >
+                ปิดหน้าต่าง
               </button>
             </div>
           </div>
@@ -5680,10 +7287,6 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
               )}
             </div>
 
-            <p className="text-[11px] text-slate-500 bg-slate-50 p-2.5 rounded-xl border border-slate-100">
-              สถานะของผู้เช่าจะถูกเปลี่ยนเป็น "เลิกเช่า/ยกเลิก" และระบบจะบันทึกประวัติการปฏิเสธไว้ในระบบ
-            </p>
-
             <div className="p-5 -mx-6 -mb-6 bg-slate-50 border-t border-slate-100 flex justify-end gap-2 rounded-b-3xl mt-4">
               <button
                 type="button"
@@ -5725,25 +7328,37 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                 const roomNum = conRoom ? conRoom.roomNumber : selectedContractForPrint.roomId;
                 const createdDate = selectedContractForPrint.createdAt ? selectedContractForPrint.createdAt.split('T')[0] : selectedContractForPrint.startDate;
 
+                const dormName = dorm?.name || 'หอพัก';
+                const dormAddress = [
+                  dorm.addressLine1,
+                  dorm.subdistrict ? `ต.${dorm.subdistrict}` : '',
+                  dorm.district ? `อ.${dorm.district}` : '',
+                  dorm.province ? `จ.${dorm.province}` : '',
+                ].filter(Boolean).join(' ') || (dorm as any).address || '-';
+                const resolvedLandlord = resolveLandlordSignerName(paymentSettings);
+                const dormOwner = resolvedLandlord || dorm?.name || 'ผู้ให้เช่า';
+
+                const isTermContract = selectedContractForPrint.rentBillingType === 'term' || (selectedContractForPrint as any).rentalType === 'TERM' || (selectedContractForPrint as any).rentalPlan === 'term';
+
                 return (
                   <div className="space-y-6 text-xs text-slate-800 font-sans max-w-2xl mx-auto leading-relaxed bg-white p-4 sm:p-6 rounded-2xl">
                     <div className="text-center space-y-1 pb-4 border-b border-slate-100">
                       <h3 className="text-base font-extrabold text-slate-950 uppercase tracking-wide">หนังสือสัญญาเช่าที่พักอาศัย</h3>
-                      <p className="text-slate-400 font-medium text-[10px]">สัญญาเลขที่: {selectedContractForPrint.contractNumber}</p>
+                      <p className="text-slate-400 font-medium text-[10px]">สัญญาเลขที่: {selectedContractForPrint.contractNumber} &bull; อาคารหอพัก {dormName}</p>
                     </div>
 
                     <div className="space-y-4">
                       <p>
-                        สัญญาฉบับนี้ทำขึ้น ณ <span className="font-extrabold text-slate-900">อาคารหอพัก {dorm.name || 'HorPlus'} ({dorm.address || 'ที่อยู่หอพัก'})</span> เมื่อวันที่ <span className="font-semibold">{formatThaiDate(createdDate)}</span> ระหว่าง
-                        <span className="font-extrabold text-slate-900"> นิติบุคคล {dorm.name || 'HorPlus'} (ผู้ให้เช่า)</span> ฝ่ายหนึ่ง กับ
+                        สัญญาฉบับนี้ทำขึ้น ณ <span className="font-extrabold text-slate-900">อาคารหอพัก {dormName} ({dormAddress})</span> เมื่อวันที่ <span className="font-semibold">{formatThaiDate(createdDate)}</span> ระหว่าง
+                        <span className="font-extrabold text-slate-900"> นิติบุคคล {dormName} (ผู้ให้เช่า)</span> โดย <span className="font-bold text-slate-900">{dormOwner}</span> ฝ่ายหนึ่ง กับ
                         <span className="font-extrabold text-slate-900"> คุณ{tenantName} (ผู้เช่า)</span> อีกฝ่ายหนึ่ง โดยมีใจความดังเงื่อนไขต่อไปนี้:
                       </p>
 
                       <div className="bg-slate-50 p-4 border border-slate-100 rounded-2xl space-y-2.5">
                         <p>&bull; <span className="font-bold">ห้องพักตกลงเช่า:</span> ผู้เช่าตกลงเช่าห้องพักหมายเลข <span className="font-extrabold text-indigo-600">ห้อง {roomNum}</span> ของอาคาร</p>
                         <p>&bull; <span className="font-bold">ระยะเวลาสัญญาเช่า:</span> กำหนดเช่าอาศัย <span className="font-bold">{selectedContractForPrint.durationMonths} เดือน</span> เริ่มต้นตั้งแต่วันที่ <span className="font-bold">{formatThaiDate(selectedContractForPrint.startDate)}</span> ถึง วันที่ <span className="font-bold">{formatThaiDate(selectedContractForPrint.endDate)}</span></p>
-                        <p>&bull; <span className="font-bold">ค่าเช่าและเงินประกัน:</span> อัตราค่าบริการเช่าเดือนละ <span className="font-bold text-slate-900">{formatBaht(selectedContractForPrint.rentAmount)}</span> พร้อมกับระบุเงินประกันความเสียหายแรกเข้าจำนวน <span className="font-bold">{formatBaht(selectedContractForPrint.depositAmount)}</span> ({selectedContractForPrint.depositType === 'deduct_rent' ? 'ไปหักกับค่าเช่า' : 'คืนเมื่อสิ้นสุดสัญญา'})</p>
-                        {selectedContractForPrint.advancePaymentAmount ? (
+                        <p>&bull; <span className="font-bold">ค่าเช่าและเงินประกัน:</span> {isTermContract ? 'อัตราค่าบริการเช่าเทอมละ' : 'อัตราค่าบริการเช่าเดือนละ'} <span className="font-bold text-slate-900">{formatBaht(selectedContractForPrint.rentAmount)}</span> พร้อมกับระบุเงินประกันความเสียหายแรกเข้าจำนวน <span className="font-bold">{formatBaht(selectedContractForPrint.depositAmount)}</span> ({selectedContractForPrint.depositType === 'deduct_rent' ? 'ไปหักกับค่าเช่า' : 'คืนเมื่อสิ้นสุดสัญญา'})</p>
+                        {Number(selectedContractForPrint.advancePaymentAmount) > 0 ? (
                           <p>&bull; <span className="font-bold">ค่าเช่าล่วงหน้า:</span> ชำระล่วงหน้าจำนวน <span className="font-bold">{formatBaht(selectedContractForPrint.advancePaymentAmount)}</span></p>
                         ) : null}
                       </div>
@@ -5758,22 +7373,54 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                     <div className="grid grid-cols-2 gap-8 pt-8 border-t border-dashed border-slate-200 text-center">
                       <div className="space-y-2">
                         <p className="text-[10px] text-slate-400 font-bold uppercase">ลงชื่อ ผู้เช่าห้องพัก</p>
-                        {selectedContractForPrint.tenantSignature ? (
-                          <img src={selectedContractForPrint.tenantSignature} alt="ลายเซ็นผู้เช่า" className="h-10 mx-auto border border-slate-100 rounded-lg p-1 bg-slate-50/50 object-contain" />
-                        ) : (
-                          <div className="h-10 border border-dashed border-slate-200 rounded-lg flex items-center justify-center text-[10px] text-slate-300">ลายมือชื่อ</div>
-                        )}
+                        {(() => {
+                          const tSig = (selectedContractForPrint.tenantSignature && (selectedContractForPrint.tenantSignature.startsWith('http') || selectedContractForPrint.tenantSignature.startsWith('data:') || selectedContractForPrint.tenantSignature.startsWith('/api/')))
+                            ? selectedContractForPrint.tenantSignature
+                            : (selectedContractForPrint.tenantSignature && dorm?.id ? `/api/v1/dormitories/${dorm.id}/contracts/${selectedContractForPrint.id}/tenant-signature` : null);
+                          return (
+                            <>
+                              {tSig ? (
+                                <img
+                                  src={tSig}
+                                  alt="ลายเซ็นผู้เช่า"
+                                  className="h-10 mx-auto object-contain"
+                                  onError={(e) => {
+                                    (e.target as HTMLElement).style.display = 'none';
+                                  }}
+                                />
+                              ) : (
+                                <div className="h-10" />
+                              )}
+                            </>
+                          );
+                        })()}
                         <p className="font-extrabold text-slate-800 text-xs">(คุณ{tenantName})</p>
                       </div>
 
                       <div className="space-y-2">
                         <p className="text-[10px] text-slate-400 font-bold uppercase">ลงชื่อ นิติหอพัก / ผู้ให้เช่า</p>
-                        {(selectedContractForPrint.ownerSignature || dorm.ownerSignature) ? (
-                          <img src={selectedContractForPrint.ownerSignature || dorm.ownerSignature} alt="ลายเซ็นผู้ให้เช่า" className="h-10 mx-auto border border-slate-100 rounded-lg p-1 bg-slate-50/50 object-contain" />
-                        ) : (
-                          <div className="h-10 border border-dashed border-slate-200 rounded-lg flex items-center justify-center text-[10px] text-slate-300">ลายมือชื่อผู้ให้เช่า</div>
-                        )}
-                        <p className="font-extrabold text-slate-800 text-xs">({dorm.ownerName || 'ผู้จัดการหอพัก'})</p>
+                        {(() => {
+                          const oSig = (selectedContractForPrint.ownerSignature && (selectedContractForPrint.ownerSignature.startsWith('http') || selectedContractForPrint.ownerSignature.startsWith('data:') || selectedContractForPrint.ownerSignature.startsWith('/api/')))
+                            ? selectedContractForPrint.ownerSignature
+                            : (dorm?.id ? (selectedContractForPrint.ownerSignature ? `/api/v1/dormitories/${dorm.id}/contracts/${selectedContractForPrint.id}/owner-signature` : `/api/v1/dormitories/${dorm.id}/signature`) : null);
+                          return (
+                            <>
+                              {oSig ? (
+                                <img
+                                  src={oSig}
+                                  alt="ลายเซ็นผู้ให้เช่า"
+                                  className="h-10 mx-auto object-contain"
+                                  onError={(e) => {
+                                    (e.target as HTMLElement).style.display = 'none';
+                                  }}
+                                />
+                              ) : (
+                                <div className="h-10" />
+                              )}
+                            </>
+                          );
+                        })()}
+                        <p className="font-extrabold text-slate-800 text-xs">{resolvedLandlord ? `(${resolvedLandlord})` : ''}</p>
                       </div>
                     </div>
                   </div>
@@ -5860,8 +7507,8 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                     type="button"
                     onClick={() => setEditContractDepositStatus('paid')}
                     className={`flex-1 py-2 rounded-xl text-xs font-bold border transition-all cursor-pointer ${editContractDepositStatus === 'paid'
-                        ? 'bg-emerald-50 border-emerald-300 text-emerald-700'
-                        : 'bg-slate-50 border-slate-200 text-slate-600'
+                      ? 'bg-emerald-50 border-emerald-300 text-emerald-700'
+                      : 'bg-slate-50 border-slate-200 text-slate-600'
                       }`}
                   >
                     จ่ายแล้ว
@@ -5870,8 +7517,8 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                     type="button"
                     onClick={() => setEditContractDepositStatus('unpaid')}
                     className={`flex-1 py-2 rounded-xl text-xs font-bold border transition-all cursor-pointer ${editContractDepositStatus === 'unpaid'
-                        ? 'bg-rose-50 border-rose-300 text-rose-700'
-                        : 'bg-slate-50 border-slate-200 text-slate-600'
+                      ? 'bg-rose-50 border-rose-300 text-rose-700'
+                      : 'bg-slate-50 border-slate-200 text-slate-600'
                       }`}
                   >
                     ยังไม่จ่าย
@@ -5887,8 +7534,8 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                   type="button"
                   onClick={() => setEditContractDepositType('refundable')}
                   className={`flex-1 py-2 rounded-xl text-xs font-bold border transition-all cursor-pointer ${editContractDepositType === 'refundable'
-                      ? 'bg-indigo-50 border-indigo-300 text-indigo-700'
-                      : 'bg-slate-50 border-slate-200 text-slate-600'
+                    ? 'bg-indigo-50 border-indigo-300 text-indigo-700'
+                    : 'bg-slate-50 border-slate-200 text-slate-600'
                     }`}
                 >
                   คืนเมื่อสิ้นสุดสัญญา
@@ -5897,8 +7544,8 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                   type="button"
                   onClick={() => setEditContractDepositType('deduct_rent')}
                   className={`flex-1 py-2 rounded-xl text-xs font-bold border transition-all cursor-pointer ${editContractDepositType === 'deduct_rent'
-                      ? 'bg-indigo-50 border-indigo-300 text-indigo-700'
-                      : 'bg-slate-50 border-slate-200 text-slate-600'
+                    ? 'bg-indigo-50 border-indigo-300 text-indigo-700'
+                    : 'bg-slate-50 border-slate-200 text-slate-600'
                     }`}
                 >
                   ไปหักกับค่าเช่า
@@ -5949,12 +7596,129 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
             setIsRenewContractModalOpen(false);
             setSelectedContractForRenew(null);
           }}
-          title={`ต่ออายุสัญญาเช่า (เลขที่ ${selectedContractForRenew.contractNumber})`}
+          title={`ต่ออายุสัญญาเช่า (${selectedContractForRenew.rentBillingType === 'term' || (selectedContractForRenew as any).rentalType === 'TERM' || selectedTenant?.rentalType === 'TERM' ? 'รายเทอม' : 'รายเดือน'})`}
           size="md"
         >
-          {/* ว่างเปล่าสำหรับเตรียมพัฒนาต่อ */}
-          <div className="min-h-[240px] flex items-center justify-center p-6 text-slate-300">
-          </div>
+          {(() => {
+            const isDailyContract = selectedContractForRenew.rentBillingType === 'daily' || selectedContractForRenew.durationMonths === 0;
+
+            if (isDailyContract) {
+              return (
+                <div className="space-y-4 text-xs">
+                  <div className="p-4 bg-amber-50 border border-amber-200 rounded-2xl text-amber-900">
+                    <p className="font-bold">การเข้าพักรายวัน ไม่ต้องทำสัญญาเช่าระยะยาว</p>
+                    <p className="text-[11px] text-amber-700 mt-1">
+                      การขยายเวลาเข้าพักรายวันสามารถจัดการผ่านระบบเช็คอิน/เช็คเอาท์รายวันได้โดยตรง
+                    </p>
+                  </div>
+                  <div className="flex justify-end pt-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsRenewContractModalOpen(false);
+                        setSelectedContractForRenew(null);
+                      }}
+                      className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition-all cursor-pointer"
+                    >
+                      ปิด
+                    </button>
+                  </div>
+                </div>
+              );
+            }
+
+            const targetRoomNum = getRoomNumber(selectedContractForRenew.tenantId);
+            const isTerm = selectedContractForRenew.rentBillingType === 'term' ||
+              (selectedContractForRenew as any).rentalType === 'TERM' ||
+              selectedTenant?.rentalType === 'TERM';
+
+            return (
+              <div className="space-y-4">
+                <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200/80 flex items-center justify-between text-xs">
+                  <div>
+                    <span className="text-slate-500 font-medium">ห้อง:</span> <strong className="text-slate-800 font-bold">{targetRoomNum}</strong>
+                    <span className="mx-2 text-slate-300">|</span>
+                    <span className="text-slate-500 font-medium">ผู้เช่า:</span> <strong className="text-slate-800 font-bold">{selectedTenant?.name || 'ผู้เช่า'}</strong>
+                  </div>
+                  <span className={`text-[10px] font-bold px-2.5 py-1 rounded-lg border ${isTerm ? 'bg-purple-50 text-purple-700 border-purple-200' : 'bg-blue-50 text-blue-700 border-blue-200'
+                    }`}>
+                    {isTerm ? 'สัญญาเช่ารายเทอม' : 'สัญญาเช่ารายเดือน'}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                  <div>
+                    <label className="block text-slate-700 font-bold mb-1">วันที่เริ่มต้นสัญญา *</label>
+                    <ThaiDatePicker
+                      value={renewContractStartDate}
+                      onChange={(val) => {
+                        setRenewContractStartDate(val);
+                        setRenewContractEndDate(calculateContractEndDate(val, renewContractMonths));
+                      }}
+                      className="w-full"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-700 font-bold mb-1">
+                      {isTerm ? 'ระยะเวลาตามเทอม (เดือน)' : 'ระยะเวลาสัญญา (เดือน)'} *
+                    </label>
+                    <input
+                      type="number"
+                      min={1}
+                      value={renewContractMonths}
+                      onChange={(e) => {
+                        const dur = Number(e.target.value) || 1;
+                        setRenewContractMonths(dur);
+                        setRenewContractEndDate(calculateContractEndDate(renewContractStartDate, dur));
+                      }}
+                      className="w-full px-3 py-2 border border-slate-200 rounded-xl bg-white text-xs font-semibold focus:outline-none focus:border-indigo-600"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-700 font-bold mb-1">วันที่สิ้นสุดสัญญา (คำนวณอัตโนมัติ)</label>
+                    <div className="w-full px-3 py-2 border border-slate-200 bg-slate-50 text-slate-700 rounded-xl text-xs font-semibold flex items-center h-[38px]">
+                      {formatThaiDate(renewContractEndDate) || renewContractEndDate || '-'}
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-700 font-bold mb-1">
+                      {isTerm ? 'อัตราค่าเช่า (บาท/เทอม) *' : 'อัตราค่าเช่า (บาท/เดือน) *'}
+                    </label>
+                    <CurrencyInput
+                      value={renewContractRentAmount}
+                      onChange={(val) => setRenewContractRentAmount(val)}
+                      placeholder="เช่น 4500"
+                      className="w-full"
+                    />
+                  </div>
+                </div>
+
+                <div className="p-4 -mx-6 -mb-6 bg-slate-50 border-t border-slate-100 flex justify-end gap-2 rounded-b-3xl mt-4">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsRenewContractModalOpen(false);
+                      setSelectedContractForRenew(null);
+                    }}
+                    className="px-4 py-2 border border-slate-200 bg-white hover:bg-slate-100 text-slate-600 rounded-xl text-xs font-bold transition-all cursor-pointer"
+                  >
+                    ยกเลิก
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleExecuteRenewContract}
+                    className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl flex items-center gap-1.5 shadow-sm transition-all cursor-pointer active:scale-95"
+                  >
+                    <RotateCw className="w-3.5 h-3.5" />
+                    <span>ยืนยันต่อสัญญา</span>
+                  </button>
+                </div>
+              </div>
+            );
+          })()}
         </Modal>
       )}
 
@@ -5984,11 +7748,13 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                   className="w-full px-3 py-2 border border-slate-200 rounded-xl bg-white text-xs font-semibold text-slate-800 focus:outline-none focus:border-indigo-600"
                 >
                   <option value="">-- เลือกห้องพัก --</option>
-                  {rooms.map((rm) => (
-                    <option key={rm.id} value={rm.id}>
-                      ห้อง {rm.roomNumber} (ชั้น {rm.floor}) - {formatBaht(rm.price)}/ด.
-                    </option>
-                  ))}
+                  {[...rooms]
+                    .sort((a, b) => (a.roomNumber || '').localeCompare(b.roomNumber || '', undefined, { numeric: true }))
+                    .map((rm) => (
+                      <option key={rm.id} value={rm.id}>
+                        {formatOwnerRoomOptionLabel(rm, localBuildings)}
+                      </option>
+                    ))}
                 </select>
               </div>
 
@@ -6004,8 +7770,8 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                         setCreateContractEndDate(calculateContractEndDate(createContractStartDate, dur));
                       }}
                       className={`flex-1 py-2 rounded-xl text-xs font-bold border transition-all cursor-pointer ${createContractDuration === dur
-                          ? 'bg-indigo-600 border-indigo-600 text-white shadow-2xs'
-                          : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                        ? 'bg-indigo-600 border-indigo-600 text-white shadow-2xs'
+                        : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
                         }`}
                     >
                       {dur} เดือน
@@ -6071,8 +7837,8 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                     type="button"
                     onClick={() => setCreateContractDepositStatus('paid')}
                     className={`flex-1 py-2 rounded-xl text-xs font-bold border transition-all cursor-pointer ${createContractDepositStatus === 'paid'
-                        ? 'bg-emerald-50 border-emerald-300 text-emerald-700'
-                        : 'bg-slate-50 border-slate-200 text-slate-600'
+                      ? 'bg-emerald-50 border-emerald-300 text-emerald-700'
+                      : 'bg-slate-50 border-slate-200 text-slate-600'
                       }`}
                   >
                     จ่ายแล้ว
@@ -6081,8 +7847,8 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                     type="button"
                     onClick={() => setCreateContractDepositStatus('unpaid')}
                     className={`flex-1 py-2 rounded-xl text-xs font-bold border transition-all cursor-pointer ${createContractDepositStatus === 'unpaid'
-                        ? 'bg-rose-50 border-rose-300 text-rose-700'
-                        : 'bg-slate-50 border-slate-200 text-slate-600'
+                      ? 'bg-rose-50 border-rose-300 text-rose-700'
+                      : 'bg-slate-50 border-slate-200 text-slate-600'
                       }`}
                   >
                     ยังไม่จ่าย
@@ -6098,8 +7864,8 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                   type="button"
                   onClick={() => setCreateContractDepositType('refundable')}
                   className={`flex-1 py-2 rounded-xl text-xs font-bold border transition-all cursor-pointer ${createContractDepositType === 'refundable'
-                      ? 'bg-indigo-50 border-indigo-300 text-indigo-700'
-                      : 'bg-slate-50 border-slate-200 text-slate-600'
+                    ? 'bg-indigo-50 border-indigo-300 text-indigo-700'
+                    : 'bg-slate-50 border-slate-200 text-slate-600'
                     }`}
                 >
                   คืนเมื่อสิ้นสุดสัญญา
@@ -6108,8 +7874,8 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                   type="button"
                   onClick={() => setCreateContractDepositType('deduct_rent')}
                   className={`flex-1 py-2 rounded-xl text-xs font-bold border transition-all cursor-pointer ${createContractDepositType === 'deduct_rent'
-                      ? 'bg-indigo-50 border-indigo-300 text-indigo-700'
-                      : 'bg-slate-50 border-slate-200 text-slate-600'
+                    ? 'bg-indigo-50 border-indigo-300 text-indigo-700'
+                    : 'bg-slate-50 border-slate-200 text-slate-600'
                     }`}
                 >
                   ไปหักกับค่าเช่า
@@ -6141,8 +7907,8 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                 onClick={handleSaveNewContract}
                 disabled={!createContractRoomId}
                 className={`px-5 py-2 font-bold text-xs rounded-xl flex items-center gap-1.5 shadow-sm transition-all ${createContractRoomId
-                    ? 'bg-indigo-600 hover:bg-indigo-700 text-white cursor-pointer'
-                    : 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                  ? 'bg-indigo-600 hover:bg-indigo-700 text-white cursor-pointer'
+                  : 'bg-slate-200 text-slate-400 cursor-not-allowed'
                   }`}
               >
                 <CheckCircle2 className="w-4 h-4" />
@@ -6222,8 +7988,12 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                 type="tel"
                 required
                 placeholder="เช่น 081-234-5678"
-                value={newCoPhone}
-                onChange={(e) => setNewCoPhone(e.target.value)}
+                maxLength={12}
+                value={formatPhoneInput(newCoPhone)}
+                onChange={(e) => {
+                  const clean = e.target.value.replace(/\D/g, '').slice(0, 10);
+                  setNewCoPhone(clean);
+                }}
                 className="w-full px-3 py-2 border border-gray-200 rounded-xl text-xs bg-white text-slate-800 font-medium focus:outline-none focus:border-indigo-600"
               />
             </div>
@@ -6279,8 +8049,8 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                 type="submit"
                 disabled={!newCoName.trim() || !newCoPhone.trim() || (newCoRelationship === 'อื่นๆ' && !newCoCustomRelationship.trim())}
                 className={`px-5 py-2 font-bold text-xs rounded-xl shadow-sm transition-all flex items-center gap-1.5 ${newCoName.trim() && newCoPhone.trim() && (newCoRelationship !== 'อื่นๆ' || newCoCustomRelationship.trim())
-                    ? 'bg-indigo-600 hover:bg-indigo-700 text-white cursor-pointer'
-                    : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                  ? 'bg-indigo-600 hover:bg-indigo-700 text-white cursor-pointer'
+                  : 'bg-gray-200 text-gray-400 cursor-not-allowed'
                   }`}
               >
                 <CheckCircle2 className="w-4 h-4" />
@@ -6305,9 +8075,9 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
             <div className="p-3 bg-rose-50 border border-rose-100 rounded-2xl flex items-center gap-3">
               <AlertCircle className="w-5 h-5 text-rose-600 shrink-0" />
               <div className="text-rose-900">
-                <p className="font-bold">คุณกำลังจะนำคุณ {coToDelete.name} ออกจากห้องพัก</p>
+                <p className="font-bold">{coToDelete.name} ออกจากห้องพัก</p>
                 <p className="text-[11px] text-rose-700 mt-0.5">
-                  ระบบจะบันทึกประวัติการนำออกพร้อมวันเดือนปีและเวลา ({formatThaiDate(new Date().toISOString(), true)}) ไว้ในไทม์ไลน์
+                  ระบบจะบันทึกประวัติการนำออก ({formatThaiDate(new Date().toISOString(), true)})
                 </p>
               </div>
             </div>
@@ -6354,6 +8124,34 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
         <div className="fixed bottom-6 right-6 z-50 bg-slate-900 text-white px-4 py-3 rounded-2xl shadow-xl flex items-center gap-2 text-xs font-bold animate-bounce">
           <CheckCircle2 className="w-4 h-4 text-emerald-400" />
           <span>{contractToast}</span>
+        </div>
+      )}
+
+      {/* Canonical White-Fade Tenant Action Toast */}
+      {tenantActionToast && (
+        <div
+          role="status"
+          aria-live="polite"
+          data-testid="tenant-action-toast"
+          className={`fixed bottom-20 left-1/2 -translate-x-1/2 sm:bottom-8 sm:right-8 sm:left-auto sm:translate-x-0 z-[9999] bg-white text-slate-800 px-4.5 py-3 rounded-2xl shadow-2xl border border-slate-200/90 flex items-center gap-2.5 text-xs font-bold transition-all duration-500 ease-in-out ${isTenantActionToastFading
+            ? 'opacity-0 translate-y-3 pointer-events-none'
+            : 'opacity-100 translate-y-0 animate-in fade-in slide-in-from-bottom-3 duration-300'
+            }`}
+        >
+          <CheckCircle2 className="w-4.5 h-4.5 text-emerald-500 shrink-0" />
+          <span>{tenantActionToast}</span>
+        </div>
+      )}
+
+      {/* Floating Copy / Info Toast */}
+      {copySuccessToast && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="fixed bottom-6 right-6 z-50 bg-slate-900 text-white px-4 py-3 rounded-2xl shadow-xl flex items-center gap-2 text-xs font-bold animate-in fade-in slide-in-from-bottom-2"
+        >
+          <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+          <span>{copySuccessToast}</span>
         </div>
       )}
 

@@ -26,6 +26,8 @@ import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 const { PrismaClient } = require('../../server/node_modules/@prisma/client/index.js');
 const { PNG } = require('../../server/node_modules/pngjs/lib/png.js');
+const { PDFDocument } = require('../../server/node_modules/pdf-lib/cjs/index.js');
+const crypto = require('crypto');
 
 import { assertSafeDatabaseTarget } from './db-safety-guard.mjs';
 import { FRESH_DORM, COMP_DORM, REGISTRATION_OWNER } from './constants.mjs';
@@ -52,26 +54,50 @@ const prisma = new PrismaClient({
   },
 });
 
-function createDeterministicSignatureBuffer() {
+function createDeterministicSignatureBuffer(seed = 0) {
   const png = new PNG({ width: 60, height: 25 });
+  const r = (seed * 67) % 150;
+  const g = (seed * 31) % 150;
+  const b = (seed * 89) % 150;
+  const strokeOffset = (seed * 7) % 10;
   for (let y = 0; y < 25; y++) {
     for (let x = 0; x < 60; x++) {
       const idx = (60 * y + x) << 2;
-      // Draw a clean diagonal stroke
-      if ((x >= 10 && x <= 50 && y >= 10 && y <= 14) || (x === y + 15)) {
-        png.data[idx] = 0;       // R
-        png.data[idx + 1] = 0;   // G
-        png.data[idx + 2] = 0;   // B
-        png.data[idx + 3] = 255; // Alpha
+      const isStroke = ((x >= 10 && x <= 50 && y >= 10 + (strokeOffset % 3) && y <= 13 + (strokeOffset % 3)) ||
+                       (x === y + 15 + (seed % 5)) ||
+                       (Math.abs(y - (12 + Math.sin((x + seed) / 5) * 5)) < 1.4 && x >= 12 && x <= 48));
+      if (isStroke) {
+        png.data[idx] = r;
+        png.data[idx + 1] = g;
+        png.data[idx + 2] = b;
+        png.data[idx + 3] = 255;
       } else {
         png.data[idx] = 255;
         png.data[idx + 1] = 255;
         png.data[idx + 2] = 255;
-        png.data[idx + 3] = 0;   // Transparent
+        png.data[idx + 3] = 0;
       }
     }
   }
   return PNG.sync.write(png);
+}
+
+async function generateSampleIdPdfBuffer(applicantName, idNumber) {
+  const pdfDoc = await PDFDocument.create();
+  const page = pdfDoc.addPage([595, 842]);
+  page.drawText('IDENTITY DOCUMENT COPY', { x: 50, y: 780, size: 16 });
+  page.drawText(`Citizen ID: ${idNumber || '1-1002-00345-67-8'}`, { x: 50, y: 750, size: 12 });
+  page.drawText('For tenancy agreement verification only', { x: 50, y: 720, size: 10 });
+  page.drawRectangle({
+    x: 50,
+    y: 400,
+    width: 320,
+    height: 200,
+    borderWidth: 1,
+  });
+  page.drawText('[ OFFICIAL ID CARD PHOTO PLACEHOLDER ]', { x: 70, y: 500, size: 11 });
+  const pdfBytes = await pdfDoc.save();
+  return Buffer.from(pdfBytes);
 }
 
 export async function seedLocal07Data() {
@@ -321,6 +347,13 @@ export async function seedLocal07Data() {
     },
   });
 
+  const compOwnerSigBuffer = createDeterministicSignatureBuffer(999);
+  const compOwnerSig = await signatureStorageService.saveSignature({
+    dormitoryId: compDorm.id,
+    userId: compOwner.id,
+    buffer: compOwnerSigBuffer,
+  });
+
   // Roles
   const ownerRole = await prisma.role.create({
     data: {
@@ -494,8 +527,8 @@ export async function seedLocal07Data() {
     { roomNumber: '102', floor: 1, rent: 4500, termRent: 17500, dailyRent: 450, status: 'occupied', bldId: bldA.id },
     { roomNumber: '103', floor: 1, rent: 4500, termRent: 18000, dailyRent: 500, status: 'occupied', bldId: bldA.id },
     { roomNumber: '104', floor: 1, rent: 4500, termRent: 18000, dailyRent: 500, status: 'occupied', bldId: bldA.id },
-    { roomNumber: '105', floor: 1, rent: 4500, termRent: 18000, dailyRent: 500, status: 'vacant', bldId: bldA.id },
-    { roomNumber: '106', floor: 1, rent: 4500, termRent: 18000, dailyRent: 500, status: 'vacant', bldId: bldA.id },
+    { roomNumber: '105', floor: 1, rent: 4500, termRent: 18000, dailyRent: 500, status: 'occupied', bldId: bldA.id },
+    { roomNumber: '106', floor: 1, rent: 4500, termRent: 18000, dailyRent: 500, status: 'occupied', bldId: bldA.id },
     // Floor 2 (Building A)
     { roomNumber: '201', floor: 2, rent: 4800, termRent: 19200, dailyRent: 550, status: 'occupied', bldId: bldA.id },
     { roomNumber: '202', floor: 2, rent: 4800, termRent: 19200, dailyRent: 550, status: 'occupied', bldId: bldA.id },
@@ -621,7 +654,8 @@ export async function seedLocal07Data() {
       deposit: 4800,
       isMovedOut: true,
       startDate: '2026-06-01',
-      endDate: '2026-08-01',
+      endDate: '2026-07-31',
+      terminationEffectiveDate: '2026-08-01',
       createdAt: '2026-07-15T08:30:00.000Z',
     },
     {
@@ -693,6 +727,17 @@ export async function seedLocal07Data() {
     // Contract
     const durationMonths = tc.durationMonths ? tc.durationMonths : (tc.isMovedOut ? 2 : 12);
 
+    let contractTenantSig = null;
+    let contractOwnerSig = compOwnerSig.objectKey;
+    if (tc.num !== '303') {
+      const seedNum = parseInt(tc.num.replace(/\D/g, ''), 10) || 101;
+      const tSigRes = await signatureStorageService.saveTenantSignature({
+        dormitoryId: compDorm.id,
+        buffer: createDeterministicSignatureBuffer(seedNum),
+      });
+      contractTenantSig = tSigRes.objectKey;
+    }
+
     const contract = await prisma.contract.create({
       data: {
         dormitoryId: compDorm.id,
@@ -705,9 +750,11 @@ export async function seedLocal07Data() {
         rentBillingType: 'monthly',
         rentAmount: tc.rent,
         depositAmount: tc.deposit,
+        tenantSignature: contractTenantSig,
+        ownerSignature: contractOwnerSig,
         status: tc.isMovedOut ? 'terminated' : 'active',
-        terminatedAt: tc.isMovedOut ? contractEndDate : null,
-        terminationEffectiveDate: tc.isMovedOut ? contractEndDate : null,
+        terminatedAt: tc.isMovedOut ? (tc.terminationEffectiveDate ? new Date(tc.terminationEffectiveDate) : contractEndDate) : null,
+        terminationEffectiveDate: tc.isMovedOut ? (tc.terminationEffectiveDate ? new Date(tc.terminationEffectiveDate) : contractEndDate) : null,
         terminationReason: tc.isMovedOut ? 'ย้ายออกตามกำหนดและส่งมอบห้องเรียบร้อย' : null,
         createdAt: contractCreatedAt,
       },
@@ -721,8 +768,18 @@ export async function seedLocal07Data() {
         roomId: room.id,
         tenantId: tenant.id,
         startedAt: tc.isMovedOut ? contractStartDate : new Date('2026-01-01'),
-        endedAt: tc.isMovedOut ? contractEndDate : null,
+        endedAt: tc.isMovedOut ? (tc.terminationEffectiveDate ? new Date(tc.terminationEffectiveDate) : contractEndDate) : null,
         status: tc.isMovedOut ? 'ENDED' : 'ACTIVE',
+      },
+    });
+
+    // Update Room current tenant and contract
+    await prisma.room.update({
+      where: { id: room.id },
+      data: {
+        status: tc.isMovedOut ? 'vacant' : 'occupied',
+        currentTenantId: tc.isMovedOut ? null : tenant.id,
+        currentContractId: tc.isMovedOut ? null : contract.id,
       },
     });
 
@@ -772,6 +829,8 @@ export async function seedLocal07Data() {
           rentBillingType: 'monthly',
           rentAmount: tc.rent,
           depositAmount: tc.deposit,
+          tenantSignature: contractTenantSig,
+          ownerSignature: compOwnerSig.objectKey,
           status: 'active',
         },
       });
@@ -813,18 +872,103 @@ export async function seedLocal07Data() {
     },
   });
 
+  const pimpaRegSnapshot = {
+    defaultTerms: 'ข้อกำหนดสัญญาเช่าตามระยะเวลา (Term 4 เดือน: ก.ค. - ต.ค. 2569) ห้ามส่งเสียงดังหลัง 22:00 น. และชำระค่าบริการภายในวันที่ 5 ของรอบบิล',
+    terms: 'ข้อกำหนดสัญญาเช่าตามระยะเวลา (Term 4 เดือน: ก.ค. - ต.ค. 2569) ห้ามส่งเสียงดังหลัง 22:00 น. และชำระค่าบริการภายในวันที่ 5 ของรอบบิล',
+    rentalType: 'TERM',
+    durationMonths: 4,
+    unitRentAmount: 4500,
+    totalRentAmount: 18000,
+    depositAmount: 4500,
+    policyVersion: '1.0.0',
+    applicantName: 'นางสาวพิมพา สดใส',
+    applicantPhone: '0898887766',
+  };
+
+  const termSigRes = await signatureStorageService.saveTenantSignature({
+    dormitoryId: compDorm.id,
+    buffer: createDeterministicSignatureBuffer(105),
+  });
+
+  const reg105 = await prisma.tenantRegistrationRequest.create({
+    data: {
+      id: '10500001-0000-4000-8000-000000000105',
+      dormitoryId: compDorm.id,
+      requestedRoomId: createdRooms['105'].id,
+      approvedRoomId: createdRooms['105'].id,
+      approvedTenantId: tenantPimpa.id,
+      firstName: 'พิมพา',
+      lastName: 'สดใส',
+      phone: '0898887766',
+      status: 'approved',
+      submittedAt: new Date('2026-07-01T08:00:00.000Z'),
+      reviewedAt: new Date('2026-07-01T08:30:00.000Z'),
+      acceptedAt: new Date('2026-07-01T08:30:00.000Z'),
+      tenantSignatureObjectKey: termSigRes.objectKey,
+      tenantSignatureSha256: termSigRes.sha256,
+      tenantSignatureMimeType: termSigRes.mimeType,
+      tenantSignatureByteSize: termSigRes.byteSize,
+      reviewedByUserId: compOwner.id,
+      acceptanceSnapshot: pimpaRegSnapshot,
+      acceptanceSnapshotSha256: crypto.createHash('sha256').update(JSON.stringify(pimpaRegSnapshot)).digest('hex'),
+    },
+  });
+
+  const occupancy105 = await prisma.occupancy.create({
+    data: {
+      dormitoryId: compDorm.id,
+      roomId: createdRooms['105'].id,
+      tenantId: tenantPimpa.id,
+      registrationId: reg105.id,
+      startedAt: new Date('2026-07-01T00:00:00.000Z'),
+      status: 'ACTIVE',
+    },
+  });
+
   await prisma.provisionalRentalTerm.create({
     data: {
       dormitoryId: compDorm.id,
       roomId: createdRooms['105'].id,
       tenantId: tenantPimpa.id,
+      occupancyId: occupancy105.id,
       rentalType: 'TERM',
+      durationMonths: 4,
       unitRentAmount: 4500,
       totalRentAmount: 18000,
+      depositAmount: 4500,
       termInstallmentCount: 2,
       startDate: new Date('2026-07-01T00:00:00.000Z'),
       endDate: new Date('2026-10-31T00:00:00.000Z'),
       status: 'ACTIVE',
+      createdAt: new Date('2026-07-01T09:00:00.000Z'),
+    },
+  });
+
+  await prisma.room.update({
+    where: { id: createdRooms['105'].id },
+    data: {
+      status: 'occupied',
+      currentTenantId: tenantPimpa.id,
+      currentContractId: null,
+    },
+  });
+
+  await prisma.contract.create({
+    data: {
+      dormitoryId: compDorm.id,
+      roomId: createdRooms['105'].id,
+      tenantId: tenantPimpa.id,
+      contractNumber: 'CTR-2026-105-TERM',
+      startDate: new Date('2026-11-01T00:00:00.000Z'),
+      endDate: new Date('2027-02-28T00:00:00.000Z'),
+      durationMonths: 4,
+      rentBillingType: 'term',
+      rentAmount: 18000,
+      depositAmount: 4500,
+      terms: 'ข้อกำหนดสัญญาเช่าตามระยะเวลา (Term 4 เดือน: พ.ย. 2569 - ก.พ. 2570) ห้ามส่งเสียงดังหลัง 22:00 น. ชำระค่าบริการภายในวันที่ 5 ของรอบบิล และห้ามสูบบุหรี่ภายในห้องพัก',
+      tenantSignature: termSigRes.objectKey,
+      ownerSignature: compOwnerSig.objectKey,
+      status: 'active',
       createdAt: new Date('2026-07-01T09:00:00.000Z'),
     },
   });
@@ -894,7 +1038,7 @@ export async function seedLocal07Data() {
   const cycleOct = cycleOctRes.cycle;
 
   // --- Seed Realistic Daily Stays & Future Reservation Scenarios ---
-  // 1. Room 106: Active & Unpaid Daily Stay in August 2026
+  // 1. Room 106: Ended & Unpaid Daily Stay in August 2026 (checked-out unpaid historical stay)
   const tenantDaily106 = await prisma.tenant.create({
     data: {
       dormitoryId: compDorm.id,
@@ -903,12 +1047,12 @@ export async function seedLocal07Data() {
       lastName: 'รายวันสิงหา',
       displayName: 'เอกชัย รายวันสิงหา',
       phone: '088-777-1111',
-      status: 'active',
+      status: 'checked_out',
     },
   });
 
-  // Deterministic Bangkok Reference Time for Active August Daily Fixtures
-  // Anchor to August 2026 cycle so active daily stays are deterministically situated in August
+  // Deterministic Bangkok Reference Time for August Daily Fixtures
+  // Anchor to August 2026 cycle so ended daily stays are deterministically situated in August
   const now = new Date('2026-08-28T12:00:00.000+07:00');
   console.log(`\n📅 Seed-time Reference Instant (Bangkok): ${now.toISOString()}`);
 
@@ -929,12 +1073,14 @@ export async function seedLocal07Data() {
       endDate: end106,
       checkInAt: checkIn106,
       checkOutAt: checkOut106,
+      actualCheckedOutAt: new Date('2026-08-31T10:00:00.000+07:00'),
+      checkedOutByUserId: COMP_DORM.owner.id,
       inclusiveDayCount: 6,
       dailyRateAmount: 500.0,
       totalRentAmount: 3000.0,
       depositAmount: 500.0,
       depositDeclaredStatus: 'UNPAID',
-      status: 'ACTIVE',
+      status: 'CHECKED_OUT',
       approvedAt: checkIn106,
       approvedByUserId: COMP_DORM.owner.id,
     },
@@ -970,6 +1116,247 @@ export async function seedLocal07Data() {
         status: 'OUTSTANDING',
       },
     ],
+  });
+
+  // 1b. Room 106: Ended Daily Stay earlier in September 2026 (checked in Sept 1, checked out Sept 4)
+  const tenantDaily106EarlySep = await prisma.tenant.create({
+    data: {
+      dormitoryId: compDorm.id,
+      tenantNumber: 'TNT-D-106-EARLY-SEP',
+      firstName: 'อดิศร',
+      lastName: 'กันยาย้ายออก',
+      displayName: 'นายอดิศร กันยาย้ายออก',
+      phone: '088-777-8888',
+      status: 'checked_out',
+      createdAt: new Date('2026-09-01T08:00:00.000Z'),
+    },
+  });
+
+  const checkIn106Early = new Date('2026-09-01T14:00:00.000+07:00');
+  const checkOut106Early = new Date('2026-09-04T11:00:00.000+07:00');
+  const start106Early = new Date('2026-09-01T00:00:00.000Z');
+  const end106Early = new Date('2026-09-04T00:00:00.000Z');
+
+  const occ106Early = await prisma.occupancy.create({
+    data: {
+      dormitoryId: compDorm.id,
+      roomId: createdRooms['106'].id,
+      tenantId: tenantDaily106EarlySep.id,
+      startedAt: checkIn106Early,
+      endedAt: checkOut106Early,
+      status: 'ENDED',
+    },
+  });
+
+  const dailyStay106Early = await prisma.dailyStay.create({
+    data: {
+      dormitoryId: compDorm.id,
+      roomId: createdRooms['106'].id,
+      tenantId: tenantDaily106EarlySep.id,
+      occupancyId: occ106Early.id,
+      requestSource: 'OWNER',
+      applicantFullName: 'นายอดิศร กันยาย้ายออก',
+      applicantPhone: '088-777-8888',
+      startDate: start106Early,
+      endDate: end106Early,
+      checkInAt: checkIn106Early,
+      checkOutAt: checkOut106Early,
+      actualCheckedOutAt: checkOut106Early,
+      checkedOutByUserId: COMP_DORM.owner.id,
+      inclusiveDayCount: 3,
+      dailyRateAmount: 500.0,
+      totalRentAmount: 1500.0,
+      depositAmount: 500.0,
+      depositDeclaredStatus: 'PAID',
+      status: 'COMPLETED',
+      approvedAt: checkIn106Early,
+      approvedByUserId: COMP_DORM.owner.id,
+    },
+  });
+
+  const dailyInvoice106Early = await prisma.dailyStayInvoice.create({
+    data: {
+      dormitoryId: compDorm.id,
+      dailyStayId: dailyStay106Early.id,
+      invoiceNumber: 'DINV-202609-000',
+      totalRentAmount: 1500.0,
+      depositAmount: 500.0,
+      totalAgreedAmount: 2000.0,
+      outstandingAmount: 0.0,
+      status: 'SETTLED',
+    },
+  });
+
+  await prisma.dailyStayInvoiceItem.createMany({
+    data: [
+      {
+        invoiceId: dailyInvoice106Early.id,
+        itemType: 'DAILY_RENT',
+        description: 'ค่าเช่าห้องพักรายวัน 3 คืน (ชำระแล้ว)',
+        amount: 1500.0,
+        status: 'SETTLED',
+        paidAt: new Date('2026-09-01T14:30:00.000+07:00'),
+      },
+      {
+        invoiceId: dailyInvoice106Early.id,
+        itemType: 'DEPOSIT',
+        description: 'เงินประกันห้องพักรายวัน (ชำระแล้ว)',
+        amount: 500.0,
+        status: 'SETTLED',
+        paidAt: new Date('2026-09-01T14:30:00.000+07:00'),
+      },
+    ],
+  });
+
+  // 1c. Room 106: Genuinely Active Daily Stay in September 2026 (spans 2026-09-05 to 2026-09-10, covering 2026-09-07 UAT)
+  const tenantDaily106Sep = await prisma.tenant.create({
+    data: {
+      dormitoryId: compDorm.id,
+      tenantNumber: 'TNT-D-106-SEP',
+      firstName: 'สมเกียรติ',
+      lastName: 'วันสบายกันยา',
+      displayName: 'นายสมเกียรติ วันสบายกันยา',
+      phone: '088-777-9999',
+      status: 'active',
+      createdAt: new Date('2026-09-05T08:00:00.000Z'),
+    },
+  });
+
+  const checkIn106Sep = new Date('2026-09-05T14:00:00.000+07:00');
+  const checkOut106Sep = new Date('2026-09-10T12:00:00.000+07:00');
+  const start106Sep = new Date('2026-09-05T00:00:00.000Z');
+  const end106Sep = new Date('2026-09-10T00:00:00.000Z');
+
+  const occupancy106 = await prisma.occupancy.create({
+    data: {
+      dormitoryId: compDorm.id,
+      roomId: createdRooms['106'].id,
+      tenantId: tenantDaily106Sep.id,
+      startedAt: checkIn106Sep,
+      status: 'ACTIVE',
+    },
+  });
+
+  const dailyStay106Sep = await prisma.dailyStay.create({
+    data: {
+      dormitoryId: compDorm.id,
+      roomId: createdRooms['106'].id,
+      tenantId: tenantDaily106Sep.id,
+      occupancyId: occupancy106.id,
+      requestSource: 'OWNER',
+      applicantFullName: 'นายสมเกียรติ วันสบายกันยา',
+      applicantPhone: '088-777-9999',
+      startDate: start106Sep,
+      endDate: end106Sep,
+      checkInAt: checkIn106Sep,
+      checkOutAt: checkOut106Sep,
+      inclusiveDayCount: 5,
+      dailyRateAmount: 500.0,
+      totalRentAmount: 2500.0,
+      depositAmount: 500.0,
+      depositDeclaredStatus: 'PAID',
+      status: 'ACTIVE',
+      approvedAt: checkIn106Sep,
+      approvedByUserId: COMP_DORM.owner.id,
+    },
+  });
+
+  await prisma.room.update({
+    where: { id: createdRooms['106'].id },
+    data: {
+      status: 'occupied',
+      currentTenantId: tenantDaily106Sep.id,
+      currentContractId: null,
+    },
+  });
+
+  const dailyInvoice106Sep = await prisma.dailyStayInvoice.create({
+    data: {
+      dormitoryId: compDorm.id,
+      dailyStayId: dailyStay106Sep.id,
+      invoiceNumber: 'DINV-202609-001',
+      totalRentAmount: 2500.0,
+      depositAmount: 500.0,
+      totalAgreedAmount: 3000.0,
+      outstandingAmount: 0.0,
+      status: 'SETTLED',
+    },
+  });
+
+  const rentItem106Sep = await prisma.dailyStayInvoiceItem.create({
+    data: {
+      invoiceId: dailyInvoice106Sep.id,
+      itemType: 'DAILY_RENT',
+      description: 'ค่าเช่าห้องพักรายวัน 5 คืน (ชำระแล้ว)',
+      amount: 2500.0,
+      status: 'SETTLED',
+      paidAt: new Date('2026-09-05T14:30:00.000+07:00'),
+    },
+  });
+
+  const depItem106Sep = await prisma.dailyStayInvoiceItem.create({
+    data: {
+      invoiceId: dailyInvoice106Sep.id,
+      itemType: 'DEPOSIT',
+      description: 'เงินประกันห้องพักรายวัน (ชำระแล้ว)',
+      amount: 500.0,
+      status: 'SETTLED',
+      paidAt: new Date('2026-09-05T14:30:00.000+07:00'),
+    },
+  });
+
+  const payRent106Sep = await prisma.payment.create({
+    data: {
+      dormitoryId: compDorm.id,
+      dailyStayInvoiceId: dailyInvoice106Sep.id,
+      billId: null,
+      tenantId: tenantDaily106Sep.id,
+      method: 'CASH',
+      amount: 2500.0,
+      status: 'APPROVED',
+      paymentDate: new Date('2026-09-05T14:30:00.000+07:00'),
+      reviewedByUserId: COMP_DORM.owner.id,
+      reviewedAt: new Date('2026-09-05T14:30:00.000+07:00'),
+    },
+  });
+
+  const payDep106Sep = await prisma.payment.create({
+    data: {
+      dormitoryId: compDorm.id,
+      dailyStayInvoiceId: dailyInvoice106Sep.id,
+      billId: null,
+      tenantId: tenantDaily106Sep.id,
+      method: 'CASH',
+      amount: 500.0,
+      status: 'APPROVED',
+      paymentDate: new Date('2026-09-05T14:30:00.000+07:00'),
+      reviewedByUserId: COMP_DORM.owner.id,
+      reviewedAt: new Date('2026-09-05T14:30:00.000+07:00'),
+    },
+  });
+
+  await prisma.paymentAllocation.create({
+    data: {
+      dormitoryId: compDorm.id,
+      paymentId: payRent106Sep.id,
+      dailyStayInvoiceId: dailyInvoice106Sep.id,
+      dailyStayInvoiceItemId: rentItem106Sep.id,
+      allocatedAmount: 2500.0,
+      allocationOrder: 1,
+      billId: null,
+    },
+  });
+
+  await prisma.paymentAllocation.create({
+    data: {
+      dormitoryId: compDorm.id,
+      paymentId: payDep106Sep.id,
+      dailyStayInvoiceId: dailyInvoice106Sep.id,
+      dailyStayInvoiceItemId: depItem106Sep.id,
+      allocatedAmount: 500.0,
+      allocationOrder: 1,
+      billId: null,
+    },
   });
 
   // 2. Room 205: Checked-out & Unpaid Daily Tail in July 2026 (checked out 2026-07-28, rent unpaid)
@@ -1115,7 +1502,7 @@ export async function seedLocal07Data() {
     ],
   });
 
-  // 4. Room 206: Active & Paid Daily Stay in August 2026 (checked in Aug 20, checkout Aug 26, rent and deposit paid)
+  // 4. Room 206: Ended & Paid Daily Stay in August 2026 (checked in Aug 20, checkout Aug 26, rent and deposit paid)
   const tenantDaily206 = await prisma.tenant.create({
     data: {
       dormitoryId: compDorm.id,
@@ -1124,7 +1511,7 @@ export async function seedLocal07Data() {
       lastName: 'จ่ายครบรายวันสิงหา',
       displayName: 'กิตติศักดิ์ จ่ายครบรายวันสิงหา',
       phone: '088-777-5555',
-      status: 'active',
+      status: 'checked_out',
     },
   });
 
@@ -1145,12 +1532,14 @@ export async function seedLocal07Data() {
       endDate: end206,
       checkInAt: checkIn206,
       checkOutAt: checkOut206,
+      actualCheckedOutAt: new Date('2026-08-26T11:00:00.000+07:00'),
+      checkedOutByUserId: COMP_DORM.owner.id,
       inclusiveDayCount: 7,
       dailyRateAmount: 550.0,
       totalRentAmount: 3850.0,
       depositAmount: 500.0,
       depositDeclaredStatus: 'PAID',
-      status: 'ACTIVE',
+      status: 'COMPLETED',
       approvedAt: checkIn206,
       approvedByUserId: COMP_DORM.owner.id,
     },
@@ -1257,9 +1646,9 @@ export async function seedLocal07Data() {
     data: {
       dormitoryId: compDorm.id,
       tenantNumber: 'TNT-RESV-205',
-      firstName: 'มนัส',
-      lastName: 'จองล่วงหน้า',
-      displayName: 'มนัส จองล่วงหน้า',
+      firstName: 'กิติยา',
+      lastName: 'สงคราม',
+      displayName: 'นางสาวกิติยา สงคราม',
       phone: '088-777-4444',
       status: 'active',
     },
@@ -1271,8 +1660,8 @@ export async function seedLocal07Data() {
       roomId: createdRooms['205'].id,
       tenantId: tenantResv205.id,
       rentalType: 'MONTHLY',
-      startDate: new Date('2026-09-15T00:00:00.000Z'),
-      endDate: new Date('2027-01-14T00:00:00.000Z'),
+      startDate: new Date('2026-10-01T00:00:00.000Z'),
+      endDate: new Date('2027-01-31T00:00:00.000Z'),
       durationMonths: 4,
       unitRentAmount: 4800.0,
       totalRentAmount: 19200.0,
@@ -1719,6 +2108,8 @@ export async function seedLocal07Data() {
       amount: 4800,
     },
   });
+
+
 
   // Seed Room 101 July 2026 Snapshot with 1 person (Section 7: People-Count difference fixture; current household = 2)
   await prisma.roomBillingCycleSnapshot.upsert({
@@ -2553,48 +2944,301 @@ export async function seedLocal07Data() {
     },
   });
 
-  // Seed sample Tenant Registration Request (Pending) with acceptance snapshot & signature
-  const room102 = await prisma.room.findFirst({
-    where: { dormitoryId: compDorm.id, roomNumber: '102' },
+  // Seed sample Tenant Registration Requests (Pending) for all 3 rental types (Monthly, Term, Daily)
+  const room304 = await prisma.room.findFirst({
+    where: { dormitoryId: compDorm.id, roomNumber: '304' },
+  });
+  const roomB102 = await prisma.room.findFirst({
+    where: { dormitoryId: compDorm.id, roomNumber: 'B102' },
+  });
+  const room205 = await prisma.room.findFirst({
+    where: { dormitoryId: compDorm.id, roomNumber: '205' },
   });
 
-  if (room102) {
-    const signatureStorage = new SignatureStorageService();
+  const signatureStorage = new SignatureStorageService(prisma);
+
+  // 1. Monthly Applicant: TNT-014 (Room 304)
+  if (room304) {
     const tenantSigResult = await signatureStorage.saveTenantSignature({
       dormitoryId: compDorm.id,
-      buffer: sigBuffer,
+      buffer: createDeterministicSignatureBuffer(304),
     });
 
+    const reqId304 = crypto.randomUUID();
+    const pdfBuf304 = await generateSampleIdPdfBuffer('นายชัยวัฒน์ วัฒนพร', '1-1002-00345-67-8');
+    const idDocKey304 = `dormitories/${compDorm.id}/tenant-registrations/${reqId304}/id-document_${crypto.randomUUID().slice(0, 8)}.pdf`;
+    await localStorageProvider.saveFile(idDocKey304, pdfBuf304);
+
     const canonicalSnapshot = {
-      defaultTerms: `1. ห้ามสูบบุหรี่ภายในห้องพักและพื้นที่ส่วนกลาง
-2. ห้ามส่งเสียงดังรบกวนผู้อื่นหลังเวลา 22:00 น.
-3. ชำระค่าเช่าและค่าน้ำไฟตรงตามกำหนดเวลา ภายในวันที่ 5 ของทุกเดือน
-4. ห้ามนำบุคคลภายนอกมาพักค้างคืนโดยไม่แจ้งเจ้าหน้าที่
-5. รักษาความสะอาดและดูแลรักษาทรัพย์สินของหอพักอย่างเคร่งครัด`,
       dormitoryId: compDorm.id,
       dormitoryName: compDorm.name,
+      roomNumber: '304',
+      rentalType: 'MONTHLY',
+      rentalPlan: 'monthly',
+      proposedRent: 3800,
+      rentAmount: 3800,
+      proposedDeposit: 7600,
+      depositAmount: 7600,
+      durationMonths: 12,
+      startDate: '2026-09-01',
+      endDate: '2027-08-31',
       petPolicy: {
         allowed: 'conditional',
         allowedTypes: ['cat', 'small_pet'],
       },
       policyVersion: 1,
+      idCardDocument: {
+        originalFilename: 'สำเนาบัตรประชาชน_ชัยวัฒน์.pdf',
+        filename: 'id-document.pdf',
+        objectKey: idDocKey304,
+        url: `/api/v1/tenant-registrations/${reqId304}/identity-document`,
+        mimeType: 'application/pdf',
+        byteSize: pdfBuf304.length,
+        uploadedAt: '2026-09-01T10:00:00.000Z',
+      },
+      attachments: [
+        {
+          name: 'สำเนาบัตรประชาชน_ชัยวัฒน์.pdf',
+          type: 'application/pdf',
+          size: pdfBuf304.length,
+          objectKey: idDocKey304,
+          url: `/api/v1/tenant-registrations/${reqId304}/identity-document`,
+          isIdCard: true,
+        },
+      ],
+      defaultTerms: `1. ห้ามสูบบุหรี่ภายในห้องพักและพื้นที่ส่วนกลาง
+2. ห้ามส่งเสียงดังรบกวนผู้อื่นหลังเวลา 22:00 น.
+3. ชำระค่าเช่าและค่าน้ำไฟตรงตามกำหนดเวลา ภายในวันที่ 5 ของทุกเดือน
+4. ห้ามนำบุคคลภายนอกมาพักค้างคืนโดยไม่แจ้งเจ้าหน้าที่
+5. รักษาความสะอาดและดูแลรักษาทรัพย์สินของหอพักอย่างเคร่งครัด`,
     };
-    const crypto = await import('crypto');
     const snapshotJson = JSON.stringify(canonicalSnapshot);
     const snapshotSha256 = crypto.createHash('sha256').update(snapshotJson).digest('hex');
 
-    await prisma.tenantRegistrationRequest.create({
+    const pendingTenant = await prisma.tenant.create({
       data: {
         dormitoryId: compDorm.id,
-        requestedRoomId: room102.id,
-        firstName: 'กิตติศักดิ์',
-        lastName: 'มงคลดี',
-        phone: '089-112-3344',
-        note: 'ประสงค์เข้าพักช่วงต้นเดือนหน้า เลี้ยงแมว 1 ตัว',
+        tenantNumber: 'TNT-014',
+        firstName: 'ชัยวัฒน์',
+        lastName: 'วัฒนพร',
+        displayName: 'นายชัยวัฒน์ วัฒนพร',
+        phone: '0891123344',
+        email: 'chaiwat.pending@horplus-uat.local',
         status: 'pending',
+        notes: 'ประสงค์เข้าพักห้อง 304 สัญญา 12 เดือน (ก.ย. 2569 - ส.ค. 2570) เลี้ยงแมว 1 ตัว',
+        petInfo: {
+          hasPet: true,
+          type: 'cat',
+          name: 'มีโชค',
+          count: 1,
+        },
+      },
+    });
+
+    await prisma.tenantRegistrationRequest.create({
+      data: {
+        id: reqId304,
+        dormitoryId: compDorm.id,
+        requestedRoomId: room304.id,
+        approvedTenantId: pendingTenant.id,
+        firstName: 'ชัยวัฒน์',
+        lastName: 'วัฒนพร',
+        phone: '0891123344',
+        note: 'ประสงค์เข้าพักห้อง 304 สัญญา 12 เดือน (ก.ย. 2569 - ส.ค. 2570) เลี้ยงแมว 1 ตัว',
+        status: 'pending_owner_approval',
         acceptanceSnapshot: canonicalSnapshot,
         acceptanceSnapshotSha256: snapshotSha256,
-        acceptedAt: new Date('2026-08-01T10:00:00Z'),
+        acceptedAt: new Date('2026-09-01T10:00:00Z'),
+        tenantSignatureObjectKey: tenantSigResult.objectKey,
+        tenantSignatureSha256: tenantSigResult.sha256,
+        tenantSignatureMimeType: tenantSigResult.mimeType,
+        tenantSignatureByteSize: tenantSigResult.byteSize,
+      },
+    });
+  }
+
+  // 2. Term Applicant: TNT-015 (Room B102)
+  if (roomB102) {
+    const tenantSigResult = await signatureStorage.saveTenantSignature({
+      dormitoryId: compDorm.id,
+      buffer: createDeterministicSignatureBuffer(102),
+    });
+
+    const reqIdB102 = crypto.randomUUID();
+    const pdfBufB102 = await generateSampleIdPdfBuffer('นายนัฐพล สุขเจริญ', '1-1004-55678-90-1');
+    const idDocKeyB102 = `dormitories/${compDorm.id}/tenant-registrations/${reqIdB102}/id-document_${crypto.randomUUID().slice(0, 8)}.pdf`;
+    await localStorageProvider.saveFile(idDocKeyB102, pdfBufB102);
+
+    const canonicalSnapshot = {
+      dormitoryId: compDorm.id,
+      dormitoryName: compDorm.name,
+      roomNumber: 'B102',
+      rentalType: 'TERM',
+      rentalPlan: 'term',
+      proposedRent: 15000,
+      rentAmount: 15000,
+      proposedDeposit: 4000,
+      depositAmount: 4000,
+      durationMonths: 4,
+      startDate: '2026-11-01',
+      endDate: '2027-02-28',
+      petPolicy: {
+        allowed: 'conditional',
+        allowedTypes: ['cat', 'small_pet'],
+      },
+      policyVersion: 1,
+      idCardDocument: {
+        originalFilename: 'สำเนาบัตรประชาชน_นัฐพล.pdf',
+        filename: 'id-document.pdf',
+        objectKey: idDocKeyB102,
+        url: `/api/v1/tenant-registrations/${reqIdB102}/identity-document`,
+        mimeType: 'application/pdf',
+        byteSize: pdfBufB102.length,
+        uploadedAt: '2026-11-01T11:00:00.000Z',
+      },
+      attachments: [
+        {
+          name: 'สำเนาบัตรประชาชน_นัฐพล.pdf',
+          type: 'application/pdf',
+          size: pdfBufB102.length,
+          objectKey: idDocKeyB102,
+          url: `/api/v1/tenant-registrations/${reqIdB102}/identity-document`,
+          isIdCard: true,
+        },
+      ],
+      defaultTerms: `1. ห้ามสูบบุหรี่ภายในห้องพักและพื้นที่ส่วนกลาง
+2. ห้ามส่งเสียงดังรบกวนผู้อื่นหลังเวลา 22:00 น.
+3. สัญญาเช่ารายเทอมกำหนดชำระค่าเช่าตามงวดเทอมการศึกษา
+4. ห้ามนำบุคคลภายนอกมาพักค้างคืนโดยไม่แจ้งเจ้าหน้าที่
+5. รักษาความสะอาดและดูแลรักษาทรัพย์สินของหอพักอย่างเคร่งครัด`,
+    };
+    const snapshotJson = JSON.stringify(canonicalSnapshot);
+    const snapshotSha256 = crypto.createHash('sha256').update(snapshotJson).digest('hex');
+
+    const pendingTenant = await prisma.tenant.create({
+      data: {
+        dormitoryId: compDorm.id,
+        tenantNumber: 'TNT-015',
+        firstName: 'นัฐพล',
+        lastName: 'สุขเจริญ',
+        displayName: 'นายนัฐพล สุขเจริญ',
+        phone: '0812345678',
+        email: 'natthapol.term@horplus-uat.local',
+        status: 'pending',
+        notes: 'นักศึกษา ม.เกษตร ประสงค์เช่ารายเทอม 4 เดือน (พ.ย. 2569 - ก.พ. 2570)',
+      },
+    });
+
+    await prisma.tenantRegistrationRequest.create({
+      data: {
+        id: reqIdB102,
+        dormitoryId: compDorm.id,
+        requestedRoomId: roomB102.id,
+        approvedTenantId: pendingTenant.id,
+        firstName: 'นัฐพล',
+        lastName: 'สุขเจริญ',
+        phone: '0812345678',
+        note: 'นักศึกษา ม.เกษตร ประสงค์เช่ารายเทอม 4 เดือน (พ.ย. 2569 - ก.พ. 2570)',
+        status: 'pending_owner_approval',
+        acceptanceSnapshot: canonicalSnapshot,
+        acceptanceSnapshotSha256: snapshotSha256,
+        acceptedAt: new Date('2026-11-01T11:00:00Z'),
+        tenantSignatureObjectKey: tenantSigResult.objectKey,
+        tenantSignatureSha256: tenantSigResult.sha256,
+        tenantSignatureMimeType: tenantSigResult.mimeType,
+        tenantSignatureByteSize: tenantSigResult.byteSize,
+      },
+    });
+  }
+
+  // 3. Daily Applicant: TNT-016 (Room 205)
+  if (room205) {
+    const tenantSigResult = await signatureStorage.saveTenantSignature({
+      dormitoryId: compDorm.id,
+      buffer: createDeterministicSignatureBuffer(205),
+    });
+
+    const reqId205 = crypto.randomUUID();
+    const pdfBuf205 = await generateSampleIdPdfBuffer('นายวรกิจ ประเสริฐวงศ์', '1-1003-99887-12-3');
+    const idDocKey205 = `dormitories/${compDorm.id}/tenant-registrations/${reqId205}/id-document_${crypto.randomUUID().slice(0, 8)}.pdf`;
+    await localStorageProvider.saveFile(idDocKey205, pdfBuf205);
+
+    const canonicalSnapshot = {
+      dormitoryId: compDorm.id,
+      dormitoryName: compDorm.name,
+      roomNumber: '205',
+      rentalType: 'DAILY',
+      rentalPlan: 'daily',
+      dailyRate: 500,
+      totalDays: 5,
+      proposedRent: 2500,
+      rentAmount: 2500,
+      proposedDeposit: 500,
+      depositAmount: 500,
+      startDate: '2026-09-10',
+      endDate: '2026-09-15',
+      checkInDate: '2026-09-10',
+      checkOutDate: '2026-09-15',
+      petPolicy: {
+        allowed: 'conditional',
+        allowedTypes: ['cat', 'small_pet'],
+      },
+      policyVersion: 1,
+      idCardDocument: {
+        originalFilename: 'สำเนาบัตรประชาชน_วรกิจ.pdf',
+        filename: 'id-document.pdf',
+        objectKey: idDocKey205,
+        url: `/api/v1/tenant-registrations/${reqId205}/identity-document`,
+        mimeType: 'application/pdf',
+        byteSize: pdfBuf205.length,
+        uploadedAt: '2026-09-05T12:00:00.000Z',
+      },
+      attachments: [
+        {
+          name: 'สำเนาบัตรประชาชน_วรกิจ.pdf',
+          type: 'application/pdf',
+          size: pdfBuf205.length,
+          objectKey: idDocKey205,
+          url: `/api/v1/tenant-registrations/${reqId205}/identity-document`,
+          isIdCard: true,
+        },
+      ],
+      defaultTerms: `1. ห้ามสูบบุหรี่ภายในห้องพักและพื้นที่ส่วนกลาง
+2. ห้ามส่งเสียงดังรบกวนผู้อื่นหลังเวลา 22:00 น.
+3. คืนกุญแจและคีย์การ์ด ณ วัน Check-out ภายใน 12:00 น.
+4. รักษาความสะอาดและดูแลรักษาทรัพย์สินของห้องพัก`,
+    };
+    const snapshotJson = JSON.stringify(canonicalSnapshot);
+    const snapshotSha256 = crypto.createHash('sha256').update(snapshotJson).digest('hex');
+
+    const pendingTenant = await prisma.tenant.create({
+      data: {
+        dormitoryId: compDorm.id,
+        tenantNumber: 'TNT-016',
+        firstName: 'วรกิจ',
+        lastName: 'ประเสริฐวงศ์',
+        displayName: 'นายวรกิจ ประเสริฐวงศ์',
+        phone: '0823456789',
+        email: 'worakit.daily@horplus-uat.local',
+        status: 'pending',
+        notes: 'เข้าอบรมสัมมนา ขอพักรายวัน 5 วัน (10-15 ก.ย. 2569)',
+      },
+    });
+
+    await prisma.tenantRegistrationRequest.create({
+      data: {
+        id: reqId205,
+        dormitoryId: compDorm.id,
+        requestedRoomId: room205.id,
+        approvedTenantId: pendingTenant.id,
+        firstName: 'วรกิจ',
+        lastName: 'ประเสริฐวงศ์',
+        phone: '0823456789',
+        note: 'เข้าอบรมสัมมนา ขอพักรายวัน 5 วัน (10-15 ก.ย. 2569)',
+        status: 'pending_owner_approval',
+        acceptanceSnapshot: canonicalSnapshot,
+        acceptanceSnapshotSha256: snapshotSha256,
+        acceptedAt: new Date('2026-09-05T14:00:00Z'),
         tenantSignatureObjectKey: tenantSigResult.objectKey,
         tenantSignatureSha256: tenantSigResult.sha256,
         tenantSignatureMimeType: tenantSigResult.mimeType,
@@ -2604,7 +3248,7 @@ export async function seedLocal07Data() {
   }
 
   await backfillRoomOperationalStatusBaseline(undefined, prisma);
-  console.log(`✅ Comprehensive Owner provisioned: "${compDorm.name}" (18 rooms, 11 occupied, July 2026 billing cycle seeded with paid & unpaid bills, payments, receipts, and 1 pending tenant registration request)`);
+  console.log(`✅ Comprehensive Owner provisioned: "${compDorm.name}" (18 rooms, 11 occupied, July 2026 billing cycle seeded with paid & unpaid bills, payments, receipts, and 3 pending tenant registration requests: Monthly, Term, Daily)`);
   console.log('\n================================================================================');
   console.log('🎉 LOCAL-07 DATASET SEEDING COMPLETE & FULLY POPULATED');
   console.log('================================================================================\n');

@@ -223,6 +223,18 @@ export interface Tenant {
   lifecycleStage?: TenantLifecycleStage;
   rentalType?: 'MONTHLY' | 'TERM' | 'DAILY' | 'monthly' | 'term' | 'daily' | string;
   roomId?: string;
+  requestedRoomId?: string | null;
+  registrationRequestId?: string | null;
+  rentalPlan?: string | null;
+  requestedRent?: number | null;
+  requestedDeposit?: number | null;
+  requestedStartDate?: string | null;
+  requestedEndDate?: string | null;
+  requestedDurationMonths?: number | null;
+  requestedDays?: number | null;
+  requestedDailyRate?: number | null;
+  requestedAttachments?: Array<{ name: string; type?: string; size?: number; url?: string }> | null;
+  acceptanceSnapshot?: any | null;
   lineFriendId?: string | null;
   createdAt: string;
   updatedAt: string;

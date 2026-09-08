@@ -18,35 +18,43 @@ import { seedLocal07Data } from './seed.mjs';
 import { generateOracle } from './generate-oracle.mjs';
 import { createAllSessions } from './login-helper.mjs';
 import { runVerification } from './verify.mjs';
+import { acquireRefreshLock } from './refresh-lock.mjs';
 
 async function main() {
-  console.log('================================================================================');
-  console.log('  HORPLUS LOCAL-07 — MASTER REFRESH ORCHESTRATOR');
-  console.log('================================================================================\n');
+  // Acquire mutual-exclusion refresh lock & check if API is actively running
+  const releaseLock = await acquireRefreshLock();
 
-  // 1. Safety Guard
-  const safety = assertSafeDatabaseTarget();
-  console.log(`🔒 [1/5] Safety Guard: Target confirmed ${safety.host}:${safety.port}/${safety.database}`);
+  try {
+    console.log('================================================================================');
+    console.log('  HORPLUS LOCAL-07 — MASTER REFRESH ORCHESTRATOR');
+    console.log('================================================================================\n');
 
-  // 2. Reset & Seed
-  console.log(`🌱 [2/5] Seeding deterministic LOCAL-07 dataset...`);
-  await seedLocal07Data();
+    // 1. Safety Guard
+    const safety = assertSafeDatabaseTarget();
+    console.log(`🔒 [1/5] Safety Guard: Target confirmed ${safety.host}:${safety.port}/${safety.database}`);
 
-  // 3. Oracle Generation
-  console.log(`📊 [3/5] Generating Dashboard & Reports Oracle...`);
-  generateOracle();
+    // 2. Reset & Seed
+    console.log(`🌱 [2/5] Seeding deterministic LOCAL-07 dataset...`);
+    await seedLocal07Data();
 
-  // 4. Authenticated Sessions
-  console.log(`🔑 [4/5] Generating authenticated sessions & storage states...`);
-  const sessions = await createAllSessions();
+    // 3. Oracle Generation
+    console.log(`📊 [3/5] Generating Dashboard & Reports Oracle...`);
+    generateOracle();
 
-  // 5. Verification
-  console.log(`🔍 [5/5] Running sandbox integrity verification...`);
-  const ok = await runVerification();
+    // 4. Authenticated Sessions
+    console.log(`🔑 [4/5] Generating authenticated sessions & storage states...`);
+    const sessions = await createAllSessions();
 
-  if (!ok) {
-    console.error('❌ Sandbox refresh completed with verification errors.');
-    process.exit(1);
+    // 5. Verification
+    console.log(`🔍 [5/5] Running sandbox integrity verification...`);
+    const ok = await runVerification();
+
+    if (!ok) {
+      console.error('❌ Sandbox refresh completed with verification errors.');
+      process.exit(1);
+    }
+  } finally {
+    releaseLock();
   }
 
   console.log('================================================================================');

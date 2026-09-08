@@ -15,6 +15,8 @@ import {
   calculateNameSimilarity,
   maskFullName,
 } from '../utils/thai-identity.util.js';
+import { processAndSecureTenantDocument } from './image-security.service.js';
+import { LocalStorageProvider } from './local-storage.service.js';
 import crypto from 'crypto';
 
 export interface CreateRegistrationDto {
@@ -68,12 +70,17 @@ export function computeSnapshotSha256(snapshot: any): string {
 }
 
 export interface ApproveRegistrationDto {
+  roomId?: string;
+  rentalType?: string;
+  rentalPlan?: string;
+  totalDays?: number;
+  dailyRate?: number | string;
   startDate: string;
-  endDate: string;
-  durationMonths: number;
-  rentAmount: string | number;
-  depositAmount: string | number;
-  advancePaymentAmount: string | number;
+  endDate?: string;
+  durationMonths?: number;
+  rentAmount?: string | number;
+  depositAmount?: string | number;
+  advancePaymentAmount?: string | number;
   terms?: string | null;
   confirmReplacement?: boolean;
   requireTenantConfirmation?: boolean;
@@ -416,23 +423,47 @@ export class TenantRegistrationService {
     payload: ApproveRegistrationDto,
     actorUserId?: string
   ) {
-    if (
-      !payload ||
-      !payload.startDate ||
-      !payload.endDate ||
-      payload.durationMonths === undefined ||
-      payload.rentAmount === undefined ||
-      payload.depositAmount === undefined ||
-      payload.advancePaymentAmount === undefined
-    ) {
+    const prisma = getPrismaClient();
+
+    // Check request snapshot to determine rental type if not specified in payload
+    const existingReq = await prisma.tenantRegistrationRequest.findFirst({
+      where: { id, dormitoryId },
+      select: { acceptanceSnapshot: true },
+    });
+    const reqSnap = (existingReq?.acceptanceSnapshot as any) || {};
+    const isDaily = payload?.rentalType?.toUpperCase() === 'DAILY' || reqSnap.rentalType === 'DAILY' || reqSnap.rentalPlan === 'daily';
+
+    if (!payload || !payload.startDate || !payload.endDate || payload.depositAmount === undefined) {
       const err = new Error('MISSING_CONTRACT_TERMS');
       (err as any).statusCode = 400;
       (err as any).code = 'MISSING_CONTRACT_TERMS';
-      (err as any).message = 'กรุณาระบุข้อกำหนดสัญญาที่จำเป็นให้ครบถ้วน (วันเริ่ม, วันสิ้นสุด, ระยะเวลา, ค่าเช่า, เงินมัดจำ, ค่าล่วงหน้า)';
+      (err as any).message = 'กรุณาระบุข้อกำหนดสัญญาที่จำเป็นให้ครบถ้วน (วันเริ่ม, วันสิ้นสุด, เงินมัดจำ)';
       throw err;
     }
 
-    const prisma = getPrismaClient();
+    if (!isDaily && payload.rentAmount === undefined && !reqSnap.rentAmount && !reqSnap.proposedRent) {
+      const err = new Error('MISSING_CONTRACT_TERMS');
+      (err as any).statusCode = 400;
+      (err as any).code = 'MISSING_CONTRACT_TERMS';
+      (err as any).message = 'กรุณาระบุค่าเช่า';
+      throw err;
+    }
+
+    if (!isDaily && payload.durationMonths === undefined) {
+      if (reqSnap.durationMonths) {
+        payload.durationMonths = Number(reqSnap.durationMonths);
+      } else {
+        const sDate = new Date(payload.startDate);
+        const eDate = new Date(payload.endDate);
+        const months = Math.max(1, Math.round((eDate.getTime() - sDate.getTime()) / (30 * 24 * 3600 * 1000)));
+        payload.durationMonths = months;
+      }
+    }
+
+    if (payload.advancePaymentAmount === undefined) {
+      payload.advancePaymentAmount = 0;
+    }
+
     const resTx = await prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
 
@@ -457,19 +488,20 @@ export class TenantRegistrationService {
       }
 
       // 2. Acquire shared room advisory availability lock, row lock, and validate maintenance status
+      const effectiveRoomId = payload.roomId || req.requestedRoomId;
       let room: any = null;
-      if (req.requestedRoomId) {
+      if (effectiveRoomId) {
         // 2.1 Shared room advisory availability lock (matching RoomService, Contract, Provisional, Daily)
-        await acquireRoomAvailabilityLock(tx, dormitoryId, req.requestedRoomId);
+        await acquireRoomAvailabilityLock(tx, dormitoryId, effectiveRoomId);
 
-        const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(req.requestedRoomId);
+        const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(effectiveRoomId);
         if (isUuid) {
           try {
-            await tx.$executeRaw`SELECT id FROM rooms WHERE id = ${req.requestedRoomId}::uuid FOR UPDATE`;
+            await tx.$executeRaw`SELECT id FROM rooms WHERE id = ${effectiveRoomId}::uuid FOR UPDATE`;
           } catch {}
         }
 
-        room = await tx.room.findFirst({ where: { id: req.requestedRoomId, dormitoryId } });
+        room = await tx.room.findFirst({ where: { id: effectiveRoomId, dormitoryId } });
         if (!room) {
           const err = new Error('ROOM_DORM_MISMATCH');
           (err as any).statusCode = 400;
@@ -492,14 +524,14 @@ export class TenantRegistrationService {
 
         // Check if room currently has an active tenancy OR an approved future renewal contract
         const activeOccupancy = await tx.occupancy.findFirst({
-          where: { dormitoryId, roomId: req.requestedRoomId, status: 'ACTIVE' },
+          where: { dormitoryId, roomId: effectiveRoomId, status: 'ACTIVE' },
           include: { tenant: true, contract: true },
         });
 
         const futureContract = await tx.contract.findFirst({
           where: {
             dormitoryId,
-            roomId: req.requestedRoomId,
+            roomId: effectiveRoomId,
             deletedAt: null,
             status: 'approved_scheduled',
           },
@@ -544,7 +576,7 @@ export class TenantRegistrationService {
             await tx.tenantRenewalRequest.updateMany({
               where: {
                 dormitoryId,
-                roomId: req.requestedRoomId,
+                roomId: effectiveRoomId,
                 tenantId: futureContract.tenantId,
                 status: { in: ['PENDING_OWNER_APPROVAL', 'APPROVED'] },
               },
@@ -573,7 +605,7 @@ export class TenantRegistrationService {
               event: 'SECURITY_AUDIT',
               dormitoryId,
               futureTenantId: futureContract.tenantId,
-              roomId: req.requestedRoomId,
+              roomId: effectiveRoomId,
               actorUserId,
               action: 'FUTURE_RENEWAL_OVERRIDDEN',
               msg: `Owner cancelled scheduled future contract ${futureContract.id} to approve replacement applicant ${id}`,
@@ -664,7 +696,7 @@ export class TenantRegistrationService {
                   dormitoryId,
                   tenantId: oldTenantId,
                   contractId: oldContractId,
-                  roomId: req.requestedRoomId,
+                  roomId: effectiveRoomId,
                   depositAmount: deposit,
                   unpaidBillAmount: unpaidTotal,
                   damageChargeTotal: new Prisma.Decimal(0),
@@ -698,7 +730,7 @@ export class TenantRegistrationService {
               event: 'SECURITY_AUDIT',
               dormitoryId,
               oldTenantId,
-              roomId: req.requestedRoomId,
+              roomId: effectiveRoomId,
               actorUserId,
               action: 'OWNER_FORCED_REPLACEMENT_EXECUTED',
               msg: `Owner terminated active tenancy for tenant ${oldTenantId} to approve replacement applicant ${id}`,
@@ -707,7 +739,7 @@ export class TenantRegistrationService {
         }
       }
 
-      if (!req.requestedRoomId) {
+      if (!effectiveRoomId) {
         const err = new Error('MISSING_ROOM_ASSIGNMENT');
         (err as any).statusCode = 400;
         (err as any).code = 'MISSING_ROOM_ASSIGNMENT';
@@ -753,7 +785,7 @@ export class TenantRegistrationService {
             status: 'awaiting_tenant_confirmation',
             reviewedAt: new Date(),
             reviewedByUserId: safeActorId,
-            approvedRoomId: req.requestedRoomId,
+            approvedRoomId: effectiveRoomId,
             acceptanceSnapshot: updatedSnapshot,
           },
         });
@@ -781,31 +813,6 @@ export class TenantRegistrationService {
         },
       });
 
-      // 4. Create Contract B
-      const contractCount = await tx.contract.count({ where: { dormitoryId } });
-      const contractNumber = `CTR-${Date.now()}-${(contractCount + 1).toString().padStart(4, '0')}`;
-
-      const contract = await tx.contract.create({
-        data: {
-          dormitoryId,
-          contractNumber,
-          roomId: req.requestedRoomId,
-          tenantId: tenant.id,
-          status: 'active',
-          startDate: new Date(payload.startDate),
-          endDate: new Date(payload.endDate),
-          durationMonths: payload.durationMonths,
-          rentAmount: String(payload.rentAmount),
-          depositAmount: String(payload.depositAmount),
-          advancePaymentAmount: String(payload.advancePaymentAmount),
-          terms: payload.terms || null,
-          tenantSignature: req.tenantSignatureObjectKey || req.tenantSignatureSha256 || 'SIGNED',
-          createdByUserId: safeActorId,
-          activatedAt: new Date(),
-        },
-      });
-      const contractId = contract.id;
-
       // Sync profile from registration snapshot onto tenant
       const snap = (req.acceptanceSnapshot as any) || {};
       const tenantUpdateData: Prisma.TenantUpdateInput = {};
@@ -818,6 +825,18 @@ export class TenantRegistrationService {
           tenantUpdateData.nationalIdMasked = `${cleanId.slice(0, 1)}-${cleanId.slice(1, 5)}-xxxxx-${cleanId.slice(10, 12)}-${cleanId.slice(12)}`;
         }
       }
+
+      // Promote/adopt ID document from pending registration acceptanceSnapshot onto canonical Tenant record
+      const snapDoc = snap.idCardDocument || (Array.isArray(snap.attachments) ? snap.attachments.find((a: any) => a.isIdCard || a.name?.includes('บัตรประชาชน') || a.type?.includes('pdf') || a.type?.includes('image')) : null);
+      if (snapDoc && snapDoc.objectKey && !tenant.idCardObjectKey) {
+        tenantUpdateData.idCardObjectKey = snapDoc.objectKey;
+        tenantUpdateData.idCardSha256 = snapDoc.sha256 || null;
+        tenantUpdateData.idCardMimeType = snapDoc.mimeType || (snapDoc.objectKey.endsWith('.pdf') ? 'application/pdf' : 'image/webp');
+        tenantUpdateData.idCardByteSize = snapDoc.byteSize ? Number(snapDoc.byteSize) : null;
+        tenantUpdateData.idCardUploadedAt = snapDoc.uploadedAt ? new Date(snapDoc.uploadedAt) : new Date();
+        tenantUpdateData.idCardUploadedByUserId = safeActorId;
+      }
+
       if (Object.keys(tenantUpdateData).length > 0) {
         await tx.tenant.update({
           where: { id: tenant.id },
@@ -865,37 +884,181 @@ export class TenantRegistrationService {
         });
       }
 
-      // 5. Establish Authoritative Occupancy B & Transition Room B to Occupied
+      const now = new Date();
+      const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      const startStr = String(payload.startDate || '').slice(0, 10);
+      const isFutureStartDate = Boolean(startStr && startStr > todayStr);
+
+      const isDaily = payload.rentalType?.toUpperCase() === 'DAILY' || snap.rentalType === 'DAILY';
+      const isTerm = payload.rentalType?.toUpperCase() === 'TERM' || snap.rentalType === 'TERM';
+
+      let contractId: string | null = null;
+      let dailyStayRecord: any = null;
+
+      if (isDaily) {
+        // 4. Create DailyStay (NO Contract created for Daily rental)
+        dailyStayRecord = await tx.dailyStay.create({
+          data: {
+            dormitoryId,
+            roomId: effectiveRoomId,
+            tenantId: tenant.id,
+            requestSource: 'TENANT',
+            applicantFullName: displayName,
+            applicantPhone: req.phone,
+            requesterUserId: safeActorId || undefined,
+            startDate: new Date(payload.startDate),
+            endDate: new Date(payload.endDate || payload.startDate),
+            checkInAt: new Date(payload.startDate),
+            checkOutAt: new Date(payload.endDate || payload.startDate),
+            inclusiveDayCount: payload.totalDays || Math.max(1, Math.round((new Date(payload.endDate || payload.startDate).getTime() - new Date(payload.startDate).getTime()) / (24 * 3600 * 1000))),
+            dailyRateAmount: payload.dailyRate ? new Prisma.Decimal(payload.dailyRate) : new Prisma.Decimal(payload.rentAmount || 0),
+            totalRentAmount: new Prisma.Decimal(payload.rentAmount || (Number(payload.dailyRate || 0) * Number(payload.totalDays || 1))),
+            depositAmount: new Prisma.Decimal(payload.depositAmount || 0),
+            depositDeclaredStatus: (payload as any).depositDeclaredStatus || 'PAID',
+            status: isFutureStartDate ? 'RESERVED' : 'ACTIVE',
+            approvedAt: new Date(),
+            approvedByUserId: safeActorId,
+          },
+        });
+
+        // 5. Establish Authoritative Occupancy & Transition Room
+        await tx.occupancy.create({
+          data: {
+            dormitoryId,
+            roomId: effectiveRoomId,
+            tenantId: tenant.id,
+            registrationId: id,
+            status: isFutureStartDate ? 'RESERVED' : 'ACTIVE',
+            startedAt: new Date(payload.startDate),
+          },
+        });
+
+        if (!isFutureStartDate) {
+          await tx.room.update({
+            where: { id: effectiveRoomId },
+            data: {
+              status: 'occupied',
+              currentTenantId: tenant.id,
+            },
+          });
+        }
+        // When isFutureStartDate is true, physical room remains vacant today (currentTenantId: null)
+        // while the reservation is interval-protected via DailyStay (RESERVED) and Occupancy (RESERVED).
+
+        // 6. Update Registration Request status to approved
+        const updatedReq = await tx.tenantRegistrationRequest.update({
+          where: { id },
+          data: {
+            status: 'approved',
+            reviewedAt: new Date(),
+            reviewedByUserId: safeActorId,
+            approvedTenantId: tenant.id,
+            approvedRoomId: effectiveRoomId,
+          },
+        });
+
+        // 7. Mark TenantRegistrationIntent as COMPLETED if exists
+        if (req.lineFollowerId) {
+          await tx.tenantRegistrationIntent.updateMany({
+            where: {
+              dormitoryId,
+              lineFriendId: req.lineFollowerId,
+              purpose: 'TENANT_REGISTRATION',
+              status: { in: ['ACTIVE', 'SUBMITTED'] },
+            },
+            data: {
+              status: 'COMPLETED',
+              completedAt: new Date(),
+            },
+          });
+        }
+
+        return {
+          request: updatedReq,
+          tenant,
+          tenantId: tenant.id,
+          dailyStay: dailyStayRecord,
+          status: 'approved',
+          message: isFutureStartDate ? 'อนุมัติการจองเข้าพักรายวันเรียบร้อยแล้ว' : 'อนุมัติการเข้าพักรายวันเรียบร้อยแล้ว',
+        };
+      }
+
+      // 4. Create Contract for Monthly or Term
+      const contractCount = await tx.contract.count({ where: { dormitoryId } });
+      const contractNumber = `CTR-${Date.now()}-${(contractCount + 1).toString().padStart(4, '0')}`;
+
+      // Capture/freeze the current dormitory Owner Signature from Settings at contract signing time
+      const latestOwnerSig = await tx.ownerSignature.findFirst({
+        where: { dormitoryId, isCurrent: true },
+        orderBy: { createdAt: 'desc' },
+      });
+      const frozenOwnerSignature = latestOwnerSig?.objectKey || null;
+
+      const contract = await tx.contract.create({
+        data: {
+          dormitoryId,
+          contractNumber,
+          roomId: effectiveRoomId,
+          tenantId: tenant.id,
+          status: isFutureStartDate ? 'approved_scheduled' : 'active',
+          startDate: new Date(payload.startDate),
+          endDate: new Date(payload.endDate || payload.startDate),
+          durationMonths: payload.durationMonths || (isTerm ? 4 : 12),
+          rentBillingType: isTerm ? 'term' : 'monthly',
+          rentAmount: String(payload.rentAmount || 0),
+          depositAmount: String(payload.depositAmount || 0),
+          advancePaymentAmount: String(payload.advancePaymentAmount || 0),
+          terms: payload.terms || null,
+          tenantSignature: req.tenantSignatureObjectKey || req.tenantSignatureSha256 || 'SIGNED',
+          ownerSignature: frozenOwnerSignature,
+          createdByUserId: safeActorId,
+          activatedAt: isFutureStartDate ? null : new Date(),
+        },
+      });
+      contractId = contract.id;
+
+      // 5. Establish Authoritative Occupancy B & Transition Room B
       const occupancy = await tx.occupancy.create({
         data: {
           dormitoryId,
-          roomId: req.requestedRoomId,
+          roomId: effectiveRoomId,
           tenantId: tenant.id,
           registrationId: id,
-          status: 'ACTIVE',
+          contractId: contractId,
+          status: isFutureStartDate ? 'SCHEDULED' : 'ACTIVE',
           startedAt: new Date(payload.startDate),
         },
       });
 
-      await tx.room.update({
-        where: { id: req.requestedRoomId },
-        data: {
-          status: 'occupied',
-          currentTenantId: tenant.id,
-          currentContractId: contractId,
-        },
-      });
+      if (!isFutureStartDate) {
+        await tx.room.update({
+          where: { id: effectiveRoomId },
+          data: {
+            status: 'occupied',
+            currentTenantId: tenant.id,
+            currentContractId: contractId,
+          },
+        });
+      } else {
+        const currentRoom = await tx.room.findUnique({ where: { id: effectiveRoomId } });
+        if (currentRoom?.status === 'vacant') {
+          await tx.room.update({
+            where: { id: effectiveRoomId },
+            data: { status: 'reserved' },
+          });
+        }
+      }
 
       // 5.5. Create one-time Deposit Bill for approved registration contract
       if (Number(payload.depositAmount) > 0) {
         await createDepositBillForAgreementInTx(tx, {
           dormitoryId,
-          roomId: req.requestedRoomId,
+          roomId: effectiveRoomId,
           tenantId: tenant.id,
           contractId: contractId,
-          agreementType: 'MONTHLY',
+          agreementType: isTerm ? 'TERM' : 'MONTHLY',
           startDate: new Date(payload.startDate),
-          depositAmount: payload.depositAmount,
+          depositAmount: payload.depositAmount || 0,
           depositDeclaredStatus: (payload as any).depositDeclaredStatus || 'UNPAID',
           actorUserId: safeActorId,
         });
@@ -909,7 +1072,7 @@ export class TenantRegistrationService {
           reviewedAt: new Date(),
           reviewedByUserId: safeActorId,
           approvedTenantId: tenant.id,
-          approvedRoomId: req.requestedRoomId,
+          approvedRoomId: effectiveRoomId,
           approvedContractId: contractId,
         },
       });
@@ -933,8 +1096,10 @@ export class TenantRegistrationService {
       return {
         request: updatedReq,
         tenant,
+        tenantId: tenant.id,
         contractId,
         occupancy,
+        status: 'approved',
       };
     });
 
@@ -1031,6 +1196,16 @@ export class TenantRegistrationService {
           tenantUpdateData.nationalIdMasked = `${cleanId.slice(0, 1)}-${cleanId.slice(1, 5)}-xxxxx-${cleanId.slice(10, 12)}-${cleanId.slice(12)}`;
         }
       }
+      // Promote/adopt ID document from pending registration acceptanceSnapshot onto canonical Tenant record
+      const snapDoc = snap.idCardDocument || (Array.isArray(snap.attachments) ? snap.attachments.find((a: any) => a.isIdCard || a.name?.includes('บัตรประชาชน') || a.type?.includes('pdf') || a.type?.includes('image')) : null);
+      if (snapDoc && snapDoc.objectKey && !tenant.idCardObjectKey) {
+        tenantUpdateData.idCardObjectKey = snapDoc.objectKey;
+        tenantUpdateData.idCardSha256 = snapDoc.sha256 || null;
+        tenantUpdateData.idCardMimeType = snapDoc.mimeType || (snapDoc.objectKey.endsWith('.pdf') ? 'application/pdf' : 'image/webp');
+        tenantUpdateData.idCardByteSize = snapDoc.byteSize ? Number(snapDoc.byteSize) : null;
+        tenantUpdateData.idCardUploadedAt = snapDoc.uploadedAt ? new Date(snapDoc.uploadedAt) : new Date();
+      }
+
       if (Object.keys(tenantUpdateData).length > 0) {
         await tx.tenant.update({
           where: { id: tenant.id },
@@ -1082,6 +1257,13 @@ export class TenantRegistrationService {
       const contractCount = await tx.contract.count({ where: { dormitoryId } });
       const contractNumber = `CTR-${Date.now()}-${(contractCount + 1).toString().padStart(4, '0')}`;
 
+      // Freeze current owner signature
+      const latestOwnerSig = await tx.ownerSignature.findFirst({
+        where: { dormitoryId, isCurrent: true },
+        orderBy: { createdAt: 'desc' },
+      });
+      const frozenOwnerSignature = latestOwnerSig?.objectKey || null;
+
       const contract = await tx.contract.create({
         data: {
           dormitoryId,
@@ -1097,6 +1279,7 @@ export class TenantRegistrationService {
           advancePaymentAmount: String(approvedTerms.advancePaymentAmount || '0'),
           terms: approvedTerms.terms || null,
           tenantSignature: sigMeta.objectKey,
+          ownerSignature: frozenOwnerSignature,
           createdByUserId: req.reviewedByUserId || null,
           activatedAt: new Date(),
         },
@@ -1183,6 +1366,15 @@ export class TenantRegistrationService {
     }
 
     return resTx;
+  }
+
+  public async requestRevision(
+    id: string,
+    dormitoryId: string,
+    reason?: string,
+    actorUserId?: string
+  ) {
+    return this.rejectRequest(id, dormitoryId, reason, actorUserId);
   }
 
   public async rejectRequest(
@@ -1864,6 +2056,102 @@ export class TenantRegistrationService {
         message: 'ยืนยันสิทธิ์ผู้เช่าและบันทึกสัญญาเรียบร้อยแล้ว',
       };
     });
+  }
+
+  public async saveRegistrationIdentityDocument(
+    dormitoryId: string,
+    requestId: string,
+    fileBuffer: Buffer,
+    actorUserId?: string
+  ) {
+    const prisma = getPrismaClient();
+    const req = await prisma.tenantRegistrationRequest.findFirst({
+      where: { id: requestId, dormitoryId },
+    });
+    if (!req) {
+      throw new AppError('ไม่พบคำขอลงทะเบียน', 404, 'REGISTRATION_NOT_FOUND');
+    }
+
+    // Process via shared secure pipeline (Sharp raster or pdf-lib binary validation)
+    const secured = await processAndSecureTenantDocument(fileBuffer);
+
+    const localStorageProvider = new LocalStorageProvider();
+    const objectKey = `registrations/${dormitoryId}/${requestId}/identity-documents/id-card-${Date.now()}${secured.extension}`;
+
+    let saved = false;
+    try {
+      await localStorageProvider.saveFile(objectKey, secured.buffer);
+      saved = true;
+
+      const currentSnapshot = (req.acceptanceSnapshot as any) || {};
+      const docMetadata = {
+        objectKey,
+        sha256: secured.sha256,
+        mimeType: secured.mimeType,
+        extension: secured.extension,
+        byteSize: secured.byteSize,
+        pageCount: secured.pageCount,
+        uploadedAt: new Date().toISOString(),
+        uploadedByUserId: actorUserId || null,
+        filename: `id-document${secured.extension}`,
+      };
+
+      const updatedSnapshot = {
+        ...currentSnapshot,
+        idCardDocument: docMetadata,
+      };
+
+      await prisma.tenantRegistrationRequest.update({
+        where: { id: requestId },
+        data: {
+          acceptanceSnapshot: updatedSnapshot,
+        },
+      });
+
+      return {
+        requestId,
+        hasIdentityDocument: true,
+        ...docMetadata,
+      };
+    } catch (err: any) {
+      // Failure compensation: clean up orphan saved file if DB update fails
+      if (saved) {
+        try {
+          await localStorageProvider.deleteFile(objectKey);
+        } catch (cleanupErr) {
+          logger.warn({ cleanupErr, objectKey }, 'Failed to cleanup orphan registration document on error');
+        }
+      }
+      throw err;
+    }
+  }
+
+  public async getRegistrationIdentityDocument(dormitoryId: string, requestId: string) {
+    const prisma = getPrismaClient();
+    const req = await prisma.tenantRegistrationRequest.findFirst({
+      where: { id: requestId, dormitoryId },
+    });
+    if (!req) {
+      throw new AppError('ไม่พบคำขอลงทะเบียน', 404, 'REGISTRATION_NOT_FOUND');
+    }
+
+    const snap = (req.acceptanceSnapshot as any) || {};
+    const snapDoc = snap.idCardDocument || (Array.isArray(snap.attachments) ? snap.attachments.find((a: any) => a.isIdCard || a.name?.includes('บัตรประชาชน') || a.type?.includes('pdf') || a.type?.includes('image')) : null);
+
+    if (!snapDoc || !snapDoc.objectKey) {
+      throw new AppError('คำขอนี้ยังไม่ได้แนบเอกสารสำเนาบัตรประชาชน', 404, 'IDENTITY_DOCUMENT_NOT_FOUND');
+    }
+
+    const localStorageProvider = new LocalStorageProvider();
+    const fileBuffer = await localStorageProvider.getFile(snapDoc.objectKey);
+    const isPdf = snapDoc.mimeType === 'application/pdf' || snapDoc.objectKey.endsWith('.pdf');
+
+    return {
+      fileBuffer,
+      mimeType: isPdf ? 'application/pdf' : (snapDoc.mimeType || 'image/webp'),
+      extension: isPdf ? '.pdf' : '.webp',
+      filename: snapDoc.filename || `registration-id-document${isPdf ? '.pdf' : '.webp'}`,
+    };
   }
 }
 

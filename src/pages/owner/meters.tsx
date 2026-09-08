@@ -137,6 +137,30 @@ export interface MeterRowState {
   editElecPrev?: boolean;
   otherFees?: { description: string; amount: number | string }[];
   snapshotVersion?: number;
+  parkingQuantity?: number | string;
+}
+
+export function calculateParkingCostHelper(
+  row: { peopleCount?: number; parkingQuantity?: number | string },
+  rateSnapshot?: { parkingFeeMode?: string; parkingFee?: number | string } | null,
+  fallbackVehicleCount: number = 0
+): number {
+  if (row.peopleCount === 0) return 0;
+  const mode = rateSnapshot?.parkingFeeMode || 'per_room';
+  if (mode === 'free' || mode === 'none') return 0;
+  const fee = Number(rateSnapshot?.parkingFee) || 0;
+  if (fee <= 0) return 0;
+
+  if (mode === 'per_vehicle' || mode === 'vehicle') {
+    if (row.parkingQuantity !== undefined && row.parkingQuantity !== null && !isNaN(Number(row.parkingQuantity))) {
+      return Number(row.parkingQuantity) * fee;
+    }
+    return fallbackVehicleCount * fee;
+  } else if (mode === 'per_person' || mode === 'person') {
+    return (row.peopleCount || 0) * fee;
+  } else {
+    return fee;
+  }
 }
 
 export function getTenantForRoomAndCycleHelper(
@@ -314,6 +338,7 @@ export function buildRowsFromWorkspace(params: {
       editElecPrev: false,
       otherFees: snap?.otherFees || [],
       snapshotVersion: snap?.version || 0,
+      parkingQuantity: roomCtx?.parkingQuantity !== undefined ? String(roomCtx.parkingQuantity) : undefined,
     };
   });
 
@@ -333,6 +358,7 @@ export function buildRowsFromWorkspace(params: {
           peopleCount: draftPatch.peopleCount !== undefined ? draftPatch.peopleCount : serverRow.peopleCount,
           overdueAmount: draftPatch.overdueAmount !== undefined ? draftPatch.overdueAmount : serverRow.overdueAmount,
           isReplaced: draftPatch.isReplaced !== undefined ? draftPatch.isReplaced : serverRow.isReplaced,
+          parkingQuantity: serverRow.parkingQuantity,
           // serverRow.otherFees is authoritative from server query
           // serverRow.snapshotVersion is authoritative from server query
         };
@@ -2275,23 +2301,15 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   };
 
   const getParkingCost = (row: MeterRowState) => {
-    if (row.peopleCount === 0) return 0;
-    const mode = rateSnapshot?.parkingFeeMode || 'per_room';
-    if (mode === 'free' || mode === 'none') return 0;
-    const fee = Number(rateSnapshot?.parkingFee) || 0;
-    if (fee <= 0) return 0;
-
-    if (mode === 'per_vehicle' || mode === 'vehicle') {
-      const tenant = getTenantForRoomAndCycle(row.roomId, selectedCycle);
-      if (tenant && (tenant as any).vehicle && (tenant as any).vehicle.type && (tenant as any).vehicle.type !== 'none') {
-        return fee;
-      }
-      return 0;
-    } else if (mode === 'per_person' || mode === 'person') {
-      return (row.peopleCount || 0) * fee;
-    } else {
-      return fee;
+    const tenant = getTenantForRoomAndCycle(row.roomId, selectedCycle);
+    const tenantVehicles = (tenant as any)?.vehicles;
+    let fallbackCount = 0;
+    if (Array.isArray(tenantVehicles) && tenantVehicles.length > 0) {
+      fallbackCount = tenantVehicles.length;
+    } else if (tenant && (tenant as any).vehicle && (tenant as any).vehicle.type && (tenant as any).vehicle.type !== 'none') {
+      fallbackCount = 1;
     }
+    return calculateParkingCostHelper(row, rateSnapshot, fallbackCount);
   };
 
   // Initialize meter rows based on rooms list, stored states, and bills

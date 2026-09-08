@@ -225,16 +225,24 @@ export const TerminateContractSchema = z.object({
 });
 
 export const ApproveRegistrationSchema = z.object({
+  roomId: z.string().uuid().optional(),
+  rentalType: z.string().optional(),
+  rentalPlan: z.string().optional(),
   startDate: z.string().min(1, 'กรุณาระบุวันเริ่มสัญญา').refine(val => !isNaN(Date.parse(val)), 'วันเริ่มสัญญาไม่ถูกต้อง'),
   endDate: z.string().min(1, 'กรุณาระบุวันสิ้นสุดสัญญา').refine(val => !isNaN(Date.parse(val)), 'วันสิ้นสุดสัญญาไม่ถูกต้อง'),
   durationMonths: z.union([
     z.number().int().min(1, 'ระยะเวลาสัญญาต้องอย่างน้อย 1 เดือน'),
     z.string().transform(v => parseInt(v, 10)).pipe(z.number().int().min(1, 'ระยะเวลาสัญญาต้องอย่างน้อย 1 เดือน'))
-  ]),
+  ]).optional(),
+  totalDays: z.number().int().min(1).optional(),
+  dailyRate: z.union([
+    z.number().min(0),
+    z.string().regex(/^\d+(\.\d{1,2})?$/)
+  ]).optional(),
   rentAmount: z.union([
     z.number().min(0, 'ค่าเช่าต้องไม่ติดลบ'),
     z.string().regex(/^\d+(\.\d{1,2})?$/, 'ค่าเช่าต้องเป็นตัวเลขที่ถูกต้อง')
-  ]),
+  ]).optional(),
   depositAmount: z.union([
     z.number().min(0, 'เงินมัดจำต้องไม่ติดลบ'),
     z.string().regex(/^\d+(\.\d{1,2})?$/, 'เงินมัดจำต้องเป็นตัวเลขที่ถูกต้อง')
@@ -242,8 +250,9 @@ export const ApproveRegistrationSchema = z.object({
   advancePaymentAmount: z.union([
     z.number().min(0, 'ค่าเช่าล่วงหน้าต้องไม่ติดลบ'),
     z.string().regex(/^\d+(\.\d{1,2})?$/, 'ค่าเช่าล่วงหน้าต้องเป็นตัวเลขที่ถูกต้อง')
-  ]),
+  ]).optional(),
   terms: z.string().optional().nullable(),
+  depositDeclaredStatus: z.enum(['PAID', 'UNPAID']).optional().nullable(),
   confirmReplacement: z.boolean().optional(),
   requireTenantConfirmation: z.boolean().optional(),
   legacyDirectApproval: z.boolean().optional(),

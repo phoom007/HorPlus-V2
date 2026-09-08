@@ -35,6 +35,7 @@ import {
 } from '../../components/GlobalComponents';
 import { Announcement, User, Building, Room } from '../../types';
 import { convertImageToWebP, UPLOAD_DROPZONE_TEXT } from '../../utils/imageUtils';
+import { formatOwnerRoomOptionLabel } from '../../utils/room-label.util';
 
 interface OwnerAnnouncementsProps {
   announcements: Announcement[];
@@ -719,7 +720,7 @@ export const OwnerAnnouncements: React.FC<OwnerAnnouncementsProps> = ({
                             <option key={bld.id} value={`bld-${bld.id}`}>🏢 ผู้เช่า ตึก {bld.name?.replace('อาคาร ', '') || bld.id}</option>
                           ))}
                           {(rooms || []).slice(0, 10).map(room => (
-                            <option key={room.id} value={`room-${room.roomNumber}`}>🔑 ผู้เช่า ห้อง {room.roomNumber}</option>
+                            <option key={room.id} value={`room-${room.roomNumber}`}>🔑 ผู้เช่า ห้อง {formatOwnerRoomOptionLabel(room, buildings)}</option>
                           ))}
                         </select>
                       </div>

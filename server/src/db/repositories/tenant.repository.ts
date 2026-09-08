@@ -27,6 +27,20 @@ export interface TenantEntity {
   idCardUploadedByUserId?: string | null;
   petInfo?: any;
   notes?: string | null;
+  requestedRoomId?: string | null;
+  roomId?: string | null;
+  registrationRequestId?: string | null;
+  rentalType?: string | null;
+  rentalPlan?: string | null;
+  requestedRent?: number | null;
+  requestedDeposit?: number | null;
+  requestedStartDate?: string | null;
+  requestedEndDate?: string | null;
+  requestedDurationMonths?: number | null;
+  requestedDays?: number | null;
+  requestedDailyRate?: number | null;
+  requestedAttachments?: any[] | null;
+  acceptanceSnapshot?: any | null;
   coOccupants?: TenantCoOccupantEntity[];
   vehicles?: TenantVehicleEntity[];
   version: number;
@@ -102,6 +116,8 @@ export interface CreateTenantData {
   idCardUploadedByUserId?: string | null;
   petInfo?: any;
   notes?: string | null;
+  rentalType?: string | null;
+  rentalPlan?: string | null;
 }
 
 export interface TenantFilterQuery {
@@ -272,6 +288,8 @@ export class InMemoryTenantRepository implements ITenantRepository {
       photoUrl: data.photoUrl || null,
       petInfo: data.petInfo || null,
       notes: data.notes || null,
+      rentalType: data.rentalType || null,
+      rentalPlan: data.rentalPlan || (data.rentalType ? data.rentalType.toLowerCase() : null),
       version: 1,
       createdAt: now,
       updatedAt: now,
@@ -481,6 +499,20 @@ export class PrismaTenantRepository implements ITenantRepository {
       petInfo: t.petInfo ?? null,
       notes: t.notes ?? null,
       version: t.version,
+      requestedRoomId: t.requestedRoomId ?? null,
+      roomId: t.roomId ?? t.requestedRoomId ?? null,
+      registrationRequestId: t.registrationRequestId ?? null,
+      rentalType: t.rentalType ?? null,
+      rentalPlan: t.rentalPlan ?? null,
+      requestedRent: t.requestedRent !== undefined ? t.requestedRent : null,
+      requestedDeposit: t.requestedDeposit !== undefined ? t.requestedDeposit : null,
+      requestedStartDate: t.requestedStartDate ?? null,
+      requestedEndDate: t.requestedEndDate ?? null,
+      requestedDurationMonths: t.requestedDurationMonths !== undefined ? t.requestedDurationMonths : null,
+      requestedDays: t.requestedDays !== undefined ? t.requestedDays : null,
+      requestedDailyRate: t.requestedDailyRate !== undefined ? t.requestedDailyRate : null,
+      requestedAttachments: t.requestedAttachments ?? null,
+      acceptanceSnapshot: t.acceptanceSnapshot ?? null,
       coOccupants: Array.isArray(t.coOccupants) ? t.coOccupants.map((c: any) => ({
         id: c.id,
         dormitoryId: c.dormitoryId,
@@ -527,7 +559,141 @@ export class PrismaTenantRepository implements ITenantRepository {
       where,
       include: { coOccupants: { where: { deletedAt: null, status: 'active' } }, vehicles: { where: { deletedAt: null } } },
     });
-    return t ? this.mapTenantToEntity(t) : null;
+    if (!t) return null;
+    if (t.status === 'pending') {
+      const regWhere: any = { status: { in: ['pending', 'pending_owner_approval', 'awaiting_tenant_confirmation'] } };
+      if (t.dormitoryId) regWhere.dormitoryId = t.dormitoryId;
+      const matchedReg = await this.prisma.tenantRegistrationRequest.findFirst({
+        where: {
+          ...regWhere,
+          OR: [
+            { approvedTenantId: t.id },
+            { phone: t.phone || undefined },
+            { firstName: t.firstName, lastName: t.lastName || undefined },
+          ],
+        },
+      });
+      if (matchedReg) {
+        (t as any).requestedRoomId = matchedReg.requestedRoomId;
+        (t as any).registrationRequestId = matchedReg.id;
+        const snap = (matchedReg.acceptanceSnapshot as any) || {};
+        (t as any).rentalType = snap.rentalType || snap.rentalPlan || 'MONTHLY';
+        (t as any).rentalPlan = snap.rentalPlan || snap.rentalType || 'MONTHLY';
+        (t as any).requestedRent = snap.proposedRent ?? snap.rentAmount ?? (snap.dailyRate ? snap.dailyRate * (snap.totalDays || 1) : null);
+        (t as any).requestedDeposit = snap.proposedDeposit ?? snap.depositAmount ?? null;
+        (t as any).requestedStartDate = snap.startDate ?? snap.checkInDate ?? null;
+        (t as any).requestedEndDate = snap.endDate ?? snap.checkOutDate ?? null;
+        (t as any).requestedDurationMonths = snap.durationMonths ?? null;
+        (t as any).requestedDays = snap.totalDays ?? null;
+        (t as any).requestedDailyRate = snap.dailyRate ?? null;
+        (t as any).requestedAttachments = snap.attachments ?? null;
+        (t as any).acceptanceSnapshot = snap;
+      }
+    } else {
+      const [provTerm, dailyStay, contract] = await Promise.all([
+        this.prisma.provisionalRentalTerm.findFirst({
+          where: { tenantId: t.id, status: { in: ['ACTIVE', 'RESERVED'] }, deletedAt: null },
+          orderBy: { createdAt: 'desc' },
+        }),
+        this.prisma.dailyStay.findFirst({
+          where: { tenantId: t.id, status: { in: ['ACTIVE', 'RESERVED'] }, deletedAt: null },
+          orderBy: { createdAt: 'desc' },
+        }),
+        this.prisma.contract.findFirst({
+          where: { tenantId: t.id, status: { in: ['active', 'expiring_soon', 'checking_out', 'waiting_extension', 'pending_signature'] }, deletedAt: null },
+          orderBy: { createdAt: 'desc' },
+        }),
+      ]);
+
+      if (provTerm) {
+        (t as any).rentalType = provTerm.rentalType;
+        (t as any).rentalPlan = provTerm.rentalType.toLowerCase();
+        (t as any).roomId = provTerm.roomId;
+        (t as any).requestedDurationMonths = provTerm.durationMonths;
+        (t as any).requestedStartDate = provTerm.startDate ? (provTerm.startDate instanceof Date ? provTerm.startDate.toISOString().slice(0, 10) : String(provTerm.startDate).slice(0, 10)) : null;
+        (t as any).requestedEndDate = provTerm.endDate ? (provTerm.endDate instanceof Date ? provTerm.endDate.toISOString().slice(0, 10) : String(provTerm.endDate).slice(0, 10)) : null;
+        (t as any).requestedRent = Number(provTerm.totalRentAmount);
+      } else if (dailyStay) {
+        (t as any).rentalType = 'DAILY';
+        (t as any).rentalPlan = 'daily';
+        (t as any).roomId = dailyStay.roomId;
+        (t as any).requestedDays = dailyStay.inclusiveDayCount;
+        (t as any).requestedDailyRate = Number(dailyStay.dailyRateAmount);
+        (t as any).requestedStartDate = dailyStay.startDate ? (dailyStay.startDate instanceof Date ? dailyStay.startDate.toISOString().slice(0, 10) : String(dailyStay.startDate).slice(0, 10)) : null;
+        (t as any).requestedEndDate = dailyStay.endDate ? (dailyStay.endDate instanceof Date ? dailyStay.endDate.toISOString().slice(0, 10) : String(dailyStay.endDate).slice(0, 10)) : null;
+        (t as any).requestedRent = Number(dailyStay.totalRentAmount);
+        (t as any).requestedDeposit = Number(dailyStay.depositAmount);
+      } else if (contract) {
+        const isTerm = contract.rentBillingType?.toLowerCase() === 'term';
+        (t as any).rentalType = isTerm ? 'TERM' : 'MONTHLY';
+        (t as any).rentalPlan = isTerm ? 'term' : 'monthly';
+        (t as any).roomId = contract.roomId;
+        (t as any).requestedDurationMonths = contract.durationMonths;
+        (t as any).requestedStartDate = contract.startDate ? (contract.startDate instanceof Date ? contract.startDate.toISOString().slice(0, 10) : String(contract.startDate).slice(0, 10)) : null;
+        (t as any).requestedEndDate = contract.endDate ? (contract.endDate instanceof Date ? contract.endDate.toISOString().slice(0, 10) : String(contract.endDate).slice(0, 10)) : null;
+        (t as any).requestedRent = Number(contract.rentAmount);
+        (t as any).requestedDeposit = Number(contract.depositAmount);
+      } else {
+        // Historical deterministic fallback for ended/inactive/checked-out stays
+        const [histContract, histDailyStay] = await Promise.all([
+          this.prisma.contract.findFirst({
+            where: { tenantId: t.id, deletedAt: null },
+            orderBy: [{ endDate: 'desc' }, { createdAt: 'desc' }],
+          }),
+          this.prisma.dailyStay.findFirst({
+            where: { tenantId: t.id, deletedAt: null },
+            orderBy: [{ endDate: 'desc' }, { createdAt: 'desc' }],
+          }),
+        ]);
+
+        if (histContract && histDailyStay) {
+          const contractEnd = histContract.endDate ? new Date(histContract.endDate).getTime() : 0;
+          const dailyEnd = histDailyStay.endDate ? new Date(histDailyStay.endDate).getTime() : 0;
+          if (dailyEnd > contractEnd) {
+            (t as any).rentalType = 'DAILY';
+            (t as any).rentalPlan = 'daily';
+            (t as any).roomId = histDailyStay.roomId;
+            (t as any).requestedDays = histDailyStay.inclusiveDayCount;
+            (t as any).requestedDailyRate = Number(histDailyStay.dailyRateAmount);
+            (t as any).requestedStartDate = histDailyStay.startDate ? (histDailyStay.startDate instanceof Date ? histDailyStay.startDate.toISOString().slice(0, 10) : String(histDailyStay.startDate).slice(0, 10)) : null;
+            (t as any).requestedEndDate = histDailyStay.endDate ? (histDailyStay.endDate instanceof Date ? histDailyStay.endDate.toISOString().slice(0, 10) : String(histDailyStay.endDate).slice(0, 10)) : null;
+            (t as any).requestedRent = Number(histDailyStay.totalRentAmount);
+            (t as any).requestedDeposit = Number(histDailyStay.depositAmount);
+          } else {
+            const isTerm = histContract.rentBillingType?.toLowerCase() === 'term';
+            (t as any).rentalType = isTerm ? 'TERM' : 'MONTHLY';
+            (t as any).rentalPlan = isTerm ? 'term' : 'monthly';
+            (t as any).roomId = histContract.roomId;
+            (t as any).requestedDurationMonths = histContract.durationMonths;
+            (t as any).requestedStartDate = histContract.startDate ? (histContract.startDate instanceof Date ? histContract.startDate.toISOString().slice(0, 10) : String(histContract.startDate).slice(0, 10)) : null;
+            (t as any).requestedEndDate = histContract.endDate ? (histContract.endDate instanceof Date ? histContract.endDate.toISOString().slice(0, 10) : String(histContract.endDate).slice(0, 10)) : null;
+            (t as any).requestedRent = Number(histContract.rentAmount);
+            (t as any).requestedDeposit = Number(histContract.depositAmount);
+          }
+        } else if (histDailyStay) {
+          (t as any).rentalType = 'DAILY';
+          (t as any).rentalPlan = 'daily';
+          (t as any).roomId = histDailyStay.roomId;
+          (t as any).requestedDays = histDailyStay.inclusiveDayCount;
+          (t as any).requestedDailyRate = Number(histDailyStay.dailyRateAmount);
+          (t as any).requestedStartDate = histDailyStay.startDate ? (histDailyStay.startDate instanceof Date ? histDailyStay.startDate.toISOString().slice(0, 10) : String(histDailyStay.startDate).slice(0, 10)) : null;
+          (t as any).requestedEndDate = histDailyStay.endDate ? (histDailyStay.endDate instanceof Date ? histDailyStay.endDate.toISOString().slice(0, 10) : String(histDailyStay.endDate).slice(0, 10)) : null;
+          (t as any).requestedRent = Number(histDailyStay.totalRentAmount);
+          (t as any).requestedDeposit = Number(histDailyStay.depositAmount);
+        } else if (histContract) {
+          const isTerm = histContract.rentBillingType?.toLowerCase() === 'term';
+          (t as any).rentalType = isTerm ? 'TERM' : 'MONTHLY';
+          (t as any).rentalPlan = isTerm ? 'term' : 'monthly';
+          (t as any).roomId = histContract.roomId;
+          (t as any).requestedDurationMonths = histContract.durationMonths;
+          (t as any).requestedStartDate = histContract.startDate ? (histContract.startDate instanceof Date ? histContract.startDate.toISOString().slice(0, 10) : String(histContract.startDate).slice(0, 10)) : null;
+          (t as any).requestedEndDate = histContract.endDate ? (histContract.endDate instanceof Date ? histContract.endDate.toISOString().slice(0, 10) : String(histContract.endDate).slice(0, 10)) : null;
+          (t as any).requestedRent = Number(histContract.rentAmount);
+          (t as any).requestedDeposit = Number(histContract.depositAmount);
+        }
+      }
+    }
+    return this.mapTenantToEntity(t);
   }
 
   public async findByTenantNumber(dormitoryId: string, tenantNumber: string): Promise<TenantEntity | null> {
@@ -555,6 +721,167 @@ export class PrismaTenantRepository implements ITenantRepository {
       }),
       this.prisma.tenant.count({ where }),
     ]);
+
+    if (items.some((t) => t.status === 'pending')) {
+      const pendingRegs = await this.prisma.tenantRegistrationRequest.findMany({
+        where: { dormitoryId, status: { in: ['pending', 'pending_owner_approval', 'awaiting_tenant_confirmation'] } },
+      });
+      if (pendingRegs.length > 0) {
+        for (const item of items) {
+          if (item.status === 'pending') {
+            const matchedReg = pendingRegs.find(
+              (r) =>
+                r.approvedTenantId === item.id ||
+                r.phone === item.phone ||
+                r.phone?.replace(/[^0-9]/g, '') === item.phone?.replace(/[^0-9]/g, '') ||
+                `${r.firstName} ${r.lastName}`.trim() === (item.displayName || '').trim()
+            );
+            if (matchedReg) {
+              (item as any).requestedRoomId = matchedReg.requestedRoomId;
+              (item as any).registrationRequestId = matchedReg.id;
+              const snap = (matchedReg.acceptanceSnapshot as any) || {};
+              (item as any).rentalType = snap.rentalType || snap.rentalPlan || 'MONTHLY';
+              (item as any).rentalPlan = snap.rentalPlan || snap.rentalType || 'MONTHLY';
+              (item as any).requestedRent = snap.proposedRent ?? snap.rentAmount ?? (snap.dailyRate ? snap.dailyRate * (snap.totalDays || 1) : null);
+              (item as any).requestedDeposit = snap.proposedDeposit ?? snap.depositAmount ?? null;
+              (item as any).requestedStartDate = snap.startDate ?? snap.checkInDate ?? null;
+              (item as any).requestedEndDate = snap.endDate ?? snap.checkOutDate ?? null;
+              (item as any).requestedDurationMonths = snap.durationMonths ?? null;
+              (item as any).requestedDays = snap.totalDays ?? null;
+              (item as any).requestedDailyRate = snap.dailyRate ?? null;
+              (item as any).requestedAttachments = snap.attachments ?? null;
+              (item as any).acceptanceSnapshot = snap;
+            }
+          }
+        }
+      }
+    }
+
+    const nonPending = items.filter((t) => t.status !== 'pending');
+    if (nonPending.length > 0) {
+      const nonPendingIds = nonPending.map((t) => t.id);
+      const [provTerms, dailyStays, contracts] = await Promise.all([
+        this.prisma.provisionalRentalTerm.findMany({
+          where: { tenantId: { in: nonPendingIds }, status: { in: ['ACTIVE', 'RESERVED'] }, deletedAt: null },
+          orderBy: { createdAt: 'desc' },
+        }),
+        this.prisma.dailyStay.findMany({
+          where: { tenantId: { in: nonPendingIds }, status: { in: ['ACTIVE', 'RESERVED'] }, deletedAt: null },
+          orderBy: { createdAt: 'desc' },
+        }),
+        this.prisma.contract.findMany({
+          where: { tenantId: { in: nonPendingIds }, status: { in: ['active', 'expiring_soon', 'checking_out', 'waiting_extension', 'pending_signature'] }, deletedAt: null },
+          orderBy: { createdAt: 'desc' },
+        }),
+      ]);
+
+      for (const item of items) {
+        if (item.status !== 'pending') {
+          const provTerm = provTerms.find((p) => p.tenantId === item.id);
+          if (provTerm) {
+            (item as any).rentalType = provTerm.rentalType;
+            (item as any).rentalPlan = provTerm.rentalType.toLowerCase();
+            (item as any).roomId = provTerm.roomId;
+            (item as any).requestedDurationMonths = provTerm.durationMonths;
+            (item as any).requestedStartDate = provTerm.startDate ? (provTerm.startDate instanceof Date ? provTerm.startDate.toISOString().slice(0, 10) : String(provTerm.startDate).slice(0, 10)) : null;
+            (item as any).requestedEndDate = provTerm.endDate ? (provTerm.endDate instanceof Date ? provTerm.endDate.toISOString().slice(0, 10) : String(provTerm.endDate).slice(0, 10)) : null;
+            (item as any).requestedRent = Number(provTerm.totalRentAmount);
+            continue;
+          }
+          const daily = dailyStays.find((d) => d.tenantId === item.id);
+          if (daily) {
+            (item as any).rentalType = 'DAILY';
+            (item as any).rentalPlan = 'daily';
+            (item as any).roomId = daily.roomId;
+            (item as any).requestedDays = daily.inclusiveDayCount;
+            (item as any).requestedDailyRate = Number(daily.dailyRateAmount);
+            (item as any).requestedStartDate = daily.startDate ? (daily.startDate instanceof Date ? daily.startDate.toISOString().slice(0, 10) : String(daily.startDate).slice(0, 10)) : null;
+            (item as any).requestedEndDate = daily.endDate ? (daily.endDate instanceof Date ? daily.endDate.toISOString().slice(0, 10) : String(daily.endDate).slice(0, 10)) : null;
+            (item as any).requestedRent = Number(daily.totalRentAmount);
+            (item as any).requestedDeposit = Number(daily.depositAmount);
+            continue;
+          }
+          const ct = contracts.find((c) => c.tenantId === item.id);
+          if (ct) {
+            const isTerm = ct.rentBillingType?.toLowerCase() === 'term';
+            (item as any).rentalType = isTerm ? 'TERM' : 'MONTHLY';
+            (item as any).rentalPlan = isTerm ? 'term' : 'monthly';
+            (item as any).roomId = ct.roomId;
+            (item as any).requestedDurationMonths = ct.durationMonths;
+            (item as any).requestedStartDate = ct.startDate ? (ct.startDate instanceof Date ? ct.startDate.toISOString().slice(0, 10) : String(ct.startDate).slice(0, 10)) : null;
+            (item as any).requestedEndDate = ct.endDate ? (ct.endDate instanceof Date ? ct.endDate.toISOString().slice(0, 10) : String(ct.endDate).slice(0, 10)) : null;
+            (item as any).requestedRent = Number(ct.rentAmount);
+            (item as any).requestedDeposit = Number(ct.depositAmount);
+          }
+        }
+      }
+
+      // Historical deterministic fallback for ended/inactive/checked-out stays
+      const unresolved = items.filter((item) => item.status !== 'pending' && !(item as any).rentalType);
+      if (unresolved.length > 0) {
+        const unresolvedIds = unresolved.map((u) => u.id);
+        const [histContracts, histDailyStays] = await Promise.all([
+          this.prisma.contract.findMany({
+            where: { tenantId: { in: unresolvedIds }, deletedAt: null },
+            orderBy: [{ endDate: 'desc' }, { createdAt: 'desc' }],
+          }),
+          this.prisma.dailyStay.findMany({
+            where: { tenantId: { in: unresolvedIds }, deletedAt: null },
+            orderBy: [{ endDate: 'desc' }, { createdAt: 'desc' }],
+          }),
+        ]);
+
+        for (const item of unresolved) {
+          const hContract = histContracts.find((c) => c.tenantId === item.id);
+          const hDaily = histDailyStays.find((d) => d.tenantId === item.id);
+          if (hContract && hDaily) {
+            const contractEnd = hContract.endDate ? new Date(hContract.endDate).getTime() : 0;
+            const dailyEnd = hDaily.endDate ? new Date(hDaily.endDate).getTime() : 0;
+            if (dailyEnd > contractEnd) {
+              (item as any).rentalType = 'DAILY';
+              (item as any).rentalPlan = 'daily';
+              (item as any).roomId = hDaily.roomId;
+              (item as any).requestedDays = hDaily.inclusiveDayCount;
+              (item as any).requestedDailyRate = Number(hDaily.dailyRateAmount);
+              (item as any).requestedStartDate = hDaily.startDate ? (hDaily.startDate instanceof Date ? hDaily.startDate.toISOString().slice(0, 10) : String(hDaily.startDate).slice(0, 10)) : null;
+              (item as any).requestedEndDate = hDaily.endDate ? (hDaily.endDate instanceof Date ? hDaily.endDate.toISOString().slice(0, 10) : String(hDaily.endDate).slice(0, 10)) : null;
+              (item as any).requestedRent = Number(hDaily.totalRentAmount);
+              (item as any).requestedDeposit = Number(hDaily.depositAmount);
+            } else {
+              const isTerm = hContract.rentBillingType?.toLowerCase() === 'term';
+              (item as any).rentalType = isTerm ? 'TERM' : 'MONTHLY';
+              (item as any).rentalPlan = isTerm ? 'term' : 'monthly';
+              (item as any).roomId = hContract.roomId;
+              (item as any).requestedDurationMonths = hContract.durationMonths;
+              (item as any).requestedStartDate = hContract.startDate ? (hContract.startDate instanceof Date ? hContract.startDate.toISOString().slice(0, 10) : String(hContract.startDate).slice(0, 10)) : null;
+              (item as any).requestedEndDate = hContract.endDate ? (hContract.endDate instanceof Date ? hContract.endDate.toISOString().slice(0, 10) : String(hContract.endDate).slice(0, 10)) : null;
+              (item as any).requestedRent = Number(hContract.rentAmount);
+              (item as any).requestedDeposit = Number(hContract.depositAmount);
+            }
+          } else if (hDaily) {
+            (item as any).rentalType = 'DAILY';
+            (item as any).rentalPlan = 'daily';
+            (item as any).roomId = hDaily.roomId;
+            (item as any).requestedDays = hDaily.inclusiveDayCount;
+            (item as any).requestedDailyRate = Number(hDaily.dailyRateAmount);
+            (item as any).requestedStartDate = hDaily.startDate ? (hDaily.startDate instanceof Date ? hDaily.startDate.toISOString().slice(0, 10) : String(hDaily.startDate).slice(0, 10)) : null;
+            (item as any).requestedEndDate = hDaily.endDate ? (hDaily.endDate instanceof Date ? hDaily.endDate.toISOString().slice(0, 10) : String(hDaily.endDate).slice(0, 10)) : null;
+            (item as any).requestedRent = Number(hDaily.totalRentAmount);
+            (item as any).requestedDeposit = Number(hDaily.depositAmount);
+          } else if (hContract) {
+            const isTerm = hContract.rentBillingType?.toLowerCase() === 'term';
+            (item as any).rentalType = isTerm ? 'TERM' : 'MONTHLY';
+            (item as any).rentalPlan = isTerm ? 'term' : 'monthly';
+            (item as any).roomId = hContract.roomId;
+            (item as any).requestedDurationMonths = hContract.durationMonths;
+            (item as any).requestedStartDate = hContract.startDate ? (hContract.startDate instanceof Date ? hContract.startDate.toISOString().slice(0, 10) : String(hContract.startDate).slice(0, 10)) : null;
+            (item as any).requestedEndDate = hContract.endDate ? (hContract.endDate instanceof Date ? hContract.endDate.toISOString().slice(0, 10) : String(hContract.endDate).slice(0, 10)) : null;
+            (item as any).requestedRent = Number(hContract.rentAmount);
+            (item as any).requestedDeposit = Number(hContract.depositAmount);
+          }
+        }
+      }
+    }
 
     return { items: items.map((t) => this.mapTenantToEntity(t)), total };
   }

@@ -26,9 +26,19 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROOT_DIR = path.resolve(__dirname, '../..');
 
+export function getConfiguredDbPort() {
+  const envPath = path.join(ROOT_DIR, 'server/.env');
+  if (fs.existsSync(envPath)) {
+    dotenv.config({ path: envPath });
+  }
+  return String(process.env.LOCAL07_DB_PORT || process.env.PGPORT || '15455');
+}
+
 export const REQUIRED_SAFETY_CONFIG = {
   DB_HOST: '127.0.0.1',
-  DB_PORT: '5455',
+  get DB_PORT() {
+    return getConfiguredDbPort();
+  },
   DB_NAME: 'horplus_wave1d_fasttrack_test',
   REDIS_HOST: '127.0.0.1',
   REDIS_PORT: '6380',
