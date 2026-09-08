@@ -1332,6 +1332,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
     setNewCoRelationship('แฟน');
     setNewCoCustomRelationship('');
     setIsAddCoModalOpen(false);
+    setTenantActionToast('เพิ่มผู้พักร่วมเรียบร้อยแล้ว');
   };
 
   const handleConfirmRemoveCoOccupant = () => {
@@ -1369,6 +1370,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
     setIsDeleteCoModalOpen(false);
     setCoToDelete(null);
     setDeleteCoReason('');
+    setTenantActionToast('นำผู้พักร่วมออกเรียบร้อยแล้ว');
   };
 
   const buildRoomContext = async (targetRoom: Room): Promise<QuickAddRoomContext> => {
@@ -1525,6 +1527,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
     setSelectedContractForReview(null);
     setQuickAddModalOpen(false);
     setSelectedQuickAddContext(null);
+    setTenantActionToast('เพิ่มผู้เช่าเรียบร้อยแล้ว');
   };
 
   const handleAddCoOccupant = () => {
@@ -2068,14 +2071,14 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
 
           <div class="section-title">ข้อมูลส่วนตัวผู้เช่า</div>
           <table class="info-grid">
-            <tr><td class="label">ชื่อ-นามสกุล:</td><td class="value">' + (selectedTenant.name || '-') + '</td></tr>
-            <tr><td class="label">เลขประจำตัวประชาชน:</td><td class="value">' + (selectedTenant.citizenId || '-') + '</td></tr>
-            <tr><td class="label">เบอร์โทรศัพท์:</td><td class="value">' + (selectedTenant.phone || '-') + '</td></tr>
-            <tr><td class="label">อีเมล:</td><td class="value">' + (selectedTenant.email || '-') + '</td></tr>
-            <tr><td class="label">ผู้ติดต่อฉุกเฉิน:</td><td class="value">' + (selectedTenant.emergencyContact?.name || '-') + ' (' + (selectedTenant.emergencyContact?.relationship || '-') + ') เบอร์: ' + (selectedTenant.emergencyContact?.phone || '-') + '</td></tr>
+            <tr><td class="label">ชื่อ-นามสกุล:</td><td class="value">${selectedTenant.name || (selectedTenant as any).displayName || '-'}</td></tr>
+            <tr><td class="label">เลขประจำตัวประชาชน:</td><td class="value">${selectedTenant.citizenId || (selectedTenant as any).nationalIdMasked || (selectedTenant as any).nationalId || '-'}</td></tr>
+            <tr><td class="label">เบอร์โทรศัพท์:</td><td class="value">${selectedTenant.phone || '-'}</td></tr>
+            <tr><td class="label">อีเมล:</td><td class="value">${selectedTenant.email || '-'}</td></tr>
+            <tr><td class="label">ผู้ติดต่อฉุกเฉิน:</td><td class="value">${selectedTenant.emergencyContact?.name ? `${selectedTenant.emergencyContact.name} (${selectedTenant.emergencyContact.relationship || '-'}) เบอร์: ${selectedTenant.emergencyContact.phone || '-'}` : '-'}</td></tr>
           </table>
 
-          <div class="footer-note">เอกสารนี้พิมพ์จากระบบบริหารจัดการหอพัก เมื่อ ' + new Date().toLocaleDateString('th-TH', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' }) + ' น.</div>
+          <div class="footer-note">เอกสารนี้พิมพ์จากระบบบริหารจัดการหอพัก เมื่อ ${new Date().toLocaleDateString('th-TH', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })} น.</div>
         </div>
         <script>
           window.onload = function() {
@@ -2292,6 +2295,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
       setPendingIdCardFile(null);
       setIsEditOpen(false);
       onAddLog('แก้ไขทะเบียนผู้เช่า', `แก้ไขข้อมูลผู้เช่าคุณ ${name.trim()}`, 'Tenant', selectedTenant.id);
+      setTenantActionToast('บันทึกการแก้ไขเรียบร้อยแล้ว');
 
       // Invalidate React Query caches for tenants list and tenant detail independently without blocking or reverting success
       if (queryClient && effectiveDormId) {

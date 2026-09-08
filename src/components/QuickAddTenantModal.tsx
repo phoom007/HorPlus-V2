@@ -1256,34 +1256,33 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
                             </div>
                           </div>
 
-                          <div className="p-3 bg-indigo-50/70 border border-indigo-100 rounded-2xl space-y-2 text-xs">
-                            <div className="flex items-center justify-between font-bold text-indigo-950">
-                              <span>ตารางแบ่งชำระรายงวด ({termInstallmentCount} งวด):</span>
-                              {termInstallmentCount === 1 && (
-                                <span className="text-[10px] text-indigo-600 font-semibold bg-indigo-100/60 px-2 py-0.5 rounded-md">ชำระเต็มจำนวน</span>
-                              )}
+                          {termInstallmentCount > 1 && (
+                            <div className="p-3 bg-indigo-50/70 border border-indigo-100 rounded-2xl space-y-2 text-xs">
+                              <div className="flex items-center justify-between font-bold text-indigo-950">
+                                <span>ตารางแบ่งชำระรายงวด ({termInstallmentCount} งวด):</span>
+                              </div>
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 pt-0.5">
+                                {schedule.map((inst) => (
+                                  <div
+                                    key={inst.installmentNo}
+                                    className="flex items-center justify-between bg-white px-2.5 py-1.5 rounded-xl border border-indigo-100/80 text-xs shadow-2xs"
+                                  >
+                                    <span className="font-bold text-slate-600">งวดที่ {inst.installmentNo}:</span>
+                                    <span className="font-extrabold text-slate-900 font-mono">฿{inst.formattedAmount}</span>
+                                  </div>
+                                ))}
+                              </div>
+                              <div className="flex items-center justify-between pt-1.5 border-t border-indigo-100 text-xs">
+                                <span className="font-bold text-indigo-900">ยอดที่ต้องชำระในงวดแรก:</span>
+                                <span className="font-extrabold text-indigo-700 text-sm font-mono">{formatBaht(firstPaymentDue)}</span>
+                              </div>
+                              <p className="text-[10px] text-indigo-600/80 italic">
+                                {termDepositDeclaredStatus === 'PAID'
+                                  ? '* รวมเฉพาะค่าเช่างวดที่ 1 (เงินประกันชำระแล้ว)'
+                                  : '* รวมค่าเช่างวดที่ 1 + เงินประกัน/มัดจำ'}
+                              </p>
                             </div>
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 pt-0.5">
-                              {schedule.map((inst) => (
-                                <div
-                                  key={inst.installmentNo}
-                                  className="flex items-center justify-between bg-white px-2.5 py-1.5 rounded-xl border border-indigo-100/80 text-xs shadow-2xs"
-                                >
-                                  <span className="font-bold text-slate-600">งวดที่ {inst.installmentNo}:</span>
-                                  <span className="font-extrabold text-slate-900 font-mono">฿{inst.formattedAmount}</span>
-                                </div>
-                              ))}
-                            </div>
-                            <div className="flex items-center justify-between pt-1.5 border-t border-indigo-100 text-xs">
-                              <span className="font-bold text-indigo-900">ยอดที่ต้องชำระในงวดแรก:</span>
-                              <span className="font-extrabold text-indigo-700 text-sm font-mono">{formatBaht(firstPaymentDue)}</span>
-                            </div>
-                            <p className="text-[10px] text-indigo-600/80 italic">
-                              {termDepositDeclaredStatus === 'PAID'
-                                ? '* รวมเฉพาะค่าเช่างวดที่ 1 (เงินประกันชำระแล้ว)'
-                                : '* รวมค่าเช่างวดที่ 1 + เงินประกัน/มัดจำ'}
-                            </p>
-                          </div>
+                          )}
                         </div>
                       );
                     })()}

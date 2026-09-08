@@ -3241,16 +3241,17 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
           <span>ยังไม่ได้ตั้งค่ารอบคำนวณ</span>
         </div>
       )}
-      {/* Floating Toast Notification (Mobile: Centered above bottom nav, White/Red/Green/Amber bg, Smooth Fade) */}
+      {/* Floating Toast Notification (Mobile: Centered above bottom nav, Consistent White Fade for Success, Smooth Fade) */}
       {(saveSuccess || toastMessage) && (
         <div
+          role="status"
+          aria-live="polite"
+          data-testid="toast-notification"
           className={`fixed bottom-20 left-1/2 -translate-x-1/2 sm:bottom-8 sm:right-8 sm:left-auto sm:translate-x-0 z-[9999] px-4.5 py-3 rounded-2xl shadow-2xl border flex items-center gap-2.5 text-xs font-bold transition-all duration-500 ease-in-out ${toastType === 'error'
             ? 'bg-rose-50 border-rose-200 text-rose-800'
             : toastType === 'warning'
               ? 'bg-amber-50 border-amber-200 text-amber-800'
-              : toastType === 'success'
-                ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
-                : 'bg-sky-50 border-sky-200 text-sky-800'
+              : 'bg-white border-slate-200/90 text-slate-800'
             } ${isToastFading
               ? 'opacity-0 translate-y-3 pointer-events-none'
               : 'opacity-100 translate-y-0 animate-in fade-in slide-in-from-bottom-3 duration-300'
@@ -3260,10 +3261,8 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
             <AlertCircle className="w-4.5 h-4.5 text-rose-500 shrink-0" />
           ) : toastType === 'warning' ? (
             <AlertTriangle className="w-4.5 h-4.5 text-amber-500 shrink-0" />
-          ) : toastType === 'success' ? (
-            <CheckCircle2 className="w-4.5 h-4.5 text-emerald-500 shrink-0" />
           ) : (
-            <Info className="w-4.5 h-4.5 text-sky-500 shrink-0" />
+            <CheckCircle2 className="w-4.5 h-4.5 text-emerald-500 shrink-0" />
           )}
           <span className="whitespace-pre-line">{toastMessage || "บันทึกข้อมูลสำเร็จ"}</span>
         </div>

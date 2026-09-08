@@ -7,6 +7,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, act, cleanup } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { OwnerTenants } from '../pages/owner/tenants';
+import { QuickAddTenantModal } from '../components/QuickAddTenantModal';
 import { formatOwnerRoomOptionLabel } from '../utils/room-label.util';
 import { resolveLandlordSignerName } from '../utils/landlord-signer.util';
 import * as httpClient from '../data/httpClient';
@@ -100,6 +101,8 @@ describe('Tenant Phase 3 Step 3C.5B.6E: Targeted PO UAT UI Corrections', () => {
     name: 'นายสมชาย ผู้พักอาศัย',
     phone: '0811112233',
     email: '', // empty email to test fallback
+    citizenId: '1234567890123',
+    idCardPhotoMock: 'data:image/png;base64,mockphotodata',
     status: 'active',
     roomId: 'room-101',
     rentalType: 'MONTHLY',
@@ -558,6 +561,425 @@ describe('Tenant Phase 3 Step 3C.5B.6E: Targeted PO UAT UI Corrections', () => {
       const optionTexts = options.map(o => o.textContent);
       expect(optionTexts.some(t => t?.includes('102 • อาคาร B'))).toBe(true);
       expect(optionTexts.some(t => t === '103')).toBe(true);
+    });
+  });
+
+  describe('9. Tenant Profile: ID Card Document Print Shows Actual ID Card Text (Issue 1)', () => {
+    it('generates printed document containing authoritative tenant citizenId and name without raw string concatenation', async () => {
+      let writtenHtml = '';
+      const mockPrintWindow = {
+        document: {
+          write: vi.fn((html: string) => {
+            writtenHtml = html;
+          }),
+          close: vi.fn(),
+        },
+      };
+      const openSpy = vi.spyOn(window, 'open').mockReturnValue(mockPrintWindow as any);
+
+      render(
+        <QueryClientProvider client={queryClient}>
+          <OwnerTenants
+            dormitoryId={mockDormitoryId}
+            dormitory={sampleDormitory}
+            tenants={[activeMonthlyTenant]}
+            rooms={sampleRooms}
+            contracts={[activeContract]}
+            initialTenantId={activeMonthlyTenant.id}
+            onSaveTenants={vi.fn()}
+            onSaveRooms={vi.fn()}
+            onSaveContracts={vi.fn()}
+            onAddLog={vi.fn()}
+            buildings={sampleBuildings}
+          />
+        </QueryClientProvider>
+      );
+
+      // Open ID card modal
+      const idDocItem = screen.getByTitle('คลิกเพื่อเปิดดูภาพสำเนาบัตรประชาชน');
+      fireEvent.click(idDocItem);
+
+      // Click print button
+      const printBtn = screen.getByRole('button', { name: /พิมพ์เอกสาร/i });
+      fireEvent.click(printBtn);
+
+      expect(openSpy).toHaveBeenCalled();
+      expect(mockPrintWindow.document.write).toHaveBeenCalled();
+      expect(writtenHtml).toContain('เอกสารสำเนาบัตรประจำตัวประชาชนผู้เช่า');
+      expect(writtenHtml).toContain('1234567890123');
+      expect(writtenHtml).toContain('นายสมชาย ผู้พักอาศัย');
+      expect(writtenHtml).toContain('0811112233');
+
+      // Crucial: Must NOT contain raw string concatenation artifacts
+      expect(writtenHtml).not.toContain("'+ (selectedTenant.citizenId || '-') +'");
+      expect(writtenHtml).not.toContain("'+ (selectedTenant.name || '-') +'");
+
+      openSpy.mockRestore();
+    });
+  });
+
+  describe('10. QuickAddTenantModal: Hide Installment Table When Installment = 1 (Issue 2)', () => {
+    const mockRoom101Context = {
+      roomId: 'room-101-uuid',
+      dormitoryId: mockDormitoryId,
+      roomNumber: '101',
+      buildingId: 'bld-a',
+      effective: {
+        monthlyRent: 3500,
+        termRent: 12000,
+        dailyRent: 550,
+        depositAmount: 3500,
+      },
+      building: {
+        id: 'bld-a',
+        name: 'อาคาร A',
+        termMonths: 4,
+        maxTermRentInstallments: 3,
+      },
+    };
+
+    it('hides installment table and schedule title when installment count = 1, and shows when > 1', async () => {
+      render(
+        <QueryClientProvider client={queryClient}>
+          <QuickAddTenantModal
+            isOpen={true}
+            onClose={vi.fn()}
+            context={mockRoom101Context as any}
+            defaultTab="TERM"
+            hideLineTab={true}
+            onSuccess={vi.fn()}
+          />
+        </QueryClientProvider>
+      );
+
+      // In QuickAddTenantModal, termInstallmentCount defaults to 1
+      // Initially, when installmentCount === 1, table and schedule title MUST be hidden
+      expect(screen.queryByText(/ตารางแบ่งชำระรายงวด/)).toBeNull();
+
+      // Normal financial breakdown must remain visible
+      expect(screen.getByText('ค่าเช่ารวม:')).toBeDefined();
+      expect(screen.getByText('เงินประกัน/มัดจำ:')).toBeDefined();
+      expect(screen.getByText('ยอดตามข้อตกลง:')).toBeDefined();
+      expect(screen.getByText('ยอดชำระแล้ว:')).toBeDefined();
+      expect(screen.getByText('ยอดค้างชำระคงเหลือ:')).toBeDefined();
+
+      // Find the installment count select
+      const selects = screen.getAllByRole('combobox');
+      const installmentSelect = selects.find(s => (s as HTMLSelectElement).value === '1') as HTMLSelectElement;
+      expect(installmentSelect).toBeDefined();
+
+      // Change installment to 2
+      fireEvent.change(installmentSelect, { target: { value: '2' } });
+
+      // When installmentCount > 1, table and schedule title MUST be rendered
+      expect(screen.getByText(/ตารางแบ่งชำระรายงวด \(2 งวด\):/)).toBeDefined();
+      expect(screen.getByText('งวดที่ 1:')).toBeDefined();
+      expect(screen.getByText('งวดที่ 2:')).toBeDefined();
+
+      // Change back to 1
+      fireEvent.change(installmentSelect, { target: { value: '1' } });
+
+      // Must be hidden again
+      expect(screen.queryByText(/ตารางแบ่งชำระรายงวด/)).toBeNull();
+    });
+  });
+
+  describe('11. White-Fade Toast Feedback on Co-Occupant Actions (Issue 3)', () => {
+    it('shows white-fade toast "เพิ่มผู้พักร่วมเรียบร้อยแล้ว" after adding a co-occupant', async () => {
+      render(
+        <QueryClientProvider client={queryClient}>
+          <OwnerTenants
+            dormitoryId={mockDormitoryId}
+            dormitory={sampleDormitory}
+            tenants={[activeMonthlyTenant]}
+            rooms={sampleRooms}
+            contracts={[activeContract]}
+            initialTenantId={activeMonthlyTenant.id}
+            onSaveTenants={vi.fn()}
+            onSaveRooms={vi.fn()}
+            onSaveContracts={vi.fn()}
+            onAddLog={vi.fn()}
+            buildings={sampleBuildings}
+          />
+        </QueryClientProvider>
+      );
+
+      // Switch to Co-occupants / History tab
+      const coTabBtn = screen.getByRole('button', { name: /ประวัติผู้พักร่วม|ผู้พักร่วม/i });
+      fireEvent.click(coTabBtn);
+
+      // Open add co-occupant modal
+      const addCoBtn = screen.getByRole('button', { name: 'บันทึกแจ้งผู้พักร่วม' });
+      fireEvent.click(addCoBtn);
+
+      // Fill in required name and phone
+      const nameInput = screen.getByPlaceholderText('เช่น สมชาย ใจดี');
+      fireEvent.change(nameInput, { target: { value: 'สมจิต ผู้พักร่วม' } });
+      const phoneInput = screen.getByPlaceholderText('เช่น 081-234-5678');
+      fireEvent.change(phoneInput, { target: { value: '0899998877' } });
+
+      vi.useFakeTimers();
+
+      // Click "บันทึกเพิ่มผู้พักร่วม"
+      const submitBtn = screen.getByRole('button', { name: /บันทึกเพิ่มผู้พักร่วม/i });
+      fireEvent.click(submitBtn);
+
+      // Toast must appear with canonical white-fade styling and text
+      const toast = screen.getByTestId('tenant-action-toast');
+      expect(toast).toBeDefined();
+      expect(toast.textContent).toContain('เพิ่มผู้พักร่วมเรียบร้อยแล้ว');
+      expect(toast.className).toContain('bg-white');
+      expect(toast.className).toContain('border-slate-200/90');
+      expect(toast.className).toContain('shadow-2xl');
+
+      // Fast-forward timer to dismiss
+      act(() => {
+        vi.advanceTimersByTime(3600);
+      });
+      expect(screen.queryByTestId('tenant-action-toast')).toBeNull();
+
+      vi.useRealTimers();
+    });
+
+    it('shows white-fade toast "นำผู้พักร่วมออกเรียบร้อยแล้ว" after removing a co-occupant', async () => {
+      const tenantWithCo: Tenant = {
+        ...activeMonthlyTenant,
+        coOccupants: [
+          {
+            id: 'co-1',
+            name: 'สมหญิง ผู้พักร่วมเดิม',
+            phone: '0822223344',
+            relationship: 'แฟน',
+            addedAt: '2026-01-01',
+          },
+        ],
+      };
+
+      render(
+        <QueryClientProvider client={queryClient}>
+          <OwnerTenants
+            dormitoryId={mockDormitoryId}
+            dormitory={sampleDormitory}
+            tenants={[tenantWithCo]}
+            rooms={sampleRooms}
+            contracts={[activeContract]}
+            initialTenantId={tenantWithCo.id}
+            onSaveTenants={vi.fn()}
+            onSaveRooms={vi.fn()}
+            onSaveContracts={vi.fn()}
+            onAddLog={vi.fn()}
+            buildings={sampleBuildings}
+          />
+        </QueryClientProvider>
+      );
+
+      // Switch to Co-occupants / History tab
+      const coTabBtn = screen.getByRole('button', { name: /ประวัติผู้พักร่วม|ผู้พักร่วม/i });
+      fireEvent.click(coTabBtn);
+
+      // Click "นำออก" button
+      const removeBtn = screen.getByTitle('นำผู้พักร่วมออกจากห้องพัก');
+      fireEvent.click(removeBtn);
+
+      vi.useFakeTimers();
+
+      // Click "ยืนยันการนำออกและบันทึกประวัติ"
+      const confirmRemoveBtn = screen.getByRole('button', { name: /ยืนยันการนำออกและบันทึกประวัติ/i });
+      fireEvent.click(confirmRemoveBtn);
+
+      // Toast must appear with canonical white-fade styling and text
+      const toast = screen.getByTestId('tenant-action-toast');
+      expect(toast).toBeDefined();
+      expect(toast.textContent).toContain('นำผู้พักร่วมออกเรียบร้อยแล้ว');
+      expect(toast.className).toContain('bg-white');
+      expect(toast.className).toContain('border-slate-200/90');
+      expect(toast.className).toContain('shadow-2xl');
+
+      // Fast-forward timer to dismiss
+      act(() => {
+        vi.advanceTimersByTime(3600);
+      });
+      expect(screen.queryByTestId('tenant-action-toast')).toBeNull();
+
+      vi.useRealTimers();
+    });
+
+    it('shows white-fade toast "บันทึกการแก้ไขเรียบร้อยแล้ว" after saving tenant edit', async () => {
+      const httpSpy = vi.spyOn(httpClient, 'httpRequest').mockResolvedValue({
+        success: true,
+        data: {
+          tenant: {
+            ...activeMonthlyTenant,
+            name: 'นายสมชาย ผู้พักอาศัย แก้ไขใหม่',
+            version: 2,
+          },
+          emergencyContacts: [
+            { id: 'em-1', name: 'สมศรี ผู้ติดต่อ', phone: '0855554433', relationship: 'มารดา', isPrimary: true },
+          ],
+          vehicles: [],
+        },
+      });
+
+      const tenantWithEmergency: Tenant = {
+        ...activeMonthlyTenant,
+        emergencyContact: {
+          name: 'สมศรี ผู้ติดต่อ',
+          phone: '0855554433',
+          relationship: 'มารดา',
+        },
+      };
+
+      render(
+        <QueryClientProvider client={queryClient}>
+          <OwnerTenants
+            dormitoryId={mockDormitoryId}
+            dormitory={sampleDormitory}
+            tenants={[tenantWithEmergency]}
+            rooms={sampleRooms}
+            contracts={[activeContract]}
+            initialTenantId={tenantWithEmergency.id}
+            onSaveTenants={vi.fn()}
+            onSaveRooms={vi.fn()}
+            onSaveContracts={vi.fn()}
+            onAddLog={vi.fn()}
+            buildings={sampleBuildings}
+          />
+        </QueryClientProvider>
+      );
+
+      // Click "แก้ไขข้อมูล"
+      const editBtn = screen.getByRole('button', { name: 'แก้ไขข้อมูล' });
+      fireEvent.click(editBtn);
+
+      // Change name to trigger dirty state
+      const nameInput = screen.getByDisplayValue(tenantWithEmergency.name);
+      fireEvent.change(nameInput, { target: { value: 'นายสมชาย ผู้พักอาศัย แก้ไขใหม่' } });
+
+      vi.useFakeTimers();
+
+      // Click "บันทึกการแก้ไข"
+      const saveBtn = screen.getByRole('button', { name: 'บันทึกการแก้ไข' });
+      await act(async () => {
+        fireEvent.click(saveBtn);
+      });
+
+      // Toast must appear with canonical white-fade styling and text
+      const toast = screen.getByTestId('tenant-action-toast');
+      expect(toast).toBeDefined();
+      expect(toast.textContent).toContain('บันทึกการแก้ไขเรียบร้อยแล้ว');
+      expect(toast.className).toContain('bg-white');
+      expect(toast.className).toContain('border-slate-200/90');
+      expect(toast.className).toContain('shadow-2xl');
+
+      // Fast-forward timer to dismiss
+      act(() => {
+        vi.advanceTimersByTime(3600);
+      });
+      expect(screen.queryByTestId('tenant-action-toast')).toBeNull();
+
+      vi.useRealTimers();
+      httpSpy.mockRestore();
+    });
+
+    it('shows white-fade toast "เพิ่มผู้เช่าเรียบร้อยแล้ว" after confirming quick-add in OwnerTenants', async () => {
+      const httpSpy = vi.spyOn(httpClient, 'httpRequest').mockImplementation(async (method, url) => {
+        if (String(url).includes('quick-add-context')) {
+          return {
+            data: {
+              roomId: 'room-103',
+              dormitoryId: mockDormitoryId,
+              roomNumber: '103',
+              effective: {
+                monthlyRent: 4500,
+                monthlyDeposit: 4500,
+                termRent: 18000,
+                termDeposit: 4500,
+                termMonths: 4,
+                dailyRate: 500,
+                dailyDeposit: 500,
+              },
+              building: {
+                id: 'bld-a',
+                name: 'อาคาร A',
+                termMonths: 4,
+                maxInstallments: 1,
+              },
+            },
+          };
+        }
+        if (String(url).includes('provisional-terms')) {
+          return {
+            success: true,
+            tenant: { id: 'tnt-new', name: 'ผู้เช่าใหม่ เทอม', phone: '0898887766' },
+          };
+        }
+        return { success: true };
+      });
+
+      render(
+        <QueryClientProvider client={queryClient}>
+          <OwnerTenants
+            dormitoryId={mockDormitoryId}
+            dormitory={sampleDormitory}
+            tenants={[activeMonthlyTenant]}
+            rooms={sampleRooms}
+            contracts={[activeContract]}
+            initialTenantId={activeMonthlyTenant.id}
+            onSaveTenants={vi.fn()}
+            onSaveRooms={vi.fn()}
+            onSaveContracts={vi.fn()}
+            onAddLog={vi.fn()}
+            buildings={sampleBuildings}
+          />
+        </QueryClientProvider>
+      );
+
+      // Click "จดทะเบียนผู้เช่าและย้ายเข้า"
+      const quickAddBtn = screen.getByTitle('จดทะเบียนผู้เช่าและย้ายเข้า');
+      await act(async () => {
+        fireEvent.click(quickAddBtn);
+      });
+
+      // Switch to MONTHLY tab
+      const monthlyTab = screen.getByTestId('tab-monthly');
+      fireEvent.click(monthlyTab);
+
+      // Enter required tenant name and phone
+      const nameInput = screen.getByPlaceholderText(/เช่น นายสมชาย ใจดี/i);
+      fireEvent.change(nameInput, { target: { value: 'ผู้เช่าใหม่ รายเดือน' } });
+      const phoneInput = screen.getByPlaceholderText(/เช่น 081-234-5678/i);
+      fireEvent.change(phoneInput, { target: { value: '0898887766' } });
+
+      vi.useFakeTimers();
+
+      // Submit form
+      const submitBtn = screen.getByRole('button', { name: /ยืนยันเพิ่มผู้เช่า/i });
+      await act(async () => {
+        fireEvent.submit(submitBtn.closest('form')!);
+      });
+
+      // Toast must appear with canonical white-fade styling and exact canonical text
+      const toast = screen.getByTestId('tenant-action-toast');
+      expect(toast).toBeDefined();
+      expect(toast.querySelector('span')?.textContent?.trim()).toBe('เพิ่มผู้เช่าเรียบร้อยแล้ว');
+      expect(toast.textContent).toContain('เพิ่มผู้เช่าเรียบร้อยแล้ว');
+      expect(toast.textContent).not.toContain('รายเดือน');
+      expect(toast.textContent).not.toContain('รายเทอม');
+      expect(toast.textContent).not.toContain('รายวัน');
+      expect(toast.textContent).not.toContain('ผู้เช่าใหม่');
+      expect(toast.textContent).not.toContain('103');
+      expect(toast.className).toContain('bg-white');
+      expect(toast.className).toContain('border-slate-200/90');
+      expect(toast.className).toContain('shadow-2xl');
+
+      // Fast-forward timer to dismiss
+      act(() => {
+        vi.advanceTimersByTime(3600);
+      });
+      expect(screen.queryByTestId('tenant-action-toast')).toBeNull();
+
+      vi.useRealTimers();
+      httpSpy.mockRestore();
     });
   });
 });
