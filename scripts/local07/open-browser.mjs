@@ -62,7 +62,13 @@ async function main() {
   const safety = assertSafeDatabaseTarget();
 
   // 3. Full-Stack Preflight Readiness Gate
-  const preflight = await runPreflight({ silent: true });
+  let preflight = await runPreflight({ silent: true });
+  if (!preflight.passed && !preflight.checks.uatSessions && preflight.checks.apiReady && preflight.checks.frontend && preflight.checks.postgres && preflight.checks.redis) {
+    console.log('⚠️ UAT session expired or probe returned 401. Auto-refreshing UAT sessions...');
+    await createAllSessions();
+    preflight = await runPreflight({ silent: true });
+  }
+
   if (!preflight.passed) {
     if (!preflight.checks.apiLiveness || !preflight.checks.apiReady) {
       console.error('\n❌ UAT BLOCKED: Backend API unavailable on 127.0.0.1:3001');
