@@ -65,6 +65,7 @@ export interface ReportCalculationParams {
   buildings?: any[];
   tenants?: any[];
   contracts?: any[];
+  repairs?: any[];
   selectedBuilding?: string;
   selectedBillingCycleId?: string; // Authoritative UUID from /api/v1/billing-cycles
   selectedCycleCode?: string;      // Canonical YYYY-MM code (e.g. "2026-08")
@@ -84,6 +85,7 @@ export interface MonthlyRevenueHistoryItem {
   exactOther: string;
   exactFine: string;
   exactTotal: string;
+  exactRepairCost?: string;
   rent: number;
   water: number;
   elec: number;
@@ -91,6 +93,7 @@ export interface MonthlyRevenueHistoryItem {
   other: number;
   fine: number;
   total: number;
+  repairCost?: number;
 }
 
 export interface BreakdownPercentages {
@@ -131,6 +134,9 @@ export interface ReportCalculationResult {
   exactTotalBilledPlusDeposit: string;
   exactYearBilledTotal: string;
   exactArpu: string;
+  exactTotalRepairCostThisMonth: string;
+  exactTotalRepairCostYear: string;
+  exactNetIncomeThisMonth: string;
 
   // Presentation Monetary Values (Numbers for charts/UI, computed from exact satangs)
   fixedRentTotal: number;
@@ -148,6 +154,11 @@ export interface ReportCalculationResult {
   totalUnpaidThisMonth: number;
   totalOverdueAmount: number;
   totalBilledPlusDeposit: number;
+  totalRepairCostThisMonth: number;
+  totalRepairCostYear: number;
+  repairsCountThisMonth: number;
+  repairsCountYear: number;
+  netIncomeThisMonth: number;
   paidPercent: number;
   unpaidPercent: number;
   arpu: number;
@@ -226,6 +237,7 @@ export function calculateOwnerReports(params: ReportCalculationParams): ReportCa
   const contracts = params.contracts || [];
   const selectedBuilding = params.selectedBuilding || 'all';
   const currentYearStr = new Date().getFullYear().toString();
+  const currentMonthStr = String(new Date().getMonth() + 1).padStart(2, '0');
 
   // Authoritative cycle resolution
   const selectedBillingCycleId = params.selectedBillingCycleId || '';
@@ -239,14 +251,22 @@ export function calculateOwnerReports(params: ReportCalculationParams): ReportCa
   // 1. Filtered rooms by selected building
   const filteredRooms = selectedBuilding === 'all'
     ? rooms
-    : rooms.filter(r => r.buildingId === selectedBuilding);
+    : (selectedBuilding === 'unspecified'
+        ? rooms.filter(r => !r.buildingId)
+        : rooms.filter(r => r.buildingId === selectedBuilding));
 
-  const filteredRoomIds = new Set(filteredRooms.map(r => r.id));
+  const filteredRoomIds = new Set(filteredRooms.map(r => r.id).filter(Boolean));
+  const filteredRoomNumbers = new Set(filteredRooms.map(r => r.roomNumber).filter(Boolean));
 
   // 2. Filtered bills by building
   const filteredBills = selectedBuilding === 'all'
     ? bills
-    : bills.filter(b => filteredRoomIds.has(b.roomId));
+    : bills.filter(b => {
+        if (b.roomId && filteredRoomIds.has(b.roomId)) return true;
+        if (b.roomId && filteredRoomNumbers.has(b.roomId)) return true;
+        if (b.roomNumber && filteredRoomNumbers.has(b.roomNumber)) return true;
+        return false;
+      });
 
   // 3. Current Month Bills — matches selectedBillingCycleId (authoritative UUID) or cycleCode/cycleId
   let currentMonthBills: any[];
@@ -345,8 +365,18 @@ export function calculateOwnerReports(params: ReportCalculationParams): ReportCa
   const otherServiceSatangs: bigint = revenueActiveBills.reduce((sum: bigint, b: any) => sum + getBillOtherServiceSatangs(b), 0n);
   const fineSatangs: bigint = revenueActiveBills.reduce((sum: bigint, b: any) => sum + getBillFineSatangs(b), 0n);
 
-  // Deposits
-  const contractDepositSatangs: bigint = contracts
+  // Deposits: contracts filtered by selected building
+  const filteredContracts = selectedBuilding === 'all'
+    ? contracts
+    : contracts.filter(c => {
+        const contractRoomId = c.roomId || c.room?.id;
+        const contractRoomNumber = c.roomNumber || c.room?.roomNumber;
+        if (contractRoomId && (filteredRoomIds.has(contractRoomId) || filteredRoomNumbers.has(contractRoomId))) return true;
+        if (contractRoomNumber && filteredRoomNumbers.has(contractRoomNumber)) return true;
+        return false;
+      });
+
+  const contractDepositSatangs: bigint = filteredContracts
     .filter(c => c.status === 'active' || c.status === 'pending_signature')
     .reduce((sum: bigint, c: any): bigint => sum + toSatangs(c.depositAmount || 0), 0n);
 
@@ -361,13 +391,65 @@ export function calculateOwnerReports(params: ReportCalculationParams): ReportCa
   const sumCategoriesTotalSatangs: bigint = fixedRentSatangs + waterSatangs + electricSatangs + commonParkingSatangs + otherServiceSatangs + fineSatangs;
   const totalBilledSatangs: bigint = sumBillsTotalSatangs > 0n ? sumBillsTotalSatangs : sumCategoriesTotalSatangs;
 
-  const totalRevenueSatangs: bigint = paidBills.reduce((sum: bigint, b: any): bigint => sum + toSatangs(b.paidAmount || b.totalAmount), 0n);
-  const totalUnpaidSatangs: bigint = totalBilledSatangs - totalRevenueSatangs;
+  const totalRevenueSatangs: bigint = revenueActiveBills.reduce((sum: bigint, b: any): bigint => {
+    const s = (b.status || '').toLowerCase();
+    if (s === 'paid') {
+      return sum + toSatangs(b.paidAmount || b.totalAmount);
+    }
+    if (s === 'partially_paid' || s === 'partial') {
+      return sum + toSatangs(b.paidAmount || 0);
+    }
+    return sum;
+  }, 0n);
+
+  const totalUnpaidSatangs: bigint = totalBilledSatangs > totalRevenueSatangs ? totalBilledSatangs - totalRevenueSatangs : 0n;
 
   // Overdue Total
   const totalOverdueSatangs: bigint = filteredBills
-    .filter(b => b.status === 'overdue')
+    .filter(b => (b.status || '').toLowerCase() === 'overdue')
     .reduce((sum: bigint, b: any): bigint => sum + toSatangs(b.totalAmount), 0n);
+
+  // 6.5. Maintenance Repair Expenses Aggregation
+  const rawRepairs = params.repairs || [];
+  const filteredRepairs = selectedBuilding === 'all'
+    ? rawRepairs
+    : rawRepairs.filter(r => {
+        if (r.buildingId && r.buildingId === selectedBuilding) return true;
+        if (r.roomId && (filteredRoomIds.has(r.roomId) || filteredRoomNumbers.has(r.roomId))) return true;
+        return false;
+      });
+
+  const getRepairIsoString = (r: any): string => {
+    if (!r) return '';
+    if (typeof r.createdAt === 'string') return r.createdAt;
+    if (r.createdAt instanceof Date) return r.createdAt.toISOString();
+    if (r.createdAt?.toISOString && typeof r.createdAt.toISOString === 'function') {
+      return r.createdAt.toISOString();
+    }
+    return '';
+  };
+
+  const effectiveCyclePrefix = selectedCycleCode
+    ? selectedCycleCode.slice(0, 7)
+    : (selectedCycle && selectedCycle.length === 7 && selectedCycle.includes('-') ? selectedCycle.slice(0, 7) : `${currentYearStr}-${currentMonthStr}`);
+
+  const currentMonthRepairs = filteredRepairs.filter(r => {
+    const dStr = getRepairIsoString(r);
+    return dStr.startsWith(effectiveCyclePrefix);
+  });
+
+  const repairCostThisMonthSatangs = currentMonthRepairs.reduce((s: bigint, r: any) => s + toSatangs(r.cost || 0), 0n);
+  const repairsCountThisMonth = currentMonthRepairs.length;
+
+  const yearRepairs = filteredRepairs.filter(r => {
+    const dStr = getRepairIsoString(r);
+    return dStr.startsWith(selectedYear);
+  });
+
+  const repairCostYearSatangs = yearRepairs.reduce((s: bigint, r: any) => s + toSatangs(r.cost || 0), 0n);
+  const repairsCountYear = yearRepairs.length;
+
+  const netIncomeThisMonthSatangs = totalRevenueSatangs - repairCostThisMonthSatangs;
 
   // 7. Month-by-Month Historical Revenue (01 to 12) for Charts & Yearly CSV
   const defaultMonths = ['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12'];
@@ -402,6 +484,12 @@ export function calculateOwnerReports(params: ReportCalculationParams): ReportCa
     // Combined other for chart: common/parking + other + fine
     const mChartOtherSat = mCommonParkingSat + mOtherSat + mFineSat;
 
+    const monthRepairs = filteredRepairs.filter(r => {
+      const dStr = getRepairIsoString(r);
+      return dStr.startsWith(cycleKey);
+    });
+    const mRepairSat = monthRepairs.reduce((s: bigint, r: any) => s + toSatangs(r.cost || 0), 0n);
+
     return {
       cycleId: cycleKey,
       monthKey: m,
@@ -414,6 +502,7 @@ export function calculateOwnerReports(params: ReportCalculationParams): ReportCa
       exactOther: satangsToString(mChartOtherSat),
       exactFine: satangsToString(mFineSat),
       exactTotal: satangsToString(mTotalSat),
+      exactRepairCost: satangsToString(mRepairSat),
       rent: satangsToNumber(mRentSat),
       water: satangsToNumber(mWaterSat),
       elec: satangsToNumber(mElecSat),
@@ -421,6 +510,7 @@ export function calculateOwnerReports(params: ReportCalculationParams): ReportCa
       other: satangsToNumber(mChartOtherSat),
       fine: satangsToNumber(mFineSat),
       total: satangsToNumber(mTotalSat),
+      repairCost: satangsToNumber(mRepairSat),
     };
   });
 
@@ -507,6 +597,9 @@ export function calculateOwnerReports(params: ReportCalculationParams): ReportCa
     exactTotalBilledPlusDeposit: satangsToString(totalBreakdownSatangs),
     exactYearBilledTotal: satangsToString(yearBilledSatangs),
     exactArpu: satangsToString(arpuSatangs),
+    exactTotalRepairCostThisMonth: satangsToString(repairCostThisMonthSatangs),
+    exactTotalRepairCostYear: satangsToString(repairCostYearSatangs),
+    exactNetIncomeThisMonth: satangsToString(netIncomeThisMonthSatangs),
 
     // Presentation Numbers (derived safely from exact satangs)
     fixedRentTotal: satangsToNumber(fixedRentSatangs),
@@ -524,6 +617,11 @@ export function calculateOwnerReports(params: ReportCalculationParams): ReportCa
     totalUnpaidThisMonth: satangsToNumber(totalUnpaidSatangs),
     totalOverdueAmount: satangsToNumber(totalOverdueSatangs),
     totalBilledPlusDeposit: satangsToNumber(totalBreakdownSatangs),
+    totalRepairCostThisMonth: satangsToNumber(repairCostThisMonthSatangs),
+    totalRepairCostYear: satangsToNumber(repairCostYearSatangs),
+    repairsCountThisMonth,
+    repairsCountYear,
+    netIncomeThisMonth: satangsToNumber(netIncomeThisMonthSatangs),
     paidPercent,
     unpaidPercent,
     arpu: satangsToNumber(arpuSatangs),

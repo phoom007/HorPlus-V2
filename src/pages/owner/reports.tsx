@@ -35,7 +35,7 @@ import {
   Tooltip,
   Legend
 } from 'recharts';
-import { Room, Bill, Building, Tenant, Contract } from '../../types';
+import { Room, Bill, Building, Tenant, Contract, MaintenanceRequest as RepairRequest } from '../../types';
 import { calculateOwnerReports } from '../../utils/report-calculations';
 
 interface OwnerReportsProps {
@@ -44,6 +44,7 @@ interface OwnerReportsProps {
   buildings?: Building[];
   tenants?: Tenant[];
   contracts?: Contract[];
+  repairs?: RepairRequest[];
   selectedBillingCycleId?: string; // Authoritative UUID
   selectedCycleCode?: string;      // Canonical YYYY-MM
   selectedCycle?: string;          // Backward compatibility
@@ -76,6 +77,7 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
   buildings = [],
   tenants = [],
   contracts = [],
+  repairs = [],
   selectedBillingCycleId,
   selectedCycleCode,
   selectedCycle: propSelectedCycle,
@@ -102,6 +104,10 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
     return buildings || [];
   }, [buildings]);
 
+  const hasUnspecifiedRooms = useMemo(() => {
+    return (rooms || []).some(r => !r.buildingId);
+  }, [rooms]);
+
   // Execute canonical shared report calculations
   const reportData = useMemo(() => {
     return calculateOwnerReports({
@@ -110,13 +116,14 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
       buildings,
       tenants,
       contracts,
+      repairs,
       selectedBuilding,
       selectedBillingCycleId,
       selectedCycleCode: effectiveCycleCode,
       selectedCycle: propSelectedCycle,
       selectedYear,
     });
-  }, [rooms, bills, buildings, tenants, contracts, selectedBuilding, selectedBillingCycleId, effectiveCycleCode, propSelectedCycle, selectedYear]);
+  }, [rooms, bills, buildings, tenants, contracts, repairs, selectedBuilding, selectedBillingCycleId, effectiveCycleCode, propSelectedCycle, selectedYear]);
 
   const {
     filteredRooms,
@@ -138,6 +145,8 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
     exactDepositTotal,
     exactTotalBilledThisMonth,
     exactTotalBilledPlusDeposit,
+    exactTotalRepairCostThisMonth,
+    exactTotalRepairCostYear,
     fixedRentTotal,
     waterTotal,
     electricTotal,
@@ -150,6 +159,10 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
     totalUnpaidThisMonth,
     totalOverdueAmount,
     totalBilledPlusDeposit,
+    totalRepairCostThisMonth,
+    totalRepairCostYear,
+    repairsCountThisMonth,
+    repairsCountYear,
     paidPercent,
     unpaidPercent,
     occupiedPercent,
@@ -178,7 +191,9 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
   const handleExportCSVMode = (mode: 'monthly' | 'yearly') => {
     setShowCsvPopover(false);
     const bObj = buildingOptions.find(b => b.id === selectedBuilding);
-    const bName = selectedBuilding === 'all' ? 'ทุกตึก' : (bObj?.name || selectedBuilding);
+    const bName = selectedBuilding === 'all'
+      ? 'ทุกตึก'
+      : (selectedBuilding === 'unspecified' ? 'ไม่ระบุอาคาร' : (bObj?.name || selectedBuilding));
     const currentMonthNum = effectiveCycleCode.split('-')[1] || '07';
     const monthLabel = `${monthNames[currentMonthNum]} ${parseInt(selectedYear) + 543}`;
     const yearLabel = `${parseInt(selectedYear) + 543}`;
@@ -196,21 +211,22 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
       csv += `"ค่าบริการอื่นๆ",${exactOtherServiceTotal}\n`;
       csv += `"ค่าปรับชำระเกินกำหนด",${exactFineTotal}\n`;
       csv += `"ค่าประกัน / มัดจำ",${exactDepositTotal}\n`;
-      csv += `"รวมยอดจัดเก็บทั้งหมด",${exactTotalBilledThisMonth}\n\n`;
+      csv += `"รวมยอดจัดเก็บทั้งหมด",${exactTotalBilledThisMonth}\n`;
+      csv += `"ค่าใช้จ่ายงานแจ้งซ่อม",${exactTotalRepairCostThisMonth}\n\n`;
 
       csv += `สถานะการชำระเงินประจำเดือน (${effectiveCycleCode}):\n`;
       csv += `เลขห้อง,สถานะ,ยอดเงินชำระ (บาท)\n`;
       currentMonthBills.forEach(b => {
-        const rm = rooms.find(r => r.id === b.roomId);
-        csv += `"${rm?.roomNumber || 'ไม่ระบุ'}","${b.status === 'paid' ? 'ชำระแล้ว' : 'ยังไม่ชำระ'}",${b.totalAmount}\n`;
+        const rm = rooms.find(r => r.id === b.roomId || (b.roomNumber && r.roomNumber === b.roomNumber) || r.roomNumber === b.roomId);
+        csv += `"${rm?.roomNumber || b.roomNumber || 'ไม่ระบุ'}","${b.status === 'paid' ? 'ชำระแล้ว' : 'ยังไม่ชำระ'}",${b.totalAmount}\n`;
       });
     } else {
       csv += `ประเภทรายงาน: ประจำปี ${yearLabel} (ปี ค.ศ. ${selectedYear})\n`;
       csv += `พิมพ์เมื่อวันที่: ${new Date().toLocaleString('th-TH')}\n\n`;
-      csv += `เดือน,ค่าเช่าห้อง (บาท),ค่าน้ำ (บาท),ค่าไฟฟ้า (บาท),อื่นๆ/ส่วนกลาง (บาท),รวมจัดเก็บ (บาท)\n`;
+      csv += `เดือน,ค่าเช่าห้อง (บาท),ค่าน้ำ (บาท),ค่าไฟฟ้า (บาท),อื่นๆ/ส่วนกลาง (บาท),รวมจัดเก็บ (บาท),ค่าใช้จ่ายซ่อมบำรุง (บาท)\n`;
 
       monthlyRevenueHistory.forEach(r => {
-        csv += `"${r.name}",${r.exactRent},${r.exactWater},${r.exactElec},${r.exactOther},${r.exactTotal}\n`;
+        csv += `"${r.name}",${r.exactRent},${r.exactWater},${r.exactElec},${r.exactOther},${r.exactTotal},${r.exactRepairCost || '0.00'}\n`;
       });
     }
 
@@ -263,6 +279,9 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
               {buildingOptions.map(b => (
                 <option key={b.id} value={b.id}>{b.name}</option>
               ))}
+              {hasUnspecifiedRooms && (
+                <option value="unspecified">ไม่ระบุอาคาร</option>
+              )}
             </select>
           </div>
 
@@ -342,7 +361,9 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
               <p className="text-xs font-bold text-slate-400">ยอดรวมจัดเก็บทั้งหมด (รอบ {displayMonthTh} {displayYearTh})</p>
               {selectedBuilding !== 'all' && (
                 <span className="px-2 py-0.5 bg-blue-50 text-blue-600 text-[10px] font-black rounded-lg border border-blue-100">
-                  {buildingOptions.find(b => b.id === selectedBuilding)?.name || selectedBuilding}
+                  {selectedBuilding === 'unspecified'
+                    ? 'ไม่ระบุอาคาร'
+                    : (buildingOptions.find(b => b.id === selectedBuilding)?.name || selectedBuilding)}
                 </span>
               )}
             </div>
@@ -415,7 +436,9 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
               { label: 'ยอดค้างชำระสะสม', val: formatBaht(totalOverdueAmount), pct: 'ติดตามทวงถาม', sub: `อัปเดตอ้างอิงงวด ${displayMonthTh} ${displayYearTh}` },
               { label: 'อัตราจัดเก็บชำระจริง', val: `${paidPercent}%`, pct: `รับแล้ว ${paidBills.length} บิล`, sub: `อัปเดตอ้างอิงงวด ${displayMonthTh} ${displayYearTh}` },
               { label: 'รายได้เฉลี่ยต่อห้อง (ARPU)', val: formatBaht(arpu), pct: 'เฉลี่ยรายห้อง', sub: `คำนวณจาก ${occupiedCount} ห้องที่มีผู้เช่า` },
-              { label: 'ยอดประกันถือครองรวม', val: formatBaht(depositTotal), pct: 'หลักประกันสัญญา', sub: 'อ้างอิงสัญญาเช่าที่มีผลบังคับใช้' }
+              { label: 'ยอดประกันถือครองรวม', val: formatBaht(depositTotal), pct: 'หลักประกันสัญญา', sub: 'อ้างอิงสัญญาเช่าที่มีผลบังคับใช้' },
+              { label: 'ค่าใช้จ่ายแจ้งซ่อม (รอบนี้)', val: formatBaht(totalRepairCostThisMonth), pct: `${repairsCountThisMonth} งาน`, sub: `อ้างอิงรอบ ${displayMonthTh} ${displayYearTh}` },
+              { label: `ค่าใช้จ่ายแจ้งซ่อมรวมปี ${selectedYear}`, val: formatBaht(totalRepairCostYear), pct: `${repairsCountYear} งาน`, sub: `สรุปงานซ่อมสะสมปี ${selectedYear}` }
             ].map((stat, i) => (
               <div key={i} className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-100 shadow-xs flex flex-col justify-between hover:border-slate-200 transition-all">
                 <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">{stat.label}</span>
