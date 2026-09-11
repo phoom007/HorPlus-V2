@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { MessageSquare, X, AlertTriangle, Settings, Sparkles, Check } from 'lucide-react';
 import { formatThaiDate } from './GlobalComponents';
+import { LineLogo } from './LineLogo';
 
 interface LineQuotaBadgeProps {
   dormitoryId?: string;
@@ -131,8 +132,8 @@ export const LineQuotaBadge: React.FC<LineQuotaBadgeProps> = ({
         title="ยังไม่พร้อมใช้งาน (กรุณาลงทะเบียนหอพักให้เสร็จก่อน)"
       >
         {!hideIcon && (
-          <div className="w-3.5 h-3.5 sm:w-4 sm:h-4 rounded-full bg-slate-400 text-white flex items-center justify-center font-bold shadow-2xs shrink-0">
-            <MessageSquare className="w-2 h-2 sm:w-2.5 sm:h-2.5 fill-white/20 text-white" />
+          <div className="relative flex items-center justify-center shrink-0">
+            <LineLogo className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0 rounded-sm opacity-60 grayscale" />
           </div>
         )}
         <div className="flex items-center gap-1 text-[10px] sm:text-xs shrink-0 whitespace-nowrap">
@@ -178,13 +179,7 @@ export const LineQuotaBadge: React.FC<LineQuotaBadgeProps> = ({
         {/* LINE Icon / Attention indicator */}
         {!hideIcon && (
           <div className="relative flex items-center justify-center shrink-0">
-            <div
-              className={`w-3.5 h-3.5 sm:w-4 sm:h-4 rounded-full flex items-center justify-center font-bold shadow-2xs ${
-                isConfigured ? 'bg-[#06C755] text-white' : 'bg-amber-500 text-white'
-              }`}
-            >
-              <MessageSquare className="w-2 h-2 sm:w-2.5 sm:h-2.5 fill-white/20 text-white" />
-            </div>
+            <LineLogo className={`w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0 rounded-sm ${!isConfigured ? 'opacity-85' : ''}`} />
             <span
               className={`absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full border border-white ${
                 !isConfigured
@@ -249,8 +244,8 @@ export const LineQuotaBadge: React.FC<LineQuotaBadgeProps> = ({
               </button>
 
               <div className="flex items-center gap-3 mb-2">
-                <div className="w-10 h-10 rounded-2xl bg-white/20 backdrop-blur-md flex items-center justify-center shrink-0 border border-white/30">
-                  <MessageSquare className="w-5 h-5 text-white fill-white/20" />
+                <div className="w-10 h-10 rounded-2xl bg-white/20 backdrop-blur-md flex items-center justify-center shrink-0 border border-white/30 overflow-hidden shadow-xs">
+                  <LineLogo className="w-7 h-7 shrink-0 rounded-xs" />
                 </div>
                 <div>
                   <h3 className="text-base font-black tracking-tight text-white leading-tight">
@@ -307,7 +302,10 @@ export const LineQuotaBadge: React.FC<LineQuotaBadgeProps> = ({
 
                   {/* 5 Event Preferences Toggle */}
                   <div className="p-3 bg-slate-50 rounded-2xl border border-slate-100 space-y-2">
-                    <span className="text-xs font-bold text-slate-700 block">การแจ้งเตือนอัตโนมัติผ่าน LINE</span>
+                    <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                      <LineLogo className="w-3.5 h-3.5 shrink-0 rounded-xs" />
+                      <span>การแจ้งเตือนอัตโนมัติผ่าน LINE</span>
+                    </span>
                     <div className="space-y-1.5 text-xs text-slate-600">
                       {[
                         { key: 'notifyRepairRequest' as const, label: 'แจ้งเตือนเมื่อมีคำขอแจ้งซ่อมใหม่' },
@@ -363,7 +361,7 @@ export const LineQuotaBadge: React.FC<LineQuotaBadgeProps> = ({
                     }}
                     className="w-full py-2.5 bg-gradient-to-r from-[#06C755] to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 text-white font-extrabold text-xs rounded-xl transition-all shadow-md shadow-emerald-500/20 cursor-pointer flex items-center justify-center gap-2"
                   >
-                    <Settings className="w-4 h-4" />
+                    <LineLogo className="w-4 h-4 shrink-0 rounded-xs" />
                     ตั้งค่า LINE OA ทันที
                   </button>
                 </div>

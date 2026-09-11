@@ -428,17 +428,17 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
     primary: {
       btn: 'bg-indigo-600 hover:bg-indigo-700 text-white',
       iconBg: 'bg-indigo-50 text-indigo-600',
-      icon: <Info className="w-6 h-6" />
+      icon: <Info className="w-5 h-5" />
     },
     warning: {
       btn: 'bg-amber-600 hover:bg-amber-700 text-white',
       iconBg: 'bg-amber-50 text-amber-600',
-      icon: <AlertTriangle className="w-6 h-6" />
+      icon: <AlertTriangle className="w-5 h-5" />
     },
     danger: {
       btn: 'bg-rose-600 hover:bg-rose-700 text-white',
       iconBg: 'bg-rose-50 text-rose-600',
-      icon: <Trash2 className="w-6 h-6" />
+      icon: <Trash2 className="w-5 h-5" />
     }
   };
 
@@ -447,11 +447,11 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
     const blocks = msg.split('\n\n').filter(Boolean);
 
     if (blocks.length === 1 && !msg.includes('\n')) {
-      return <p className="text-xs sm:text-sm text-slate-600 leading-relaxed mt-1.5">{msg}</p>;
+      return <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">{msg}</p>;
     }
 
     return (
-      <div className="space-y-2.5 mt-2">
+      <div className="space-y-2.5">
         {blocks.map((block, bIdx) => {
           const lines = block.split('\n').filter(l => l.trim().length > 0);
           const isBulletList = lines.length > 0 && lines.every(l => {
@@ -494,12 +494,12 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
 
       {/* Panel */}
       <div className="bg-white rounded-3xl p-5 sm:p-6 shadow-2xl border border-slate-100 max-w-md w-full relative z-10 animate-in fade-in zoom-in-95 duration-150">
+        <h3 className="text-base font-black text-slate-900 leading-tight mb-3.5">{title}</h3>
         <div className="flex gap-3.5 items-start">
-          <div className={`p-3 rounded-2xl shrink-0 ${colors[type].iconBg}`}>
+          <div className={`w-10 h-10 rounded-xl shrink-0 flex items-center justify-center ${colors[type].iconBg} mt-0.5`}>
             {colors[type].icon}
           </div>
           <div className="flex-1 min-w-0">
-            <h3 className="text-base font-black text-slate-900 leading-tight">{title}</h3>
             {renderFormattedMessage(message)}
           </div>
         </div>

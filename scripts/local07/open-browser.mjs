@@ -168,9 +168,34 @@ async function main() {
   const context = await browser.newContext({
     storageState: sessionFile,
     viewport: null, // Full window
+    acceptDownloads: true,
+  });
+
+  const handleDownload = async (download) => {
+    try {
+      const suggestedFilename = download.suggestedFilename();
+      const userDownloads = path.join(process.env.USERPROFILE || ROOT_DIR, 'Downloads');
+      if (!fs.existsSync(userDownloads)) {
+        fs.mkdirSync(userDownloads, { recursive: true });
+      }
+      const targetPath = path.join(userDownloads, suggestedFilename);
+      await download.saveAs(targetPath);
+      console.log('\n================================================================================');
+      console.log('📥 [UAT Download Success] บันทึกไฟล์สำเร็จเรียบร้อย!');
+      console.log(`📄 ชื่อไฟล์:  ${suggestedFilename}`);
+      console.log(`📁 ปลายทาง: ${targetPath}`);
+      console.log('================================================================================\n');
+    } catch (err) {
+      console.error(`⚠️ [UAT Download Warning] ${err.message}`);
+    }
+  };
+
+  context.on('page', (newPage) => {
+    newPage.on('download', handleDownload);
   });
 
   const page = await context.newPage();
+  page.on('download', handleDownload);
 
   try {
     await page.goto(persona.url, { waitUntil: 'domcontentloaded', timeout: 15000 });

@@ -31,7 +31,7 @@ export function getConfiguredDbPort() {
   if (fs.existsSync(envPath)) {
     dotenv.config({ path: envPath });
   }
-  return String(process.env.LOCAL07_DB_PORT || process.env.PGPORT || '15455');
+  return String(process.env.LOCAL07_DB_PORT || process.env.PGPORT || '15555');
 }
 
 export const REQUIRED_SAFETY_CONFIG = {

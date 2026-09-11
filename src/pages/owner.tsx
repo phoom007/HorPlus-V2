@@ -317,6 +317,7 @@ export function getTargetQueriesForTab(targetTab: string, dormId: string, cycleI
       return [
         { queryKey: queryKeys.maintenance(dormId), queryFn: () => fetchAllPaginated('/api/v1/maintenance', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.MAINTENANCE },
         { queryKey: queryKeys.rooms(dormId), queryFn: () => fetchAuthoritativeRooms(dormHeader), staleTime: STALE_TIMES.ROOMS },
+        { queryKey: queryKeys.buildings(dormId), queryFn: () => fetchAllPaginated<Building>('/api/v1/properties/buildings', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.BUILDINGS },
         { queryKey: queryKeys.tenants(dormId), queryFn: () => fetchAllPaginated<Tenant>('/api/v1/tenants', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.TENANTS },
       ];
     case 'announcements':
@@ -333,6 +334,7 @@ export function getTargetQueriesForTab(targetTab: string, dormId: string, cycleI
         { queryKey: queryKeys.tenants(dormId), queryFn: () => fetchAllPaginated<Tenant>('/api/v1/tenants', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.TENANTS },
         { queryKey: queryKeys.contracts(dormId), queryFn: () => fetchAllPaginated<Contract>('/api/v1/contracts', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.CONTRACTS },
         { queryKey: queryKeys.billingCycles(dormId), queryFn: () => fetchAllPaginatedWithMeta('/api/v1/billing-cycles', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.BILLING_CYCLES },
+        { queryKey: queryKeys.maintenance(dormId), queryFn: () => fetchAllPaginated('/api/v1/maintenance', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.MAINTENANCE },
       ];
     default:
       return [];
@@ -392,15 +394,8 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
     }
   }, [pathSegment, onboardingRequired, isAddDormRegistrationMode, isRegistrationMode, navigate]);
 
-  useEffect(() => {
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-    const mainEl = document.getElementById('owner-main-content');
-    if (mainEl) {
-      mainEl.scrollTop = 0;
-    }
-  }, [activeTab, location.pathname]);
-
   const changeTab = (tabId: string) => {
+    setIsDetailViewOpen(false);
     if (isRegistrationMode) {
       if (isAddDormRegistrationMode) {
         if (tabId === 'register' || tabId === 'dormitories/new') {
@@ -427,6 +422,16 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
   const [tenantReturnContext, setTenantReturnContext] = useState<TenantReturnContext | null>(null);
   const [roomsRestoredState, setRoomsRestoredState] = useState<RoomsRestoredState | null>(null);
   const [targetScrollRoomId, setTargetScrollRoomId] = useState<string | undefined>(undefined);
+  const [isDetailViewOpen, setIsDetailViewOpen] = useState(false);
+
+  useEffect(() => {
+    if (roomsRestoredState) return;
+    window.scrollTo({ top: 0, behavior: 'instant' as any });
+    const mainEl = document.getElementById('owner-main-content');
+    if (mainEl) {
+      mainEl.scrollTop = 0;
+    }
+  }, [activeTab, location.pathname, roomsRestoredState]);
 
   // Authoritative Billing Cycle State
   const [selectedBillingCycleId, setSelectedBillingCycleId] = useState<string>('');
@@ -704,6 +709,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
     }
   });
 
+  const tenantIdsStr = (tenants || []).map(t => t.id).sort().join(',');
   useEffect(() => {
     try {
       const saved = localStorage.getItem(`HorPlus_seen_tenants_${selectedCycle}`);
@@ -713,7 +719,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
         setSeenTenantIds((tenants || []).map(t => t.id));
       }
     } catch {}
-  }, [selectedCycle, tenants]);
+  }, [selectedCycle, tenantIdsStr]);
 
   const hasUnviewedTenants = (tenants || []).some(t => !seenTenantIds.includes(t.id));
 
@@ -727,6 +733,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
     }
   });
 
+  const contractIdsStr = (contracts || []).map(c => c.id).sort().join(',');
   useEffect(() => {
     try {
       const saved = localStorage.getItem(`HorPlus_seen_contracts_${selectedCycle}`);
@@ -736,7 +743,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
         setSeenContractIds((contracts || []).map(c => c.id));
       }
     } catch {}
-  }, [selectedCycle, contracts]);
+  }, [selectedCycle, contractIdsStr]);
 
   const hasUnviewedContracts = (contracts || []).some(c => !seenContractIds.includes(c.id));
 
@@ -775,6 +782,12 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
   }, [activeDormitoryId, isRegistrationMode, selectedBillingCycleId, billingCyclesQuery.data?.operationalBillingCycleId, queryClient]);
 
   const handleTabChange = async (tabId: string) => {
+    setIsDetailViewOpen(false);
+    setTenantReturnContext(null);
+    setInitialTenantId(undefined);
+    setCameFromMetersContext(null);
+    setInitialRoomId(undefined);
+    setRoomsRestoredState(null);
     if (isRegistrationMode) {
       changeTab(tabId);
       setIsSidebarOpen(false);
@@ -924,8 +937,13 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
     queryClient.invalidateQueries({ queryKey: queryKeys.maintenance(activeDormitoryId) });
   };
 
-  const handleSaveAnnouncements = (_newAnnouncements: Announcement[]) => {
-    queryClient.invalidateQueries({ queryKey: queryKeys.announcements(activeDormitoryId) });
+  const handleSaveAnnouncements = (newAnnouncements: Announcement[], options?: { skipInvalidate?: boolean }) => {
+    if (activeDormitoryId && newAnnouncements) {
+      queryClient.setQueryData(queryKeys.announcements(activeDormitoryId), newAnnouncements);
+    }
+    if (!options?.skipInvalidate) {
+      queryClient.invalidateQueries({ queryKey: queryKeys.announcements(activeDormitoryId) });
+    }
   };
 
   // Sidebar Menu Items with role boundaries
@@ -1099,16 +1117,18 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
                 } else if (ctx.cycleCode) {
                   setSelectedCycleCode(ctx.cycleCode);
                 }
-                setRoomsRestoredState({
-                  viewMode: ctx.viewMode,
-                  selectedBuilding: ctx.selectedBuilding,
-                  selectedStatus: ctx.selectedStatus,
-                  searchQuery: ctx.searchQuery,
-                  scrollY: ctx.scrollY,
-                  roomId: ctx.roomId,
+                React.startTransition(() => {
+                  setRoomsRestoredState({
+                    viewMode: ctx.viewMode,
+                    selectedBuilding: ctx.selectedBuilding,
+                    selectedStatus: ctx.selectedStatus,
+                    searchQuery: ctx.searchQuery,
+                    scrollY: ctx.scrollY,
+                    roomId: ctx.roomId,
+                  });
+                  setTenantReturnContext(null);
+                  changeTab('rooms');
                 });
-                setTenantReturnContext(null);
-                changeTab('rooms');
               } else if (ctx.source === 'meters') {
                 if (ctx.cycleId) {
                   setSelectedBillingCycleId(ctx.cycleId);
@@ -1120,9 +1140,11 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
                 if (ctx.roomId) {
                   setTargetScrollRoomId(ctx.roomId);
                 }
-                setTenantReturnContext(null);
-                setCameFromMetersContext(null);
-                changeTab('meters');
+                React.startTransition(() => {
+                  setTenantReturnContext(null);
+                  setCameFromMetersContext(null);
+                  changeTab('meters');
+                });
               }
             }}
             cameFromMeters={Boolean(cameFromMetersContext)}
@@ -1210,6 +1232,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
             bills={bills}
             dormitoryId={activeDormitoryId}
             rooms={rooms}
+            buildings={buildings}
             tenants={tenants}
             selectedBillingCycleId={selectedBillingCycleId || billingCycles.find(c => c.cycleCode === selectedCycleCode)?.id}
             selectedCycleCode={selectedCycleCode}
@@ -1224,9 +1247,11 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
           <OwnerMaintenance
             repairs={repairs}
             rooms={rooms}
+            buildings={buildings}
             tenants={tenants}
             onSaveRepairs={handleSaveRepairs}
             onAddLog={handleAddLog}
+            onDetailViewChange={setIsDetailViewOpen}
           />
         );
       case 'announcements':
@@ -1238,6 +1263,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
             currentUser={user}
             rooms={rooms}
             buildings={buildings}
+            onDetailViewChange={setIsDetailViewOpen}
           />
         );
       case 'reports':
@@ -1248,6 +1274,9 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
             buildings={buildings}
             tenants={tenants}
             contracts={contracts}
+            repairs={repairs}
+            dormitory={currentDormitory}
+            billingCycles={billingCycles}
             selectedBillingCycleId={selectedBillingCycleId}
             selectedCycleCode={selectedCycleCode}
             selectedCycle={selectedCycleCode}
@@ -1278,7 +1307,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
   };
 
   return (
-    <div className="min-h-screen bg-[#f8fafc] flex relative">
+    <div className="h-screen h-[100dvh] overflow-hidden bg-[#f8fafc] flex relative">
       {/* Mobile Sidebar Overlay Drawer */}
       {isSidebarOpen && (
         <div className="fixed inset-0 z-[100] flex lg:hidden">
@@ -1289,7 +1318,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
           />
 
           {/* Drawer container */}
-          <aside className="relative flex w-64 max-w-[280px] h-full flex-col justify-between bg-white p-4 text-slate-600 border-r border-slate-100 animate-in slide-in-from-left duration-200">
+          <aside className="relative flex w-64 max-w-[280px] h-full flex-col justify-between bg-white p-4 text-slate-600 animate-in slide-in-from-left duration-200">
             <div className="flex-1 overflow-y-auto space-y-6 pr-1 pb-4">
               {/* Logo block with Close button */}
               <div className="flex items-center justify-between px-2 py-1">
@@ -1382,7 +1411,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
       )}
 
       {/* Desktop Sidebar Navigation */}
-      <aside className="hidden lg:flex w-64 h-full max-h-screen bg-white text-slate-600 border-r border-slate-150/40 shrink-0 flex-col justify-between p-4 z-10 shadow-xs">
+      <aside className="hidden lg:flex w-64 h-full bg-white text-slate-600 shrink-0 flex-col justify-between p-4 z-10 shadow-xs">
         <div className="flex-1 overflow-y-auto space-y-6 pr-1 pb-4">
           {/* Logo block */}
           <div className="flex items-center gap-2.5 px-2 py-1">
@@ -1464,7 +1493,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
       </aside>
 
       {/* Main Content Area */}
-      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+      <div className="flex-1 flex flex-col min-w-0 overflow-hidden h-full">
         {/* Top bar header */}
         <header className="bg-white border-b border-slate-100 flex flex-col sm:flex-row items-center justify-between px-3.5 sm:px-6 py-2.5 sm:py-3 shrink-0 z-30 gap-2.5 sm:gap-3">
           {/* Left Block: Hamburger & Logo */}
@@ -1832,14 +1861,21 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
         </header>
 
         {/* Dynamic page container */}
-        <main id="owner-main-content" className="flex-1 overflow-y-auto bg-slate-50/70 p-4 md:p-6 pb-24 md:pb-6">
+        <main
+          id="owner-main-content"
+          className={`flex-1 ${
+            isDetailViewOpen
+              ? 'p-0 overflow-hidden bg-slate-50 flex flex-col'
+              : 'overflow-y-auto bg-slate-50/70 p-4 md:p-6 pb-24 md:pb-6'
+          }`}
+        >
           {renderSubView()}
         </main>
       </div>
 
       {/* Mobile Bottom Navigation Bar (Responsive & Role-based) */}
       {!isRegistrationMode && (
-        <div className="md:hidden fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-md border-t border-slate-100 z-40 py-2 pb-safe px-4 shadow-[0_-4px_12px_rgba(0,0,0,0.03)]">
+        <div className={`md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-slate-100 z-20 py-2 pb-safe px-4 shadow-[0_-4px_12px_rgba(0,0,0,0.03)] ${isDetailViewOpen ? 'pointer-events-none' : ''}`}>
           <div className="flex justify-around items-center">
             {(() => {
               const maxItems = 5;

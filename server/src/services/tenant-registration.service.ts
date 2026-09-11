@@ -359,9 +359,14 @@ export class TenantRegistrationService {
 
   public async getRequestById(id: string, dormitoryId: string) {
     const prisma = getPrismaClient();
-    const req = await prisma.tenantRegistrationRequest.findFirst({
+    let req = await prisma.tenantRegistrationRequest.findFirst({
       where: { id, dormitoryId },
     });
+    if (!req) {
+      req = await prisma.tenantRegistrationRequest.findFirst({
+        where: { dormitoryId, approvedTenantId: id },
+      });
+    }
     if (!req) {
       const err = new Error('REGISTRATION_REQUEST_NOT_FOUND');
       (err as any).statusCode = 404;
@@ -468,9 +473,14 @@ export class TenantRegistrationService {
       await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
 
       // 1. Re-verify request status inside transaction
-      const req = await tx.tenantRegistrationRequest.findFirst({
+      let req = await tx.tenantRegistrationRequest.findFirst({
         where: { id, dormitoryId },
       });
+      if (!req) {
+        req = await tx.tenantRegistrationRequest.findFirst({
+          where: { dormitoryId, approvedTenantId: id },
+        });
+      }
 
       if (!req) {
         const err = new Error('REGISTRATION_REQUEST_NOT_FOUND');
@@ -479,7 +489,7 @@ export class TenantRegistrationService {
         throw err;
       }
 
-      if (req.status !== 'pending_owner_approval') {
+      if (req.status !== 'pending_owner_approval' && req.status !== 'pending') {
         const err = new Error('INVALID_REQUEST_STATUS');
         (err as any).statusCode = 400;
         (err as any).code = 'INVALID_REQUEST_STATUS';
@@ -780,7 +790,7 @@ export class TenantRegistrationService {
         };
 
         const updatedReq = await tx.tenantRegistrationRequest.update({
-          where: { id },
+          where: { id: req.id },
           data: {
             status: 'awaiting_tenant_confirmation',
             reviewedAt: new Date(),
@@ -800,18 +810,55 @@ export class TenantRegistrationService {
       const tenantNumber = await generateNextTenantNumber(dormitoryId, tx);
       const displayName = `${req.firstName} ${req.lastName}`.trim();
 
-      const tenant = await tx.tenant.create({
-        data: {
-          dormitoryId,
-          tenantNumber,
-          firstName: req.firstName,
-          lastName: req.lastName,
-          displayName,
-          phone: req.phone,
-          lineFriendId: req.lineFollowerId || null,
-          status: 'active',
-        },
-      });
+      let tenant = null;
+      if (req.approvedTenantId) {
+        tenant = await tx.tenant.findFirst({
+          where: { id: req.approvedTenantId, dormitoryId },
+        });
+      }
+      if (!tenant && req.phone) {
+        tenant = await tx.tenant.findFirst({
+          where: { dormitoryId, phone: req.phone, status: 'pending' },
+        });
+      }
+
+      if (tenant) {
+        tenant = await tx.tenant.update({
+          where: { id: tenant.id },
+          data: {
+            status: 'active',
+            firstName: req.firstName,
+            lastName: req.lastName,
+            displayName,
+            phone: req.phone,
+            lineFriendId: req.lineFollowerId || tenant.lineFriendId,
+          },
+        });
+      } else {
+        tenant = await tx.tenant.create({
+          data: {
+            dormitoryId,
+            tenantNumber,
+            firstName: req.firstName,
+            lastName: req.lastName,
+            displayName,
+            phone: req.phone,
+            lineFriendId: req.lineFollowerId || null,
+            status: 'active',
+          },
+        });
+      }
+
+      if (req.phone) {
+        await tx.tenant.deleteMany({
+          where: {
+            dormitoryId,
+            phone: req.phone,
+            status: 'pending',
+            id: { not: tenant.id },
+          },
+        });
+      }
 
       // Sync profile from registration snapshot onto tenant
       const snap = (req.acceptanceSnapshot as any) || {};
@@ -922,7 +969,7 @@ export class TenantRegistrationService {
         });
 
         // 5. Establish Authoritative Occupancy & Transition Room
-        await tx.occupancy.create({
+        const occupancy = await tx.occupancy.create({
           data: {
             dormitoryId,
             roomId: effectiveRoomId,
@@ -947,7 +994,7 @@ export class TenantRegistrationService {
 
         // 6. Update Registration Request status to approved
         const updatedReq = await tx.tenantRegistrationRequest.update({
-          where: { id },
+          where: { id: req.id },
           data: {
             status: 'approved',
             reviewedAt: new Date(),
@@ -977,6 +1024,9 @@ export class TenantRegistrationService {
           request: updatedReq,
           tenant,
           tenantId: tenant.id,
+          contractId: null,
+          occupancyId: occupancy.id,
+          roomId: effectiveRoomId,
           dailyStay: dailyStayRecord,
           status: 'approved',
           message: isFutureStartDate ? 'อนุมัติการจองเข้าพักรายวันเรียบร้อยแล้ว' : 'อนุมัติการเข้าพักรายวันเรียบร้อยแล้ว',
@@ -1051,6 +1101,78 @@ export class TenantRegistrationService {
 
       // 5.5. Create one-time Deposit Bill for approved registration contract
       if (Number(payload.depositAmount) > 0) {
+        // Ensure billing cycle covering startDate exists for future start dates
+        const startD = new Date(payload.startDate);
+        const cycleExists = await tx.billingCycle.findFirst({
+          where: {
+            dormitoryId,
+            periodStart: { lte: startD },
+            periodEnd: { gte: startD },
+          },
+        });
+
+        if (!cycleExists) {
+          const latestCycle = await tx.billingCycle.findFirst({
+            where: { dormitoryId },
+            orderBy: { periodEnd: 'desc' },
+            include: { rateSnapshot: true },
+          });
+
+          if (latestCycle && startD > new Date(latestCycle.periodEnd)) {
+            let curEnd = new Date(latestCycle.periodEnd);
+            let prevCycle = latestCycle;
+
+            while (curEnd < startD) {
+              const nextMonthDate = new Date(curEnd);
+              nextMonthDate.setDate(nextMonthDate.getDate() + 1);
+              const y = nextMonthDate.getFullYear();
+              const m = nextMonthDate.getMonth() + 1;
+              const cycleCode = `${y}-${String(m).padStart(2, '0')}`;
+              const lastDay = new Date(y, m, 0).getDate();
+              const periodStart = new Date(`${y}-${String(m).padStart(2, '0')}-01`);
+              const periodEnd = new Date(`${y}-${String(m).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`);
+              const nextM = m === 12 ? 1 : m + 1;
+              const nextY = m === 12 ? y + 1 : y;
+              const billingDate = new Date(`${y}-${String(m).padStart(2, '0')}-25`);
+              const dueDate = new Date(`${nextY}-${String(nextM).padStart(2, '0')}-05`);
+
+              const newCycle = await tx.billingCycle.create({
+                data: {
+                  dormitoryId,
+                  cycleCode,
+                  name: cycleCode,
+                  periodStart,
+                  periodEnd,
+                  billingDate,
+                  dueDate,
+                  status: 'draft',
+                  createdByUserId: safeActorId,
+                },
+              });
+
+              if (prevCycle?.rateSnapshot) {
+                const snap = { ...prevCycle.rateSnapshot };
+                delete (snap as any).id;
+                delete (snap as any).billingCycleId;
+                delete (snap as any).createdAt;
+                delete (snap as any).updatedAt;
+                await tx.billingRateSnapshot.create({
+                  data: {
+                    ...snap,
+                    dormitoryId,
+                    billingCycleId: newCycle.id,
+                    source: 'INHERITED',
+                    inheritedFromBillingCycleId: prevCycle.id,
+                  } as any,
+                });
+              }
+
+              prevCycle = newCycle as any;
+              curEnd = periodEnd;
+            }
+          }
+        }
+
         await createDepositBillForAgreementInTx(tx, {
           dormitoryId,
           roomId: effectiveRoomId,
@@ -1066,7 +1188,7 @@ export class TenantRegistrationService {
 
       // 6. Update Registration Request status to approved
       const updatedReq = await tx.tenantRegistrationRequest.update({
-        where: { id },
+        where: { id: req.id },
         data: {
           status: 'approved',
           reviewedAt: new Date(),
@@ -1098,6 +1220,8 @@ export class TenantRegistrationService {
         tenant,
         tenantId: tenant.id,
         contractId,
+        occupancyId: occupancy.id,
+        roomId: effectiveRoomId,
         occupancy,
         status: 'approved',
       };
@@ -1107,6 +1231,36 @@ export class TenantRegistrationService {
       await outboxService.processPendingOutboxEvents();
     } catch (err: any) {
       logger.error({ event: 'OUTBOX_DISPATCH_AFTER_REGISTRATION_APPROVE_ERROR', error: err.message });
+    }
+
+    try {
+      const lineFollowerId = (existingReq as any)?.lineFollowerId;
+      if (lineFollowerId) {
+        const lineFriend = await prisma.dormitoryLineFriend.findUnique({
+          where: { id: lineFollowerId },
+        });
+        if (lineFriend && lineFriend.lineUserIdEncrypted) {
+          const { decryptText } = await import('../utils/crypto-encryption.js');
+          const lineUserId = decryptText(lineFriend.lineUserIdEncrypted);
+          const dorm = await prisma.dormitory.findUnique({ where: { id: dormitoryId }, select: { name: true } });
+          const targetRoomId = (resTx as any)?.occupancy?.roomId || (resTx as any)?.contract?.roomId || (resTx as any)?.request?.approvedRoomId;
+          const room = targetRoomId
+            ? await prisma.room.findUnique({ where: { id: targetRoomId }, select: { roomNumber: true } })
+            : null;
+          const { LineOaService, buildTenantApprovalOutcomeFlexMessage, getPublicAppOrigin } = await import('./line-oa.service.js');
+          const lineOaService = new LineOaService(prisma);
+          const flexMsg = buildTenantApprovalOutcomeFlexMessage(
+            dorm?.name || 'หอพัก',
+            room?.roomNumber || 'ไม่ระบุ',
+            true,
+            undefined,
+            getPublicAppOrigin()
+          );
+          await lineOaService.pushOutcomeNotification(dormitoryId, lineUserId, flexMsg);
+        }
+      }
+    } catch (pushErr: any) {
+      logger.warn({ event: 'LINE_APPROVAL_PUSH_SKIPPED', error: pushErr.message });
     }
 
     return resTx;
@@ -1384,7 +1538,7 @@ export class TenantRegistrationService {
     actorUserId?: string
   ) {
     const req = await this.getRequestById(id, dormitoryId);
-    if (req.status !== 'pending_owner_approval') {
+    if (req.status !== 'pending_owner_approval' && req.status !== 'pending') {
       const err = new Error('INVALID_REQUEST_STATUS');
       (err as any).statusCode = 400;
       (err as any).code = 'INVALID_REQUEST_STATUS';
@@ -1396,10 +1550,10 @@ export class TenantRegistrationService {
     const revisionHistory = Array.isArray(currentSnapshot.revisionHistory)
       ? [...currentSnapshot.revisionHistory]
       : [];
-    const reasonText = reason || 'Owner requested revision';
+    const reasonText = reason || 'Owner rejected registration';
 
     revisionHistory.push({
-      action: 'REVISION_REQUESTED',
+      action: 'REJECTED',
       reason: reasonText,
       reviewedAt: new Date().toISOString(),
       reviewedByUserId: actorUserId || null,
@@ -1412,16 +1566,62 @@ export class TenantRegistrationService {
     };
 
     const prisma = getPrismaClient();
-    return prisma.tenantRegistrationRequest.update({
-      where: { id },
+
+    // Clean up any placeholder tenant linked to this request so it does not linger in pending tab
+    if (prisma?.tenant?.deleteMany) {
+      if (req.approvedTenantId) {
+        await prisma.tenant.deleteMany({
+          where: { id: req.approvedTenantId, dormitoryId, status: 'pending' },
+        });
+      }
+      if (req.phone) {
+        await prisma.tenant.deleteMany({
+          where: { dormitoryId, phone: req.phone, status: 'pending' },
+        });
+      }
+    }
+
+    const updated = await prisma.tenantRegistrationRequest.update({
+      where: { id: req.id },
       data: {
-        status: 'revision_requested', // Option B non-terminal status
+        status: 'rejected',
         rejectedReason: reasonText,
         reviewedAt: new Date(),
         reviewedByUserId: actorUserId,
         acceptanceSnapshot: updatedSnapshot,
       },
     });
+
+    try {
+      const lineFollowerId = req.lineFollowerId;
+      if (lineFollowerId) {
+        const lineFriend = await prisma.dormitoryLineFriend.findUnique({
+          where: { id: lineFollowerId },
+        });
+        if (lineFriend && lineFriend.lineUserIdEncrypted) {
+          const { decryptText } = await import('../utils/crypto-encryption.js');
+          const lineUserId = decryptText(lineFriend.lineUserIdEncrypted);
+          const dorm = await prisma.dormitory.findUnique({ where: { id: dormitoryId }, select: { name: true } });
+          const room = req.requestedRoomId
+            ? await prisma.room.findUnique({ where: { id: req.requestedRoomId }, select: { roomNumber: true } })
+            : null;
+          const { LineOaService, buildTenantApprovalOutcomeFlexMessage, getPublicAppOrigin } = await import('./line-oa.service.js');
+          const lineOaService = new LineOaService(prisma);
+          const flexMsg = buildTenantApprovalOutcomeFlexMessage(
+            dorm?.name || 'หอพัก',
+            room?.roomNumber || 'ไม่ระบุ',
+            false,
+            reasonText,
+            getPublicAppOrigin()
+          );
+          await lineOaService.pushOutcomeNotification(dormitoryId, lineUserId, flexMsg);
+        }
+      }
+    } catch (pushErr: any) {
+      logger.warn({ event: 'LINE_REJECTION_PUSH_SKIPPED', error: pushErr.message });
+    }
+
+    return updated;
   }
 
   public async resubmitRequest(

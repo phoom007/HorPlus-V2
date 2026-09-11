@@ -16,6 +16,7 @@ import {
   FileText,
   Clock,
   ArrowLeft,
+  ChevronLeft,
   X,
   AlertCircle,
   Download,
@@ -56,7 +57,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { LineLogo as LineIcon } from '../../components/LineLogo';
 import { QuickAddTenantModal, QuickAddSuccessResult } from '../../components/QuickAddTenantModal';
 import { httpRequest } from '../../data/httpClient';
-import { approveTenantRegistrationRequest, rejectTenantRegistrationRequest, fetchTenantProfile, TenantBasicProfileUpdateInput } from '../../data/adapters/api';
+import { approveTenantRegistrationRequest, rejectTenantRegistrationRequest, terminateContract, fetchTenantProfile, TenantBasicProfileUpdateInput } from '../../data/adapters/api';
 import { UpdateTenantProfilePayload } from '../../data/contracts';
 import { useQuery, QueryClientContext } from '@tanstack/react-query';
 import { queryKeys, STALE_TIMES } from '../../lib/queryClient';
@@ -79,6 +80,7 @@ import { convertImageToWebP, UPLOAD_DROPZONE_TEXT } from '../../utils/imageUtils
 import { formatOwnerRoomOptionLabel } from '../../utils/room-label.util';
 import { resolveLandlordSignerName } from '../../utils/landlord-signer.util';
 import { getPaymentSettings, PaymentSettingsDTO } from '../../services/payment-settings.service';
+import { sortRoomsByBuildingAndNumber } from '../../utils/roomSorter';
 
 export function useAuthenticatedBlobUrl(url: string | null | undefined, dormitoryId?: string): string | null {
   const [blobUrl, setBlobUrl] = useState<string | null>(() => {
@@ -1723,7 +1725,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
 
     setIsSuccessAnimating(true);
 
-    setTimeout(() => {
+    setTimeout(async () => {
       const tenantId = selectedTenant.id;
       const tenantName = selectedTenant.name;
       const room = rooms.find(r => r.currentTenantId === tenantId);
@@ -1750,13 +1752,18 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
         ? validDeductions.map(d => `${d.title || 'ค่าใช้จ่าย'}: ${Number(d.amount) || 0} บาท`).join(', ')
         : 'ไม่มีรายการหัก';
 
-      // 1. Update room status to vacant and clear currentTenantId
-      const updatedRooms = rooms.map(r => r.currentTenantId === tenantId ? {
-        ...r,
-        status: 'vacant' as const,
-        currentTenantId: undefined,
-        updatedAt: new Date().toISOString()
-      } : r);
+      // 1. Update room status to vacant and clear currentTenantId & currentContractId
+      const updatedRooms = rooms.map(r =>
+        (r.currentTenantId === tenantId || (selectedTenant.roomId && r.id === selectedTenant.roomId) || (room && r.id === room.id))
+          ? {
+              ...r,
+              status: 'vacant' as const,
+              currentTenantId: undefined,
+              currentContractId: undefined,
+              updatedAt: new Date().toISOString()
+            }
+          : r
+      );
 
       // 2. Set tenant status to inactive (preserve rentalHistory)
       const updatedTenants = tenants.map(t => {
@@ -1773,7 +1780,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
         return t;
       });
 
-      // 3. Update contract status to 'expired' and record audit trail in terms
+      // 3. Update contract status to 'terminated' and record audit trail in terms
       const settlementRecord = `[ระบบนิติ] เลิกเช่าคืนห้องพักเมื่อ ${new Date().toLocaleDateString('th-TH')}` +
         ` | เงินประกันตามสัญญา: ${origDeposit.toLocaleString()} บาท (ชำระจริง: ${actualPaidDeposit.toLocaleString()} บาท)` +
         ` | การจัดการเงินประกัน: ${!hasPaidDeposit ? 'ไม่มีเงินประกันที่ชำระแล้ว' : (refundDeposit ? 'คืนเงินประกัน (นำมาหักลดค่าใช้จ่าย)' : 'ไม่คืนเงินประกัน (ยึดเงินประกัน)')}` +
@@ -1791,13 +1798,59 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
         if (c.tenantId === tenantId && (c.status === 'active' || c.status === 'expiring_soon' || c.status === 'checking_out' || c.status === 'pending_signature' || c.status === 'expired' || c.status === 'waiting_extension')) {
           return {
             ...c,
-            status: 'expired' as const,
+            status: 'terminated' as any,
+            terminationEffectiveDate: new Date().toISOString().slice(0, 10),
+            terminatedAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
-            terms: `${c.terms || ''}\n${settlementRecord}`
+            terms: `${c.terms || ''}\n${settlementRecord}`,
+            depositRefundAmount: netRefundAmount.toFixed(2),
+            deductionAmount: totalDeductions.toFixed(2),
+            settlementSummary: {
+              depositRefundAmount: netRefundAmount.toFixed(2),
+              deductionAmount: totalDeductions.toFixed(2),
+              settlementNote: settlementRecord,
+              terminatedAt: new Date().toISOString(),
+            }
           };
         }
         return c;
       });
+
+      // Terminate via API if activeContract exists and has backend UUID
+      const activeContractId = activeContract?.id;
+      if (activeContractId && !activeContractId.startsWith('ct-') && activeContractId.length >= 20) {
+        try {
+          await terminateContract(activeContractId, {
+            terminationEffectiveDate: new Date().toISOString().slice(0, 10),
+            terminationReason: `เลิกสัญญา: ${deductionsSummaryText}`,
+            depositRefundAmount: netRefundAmount.toFixed(2),
+            deductionAmount: totalDeductions.toFixed(2),
+            settlementNote: settlementRecord,
+            nextRoomStatus: 'vacant',
+          });
+        } catch (err) {
+          console.warn('Failed to terminate contract via API:', err);
+        }
+      }
+
+      // Direct tenant update on backend to ensure status is marked 'former' and room vacated
+      if (tenantId && !tenantId.startsWith('t-') && tenantId.length >= 20) {
+        try {
+          await httpRequest('PUT', `/tenants/${tenantId}`, { status: 'former' });
+        } catch (tErr) {
+          console.warn('Failed to update tenant status to former directly:', tErr);
+        }
+      }
+
+      if (queryClient && effectiveDormId) {
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: queryKeys.contracts(effectiveDormId) }),
+          queryClient.invalidateQueries({ queryKey: queryKeys.rooms(effectiveDormId) }),
+          queryClient.invalidateQueries({ queryKey: queryKeys.tenants(effectiveDormId) }),
+          queryClient.invalidateQueries({ queryKey: queryKeys.bills(effectiveDormId) }),
+          queryClient.invalidateQueries({ queryKey: ['meter', effectiveDormId] }),
+        ]);
+      }
 
       // 4. Update or generate bills
       let updatedBills = [...bills];
@@ -1805,7 +1858,8 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
         id: `item-deduct-${Date.now()}-${idx}`,
         description: item.title || 'ค่าใช้จ่ายก่อนย้ายออก',
         amount: Number(item.amount) || 0,
-        category: 'fine'
+        category: 'other',
+        type: 'other_fee'
       }));
 
       const currentCycle = selectedCycle || new Date().toISOString().slice(0, 7);
@@ -2394,8 +2448,9 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
     const chosenRoom = rooms.find(r => r.id === approveRoomId);
     const roomNum = chosenRoom ? chosenRoom.roomNumber : '';
 
-    const reqId = (selectedTenant as any).registrationRequestId || (selectedTenant as any).requestId;
+    const reqId = (selectedTenant as any).registrationRequestId || (selectedTenant as any).requestId || (selectedTenant.status === 'pending' ? selectedTenant.id : undefined);
     let effectiveTenantId = selectedTenant.id;
+    let effectiveContractId: string | undefined;
     if (reqId) {
       try {
         const payload: any = {
@@ -2421,11 +2476,24 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
         }
 
         const approveRes = await approveTenantRegistrationRequest(reqId, payload);
+        if (approveRes && !approveRes.success) {
+          const errMsg = approveRes.error?.message || 'ไม่สามารถอนุมัติคำขอเช่าได้ กรุณาลองใหม่อีกครั้ง';
+          setTenantActionToast(errMsg);
+          return;
+        }
         if (approveRes?.data?.tenantId) {
           effectiveTenantId = approveRes.data.tenantId;
+        } else if (approveRes?.data?.tenant?.id) {
+          effectiveTenantId = approveRes.data.tenant.id;
         }
-      } catch (err) {
+        if (approveRes?.data?.contractId) {
+          effectiveContractId = approveRes.data.contractId;
+        }
+      } catch (err: any) {
         console.error('Failed to approve registration request via API:', err);
+        const errMsg = err?.message || 'ไม่สามารถอนุมัติคำขอเช่าได้ กรุณาลองใหม่อีกครั้ง';
+        setTenantActionToast(errMsg);
+        return;
       }
     }
 
@@ -2439,32 +2507,33 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
       }
     }
 
-    // 1. Update tenant status to active and update rentalHistory & rentalType
-    const updatedTenants = tenants.map(t => {
-      if (t.id === selectedTenant.id) {
-        const existingHistory = t.rentalHistory || [];
-        const newHistory = roomNum && !existingHistory.includes(roomNum)
-          ? [...existingHistory, roomNum]
-          : existingHistory;
-        return {
-          ...t,
-          status: 'active' as const,
-          rentalHistory: newHistory,
-          roomId: approveRoomId,
-          rentalType: approveRentalType,
-          rentalPlan: approveRentalType.toLowerCase(),
-          requestedRent: Number(approveRent) || t.requestedRent,
-          requestedDeposit: Number(approveDeposit) || t.requestedDeposit,
-          requestedStartDate: approveStartDate,
-          requestedEndDate: approveEndDate,
-          requestedDays: approveRentalType === 'DAILY' ? approveDays : undefined,
-          requestedDailyRate: approveRentalType === 'DAILY' ? Number(approveDailyRate) : undefined,
-          requestedDurationMonths: approveRentalType !== 'DAILY' ? approveDurationMonths : undefined,
-          updatedAt: new Date().toISOString()
-        };
-      }
-      return t;
-    });
+    // 1. Build approved tenant using effectiveTenantId
+    const existingHistory = selectedTenant.rentalHistory || [];
+    const newHistory = roomNum && !existingHistory.includes(roomNum)
+      ? [...existingHistory, roomNum]
+      : existingHistory;
+
+    const approvedTenant: Tenant = {
+      ...selectedTenant,
+      id: effectiveTenantId,
+      status: 'active' as const,
+      rentalHistory: newHistory,
+      roomId: approveRoomId,
+      rentalType: approveRentalType,
+      rentalPlan: approveRentalType.toLowerCase(),
+      requestedRent: Number(approveRent) || selectedTenant.requestedRent,
+      requestedDeposit: Number(approveDeposit) || selectedTenant.requestedDeposit,
+      requestedStartDate: approveStartDate,
+      requestedEndDate: approveEndDate,
+      requestedDays: approveRentalType === 'DAILY' ? approveDays : undefined,
+      requestedDailyRate: approveRentalType === 'DAILY' ? Number(approveDailyRate) : undefined,
+      requestedDurationMonths: approveRentalType !== 'DAILY' ? approveDurationMonths : undefined,
+      updatedAt: new Date().toISOString()
+    };
+
+    // Remove old pending registration request from tenants and insert/update with approvedTenant
+    const filteredTenants = tenants.filter(t => t.id !== selectedTenant.id && t.id !== reqId && t.id !== effectiveTenantId);
+    const updatedTenants = [...filteredTenants, approvedTenant];
 
     // 2. Update room occupied/reserved status and currentTenantId
     const isFuture = Boolean(approveStartDate && new Date(approveStartDate) > new Date(new Date().toISOString().split('T')[0]));
@@ -2475,13 +2544,13 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
           return {
             ...r,
             status: isFuture ? (r.status === 'vacant' ? ('reserved' as const) : r.status) : ('occupied' as const),
-            currentTenantId: isFuture ? (r.currentTenantId || null) : selectedTenant.id,
+            currentTenantId: isFuture ? (r.currentTenantId || null) : effectiveTenantId,
             deposit: Number(approveDeposit) || r.deposit,
             price: Number(approveRent) || r.price,
             updatedAt: new Date().toISOString()
           };
         }
-        if (!isFuture && r.currentTenantId === selectedTenant.id && r.id !== chosenRoom.id) {
+        if (!isFuture && (r.currentTenantId === selectedTenant.id || r.currentTenantId === effectiveTenantId) && r.id !== chosenRoom.id) {
           return {
             ...r,
             status: 'vacant' as const,
@@ -2496,10 +2565,12 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
 
     // 3. For Term or Monthly, create or update contract; for Daily, do not create contract
     if (onSaveContracts && approveRentalType !== 'DAILY') {
-      const existingContract = contracts.find(c => c.tenantId === selectedTenant.id);
+      const existingContract = contracts.find(c => c.tenantId === effectiveTenantId || c.tenantId === selectedTenant.id);
       if (existingContract) {
         const updatedContracts = contracts.map(c => c.id === existingContract.id ? {
           ...c,
+          id: effectiveContractId || c.id,
+          tenantId: effectiveTenantId,
           status: isFuture ? ('approved_scheduled' as any) : ('active' as const),
           roomId: chosenRoom ? chosenRoom.id : c.roomId,
           startDate: approveStartDate || c.startDate,
@@ -2513,9 +2584,9 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
         onSaveContracts(updatedContracts);
       } else if (chosenRoom) {
         const newContract: Contract = {
-          id: `ct-${Date.now()}`,
+          id: effectiveContractId || `ct-${Date.now()}`,
           contractNumber: `CT-${new Date().getFullYear()}${String(new Date().getMonth() + 1).padStart(2, '0')}-${roomNum}`,
-          tenantId: selectedTenant.id,
+          tenantId: effectiveTenantId,
           roomId: chosenRoom.id,
           startDate: approveStartDate,
           endDate: approveEndDate || calculateContractEndDate(approveStartDate, approveDurationMonths),
@@ -2536,12 +2607,24 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
     }
 
     onSaveTenants(updatedTenants);
-    const updatedSelected = updatedTenants.find(t => t.id === selectedTenant.id) || null;
-    setSelectedTenant(updatedSelected);
+    setSelectedTenant(approvedTenant);
     setIsApproveOpen(false);
     setActiveStatusTab('active');
     setTenantActionToast('อนุมัติคำขอเรียบร้อยแล้ว');
-    onAddLog('อนุมัติผู้เช่า', `อนุมัติคำขอเช่าคุณ ${selectedTenant.name} เข้าห้องพัก ${roomNum}`, 'Tenant', selectedTenant.id);
+    onAddLog('อนุมัติผู้เช่า', `อนุมัติคำขอเช่าคุณ ${selectedTenant.name} เข้าห้องพัก ${roomNum}`, 'Tenant', effectiveTenantId);
+
+    // TanStack Query cache invalidations
+    if (queryClient && effectiveDormId) {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.tenants(effectiveDormId) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.rooms(effectiveDormId) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.contracts(effectiveDormId) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.bills(effectiveDormId) }),
+        queryClient.invalidateQueries({ queryKey: ['meter', effectiveDormId] }),
+        queryClient.invalidateQueries({ queryKey: ['owner', effectiveDormId, 'tenants', effectiveTenantId] }),
+        queryClient.invalidateQueries({ queryKey: ['owner', effectiveDormId, 'tenants', selectedTenant.id] }),
+      ]);
+    }
   };
 
   const handleOpenDailyExtend = (tenant: Tenant) => {
@@ -2594,7 +2677,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
   const handleConfirmReject = async () => {
     if (!selectedTenant) return;
 
-    const reqId = (selectedTenant as any).registrationRequestId || (selectedTenant as any).requestId;
+    const reqId = (selectedTenant as any).registrationRequestId || (selectedTenant as any).requestId || selectedTenant.id;
     if (reqId) {
       try {
         await rejectTenantRegistrationRequest(reqId, rejectReason);
@@ -2603,22 +2686,12 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
       }
     }
 
-    // Option B: Non-terminal revision requested (กรุณาตรวจสอบอีกครั้ง)
-    const updatedTenants = tenants.map(t => {
-      if (t.id === selectedTenant.id) {
-        return {
-          ...t,
-          status: 'revision_requested' as any,
-          rejectedReason: rejectReason,
-          updatedAt: new Date().toISOString()
-        };
-      }
-      return t;
-    });
+    // Remove rejected request from tenants list
+    const updatedTenants = tenants.filter(t => t.id !== selectedTenant.id && t.id !== reqId);
 
     // If tenant was linked to a room, detach
     const updatedRooms = rooms.map(r => {
-      if (r.currentTenantId === selectedTenant.id) {
+      if (r.currentTenantId === selectedTenant.id || (reqId && r.currentTenantId === reqId)) {
         return {
           ...r,
           status: 'vacant' as const,
@@ -2631,6 +2704,15 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
 
     onSaveTenants(updatedTenants);
     onSaveRooms(updatedRooms);
+
+    if (queryClient && effectiveDormId) {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.tenants(effectiveDormId) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.rooms(effectiveDormId) }),
+        queryClient.invalidateQueries({ queryKey: ['meter', effectiveDormId] }),
+      ]);
+    }
+
     setIsRejectOpen(false);
     setSelectedTenant(null);
     setTenantActionToast('ส่งคำขอให้ผู้เช่าแก้ไขแล้ว');
@@ -3242,18 +3324,26 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
     const hasBill = bills?.some(b => b.tenantId === tenant.id && b.cycleId === selectedCycle);
     if (hasBill) return true;
 
-    // 2. Check if there is a contract active during this cycle
-    const tenantContracts = contracts?.filter(c => c.tenantId === tenant.id);
+    // 2. Check if there is a contract active during this cycle, or scheduled/future contract
+    const tenantContracts = contracts?.filter(c => c.tenantId === tenant.id && !c.deletedAt);
     const hasContract = tenantContracts?.some(c => {
       const [cy, cm] = selectedCycle.split('-').map(Number);
-      const [sy, sm] = c.startDate.split('-').map(Number);
-      const [ey, em] = c.endDate.split('-').map(Number);
+      const [sy, sm] = (c.startDate || '').slice(0, 10).split('-').map(Number);
+      const [ey, em] = (c.endDate || '').slice(0, 10).split('-').map(Number);
 
       const cycleVal = cy * 12 + (cm - 1);
       const startVal = sy * 12 + (sm - 1);
       const endVal = ey * 12 + (em - 1);
 
-      return cycleVal >= startVal && cycleVal <= endVal;
+      // Active during cycle
+      if (cycleVal >= startVal && cycleVal <= endVal) return true;
+
+      // Scheduled/future contracts (e.g. approved applicant moving in upcoming cycle)
+      if (c.status === 'approved_scheduled' || startVal >= cycleVal) {
+        return true;
+      }
+
+      return false;
     });
     if (hasContract) return true;
 
@@ -3271,6 +3361,9 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
         if (cycleVal >= startVal && cycleVal <= endVal) {
           return true;
         }
+        if (startVal >= cycleVal) {
+          return true;
+        }
       }
     }
 
@@ -3280,9 +3373,14 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
       return true;
     }
 
-    // 5. Check active Term or Daily tenants in recent cycles
+    // 5. Check active Term or Daily tenants in recent or upcoming cycles
     const isDailyOrTerm = ((tenant as any).rentalType === 'DAILY' || (tenant as any).rentalPlan === 'daily' || (tenant as any).rentalType === 'TERM' || (tenant as any).rentalPlan === 'term');
-    if (isDailyOrTerm && getTenantCategory(tenant) === 'active' && isRecent2Cycles) {
+    if (isDailyOrTerm && getTenantCategory(tenant) === 'active') {
+      return true;
+    }
+
+    // 6. Active tenants in current or upcoming operational cycles
+    if (getTenantCategory(tenant) === 'active' && tenant.status === 'active') {
       return true;
     }
 
@@ -3290,7 +3388,12 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
   };
 
   // Helper to categorize each tenant into: pending, active, inactive
-  const getTenantCategory = (t: Tenant): 'pending' | 'active' | 'inactive' => {
+  const getTenantCategory = (t: Tenant): 'pending' | 'active' | 'inactive' | null => {
+    const statusLower = typeof t.status === 'string' ? t.status.toLowerCase() : '';
+    if (statusLower === 'rejected' || statusLower === 'cancelled') {
+      return null;
+    }
+
     if (
       t.status === 'inactive' ||
       (t.status as any) === 'former' ||
@@ -3453,6 +3556,15 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
     const currentRoom = rooms.find(r => r.currentTenantId === tenantId);
     if (currentRoom) return currentRoom.roomNumber;
 
+    // 3.5 Fallback to any contract for this tenant (e.g. future scheduled contract)
+    if (contracts) {
+      const anyContract = contracts.find(c => c.tenantId === tenantId && !c.deletedAt);
+      if (anyContract) {
+        const r = rooms.find(room => room.id === anyContract.roomId);
+        if (r) return r.roomNumber;
+      }
+    }
+
     // 4. Fallback to rentalHistory or applied room (e.g. for pending applicants)
     const t = tenants.find(item => item.id === tenantId);
     if (t) {
@@ -3482,13 +3594,13 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
   const filteredTenants = tenants.filter(t => {
     if (getTenantCategory(t) !== activeStatusTab) return false;
 
-    if (activeStatusTab === 'active' && !isTenantInCycle(t)) return false;
+    const q = (searchQuery || '').toLowerCase().trim();
+    if (!q && activeStatusTab === 'active' && !isTenantInCycle(t)) return false;
 
     const name = (t?.name || '').toLowerCase();
     const phone = t?.phone || '';
     const email = (t?.email || '').toLowerCase();
     const roomNum = getRoomNumber(t.id).toLowerCase();
-    const q = (searchQuery || '').toLowerCase();
 
     return (
       name.includes(q) ||
@@ -3498,6 +3610,15 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
     );
   }).sort((a, b) => {
     if (activeStatusTab === 'active') {
+      const roomObjA = rooms.find(r => r.currentTenantId === a.id || r.id === (a as any).roomId);
+      const roomObjB = rooms.find(r => r.currentTenantId === b.id || r.id === (b as any).roomId);
+      const buildingOrderMap = new Map<string, number>();
+      propBuildings.forEach((bld, idx) => {
+        if (bld?.id) buildingOrderMap.set(bld.id, idx);
+      });
+      const bldIdxA = roomObjA?.buildingId && buildingOrderMap.has(roomObjA.buildingId) ? buildingOrderMap.get(roomObjA.buildingId)! : 999999;
+      const bldIdxB = roomObjB?.buildingId && buildingOrderMap.has(roomObjB.buildingId) ? buildingOrderMap.get(roomObjB.buildingId)! : 999999;
+      if (bldIdxA !== bldIdxB) return bldIdxA - bldIdxB;
       const roomA = getRoomNumber(a.id) || a.roomNumber || '';
       const roomB = getRoomNumber(b.id) || b.roomNumber || '';
       return roomA.localeCompare(roomB, undefined, { numeric: true, sensitivity: 'base' });
@@ -3775,7 +3896,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                               data-testid="badge-unbound-line"
                               className="bg-amber-50 border border-amber-200 text-amber-700 font-extrabold text-[9px] px-1.5 py-0.5 rounded-md shrink-0 flex items-center gap-1"
                             >
-                              <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+                              <LineIcon className="w-2.5 h-2.5 shrink-0 opacity-60 grayscale" />
                               <span>ยังไม่ผูก LINE</span>
                             </span>
                           )}
@@ -3839,26 +3960,32 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
             <div className="bg-white p-4 sm:p-6 rounded-3xl border border-gray-100 shadow-xs h-[700px] flex flex-col justify-between w-full min-w-0 overflow-hidden">
               <div>
                 {/* Context-Aware Back Button */}
-                {originTab === 'rooms' ? (
+                {returnContext?.source === 'rooms' ? (
                   <div className="flex items-center justify-between gap-2 mb-4 pb-2.5 border-b border-gray-100">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setOriginTab(null);
-                        const targetRoom = rooms.find(r => r.currentTenantId === selectedTenant.id || r.id === (selectedTenant as any).roomId);
-                        if (returnContext && onReturnToSource) {
-                          onReturnToSource(returnContext);
-                        } else if (onBackToRooms) {
-                          onBackToRooms(targetRoom?.id);
-                        }
-                      }}
-                      className="inline-flex items-center gap-2 text-indigo-700 hover:text-indigo-900 bg-indigo-50 hover:bg-indigo-100/90 px-3.5 py-1.5 rounded-xl font-extrabold text-xs transition-all border border-indigo-200/80 cursor-pointer shadow-3xs group active:scale-95"
-                    >
-                      <ArrowLeft className="w-4 h-4 text-indigo-600 group-hover:-translate-x-0.5 transition-transform" />
-                      <span>
-                        กลับไปยัง {getRoomNumber(selectedTenant.id) && getRoomNumber(selectedTenant.id) !== '-' ? `(ห้อง ${getRoomNumber(selectedTenant.id)})` : ''}
+                    <div className="flex items-center gap-1.5 sm:gap-2.5 min-w-0 font-sans">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const targetRoom = rooms.find(r => r.currentTenantId === selectedTenant.id || r.id === (selectedTenant as any).roomId);
+                          setSelectedTenant(null);
+                          if (returnContext && onReturnToSource) {
+                            onReturnToSource(returnContext);
+                          } else if (onBackToRooms) {
+                            onBackToRooms(targetRoom?.id);
+                          }
+                        }}
+                        className="inline-flex items-center gap-1 px-2 sm:px-2.5 py-1.5 -ml-2 rounded-xl text-slate-700 hover:text-indigo-600 hover:bg-slate-100 active:bg-slate-200 transition-colors cursor-pointer font-extrabold text-xs sm:text-sm shrink-0 group"
+                        title="ย้อนกลับ"
+                      >
+                        <span>กลับ</span>
+                      </button>
+
+                      <ChevronLeft className="w-4 h-4 text-slate-400 shrink-0 stroke-[2.5]" />
+
+                      <span className="px-1.5 sm:px-2 py-1.5 text-slate-800 font-extrabold text-xs sm:text-sm shrink-0 select-none">
+                        ห้อง {getRoomNumber(selectedTenant.id)}
                       </span>
-                    </button>
+                    </div>
 
                     <button
                       type="button"
@@ -3991,7 +4118,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                                       data-testid="header-badge-unbound-line"
                                       className="bg-amber-50 text-amber-800 border border-amber-200 text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1"
                                     >
-                                      <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+                                      <LineIcon className="w-3 h-3 shrink-0 opacity-60 grayscale" />
                                       ยังไม่ผูก LINE
                                     </span>
                                   ) : (

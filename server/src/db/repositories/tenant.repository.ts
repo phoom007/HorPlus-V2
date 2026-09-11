@@ -225,7 +225,7 @@ export class InMemoryTenantRepository implements ITenantRepository {
 
   public async findAll(dormitoryId: string, filter: TenantFilterQuery = {}): Promise<{ items: TenantEntity[]; total: number }> {
     let list = Array.from(this.tenants.values()).filter(
-      (t) => t.dormitoryId === dormitoryId && !t.deletedAt && t.status !== 'archived'
+      (t) => t.dormitoryId === dormitoryId && !t.deletedAt && t.status !== 'archived' && t.status !== 'rejected'
     );
 
     if (filter.status) {
@@ -552,14 +552,49 @@ export class PrismaTenantRepository implements ITenantRepository {
 
   public async findById(id: string, dormitoryId?: string): Promise<TenantEntity | null> {
     const isUuid = (str?: string | null) => !!str && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
-    if (!isUuid(id)) return null;
     const where: any = { id };
     if (dormitoryId) where.dormitoryId = dormitoryId;
     const t = await this.prisma.tenant.findFirst({
       where,
       include: { coOccupants: { where: { deletedAt: null, status: 'active' } }, vehicles: { where: { deletedAt: null } } },
     });
-    if (!t) return null;
+    if (!t) {
+      const regWhere: any = { id, status: { in: ['pending', 'pending_owner_approval'] } };
+      if (dormitoryId) regWhere.dormitoryId = dormitoryId;
+      const reg = await this.prisma.tenantRegistrationRequest.findFirst({ where: regWhere });
+      if (reg) {
+        const snap = (reg.acceptanceSnapshot as any) || {};
+        return {
+          id: reg.id,
+          dormitoryId: reg.dormitoryId,
+          tenantNumber: 'REQ-' + reg.id.slice(0, 8).toUpperCase(),
+          firstName: reg.firstName,
+          lastName: reg.lastName,
+          displayName: `${reg.firstName} ${reg.lastName || ''}`.trim(),
+          name: `${reg.firstName} ${reg.lastName || ''}`.trim(),
+          phone: reg.phone,
+          status: 'pending',
+          requestedRoomId: reg.requestedRoomId,
+          roomId: reg.requestedRoomId,
+          registrationRequestId: reg.id,
+          rentalType: snap.rentalType || snap.rentalPlan || 'MONTHLY',
+          rentalPlan: snap.rentalPlan || snap.rentalType || 'MONTHLY',
+          requestedRent: snap.proposedRent ?? snap.rentAmount ?? (snap.dailyRate ? snap.dailyRate * (snap.totalDays || 1) : null),
+          requestedDeposit: snap.proposedDeposit ?? snap.depositAmount ?? null,
+          requestedStartDate: snap.startDate ?? snap.checkInDate ?? null,
+          requestedEndDate: snap.endDate ?? snap.checkOutDate ?? null,
+          requestedDurationMonths: snap.durationMonths ?? null,
+          requestedDays: snap.totalDays ?? null,
+          requestedDailyRate: snap.dailyRate ?? null,
+          requestedAttachments: snap.attachments ?? null,
+          acceptanceSnapshot: snap,
+          version: reg.version || 1,
+          createdAt: reg.createdAt,
+          updatedAt: reg.updatedAt,
+        };
+      }
+      return null;
+    }
     if (t.status === 'pending') {
       const regWhere: any = { status: { in: ['pending', 'pending_owner_approval', 'awaiting_tenant_confirmation'] } };
       if (t.dormitoryId) regWhere.dormitoryId = t.dormitoryId;
@@ -722,36 +757,82 @@ export class PrismaTenantRepository implements ITenantRepository {
       this.prisma.tenant.count({ where }),
     ]);
 
-    if (items.some((t) => t.status === 'pending')) {
-      const pendingRegs = await this.prisma.tenantRegistrationRequest.findMany({
-        where: { dormitoryId, status: { in: ['pending', 'pending_owner_approval', 'awaiting_tenant_confirmation'] } },
-      });
-      if (pendingRegs.length > 0) {
-        for (const item of items) {
-          if (item.status === 'pending') {
-            const matchedReg = pendingRegs.find(
-              (r) =>
-                r.approvedTenantId === item.id ||
-                r.phone === item.phone ||
-                r.phone?.replace(/[^0-9]/g, '') === item.phone?.replace(/[^0-9]/g, '') ||
-                `${r.firstName} ${r.lastName}`.trim() === (item.displayName || '').trim()
-            );
-            if (matchedReg) {
-              (item as any).requestedRoomId = matchedReg.requestedRoomId;
-              (item as any).registrationRequestId = matchedReg.id;
-              const snap = (matchedReg.acceptanceSnapshot as any) || {};
-              (item as any).rentalType = snap.rentalType || snap.rentalPlan || 'MONTHLY';
-              (item as any).rentalPlan = snap.rentalPlan || snap.rentalType || 'MONTHLY';
-              (item as any).requestedRent = snap.proposedRent ?? snap.rentAmount ?? (snap.dailyRate ? snap.dailyRate * (snap.totalDays || 1) : null);
-              (item as any).requestedDeposit = snap.proposedDeposit ?? snap.depositAmount ?? null;
-              (item as any).requestedStartDate = snap.startDate ?? snap.checkInDate ?? null;
-              (item as any).requestedEndDate = snap.endDate ?? snap.checkOutDate ?? null;
-              (item as any).requestedDurationMonths = snap.durationMonths ?? null;
-              (item as any).requestedDays = snap.totalDays ?? null;
-              (item as any).requestedDailyRate = snap.dailyRate ?? null;
-              (item as any).requestedAttachments = snap.attachments ?? null;
-              (item as any).acceptanceSnapshot = snap;
-            }
+    const pendingRegs = (!filter.status || filter.status === 'pending')
+      ? await this.prisma.tenantRegistrationRequest.findMany({
+          where: { dormitoryId, status: { in: ['pending', 'pending_owner_approval'] } },
+        })
+      : [];
+
+    if (pendingRegs.length > 0) {
+      for (const reg of pendingRegs) {
+        const isMatched = items.some(
+          (t) =>
+            t.id === reg.id ||
+            (t as any).registrationRequestId === reg.id ||
+            (reg.approvedTenantId && t.id === reg.approvedTenantId) ||
+            (t.status === 'pending' && (
+              (t.phone && reg.phone && t.phone.replace(/\D/g, '') === reg.phone.replace(/\D/g, '')) ||
+              `${reg.firstName} ${reg.lastName || ''}`.trim() === (t.displayName || '').trim()
+            ))
+        );
+        if (!isMatched) {
+          const snap = (reg.acceptanceSnapshot as any) || {};
+          const syntheticPendingTenant: any = {
+            id: reg.id,
+            dormitoryId: reg.dormitoryId,
+            tenantNumber: 'REQ-' + reg.id.slice(0, 8).toUpperCase(),
+            firstName: reg.firstName,
+            lastName: reg.lastName,
+            displayName: `${reg.firstName} ${reg.lastName || ''}`.trim(),
+            name: `${reg.firstName} ${reg.lastName || ''}`.trim(),
+            phone: reg.phone,
+            status: 'pending',
+            requestedRoomId: reg.requestedRoomId,
+            roomId: reg.requestedRoomId,
+            registrationRequestId: reg.id,
+            rentalType: snap.rentalType || snap.rentalPlan || 'MONTHLY',
+            rentalPlan: snap.rentalPlan || snap.rentalType || 'MONTHLY',
+            requestedRent: snap.proposedRent ?? snap.rentAmount ?? (snap.dailyRate ? snap.dailyRate * (snap.totalDays || 1) : null),
+            requestedDeposit: snap.proposedDeposit ?? snap.depositAmount ?? null,
+            requestedStartDate: snap.startDate ?? snap.checkInDate ?? null,
+            requestedEndDate: snap.endDate ?? snap.checkOutDate ?? null,
+            requestedDurationMonths: snap.durationMonths ?? null,
+            requestedDays: snap.totalDays ?? null,
+            requestedDailyRate: snap.dailyRate ?? null,
+            requestedAttachments: snap.attachments ?? null,
+            acceptanceSnapshot: snap,
+            version: reg.version || 1,
+            createdAt: reg.createdAt,
+            updatedAt: reg.updatedAt,
+          };
+          items.push(syntheticPendingTenant);
+        }
+      }
+
+      for (const item of items) {
+        if (item.status === 'pending') {
+          const matchedReg = pendingRegs.find(
+            (r) =>
+              r.id === item.id ||
+              r.approvedTenantId === item.id ||
+              (r.phone && item.phone && r.phone.replace(/\D/g, '') === item.phone.replace(/\D/g, '')) ||
+              `${r.firstName} ${r.lastName || ''}`.trim() === (item.displayName || '').trim()
+          );
+          if (matchedReg) {
+            (item as any).requestedRoomId = matchedReg.requestedRoomId;
+            (item as any).registrationRequestId = matchedReg.id;
+            const snap = (matchedReg.acceptanceSnapshot as any) || {};
+            (item as any).rentalType = snap.rentalType || snap.rentalPlan || 'MONTHLY';
+            (item as any).rentalPlan = snap.rentalPlan || snap.rentalType || 'MONTHLY';
+            (item as any).requestedRent = snap.proposedRent ?? snap.rentAmount ?? (snap.dailyRate ? snap.dailyRate * (snap.totalDays || 1) : null);
+            (item as any).requestedDeposit = snap.proposedDeposit ?? snap.depositAmount ?? null;
+            (item as any).requestedStartDate = snap.startDate ?? snap.checkInDate ?? null;
+            (item as any).requestedEndDate = snap.endDate ?? snap.checkOutDate ?? null;
+            (item as any).requestedDurationMonths = snap.durationMonths ?? null;
+            (item as any).requestedDays = snap.totalDays ?? null;
+            (item as any).requestedDailyRate = snap.dailyRate ?? null;
+            (item as any).requestedAttachments = snap.attachments ?? null;
+            (item as any).acceptanceSnapshot = snap;
           }
         }
       }
@@ -883,7 +964,8 @@ export class PrismaTenantRepository implements ITenantRepository {
       }
     }
 
-    return { items: items.map((t) => this.mapTenantToEntity(t)), total };
+    const nonRejectedItems = items.filter((t) => t.status !== 'rejected');
+    return { items: nonRejectedItems.map((t) => this.mapTenantToEntity(t)), total: nonRejectedItems.length };
   }
 
   public async countActiveByDormitory(dormitoryId: string): Promise<number> {

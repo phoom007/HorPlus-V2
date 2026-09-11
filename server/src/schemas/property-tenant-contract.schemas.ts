@@ -86,6 +86,7 @@ export const CreateTenantSchema = BaseCreateTenantSchema.refine(
 
 export const UpdateTenantSchema = BaseCreateTenantSchema.partial().extend({
   version: z.number().int().optional(),
+  status: z.string().optional(),
   nationalId: z
     .string()
     .optional()

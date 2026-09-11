@@ -36,34 +36,66 @@ export function createAnnouncementRouter(announcementService: AnnouncementServic
       };
 
       const result = await announcementService.getRepository().findAll(dormitoryId, query);
-      res.json(result);
+      res.json({
+        data: result.items,
+        pagination: { total: result.total, page: query.page, pageSize: query.pageSize },
+        items: result.items,
+        total: result.total
+      });
     } catch (err: any) {
       res.status(500).json({ error: { message: err.message } });
     }
   });
 
-  // POST /api/v1/announcements (Create Draft)
+  // POST /api/v1/announcements (Create and Publish Immediately)
   router.post('/', mutationGuard('announcement:write'), async (req: Request, res: Response) => {
     try {
       const { actor, dormitoryId } = getContext(req);
-      const { title, summary, content, priority, isPinned, audiences } = req.body;
-
-      if (!title || !content) {
-        return res.status(400).json({ error: { code: 'INVALID_INPUT', message: 'Title and content are required' } });
-      }
-
-      const draft = await announcementService.createDraft({
-        dormitoryId,
+      const {
         title,
         summary,
         content,
         priority,
         isPinned,
+        type,
+        targetType,
+        targetBuildingId,
+        customTarget,
+        targetRooms,
+        attachmentUrl,
+        linkUrl,
+        author,
+        status,
+        publishDate,
+        audiences
+      } = req.body;
+
+      if (!title || !content) {
+        return res.status(400).json({ error: { code: 'INVALID_INPUT', message: 'Title and content are required' } });
+      }
+
+      const announcement = await announcementService.createDraft({
+        dormitoryId,
+        title: title.trim(),
+        summary: summary || (content.trim().length > 50 ? content.trim().substring(0, 50) + '...' : content.trim()),
+        content: content.trim(),
+        type: type || 'general',
+        targetType: targetType || 'all',
+        targetBuildingId: targetBuildingId || null,
+        customTarget: customTarget || null,
+        targetRooms: Array.isArray(targetRooms) ? targetRooms.join(', ') : (targetRooms || null),
+        attachmentUrl: attachmentUrl || null,
+        linkUrl: linkUrl || null,
+        author: author || null,
+        priority: priority || 'normal',
+        isPinned: isPinned !== undefined ? isPinned : true,
         createdByUserId: actor?.userId || undefined,
+        status: status || 'published',
+        publishDate: publishDate ? new Date(publishDate) : new Date(),
         audiences: audiences || [{ targetType: 'all_tenants' }]
       });
 
-      res.status(201).json(draft);
+      res.status(201).json(announcement);
     } catch (err: any) {
       res.status(500).json({ error: { message: err.message } });
     }

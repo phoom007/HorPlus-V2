@@ -222,6 +222,8 @@ export class BillingService {
           agreementEndDate: c.endDate,
           cyclePeriodStart: billingCycle.periodStart,
           cyclePeriodEnd: billingCycle.periodEnd,
+          status: c.status,
+          terminationEffectiveDate: c.terminationEffectiveDate || (c.status === 'terminated' ? c.terminatedAt : null),
         })
       );
 

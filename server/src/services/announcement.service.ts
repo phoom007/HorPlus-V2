@@ -1,4 +1,6 @@
 import {
+  IAnnouncementRepository,
+  PrismaAnnouncementRepository,
   InMemoryAnnouncementRepository,
   AnnouncementEntity,
   AnnouncementAudienceEntity,
@@ -22,6 +24,7 @@ export interface CreateAnnouncementInput {
   content: string;
   priority?: AnnouncementPriority;
   isPinned?: boolean;
+  publishDate?: Date | string;
   createdByUserId?: string;
   audiences: {
     targetType: AnnouncementTargetType;
@@ -142,26 +145,34 @@ export class AnnouncementRecipientResolver {
 
 export class AnnouncementService {
   constructor(
-    private announcementRepo: InMemoryAnnouncementRepository = new InMemoryAnnouncementRepository(),
+    private announcementRepo: IAnnouncementRepository = new PrismaAnnouncementRepository(),
     private recipientResolver: AnnouncementRecipientResolver = new AnnouncementRecipientResolver(),
     private notificationService: NotificationService = new NotificationService()
   ) {}
 
-  public getRepository(): InMemoryAnnouncementRepository {
+  public getRepository(): IAnnouncementRepository {
     return this.announcementRepo;
   }
 
   // --- Staff Operations ---
-  public async createDraft(input: CreateAnnouncementInput): Promise<AnnouncementEntity> {
+  public async createDraft(input: CreateAnnouncementInput & { type?: string; targetType?: string; targetBuildingId?: string; customTarget?: string; targetRooms?: string; attachmentUrl?: string; linkUrl?: string; author?: string; status?: AnnouncementStatus }): Promise<AnnouncementEntity> {
     const announcement = await this.announcementRepo.createAnnouncement({
       dormitoryId: input.dormitoryId,
       title: input.title,
       summary: input.summary,
       content: input.content,
+      type: input.type || 'general',
+      targetType: input.targetType || 'all',
+      targetBuildingId: input.targetBuildingId || null,
+      customTarget: input.customTarget || null,
+      targetRooms: input.targetRooms || null,
+      attachmentUrl: input.attachmentUrl || null,
+      linkUrl: input.linkUrl || null,
+      author: input.author || null,
       priority: input.priority || 'normal',
       isPinned: input.isPinned || false,
       createdByUserId: input.createdByUserId,
-      status: 'draft'
+      status: input.status || 'draft'
     });
 
     if (input.audiences && input.audiences.length > 0) {
@@ -173,11 +184,11 @@ export class AnnouncementService {
     return announcement;
   }
 
-  public async updateAnnouncement(dormitoryId: string, id: string, updates: Partial<CreateAnnouncementInput>): Promise<AnnouncementEntity | null> {
+  public async updateAnnouncement(dormitoryId: string, id: string, updates: Partial<CreateAnnouncementInput> & { type?: string; customTarget?: string; targetRooms?: string; attachmentUrl?: string; linkUrl?: string; author?: string }): Promise<AnnouncementEntity | null> {
     const existing = await this.announcementRepo.findById(dormitoryId, id);
     if (!existing) return null;
 
-    if (existing.status === 'published' || existing.status === 'archived') {
+    if (existing.status === 'archived') {
       throw new Error(`CANNOT_MODIFY_ANNOUNCEMENT: Cannot modify announcement in ${existing.status} state`);
     }
 
@@ -185,6 +196,12 @@ export class AnnouncementService {
       title: updates.title,
       summary: updates.summary,
       content: updates.content,
+      type: updates.type,
+      customTarget: updates.customTarget,
+      targetRooms: updates.targetRooms,
+      attachmentUrl: updates.attachmentUrl,
+      linkUrl: updates.linkUrl,
+      author: updates.author,
       priority: updates.priority,
       isPinned: updates.isPinned,
       updatedByUserId: updates.createdByUserId

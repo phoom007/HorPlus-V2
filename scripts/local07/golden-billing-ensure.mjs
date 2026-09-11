@@ -304,6 +304,39 @@ export async function ensureGoldenBillingTimeline() {
     },
   });
 
+  // Cycle 2026-11: Future Draft
+  const novCycle = await prisma.billingCycle.upsert({
+    where: {
+      dormitory_cycle_code_unique: {
+        dormitoryId: dorm.id,
+        cycleCode: '2026-11',
+      },
+    },
+    update: {},
+    create: {
+      dormitoryId: dorm.id,
+      cycleCode: '2026-11',
+      name: 'รอบบิล พฤศจิกายน 2569',
+      periodStart: new Date('2026-11-01'),
+      periodEnd: new Date('2026-11-30'),
+      billingDate: new Date('2026-11-25'),
+      dueDate: new Date('2026-12-05'),
+      status: 'draft',
+    },
+  });
+
+  await prisma.billingRateSnapshot.upsert({
+    where: { billingCycleId: novCycle.id },
+    update: {},
+    create: {
+      dormitoryId: dorm.id,
+      billingCycleId: novCycle.id,
+      ...defaultRates,
+      source: 'INHERITED',
+      inheritedFromBillingCycleId: octCycle.id,
+    },
+  });
+
   // 6. Verify Operational Cycle Resolver identifies August 2026
   console.log('--- 5. Verifying Operational Cycle Resolution ---');
   const resolver = new CurrentCycleResolverService(prisma);

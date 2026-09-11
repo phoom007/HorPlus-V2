@@ -15,6 +15,8 @@ interface TenantClaimModalProps {
   dormitoryId: string;
   roomNumber: string;
   roomId?: string;
+  initialClaimInput?: string;
+  allowAdditionalRoom?: boolean;
   onSuccess: (message: string) => void;
 }
 
@@ -24,18 +26,20 @@ export const TenantClaimModal: React.FC<TenantClaimModalProps> = ({
   dormitoryId,
   roomNumber,
   roomId,
+  initialClaimInput,
+  allowAdditionalRoom = false,
   onSuccess,
 }) => {
   const [loadingCandidate, setLoadingCandidate] = useState(false);
   const [candidate, setCandidate] = useState<any | null>(null);
-  const [claimInput, setClaimInput] = useState('');
+  const [claimInput, setClaimInput] = useState(initialClaimInput || '');
   const [submitting, setSubmitting] = useState(false);
   const [errorText, setErrorText] = useState<string | null>(null);
 
   // Fetch candidate discovery
   useEffect(() => {
     if (isOpen && (roomNumber || roomId)) {
-      setClaimInput('');
+      setClaimInput(initialClaimInput || '');
       setErrorText(null);
       setCandidate(null);
       setLoadingCandidate(true);
@@ -80,6 +84,7 @@ export const TenantClaimModal: React.FC<TenantClaimModalProps> = ({
         roomNumber,
         roomId: roomId || undefined,
         claimInput: claimInput.trim(),
+        allowAdditionalRoom: allowAdditionalRoom || undefined,
       });
 
       onSuccess('ยืนยันสิทธิ์ผู้เช่าสำเร็จเรียบร้อยแล้ว');

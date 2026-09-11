@@ -138,6 +138,7 @@ import { Dormitory, Building, Room } from '../../types';
 import { normalizeNumericInput } from '../../utils/numericInput';
 import { createPortal } from 'react-dom';
 import { saveRegistrationDraft, getRegistrationDraft, clearRegistrationDraft } from '../../utils/localDraftStorage';
+import { LineLogo } from '../../components/LineLogo';
 
 interface RegisterProps {
   onAddLog?: (action: string, details: string, module: string, targetId?: string) => void;
@@ -352,6 +353,7 @@ export function getRegistrationInitialFormData() {
       isConnected: false,
       botDisplayName: '',
       botPictureUrl: '',
+      webhookUrl: '',
       verifiedAt: null,
       verificationError: null,
     },
@@ -654,9 +656,8 @@ export const DormitoryLogoUploader: React.FC<DormitoryLogoUploaderProps> = ({
             const file = e.dataTransfer.files?.[0];
             if (file) handleFile(file);
           }}
-          className={`flex items-center gap-3 p-3 bg-white border-2 rounded-2xl cursor-pointer transition ${
-            isDragOver ? 'border-blue-500 bg-blue-50/50' : 'border-slate-200 hover:border-blue-400'
-          } ${isUploading ? 'opacity-50 pointer-events-none' : ''}`}
+          className={`flex items-center gap-3 p-3 bg-white border-2 rounded-2xl cursor-pointer transition ${isDragOver ? 'border-blue-500 bg-blue-50/50' : 'border-slate-200 hover:border-blue-400'
+            } ${isUploading ? 'opacity-50 pointer-events-none' : ''}`}
         >
           <div className="w-16 h-16 rounded-xl border border-slate-100 bg-slate-50 flex items-center justify-center overflow-hidden shrink-0">
             <img src={logoUrl} alt="Dormitory Logo" className="w-full h-full object-contain" />
@@ -707,11 +708,10 @@ export const DormitoryLogoUploader: React.FC<DormitoryLogoUploaderProps> = ({
             const file = e.dataTransfer.files?.[0];
             if (file) handleFile(file);
           }}
-          className={`border-2 border-dashed rounded-2xl p-4 text-center cursor-pointer transition flex flex-col items-center justify-center gap-1.5 ${
-            isDragOver
-              ? 'border-blue-500 bg-blue-50/50'
-              : 'border-slate-200 hover:border-blue-400 bg-white hover:bg-slate-50/50'
-          } ${isUploading ? 'opacity-50 pointer-events-none' : ''}`}
+          className={`border-2 border-dashed rounded-2xl p-4 text-center cursor-pointer transition flex flex-col items-center justify-center gap-1.5 ${isDragOver
+            ? 'border-blue-500 bg-blue-50/50'
+            : 'border-slate-200 hover:border-blue-400 bg-white hover:bg-slate-50/50'
+            } ${isUploading ? 'opacity-50 pointer-events-none' : ''}`}
         >
           {isUploading ? (
             <Loader2 className="w-6 h-6 text-blue-500 animate-spin" />
@@ -764,6 +764,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
 
   const [formData, setFormData] = useState(getInitialForm());
   const [testingLine, setTestingLine] = useState(false);
+  const [copiedWebhook, setCopiedWebhook] = useState(false);
   const [lineStatusMsg, setLineStatusMsg] = useState<{ type: 'success' | 'error'; msg: string } | null>(
     formData.lineOA.isConnected ? { type: 'success', msg: 'เชื่อมต่อกับ LINE Official Account สำเร็จ (พร้อมใช้งาน)' } : null
   );
@@ -1209,6 +1210,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
       const botDisplayName = lineRes?.data?.botDisplayName || lineRes?.botDisplayName || '';
       const botPictureUrl = lineRes?.data?.botPictureUrl || lineRes?.botPictureUrl || '';
       const lineOaId = lineRes?.data?.lineOaId || lineRes?.lineOaId || '';
+      const webhookUrl = lineRes?.data?.webhookUrl || lineRes?.config?.webhookUrl || lineRes?.webhookUrl || `${window.location.origin}/api/v1/line/webhook/${provDormId}`;
 
       setFormData(prev => ({
         ...prev,
@@ -1217,13 +1219,10 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
           isConnected: true,
           botDisplayName,
           botPictureUrl,
+          webhookUrl,
           oaName: lineOaId || prev.lineOA.oaName
         }
       }));
-      setLineStatusMsg({ type: 'success', msg: 'ทดสอบสำเร็จ: เชื่อมต่อ LINE Official Account สำเร็จ (พร้อมใช้งาน)' });
-    } catch (err: any) {
-      setFormData(prev => ({ ...prev, lineOA: { ...prev.lineOA, isConnected: false } }));
-      setLineStatusMsg({ type: 'error', msg: err?.message || 'การเชื่อมต่อ LINE OA ล้มเหลว กรุณาตรวจสอบ Channel ID / Secret' });
     } finally {
       setTestingLine(false);
     }
@@ -3330,7 +3329,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
         <div className="bg-white p-4 sm:p-8 rounded-3xl border border-slate-100 shadow-xs space-y-6 animate-in fade-in duration-200">
           <div className="flex items-center justify-between gap-3 pb-3 border-b border-slate-100 flex-wrap">
             <div className="flex items-center gap-2">
-              <Send className="w-5 h-5 text-emerald-600 shrink-0" />
+              <LineLogo className="w-5 h-5 shrink-0 rounded-xs" />
               <div>
                 <h3 className="text-sm sm:text-base font-black text-slate-800">ขั้นตอนที่ 6: เชื่อมต่อ LINE OA</h3>
                 <p className="text-[11px] sm:text-xs text-slate-400 font-medium">ตั้งค่าระบบแจ้งเตือนบิล ค่าน้ำไฟ และรับชำระผ่าน LINE Official Account</p>
@@ -3361,12 +3360,8 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                       className="w-full h-full object-cover"
                       referrerPolicy="no-referrer"
                     />
-                  ) : formData.lineOA.isConnected ? (
-                    <div className="w-full h-full bg-emerald-600 text-white flex items-center justify-center font-black text-xs">
-                      OA
-                    </div>
                   ) : (
-                    <Bot className="w-6 h-6 text-slate-400" />
+                    <LineLogo className={`w-7 h-7 shrink-0 rounded-xs ${!formData.lineOA.isConnected ? 'opacity-60 grayscale' : ''}`} />
                   )}
                 </div>
                 <div>
@@ -3378,8 +3373,8 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                   <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
                     <span className="text-[11px] sm:text-xs text-slate-500 font-bold">LINE ID:</span>
                     <span className={`text-[11px] sm:text-xs font-black px-2 py-0.5 rounded-md ${formData.lineOA.isConnected
-                        ? 'text-emerald-800 bg-emerald-100/90'
-                        : 'text-slate-500 bg-slate-100'
+                      ? 'text-emerald-800 bg-emerald-100/90'
+                      : 'text-slate-500 bg-slate-100'
                       }`}>
                       {formData.lineOA.isConnected
                         ? (formData.lineOA.lineOaId || formData.lineOA.oaName || 'เชื่อมต่อแล้ว')
@@ -3391,8 +3386,8 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
 
               <div className="flex items-center gap-2 shrink-0 self-start sm:self-auto">
                 <span className={`px-3 py-1 rounded-full text-xs font-black flex items-center gap-1.5 whitespace-nowrap shrink-0 ${formData.lineOA.isConnected
-                    ? 'bg-emerald-100 text-emerald-700 border border-emerald-200'
-                    : 'bg-slate-100 text-slate-600 border border-slate-200'
+                  ? 'bg-emerald-100 text-emerald-700 border border-emerald-200'
+                  : 'bg-slate-100 text-slate-600 border border-slate-200'
                   }`}>
                   <span className={`w-2 h-2 rounded-full shrink-0 ${formData.lineOA.isConnected ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'
                     }`} />
@@ -3418,6 +3413,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                         isConnected: false,
                         botDisplayName: '',
                         botPictureUrl: '',
+                        webhookUrl: '',
                         lineOaId: '',
                         oaName: ''
                       }
@@ -3445,6 +3441,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                         isConnected: false,
                         botDisplayName: '',
                         botPictureUrl: '',
+                        webhookUrl: '',
                         lineOaId: '',
                         oaName: ''
                       }
@@ -3455,6 +3452,65 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                   className="w-full px-3.5 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:border-emerald-500 outline-none font-mono text-xs"
                 />
               </div>
+            </div>
+
+            {/* LINE Webhook URL (Above test status button) */}
+            <div className="pt-2">
+              <label className="block text-xs font-bold text-slate-700 mb-1">
+                LINE Webhook URL <span className="text-[11px] font-normal text-slate-400">(นำไปวางใน LINE Developers Console &gt; Messaging API)</span>
+              </label>
+
+              <div className="flex items-center gap-2">
+                <div className="flex-1 relative">
+                  <input
+                    type="text"
+                    readOnly
+                    value={formData.lineOA.isConnected && formData.lineOA.webhookUrl ? formData.lineOA.webhookUrl : ''}
+                    placeholder="กรุณากรอกข้อมูล 2 ช่องด้านบน และกดทดสอบตรวจสถานะ LINE OA ก่อน"
+                    className={`w-full px-3.5 py-2 text-xs rounded-xl outline-none font-mono transition-all border ${formData.lineOA.isConnected && formData.lineOA.webhookUrl
+                      ? 'bg-slate-50 text-emerald-700 border-emerald-300 font-bold select-all'
+                      : 'bg-slate-50 text-slate-400 border-slate-200 cursor-not-allowed placeholder:font-sans placeholder:text-slate-400 placeholder:text-xs'
+                      }`}
+                  />
+                </div>
+
+                <button
+                  type="button"
+                  disabled={!formData.lineOA.isConnected || !formData.lineOA.webhookUrl}
+                  onClick={() => {
+                    if (formData.lineOA.webhookUrl) {
+                      navigator.clipboard.writeText(formData.lineOA.webhookUrl);
+                      setCopiedWebhook(true);
+                      setTimeout(() => setCopiedWebhook(false), 2000);
+                    }
+                  }}
+                  className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shrink-0 shadow-2xs ${formData.lineOA.isConnected && formData.lineOA.webhookUrl
+                    ? copiedWebhook
+                      ? 'bg-emerald-100 text-emerald-700 border border-emerald-300'
+                      : 'bg-white hover:bg-emerald-50 text-slate-700 hover:text-emerald-700 border border-slate-200 hover:border-emerald-300 cursor-pointer active:scale-95'
+                    : 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed opacity-60'
+                    }`}
+                  title={formData.lineOA.isConnected && formData.lineOA.webhookUrl ? 'คัดลอก Webhook URL' : 'กรุณากรอกข้อมูล 2 ช่องด้านบนและกดทดสอบสถานะก่อน'}
+                >
+                  {copiedWebhook ? (
+                    <>
+                      <Check className="w-3.5 h-3.5 text-emerald-600" />
+                      <span className="text-emerald-700 font-extrabold">คัดลอกแล้ว!</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-3.5 h-3.5 text-slate-500" />
+                      <span>คัดลอก</span>
+                    </>
+                  )}
+                </button>
+              </div>
+
+              {!formData.lineOA.isConnected && (
+                <p className="text-[11px] text-amber-600 mt-1.5 flex items-center gap-1 font-medium">
+                  <span>* กรุณากรอก LINE Channel ID และ LINE Channel Secret ด้านบน</span>
+                </p>
+              )}
             </div>
 
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2">
@@ -3589,7 +3645,10 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                 </li>
                 <li className="flex items-start gap-1.5">
                   <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0 mt-0.5" />
-                  <span>โควตา LINE แจ้งเตือน 30 ข้อความ/เดือน</span>
+                  <span className="flex items-center gap-1.5">
+                    <LineLogo className="w-3.5 h-3.5 shrink-0 rounded-xs" />
+                    <span>โควตา LINE แจ้งเตือน 30 ข้อความ/เดือน</span>
+                  </span>
                 </li>
               </ul>
             </div>
@@ -3656,7 +3715,10 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                 </li>
                 <li className="flex items-start gap-1.5">
                   <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0 mt-0.5" />
-                  <span>โควตา LINE แจ้งเตือน 300 ข้อความ/เดือน</span>
+                  <span className="flex items-center gap-1.5">
+                    <LineLogo className="w-3.5 h-3.5 shrink-0 rounded-xs" />
+                    <span>โควตา LINE แจ้งเตือน 300 ข้อความ/เดือน</span>
+                  </span>
                 </li>
                 <li className="flex items-start gap-1.5">
                   <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0 mt-0.5" />

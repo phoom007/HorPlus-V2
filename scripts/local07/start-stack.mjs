@@ -188,9 +188,9 @@ async function main() {
       detached: false,
     });
 
-    const apiReady = await waitForEndpoint('http://127.0.0.1:3001/health/liveness', 30);
+    const apiReady = await waitForEndpoint('http://127.0.0.1:3001/health/liveness', 60);
     if (!apiReady) {
-      console.error('❌ Backend API failed to become ready on http://127.0.0.1:3001 within 30 seconds.');
+      console.error('❌ Backend API failed to become ready on http://127.0.0.1:3001 within 60 seconds.');
       if (apiChild) apiChild.kill();
       process.exit(1);
     }

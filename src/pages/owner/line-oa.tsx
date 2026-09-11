@@ -366,7 +366,7 @@ export const OwnerLineOaPage: React.FC<OwnerLineOaPageProps> = ({
       {/* 2. Credentials Configuration */}
       <div className="p-5 bg-white rounded-3xl border border-slate-200/80 shadow-xs space-y-4">
         <h2 className="text-sm font-black text-slate-900 flex items-center gap-2">
-          <Settings className="w-4 h-4 text-indigo-600" />
+          <LineLogo className="w-4 h-4 shrink-0 rounded-xs" />
           ข้อมูล Messaging API จาก LINE Developers Console
         </h2>
 
@@ -414,7 +414,7 @@ export const OwnerLineOaPage: React.FC<OwnerLineOaPageProps> = ({
       <div className="p-5 bg-white rounded-3xl border border-slate-200/80 shadow-xs space-y-4">
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-black text-slate-900 flex items-center gap-2">
-            <MessageSquare className="w-4 h-4 text-emerald-600" />
+            <LineLogo className="w-4 h-4 shrink-0 rounded-xs" />
             Webhook URL สำหรับนำไปใส่ใน LINE Developers Console
           </h2>
           <button
@@ -465,7 +465,8 @@ export const OwnerLineOaPage: React.FC<OwnerLineOaPageProps> = ({
 
       {/* 4. Event Notification Preferences */}
       <div className="p-5 bg-white rounded-3xl border border-slate-200/80 shadow-xs space-y-4">
-        <h2 className="text-sm font-black text-slate-900">
+        <h2 className="text-sm font-black text-slate-900 flex items-center gap-2">
+          <LineLogo className="w-4 h-4 shrink-0 rounded-xs" />
           กำหนดการแจ้งเตือนอัตโนมัติผ่าน LINE (Event Preferences)
         </h2>
         <p className="text-xs text-slate-500 -mt-2">

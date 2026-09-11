@@ -17,6 +17,7 @@ import {
   RotateCcw
 } from 'lucide-react';
 import { Task009ApiAdapter, StaffMember, LineFriend, SlotUsage } from '../../data/adapters/task009';
+import { LineLogo } from '../../components/LineLogo';
 
 interface OwnerUsersProps {
   onAddLog: (action: string, details: string, type: string, id: string) => void;
@@ -340,7 +341,7 @@ export const OwnerUsers: React.FC<OwnerUsersProps> = ({ onAddLog }) => {
         <div className="lg:col-span-4 space-y-6 w-full min-w-0">
           <div className="bg-white p-5 rounded-3xl border border-gray-100 shadow-3xs space-y-4">
             <h4 className="text-xs font-extrabold text-slate-950 flex items-center gap-2">
-              <LinkIcon className="w-4 h-4 text-indigo-600 shrink-0" />
+              <LineLogo className="w-4 h-4 shrink-0 rounded-xs" />
               สร้างสิทธิ์ Access Grant สำหรับ LINE Friend
             </h4>
 
@@ -481,8 +482,8 @@ export const OwnerUsers: React.FC<OwnerUsersProps> = ({ onAddLog }) => {
                           {grant.pictureUrl ? (
                             <img src={grant.pictureUrl} alt="" className="w-7 h-7 rounded-full object-cover border border-slate-200" />
                           ) : (
-                            <div className="w-7 h-7 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center font-extrabold text-[10px]">
-                              LINE
+                            <div className="w-7 h-7 rounded-full overflow-hidden flex items-center justify-center shrink-0">
+                              <LineLogo className="w-full h-full" />
                             </div>
                           )}
                           <span className="font-extrabold text-slate-900">{grant.displayName}</span>

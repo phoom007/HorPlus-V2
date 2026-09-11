@@ -224,6 +224,8 @@ export interface AgreementCycleEligibilityParams {
   agreementEndDate?: Date | string | null;
   cyclePeriodStart: Date | string;
   cyclePeriodEnd: Date | string;
+  status?: string | null;
+  terminationEffectiveDate?: Date | string | null;
 }
 
 /**
@@ -240,7 +242,19 @@ export interface AgreementCycleEligibilityParams {
  */
 export function isAgreementEligibleForBillingCycle(params: AgreementCycleEligibilityParams): boolean {
   const agrStart = toDateOnlyString(params.agreementStartDate);
-  const agrEnd = params.agreementEndDate ? toDateOnlyString(params.agreementEndDate) : '9999-12-31';
+  let effectiveEndDate = params.agreementEndDate;
+
+  if (
+    (params.status === 'terminated' || params.status === 'TERMINATED') &&
+    params.terminationEffectiveDate
+  ) {
+    const termDateStr = toDateOnlyString(params.terminationEffectiveDate);
+    if (!effectiveEndDate || termDateStr < toDateOnlyString(effectiveEndDate)) {
+      effectiveEndDate = termDateStr;
+    }
+  }
+
+  const agrEnd = effectiveEndDate ? toDateOnlyString(effectiveEndDate) : '9999-12-31';
   const cycleStart = toDateOnlyString(params.cyclePeriodStart);
   const cycleEndExclusive = getCalendarDayAfter(params.cyclePeriodEnd);
 

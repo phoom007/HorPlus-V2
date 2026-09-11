@@ -41,6 +41,7 @@ import {
 import { VersionConflictModal } from '../../components/VersionConflictModal';
 import { getDataProvider } from '../../data/dataProvider';
 import { CreateRoomPayload, UpdateRoomChanges } from '../../data/contracts';
+import { sortRoomsByBuildingAndNumber } from '../../utils/roomSorter';
 import { httpRequest } from '../../data/httpClient';
 import { getOwnerRoomMutationErrorMessage, getOwnerRoomMutationDomainCode } from '../../lib/roomErrorMapper';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -300,10 +301,10 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
     }
     return map;
   }, [previewContext]);
-  const [viewMode, setViewMode] = useState<'grid' | 'list' | 'floor'>('grid');
-  const [selectedBuilding, setSelectedBuilding] = useState<string>('all');
-  const [selectedStatus, setSelectedStatus] = useState<string>('all');
-  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [viewMode, setViewMode] = useState<'grid' | 'list' | 'floor'>(() => restoredState?.viewMode || 'grid');
+  const [selectedBuilding, setSelectedBuilding] = useState<string>(() => restoredState?.selectedBuilding ?? 'all');
+  const [selectedStatus, setSelectedStatus] = useState<string>(() => restoredState?.selectedStatus ?? 'all');
+  const [searchQuery, setSearchQuery] = useState<string>(() => restoredState?.searchQuery ?? '');
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingRoom, setEditingRoom] = useState<Room | null>(null);
@@ -1096,7 +1097,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
 
   // Filter Logic (Decision A1: Filter & Search against selected-cycle presentation authority)
   const filteredRooms = React.useMemo(() => {
-    return rooms.filter(r => {
+    const filtered = rooms.filter(r => {
       const matchBuilding = selectedBuilding === 'all' || r.buildingId === selectedBuilding;
       const presentation = roomCyclePresentationsById.get(r.id) || resolveRoomCyclePresentation(r, undefined, selectedBillingCycleId);
 
@@ -1130,6 +1131,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
 
       return matchBuilding && matchStatus && matchSearch;
     });
+    return sortRoomsByBuildingAndNumber(filtered, buildings || []);
   }, [rooms, selectedBuilding, selectedStatus, searchQuery, roomCyclePresentationsById, buildings, selectedBillingCycleId]);
 
   return (
@@ -1138,8 +1140,8 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
       {toastMessage && (
         <div
           className={`fixed bottom-20 left-1/2 -translate-x-1/2 sm:bottom-8 sm:right-8 sm:left-auto sm:translate-x-0 z-[9999] bg-white text-slate-800 px-4.5 py-3 rounded-2xl shadow-2xl border border-slate-200/90 flex items-center gap-2.5 text-xs font-bold transition-all duration-500 ease-in-out ${isToastFading
-              ? 'opacity-0 translate-y-3 pointer-events-none'
-              : 'opacity-100 translate-y-0 animate-in fade-in slide-in-from-bottom-3 duration-300'
+            ? 'opacity-0 translate-y-3 pointer-events-none'
+            : 'opacity-100 translate-y-0 animate-in fade-in slide-in-from-bottom-3 duration-300'
             }`}
         >
           <CheckCircle2 className="w-4.5 h-4.5 text-emerald-500 shrink-0" />
@@ -1287,14 +1289,14 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                     {/* Status Badge (Cycle-scoped view) */}
                     <div
                       className={`px-2.5 py-1 rounded-full text-xs font-black border shadow-2xs select-none cursor-default ${isCycleOccupied
-                          ? 'bg-indigo-100 text-indigo-800 border-indigo-200'
-                          : (isCycleReserved || isDailyTail)
-                            ? 'bg-amber-100 text-amber-800 border-amber-200'
-                            : (isMaintenanceInCycle
-                              ? 'bg-rose-100 text-rose-800 border-rose-200'
-                              : (isUnavailable
-                                ? 'bg-slate-200 text-slate-700 border-slate-300'
-                                : 'bg-emerald-100 text-emerald-800 border-emerald-200'))
+                        ? 'bg-indigo-100 text-indigo-800 border-indigo-200'
+                        : (isCycleReserved || isDailyTail)
+                          ? 'bg-amber-100 text-amber-800 border-amber-200'
+                          : (isMaintenanceInCycle
+                            ? 'bg-rose-100 text-rose-800 border-rose-200'
+                            : (isUnavailable
+                              ? 'bg-slate-200 text-slate-700 border-slate-300'
+                              : 'bg-emerald-100 text-emerald-800 border-emerald-200'))
                         }`}
                       title={`สถานะห้องในงวด: ${isCycleOccupied ? 'มีผู้เช่า' : (isCycleReserved ? 'จองแล้ว' : (isDailyTail ? 'ค้างชำระ (รายวัน)' : (isMaintenanceInCycle ? 'ปิดปรับปรุง' : (isUnavailable ? 'ไม่มีประวัติสถานะ' : 'ว่าง'))))}`}
                     >
@@ -1690,31 +1692,31 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                         {/* Status minimal badge (Cycle-scoped view) */}
                         <div
                           className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold select-none border shadow-2xs cursor-default whitespace-nowrap ${isCycleOccupied
-                              ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
-                              : isCycleReserved
+                            ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                            : isCycleReserved
+                              ? 'bg-amber-50 text-amber-700 border-amber-200'
+                              : isDailyTail
                                 ? 'bg-amber-50 text-amber-700 border-amber-200'
-                                : isDailyTail
-                                  ? 'bg-amber-50 text-amber-700 border-amber-200'
-                                  : isMaintenanceInCycle
-                                    ? 'bg-rose-50 text-rose-700 border-rose-200'
-                                    : isUnavailable
-                                      ? 'bg-slate-100 text-slate-600 border-slate-200'
-                                      : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                : isMaintenanceInCycle
+                                  ? 'bg-rose-50 text-rose-700 border-rose-200'
+                                  : isUnavailable
+                                    ? 'bg-slate-100 text-slate-600 border-slate-200'
+                                    : 'bg-emerald-50 text-emerald-700 border-emerald-200'
                             }`}
                           title={`สถานะห้อง: ${isCycleOccupied ? 'มีผู้เช่า' : (isCycleReserved ? 'จองแล้ว' : (isDailyTail ? 'ค้างชำระ' : (isMaintenanceInCycle ? 'ปิดปรับปรุง' : (isUnavailable ? 'ไม่มีประวัติสถานะ' : 'ว่าง'))))}`}
                         >
                           <span
                             className={`w-1.5 h-1.5 rounded-full shrink-0 ${isCycleOccupied
-                                ? 'bg-indigo-500'
-                                : isCycleReserved
+                              ? 'bg-indigo-500'
+                              : isCycleReserved
+                                ? 'bg-amber-500'
+                                : isDailyTail
                                   ? 'bg-amber-500'
-                                  : isDailyTail
-                                    ? 'bg-amber-500'
-                                    : isMaintenanceInCycle
-                                      ? 'bg-rose-500'
-                                      : isUnavailable
-                                        ? 'bg-slate-400'
-                                        : 'bg-emerald-500'
+                                  : isMaintenanceInCycle
+                                    ? 'bg-rose-500'
+                                    : isUnavailable
+                                      ? 'bg-slate-400'
+                                      : 'bg-emerald-500'
                               }`}
                           />
                           <span>{isCycleOccupied ? 'มีผู้เช่า' : (isCycleReserved ? 'จองแล้ว' : (isDailyTail ? 'ค้างชำระ' : (isMaintenanceInCycle ? 'ปิดปรับปรุง' : (isUnavailable ? 'ไม่มีประวัติสถานะ' : 'ว่าง'))))}</span>
@@ -2151,8 +2153,8 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                   data-testid="btn-save-room"
                   disabled={!isFormModified || isSubmitting}
                   className={`px-5 py-2 font-extrabold text-xs rounded-xl shadow-xs transition-all flex items-center gap-1.5 ${isFormModified && !isSubmitting
-                      ? 'bg-indigo-600 hover:bg-indigo-700 text-white cursor-pointer active:scale-95'
-                      : 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-none'
+                    ? 'bg-indigo-600 hover:bg-indigo-700 text-white cursor-pointer active:scale-95'
+                    : 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-none'
                     }`}
                   title={!isFormModified && editingRoom ? 'ไม่มีการเปลี่ยนแปลงข้อมูล' : undefined}
                 >
@@ -2266,10 +2268,10 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                 disabled={!!editingRoom}
                 placeholder="เช่น A101"
                 className={`w-full px-3 py-2 text-xs border rounded-xl font-bold transition-colors ${errorText && (errorText.includes('เลขห้อง') || errorText.includes('เลขที่ห้อง'))
-                    ? 'border-rose-500 bg-rose-50/40 text-rose-900 focus:border-rose-600 ring-2 ring-rose-100'
-                    : editingRoom
-                      ? 'bg-slate-100 text-slate-500 border-gray-200 cursor-not-allowed select-none'
-                      : 'bg-white text-slate-800 border-gray-200 focus:border-indigo-600'
+                  ? 'border-rose-500 bg-rose-50/40 text-rose-900 focus:border-rose-600 ring-2 ring-rose-100'
+                  : editingRoom
+                    ? 'bg-slate-100 text-slate-500 border-gray-200 cursor-not-allowed select-none'
+                    : 'bg-white text-slate-800 border-gray-200 focus:border-indigo-600'
                   }`}
                 title={editingRoom ? 'ไม่สามารถแก้ไขเลขที่ห้องพักได้' : undefined}
               />
@@ -2400,9 +2402,6 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                 />
               </div>
             </div>
-            <p className="text-[11px] text-gray-500 font-medium mt-1">
-              กำหนดเงินประกันเริ่มต้นแยกตามแต่ละรอบการเช่า (ใช้เป็นค่าเริ่มต้นเมื่อทำสัญญาใหม่)
-            </p>
           </div>
 
           {/* Room Status Selector - อยู่ด้านล่าง อัตราค่าประกัน */}
@@ -2422,8 +2421,8 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                   }
                 }}
                 className={`py-2 px-3 text-xs font-extrabold rounded-xl border transition-all cursor-pointer text-center truncate ${roomStatus !== 'maintenance'
-                    ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
-                    : 'bg-white hover:bg-slate-50 text-slate-700 border-gray-200'
+                  ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
+                  : 'bg-white hover:bg-slate-50 text-slate-700 border-gray-200'
                   }`}
               >
                 เปิดใช้งาน
@@ -2436,10 +2435,10 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                 const blockReason = opActions?.maintenanceBlockReason;
                 const tooltipText = isMaintenanceDisabled
                   ? (blockReason === 'ACTIVE_RESERVATION'
-                      ? 'มีการจองล่วงหน้า ต้องจัดการการจองก่อน'
-                      : blockReason === 'ACTIVE_OCCUPANCY'
-                        ? 'มีผู้เช่าพักอยู่ ต้องย้ายหรือสิ้นสุดการเช่าก่อน'
-                        : 'ไม่สามารถตรวจสอบสถานะการเปิดปิดห้องได้ กรุณาโหลดข้อมูลใหม่')
+                    ? 'มีการจองล่วงหน้า ต้องจัดการการจองก่อน'
+                    : blockReason === 'ACTIVE_OCCUPANCY'
+                      ? 'มีผู้เช่าพักอยู่ ต้องย้ายหรือสิ้นสุดการเช่าก่อน'
+                      : 'ไม่สามารถตรวจสอบสถานะการเปิดปิดห้องได้ กรุณาโหลดข้อมูลใหม่')
                   : undefined;
 
                 return (
@@ -2455,10 +2454,10 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
                       setRoomStatus('maintenance');
                     }}
                     className={`py-2 px-3 text-xs font-extrabold rounded-xl border transition-all text-center truncate ${roomStatus === 'maintenance'
-                        ? 'bg-rose-600 text-white border-rose-600 shadow-xs'
-                        : isMaintenanceDisabled
-                          ? 'bg-slate-50 text-slate-400 border-slate-200 cursor-not-allowed opacity-75'
-                          : 'bg-white hover:bg-slate-50 text-slate-700 border-gray-200 cursor-pointer'
+                      ? 'bg-rose-600 text-white border-rose-600 shadow-xs'
+                      : isMaintenanceDisabled
+                        ? 'bg-slate-50 text-slate-400 border-slate-200 cursor-not-allowed opacity-75'
+                        : 'bg-white hover:bg-slate-50 text-slate-700 border-gray-200 cursor-pointer'
                       }`}
                     title={tooltipText}
                   >

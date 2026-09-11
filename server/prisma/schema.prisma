@@ -139,6 +139,8 @@ model Dormitory {
   paymentAllocations         PaymentAllocation[]
   combinedPaymentGroupBillTargets CombinedPaymentGroupBillTarget[]
   paymentEvidenceVerifications PaymentEvidenceVerification[]
+  maintenanceRequests        MaintenanceRequest[]
+  announcements              Announcement[]
 
   @@map("dormitories")
 }
@@ -483,6 +485,7 @@ model Room {
   provisionalRentalTerms    ProvisionalRentalTerm[]
   dailyStays                DailyStay[]
   receipts                  Receipt[]
+  maintenanceRequests       MaintenanceRequest[]
 
   @@unique([dormitoryId, buildingId, normalizedRoomNumber], map: "dormitory_building_normalized_room_number_unique")
   @@map("rooms")
@@ -534,6 +537,7 @@ model Tenant {
   provisionalRentalTerms ProvisionalRentalTerm[]
   dailyStays             DailyStay[]
   combinedPaymentGroups  CombinedPaymentGroup[]
+  maintenanceRequests    MaintenanceRequest[]
   lineFriendId           String?                  @map("line_friend_id") @db.Uuid
   lineFriend             DormitoryLineFriend?     @relation(fields: [lineFriendId], references: [id], onDelete: SetNull)
 
@@ -2140,4 +2144,93 @@ model PaymentEvidenceVerification {
 
   @@index([dormitoryId, status], name: "idx_verification_dorm_status")
   @@map("payment_evidence_verifications")
+}
+
+model MaintenanceRequest {
+  id                 String    @id @default(uuid()) @db.Uuid
+  dormitoryId        String    @map("dormitory_id") @db.Uuid
+  requestNumber      String    @map("request_number") @db.VarChar(100)
+  tenantId           String?   @map("tenant_id") @db.Uuid
+  contractId         String?   @map("contract_id") @db.Uuid
+  roomId             String?   @map("room_id") @db.Uuid
+  category           String    @default("other") @db.VarChar(100)
+  title              String    @db.VarChar(255)
+  description        String    @db.Text
+  priority           String    @default("normal") @db.VarChar(50)
+  status             String    @default("submitted") @db.VarChar(50)
+  assignedStaff      String?   @map("assigned_staff") @db.VarChar(255)
+  cost               Decimal   @default(0.00) @db.Decimal(12, 2)
+  note               String?   @db.Text
+  imageBefore        String?   @map("image_before") @db.Text
+  imageAfter         String?   @map("image_after") @db.Text
+  preferredDate      DateTime? @map("preferred_date") @db.Date
+  preferredTimeRange String?   @map("preferred_time_range") @db.VarChar(100)
+  createdByUserId    String?   @map("created_by_user_id") @db.Uuid
+  resolvedAt         DateTime? @map("resolved_at") @db.Timestamptz()
+  closedAt           DateTime? @map("closed_at") @db.Timestamptz()
+  cancelledAt        DateTime? @map("cancelled_at") @db.Timestamptz()
+  cancellationReason String?   @map("cancellation_reason") @db.Text
+  version            Int       @default(1)
+  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt          DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+  deletedAt          DateTime? @map("deleted_at") @db.Timestamptz()
+
+  dormitory          Dormitory @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
+  room               Room?     @relation(fields: [roomId], references: [id], onDelete: SetNull)
+  tenant             Tenant?   @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+
+  @@index([dormitoryId, status], name: "idx_maintenance_dorm_status")
+  @@index([dormitoryId, roomId], name: "idx_maintenance_dorm_room")
+  @@map("maintenance_requests")
+}
+
+model Announcement {
+  id               String                 @id @default(uuid()) @db.Uuid
+  dormitoryId      String                 @map("dormitory_id") @db.Uuid
+  title            String                 @db.VarChar(255)
+  summary          String?                @db.Text
+  content          String                 @db.Text
+  type             String                 @default("general") @db.VarChar(100)
+  targetType       String                 @default("all") @map("target_type") @db.VarChar(50)
+  targetBuildingId String?                @map("target_building_id") @db.Uuid
+  customTarget     String?                @map("custom_target") @db.VarChar(255)
+  targetRooms      String?                @map("target_rooms") @db.Text
+  attachmentUrl    String?                @map("attachment_url") @db.Text
+  linkUrl          String?                @map("link_url") @db.Text
+  author           String?                @db.VarChar(255)
+  isPinned         Boolean                @default(false) @map("is_pinned")
+  status           String                 @default("published") @db.VarChar(50)
+  priority         String                 @default("normal") @db.VarChar(50)
+  publishDate      DateTime               @default(now()) @map("publish_date") @db.Timestamptz()
+  publishedAt      DateTime?              @map("published_at") @db.Timestamptz()
+  archivedAt       DateTime?              @map("archived_at") @db.Timestamptz()
+  createdByUserId  String?                @map("created_by_user_id") @db.Uuid
+  version          Int                    @default(1)
+  createdAt        DateTime               @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt        DateTime               @updatedAt @map("updated_at") @db.Timestamptz()
+  deletedAt        DateTime?              @map("deleted_at") @db.Timestamptz()
+
+  dormitory        Dormitory              @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
+  audiences        AnnouncementAudience[]
+
+  @@index([dormitoryId, status], name: "idx_announcement_dorm_status")
+  @@index([dormitoryId, isPinned], name: "idx_announcement_dorm_pinned")
+  @@map("announcements")
+}
+
+model AnnouncementAudience {
+  id             String       @id @default(uuid()) @db.Uuid
+  dormitoryId    String       @map("dormitory_id") @db.Uuid
+  announcementId String       @map("announcement_id") @db.Uuid
+  targetType     String       @map("target_type") @db.VarChar(50)
+  buildingId     String?      @map("building_id") @db.Uuid
+  floor          String?      @db.VarChar(50)
+  roomId         String?      @map("room_id") @db.Uuid
+  tenantId       String?      @map("tenant_id") @db.Uuid
+  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz()
+
+  announcement   Announcement @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+
+  @@index([dormitoryId, announcementId], name: "idx_ann_audience_dorm_ann")
+  @@map("announcement_audiences")
 }

@@ -67,6 +67,7 @@ const getRoomForTenant = (
 interface LineNotificationModalProps {
   isOpen: boolean;
   onClose: () => void;
+  dormitoryId?: string;
   bills: Bill[];
   tenants: Tenant[];
   rooms: Room[];
@@ -81,6 +82,7 @@ interface LineNotificationModalProps {
 export const LineNotificationModal: React.FC<LineNotificationModalProps> = ({
   isOpen,
   onClose,
+  dormitoryId,
   bills = [],
   tenants = [],
   rooms = [],
@@ -94,6 +96,30 @@ export const LineNotificationModal: React.FC<LineNotificationModalProps> = ({
   const [selectedTenantIdsForLine, setSelectedTenantIdsForLine] = useState<string[]>([]);
   const [isSendingLine, setIsSendingLine] = useState(false);
   const [lineToastSuccess, setLineToastSuccess] = useState<string | null>(null);
+  const [lineStatus, setLineStatus] = useState<{ connected: boolean; isReady: boolean } | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const dormId = dormitoryId || (typeof window !== 'undefined' ? (localStorage.getItem('selected_dormitory_id') || sessionStorage.getItem('active_dormitory_selected_for_session')) : '') || '';
+    if (!dormId) return;
+
+    fetch(`/api/v1/dormitories/${dormId}/line-oa`, {
+      headers: { 'Content-Type': 'application/json' },
+    })
+      .then(res => res.ok ? res.json() : null)
+      .then(json => {
+        if (json?.data || json?.config) {
+          const data = json.data || json.config;
+          setLineStatus({
+            connected: Boolean(data.connected),
+            isReady: Boolean(data.isReady || (data.connected && data.credentialsVerified))
+          });
+        } else {
+          setLineStatus({ connected: false, isReady: false });
+        }
+      })
+      .catch(() => setLineStatus({ connected: false, isReady: false }));
+  }, [isOpen, dormitoryId]);
 
   // In-session delivery notification status map (server-authoritative; no fake localstorage financial state)
   const [lineNotifyMap, setLineNotifyMap] = useState<{ [key: string]: { status: 'sent' | 'resent'; sentAt: string } }>({});
@@ -229,10 +255,17 @@ export const LineNotificationModal: React.FC<LineNotificationModalProps> = ({
               <Calendar className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
               {formatCycleThaiShort(selectedCycle)}
             </span>
-            <span className="px-2.5 py-1 bg-emerald-50 text-emerald-700 border border-emerald-200/80 font-bold text-xs rounded-full flex items-center gap-1 shadow-2xs">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse shrink-0" />
-              พร้อมใช้งาน
-            </span>
+            {lineStatus?.isReady ? (
+              <span className="px-2.5 py-1 bg-emerald-50 text-emerald-700 border border-emerald-200/80 font-bold text-xs rounded-full flex items-center gap-1 shadow-2xs">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
+                พร้อมใช้งาน
+              </span>
+            ) : (
+              <span className="px-2.5 py-1 bg-amber-50 text-amber-800 border border-amber-200/80 font-bold text-xs rounded-full flex items-center gap-1 shadow-2xs">
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse shrink-0" />
+                ยังไม่พร้อมใช้งาน
+              </span>
+            )}
           </div>
         </div>
       }
@@ -452,7 +485,7 @@ export const LineNotificationModal: React.FC<LineNotificationModalProps> = ({
                 </>
               ) : (
                 <>
-                  <Send className="w-3.5 h-3.5 shrink-0" />
+                  <LineLogo className="w-3.5 h-3.5 shrink-0 rounded-xs" />
                   <span className="truncate text-[11px] sm:text-xs">ส่งแจ้งเตือน ({selectedTenantIdsForLine.length})</span>
                 </>
               )}

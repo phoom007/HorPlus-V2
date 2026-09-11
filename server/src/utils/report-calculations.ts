@@ -82,18 +82,28 @@ export interface MonthlyRevenueHistoryItem {
   exactWater: string;
   exactElec: string;
   exactCommonParking: string;
+  exactCommon?: string;
+  exactInternet?: string;
+  exactParking?: string;
   exactOther: string;
   exactFine: string;
+  exactDiscount?: string;
   exactTotal: string;
   exactRepairCost?: string;
+  exactDepositRefund?: string;
   rent: number;
   water: number;
   elec: number;
   commonParking: number;
+  common?: number;
+  internet?: number;
+  parking?: number;
   other: number;
   fine: number;
+  discount?: number;
   total: number;
   repairCost?: number;
+  depositRefund?: number;
 }
 
 export interface BreakdownPercentages {
@@ -101,8 +111,12 @@ export interface BreakdownPercentages {
   waterPct: number;
   elecPct: number;
   commonParkingPct: number;
+  commonPct?: number;
+  internetPct?: number;
+  parkingPct?: number;
   otherPct: number;
   finePct: number;
+  discountPct?: number;
   depositPct: number;
 }
 
@@ -126,7 +140,9 @@ export interface ReportCalculationResult {
   exactParkingTotal: string;
   exactOtherServiceTotal: string;
   exactFineTotal: string;
+  exactDiscountTotal: string;
   exactDepositTotal: string;
+  exactDepositRefundTotal: string;
   exactTotalBilledThisMonth: string;
   exactTotalRevenueThisMonth: string;
   exactTotalUnpaidThisMonth: string;
@@ -148,7 +164,9 @@ export interface ReportCalculationResult {
   parkingTotal: number;
   otherServiceTotal: number;
   fineTotal: number;
+  discountTotal: number;
   depositTotal: number;
+  depositRefundTotal: number;
   totalBilledThisMonth: number;
   totalRevenueThisMonth: number;
   totalUnpaidThisMonth: number;
@@ -248,6 +266,10 @@ export function calculateOwnerReports(params: ReportCalculationParams): ReportCa
     (selectedCycleCode ? selectedCycleCode.split('-')[0] :
     (selectedCycle && selectedCycle.length === 7 && selectedCycle.includes('-') ? selectedCycle.split('-')[0] : currentYearStr));
 
+  const effectiveCyclePrefix = selectedCycleCode
+    ? selectedCycleCode.slice(0, 7)
+    : (selectedCycle && selectedCycle.length === 7 && selectedCycle.includes('-') ? selectedCycle.slice(0, 7) : `${currentYearStr}-${currentMonthStr}`);
+
   // 1. Filtered rooms by selected building
   const filteredRooms = selectedBuilding === 'all'
     ? rooms
@@ -333,25 +355,84 @@ export function calculateOwnerReports(params: ReportCalculationParams): ReportCa
   };
 
   const getBillOtherServiceSatangs = (b: any): bigint => {
+    // 1. Authoritative BillItems if present
+    const othItems: bigint = Array.isArray(b.items)
+      ? b.items
+          .filter((i: any) => {
+            const t = (i?.type || i?.category || '').toLowerCase();
+            const d = (i?.description || '').toLowerCase();
+            // Exclude negative deposit credits or rent discount lines
+            if (toSatangs(i?.amount) < 0n || d.includes('หักชำระจากเงินประกัน') || d.includes('เงินประกัน')) {
+              return false;
+            }
+            return (
+              ['other', 'other_fee', 'other_fees', 'repair', 'addon', 'cleaning'].includes(t) ||
+              d.includes('ค่าใช้จ่ายอื่น') ||
+              d.includes('ก่อนย้ายออก') ||
+              d.includes('ค่าบริการ')
+            );
+          })
+          .reduce((s: bigint, i: any): bigint => s + toSatangs(i?.amount), 0n)
+      : 0n;
+
+    if (othItems > 0n) {
+      return othItems;
+    }
+
+    // 2. Fallback to header or snapshot otherFees if items array is empty/unpopulated
     let feeSum = 0n;
     if (typeof b.otherFees === 'number' || typeof b.otherFees === 'string') {
       feeSum += toSatangs(b.otherFees);
     } else if (Array.isArray(b.otherFees)) {
       feeSum += b.otherFees.reduce((s: bigint, item: any): bigint => s + toSatangs(item?.amount), 0n);
+    } else if (b.otherAmount !== undefined && b.otherAmount !== null) {
+      feeSum += toSatangs(b.otherAmount);
     }
-    const othItems: bigint = Array.isArray(b.items)
-      ? b.items.filter((i: any) => ['other', 'repair', 'addon', 'cleaning'].includes(i?.category || i?.type))
-          .reduce((s: bigint, i: any): bigint => s + toSatangs(i?.amount), 0n)
-      : 0n;
-    return feeSum + othItems;
+    return feeSum;
   };
 
   const getBillFineSatangs = (b: any): bigint => {
+    // 1. Authoritative BillItems if present
     const fineItems: bigint = Array.isArray(b.items)
-      ? b.items.filter((i: any) => i?.category === 'fine' || i?.type === 'fine')
+      ? b.items
+          .filter((i: any) => {
+            const t = (i?.type || i?.category || '').toLowerCase();
+            const d = (i?.description || '').toLowerCase();
+            return (
+              ['fine', 'late_fee', 'late_fine'].includes(t) ||
+              d.includes('ค่าปรับ') ||
+              d.includes('ล่าช้า')
+            );
+          })
           .reduce((s: bigint, i: any): bigint => s + toSatangs(i?.amount), 0n)
       : 0n;
-    return fineItems + toSatangs(b.fineAmount || 0);
+
+    if (fineItems > 0n) {
+      return fineItems;
+    }
+
+    // 2. Fallback to header fineAmount if items array is empty/unpopulated
+    return toSatangs(b.fineAmount || 0);
+  };
+
+  const getBillDiscountSatangs = (b: any): bigint => {
+    // 1. Authoritative BillItems if present
+    const discItems: bigint = Array.isArray(b.items)
+      ? b.items
+          .filter((i: any) => {
+            const t = (i?.type || i?.category || '').toLowerCase();
+            const d = (i?.description || '').toLowerCase();
+            return t === 'discount' || d.includes('ส่วนลด') || d.includes('โปรโมชั่น');
+          })
+          .reduce((s: bigint, i: any): bigint => s + toSatangs(Math.abs(Number(i?.amount || 0))), 0n)
+      : 0n;
+
+    if (discItems > 0n) {
+      return discItems;
+    }
+
+    // 2. Fallback to header discountAmount if items array is empty/unpopulated
+    return toSatangs(Math.abs(Number(b.discountAmount || 0)));
   };
 
   // 6. Current Month Authoritative Exact-Satang Aggregations
@@ -364,6 +445,7 @@ export function calculateOwnerReports(params: ReportCalculationParams): ReportCa
   const commonParkingSatangs: bigint = commonSatangs + internetSatangs + parkingSatangs;
   const otherServiceSatangs: bigint = revenueActiveBills.reduce((sum: bigint, b: any) => sum + getBillOtherServiceSatangs(b), 0n);
   const fineSatangs: bigint = revenueActiveBills.reduce((sum: bigint, b: any) => sum + getBillFineSatangs(b), 0n);
+  const discountSatangs: bigint = revenueActiveBills.reduce((sum: bigint, b: any) => sum + getBillDiscountSatangs(b), 0n);
 
   // Deposits: contracts filtered by selected building
   const filteredContracts = selectedBuilding === 'all'
@@ -386,9 +468,29 @@ export function calculateOwnerReports(params: ReportCalculationParams): ReportCa
 
   const depositSatangs: bigint = contractDepositSatangs > 0n ? contractDepositSatangs : roomDepositSatangs;
 
+  // Deposit refunds from contracts terminated in current cycle (matches effectiveCyclePrefix)
+  const terminatedContractsInCycle = filteredContracts.filter((c: any) => {
+    if (c.status !== 'terminated') return false;
+    const termDate = c.terminationEffectiveDate || c.terminatedAt || c.settlementSummary?.terminatedAt || c.endDate;
+    const termDateStr = typeof termDate === 'string'
+      ? termDate
+      : termDate instanceof Date
+      ? termDate.toISOString()
+      : '';
+    return termDateStr.startsWith(effectiveCyclePrefix);
+  });
+
+  const depositRefundSatangs: bigint = terminatedContractsInCycle.reduce(
+    (sum: bigint, c: any): bigint => {
+      const refundAmt = c.settlementSummary?.depositRefundAmount || c.depositRefundAmount || 0;
+      return sum + toSatangs(refundAmt);
+    },
+    0n
+  );
+
   // Authoritative Total Billed, Revenue, Unpaid
   const sumBillsTotalSatangs: bigint = revenueActiveBills.reduce((sum: bigint, b: any): bigint => sum + toSatangs(b.totalAmount), 0n);
-  const sumCategoriesTotalSatangs: bigint = fixedRentSatangs + waterSatangs + electricSatangs + commonParkingSatangs + otherServiceSatangs + fineSatangs;
+  const sumCategoriesTotalSatangs: bigint = fixedRentSatangs + waterSatangs + electricSatangs + commonParkingSatangs + otherServiceSatangs + fineSatangs - discountSatangs;
   const totalBilledSatangs: bigint = sumBillsTotalSatangs > 0n ? sumBillsTotalSatangs : sumCategoriesTotalSatangs;
 
   const totalRevenueSatangs: bigint = revenueActiveBills.reduce((sum: bigint, b: any): bigint => {
@@ -404,10 +506,25 @@ export function calculateOwnerReports(params: ReportCalculationParams): ReportCa
 
   const totalUnpaidSatangs: bigint = totalBilledSatangs > totalRevenueSatangs ? totalBilledSatangs - totalRevenueSatangs : 0n;
 
-  // Overdue Total
+  // Overdue Total: checks explicit status === 'overdue' OR unpaid bills whose dueDate (+ grace period) has passed
+  const now = new Date();
   const totalOverdueSatangs: bigint = filteredBills
-    .filter(b => (b.status || '').toLowerCase() === 'overdue')
-    .reduce((sum: bigint, b: any): bigint => sum + toSatangs(b.totalAmount), 0n);
+    .filter(b => {
+      const s = (b.status || '').toLowerCase();
+      if (s === 'paid' || s === 'cancelled' || s === 'void') return false;
+      if (s === 'overdue') return true;
+      if (b.dueDate) {
+        const due = new Date(b.dueDate);
+        const graceDays = Number(b.rateSnapshot?.gracePeriodDays ?? 2);
+        const graceEnd = new Date(due.getTime() + graceDays * 24 * 60 * 60 * 1000);
+        if (now > graceEnd) return true;
+      }
+      return false;
+    })
+    .reduce((sum: bigint, b: any): bigint => {
+      const outstanding = b.outstandingAmount !== undefined ? toSatangs(b.outstandingAmount) : (toSatangs(b.totalAmount) - toSatangs(b.paidAmount || 0));
+      return sum + (outstanding > 0n ? outstanding : toSatangs(b.totalAmount));
+    }, 0n);
 
   // 6.5. Maintenance Repair Expenses Aggregation
   const rawRepairs = params.repairs || [];
@@ -429,10 +546,6 @@ export function calculateOwnerReports(params: ReportCalculationParams): ReportCa
     return '';
   };
 
-  const effectiveCyclePrefix = selectedCycleCode
-    ? selectedCycleCode.slice(0, 7)
-    : (selectedCycle && selectedCycle.length === 7 && selectedCycle.includes('-') ? selectedCycle.slice(0, 7) : `${currentYearStr}-${currentMonthStr}`);
-
   const currentMonthRepairs = filteredRepairs.filter(r => {
     const dStr = getRepairIsoString(r);
     return dStr.startsWith(effectiveCyclePrefix);
@@ -449,7 +562,7 @@ export function calculateOwnerReports(params: ReportCalculationParams): ReportCa
   const repairCostYearSatangs = yearRepairs.reduce((s: bigint, r: any) => s + toSatangs(r.cost || 0), 0n);
   const repairsCountYear = yearRepairs.length;
 
-  const netIncomeThisMonthSatangs = totalRevenueSatangs - repairCostThisMonthSatangs;
+  const netIncomeThisMonthSatangs = totalRevenueSatangs - repairCostThisMonthSatangs - depositRefundSatangs;
 
   // 7. Month-by-Month Historical Revenue (01 to 12) for Charts & Yearly CSV
   const defaultMonths = ['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12'];
@@ -476,9 +589,10 @@ export function calculateOwnerReports(params: ReportCalculationParams): ReportCa
     const mCommonParkingSat = mCommonSat + mInternetSat + mParkingSat;
     const mOtherSat = monthBills.reduce((s: bigint, b: any) => s + getBillOtherServiceSatangs(b), 0n);
     const mFineSat = monthBills.reduce((s: bigint, b: any) => s + getBillFineSatangs(b), 0n);
+    const mDiscountSat = monthBills.reduce((s: bigint, b: any) => s + getBillDiscountSatangs(b), 0n);
 
     const mSumBillsSat = monthBills.reduce((s: bigint, b: any) => s + toSatangs(b.totalAmount), 0n);
-    const mSumCatSat = mRentSat + mWaterSat + mElecSat + mCommonParkingSat + mOtherSat + mFineSat;
+    const mSumCatSat = mRentSat + mWaterSat + mElecSat + mCommonParkingSat + mOtherSat + mFineSat - mDiscountSat;
     const mTotalSat = mSumBillsSat > 0n ? mSumBillsSat : mSumCatSat;
 
     // Combined other for chart: common/parking + other + fine
@@ -490,6 +604,24 @@ export function calculateOwnerReports(params: ReportCalculationParams): ReportCa
     });
     const mRepairSat = monthRepairs.reduce((s: bigint, r: any) => s + toSatangs(r.cost || 0), 0n);
 
+    const monthTerminatedContracts = filteredContracts.filter((c: any) => {
+      if (c.status !== 'terminated') return false;
+      const termDate = c.terminationEffectiveDate || c.terminatedAt || c.settlementSummary?.terminatedAt || c.endDate;
+      const termDateStr = typeof termDate === 'string'
+        ? termDate
+        : termDate instanceof Date
+        ? termDate.toISOString()
+        : '';
+      return termDateStr.startsWith(cycleKey);
+    });
+    const mDepositRefundSat = monthTerminatedContracts.reduce(
+      (sum: bigint, c: any): bigint => {
+        const refundAmt = c.settlementSummary?.depositRefundAmount || c.depositRefundAmount || 0;
+        return sum + toSatangs(refundAmt);
+      },
+      0n
+    );
+
     return {
       cycleId: cycleKey,
       monthKey: m,
@@ -499,18 +631,28 @@ export function calculateOwnerReports(params: ReportCalculationParams): ReportCa
       exactWater: satangsToString(mWaterSat),
       exactElec: satangsToString(mElecSat),
       exactCommonParking: satangsToString(mCommonParkingSat),
+      exactCommon: satangsToString(mCommonSat),
+      exactInternet: satangsToString(mInternetSat),
+      exactParking: satangsToString(mParkingSat),
       exactOther: satangsToString(mChartOtherSat),
       exactFine: satangsToString(mFineSat),
+      exactDiscount: satangsToString(mDiscountSat),
       exactTotal: satangsToString(mTotalSat),
       exactRepairCost: satangsToString(mRepairSat),
+      exactDepositRefund: satangsToString(mDepositRefundSat),
       rent: satangsToNumber(mRentSat),
       water: satangsToNumber(mWaterSat),
       elec: satangsToNumber(mElecSat),
       commonParking: satangsToNumber(mCommonParkingSat),
+      common: satangsToNumber(mCommonSat),
+      internet: satangsToNumber(mInternetSat),
+      parking: satangsToNumber(mParkingSat),
       other: satangsToNumber(mChartOtherSat),
       fine: satangsToNumber(mFineSat),
+      discount: satangsToNumber(mDiscountSat),
       total: satangsToNumber(mTotalSat),
       repairCost: satangsToNumber(mRepairSat),
+      depositRefund: satangsToNumber(mDepositRefundSat),
     };
   });
 
@@ -524,10 +666,13 @@ export function calculateOwnerReports(params: ReportCalculationParams): ReportCa
   const arpuSatangs: bigint = occupiedCount > 0 ? (totalBilledSatangs / BigInt(occupiedCount)) : 0n;
 
   // Breakdown Percentages
-  const totalBreakdownSatangs = totalBilledSatangs + depositSatangs;
+  const grossBreakdownSatangs = totalBilledSatangs + depositSatangs;
+  const totalBreakdownSatangs = grossBreakdownSatangs >= depositRefundSatangs
+    ? grossBreakdownSatangs - depositRefundSatangs
+    : 0n;
   const calcPct = (catSatangs: bigint): number => {
-    if (totalBreakdownSatangs <= 0n) return 0;
-    const tenths = Number((catSatangs * 1000n) / totalBreakdownSatangs);
+    if (grossBreakdownSatangs <= 0n) return 0;
+    const tenths = Number((catSatangs * 1000n) / grossBreakdownSatangs);
     return tenths / 10;
   };
 
@@ -536,8 +681,12 @@ export function calculateOwnerReports(params: ReportCalculationParams): ReportCa
     waterPct: calcPct(waterSatangs),
     elecPct: calcPct(electricSatangs),
     commonParkingPct: calcPct(commonParkingSatangs),
+    commonPct: calcPct(commonSatangs),
+    internetPct: calcPct(internetSatangs),
+    parkingPct: calcPct(parkingSatangs),
     otherPct: calcPct(otherServiceSatangs),
     finePct: calcPct(fineSatangs),
+    discountPct: calcPct(discountSatangs),
     depositPct: calcPct(depositSatangs),
   };
 
@@ -589,7 +738,9 @@ export function calculateOwnerReports(params: ReportCalculationParams): ReportCa
     exactParkingTotal: satangsToString(parkingSatangs),
     exactOtherServiceTotal: satangsToString(otherServiceSatangs),
     exactFineTotal: satangsToString(fineSatangs),
+    exactDiscountTotal: satangsToString(discountSatangs),
     exactDepositTotal: satangsToString(depositSatangs),
+    exactDepositRefundTotal: satangsToString(depositRefundSatangs),
     exactTotalBilledThisMonth: satangsToString(totalBilledSatangs),
     exactTotalRevenueThisMonth: satangsToString(totalRevenueSatangs),
     exactTotalUnpaidThisMonth: satangsToString(totalUnpaidSatangs),
@@ -611,7 +762,9 @@ export function calculateOwnerReports(params: ReportCalculationParams): ReportCa
     parkingTotal: satangsToNumber(parkingSatangs),
     otherServiceTotal: satangsToNumber(otherServiceSatangs),
     fineTotal: satangsToNumber(fineSatangs),
+    discountTotal: satangsToNumber(discountSatangs),
     depositTotal: satangsToNumber(depositSatangs),
+    depositRefundTotal: satangsToNumber(depositRefundSatangs),
     totalBilledThisMonth: satangsToNumber(totalBilledSatangs),
     totalRevenueThisMonth: satangsToNumber(totalRevenueSatangs),
     totalUnpaidThisMonth: satangsToNumber(totalUnpaidSatangs),

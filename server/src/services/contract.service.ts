@@ -780,6 +780,25 @@ export class ContractService {
       currentContractId: null,
     });
 
+    // End active occupancies for this contract and room
+    const prisma = getPrismaClient();
+    if (prisma) {
+      await prisma.occupancy.updateMany({
+        where: {
+          OR: [
+            { contractId: id, status: 'ACTIVE' },
+            { roomId: contract.roomId, tenantId: contract.tenantId, status: 'ACTIVE' },
+          ],
+        },
+        data: {
+          status: 'ENDED',
+          endedAt: now,
+          endedByUserId: actorUserId || null,
+          endedReason: payload.terminationReason || 'บอกเลิกสัญญา',
+        },
+      });
+    }
+
     // Check if tenant has other active contracts
     const tenantContracts = await this.contractRepo.findAll(dormitoryId, { tenantId: contract.tenantId });
     const otherActive = tenantContracts.items.some(

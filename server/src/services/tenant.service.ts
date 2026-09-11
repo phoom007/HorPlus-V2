@@ -8,6 +8,7 @@ import { processAndSecureTenantIdCardImage } from './image-security.service.js';
 import { localStorageProvider } from './local-storage.service.js';
 import { billingService as defaultBillingService } from './billing.service.js';
 import { logger } from '../config/logger.js';
+import { getPrismaClient } from '../db/prisma.js';
 
 export interface TenantAggregateDataSource {
   $transaction?<T>(fn: (tx: any) => Promise<T>): Promise<T>;
@@ -473,7 +474,31 @@ export class TenantService {
       }
     }
 
+    if ((data as any).status !== undefined) {
+      updatePayload.status = (data as any).status;
+    }
+
     const updated = await this.tenantRepo.update(id, dormitoryId, updatePayload, data.version);
+
+    if ((data as any).status === 'former' || (data as any).status === 'inactive') {
+      try {
+        const prisma = this.aggregatePrisma ?? getPrismaClient();
+        if (prisma && (prisma as any).room) {
+          await (prisma as any).room.updateMany({
+            where: { dormitoryId, currentTenantId: id },
+            data: { status: 'vacant', currentTenantId: null, currentContractId: null },
+          });
+        }
+        if (prisma && (prisma as any).occupancy) {
+          await (prisma as any).occupancy.updateMany({
+            where: { dormitoryId, tenantId: id, status: 'ACTIVE' },
+            data: { status: 'ENDED', endedAt: new Date(), endedReason: 'เลิกเช่า' },
+          });
+        }
+      } catch (dbErr) {
+        logger.warn({ msg: 'Failed to cascade room vacancy on tenant termination', err: dbErr });
+      }
+    }
 
     if (this.auditService && actorUserId && updated) {
       await this.auditService.log({

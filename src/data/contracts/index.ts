@@ -258,13 +258,16 @@ export interface MaintenanceDataSource {
   getById(id: string): Promise<MaintenanceRequest | null>;
   getByTenantId(tenantId: string): Promise<MaintenanceRequest[]>;
   createRequest(data: Omit<MaintenanceRequest, 'id' | 'createdAt' | 'updatedAt' | 'updates'>, actorUserId?: string): Promise<DataResult<MaintenanceRequest>>;
-  updateStatus(requestId: string, status: MaintenanceRequest['status'], note?: string, actorUserId?: string): Promise<DataResult<MaintenanceRequest>>;
+  updateStatus(requestId: string, status: MaintenanceRequest['status'], note?: string, actorUserId?: string, extra?: { assignedStaff?: string; cost?: number; imageAfter?: string }): Promise<DataResult<MaintenanceRequest>>;
+  deleteRequest?(requestId: string): Promise<DataResult<boolean>>;
 }
 
 export interface AnnouncementDataSource {
   getAll(): Promise<Announcement[]>;
   getById(id: string): Promise<Announcement | null>;
   createAnnouncement(data: Omit<Announcement, 'id' | 'createdAt'>, actorUserId?: string): Promise<DataResult<Announcement>>;
+  updateAnnouncement?(id: string, data: Partial<Announcement>): Promise<DataResult<Announcement>>;
+  deleteAnnouncement?(id: string): Promise<DataResult<boolean>>;
 }
 
 export interface NotificationDataSource {

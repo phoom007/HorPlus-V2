@@ -298,4 +298,157 @@ describe('calculateOwnerReports — Building Isolation & Math Precision Audit', 
     expect(reportA.totalBilledThisMonth).toBe(4850);
     expect(reportA.totalRevenueThisMonth).toBe(4850);
   });
+
+  it('6. Correctly aggregates Other Services (other_fee, cleaning, AC washing, move-out deductions)', () => {
+    const testBills = [
+      {
+        id: 'bill-oth-1',
+        roomId: 'rm-101',
+        cycleCode: '2026-08',
+        status: 'paid',
+        totalAmount: 5000,
+        paidAmount: 5000,
+        items: [
+          { type: 'other_fee', description: 'ค่าล้างแอร์', amount: 5000 },
+        ]
+      },
+      {
+        id: 'bill-oth-2',
+        roomId: 'rm-201',
+        cycleCode: '2026-08',
+        status: 'paid',
+        totalAmount: 1500,
+        paidAmount: 1500,
+        items: [
+          { category: 'other', type: 'other_fee', description: 'ค่าทำความสะอาดก่อนย้ายออก', amount: 1500 },
+          { category: 'other', description: 'หักชำระจากเงินประกันสัญญา (-1500 บาท)', amount: -1500 }
+        ]
+      }
+    ];
+
+    // All buildings: 5000 + 1500 = 6500 (deposit credit excluded)
+    const reportAll = calculateOwnerReports({
+      rooms,
+      bills: testBills,
+      contracts,
+      repairs: [],
+      buildings: [buildingA, buildingB],
+      selectedBuilding: 'all',
+      selectedCycleCode: '2026-08',
+    });
+    expect(reportAll.otherServiceTotal).toBe(6500);
+    expect(reportAll.exactOtherServiceTotal).toBe('6500.00');
+
+    // Building A only: 5000 (Room 101)
+    const reportA = calculateOwnerReports({
+      rooms,
+      bills: testBills,
+      contracts,
+      repairs: [],
+      buildings: [buildingA, buildingB],
+      selectedBuilding: 'bld-a',
+      selectedCycleCode: '2026-08',
+    });
+    expect(reportA.otherServiceTotal).toBe(5000);
+
+    // Building B only: 1500 (Room 201)
+    const reportB = calculateOwnerReports({
+      rooms,
+      bills: testBills,
+      contracts,
+      repairs: [],
+      buildings: [buildingA, buildingB],
+      selectedBuilding: 'bld-b',
+      selectedCycleCode: '2026-08',
+    });
+    expect(reportB.otherServiceTotal).toBe(1500);
+  });
+
+  it('7. Correctly aggregates Late Fines from items (late_fee, late_fine, fine) and header fallback', () => {
+    const fineBills = [
+      {
+        id: 'bill-fine-item',
+        roomId: 'rm-101',
+        cycleCode: '2026-08',
+        status: 'paid',
+        totalAmount: 4100,
+        paidAmount: 4100,
+        items: [
+          { category: 'rent', amount: 4000 },
+          { type: 'late_fee', description: 'ค่าปรับล่าช้า', amount: 100 },
+        ]
+      },
+      {
+        id: 'bill-fine-header',
+        roomId: 'rm-201',
+        cycleCode: '2026-08',
+        status: 'paid',
+        fineAmount: 200,
+        totalAmount: 6200,
+        paidAmount: 6200,
+        items: [
+          { category: 'rent', amount: 6000 },
+        ]
+      }
+    ];
+
+    const reportAll = calculateOwnerReports({
+      rooms,
+      bills: fineBills,
+      contracts,
+      repairs: [],
+      buildings: [buildingA, buildingB],
+      selectedBuilding: 'all',
+      selectedCycleCode: '2026-08',
+    });
+    expect(reportAll.fineTotal).toBe(300);
+    expect(reportAll.exactFineTotal).toBe('300.00');
+  });
+
+  it('8. Correctly aggregates Deposit Refunds from terminated contracts and updates Net Income', () => {
+    const testContracts = [
+      ...contracts,
+      {
+        id: 'ct-term-1',
+        roomId: 'rm-101',
+        status: 'terminated',
+        terminatedAt: '2026-08-15T10:00:00.000Z',
+        depositRefundAmount: '3500.00',
+        settlementSummary: {
+          depositRefundAmount: '3500.00',
+          deductionAmount: '1500.00',
+          terminatedAt: '2026-08-15T10:00:00.000Z'
+        }
+      }
+    ];
+
+    const simpleBills = [
+      {
+        id: 'b-1',
+        roomId: 'rm-101',
+        cycleCode: '2026-08',
+        status: 'paid',
+        totalAmount: 10000,
+        paidAmount: 10000,
+        items: [{ category: 'rent', amount: 10000 }]
+      }
+    ];
+
+    const report = calculateOwnerReports({
+      rooms,
+      bills: simpleBills,
+      contracts: testContracts,
+      repairs: [{ roomId: 'rm-101', cost: 1000, createdAt: '2026-08-10' }],
+      buildings: [buildingA, buildingB],
+      selectedBuilding: 'all',
+      selectedCycleCode: '2026-08',
+    });
+
+    expect(report.depositRefundTotal).toBe(3500);
+    expect(report.exactDepositRefundTotal).toBe('3500.00');
+    // Net Income = Revenue (10000) - Repair (1000) - Deposit Refund (3500) = 5500
+    expect(report.netIncomeThisMonth).toBe(5500);
+    expect(report.exactNetIncomeThisMonth).toBe('5500.00');
+  });
 });
+

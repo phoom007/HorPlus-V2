@@ -29,7 +29,7 @@ import {
   formatMoneyPlain,
 } from '../../utils/billPresentation';
 import { LineNotificationModal, LineIcon } from '../../components/LineNotificationModal';
-import { Bill, Tenant, Room } from '../../types';
+import { Bill, Tenant, Room, Building as DormBuilding } from '../../types';
 import { queryKeys } from '../../lib/queryClient';
 import { httpRequest } from '../../data/httpClient';
 import {
@@ -215,6 +215,7 @@ export interface PaymentsOwnerViewProps {
   bills?: Bill[];
   dormitoryId?: string;
   rooms?: Room[];
+  buildings?: DormBuilding[];
   tenants?: Tenant[];
   selectedBillingCycleId?: string;
   selectedCycleCode?: string;
@@ -651,6 +652,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
   bills = [],
   dormitoryId,
   rooms = [],
+  buildings = [],
   tenants = [],
   selectedBillingCycleId,
   selectedCycleCode,
@@ -1178,11 +1180,20 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
         return true;
       })
       .sort((a, b) => {
+        const roomObjA = rooms.find(r => r.id === a.roomId);
+        const roomObjB = rooms.find(r => r.id === b.roomId);
+        const buildingOrderMap = new Map<string, number>();
+        buildings.forEach((bld, idx) => {
+          if (bld?.id) buildingOrderMap.set(bld.id, idx);
+        });
+        const bldIdxA = roomObjA?.buildingId && buildingOrderMap.has(roomObjA.buildingId) ? buildingOrderMap.get(roomObjA.buildingId)! : 999999;
+        const bldIdxB = roomObjB?.buildingId && buildingOrderMap.has(roomObjB.buildingId) ? buildingOrderMap.get(roomObjB.buildingId)! : 999999;
+        if (bldIdxA !== bldIdxB) return bldIdxA - bldIdxB;
         const roomA = getRoomNum(a.roomId);
         const roomB = getRoomNum(b.roomId);
         return roomA.localeCompare(roomB, undefined, { numeric: true, sensitivity: 'base' });
       });
-  }, [bills, effectiveCycleId, effectiveCycleCode, billingCycles, paymentsData, rooms]);
+  }, [bills, effectiveCycleId, effectiveCycleCode, billingCycles, paymentsData, rooms, buildings]);
 
   // Tab 3: Paid (ชำระแล้ว) -> Strictly Selected Header Cycle ONLY (Fail Closed on missing bill cycle authority)
   const paidPayments = useMemo(() => {
@@ -1325,10 +1336,20 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
       }
     });
 
+    const buildingOrderMap = new Map<string, number>();
+    buildings.forEach((bld, idx) => {
+      if (bld?.id) buildingOrderMap.set(bld.id, idx);
+    });
+
     return Array.from(map.values()).sort((a, b) => {
+      const roomObjA = rooms.find(r => r.id === a.roomId || r.roomNumber === a.roomNumber);
+      const roomObjB = rooms.find(r => r.id === b.roomId || r.roomNumber === b.roomNumber);
+      const bldIdxA = roomObjA?.buildingId && buildingOrderMap.has(roomObjA.buildingId) ? buildingOrderMap.get(roomObjA.buildingId)! : 999999;
+      const bldIdxB = roomObjB?.buildingId && buildingOrderMap.has(roomObjB.buildingId) ? buildingOrderMap.get(roomObjB.buildingId)! : 999999;
+      if (bldIdxA !== bldIdxB) return bldIdxA - bldIdxB;
       return a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true, sensitivity: 'base' });
     });
-  }, [paidPayments, bills, billingCycles, effectiveCycleId, rooms, tenants]);
+  }, [paidPayments, bills, billingCycles, effectiveCycleId, rooms, tenants, buildings]);
 
   // Consolidated Paid Daily Summary Groups (1 card per billingCycle + tenantId + roomId when tenantId exists, isolated when null)
   const consolidatedPaidDailyGroups = useMemo(() => {
@@ -1377,10 +1398,20 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
       }
     });
 
+    const buildingOrderMap = new Map<string, number>();
+    buildings.forEach((bld, idx) => {
+      if (bld?.id) buildingOrderMap.set(bld.id, idx);
+    });
+
     return Array.from(map.values()).sort((a, b) => {
+      const roomObjA = rooms.find(r => r.id === a.roomId || r.roomNumber === a.roomNumber);
+      const roomObjB = rooms.find(r => r.id === b.roomId || r.roomNumber === b.roomNumber);
+      const bldIdxA = roomObjA?.buildingId && buildingOrderMap.has(roomObjA.buildingId) ? buildingOrderMap.get(roomObjA.buildingId)! : 999999;
+      const bldIdxB = roomObjB?.buildingId && buildingOrderMap.has(roomObjB.buildingId) ? buildingOrderMap.get(roomObjB.buildingId)! : 999999;
+      if (bldIdxA !== bldIdxB) return bldIdxA - bldIdxB;
       return a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true, sensitivity: 'base' });
     });
-  }, [paidDailyInvoices, effectiveCycleId, rooms, tenants]);
+  }, [paidDailyInvoices, effectiveCycleId, rooms, tenants, buildings]);
 
   // Tab 4: Rejected (สลิปผิดพลาด) -> Strictly Selected Header Cycle ONLY (Fail Closed on missing bill cycle authority)
   const rejectedPayments = useMemo(() => {
@@ -3535,6 +3566,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
           setIsLineModalOpen(false);
           setTargetScrollTenantId(null);
         }}
+        dormitoryId={dormitoryId}
         bills={bills}
         tenants={tenants}
         rooms={rooms}

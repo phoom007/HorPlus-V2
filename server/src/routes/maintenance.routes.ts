@@ -42,7 +42,12 @@ export function createMaintenanceRouter(maintenanceService: MaintenanceService =
       };
 
       const result = await maintenanceService.getStaffRequests(dormitoryId, query);
-      res.json(result);
+      res.json({
+        data: result.items,
+        pagination: { total: result.total, page: query.page, pageSize: query.pageSize },
+        items: result.items,
+        total: result.total
+      });
     } catch (err: any) {
       res.status(err.message.startsWith('BAD_REQUEST') ? 400 : 500).json({ error: { message: err.message } });
     }
@@ -52,24 +57,43 @@ export function createMaintenanceRouter(maintenanceService: MaintenanceService =
   router.post('/', mutationGuard('maintenance:write'), async (req: Request, res: Response) => {
     try {
       const { actor, dormitoryId } = getContext(req);
-      const { tenantId, roomId, category, title, description, priority, preferredDate, preferredTimeRange } = req.body;
-
-      if (!tenantId || !roomId || !category || !title || !description) {
-        return res.status(400).json({ error: { code: 'INVALID_INPUT', message: 'Missing required maintenance fields' } });
-      }
-
-      const request = await maintenanceService.getRepository().createRequest({
-        dormitoryId,
+      const {
         tenantId,
         roomId,
         category,
         title,
         description,
+        priority,
+        assignedStaff,
+        cost,
+        note,
+        imageBefore,
+        imageAfter,
+        preferredDate,
+        preferredTimeRange
+      } = req.body;
+
+      if (!title || !description) {
+        return res.status(400).json({ error: { code: 'INVALID_INPUT', message: 'Title and description are required' } });
+      }
+
+      const request = await maintenanceService.getRepository().createRequest({
+        dormitoryId,
+        tenantId: tenantId || null,
+        roomId: roomId || null,
+        category: category || 'other',
+        title: title.trim(),
+        description: description.trim(),
         priority: priority || 'normal',
+        assignedStaff: assignedStaff || null,
+        cost: cost !== undefined ? Number(cost) : 0,
+        note: note || null,
+        imageBefore: imageBefore || null,
+        imageAfter: imageAfter || null,
         preferredDate,
         preferredTimeRange,
         createdByUserId: actor?.userId || null,
-        status: 'submitted'
+        status: req.body.status || 'submitted'
       });
 
       res.status(201).json(request);
@@ -128,14 +152,23 @@ export function createMaintenanceRouter(maintenanceService: MaintenanceService =
     }
   });
 
-  // POST /api/v1/maintenance-requests/:requestId/status
-  router.post('/:requestId/status', mutationGuard('maintenance:write'), async (req: Request, res: Response) => {
+  const handleStatusUpdate = async (req: Request, res: Response) => {
     try {
       const { actor, dormitoryId } = getContext(req);
-      const { status, note } = req.body;
+      const { status, note, assignedStaff, cost, imageAfter } = req.body;
 
       if (!status) {
         return res.status(400).json({ error: { code: 'INVALID_INPUT', message: 'Missing status' } });
+      }
+
+      const extraUpdates: any = {};
+      if (assignedStaff !== undefined) extraUpdates.assignedStaff = assignedStaff;
+      if (cost !== undefined) extraUpdates.cost = Number(cost);
+      if (note !== undefined) extraUpdates.note = note;
+      if (imageAfter !== undefined) extraUpdates.imageAfter = imageAfter;
+
+      if (Object.keys(extraUpdates).length > 0) {
+        await maintenanceService.getRepository().updateRequest(dormitoryId, req.params.requestId, extraUpdates);
       }
 
       const actorType = actor?.roleCode === 'STAFF' ? 'staff' : (actor?.roleCode === 'MANAGER' ? 'manager' : 'owner');
@@ -153,6 +186,25 @@ export function createMaintenanceRouter(maintenanceService: MaintenanceService =
       res.json(updated);
     } catch (err: any) {
       res.status(err.message.includes('INVALID_MAINTENANCE') || err.message.includes('FORBIDDEN') ? 400 : 500).json({ error: { message: err.message } });
+    }
+  };
+
+  // POST & PATCH /api/v1/maintenance-requests/:requestId/status
+  router.post('/:requestId/status', mutationGuard('maintenance:write'), handleStatusUpdate);
+  router.patch('/:requestId/status', mutationGuard('maintenance:write'), handleStatusUpdate);
+  router.patch('/:requestId', mutationGuard('maintenance:write'), handleStatusUpdate);
+
+  // DELETE /api/v1/maintenance-requests/:requestId
+  router.delete('/:requestId', mutationGuard('maintenance:write'), async (req: Request, res: Response) => {
+    try {
+      const { dormitoryId } = getContext(req);
+      const deleted = await maintenanceService.getRepository().deleteRequest(dormitoryId, req.params.requestId);
+      if (!deleted) {
+        return res.status(404).json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Maintenance request not found' } });
+      }
+      res.status(204).send();
+    } catch (err: any) {
+      res.status(500).json({ error: { message: err.message } });
     }
   });
 

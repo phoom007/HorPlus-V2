@@ -17,6 +17,7 @@ export interface BillingCycleEntity {
   version: number;
   createdAt: Date;
   updatedAt: Date;
+  rateSnapshot?: BillingRateSnapshotEntity;
 }
 
 export interface BillingRateSnapshotEntity {
@@ -172,13 +173,19 @@ export class InMemoryBillingCycleRepository implements IBillingCycleRepository {
     const cycle = this.cycles.get(id);
     if (!cycle) return null;
     if (dormitoryId && cycle.dormitoryId !== dormitoryId) return null;
-    return cycle;
+    return {
+      ...cycle,
+      rateSnapshot: this.snapshots.get(cycle.id) || undefined,
+    };
   }
 
   public async findByCode(dormitoryId: string, cycleCode: string): Promise<BillingCycleEntity | null> {
     for (const c of this.cycles.values()) {
       if (c.dormitoryId === dormitoryId && c.cycleCode === cycleCode) {
-        return c;
+        return {
+          ...c,
+          rateSnapshot: this.snapshots.get(c.id) || undefined,
+        };
       }
     }
     return null;
@@ -247,7 +254,10 @@ export class InMemoryBillingCycleRepository implements IBillingCycleRepository {
     const page = filter.page && filter.page > 0 ? filter.page : 1;
     const pageSize = filter.pageSize && filter.pageSize > 0 ? filter.pageSize : 20;
     const start = (page - 1) * pageSize;
-    const items = list.slice(start, start + pageSize);
+    const items = list.slice(start, start + pageSize).map((c) => ({
+      ...c,
+      rateSnapshot: this.snapshots.get(c.id) || undefined,
+    }));
 
     return { items, total };
   }
@@ -399,6 +409,7 @@ export class PrismaBillingCycleRepository implements IBillingCycleRepository {
       version: c.version,
       createdAt: c.createdAt,
       updatedAt: c.updatedAt,
+      rateSnapshot: c.rateSnapshot ? this.mapSnapshotToEntity(c.rateSnapshot) : undefined,
     };
   }
 
@@ -438,7 +449,7 @@ export class PrismaBillingCycleRepository implements IBillingCycleRepository {
     if (!isUuid(id)) return null;
     const where: any = { id };
     if (dormitoryId) where.dormitoryId = dormitoryId;
-    const c = await this.prisma.billingCycle.findFirst({ where });
+    const c = await this.prisma.billingCycle.findFirst({ where, include: { rateSnapshot: true } });
     return c ? this.mapCycleToEntity(c) : null;
   }
 
@@ -447,6 +458,7 @@ export class PrismaBillingCycleRepository implements IBillingCycleRepository {
       where: {
         dormitory_cycle_code_unique: { dormitoryId, cycleCode },
       },
+      include: { rateSnapshot: true },
     });
     return c ? this.mapCycleToEntity(c) : null;
   }
@@ -536,6 +548,7 @@ export class PrismaBillingCycleRepository implements IBillingCycleRepository {
         skip: (page - 1) * pageSize,
         take: pageSize,
         orderBy: { [sortBy]: sortDirection },
+        include: { rateSnapshot: true },
       }),
     ]);
 

@@ -1866,6 +1866,8 @@ export class MeterService {
         agreementEndDate: c.endDate,
         cyclePeriodStart: cycle.periodStart,
         cyclePeriodEnd: cycle.periodEnd,
+        status: c.status,
+        terminationEffectiveDate: (c as any).terminationEffectiveDate || (c.status === 'terminated' ? (c as any).terminatedAt : null),
       });
     });
 

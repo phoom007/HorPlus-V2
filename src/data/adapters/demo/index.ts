@@ -542,13 +542,22 @@ export class DemoMaintenanceAdapter implements MaintenanceDataSource {
     return { success: false, message: res.message, error: { code: 'VALIDATION_ERROR', message: res.message || 'สร้างรายการแจ้งซ่อมไม่สำเร็จ' } };
   }
 
-  async updateStatus(requestId: string, status: MaintenanceRequest['status'], note?: string, actorUserId?: string): Promise<DataResult<MaintenanceRequest>> {
+  async updateStatus(requestId: string, status: MaintenanceRequest['status'], note?: string, actorUserId?: string, extra?: { assignedStaff?: string; cost?: number; imageAfter?: string }): Promise<DataResult<MaintenanceRequest>> {
     const res = maintenanceRepository.updateStatus(requestId, status, note || '', actorUserId);
     if (res.success) {
       const updated = maintenanceRepository.getById(requestId);
-      if (updated) return { success: true, data: updated };
+      if (updated) {
+        if (extra?.assignedStaff !== undefined) (updated as any).assignedStaff = extra.assignedStaff;
+        if (extra?.cost !== undefined) (updated as any).cost = extra.cost;
+        if (extra?.imageAfter !== undefined) (updated as any).imageAfter = extra.imageAfter;
+        return { success: true, data: updated };
+      }
     }
     return { success: false, message: res.message, error: { code: 'VALIDATION_ERROR', message: res.message || 'อัปเดตสถานะการแจ้งซ่อมไม่สำเร็จ' } };
+  }
+
+  async deleteRequest(_requestId: string): Promise<DataResult<boolean>> {
+    return { success: true, data: true };
   }
 }
 
@@ -567,6 +576,19 @@ export class DemoAnnouncementAdapter implements AnnouncementDataSource {
       return { success: true, data: res.announcement };
     }
     return { success: false, message: res.message, error: { code: 'VALIDATION_ERROR', message: res.message || 'สร้างประกาศไม่สำเร็จ' } };
+  }
+
+  async updateAnnouncement(id: string, data: Partial<Announcement>): Promise<DataResult<Announcement>> {
+    const existing = announcementRepository.getById(id);
+    if (existing) {
+      Object.assign(existing, data);
+      return { success: true, data: existing };
+    }
+    return { success: false, error: { code: 'RESOURCE_NOT_FOUND', message: 'ไม่พบประกาศ' } };
+  }
+
+  async deleteAnnouncement(_id: string): Promise<DataResult<boolean>> {
+    return { success: true, data: true };
   }
 }
 

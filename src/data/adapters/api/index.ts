@@ -1129,6 +1129,32 @@ export class ApiContractAdapter implements ContractDataSource {
       };
     }
   }
+
+  async terminateContract(contractId: string, payload: TerminateContractPayload): Promise<DataResult<any>> {
+    return terminateContract(contractId, payload);
+  }
+}
+
+export interface TerminateContractPayload {
+  terminationEffectiveDate: string;
+  terminationReason: string;
+  depositRefundAmount?: string;
+  deductionAmount?: string;
+  settlementNote?: string;
+  nextRoomStatus?: 'vacant' | 'maintenance';
+  version?: number;
+}
+
+export async function terminateContract(id: string, payload: TerminateContractPayload): Promise<DataResult<any>> {
+  try {
+    const data = await httpRequest<any>('POST', `/contracts/${id}/terminate`, payload);
+    return { success: true, data };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
+    };
+  }
 }
 
 export class ApiMeterAdapter implements MeterDataSource {
@@ -1429,10 +1455,34 @@ export class ApiMaintenanceAdapter implements MaintenanceDataSource {
     }
   }
 
-  async updateStatus(requestId: string, status: MaintenanceRequest['status'], note?: string): Promise<DataResult<MaintenanceRequest>> {
+  async updateStatus(
+    requestId: string,
+    status: MaintenanceRequest['status'],
+    note?: string,
+    _actorUserId?: string,
+    extra?: { assignedStaff?: string; cost?: number; imageAfter?: string }
+  ): Promise<DataResult<MaintenanceRequest>> {
     try {
-      const data = await httpRequest<MaintenanceRequest>('PATCH', `/maintenance/${requestId}/status`, { status, note });
+      const data = await httpRequest<MaintenanceRequest>('PATCH', `/maintenance/${requestId}/status`, {
+        status,
+        note,
+        assignedStaff: extra?.assignedStaff,
+        cost: extra?.cost,
+        imageAfter: extra?.imageAfter
+      });
       return { success: true, data };
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
+      };
+    }
+  }
+
+  async deleteRequest(requestId: string): Promise<DataResult<boolean>> {
+    try {
+      await httpRequest<any>('DELETE', `/maintenance/${requestId}`);
+      return { success: true, data: true };
     } catch (err: any) {
       return {
         success: false,
@@ -1460,6 +1510,30 @@ export class ApiAnnouncementAdapter implements AnnouncementDataSource {
     try {
       const res = await httpRequest<Announcement>('POST', '/announcements', data);
       return { success: true, data: res };
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
+      };
+    }
+  }
+
+  async updateAnnouncement(id: string, data: Partial<Announcement>): Promise<DataResult<Announcement>> {
+    try {
+      const res = await httpRequest<Announcement>('PATCH', `/announcements/${id}`, data);
+      return { success: true, data: res };
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
+      };
+    }
+  }
+
+  async deleteAnnouncement(id: string): Promise<DataResult<boolean>> {
+    try {
+      await httpRequest<any>('DELETE', `/announcements/${id}`);
+      return { success: true, data: true };
     } catch (err: any) {
       return {
         success: false,

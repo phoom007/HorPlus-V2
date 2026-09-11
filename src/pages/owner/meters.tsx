@@ -43,6 +43,7 @@ import { queryKeys, STALE_TIMES } from '../../lib/queryClient';
 import { meterDraftStore, deriveMeterDraftPatches } from '../../lib/meterDraftStore';
 import { OwnerMeterListCard } from '../../components/meters/OwnerMeterListCard';
 import { MeterOtherFeesModal } from '../../components/meters/MeterOtherFeesModal';
+import { sortRoomsByBuildingAndNumber } from '../../utils/roomSorter';
 import {
   calculateMeterRowPreview,
   calculateMeterUsageUnits,
@@ -183,7 +184,18 @@ export function getTenantForRoomAndCycleHelper(
   const activeContract = (contracts || []).find(c => {
     if (c.roomId !== roomId) return false;
     const startValStr = normalizeBangkokDate(c.startDate);
-    const endValStr = normalizeBangkokDate(c.endDate);
+    let endValStr = normalizeBangkokDate(c.endDate);
+
+    if (
+      (c.status === 'terminated' || (c.status as string) === 'TERMINATED') &&
+      ((c as any).terminationEffectiveDate || (c as any).terminatedAt)
+    ) {
+      const termDateStr = normalizeBangkokDate((c as any).terminationEffectiveDate || (c as any).terminatedAt);
+      if (!endValStr || termDateStr < endValStr) {
+        endValStr = termDateStr;
+      }
+    }
+
     const createdStr = (c as any).createdAt ? normalizeBangkokDate((c as any).createdAt) : startValStr;
     const effectiveStartStr = startValStr > createdStr ? startValStr : createdStr;
 
@@ -253,9 +265,7 @@ export function buildRowsFromWorkspace(params: {
     }
   });
 
-  const activeRooms = [...rooms].sort((a, b) =>
-    a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true, sensitivity: 'base' })
-  );
+  const activeRooms = sortRoomsByBuildingAndNumber(rooms, buildings || []);
 
   const rows: MeterRowState[] = activeRooms.map(r => {
     const roomReadings = readingsByRoom[r.id] || {};
@@ -2063,9 +2073,17 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   };
 
   const generateTemplateText = (mode: 'FULL' | 'METER_ONLY' = templateMode, freshHouseholdMap?: Map<string, number>) => {
+    const buildingOrderMap = new Map<string, number>();
+    (buildings || []).forEach((bld, idx) => {
+      if (bld?.id) buildingOrderMap.set(bld.id, idx);
+    });
+
     const sortedRows = [...meterRows].sort((a, b) => {
-      const bComp = (a.buildingCode || '').localeCompare(b.buildingCode || '');
-      if (bComp !== 0) return bComp;
+      const roomA = rooms.find(r => r.id === a.roomId);
+      const roomB = rooms.find(r => r.id === b.roomId);
+      const bldIdxA = roomA?.buildingId && buildingOrderMap.has(roomA.buildingId) ? buildingOrderMap.get(roomA.buildingId)! : 999999;
+      const bldIdxB = roomB?.buildingId && buildingOrderMap.has(roomB.buildingId) ? buildingOrderMap.get(roomB.buildingId)! : 999999;
+      if (bldIdxA !== bldIdxB) return bldIdxA - bldIdxB;
       return a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true, sensitivity: 'base' });
     });
 
@@ -4965,6 +4983,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         onClose={() => {
           setIsLineModalOpen(false);
         }}
+        dormitoryId={dormitoryId}
         bills={bills}
         tenants={tenants}
         rooms={rooms}
