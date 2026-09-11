@@ -120,6 +120,8 @@ export function createAuthRouter(authService: AuthenticationService): Router {
           dormitoryName: m.dormitoryName,
           roleCode: m.roleCode || 'OWNER',
           status: m.status,
+          hasLogo: m.hasLogo ?? false,
+          logoUrl: m.logoUrl || null,
         })),
         onboardingRequired: activeMemberships.length === 0,
         expiresAt: auth.session.expiresAt,

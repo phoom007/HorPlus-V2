@@ -198,6 +198,7 @@ export function createTenantClaimRouter(
       roomId: z.string().uuid('รหัสห้องพักไม่ถูกต้อง').optional(),
       roomNumber: z.string().optional(),
       claimInput: z.string().trim().min(1, 'กรุณาระบุชื่อ-นามสกุล หรือ เบอร์โทรศัพท์'),
+      allowAdditionalRoom: z.boolean().optional(),
     })
     .refine((data) => !!data.roomId || !!data.roomNumber, {
       message: 'กรุณาระบุห้องพัก (roomId หรือ roomNumber)',

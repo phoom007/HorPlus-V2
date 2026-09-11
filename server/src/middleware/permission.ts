@@ -50,6 +50,22 @@ export function requireDormitoryPermission(requiredPermission: string) {
         return next();
       }
 
+      // Check view <-> read aliases
+      if (['tenants:view', 'tenant:view'].includes(requiredPermission)) {
+        if (normalizedPerms.includes('tenant:read') || normalizedPerms.includes('tenants:read')) {
+          return next();
+        }
+      }
+
+      // Check legacy write alias for create, update, archive, and document:write
+      if (
+        ['tenants:create', 'tenants:update', 'tenants:archive', 'tenant:create', 'tenant:update', 'tenant:archive', 'tenants:document:write', 'tenant:document:write'].includes(requiredPermission)
+      ) {
+        if (normalizedPerms.includes('tenant:write') || normalizedPerms.includes('tenants:write')) {
+          return next();
+        }
+      }
+
       // Check singular/plural aliases (e.g. tenant:document:read vs tenants:document:read)
       const altPermission = requiredPermission.startsWith('tenant:')
         ? requiredPermission.replace('tenant:', 'tenants:')

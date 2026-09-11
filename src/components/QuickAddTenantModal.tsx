@@ -5,7 +5,7 @@
  * 3-Type Owner Quick Add: รายเทอม (TERM), รายเดือน (MONTHLY), รายวัน (DAILY).
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { X, Calendar, User, Phone, DollarSign, Clock, Shield, CheckCircle, AlertCircle, Loader2, Image as ImageIcon, Trash2, Building2, GraduationCap, CalendarDays, MessageSquare, Check, Copy, ExternalLink, Settings, CheckCircle2 } from 'lucide-react';
 import { QuickAddRoomContext } from '../types';
 import { httpRequest } from '../data/httpClient';
@@ -14,20 +14,47 @@ import { TimeWheelPicker } from './TimeWheelPicker';
 import { calculateInstallmentSchedule } from '../utils/installmentCalculator';
 import { Task009ApiAdapter, LineOaConfigResponse } from '../data/adapters/task009';
 import { useQuery } from '@tanstack/react-query';
-import { queryKeys } from '../lib/queryClient';
+import { queryKeys, queryClient } from '../lib/queryClient';
 import { resolveLineFriendAddUrl } from '../utils/lineOa.util';
 import { LineLogo } from './LineLogo';
+import { formatOwnerRoomOptionLabel } from '../utils/room-label.util';
 
-interface QuickAddTenantModalProps {
+export interface QuickAddSuccessResult {
+  rentalType: QuickAddMode;
+  roomId?: string;
+  tenantId?: string;
+  fullName?: string;
+  depositDeclaredStatus?: 'PAID' | 'UNPAID';
+}
+
+export interface QuickAddTenantModalProps {
   isOpen: boolean;
   onClose: () => void;
   context: QuickAddRoomContext | null;
-  onSuccess: (message: string) => void;
+  onSuccess: (message: string, result?: QuickAddSuccessResult) => void;
   onNavigateToLineConfig?: () => void;
   onNavigate?: (tab: string) => void;
+  defaultTab?: QuickAddMode;
+  availableRooms?: Array<{ id: string; roomNumber: string; monthlyRent?: number; floor?: number; buildingId?: string | null; buildingName?: string | null }>;
+  buildings?: Array<{ id: string; name: string }>;
+  onSelectRoom?: (roomId: string) => void;
+  hideLineTab?: boolean;
 }
 
 export type QuickAddMode = 'TERM' | 'MONTHLY' | 'DAILY' | 'LINE';
+
+export const normalizeNumericString = (raw: string | number | null | undefined): string => {
+  if (raw === null || raw === undefined || raw === '') return '';
+  const str = String(raw).trim();
+  if (!str) return '';
+  if (str.includes('.')) {
+    const [intPart, decPart] = str.split('.');
+    const cleanInt = intPart.replace(/^0+(?=\d)/, '') || '0';
+    return `${cleanInt}.${decPart}`;
+  }
+  return str.replace(/^0+(?=\d)/, '') || '0';
+};
+
 
 export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
   isOpen,
@@ -36,8 +63,14 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
   onSuccess,
   onNavigateToLineConfig,
   onNavigate,
+  defaultTab = 'LINE',
+  availableRooms,
+  buildings = [],
+  onSelectRoom,
+  hideLineTab = false,
 }) => {
-  const [activeTab, setActiveTab] = useState<QuickAddMode>('LINE');
+  const initialTab = hideLineTab && defaultTab === 'LINE' ? 'MONTHLY' : defaultTab;
+  const [activeTab, setActiveTab] = useState<QuickAddMode>(initialTab);
   const [fullName, setFullName] = useState('');
   const [phone, setPhone] = useState('');
   const [startDate, setStartDate] = useState(() => new Date().toISOString().slice(0, 10));
@@ -49,13 +82,17 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
   const [idCardError, setIdCardError] = useState<string | null>(null);
 
   // Monthly fields
-  const [durationMonths, setDurationMonths] = useState(1);
-  const [monthlyRent, setMonthlyRent] = useState<number>(0);
+  const [durationMonths, setDurationMonths] = useState<string | number>(1);
+  const [monthlyRent, setMonthlyRent] = useState<string | number>(0);
+  const [monthlyDeposit, setMonthlyDeposit] = useState<string | number>(0);
+  const [monthlyDepositDeclaredStatus, setMonthlyDepositDeclaredStatus] = useState<'PAID' | 'UNPAID'>('UNPAID');
   const [monthlyEndDate, setMonthlyEndDate] = useState('');
 
   // Term fields (Strictly Building-authoritative)
-  const [termMonths, setTermMonths] = useState<number | null>(null);
-  const [termRent, setTermRent] = useState<number | null>(null);
+  const [termMonths, setTermMonths] = useState<string | number | null>(null);
+  const [termRent, setTermRent] = useState<string | number | null>(null);
+  const [termDeposit, setTermDeposit] = useState<string | number>(0);
+  const [termDepositDeclaredStatus, setTermDepositDeclaredStatus] = useState<'PAID' | 'UNPAID'>('UNPAID');
   const [termInstallmentCount, setTermInstallmentCount] = useState(1);
   const [maxInstallments, setMaxInstallments] = useState(1);
   const [termEndDate, setTermEndDate] = useState('');
@@ -64,12 +101,124 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
   const [dailyEndDate, setDailyEndDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [checkInTime, setCheckInTime] = useState('');
   const [checkOutTime, setCheckOutTime] = useState('');
-  const [dailyRate, setDailyRate] = useState<number | null>(null);
-  const [dailyDeposit, setDailyDeposit] = useState<number>(0);
-  const [depositDeclaredStatus, setDepositDeclaredStatus] = useState<'PAID' | 'UNPAID'>('UNPAID');
+  const [dailyRate, setDailyRate] = useState<string | number | null>(null);
+  const [dailyDeposit, setDailyDeposit] = useState<string | number>(0);
+  const [dailyDepositDeclaredStatus, setDailyDepositDeclaredStatus] = useState<'PAID' | 'UNPAID'>('UNPAID');
+  const [dailyDepositPaymentMethod, setDailyDepositPaymentMethod] = useState<'CASH' | 'BANK_TRANSFER' | ''>('');
+
+  // Component-stable Idempotency Key Manager for Quick Add
+  const idempotencyKeysRef = useRef<Map<string, string>>(new Map());
+  const getIdempotencyKey = (opId: string): string => {
+    let key = idempotencyKeysRef.current.get(opId);
+    if (!key) {
+      key = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : `idem-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+      idempotencyKeysRef.current.set(opId, key);
+    }
+    return key;
+  };
+  const clearIdempotencyKey = (opId: string): void => {
+    idempotencyKeysRef.current.delete(opId);
+  };
+
+  // Section 5: Material form edit after failed submission treats as new logical request
+  useEffect(() => {
+    idempotencyKeysRef.current.clear();
+  }, [
+    fullName,
+    phone,
+    startDate,
+    dailyEndDate,
+    checkInTime,
+    checkOutTime,
+    dailyRate,
+    dailyDeposit,
+    dailyDepositDeclaredStatus,
+    dailyDepositPaymentMethod,
+    idCardFile,
+  ]);
 
   const [loading, setLoading] = useState(false);
   const [errorText, setErrorText] = useState<string | null>(null);
+
+  // Billing Cycles & Go-Live Boundary Authority
+  const billingCyclesQuery = useQuery({
+    queryKey: queryKeys.billingCycles(context?.dormitoryId || ''),
+    queryFn: async () => {
+      try {
+        return await httpRequest<any>('GET', '/billing-cycles', { headers: { 'x-dormitory-id': context?.dormitoryId || '' } });
+      } catch {
+        return { success: true, data: [] };
+      }
+    },
+    enabled: !!context?.dormitoryId && isOpen,
+    staleTime: 30000,
+  }, queryClient);
+
+  const billingCycles: any[] = Array.isArray(billingCyclesQuery.data?.data)
+    ? billingCyclesQuery.data.data
+    : Array.isArray(billingCyclesQuery.data)
+      ? billingCyclesQuery.data
+      : [];
+
+  const earliestCycle = useMemo(() => {
+    if (!billingCycles || !Array.isArray(billingCycles) || billingCycles.length === 0) return null;
+    return [...billingCycles].sort((a, b) => {
+      const startA = new Date(a.periodStart || a.startDate || 0).getTime();
+      const startB = new Date(b.periodStart || b.startDate || 0).getTime();
+      return startA - startB;
+    })[0];
+  }, [billingCycles]);
+
+  const earliestCycleStartDate = earliestCycle?.periodStart ? new Date(earliestCycle.periodStart) : null;
+  const isPreHorPlus = Boolean(
+    startDate &&
+    earliestCycleStartDate &&
+    new Date(startDate) < earliestCycleStartDate &&
+    (activeTab === 'MONTHLY' || activeTab === 'TERM')
+  );
+
+  const preHorPlusPeriods = useMemo(() => {
+    if (!isPreHorPlus || !startDate || !earliestCycleStartDate) return [];
+
+    const periods: Array<{ id: string; label: string }> = [];
+    const [startYear, startMonth, startDay] = startDate.split('-').map(Number);
+    const end = new Date(earliestCycleStartDate);
+
+    if (activeTab === 'MONTHLY') {
+      const current = new Date(Date.UTC(startYear, startMonth - 1, startDay));
+      while (current < end) {
+        const yearThai = current.getUTCFullYear() + 543;
+        const monthNames = [
+          'มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน',
+          'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'
+        ];
+        const monthName = monthNames[current.getUTCMonth()];
+        const id = `${current.getUTCFullYear()}-${String(current.getUTCMonth() + 1).padStart(2, '0')}`;
+        periods.push({
+          id,
+          label: `${monthName} ${yearThai}`,
+        });
+        current.setUTCMonth(current.getUTCMonth() + 1);
+      }
+    } else if (activeTab === 'TERM') {
+      const installments = Math.max(1, termInstallmentCount || 1);
+      for (let i = 1; i <= installments; i++) {
+        const instDate = new Date(Date.UTC(startYear, startMonth - 1 + (i - 1), 1));
+        const instMonthStr = instDate.toISOString().slice(0, 10);
+        if (instMonthStr < earliestCycleStartDate) {
+          periods.push({
+            id: String(i),
+            label: `งวดที่ ${i}`,
+          });
+        }
+      }
+    }
+    return periods;
+  }, [isPreHorPlus, startDate, earliestCycleStartDate, activeTab, termInstallmentCount]);
+
+  const [migratedPaidPeriods, setMigratedPaidPeriods] = useState<string[]>([]);
 
   // LINE OA Config state scoped strictly by context.dormitoryId
   const [lineConfig, setLineConfig] = useState<LineOaConfigResponse | null>(null);
@@ -152,7 +301,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
     return anniversary.toISOString().slice(0, 10);
   };
 
-  // Helper: inclusive days
+  // Helper: inclusive days (night-count / physical stay interval)
   const calculateInclusiveDays = (start: string, end: string): number => {
     if (!start || !end) return 1;
     const [sy, sm, sd] = start.split('-').map(Number);
@@ -160,7 +309,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
     const startUtc = Date.UTC(sy, sm - 1, sd);
     const endUtc = Date.UTC(ey, em - 1, ed);
     if (endUtc < startUtc) return 1;
-    return Math.round((endUtc - startUtc) / (24 * 3600 * 1000)) + 1;
+    return Math.max(1, Math.round((endUtc - startUtc) / (24 * 3600 * 1000)));
   };
 
   // Initialize room and building defaults when context opens
@@ -176,8 +325,13 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
       const bld = context.building;
 
       // 1. Monthly defaults: from authoritative server context
-      const mRent = eff && typeof eff.monthlyRent === 'number' ? Number(eff.monthlyRent) : 0;
+      const mRent = eff && (eff.monthlyRent !== null && eff.monthlyRent !== undefined) ? Number(eff.monthlyRent) : 0;
+      const mDep = eff?.monthlyDeposit !== null && eff?.monthlyDeposit !== undefined
+        ? Number(eff.monthlyDeposit)
+        : (eff?.depositAmount !== null && eff?.depositAmount !== undefined ? Number(eff.depositAmount) : 0);
       setMonthlyRent(mRent);
+      setMonthlyDeposit(mDep);
+      setMonthlyDepositDeclaredStatus('UNPAID');
       setDurationMonths(1);
       setMonthlyEndDate(calculateMonthEndDate(today, 1));
 
@@ -187,14 +341,20 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
         ? Number(bld.maxTermRentInstallments)
         : 1;
 
+      const tDep = eff?.termDeposit !== null && eff?.termDeposit !== undefined
+        ? Number(eff.termDeposit)
+        : (eff?.depositAmount !== null && eff?.depositAmount !== undefined ? Number(eff.depositAmount) : 0);
+      setTermDeposit(tDep);
+      setTermDepositDeclaredStatus('UNPAID');
+
       if (bldTermMonths) {
         setTermMonths(bldTermMonths);
         const tRent = eff?.termRent !== null && eff?.termRent !== undefined
           ? Number(eff.termRent)
-          : null;
+          : 0;
         setTermRent(tRent);
         setMaxInstallments(bldMaxInstallments);
-        setTermInstallmentCount(bldMaxInstallments);
+        setTermInstallmentCount(1);
         setTermEndDate(calculateMonthEndDate(today, bldTermMonths));
       } else {
         setTermMonths(null);
@@ -205,18 +365,19 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
       }
 
       // 3. Daily defaults: strictly from authoritative server context (preserves null vs 0, and explicit 0 deposit)
-      const dRent = eff?.dailyRent !== null && eff?.dailyRent !== undefined ? Number(eff.dailyRent) : null;
-      const dDep = eff?.depositAmount !== null && eff?.depositAmount !== undefined ? Number(eff.depositAmount) : 0;
+      const dRent = eff?.dailyRent !== null && eff?.dailyRent !== undefined ? Number(eff.dailyRent) : 0;
+      const dDep = eff?.dailyDeposit !== null && eff?.dailyDeposit !== undefined
+        ? Number(eff.dailyDeposit)
+        : (eff?.depositAmount !== null && eff?.depositAmount !== undefined ? Number(eff.depositAmount) : 0);
 
       setDailyRate(dRent);
       setDailyDeposit(dDep);
+      setDailyDepositDeclaredStatus('UNPAID');
       setDailyEndDate(today);
       setCheckInTime('');
       setCheckOutTime('');
-      setDepositDeclaredStatus('UNPAID');
 
-      // Set initial active tab: default = 'LINE' (Requirement R1 / T1)
-      setActiveTab('LINE');
+      setActiveTab(hideLineTab && (!defaultTab || defaultTab === 'LINE') ? 'MONTHLY' : (defaultTab || 'LINE'));
 
       // Clear ID card attachment on open
       if (idCardPreview) {
@@ -226,7 +387,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
       setIdCardPreview(null);
       setIdCardError(null);
     }
-  }, [context?.roomId, context, isOpen]);
+  }, [context?.roomId, isOpen, defaultTab, hideLineTab]);
 
   const handleFileSelect = (file: File | null) => {
     setIdCardError(null);
@@ -255,15 +416,19 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
 
   // Recalculate monthly end date on start or duration change
   useEffect(() => {
-    if (startDate && durationMonths > 0) {
-      setMonthlyEndDate(calculateMonthEndDate(startDate, durationMonths));
+    if (startDate && durationMonths && Number(durationMonths) > 0) {
+      setMonthlyEndDate(calculateMonthEndDate(startDate, Number(durationMonths)));
+    } else {
+      setMonthlyEndDate('');
     }
   }, [startDate, durationMonths]);
 
   // Recalculate term end date on start change
   useEffect(() => {
-    if (startDate && termMonths && termMonths > 0) {
-      setTermEndDate(calculateMonthEndDate(startDate, termMonths));
+    if (startDate && termMonths && Number(termMonths) > 0) {
+      setTermEndDate(calculateMonthEndDate(startDate, Number(termMonths)));
+    } else {
+      setTermEndDate('');
     }
   }, [startDate, termMonths]);
 
@@ -271,21 +436,20 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
 
   const isTermTabDisabled =
     !context.building?.termMonths ||
-    !context.effective?.termRent ||
-    Number(context.effective?.termRent) <= 0;
+    Number(context.building?.termMonths) < 1;
 
   const inclusiveDays = calculateInclusiveDays(startDate, dailyEndDate);
-  const dailyTotalRent = (dailyRate ?? 0) * inclusiveDays;
-  const dailyTotalAgreed = dailyTotalRent + dailyDeposit;
-  const dailyOutstanding = depositDeclaredStatus === 'PAID' ? dailyTotalRent : dailyTotalAgreed;
+  const dailyTotalRent = normalizeMoneyInput(dailyRate) * inclusiveDays;
+  const dailyTotalAgreed = dailyTotalRent + normalizeMoneyInput(dailyDeposit);
+  const dailyOutstanding = dailyDepositDeclaredStatus === 'PAID' ? dailyTotalRent : dailyTotalAgreed;
 
   const isTermDisabled =
     activeTab === 'TERM' &&
-    (!termMonths || termMonths < 1 || termRent === null || termRent === undefined || isNaN(Number(termRent)) || Number(termRent) < 0);
+    (!termMonths || Number(termMonths) < 1 || termRent === null || termRent === undefined || isNaN(Number(termRent)) || Number(termRent) < 0);
 
   const isMonthlyDisabled =
     activeTab === 'MONTHLY' &&
-    (monthlyRent === null || monthlyRent === undefined || isNaN(Number(monthlyRent)) || Number(monthlyRent) < 0);
+    (!durationMonths || Number(durationMonths) < 1 || monthlyRent === null || monthlyRent === undefined || isNaN(Number(monthlyRent)) || Number(monthlyRent) < 0);
 
   const isDailyDateInvalid = dailyEndDate < startDate;
 
@@ -303,8 +467,8 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
     }
 
     if (activeTab === 'TERM') {
-      if (!termMonths || termMonths < 1) {
-        setErrorText('ไม่พบข้อมูลระยะเวลาสัญญาแบบเทอมของอาคาร (termMonths) กรุณากำหนดการตั้งค่าอาคารก่อนทำสัญญาแบบเทอม');
+      if (!termMonths || isNaN(Number(termMonths)) || Number(termMonths) < 1) {
+        setErrorText('กรุณาระบุระยะเวลาตามเทอม (เดือน) ให้ถูกต้อง');
         return;
       }
       if (termRent === null || termRent === undefined || isNaN(Number(termRent)) || Number(termRent) < 0) {
@@ -314,6 +478,10 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
     }
 
     if (activeTab === 'MONTHLY') {
+      if (!durationMonths || isNaN(Number(durationMonths)) || Number(durationMonths) < 1) {
+        setErrorText('กรุณาระบุระยะเวลาสัญญา (เดือน) ให้ถูกต้อง');
+        return;
+      }
       if (monthlyRent === null || monthlyRent === undefined || isNaN(Number(monthlyRent)) || Number(monthlyRent) < 0) {
         setErrorText('กรุณาระบุค่าเช่ารายเดือน');
         return;
@@ -344,8 +512,11 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
           startDate,
           endDate: monthlyEndDate || undefined,
           durationMonths: Number(durationMonths),
-          unitRentAmount: monthlyRent.toFixed(2),
-          totalRentAmount: (monthlyRent * durationMonths).toFixed(2),
+          unitRentAmount: normalizeMoneyInput(monthlyRent).toFixed(2),
+          totalRentAmount: (normalizeMoneyInput(monthlyRent) * Number(durationMonths || 1)).toFixed(2),
+          depositAmount: normalizeMoneyInput(monthlyDeposit).toFixed(2),
+          depositDeclaredStatus: monthlyDepositDeclaredStatus,
+          migratedPaidPeriods: migratedPaidPeriods.filter(p => /^\d{4}-\d{2}$/.test(p)),
         };
 
         if (idCardFile) {
@@ -361,7 +532,12 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
           });
         }
 
-        onSuccess(`เพิ่มผู้เช่ารายเดือน (${context.roomNumber}) เรียบร้อยแล้ว`);
+        const successResult: QuickAddSuccessResult = { rentalType: 'MONTHLY', roomId: context.roomId };
+        if (hideLineTab) {
+          successResult.fullName = fullName.trim();
+          if (phone.trim()) successResult.phone = phone.trim();
+        }
+        onSuccess(`เพิ่มผู้เช่ารายเดือน (${context.roomNumber}) เรียบร้อยแล้ว`, successResult);
         onClose();
       } else if (activeTab === 'TERM') {
         const payload = {
@@ -372,9 +548,12 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
           startDate,
           endDate: termEndDate || undefined,
           durationMonths: termMonths ? Number(termMonths) : undefined,
-          unitRentAmount: Number(termRent).toFixed(2),
-          totalRentAmount: Number(termRent).toFixed(2),
+          unitRentAmount: normalizeMoneyInput(termRent).toFixed(2),
+          totalRentAmount: normalizeMoneyInput(termRent).toFixed(2),
+          depositAmount: normalizeMoneyInput(termDeposit).toFixed(2),
+          depositDeclaredStatus: termDepositDeclaredStatus,
           termInstallmentCount: Number(termInstallmentCount),
+          migratedPaidInstallments: migratedPaidPeriods.map(Number).filter(n => !isNaN(n) && n > 0),
         };
 
         if (idCardFile) {
@@ -390,10 +569,25 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
           });
         }
 
-        onSuccess(`เพิ่มผู้เช่ารายเทอม (${context.roomNumber}) เรียบร้อยแล้ว`);
+        const successResult: QuickAddSuccessResult = { rentalType: 'TERM', roomId: context.roomId };
+        if (hideLineTab) {
+          successResult.fullName = fullName.trim();
+          if (phone.trim()) successResult.phone = phone.trim();
+        }
+        onSuccess(`เพิ่มผู้เช่ารายเทอม (${context.roomNumber}) เรียบร้อยแล้ว`, successResult);
         onClose();
       } else if (activeTab === 'DAILY') {
-        const payload = {
+        const depAmount = normalizeMoneyInput(dailyDeposit);
+        if (depAmount > 0 && dailyDepositDeclaredStatus === 'PAID' && !dailyDepositPaymentMethod) {
+          setErrorText('กรุณาเลือกวิธีการชำระเงินสำหรับเงินประกัน (เงินสด หรือ โอนเงิน)');
+          setLoading(false);
+          return;
+        }
+
+        const opId = `quick-add-daily:${context.dormitoryId}:${context.roomId}:${startDate}`;
+        const idempotencyKey = getIdempotencyKey(opId);
+
+        const payload: Record<string, any> = {
           dormitoryId: context.dormitoryId,
           roomId: context.roomId,
           fullName: fullName.trim(),
@@ -402,29 +596,59 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
           endDate: dailyEndDate,
           checkInTime: checkInTime || undefined,
           checkOutTime: checkOutTime || undefined,
-          dailyRateAmount: Number(dailyRate).toFixed(2),
-          depositAmount: Number(dailyDeposit || 0).toFixed(2),
-          depositDeclaredStatus,
+          dailyRateAmount: normalizeMoneyInput(dailyRate).toFixed(2),
+          depositAmount: depAmount.toFixed(2),
+          depositDeclaredStatus: dailyDepositDeclaredStatus,
         };
+
+        if (depAmount > 0 && dailyDepositDeclaredStatus === 'PAID') {
+          payload.depositPaymentMethod = dailyDepositPaymentMethod;
+        }
 
         if (idCardFile) {
           const formData = new FormData();
           formData.append('data', JSON.stringify(payload));
           formData.append('idCardImage', idCardFile);
           await httpRequest('POST', '/api/v1/daily-stays/owner-quick-add', formData, {
-            headers: { 'x-dormitory-id': context.dormitoryId },
+            headers: {
+              'x-dormitory-id': context.dormitoryId,
+              'x-idempotency-key': idempotencyKey,
+            },
           });
         } else {
           await httpRequest('POST', '/api/v1/daily-stays/owner-quick-add', payload, {
-            headers: { 'x-dormitory-id': context.dormitoryId },
+            headers: {
+              'x-dormitory-id': context.dormitoryId,
+              'x-idempotency-key': idempotencyKey,
+            },
           });
         }
 
-        onSuccess('เพิ่มผู้เช่า รายวัน เรียบร้อยแล้ว');
+        clearIdempotencyKey(opId);
+        const successResult: QuickAddSuccessResult = { rentalType: 'DAILY', roomId: context.roomId };
+        if (hideLineTab) {
+          successResult.fullName = fullName.trim();
+          if (phone.trim()) successResult.phone = phone.trim();
+        }
+        onSuccess('เพิ่มผู้เช่า รายวัน เรียบร้อยแล้ว', successResult);
         onClose();
       }
     } catch (err: any) {
-      setErrorText(err.message || 'เกิดข้อผิดพลาดในการเพิ่มผู้เช่า');
+      const serverCode =
+        (err?.domainError?.details as any)?.error?.code ||
+        (err?.domainError?.details as any)?.code ||
+        err?.details?.error?.code;
+      const code = serverCode || err?.code || err?.domainError?.code;
+      const knownMessages: Record<string, string> = {
+        DEPOSIT_BILLING_CYCLE_NOT_FOUND: 'ไม่พบรอบบิลที่ตรงกับวันเริ่มสัญญา กรุณาสร้างรอบบิลก่อนยืนยันการเช่า',
+        ROOM_UNDER_MAINTENANCE: 'ไม่สามารถอนุมัติผู้เช่าได้ เนื่องจากห้องนี้อยู่ระหว่างปิดปรับปรุง',
+        ROOM_OCCUPIED_OR_HAS_ACTIVE_AGREEMENT: 'ห้องพักนี้มีผู้เช่าหรือมีสัญญาเช่าที่ยังใช้งานอยู่',
+        BUILDING_TERM_CONFIG_INVALID: 'ไม่พบข้อมูลระยะเวลาสัญญาแบบเทอมของอาคาร (termMonths) กรุณากำหนดการตั้งค่าอาคารก่อนทำสัญญาแบบเทอม',
+        TERM_INSTALLMENTS_EXCEED_MAX: 'จำนวนงวดชำระเกินกว่าที่อาคารกำหนด',
+        VERSION_CONFLICT: 'ข้อมูลห้องพักมีการเปลี่ยนแปลง กรุณารีเฟรชแล้วลองใหม่อีกครั้ง',
+      };
+      const msg = (code && knownMessages[code]) || err?.domainError?.message || err?.message || 'เกิดข้อผิดพลาดในการเพิ่มผู้เช่า';
+      setErrorText(msg);
     } finally {
       setLoading(false);
     }
@@ -448,7 +672,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
               </p>
             ) : (
               <p className="text-xs text-slate-500 mt-0.5">
-                ห้อง <span className="font-bold text-indigo-600">{context.roomNumber}</span> — {context.building?.name || ''} {context.roomType ? `(${context.roomType})` : 'สร้างสัญญาชั่วคราว/รายวันใน 1 ขั้นตอน'}
+                ห้อง <span className="font-bold text-indigo-600">{context.roomNumber}</span> — {context.building?.name || ''} {context.roomType ? `(${context.roomType})` : ''}
               </p>
             )}
           </div>
@@ -461,70 +685,95 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
           </button>
         </div>
 
+        {/* Room selection switcher if multiple available rooms are provided */}
+        {availableRooms && availableRooms.length > 1 && onSelectRoom && (
+          <div className="px-5 py-2.5 bg-indigo-50/50 border-b border-indigo-100 flex items-center justify-between gap-2">
+            <label htmlFor="quick-add-room-select" className="text-xs font-semibold text-indigo-900 shrink-0">
+              เลือกห้องว่าง:
+            </label>
+            <select
+              id="quick-add-room-select"
+              data-testid="quick-add-room-select"
+              value={context.roomId}
+              onChange={(e) => onSelectRoom(e.target.value)}
+              className="text-xs font-bold bg-white text-indigo-900 border border-indigo-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            >
+              {[...availableRooms]
+                .sort((a, b) => (a.roomNumber || '').localeCompare(b.roomNumber || '', undefined, { numeric: true }))
+                .map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {formatOwnerRoomOptionLabel(r, buildings)}
+                  </option>
+                ))}
+            </select>
+          </div>
+        )}
+
         {/* 4-Mode Tabs: Row 1 = TERM / MONTHLY / DAILY, Row 2 = LINE */}
         <div className="p-4 bg-slate-50 border-b border-slate-100 space-y-2">
           {/* Row 1: Traditional Rental Types (TERM / MONTHLY / DAILY) */}
           <div className="flex bg-slate-200/80 p-1 rounded-2xl gap-1">
             <button
               type="button"
+              data-testid="tab-term"
               disabled={isTermTabDisabled}
               title={isTermTabDisabled ? 'ยังไม่ได้กำหนดค่าเช่ารายเทอมของห้องพัก' : undefined}
               onClick={() => !isTermTabDisabled && setActiveTab('TERM')}
-              className={`flex-1 py-2 text-xs font-extrabold rounded-xl transition-all flex items-center justify-center gap-1.5 ${
-                isTermTabDisabled
-                  ? 'opacity-40 cursor-not-allowed text-slate-400 bg-slate-100'
-                  : activeTab === 'TERM'
+              className={`flex-1 py-2 text-xs font-extrabold rounded-xl transition-all flex items-center justify-center gap-1.5 ${isTermTabDisabled
+                ? 'opacity-40 cursor-not-allowed text-slate-400 bg-slate-100'
+                : activeTab === 'TERM'
                   ? 'bg-white text-indigo-600 shadow-xs'
                   : 'text-slate-600 hover:text-slate-900'
-              }`}
+                }`}
             >
               <GraduationCap className="w-3.5 h-3.5 shrink-0" />
               <span>รายเทอม</span>
             </button>
             <button
               type="button"
+              data-testid="tab-monthly"
               onClick={() => setActiveTab('MONTHLY')}
-              className={`flex-1 py-2 text-xs font-extrabold rounded-xl transition-all flex items-center justify-center gap-1.5 ${
-                activeTab === 'MONTHLY'
-                  ? 'bg-white text-indigo-600 shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
+              className={`flex-1 py-2 text-xs font-extrabold rounded-xl transition-all flex items-center justify-center gap-1.5 ${activeTab === 'MONTHLY'
+                ? 'bg-white text-indigo-600 shadow-xs'
+                : 'text-slate-600 hover:text-slate-900'
+                }`}
             >
               <CalendarDays className="w-3.5 h-3.5 shrink-0" />
               <span>รายเดือน</span>
             </button>
             <button
               type="button"
+              data-testid="tab-daily"
               onClick={() => setActiveTab('DAILY')}
-              className={`flex-1 py-2 text-xs font-extrabold rounded-xl transition-all flex items-center justify-center gap-1.5 ${
-                activeTab === 'DAILY'
-                  ? 'bg-white text-indigo-600 shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
+              className={`flex-1 py-2 text-xs font-extrabold rounded-xl transition-all flex items-center justify-center gap-1.5 ${activeTab === 'DAILY'
+                ? 'bg-white text-indigo-600 shadow-xs'
+                : 'text-slate-600 hover:text-slate-900'
+                }`}
             >
               <Clock className="w-3.5 h-3.5 shrink-0" />
               <span>รายวัน</span>
             </button>
           </div>
 
-          {/* Row 2: Recommended LINE Onboarding */}
-          <button
-            type="button"
-            onClick={() => setActiveTab('LINE')}
-            className={`w-full py-2.5 px-3 text-xs font-extrabold rounded-xl transition-all flex items-center justify-center gap-2 border cursor-pointer ${
-              activeTab === 'LINE'
+          {/* Row 2: Recommended LINE Onboarding (hidden when hideLineTab is true) */}
+          {!hideLineTab && (
+            <button
+              type="button"
+              data-testid="tab-line"
+              onClick={() => setActiveTab('LINE')}
+              className={`w-full py-2.5 px-3 text-xs font-extrabold rounded-xl transition-all flex items-center justify-center gap-2 border cursor-pointer ${activeTab === 'LINE'
                 ? 'bg-[#06C755] text-white border-[#05B34C] shadow-xs'
                 : 'bg-white text-slate-700 hover:text-slate-900 border-slate-200 hover:border-slate-300'
-            }`}
-          >
-            <LineLogo className="w-4 h-4 shrink-0 rounded-sm" />
-            <span>เพิ่มผู้เช่า LINE</span>
-            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${
-              activeTab === 'LINE' ? 'bg-white/20 text-white' : 'bg-emerald-50 text-emerald-700 border border-emerald-200/60'
-            }`}>
-              แนะนำ
-            </span>
-          </button>
+                }`}
+            >
+              <LineLogo className="w-4 h-4 shrink-0 rounded-sm" />
+              <span>เพิ่มผู้เช่า LINE</span>
+              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${activeTab === 'LINE' ? 'bg-white/20 text-white' : 'bg-emerald-50 text-emerald-700 border border-emerald-200/60'
+                }`}>
+                แนะนำ
+              </span>
+            </button>
+          )}
         </div>
 
         {activeTab === 'LINE' ? (
@@ -685,167 +934,275 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
             </div>
           </div>
         ) : (
-          <form onSubmit={handleSubmit} className="p-5 overflow-y-auto space-y-4 flex-1">
-          {/* Common Tenant Identity Fields */}
-          <div className="space-y-3">
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">
-                ชื่อ-นามสกุล ผู้เช่า <span className="text-rose-500">*</span>
-              </label>
-              <div className="relative">
-                <User className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
-                <input
-                  type="text"
-                  required
-                  placeholder="เช่น นายสมชาย ใจดี"
-                  value={fullName}
-                  onChange={(e) => setFullName(e.target.value)}
-                  className="w-full pl-9 pr-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">
-                เบอร์โทรศัพท์ (ถ้ามี)
-              </label>
-              <div className="relative">
-                <Phone className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
-                <input
-                  type="tel"
-                  placeholder="เช่น 081-234-5678"
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  className="w-full pl-9 pr-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
-                />
-              </div>
-            </div>
-
-            {/* Optional ID-Card Document Attachment */}
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">
-                รูปเอกสารสำเนาบัตรประชาชน (ถ้ามี)
-              </label>
-              <div className="space-y-2">
-                {!idCardFile ? (
-                  <label className="border-2 border-dashed border-slate-200 hover:border-indigo-400 bg-slate-50/60 hover:bg-indigo-50/30 rounded-2xl p-3.5 flex flex-col items-center justify-center cursor-pointer transition-all group">
-                    <input
-                      type="file"
-                      accept="image/jpeg,image/png,image/webp"
-                      className="hidden"
-                      onChange={(e) => {
-                        const f = e.target.files?.[0] || null;
-                        handleFileSelect(f);
-                      }}
-                    />
-                    <div className="flex items-center gap-2 text-slate-500 group-hover:text-indigo-600">
-                      <ImageIcon className="w-4 h-4" />
-                      <span className="text-xs font-bold">แนบรูปภาพบัตรประชาชน (JPG, PNG, WebP)</span>
-                    </div>
-                    <span className="text-[10px] text-slate-400 mt-0.5">สูงสุด 1 รูป ขนาดไม่เกิน 5 MB (ไม่บังคับ)</span>
-                  </label>
-                ) : (
-                  <div className="flex items-center justify-between p-2.5 bg-indigo-50/60 border border-indigo-100 rounded-2xl">
-                    <div className="flex items-center gap-2.5 min-w-0">
-                      {idCardPreview && (
-                        <img
-                          src={idCardPreview}
-                          alt="ID Card Preview"
-                          className="w-10 h-10 object-cover rounded-xl border border-indigo-200 shrink-0"
-                        />
-                      )}
-                      <div className="min-w-0">
-                        <p className="text-xs font-bold text-slate-800 truncate">{idCardFile.name}</p>
-                        <p className="text-[10px] text-slate-500">{(idCardFile.size / 1024).toFixed(0)} KB</p>
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => handleFileSelect(null)}
-                      className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-colors shrink-0 cursor-pointer"
-                      title="ลบไฟล์รูปภาพ"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
-                )}
-                {idCardError && (
-                  <p className="text-[11px] font-bold text-rose-600 flex items-center gap-1">
-                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                    {idCardError}
-                  </p>
-                )}
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">
-                วันที่เริ่มเข้าพัก / เริ่มสัญญา <span className="text-rose-500">*</span>
-              </label>
-              <OwnerDateInput
-                required
-                value={startDate}
-                onChange={(iso) => setStartDate(iso)}
-              />
-            </div>
-          </div>
-
-          {/* TAB 1: TERM */}
-          {activeTab === 'TERM' && (
-            <div className="space-y-3 pt-2 border-t border-slate-100">
-              {!termMonths ? (
-                <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-800 text-xs font-semibold flex items-start gap-2">
-                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-amber-600" />
-                  <span>ไม่พบข้อมูลระยะเวลาสัญญาแบบเทอมของอาคาร (termMonths) กรุณากำหนดการตั้งค่าอาคารก่อนทำสัญญาแบบเทอม</span>
+          <form onSubmit={handleSubmit} data-testid="quick-add-form" className="p-5 overflow-y-auto space-y-4 flex-1">
+            {/* Common Tenant Identity Fields */}
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  ชื่อ-นามสกุล ผู้เช่า <span className="text-rose-500">*</span>
+                </label>
+                <div className="relative">
+                  <User className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
+                  <input
+                    type="text"
+                    required
+                    placeholder="เช่น นายสมชาย ใจดี"
+                    value={fullName}
+                    onChange={(e) => setFullName(e.target.value)}
+                    className="w-full pl-9 pr-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
+                  />
                 </div>
-              ) : (
-                <>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-xs font-bold text-slate-700 mb-1">
-                        ระยะเวลาตามเทอม (เดือน) <span className="text-rose-500">*</span>
-                      </label>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  เบอร์โทรศัพท์ (ถ้ามี)
+                </label>
+                <div className="relative">
+                  <Phone className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
+                  <input
+                    type="tel"
+                    placeholder="เช่น 081-234-5678"
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                    className="w-full pl-9 pr-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
+                  />
+                </div>
+              </div>
+
+              {/* Optional ID-Card Document Attachment */}
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  รูปเอกสารสำเนาบัตรประชาชน (ถ้ามี)
+                </label>
+                <div className="space-y-2">
+                  {!idCardFile ? (
+                    <label className="border-2 border-dashed border-slate-200 hover:border-indigo-400 bg-slate-50/60 hover:bg-indigo-50/30 rounded-2xl p-3.5 flex flex-col items-center justify-center cursor-pointer transition-all group">
                       <input
-                        type="number"
-                        min="1"
-                        required
-                        value={termMonths || ''}
+                        type="file"
+                        accept="image/jpeg,image/png,image/webp"
+                        className="hidden"
                         onChange={(e) => {
-                          const val = parseInt(e.target.value);
-                          setTermMonths(isNaN(val) || val < 1 ? 1 : val);
+                          const f = e.target.files?.[0] || null;
+                          handleFileSelect(f);
                         }}
-                        className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
                       />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-bold text-slate-700 mb-1">
-                        วันที่สิ้นสุด
-                      </label>
-                      <div className="px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-700 font-bold min-h-[34px] flex items-center">
-                        {termEndDate ? formatThaiDate(termEndDate) : '-'}
+                      <div className="flex items-center gap-2 text-slate-500 group-hover:text-indigo-600">
+                        <ImageIcon className="w-4 h-4" />
+                        <span className="text-xs font-bold">แนบรูปภาพบัตรประชาชน (JPG, PNG, WebP)</span>
                       </div>
+                      <span className="text-[10px] text-slate-400 mt-0.5">สูงสุด 1 รูป ขนาดไม่เกิน 5 MB (ไม่บังคับ)</span>
+                    </label>
+                  ) : (
+                    <div className="flex items-center justify-between p-2.5 bg-indigo-50/60 border border-indigo-100 rounded-2xl">
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        {idCardPreview && (
+                          <img
+                            src={idCardPreview}
+                            alt="ID Card Preview"
+                            className="w-10 h-10 object-cover rounded-xl border border-indigo-200 shrink-0"
+                          />
+                        )}
+                        <div className="min-w-0">
+                          <p className="text-xs font-bold text-slate-800 truncate">{idCardFile.name}</p>
+                          <p className="text-[10px] text-slate-500">{(idCardFile.size / 1024).toFixed(0)} KB</p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleFileSelect(null)}
+                        className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-colors shrink-0 cursor-pointer"
+                        title="ลบไฟล์รูปภาพ"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  )}
+                  {idCardError && (
+                    <p className="text-[11px] font-bold text-rose-600 flex items-center gap-1">
+                      <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                      {idCardError}
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  วันที่เริ่มเข้าพัก / เริ่มสัญญา <span className="text-rose-500">*</span>
+                </label>
+                <OwnerDateInput
+                  required
+                  value={startDate}
+                  onChange={(iso) => setStartDate(iso)}
+                />
+              </div>
+
+              {isPreHorPlus && (
+                <div className="p-3.5 bg-amber-50/80 border border-amber-200/90 rounded-2xl space-y-3 animate-in fade-in">
+                  <div className="flex items-start gap-2 text-amber-900">
+                    <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                    <div className="text-xs space-y-0.5">
+                      <p className="font-extrabold text-amber-950">
+                        สัญญาเริ่มต้นก่อนเริ่มใช้งาน HorPlus (Go-Live Boundary)
+                      </p>
+                      <p className="text-amber-800 text-[11px] leading-relaxed">
+                        เงินประกันและค่าเช่างวดแรกในระบบจะถูกบันทึกในรอบบิล <strong className="font-bold text-amber-950">{earliestCycle?.cycleName || earliestCycle?.cycleCode || 'รอบบิลแรก'}</strong>
+                      </p>
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="pt-2.5 border-t border-amber-200/60 space-y-2">
+                    <p className="text-[11px] font-bold text-amber-900">
+                      ประวัติการชำระเงินก่อนเริ่มใช้งานระบบ (Migration Records):
+                    </p>
+                    <div className="space-y-1.5 pl-1">
+                      {preHorPlusPeriods.map((period) => (
+                        <label key={period.id} className="flex items-center gap-2 text-xs text-amber-950 cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            checked={migratedPaidPeriods.includes(period.id)}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setMigratedPaidPeriods([...migratedPaidPeriods, period.id]);
+                              } else {
+                                setMigratedPaidPeriods(migratedPaidPeriods.filter((id) => id !== period.id));
+                              }
+                            }}
+                            className="rounded text-indigo-600 focus:ring-indigo-500 w-4 h-4"
+                          />
+                          <span className="font-semibold">{period.label} - ชำระแล้ว</span>
+                        </label>
+                      ))}
+                    </div>
+                    <p className="text-[10px] text-amber-700/90 italic">
+                      * ประวัติเหล่านี้เป็นบันทึกข้อมูลการย้ายเข้าเท่านั้น จะไม่สร้างใบแจ้งหนี้หรือใบเสร็จย้อนหลังในระบบ
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* TAB 1: TERM */}
+            {activeTab === 'TERM' && (
+              <div className="space-y-3 pt-2 border-t border-slate-100">
+                {!context.building?.termMonths || Number(context.building.termMonths) < 1 ? (
+                  <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-800 text-xs font-semibold flex items-start gap-2">
+                    <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-amber-600" />
+                    <span>ไม่พบข้อมูลระยะเวลาสัญญาแบบเทอมของอาคาร (termMonths) กรุณากำหนดการตั้งค่าอาคารก่อนทำสัญญาแบบเทอม</span>
+                  </div>
+                ) : (
+                  <>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 mb-1">
+                          ระยะเวลาตามเทอม (เดือน) <span className="text-rose-500">*</span>
+                        </label>
+                        <input
+                          type="number"
+                          min="1"
+                          required
+                          value={termMonths !== null && termMonths !== undefined ? termMonths : ''}
+                          onChange={(e) => setTermMonths(e.target.value)}
+                          onBlur={(e) => {
+                            const val = e.target.value;
+                            if (val !== '') {
+                              const norm = normalizeNumericString(val);
+                              const num = parseInt(norm, 10);
+                              setTermMonths(isNaN(num) || num < 1 ? 1 : num);
+                            } else {
+                              setTermMonths('');
+                            }
+                          }}
+                          className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 mb-1">
+                          วันที่สิ้นสุด
+                        </label>
+                        <div className="px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-700 font-bold min-h-[34px] flex items-center">
+                          {termEndDate ? formatThaiDate(termEndDate) : '-'}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 mb-1">
+                          ค่าเช่ารายเทอม (บาท) <span className="text-rose-500">*</span>
+                        </label>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          required
+                          placeholder="ระบุค่าเช่ารายเทอม"
+                          value={termRent !== null && termRent !== undefined ? termRent : ''}
+                          onChange={(e) => setTermRent(e.target.value)}
+                          onBlur={(e) => {
+                            const val = e.target.value;
+                            if (val !== '') {
+                              const norm = normalizeNumericString(val);
+                              e.target.value = norm;
+                              setTermRent(norm);
+                            } else {
+                              setTermRent(null);
+                            }
+                          }}
+                          className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 mb-1">
+                          เงินประกัน/มัดจำ (บาท)
+                        </label>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={termDeposit !== null && termDeposit !== undefined ? termDeposit : ''}
+                          onChange={(e) => setTermDeposit(e.target.value)}
+                          onBlur={(e) => {
+                            const val = e.target.value;
+                            const norm = normalizeNumericString(val);
+                            e.target.value = norm || '0';
+                            setTermDeposit(norm || '0');
+                          }}
+                          className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Term Deposit Status Toggle */}
                     <div>
                       <label className="block text-xs font-bold text-slate-700 mb-1">
-                        ค่าเช่ารายเทอม (บาท) <span className="text-rose-500">*</span>
+                        สถานะการรับเงินมัดจำ
                       </label>
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        required
-                        placeholder="ระบุค่าเช่ารายเทอม"
-                        value={termRent !== null && termRent !== undefined ? termRent : ''}
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          setTermRent(val === '' ? null : normalizeMoneyInput(val));
-                        }}
-                        className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
-                      />
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setTermDepositDeclaredStatus('UNPAID')}
+                          className={`py-2 text-xs font-bold rounded-xl border transition-all cursor-pointer ${termDepositDeclaredStatus === 'UNPAID'
+                            ? 'bg-amber-50 text-amber-800 border-amber-300 font-extrabold'
+                            : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                            }`}
+                        >
+                          รอชำระ
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setTermDepositDeclaredStatus('PAID')}
+                          className={`py-2 text-xs font-bold rounded-xl border transition-all cursor-pointer ${termDepositDeclaredStatus === 'PAID'
+                            ? 'bg-emerald-50 text-emerald-800 border-emerald-300 font-extrabold'
+                            : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                            }`}
+                        >
+                          ชำระแล้ว
+                        </button>
+                      </div>
                     </div>
+
                     <div>
                       <label className="block text-xs font-bold text-slate-700 mb-1">
                         จำนวนงวดชำระ <span className="text-rose-500">*</span>
@@ -862,286 +1219,468 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
                         ))}
                       </select>
                     </div>
-                  </div>
 
-                  {/* Live Installment Breakdown Preview & Total Term Rent */}
-                  {(() => {
-                    const schedule = calculateInstallmentSchedule(termRent || 0, termInstallmentCount);
-                    return (
-                      <div className="p-3 bg-indigo-50/70 border border-indigo-100 rounded-2xl space-y-2.5">
-                        <div className="flex items-center justify-between text-xs pb-2 border-b border-indigo-100/70">
-                          <span className="font-bold text-indigo-900">ค่าเช่ารายเทอมทั้งหมด:</span>
-                          <span className="font-extrabold text-indigo-700 text-sm">{formatBaht(termRent || 0)}</span>
-                        </div>
+                    {/* Live Financial Breakdown & Installment Schedule Preview */}
+                    {(() => {
+                      const totalRent = normalizeMoneyInput(termRent);
+                      const depAmount = normalizeMoneyInput(termDeposit);
+                      const totalAgreed = totalRent + depAmount;
+                      const paidAmt = termDepositDeclaredStatus === 'PAID' ? depAmount : 0;
+                      const outstanding = totalAgreed - paidAmt;
+                      const schedule = calculateInstallmentSchedule(totalRent, termInstallmentCount);
+                      const firstRentInst = schedule[0]?.amount ? Number(schedule[0].amount) : 0;
+                      const firstPaymentDue = termDepositDeclaredStatus === 'PAID' ? firstRentInst : (firstRentInst + depAmount);
 
-                        <div className="space-y-1">
-                          <div className="text-[11px] font-bold text-slate-500 flex items-center justify-between">
-                            <span>ตารางแบ่งชำระรายงวด ({termInstallmentCount} งวด):</span>
-                            {termInstallmentCount === 1 && (
-                              <span className="text-[10px] text-indigo-600 font-semibold bg-indigo-100/60 px-2 py-0.5 rounded-md">ชำระเต็มจำนวน</span>
-                            )}
+                      return (
+                        <div className="space-y-2.5">
+                          <div className="p-3 bg-slate-50 border border-slate-200 rounded-2xl space-y-1.5 text-xs">
+                            <div className="flex justify-between text-slate-600">
+                              <span>ค่าเช่ารวม:</span>
+                              <span className="font-bold">{formatBaht(totalRent)}</span>
+                            </div>
+                            <div className="flex justify-between text-slate-600">
+                              <span>เงินประกัน/มัดจำ:</span>
+                              <span className="font-bold">{formatBaht(depAmount)}</span>
+                            </div>
+                            <div className="flex justify-between text-slate-900 pt-1 border-t border-slate-200 font-extrabold">
+                              <span>ยอดตามข้อตกลง:</span>
+                              <span className="text-indigo-700">{formatBaht(totalAgreed)}</span>
+                            </div>
+                            <div className="flex justify-between text-slate-900 font-extrabold">
+                              <span>ยอดชำระแล้ว:</span>
+                              <span className="text-emerald-700">{formatBaht(paidAmt)}</span>
+                            </div>
+                            <div className="flex justify-between text-slate-900 pt-1 font-extrabold border-t border-slate-200/60">
+                              <span>ยอดค้างชำระคงเหลือ:</span>
+                              <span className="text-rose-600">{formatBaht(outstanding)}</span>
+                            </div>
                           </div>
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 pt-1">
-                            {schedule.map((inst) => (
-                              <div
-                                key={inst.installmentNo}
-                                className="flex items-center justify-between bg-white px-2.5 py-1.5 rounded-xl border border-indigo-100/80 text-xs shadow-2xs"
-                              >
-                                <span className="font-bold text-slate-600">งวดที่ {inst.installmentNo}:</span>
-                                <span className="font-extrabold text-slate-900 font-mono">฿{inst.formattedAmount}</span>
+
+                          {termInstallmentCount > 1 && (
+                            <div className="p-3 bg-indigo-50/70 border border-indigo-100 rounded-2xl space-y-2 text-xs">
+                              <div className="flex items-center justify-between font-bold text-indigo-950">
+                                <span>ตารางแบ่งชำระรายงวด ({termInstallmentCount} งวด):</span>
                               </div>
-                            ))}
-                          </div>
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 pt-0.5">
+                                {schedule.map((inst) => (
+                                  <div
+                                    key={inst.installmentNo}
+                                    className="flex items-center justify-between bg-white px-2.5 py-1.5 rounded-xl border border-indigo-100/80 text-xs shadow-2xs"
+                                  >
+                                    <span className="font-bold text-slate-600">งวดที่ {inst.installmentNo}:</span>
+                                    <span className="font-extrabold text-slate-900 font-mono">฿{inst.formattedAmount}</span>
+                                  </div>
+                                ))}
+                              </div>
+                              <div className="flex items-center justify-between pt-1.5 border-t border-indigo-100 text-xs">
+                                <span className="font-bold text-indigo-900">ยอดที่ต้องชำระในงวดแรก:</span>
+                                <span className="font-extrabold text-indigo-700 text-sm font-mono">{formatBaht(firstPaymentDue)}</span>
+                              </div>
+                              <p className="text-[10px] text-indigo-600/80 italic">
+                                {termDepositDeclaredStatus === 'PAID'
+                                  ? '* รวมเฉพาะค่าเช่างวดที่ 1 (เงินประกันชำระแล้ว)'
+                                  : '* รวมค่าเช่างวดที่ 1 + เงินประกัน/มัดจำ'}
+                              </p>
+                            </div>
+                          )}
                         </div>
-                      </div>
-                    );
-                  })()}
-                </>
-              )}
-            </div>
-          )}
-
-          {/* TAB 2: MONTHLY */}
-          {activeTab === 'MONTHLY' && (
-            <div className="space-y-3 pt-2 border-t border-slate-100">
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    ระยะเวลาสัญญา (เดือน) <span className="text-rose-500">*</span>
-                  </label>
-                  <input
-                    type="number"
-                    min="1"
-                    required
-                    value={durationMonths}
-                    onChange={(e) => setDurationMonths(Math.max(1, parseInt(e.target.value) || 1))}
-                    className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    วันที่สิ้นสุด
-                  </label>
-                  <div className="px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-700 font-bold min-h-[34px] flex items-center">
-                    {monthlyEndDate ? formatThaiDate(monthlyEndDate) : '-'}
-                  </div>
-                </div>
+                      );
+                    })()}
+                  </>
+                )}
               </div>
+            )}
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    ค่าเช่ารายเดือน (บาท)
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    required
-                    value={monthlyRent}
-                    onChange={(e) => setMonthlyRent(normalizeMoneyInput(e.target.value))}
-                    className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    ค่าเช่ารวม (บาท)
-                  </label>
-                  <div className="px-3 py-2 text-xs bg-indigo-50 border border-indigo-100 rounded-xl text-indigo-700 font-extrabold flex items-center justify-between">
-                    <span>{formatBaht(monthlyRent * durationMonths)}</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* TAB 3: DAILY */}
-          {activeTab === 'DAILY' && (
-            <div className="space-y-3 pt-2 border-t border-slate-100">
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    วันที่สิ้นสุด (เช็คเอาท์) <span className="text-rose-500">*</span>
-                  </label>
-                  <OwnerDateInput
-                    required
-                    min={startDate}
-                    value={dailyEndDate}
-                    onChange={(iso) => setDailyEndDate(iso)}
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    จำนวนวันเข้าพัก (รวม)
-                  </label>
-                  <div className="px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-700 font-bold">
-                    {inclusiveDays} วัน
-                  </div>
-                </div>
-              </div>
-
-              {/* Optional Check-in / Check-out Times (Strict 24-Hour Thai HH:mm Wheel Picker) */}
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="block text-xs font-bold text-slate-700">
-                      เวลาเช็คอิน (ไม่บังคับ)
+            {/* TAB 2: MONTHLY */}
+            {activeTab === 'MONTHLY' && (
+              <div className="space-y-3 pt-2 border-t border-slate-100">
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      ระยะเวลาสัญญา (เดือน) <span className="text-rose-500">*</span>
                     </label>
-                    <span className="text-[10px] text-slate-400 font-semibold">24 ชม.</span>
+                    <input
+                      type="number"
+                      min="1"
+                      required
+                      value={durationMonths !== null && durationMonths !== undefined ? durationMonths : ''}
+                      onChange={(e) => setDurationMonths(e.target.value)}
+                      onBlur={(e) => {
+                        const val = e.target.value;
+                        if (val !== '') {
+                          const norm = normalizeNumericString(val);
+                          const num = parseInt(norm, 10);
+                          setDurationMonths(isNaN(num) || num < 1 ? 1 : num);
+                        } else {
+                          setDurationMonths('');
+                        }
+                      }}
+                      className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
+                    />
                   </div>
-                  <TimeWheelPicker
-                    value={checkInTime}
-                    onChange={setCheckInTime}
-                    onClear={() => setCheckInTime('')}
-                    placeholder="เช่น 14:00"
-                    data-testid="daily-checkin-time-picker"
-                  />
-                </div>
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="block text-xs font-bold text-slate-700">
-                      เวลาเช็คเอาท์ (ไม่บังคับ)
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      วันที่สิ้นสุด
                     </label>
-                    <span className="text-[10px] text-slate-400 font-semibold">24 ชม.</span>
+                    <div className="px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-700 font-bold min-h-[34px] flex items-center">
+                      {monthlyEndDate ? formatThaiDate(monthlyEndDate) : '-'}
+                    </div>
                   </div>
-                  <TimeWheelPicker
-                    value={checkOutTime}
-                    onChange={setCheckOutTime}
-                    onClear={() => setCheckOutTime('')}
-                    placeholder="เช่น 12:00"
-                    data-testid="daily-checkout-time-picker"
-                  />
                 </div>
-              </div>
 
-              <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      ค่าเช่ารายเดือน (บาท) <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      required
+                      value={monthlyRent !== null && monthlyRent !== undefined ? monthlyRent : ''}
+                      onChange={(e) => setMonthlyRent(e.target.value)}
+                      onBlur={(e) => {
+                        const val = e.target.value;
+                        const norm = normalizeNumericString(val);
+                        e.target.value = norm || '0';
+                        setMonthlyRent(norm || '0');
+                      }}
+                      className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      เงินประกัน/มัดจำ (บาท)
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={monthlyDeposit !== null && monthlyDeposit !== undefined ? monthlyDeposit : ''}
+                      onChange={(e) => setMonthlyDeposit(e.target.value)}
+                      onBlur={(e) => {
+                        const val = e.target.value;
+                        const norm = normalizeNumericString(val);
+                        e.target.value = norm || '0';
+                        setMonthlyDeposit(norm || '0');
+                      }}
+                      className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
+                    />
+                  </div>
+                </div>
+
+                {/* Monthly Deposit Status Toggle */}
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">
-                    อัตราค่าเช่าต่อวัน (บาท) <span className="text-rose-500">*</span>
+                    สถานะการรับเงินมัดจำ
                   </label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    required
-                    placeholder="ยังไม่ได้กำหนดค่าเช่ารายวัน"
-                    value={dailyRate === null || dailyRate === undefined ? '' : dailyRate}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      if (val === '') {
-                        setDailyRate(null);
-                      } else {
-                        setDailyRate(normalizeMoneyInput(val));
-                      }
-                    }}
-                    className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
-                  />
-                  {dailyRate === null && (
-                    <p className="text-[11px] text-amber-600 font-medium mt-1">
-                      ยังไม่ได้กำหนดค่าเช่ารายวัน กรุณาระบุราคาที่ตกลงกัน
-                    </p>
-                  )}
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    เงินประกัน/มัดจำ (บาท)
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={dailyDeposit}
-                    onChange={(e) => setDailyDeposit(normalizeMoneyInput(e.target.value))}
-                    className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
-                  />
-                </div>
-              </div>
-
-              {/* Deposit Status Toggle */}
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  สถานะการรับเงินมัดจำ
-                </label>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setDepositDeclaredStatus('UNPAID')}
-                    className={`py-2 text-xs font-bold rounded-xl border transition-all ${
-                      depositDeclaredStatus === 'UNPAID'
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setMonthlyDepositDeclaredStatus('UNPAID')}
+                      className={`py-2 text-xs font-bold rounded-xl border transition-all cursor-pointer ${monthlyDepositDeclaredStatus === 'UNPAID'
                         ? 'bg-amber-50 text-amber-800 border-amber-300 font-extrabold'
                         : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
-                    }`}
-                  >
-                    ยังไม่ชำระมัดจำ
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setDepositDeclaredStatus('PAID')}
-                    className={`py-2 text-xs font-bold rounded-xl border transition-all ${
-                      depositDeclaredStatus === 'PAID'
+                        }`}
+                    >
+                      รอชำระ
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setMonthlyDepositDeclaredStatus('PAID')}
+                      className={`py-2 text-xs font-bold rounded-xl border transition-all cursor-pointer ${monthlyDepositDeclaredStatus === 'PAID'
                         ? 'bg-emerald-50 text-emerald-800 border-emerald-300 font-extrabold'
                         : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
-                    }`}
-                  >
-                    ชำระเงินมัดจำแล้ว
-                  </button>
+                        }`}
+                    >
+                      ชำระแล้ว
+                    </button>
+                  </div>
                 </div>
+
+                {/* Monthly Live Financial Breakdown */}
+                {(() => {
+                  const rentPerMonth = normalizeMoneyInput(monthlyRent);
+                  const duration = Math.max(1, parseInt(String(durationMonths), 10) || 1);
+                  const totalRent = rentPerMonth * duration;
+                  const depAmount = normalizeMoneyInput(monthlyDeposit);
+                  const totalAgreed = totalRent + depAmount;
+                  const paidAmt = monthlyDepositDeclaredStatus === 'PAID' ? depAmount : 0;
+                  const outstanding = totalAgreed - paidAmt;
+                  return (
+                    <div className="p-3 bg-slate-50 border border-slate-200 rounded-2xl space-y-1.5 text-xs">
+                      <div className="flex justify-between text-slate-600">
+                        <span>ค่าเช่ารวม ({durationMonths} เดือน):</span>
+                        <span className="font-bold">{formatBaht(totalRent)}</span>
+                      </div>
+                      <div className="flex justify-between text-slate-600">
+                        <span>เงินประกัน/มัดจำ:</span>
+                        <span className="font-bold">{formatBaht(depAmount)}</span>
+                      </div>
+                      <div className="flex justify-between text-slate-900 pt-1 border-t border-slate-200 font-extrabold">
+                        <span>ยอดตามข้อตกลง:</span>
+                        <span className="text-indigo-700">{formatBaht(totalAgreed)}</span>
+                      </div>
+                      <div className="flex justify-between text-slate-900 font-extrabold">
+                        <span>ยอดชำระแล้ว:</span>
+                        <span className="text-emerald-700">{formatBaht(paidAmt)}</span>
+                      </div>
+                      <div className="flex justify-between text-slate-900 pt-1 font-extrabold border-t border-slate-200/60">
+                        <span>ยอดค้างชำระคงเหลือ:</span>
+                        <span className="text-rose-600">{formatBaht(outstanding)}</span>
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
+            )}
 
-              {/* Financial Breakdown */}
-              <div className="p-3 bg-slate-50 border border-slate-200 rounded-2xl space-y-1.5 text-xs">
-                <div className="flex justify-between text-slate-600">
-                  <span>ค่าเช่ารวม ({inclusiveDays} วัน):</span>
-                  <span className="font-bold">{formatBaht(dailyTotalRent)}</span>
+            {/* TAB 3: DAILY */}
+            {activeTab === 'DAILY' && (
+              <div className="space-y-3 pt-2 border-t border-slate-100">
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      วันที่สิ้นสุด (เช็คเอาท์) <span className="text-rose-500">*</span>
+                    </label>
+                    <OwnerDateInput
+                      required
+                      min={startDate}
+                      value={dailyEndDate}
+                      onChange={(iso) => setDailyEndDate(iso)}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      จำนวนวันเข้าพัก (รวม)
+                    </label>
+                    <div className="px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-700 font-bold">
+                      {inclusiveDays} วัน
+                    </div>
+                  </div>
                 </div>
-                <div className="flex justify-between text-slate-600">
-                  <span>เงินประกัน/มัดจำ:</span>
-                  <span className="font-bold">{formatBaht(dailyDeposit)}</span>
+
+                {/* Optional Check-in / Check-out Times (Strict 24-Hour Thai HH:mm Wheel Picker) */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block text-xs font-bold text-slate-700">
+                        เวลาเช็คอิน (ไม่บังคับ)
+                      </label>
+                      <span className="text-[10px] text-slate-400 font-semibold">24 ชม.</span>
+                    </div>
+                    <TimeWheelPicker
+                      value={checkInTime}
+                      onChange={setCheckInTime}
+                      onClear={() => setCheckInTime('')}
+                      placeholder="เช่น 14:00"
+                      data-testid="daily-checkin-time-picker"
+                    />
+                  </div>
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block text-xs font-bold text-slate-700">
+                        เวลาเช็คเอาท์ (ไม่บังคับ)
+                      </label>
+                      <span className="text-[10px] text-slate-400 font-semibold">24 ชม.</span>
+                    </div>
+                    <TimeWheelPicker
+                      value={checkOutTime}
+                      onChange={setCheckOutTime}
+                      onClear={() => setCheckOutTime('')}
+                      placeholder="เช่น 12:00"
+                      data-testid="daily-checkout-time-picker"
+                    />
+                  </div>
                 </div>
-                <div className="flex justify-between text-slate-900 pt-1 border-t border-slate-200 font-extrabold">
-                  <span>ยอดตามข้อตกลง:</span>
-                  <span className="text-indigo-700">{formatBaht(dailyTotalAgreed)}</span>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      อัตราค่าเช่าต่อวัน (บาท) <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      required
+                      placeholder="ยังไม่ได้กำหนดค่าเช่ารายวัน"
+                      value={dailyRate === null || dailyRate === undefined ? '' : dailyRate}
+                      onChange={(e) => setDailyRate(e.target.value)}
+                      onBlur={(e) => {
+                        const val = e.target.value;
+                        if (val !== '') {
+                          const norm = normalizeNumericString(val);
+                          e.target.value = norm;
+                          setDailyRate(norm);
+                        } else {
+                          setDailyRate(null);
+                        }
+                      }}
+                      className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
+                    />
+                    {dailyRate === null && (
+                      <p className="text-[11px] text-amber-600 font-medium mt-1">
+                        ยังไม่ได้กำหนดค่าเช่ารายวัน กรุณาระบุราคาที่ตกลงกัน
+                      </p>
+                    )}
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      เงินประกัน/มัดจำ (บาท)
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={dailyDeposit !== null && dailyDeposit !== undefined ? dailyDeposit : ''}
+                      onChange={(e) => setDailyDeposit(e.target.value)}
+                      onBlur={(e) => {
+                        const val = e.target.value;
+                        const norm = normalizeNumericString(val);
+                        e.target.value = norm || '0';
+                        setDailyDeposit(norm || '0');
+                      }}
+                      className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
+                    />
+                  </div>
                 </div>
-                <div className="flex justify-between text-slate-900 pt-1 font-extrabold">
-                  <span>ยอดค้างชำระคงเหลือ:</span>
-                  <span className="text-rose-600">{formatBaht(dailyOutstanding)}</span>
+
+                {/* Deposit Status Toggle */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    สถานะการรับเงินมัดจำ
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDailyDepositDeclaredStatus('UNPAID');
+                        setDailyDepositPaymentMethod('');
+                      }}
+                      className={`py-2 text-xs font-bold rounded-xl border transition-all cursor-pointer ${dailyDepositDeclaredStatus === 'UNPAID'
+                        ? 'bg-amber-50 text-amber-800 border-amber-300 font-extrabold'
+                        : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                        }`}
+                    >
+                      รอชำระ
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDailyDepositDeclaredStatus('PAID')}
+                      className={`py-2 text-xs font-bold rounded-xl border transition-all cursor-pointer ${dailyDepositDeclaredStatus === 'PAID'
+                        ? 'bg-emerald-50 text-emerald-800 border-emerald-300 font-extrabold'
+                        : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                        }`}
+                    >
+                      ชำระแล้ว
+                    </button>
+                  </div>
+
+                  {normalizeMoneyInput(dailyDeposit) > 0 && dailyDepositDeclaredStatus === 'PAID' && (
+                    <div className="mt-2.5 p-2.5 bg-indigo-50/50 border border-indigo-100 rounded-xl space-y-1.5">
+                      <label className="block text-[11px] font-bold text-indigo-900">
+                        วิธีชำระเงินประกัน <span className="text-rose-500">*</span>
+                      </label>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setDailyDepositPaymentMethod('CASH')}
+                          className={`py-1.5 text-xs font-bold rounded-lg border transition-all cursor-pointer ${dailyDepositPaymentMethod === 'CASH'
+                            ? 'bg-indigo-600 text-white border-indigo-600 font-black shadow-xs'
+                            : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                            }`}
+                        >
+                          เงินสด
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setDailyDepositPaymentMethod('BANK_TRANSFER')}
+                          className={`py-1.5 text-xs font-bold rounded-lg border transition-all cursor-pointer ${dailyDepositPaymentMethod === 'BANK_TRANSFER'
+                            ? 'bg-indigo-600 text-white border-indigo-600 font-black shadow-xs'
+                            : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                            }`}
+                        >
+                          โอนเงิน
+                        </button>
+                      </div>
+                      {!dailyDepositPaymentMethod && (
+                        <p className="text-[10px] text-rose-500 font-semibold">
+                          * กรุณาระบุวิธีชำระเงินประกัน (เงินสด หรือ โอนเงิน)
+                        </p>
+                      )}
+                    </div>
+                  )}
                 </div>
+
+                {/* Daily Live Financial Breakdown */}
+                {(() => {
+                  const rate = normalizeMoneyInput(dailyRate);
+                  const totalRent = rate * inclusiveDays;
+                  const depAmount = normalizeMoneyInput(dailyDeposit);
+                  const totalAgreed = totalRent + depAmount;
+                  const paidAmt = dailyDepositDeclaredStatus === 'PAID' ? depAmount : 0;
+                  const outstanding = totalAgreed - paidAmt;
+                  return (
+                    <div className="p-3 bg-slate-50 border border-slate-200 rounded-2xl space-y-1.5 text-xs">
+                      <div className="flex justify-between text-slate-600">
+                        <span>ค่าเช่ารวม ({inclusiveDays} วัน):</span>
+                        <span className="font-bold">{formatBaht(totalRent)}</span>
+                      </div>
+                      <div className="flex justify-between text-slate-600">
+                        <span>เงินประกัน/มัดจำ:</span>
+                        <span className="font-bold">{formatBaht(depAmount)}</span>
+                      </div>
+                      <div className="flex justify-between text-slate-900 pt-1 border-t border-slate-200 font-extrabold">
+                        <span>ยอดตามข้อตกลง:</span>
+                        <span className="text-indigo-700">{formatBaht(totalAgreed)}</span>
+                      </div>
+                      <div className="flex justify-between text-slate-900 font-extrabold">
+                        <span>ยอดชำระแล้ว:</span>
+                        <span className="text-emerald-700">{formatBaht(paidAmt)}</span>
+                      </div>
+                      <div className="flex justify-between text-slate-900 pt-1 font-extrabold border-t border-slate-200/60">
+                        <span>ยอดค้างชำระคงเหลือ:</span>
+                        <span className="text-rose-600">{formatBaht(outstanding)}</span>
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
-            </div>
-          )}
+            )}
 
-          {/* Form-level validation / business error */}
-          {errorText && (
-            <div data-testid="quick-add-error-box" className="p-3 bg-rose-50 border border-rose-200 rounded-2xl text-rose-700 text-xs font-bold flex items-start gap-2 animate-in fade-in duration-200">
-              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-              <span>{errorText}</span>
-            </div>
-          )}
+            {/* Form-level validation / business error */}
+            {errorText && (
+              <div data-testid="quick-add-error-box" className="p-3 bg-rose-50 border border-rose-200 rounded-2xl text-rose-700 text-xs font-bold flex items-start gap-2 animate-in fade-in duration-200">
+                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                <span>{errorText}</span>
+              </div>
+            )}
 
-          {/* Submit Action */}
-          <div className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2">
-            <button
-              type="button"
-              onClick={onClose}
-              disabled={loading}
-              className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl transition-colors"
-            >
-              ยกเลิก
-            </button>
-            <button
-              type="submit"
-              disabled={loading || isSubmitDisabled}
-              className={`px-4 py-2 text-xs font-bold rounded-xl shadow-xs transition-colors flex items-center gap-1.5 ${
-                isSubmitDisabled
+            {/* Submit Action */}
+            <div className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={onClose}
+                disabled={loading}
+                className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl transition-colors"
+              >
+                ยกเลิก
+              </button>
+              <button
+                type="submit"
+                disabled={loading || isSubmitDisabled}
+                className={`px-4 py-2 text-xs font-bold rounded-xl shadow-xs transition-colors flex items-center gap-1.5 ${isSubmitDisabled
                   ? 'bg-slate-300 text-slate-500 cursor-not-allowed'
                   : 'bg-indigo-600 hover:bg-indigo-700 text-white cursor-pointer'
-              }`}
-            >
-              {loading && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-              <span>ยืนยันเพิ่มผู้เช่า</span>
-            </button>
-          </div>
-        </form>
+                  }`}
+              >
+                {loading && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                <span>ยืนยันเพิ่มผู้เช่า</span>
+              </button>
+            </div>
+          </form>
         )}
       </div>
     </div>

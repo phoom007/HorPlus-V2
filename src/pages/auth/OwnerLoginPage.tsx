@@ -22,6 +22,38 @@ interface OwnerLoginPageProps {
   onLoginSuccess: (user: UserType) => void;
 }
 
+export const DormitoryPickerLogo: React.FC<{ dormitoryId: string; name?: string; logoUrl?: string | null }> = ({
+  dormitoryId,
+  name,
+  logoUrl,
+}) => {
+  const [hasError, setHasError] = useState(false);
+  const [isLoaded, setIsLoaded] = useState(false);
+
+  // Canonical current-logo authority is strictly the public endpoint GET /api/v1/dormitories/:dormitoryId/logo
+  // Stale cached logoUrl must never bypass the canonical authority endpoint
+  const src = `/api/v1/dormitories/${dormitoryId}/logo`;
+
+  if (hasError) {
+    return <Building2 className="w-6 h-6 text-indigo-500" data-testid="dormitory-fallback-icon" />;
+  }
+
+  return (
+    <>
+      {!isLoaded && <Building2 className="w-6 h-6 text-indigo-500 animate-pulse" data-testid="dormitory-fallback-icon" />}
+      <img
+        src={src}
+        alt={name || 'Dormitory'}
+        onLoad={() => setIsLoaded(true)}
+        onError={() => setHasError(true)}
+        className={`w-full h-full object-cover transition-opacity duration-200 ${
+          isLoaded ? 'opacity-100' : 'opacity-0 absolute'
+        }`}
+      />
+    </>
+  );
+};
+
 export const OwnerLoginPage: React.FC<OwnerLoginPageProps> = ({ onLoginSuccess }) => {
   const navigate = useNavigate();
   const [showPicker, setShowPicker] = useState(false);
@@ -37,6 +69,54 @@ export const OwnerLoginPage: React.FC<OwnerLoginPageProps> = ({ onLoginSuccess }
 
   const ownerUser = initialUsers.find(u => u.roleId === 'role-owner') || initialUsers[0];
 
+  const loadCanonicalDormitories = async () => {
+    try {
+      // 1. Canonical authenticated GET /api/v1/dormitories provides authoritative hasLogo & logoUrl
+      const dormRes = await fetch('/api/v1/dormitories', { credentials: 'include' });
+      if (dormRes.ok) {
+        const dormJson = await dormRes.json();
+        const dorms = dormJson.data || [];
+        if (dorms.length >= 1) {
+          const mapped = dorms.map((d: any) => ({
+            id: d.id,
+            dormitoryId: d.id,
+            dormitoryName: d.name,
+            name: d.name,
+            code: d.code,
+            type: d.type,
+            roleCode: d.roleCode || 'OWNER',
+            status: d.status || 'Active',
+            hasLogo: d.hasLogo,
+            logoUrl: d.logoUrl,
+          }));
+          setUserMemberships(mapped);
+          setShowPicker(true);
+          return mapped;
+        }
+      }
+    } catch {
+      // fallback
+    }
+
+    // 2. Fallback to /api/v1/auth/session
+    try {
+      const sessRes = await fetch('/api/v1/auth/session', { credentials: 'include' });
+      if (sessRes.ok) {
+        const sessJson = await sessRes.json();
+        if (sessJson?.data?.user) {
+          const memberships = sessJson.data.memberships || sessJson.data.user.memberships || [];
+          if (memberships.length >= 1) {
+            setUserMemberships(memberships);
+            setShowPicker(true);
+            return memberships;
+          }
+        }
+      }
+    } catch {}
+
+    return null;
+  };
+
   React.useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     const refParam = urlParams.get('ref');
@@ -44,25 +124,15 @@ export const OwnerLoginPage: React.FC<OwnerLoginPageProps> = ({ onLoginSuccess }
       sessionStorage.setItem('horplus_referral_code', refParam);
     }
 
-    fetch('/api/v1/auth/session')
-      .then(res => res.ok ? res.json() : null)
-      .then(json => {
-        if (json?.data?.user) {
-          const memberships = json.data.memberships || json.data.user.memberships || [];
-          if (memberships.length >= 1) {
-            setUserMemberships(memberships);
-            setShowPicker(true);
-          }
-        }
-      })
-      .catch(() => {});
+    loadCanonicalDormitories();
   }, []);
 
   const handleSelectDormitory = (dorm: any) => {
     setIsLoading(true);
-    if (dorm && dorm.dormitoryId) {
-      localStorage.setItem('selected_dormitory_id', dorm.dormitoryId);
-      sessionStorage.setItem('active_dormitory_selected_for_session', dorm.dormitoryId);
+    const targetId = dorm.dormitoryId || dorm.id;
+    if (targetId) {
+      localStorage.setItem('selected_dormitory_id', targetId);
+      sessionStorage.setItem('active_dormitory_selected_for_session', targetId);
     }
     setTimeout(() => {
       onLoginSuccess(ownerUser);
@@ -102,15 +172,15 @@ export const OwnerLoginPage: React.FC<OwnerLoginPageProps> = ({ onLoginSuccess }
         throw new Error(result.error?.message || 'Login failed');
       }
 
-      const memberships = result.data?.memberships || [];
-      if (memberships.length >= 1) {
-        setUserMemberships(memberships);
-        setShowPicker(true);
-      } else if (result.data?.onboardingRequired) {
-        navigate(`/owner/register${refQuery}`);
-      } else {
-        setUserMemberships(memberships);
-        setShowPicker(true);
+      const loaded = await loadCanonicalDormitories();
+      if (!loaded || loaded.length === 0) {
+        if (result.data?.onboardingRequired) {
+          navigate(`/owner/register${refQuery}`);
+        } else {
+          const memberships = result.data?.memberships || [];
+          setUserMemberships(memberships);
+          setShowPicker(true);
+        }
       }
     } catch (err: any) {
       console.error('Google Auth Failed', err);
@@ -246,8 +316,7 @@ export const OwnerLoginPage: React.FC<OwnerLoginPageProps> = ({ onLoginSuccess }
 
             <div className="flex-1 overflow-y-auto pr-1 space-y-3 scrollbar-thin">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {userMemberships.map((membership, index) => {
-                  const avatarUrl = dormAvatars[index % dormAvatars.length];
+                {userMemberships.map((membership) => {
                   return (
                     <div
                       key={membership.id}
@@ -256,15 +325,19 @@ export const OwnerLoginPage: React.FC<OwnerLoginPageProps> = ({ onLoginSuccess }
                     >
                       <div className="flex items-start gap-3">
                         <div className="relative shrink-0">
-                          <div className="w-12 h-12 rounded-xl overflow-hidden border border-indigo-100 shadow-2xs group-hover:scale-105 transition-transform bg-slate-100">
-                            <img src={avatarUrl} alt={membership.dormitoryName} className="w-full h-full object-cover" />
+                          <div className="w-12 h-12 rounded-xl overflow-hidden border border-indigo-100 shadow-2xs group-hover:scale-105 transition-transform bg-slate-50 flex items-center justify-center relative">
+                            <DormitoryPickerLogo
+                              dormitoryId={membership.dormitoryId || membership.id}
+                              name={membership.dormitoryName || membership.name}
+                              logoUrl={membership.logoUrl}
+                            />
                           </div>
                           <span className="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 bg-emerald-500 border-2 border-white rounded-full" title="เปิดใช้งานอยู่" />
                         </div>
 
                         <div className="min-w-0 flex-1">
                           <h4 className="text-xs font-black text-slate-900 group-hover:text-indigo-600 transition-colors truncate">
-                            {membership.dormitoryName}
+                            {membership.dormitoryName || membership.name}
                           </h4>
 
                           <p className="text-[11px] text-slate-400 flex items-center gap-1 mt-0.5 truncate">

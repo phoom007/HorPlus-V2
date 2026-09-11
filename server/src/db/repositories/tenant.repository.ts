@@ -1,3 +1,4 @@
+import { AppError } from '../../types/index.js';
 import { randomUUID } from 'crypto';
 
 export interface TenantEntity {
@@ -26,6 +27,20 @@ export interface TenantEntity {
   idCardUploadedByUserId?: string | null;
   petInfo?: any;
   notes?: string | null;
+  requestedRoomId?: string | null;
+  roomId?: string | null;
+  registrationRequestId?: string | null;
+  rentalType?: string | null;
+  rentalPlan?: string | null;
+  requestedRent?: number | null;
+  requestedDeposit?: number | null;
+  requestedStartDate?: string | null;
+  requestedEndDate?: string | null;
+  requestedDurationMonths?: number | null;
+  requestedDays?: number | null;
+  requestedDailyRate?: number | null;
+  requestedAttachments?: any[] | null;
+  acceptanceSnapshot?: any | null;
   coOccupants?: TenantCoOccupantEntity[];
   vehicles?: TenantVehicleEntity[];
   version: number;
@@ -101,6 +116,8 @@ export interface CreateTenantData {
   idCardUploadedByUserId?: string | null;
   petInfo?: any;
   notes?: string | null;
+  rentalType?: string | null;
+  rentalPlan?: string | null;
 }
 
 export interface TenantFilterQuery {
@@ -125,6 +142,7 @@ export interface ITenantRepository {
 
   // Co-occupants
   findCoOccupants(tenantId: string, dormitoryId: string): Promise<TenantCoOccupantEntity[]>;
+  findCoOccupantHistory(tenantId: string, dormitoryId: string): Promise<TenantCoOccupantEntity[]>;
   createCoOccupant(dormitoryId: string, tenantId: string, data: Partial<TenantCoOccupantEntity>): Promise<TenantCoOccupantEntity>;
   updateCoOccupant(id: string, dormitoryId: string, tenantId: string, data: Partial<TenantCoOccupantEntity>): Promise<TenantCoOccupantEntity | null>;
   deleteCoOccupant(id: string, dormitoryId: string, tenantId: string): Promise<boolean>;
@@ -132,14 +150,18 @@ export interface ITenantRepository {
   // Emergency Contacts
   findEmergencyContacts(tenantId: string, dormitoryId: string): Promise<TenantEmergencyContactEntity[]>;
   createEmergencyContact(dormitoryId: string, tenantId: string, data: Partial<TenantEmergencyContactEntity>): Promise<TenantEmergencyContactEntity>;
-  updateEmergencyContact(id: string, dormitoryId: string, data: Partial<TenantEmergencyContactEntity>): Promise<TenantEmergencyContactEntity | null>;
-  deleteEmergencyContact(id: string, dormitoryId: string): Promise<boolean>;
+  updateEmergencyContact(id: string, dormitoryId: string, data: Partial<TenantEmergencyContactEntity>, tenantId?: string): Promise<TenantEmergencyContactEntity | null>;
+  deleteEmergencyContact(id: string, dormitoryId: string, tenantId?: string): Promise<boolean>;
 
   // Vehicles
   findVehicles(tenantId: string, dormitoryId: string): Promise<TenantVehicleEntity[]>;
   createVehicle(dormitoryId: string, tenantId: string, data: Partial<TenantVehicleEntity>): Promise<TenantVehicleEntity>;
-  updateVehicle(id: string, dormitoryId: string, data: Partial<TenantVehicleEntity>): Promise<TenantVehicleEntity | null>;
-  deleteVehicle(id: string, dormitoryId: string): Promise<boolean>;
+  updateVehicle(id: string, dormitoryId: string, data: Partial<TenantVehicleEntity>, tenantId?: string): Promise<TenantVehicleEntity | null>;
+  deleteVehicle(id: string, dormitoryId: string, tenantId?: string): Promise<boolean>;
+
+  // Transaction & Pet Policy
+  runInTransaction<T>(fn: (repo: ITenantRepository) => Promise<T>): Promise<T>;
+  getDormitoryPetPolicy(dormitoryId: string): Promise<any | null>;
 }
 
 export class InMemoryTenantRepository implements ITenantRepository {
@@ -147,6 +169,33 @@ export class InMemoryTenantRepository implements ITenantRepository {
   private coOccupants: Map<string, TenantCoOccupantEntity> = new Map();
   private emergencyContacts: Map<string, TenantEmergencyContactEntity> = new Map();
   private vehicles: Map<string, TenantVehicleEntity> = new Map();
+  private dormPetPolicies: Map<string, any> = new Map();
+
+  public setDormitoryPetPolicy(dormitoryId: string, policy: any): void {
+    this.dormPetPolicies.set(dormitoryId, policy);
+  }
+
+  public async getDormitoryPetPolicy(dormitoryId: string): Promise<any | null> {
+    return this.dormPetPolicies.get(dormitoryId) || null;
+  }
+
+  public async runInTransaction<T>(fn: (repo: ITenantRepository) => Promise<T>): Promise<T> {
+    const tenantsBackup = new Map(Array.from(this.tenants.entries()).map(([k, v]) => [k, { ...v }]));
+    const coOccupantsBackup = new Map(Array.from(this.coOccupants.entries()).map(([k, v]) => [k, { ...v }]));
+    const emergencyContactsBackup = new Map(Array.from(this.emergencyContacts.entries()).map(([k, v]) => [k, { ...v }]));
+    const vehiclesBackup = new Map(Array.from(this.vehicles.entries()).map(([k, v]) => [k, { ...v }]));
+    const dormPetPoliciesBackup = new Map(this.dormPetPolicies);
+    try {
+      return await fn(this);
+    } catch (err) {
+      this.tenants = tenantsBackup;
+      this.coOccupants = coOccupantsBackup;
+      this.emergencyContacts = emergencyContactsBackup;
+      this.vehicles = vehiclesBackup;
+      this.dormPetPolicies = dormPetPoliciesBackup;
+      throw err;
+    }
+  }
 
   public async findById(id: string, dormitoryId?: string): Promise<TenantEntity | null> {
     const t = this.tenants.get(id);
@@ -176,7 +225,7 @@ export class InMemoryTenantRepository implements ITenantRepository {
 
   public async findAll(dormitoryId: string, filter: TenantFilterQuery = {}): Promise<{ items: TenantEntity[]; total: number }> {
     let list = Array.from(this.tenants.values()).filter(
-      (t) => t.dormitoryId === dormitoryId && !t.deletedAt && t.status !== 'archived'
+      (t) => t.dormitoryId === dormitoryId && !t.deletedAt && t.status !== 'archived' && t.status !== 'rejected'
     );
 
     if (filter.status) {
@@ -239,6 +288,8 @@ export class InMemoryTenantRepository implements ITenantRepository {
       photoUrl: data.photoUrl || null,
       petInfo: data.petInfo || null,
       notes: data.notes || null,
+      rentalType: data.rentalType || null,
+      rentalPlan: data.rentalPlan || (data.rentalType ? data.rentalType.toLowerCase() : null),
       version: 1,
       createdAt: now,
       updatedAt: now,
@@ -252,9 +303,7 @@ export class InMemoryTenantRepository implements ITenantRepository {
     if (!tenant) return null;
 
     if (expectedVersion !== undefined && tenant.version !== expectedVersion) {
-      const err = new Error('RESOURCE_VERSION_CONFLICT');
-      (err as any).code = 'RESOURCE_VERSION_CONFLICT';
-      throw err;
+      throw new AppError('Tenant profile has been modified by another process', 409, 'RESOURCE_VERSION_CONFLICT');
     }
 
     const updated: TenantEntity = {
@@ -274,8 +323,15 @@ export class InMemoryTenantRepository implements ITenantRepository {
   // Co-occupants
   public async findCoOccupants(tenantId: string, dormitoryId: string): Promise<TenantCoOccupantEntity[]> {
     return Array.from(this.coOccupants.values()).filter(
-      (c) => c.tenantId === tenantId && c.dormitoryId === dormitoryId && !c.deletedAt
+      (c) => c.tenantId === tenantId && c.dormitoryId === dormitoryId && !c.deletedAt && c.status === 'active'
     );
+  }
+
+  public async findCoOccupantHistory(tenantId: string, dormitoryId: string): Promise<TenantCoOccupantEntity[]> {
+    return Array.from(this.coOccupants.values())
+      .filter((c) => c.tenantId === tenantId && c.dormitoryId === dormitoryId)
+      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
+      .map((c) => ({ ...c, deletedAt: c.deletedAt || null }));
   }
 
   public async createCoOccupant(dormitoryId: string, tenantId: string, data: Partial<TenantCoOccupantEntity>): Promise<TenantCoOccupantEntity> {
@@ -295,6 +351,7 @@ export class InMemoryTenantRepository implements ITenantRepository {
       status: data.status || 'active',
       createdAt: now,
       updatedAt: now,
+      deletedAt: null,
     };
     this.coOccupants.set(id, item);
     return item;
@@ -312,6 +369,7 @@ export class InMemoryTenantRepository implements ITenantRepository {
     const item = this.coOccupants.get(id);
     if (!item || item.dormitoryId !== dormitoryId || item.tenantId !== tenantId) return false;
     item.deletedAt = new Date();
+    item.status = 'removed';
     return true;
   }
 
@@ -340,17 +398,19 @@ export class InMemoryTenantRepository implements ITenantRepository {
     return item;
   }
 
-  public async updateEmergencyContact(id: string, dormitoryId: string, data: Partial<TenantEmergencyContactEntity>): Promise<TenantEmergencyContactEntity | null> {
+  public async updateEmergencyContact(id: string, dormitoryId: string, data: Partial<TenantEmergencyContactEntity>, tenantId?: string): Promise<TenantEmergencyContactEntity | null> {
     const item = this.emergencyContacts.get(id);
     if (!item || item.dormitoryId !== dormitoryId) return null;
+    if (tenantId && item.tenantId !== tenantId) return null;
     const updated = { ...item, ...data, updatedAt: new Date() };
     this.emergencyContacts.set(id, updated);
     return updated;
   }
 
-  public async deleteEmergencyContact(id: string, dormitoryId: string): Promise<boolean> {
+  public async deleteEmergencyContact(id: string, dormitoryId: string, tenantId?: string): Promise<boolean> {
     const item = this.emergencyContacts.get(id);
     if (!item || item.dormitoryId !== dormitoryId) return false;
+    if (tenantId && item.tenantId !== tenantId) return false;
     this.emergencyContacts.delete(id);
     return true;
   }
@@ -383,18 +443,21 @@ export class InMemoryTenantRepository implements ITenantRepository {
     return item;
   }
 
-  public async updateVehicle(id: string, dormitoryId: string, data: Partial<TenantVehicleEntity>): Promise<TenantVehicleEntity | null> {
+  public async updateVehicle(id: string, dormitoryId: string, data: Partial<TenantVehicleEntity>, tenantId?: string): Promise<TenantVehicleEntity | null> {
     const item = this.vehicles.get(id);
     if (!item || item.dormitoryId !== dormitoryId || item.deletedAt) return null;
+    if (tenantId && item.tenantId !== tenantId) return null;
     const updated = { ...item, ...data, updatedAt: new Date() };
     this.vehicles.set(id, updated);
     return updated;
   }
 
-  public async deleteVehicle(id: string, dormitoryId: string): Promise<boolean> {
+  public async deleteVehicle(id: string, dormitoryId: string, tenantId?: string): Promise<boolean> {
     const item = this.vehicles.get(id);
     if (!item || item.dormitoryId !== dormitoryId) return false;
+    if (tenantId && item.tenantId !== tenantId) return false;
     item.deletedAt = new Date();
+    item.status = 'inactive';
     return true;
   }
 }
@@ -426,7 +489,30 @@ export class PrismaTenantRepository implements ITenantRepository {
       gender: t.gender,
       address: t.address,
       status: t.status,
+      photoUrl: t.photoUrl ?? null,
+      idCardObjectKey: t.idCardObjectKey ?? null,
+      idCardSha256: t.idCardSha256 ?? null,
+      idCardMimeType: t.idCardMimeType ?? null,
+      idCardByteSize: t.idCardByteSize ?? null,
+      idCardUploadedAt: t.idCardUploadedAt ?? null,
+      idCardUploadedByUserId: t.idCardUploadedByUserId ?? null,
+      petInfo: t.petInfo ?? null,
+      notes: t.notes ?? null,
       version: t.version,
+      requestedRoomId: t.requestedRoomId ?? null,
+      roomId: t.roomId ?? t.requestedRoomId ?? null,
+      registrationRequestId: t.registrationRequestId ?? null,
+      rentalType: t.rentalType ?? null,
+      rentalPlan: t.rentalPlan ?? null,
+      requestedRent: t.requestedRent !== undefined ? t.requestedRent : null,
+      requestedDeposit: t.requestedDeposit !== undefined ? t.requestedDeposit : null,
+      requestedStartDate: t.requestedStartDate ?? null,
+      requestedEndDate: t.requestedEndDate ?? null,
+      requestedDurationMonths: t.requestedDurationMonths !== undefined ? t.requestedDurationMonths : null,
+      requestedDays: t.requestedDays !== undefined ? t.requestedDays : null,
+      requestedDailyRate: t.requestedDailyRate !== undefined ? t.requestedDailyRate : null,
+      requestedAttachments: t.requestedAttachments ?? null,
+      acceptanceSnapshot: t.acceptanceSnapshot ?? null,
       coOccupants: Array.isArray(t.coOccupants) ? t.coOccupants.map((c: any) => ({
         id: c.id,
         dormitoryId: c.dormitoryId,
@@ -466,14 +552,183 @@ export class PrismaTenantRepository implements ITenantRepository {
 
   public async findById(id: string, dormitoryId?: string): Promise<TenantEntity | null> {
     const isUuid = (str?: string | null) => !!str && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
-    if (!isUuid(id)) return null;
     const where: any = { id };
     if (dormitoryId) where.dormitoryId = dormitoryId;
     const t = await this.prisma.tenant.findFirst({
       where,
       include: { coOccupants: { where: { deletedAt: null, status: 'active' } }, vehicles: { where: { deletedAt: null } } },
     });
-    return t ? this.mapTenantToEntity(t) : null;
+    if (!t) {
+      const regWhere: any = { id, status: { in: ['pending', 'pending_owner_approval'] } };
+      if (dormitoryId) regWhere.dormitoryId = dormitoryId;
+      const reg = await this.prisma.tenantRegistrationRequest.findFirst({ where: regWhere });
+      if (reg) {
+        const snap = (reg.acceptanceSnapshot as any) || {};
+        return {
+          id: reg.id,
+          dormitoryId: reg.dormitoryId,
+          tenantNumber: 'REQ-' + reg.id.slice(0, 8).toUpperCase(),
+          firstName: reg.firstName,
+          lastName: reg.lastName,
+          displayName: `${reg.firstName} ${reg.lastName || ''}`.trim(),
+          name: `${reg.firstName} ${reg.lastName || ''}`.trim(),
+          phone: reg.phone,
+          status: 'pending',
+          requestedRoomId: reg.requestedRoomId,
+          roomId: reg.requestedRoomId,
+          registrationRequestId: reg.id,
+          rentalType: snap.rentalType || snap.rentalPlan || 'MONTHLY',
+          rentalPlan: snap.rentalPlan || snap.rentalType || 'MONTHLY',
+          requestedRent: snap.proposedRent ?? snap.rentAmount ?? (snap.dailyRate ? snap.dailyRate * (snap.totalDays || 1) : null),
+          requestedDeposit: snap.proposedDeposit ?? snap.depositAmount ?? null,
+          requestedStartDate: snap.startDate ?? snap.checkInDate ?? null,
+          requestedEndDate: snap.endDate ?? snap.checkOutDate ?? null,
+          requestedDurationMonths: snap.durationMonths ?? null,
+          requestedDays: snap.totalDays ?? null,
+          requestedDailyRate: snap.dailyRate ?? null,
+          requestedAttachments: snap.attachments ?? null,
+          acceptanceSnapshot: snap,
+          version: reg.version || 1,
+          createdAt: reg.createdAt,
+          updatedAt: reg.updatedAt,
+        };
+      }
+      return null;
+    }
+    if (t.status === 'pending') {
+      const regWhere: any = { status: { in: ['pending', 'pending_owner_approval', 'awaiting_tenant_confirmation'] } };
+      if (t.dormitoryId) regWhere.dormitoryId = t.dormitoryId;
+      const matchedReg = await this.prisma.tenantRegistrationRequest.findFirst({
+        where: {
+          ...regWhere,
+          OR: [
+            { approvedTenantId: t.id },
+            { phone: t.phone || undefined },
+            { firstName: t.firstName, lastName: t.lastName || undefined },
+          ],
+        },
+      });
+      if (matchedReg) {
+        (t as any).requestedRoomId = matchedReg.requestedRoomId;
+        (t as any).registrationRequestId = matchedReg.id;
+        const snap = (matchedReg.acceptanceSnapshot as any) || {};
+        (t as any).rentalType = snap.rentalType || snap.rentalPlan || 'MONTHLY';
+        (t as any).rentalPlan = snap.rentalPlan || snap.rentalType || 'MONTHLY';
+        (t as any).requestedRent = snap.proposedRent ?? snap.rentAmount ?? (snap.dailyRate ? snap.dailyRate * (snap.totalDays || 1) : null);
+        (t as any).requestedDeposit = snap.proposedDeposit ?? snap.depositAmount ?? null;
+        (t as any).requestedStartDate = snap.startDate ?? snap.checkInDate ?? null;
+        (t as any).requestedEndDate = snap.endDate ?? snap.checkOutDate ?? null;
+        (t as any).requestedDurationMonths = snap.durationMonths ?? null;
+        (t as any).requestedDays = snap.totalDays ?? null;
+        (t as any).requestedDailyRate = snap.dailyRate ?? null;
+        (t as any).requestedAttachments = snap.attachments ?? null;
+        (t as any).acceptanceSnapshot = snap;
+      }
+    } else {
+      const [provTerm, dailyStay, contract] = await Promise.all([
+        this.prisma.provisionalRentalTerm.findFirst({
+          where: { tenantId: t.id, status: { in: ['ACTIVE', 'RESERVED'] }, deletedAt: null },
+          orderBy: { createdAt: 'desc' },
+        }),
+        this.prisma.dailyStay.findFirst({
+          where: { tenantId: t.id, status: { in: ['ACTIVE', 'RESERVED'] }, deletedAt: null },
+          orderBy: { createdAt: 'desc' },
+        }),
+        this.prisma.contract.findFirst({
+          where: { tenantId: t.id, status: { in: ['active', 'expiring_soon', 'checking_out', 'waiting_extension', 'pending_signature'] }, deletedAt: null },
+          orderBy: { createdAt: 'desc' },
+        }),
+      ]);
+
+      if (provTerm) {
+        (t as any).rentalType = provTerm.rentalType;
+        (t as any).rentalPlan = provTerm.rentalType.toLowerCase();
+        (t as any).roomId = provTerm.roomId;
+        (t as any).requestedDurationMonths = provTerm.durationMonths;
+        (t as any).requestedStartDate = provTerm.startDate ? (provTerm.startDate instanceof Date ? provTerm.startDate.toISOString().slice(0, 10) : String(provTerm.startDate).slice(0, 10)) : null;
+        (t as any).requestedEndDate = provTerm.endDate ? (provTerm.endDate instanceof Date ? provTerm.endDate.toISOString().slice(0, 10) : String(provTerm.endDate).slice(0, 10)) : null;
+        (t as any).requestedRent = Number(provTerm.totalRentAmount);
+      } else if (dailyStay) {
+        (t as any).rentalType = 'DAILY';
+        (t as any).rentalPlan = 'daily';
+        (t as any).roomId = dailyStay.roomId;
+        (t as any).requestedDays = dailyStay.inclusiveDayCount;
+        (t as any).requestedDailyRate = Number(dailyStay.dailyRateAmount);
+        (t as any).requestedStartDate = dailyStay.startDate ? (dailyStay.startDate instanceof Date ? dailyStay.startDate.toISOString().slice(0, 10) : String(dailyStay.startDate).slice(0, 10)) : null;
+        (t as any).requestedEndDate = dailyStay.endDate ? (dailyStay.endDate instanceof Date ? dailyStay.endDate.toISOString().slice(0, 10) : String(dailyStay.endDate).slice(0, 10)) : null;
+        (t as any).requestedRent = Number(dailyStay.totalRentAmount);
+        (t as any).requestedDeposit = Number(dailyStay.depositAmount);
+      } else if (contract) {
+        const isTerm = contract.rentBillingType?.toLowerCase() === 'term';
+        (t as any).rentalType = isTerm ? 'TERM' : 'MONTHLY';
+        (t as any).rentalPlan = isTerm ? 'term' : 'monthly';
+        (t as any).roomId = contract.roomId;
+        (t as any).requestedDurationMonths = contract.durationMonths;
+        (t as any).requestedStartDate = contract.startDate ? (contract.startDate instanceof Date ? contract.startDate.toISOString().slice(0, 10) : String(contract.startDate).slice(0, 10)) : null;
+        (t as any).requestedEndDate = contract.endDate ? (contract.endDate instanceof Date ? contract.endDate.toISOString().slice(0, 10) : String(contract.endDate).slice(0, 10)) : null;
+        (t as any).requestedRent = Number(contract.rentAmount);
+        (t as any).requestedDeposit = Number(contract.depositAmount);
+      } else {
+        // Historical deterministic fallback for ended/inactive/checked-out stays
+        const [histContract, histDailyStay] = await Promise.all([
+          this.prisma.contract.findFirst({
+            where: { tenantId: t.id, deletedAt: null },
+            orderBy: [{ endDate: 'desc' }, { createdAt: 'desc' }],
+          }),
+          this.prisma.dailyStay.findFirst({
+            where: { tenantId: t.id, deletedAt: null },
+            orderBy: [{ endDate: 'desc' }, { createdAt: 'desc' }],
+          }),
+        ]);
+
+        if (histContract && histDailyStay) {
+          const contractEnd = histContract.endDate ? new Date(histContract.endDate).getTime() : 0;
+          const dailyEnd = histDailyStay.endDate ? new Date(histDailyStay.endDate).getTime() : 0;
+          if (dailyEnd > contractEnd) {
+            (t as any).rentalType = 'DAILY';
+            (t as any).rentalPlan = 'daily';
+            (t as any).roomId = histDailyStay.roomId;
+            (t as any).requestedDays = histDailyStay.inclusiveDayCount;
+            (t as any).requestedDailyRate = Number(histDailyStay.dailyRateAmount);
+            (t as any).requestedStartDate = histDailyStay.startDate ? (histDailyStay.startDate instanceof Date ? histDailyStay.startDate.toISOString().slice(0, 10) : String(histDailyStay.startDate).slice(0, 10)) : null;
+            (t as any).requestedEndDate = histDailyStay.endDate ? (histDailyStay.endDate instanceof Date ? histDailyStay.endDate.toISOString().slice(0, 10) : String(histDailyStay.endDate).slice(0, 10)) : null;
+            (t as any).requestedRent = Number(histDailyStay.totalRentAmount);
+            (t as any).requestedDeposit = Number(histDailyStay.depositAmount);
+          } else {
+            const isTerm = histContract.rentBillingType?.toLowerCase() === 'term';
+            (t as any).rentalType = isTerm ? 'TERM' : 'MONTHLY';
+            (t as any).rentalPlan = isTerm ? 'term' : 'monthly';
+            (t as any).roomId = histContract.roomId;
+            (t as any).requestedDurationMonths = histContract.durationMonths;
+            (t as any).requestedStartDate = histContract.startDate ? (histContract.startDate instanceof Date ? histContract.startDate.toISOString().slice(0, 10) : String(histContract.startDate).slice(0, 10)) : null;
+            (t as any).requestedEndDate = histContract.endDate ? (histContract.endDate instanceof Date ? histContract.endDate.toISOString().slice(0, 10) : String(histContract.endDate).slice(0, 10)) : null;
+            (t as any).requestedRent = Number(histContract.rentAmount);
+            (t as any).requestedDeposit = Number(histContract.depositAmount);
+          }
+        } else if (histDailyStay) {
+          (t as any).rentalType = 'DAILY';
+          (t as any).rentalPlan = 'daily';
+          (t as any).roomId = histDailyStay.roomId;
+          (t as any).requestedDays = histDailyStay.inclusiveDayCount;
+          (t as any).requestedDailyRate = Number(histDailyStay.dailyRateAmount);
+          (t as any).requestedStartDate = histDailyStay.startDate ? (histDailyStay.startDate instanceof Date ? histDailyStay.startDate.toISOString().slice(0, 10) : String(histDailyStay.startDate).slice(0, 10)) : null;
+          (t as any).requestedEndDate = histDailyStay.endDate ? (histDailyStay.endDate instanceof Date ? histDailyStay.endDate.toISOString().slice(0, 10) : String(histDailyStay.endDate).slice(0, 10)) : null;
+          (t as any).requestedRent = Number(histDailyStay.totalRentAmount);
+          (t as any).requestedDeposit = Number(histDailyStay.depositAmount);
+        } else if (histContract) {
+          const isTerm = histContract.rentBillingType?.toLowerCase() === 'term';
+          (t as any).rentalType = isTerm ? 'TERM' : 'MONTHLY';
+          (t as any).rentalPlan = isTerm ? 'term' : 'monthly';
+          (t as any).roomId = histContract.roomId;
+          (t as any).requestedDurationMonths = histContract.durationMonths;
+          (t as any).requestedStartDate = histContract.startDate ? (histContract.startDate instanceof Date ? histContract.startDate.toISOString().slice(0, 10) : String(histContract.startDate).slice(0, 10)) : null;
+          (t as any).requestedEndDate = histContract.endDate ? (histContract.endDate instanceof Date ? histContract.endDate.toISOString().slice(0, 10) : String(histContract.endDate).slice(0, 10)) : null;
+          (t as any).requestedRent = Number(histContract.rentAmount);
+          (t as any).requestedDeposit = Number(histContract.depositAmount);
+        }
+      }
+    }
+    return this.mapTenantToEntity(t);
   }
 
   public async findByTenantNumber(dormitoryId: string, tenantNumber: string): Promise<TenantEntity | null> {
@@ -502,7 +757,215 @@ export class PrismaTenantRepository implements ITenantRepository {
       this.prisma.tenant.count({ where }),
     ]);
 
-    return { items: items.map((t) => this.mapTenantToEntity(t)), total };
+    const pendingRegs = (!filter.status || filter.status === 'pending')
+      ? await this.prisma.tenantRegistrationRequest.findMany({
+          where: { dormitoryId, status: { in: ['pending', 'pending_owner_approval'] } },
+        })
+      : [];
+
+    if (pendingRegs.length > 0) {
+      for (const reg of pendingRegs) {
+        const isMatched = items.some(
+          (t) =>
+            t.id === reg.id ||
+            (t as any).registrationRequestId === reg.id ||
+            (reg.approvedTenantId && t.id === reg.approvedTenantId) ||
+            (t.status === 'pending' && (
+              (t.phone && reg.phone && t.phone.replace(/\D/g, '') === reg.phone.replace(/\D/g, '')) ||
+              `${reg.firstName} ${reg.lastName || ''}`.trim() === (t.displayName || '').trim()
+            ))
+        );
+        if (!isMatched) {
+          const snap = (reg.acceptanceSnapshot as any) || {};
+          const syntheticPendingTenant: any = {
+            id: reg.id,
+            dormitoryId: reg.dormitoryId,
+            tenantNumber: 'REQ-' + reg.id.slice(0, 8).toUpperCase(),
+            firstName: reg.firstName,
+            lastName: reg.lastName,
+            displayName: `${reg.firstName} ${reg.lastName || ''}`.trim(),
+            name: `${reg.firstName} ${reg.lastName || ''}`.trim(),
+            phone: reg.phone,
+            status: 'pending',
+            requestedRoomId: reg.requestedRoomId,
+            roomId: reg.requestedRoomId,
+            registrationRequestId: reg.id,
+            rentalType: snap.rentalType || snap.rentalPlan || 'MONTHLY',
+            rentalPlan: snap.rentalPlan || snap.rentalType || 'MONTHLY',
+            requestedRent: snap.proposedRent ?? snap.rentAmount ?? (snap.dailyRate ? snap.dailyRate * (snap.totalDays || 1) : null),
+            requestedDeposit: snap.proposedDeposit ?? snap.depositAmount ?? null,
+            requestedStartDate: snap.startDate ?? snap.checkInDate ?? null,
+            requestedEndDate: snap.endDate ?? snap.checkOutDate ?? null,
+            requestedDurationMonths: snap.durationMonths ?? null,
+            requestedDays: snap.totalDays ?? null,
+            requestedDailyRate: snap.dailyRate ?? null,
+            requestedAttachments: snap.attachments ?? null,
+            acceptanceSnapshot: snap,
+            version: reg.version || 1,
+            createdAt: reg.createdAt,
+            updatedAt: reg.updatedAt,
+          };
+          items.push(syntheticPendingTenant);
+        }
+      }
+
+      for (const item of items) {
+        if (item.status === 'pending') {
+          const matchedReg = pendingRegs.find(
+            (r) =>
+              r.id === item.id ||
+              r.approvedTenantId === item.id ||
+              (r.phone && item.phone && r.phone.replace(/\D/g, '') === item.phone.replace(/\D/g, '')) ||
+              `${r.firstName} ${r.lastName || ''}`.trim() === (item.displayName || '').trim()
+          );
+          if (matchedReg) {
+            (item as any).requestedRoomId = matchedReg.requestedRoomId;
+            (item as any).registrationRequestId = matchedReg.id;
+            const snap = (matchedReg.acceptanceSnapshot as any) || {};
+            (item as any).rentalType = snap.rentalType || snap.rentalPlan || 'MONTHLY';
+            (item as any).rentalPlan = snap.rentalPlan || snap.rentalType || 'MONTHLY';
+            (item as any).requestedRent = snap.proposedRent ?? snap.rentAmount ?? (snap.dailyRate ? snap.dailyRate * (snap.totalDays || 1) : null);
+            (item as any).requestedDeposit = snap.proposedDeposit ?? snap.depositAmount ?? null;
+            (item as any).requestedStartDate = snap.startDate ?? snap.checkInDate ?? null;
+            (item as any).requestedEndDate = snap.endDate ?? snap.checkOutDate ?? null;
+            (item as any).requestedDurationMonths = snap.durationMonths ?? null;
+            (item as any).requestedDays = snap.totalDays ?? null;
+            (item as any).requestedDailyRate = snap.dailyRate ?? null;
+            (item as any).requestedAttachments = snap.attachments ?? null;
+            (item as any).acceptanceSnapshot = snap;
+          }
+        }
+      }
+    }
+
+    const nonPending = items.filter((t) => t.status !== 'pending');
+    if (nonPending.length > 0) {
+      const nonPendingIds = nonPending.map((t) => t.id);
+      const [provTerms, dailyStays, contracts] = await Promise.all([
+        this.prisma.provisionalRentalTerm.findMany({
+          where: { tenantId: { in: nonPendingIds }, status: { in: ['ACTIVE', 'RESERVED'] }, deletedAt: null },
+          orderBy: { createdAt: 'desc' },
+        }),
+        this.prisma.dailyStay.findMany({
+          where: { tenantId: { in: nonPendingIds }, status: { in: ['ACTIVE', 'RESERVED'] }, deletedAt: null },
+          orderBy: { createdAt: 'desc' },
+        }),
+        this.prisma.contract.findMany({
+          where: { tenantId: { in: nonPendingIds }, status: { in: ['active', 'expiring_soon', 'checking_out', 'waiting_extension', 'pending_signature'] }, deletedAt: null },
+          orderBy: { createdAt: 'desc' },
+        }),
+      ]);
+
+      for (const item of items) {
+        if (item.status !== 'pending') {
+          const provTerm = provTerms.find((p) => p.tenantId === item.id);
+          if (provTerm) {
+            (item as any).rentalType = provTerm.rentalType;
+            (item as any).rentalPlan = provTerm.rentalType.toLowerCase();
+            (item as any).roomId = provTerm.roomId;
+            (item as any).requestedDurationMonths = provTerm.durationMonths;
+            (item as any).requestedStartDate = provTerm.startDate ? (provTerm.startDate instanceof Date ? provTerm.startDate.toISOString().slice(0, 10) : String(provTerm.startDate).slice(0, 10)) : null;
+            (item as any).requestedEndDate = provTerm.endDate ? (provTerm.endDate instanceof Date ? provTerm.endDate.toISOString().slice(0, 10) : String(provTerm.endDate).slice(0, 10)) : null;
+            (item as any).requestedRent = Number(provTerm.totalRentAmount);
+            continue;
+          }
+          const daily = dailyStays.find((d) => d.tenantId === item.id);
+          if (daily) {
+            (item as any).rentalType = 'DAILY';
+            (item as any).rentalPlan = 'daily';
+            (item as any).roomId = daily.roomId;
+            (item as any).requestedDays = daily.inclusiveDayCount;
+            (item as any).requestedDailyRate = Number(daily.dailyRateAmount);
+            (item as any).requestedStartDate = daily.startDate ? (daily.startDate instanceof Date ? daily.startDate.toISOString().slice(0, 10) : String(daily.startDate).slice(0, 10)) : null;
+            (item as any).requestedEndDate = daily.endDate ? (daily.endDate instanceof Date ? daily.endDate.toISOString().slice(0, 10) : String(daily.endDate).slice(0, 10)) : null;
+            (item as any).requestedRent = Number(daily.totalRentAmount);
+            (item as any).requestedDeposit = Number(daily.depositAmount);
+            continue;
+          }
+          const ct = contracts.find((c) => c.tenantId === item.id);
+          if (ct) {
+            const isTerm = ct.rentBillingType?.toLowerCase() === 'term';
+            (item as any).rentalType = isTerm ? 'TERM' : 'MONTHLY';
+            (item as any).rentalPlan = isTerm ? 'term' : 'monthly';
+            (item as any).roomId = ct.roomId;
+            (item as any).requestedDurationMonths = ct.durationMonths;
+            (item as any).requestedStartDate = ct.startDate ? (ct.startDate instanceof Date ? ct.startDate.toISOString().slice(0, 10) : String(ct.startDate).slice(0, 10)) : null;
+            (item as any).requestedEndDate = ct.endDate ? (ct.endDate instanceof Date ? ct.endDate.toISOString().slice(0, 10) : String(ct.endDate).slice(0, 10)) : null;
+            (item as any).requestedRent = Number(ct.rentAmount);
+            (item as any).requestedDeposit = Number(ct.depositAmount);
+          }
+        }
+      }
+
+      // Historical deterministic fallback for ended/inactive/checked-out stays
+      const unresolved = items.filter((item) => item.status !== 'pending' && !(item as any).rentalType);
+      if (unresolved.length > 0) {
+        const unresolvedIds = unresolved.map((u) => u.id);
+        const [histContracts, histDailyStays] = await Promise.all([
+          this.prisma.contract.findMany({
+            where: { tenantId: { in: unresolvedIds }, deletedAt: null },
+            orderBy: [{ endDate: 'desc' }, { createdAt: 'desc' }],
+          }),
+          this.prisma.dailyStay.findMany({
+            where: { tenantId: { in: unresolvedIds }, deletedAt: null },
+            orderBy: [{ endDate: 'desc' }, { createdAt: 'desc' }],
+          }),
+        ]);
+
+        for (const item of unresolved) {
+          const hContract = histContracts.find((c) => c.tenantId === item.id);
+          const hDaily = histDailyStays.find((d) => d.tenantId === item.id);
+          if (hContract && hDaily) {
+            const contractEnd = hContract.endDate ? new Date(hContract.endDate).getTime() : 0;
+            const dailyEnd = hDaily.endDate ? new Date(hDaily.endDate).getTime() : 0;
+            if (dailyEnd > contractEnd) {
+              (item as any).rentalType = 'DAILY';
+              (item as any).rentalPlan = 'daily';
+              (item as any).roomId = hDaily.roomId;
+              (item as any).requestedDays = hDaily.inclusiveDayCount;
+              (item as any).requestedDailyRate = Number(hDaily.dailyRateAmount);
+              (item as any).requestedStartDate = hDaily.startDate ? (hDaily.startDate instanceof Date ? hDaily.startDate.toISOString().slice(0, 10) : String(hDaily.startDate).slice(0, 10)) : null;
+              (item as any).requestedEndDate = hDaily.endDate ? (hDaily.endDate instanceof Date ? hDaily.endDate.toISOString().slice(0, 10) : String(hDaily.endDate).slice(0, 10)) : null;
+              (item as any).requestedRent = Number(hDaily.totalRentAmount);
+              (item as any).requestedDeposit = Number(hDaily.depositAmount);
+            } else {
+              const isTerm = hContract.rentBillingType?.toLowerCase() === 'term';
+              (item as any).rentalType = isTerm ? 'TERM' : 'MONTHLY';
+              (item as any).rentalPlan = isTerm ? 'term' : 'monthly';
+              (item as any).roomId = hContract.roomId;
+              (item as any).requestedDurationMonths = hContract.durationMonths;
+              (item as any).requestedStartDate = hContract.startDate ? (hContract.startDate instanceof Date ? hContract.startDate.toISOString().slice(0, 10) : String(hContract.startDate).slice(0, 10)) : null;
+              (item as any).requestedEndDate = hContract.endDate ? (hContract.endDate instanceof Date ? hContract.endDate.toISOString().slice(0, 10) : String(hContract.endDate).slice(0, 10)) : null;
+              (item as any).requestedRent = Number(hContract.rentAmount);
+              (item as any).requestedDeposit = Number(hContract.depositAmount);
+            }
+          } else if (hDaily) {
+            (item as any).rentalType = 'DAILY';
+            (item as any).rentalPlan = 'daily';
+            (item as any).roomId = hDaily.roomId;
+            (item as any).requestedDays = hDaily.inclusiveDayCount;
+            (item as any).requestedDailyRate = Number(hDaily.dailyRateAmount);
+            (item as any).requestedStartDate = hDaily.startDate ? (hDaily.startDate instanceof Date ? hDaily.startDate.toISOString().slice(0, 10) : String(hDaily.startDate).slice(0, 10)) : null;
+            (item as any).requestedEndDate = hDaily.endDate ? (hDaily.endDate instanceof Date ? hDaily.endDate.toISOString().slice(0, 10) : String(hDaily.endDate).slice(0, 10)) : null;
+            (item as any).requestedRent = Number(hDaily.totalRentAmount);
+            (item as any).requestedDeposit = Number(hDaily.depositAmount);
+          } else if (hContract) {
+            const isTerm = hContract.rentBillingType?.toLowerCase() === 'term';
+            (item as any).rentalType = isTerm ? 'TERM' : 'MONTHLY';
+            (item as any).rentalPlan = isTerm ? 'term' : 'monthly';
+            (item as any).roomId = hContract.roomId;
+            (item as any).requestedDurationMonths = hContract.durationMonths;
+            (item as any).requestedStartDate = hContract.startDate ? (hContract.startDate instanceof Date ? hContract.startDate.toISOString().slice(0, 10) : String(hContract.startDate).slice(0, 10)) : null;
+            (item as any).requestedEndDate = hContract.endDate ? (hContract.endDate instanceof Date ? hContract.endDate.toISOString().slice(0, 10) : String(hContract.endDate).slice(0, 10)) : null;
+            (item as any).requestedRent = Number(hContract.rentAmount);
+            (item as any).requestedDeposit = Number(hContract.depositAmount);
+          }
+        }
+      }
+    }
+
+    const nonRejectedItems = items.filter((t) => t.status !== 'rejected');
+    return { items: nonRejectedItems.map((t) => this.mapTenantToEntity(t)), total: nonRejectedItems.length };
   }
 
   public async countActiveByDormitory(dormitoryId: string): Promise<number> {
@@ -526,6 +989,18 @@ export class PrismaTenantRepository implements ITenantRepository {
         phone: data.phone,
         email: data.email || null,
         status: data.status || 'active',
+        dateOfBirth: data.dateOfBirth || null,
+        gender: data.gender || null,
+        address: data.address || null,
+        photoUrl: data.photoUrl || null,
+        idCardObjectKey: data.idCardObjectKey || null,
+        idCardSha256: data.idCardSha256 || null,
+        idCardMimeType: data.idCardMimeType || null,
+        idCardByteSize: data.idCardByteSize || null,
+        idCardUploadedAt: data.idCardUploadedAt || null,
+        idCardUploadedByUserId: data.idCardUploadedByUserId || null,
+        petInfo: data.petInfo || null,
+        notes: data.notes || null,
       },
     });
 
@@ -533,25 +1008,54 @@ export class PrismaTenantRepository implements ITenantRepository {
   }
 
   public async update(id: string, dormitoryId: string, data: Partial<TenantEntity>, expectedVersion?: number): Promise<TenantEntity | null> {
+    const updatePayload: any = {
+      version: { increment: 1 },
+    };
+    if (data.firstName !== undefined) updatePayload.firstName = data.firstName;
+    if (data.lastName !== undefined) updatePayload.lastName = data.lastName;
+    if (data.displayName !== undefined) updatePayload.displayName = data.displayName;
+    if (data.phone !== undefined) updatePayload.phone = data.phone;
+    if (data.email !== undefined) updatePayload.email = data.email;
+    if (data.status !== undefined) updatePayload.status = data.status;
+    if (data.address !== undefined) updatePayload.address = data.address;
+    if (data.gender !== undefined) updatePayload.gender = data.gender;
+    if (data.dateOfBirth !== undefined) updatePayload.dateOfBirth = data.dateOfBirth;
+    if (data.photoUrl !== undefined) updatePayload.photoUrl = data.photoUrl;
+    if (data.petInfo !== undefined) updatePayload.petInfo = data.petInfo;
+    if (data.notes !== undefined) updatePayload.notes = data.notes;
+    if (data.nationalIdEncrypted !== undefined) updatePayload.nationalIdEncrypted = data.nationalIdEncrypted;
+    if (data.nationalIdMasked !== undefined) updatePayload.nationalIdMasked = data.nationalIdMasked;
+    if (data.idCardObjectKey !== undefined) updatePayload.idCardObjectKey = data.idCardObjectKey;
+    if (data.idCardSha256 !== undefined) updatePayload.idCardSha256 = data.idCardSha256;
+    if (data.idCardMimeType !== undefined) updatePayload.idCardMimeType = data.idCardMimeType;
+    if (data.idCardByteSize !== undefined) updatePayload.idCardByteSize = data.idCardByteSize;
+    if (data.idCardUploadedAt !== undefined) updatePayload.idCardUploadedAt = data.idCardUploadedAt;
+    if (data.idCardUploadedByUserId !== undefined) updatePayload.idCardUploadedByUserId = data.idCardUploadedByUserId;
+    if (data.linkedUserId !== undefined) updatePayload.linkedUserId = data.linkedUserId;
+
+    if (expectedVersion !== undefined) {
+      // Atomic compare-and-swap update
+      const res = await this.prisma.tenant.updateMany({
+        where: { id, dormitoryId, version: expectedVersion },
+        data: updatePayload,
+      });
+
+      if (res.count === 0) {
+        const exists = await this.prisma.tenant.findFirst({ where: { id, dormitoryId } });
+        if (!exists) return null;
+        throw new AppError('Tenant profile has been modified by another process', 409, 'RESOURCE_VERSION_CONFLICT');
+      }
+
+      const t = await this.prisma.tenant.findUnique({ where: { id } });
+      return t ? this.mapTenantToEntity(t) : null;
+    }
+
     const existing = await this.findById(id, dormitoryId);
     if (!existing) return null;
-    if (expectedVersion !== undefined && existing.version !== expectedVersion) {
-      const err = new Error('RESOURCE_VERSION_CONFLICT');
-      (err as any).code = 'RESOURCE_VERSION_CONFLICT';
-      throw err;
-    }
 
     const t = await this.prisma.tenant.update({
       where: { id },
-      data: {
-        firstName: data.firstName,
-        lastName: data.lastName,
-        displayName: data.displayName,
-        phone: data.phone,
-        email: data.email,
-        status: data.status,
-        version: { increment: 1 },
-      },
+      data: updatePayload,
     });
 
     return this.mapTenantToEntity(t);
@@ -639,8 +1143,33 @@ export class PrismaTenantRepository implements ITenantRepository {
     return true;
   }
 
+  public async findCoOccupantHistory(tenantId: string, dormitoryId: string): Promise<TenantCoOccupantEntity[]> {
+    const list = await this.prisma.tenantCoOccupant.findMany({
+      where: { tenantId, dormitoryId },
+      orderBy: { createdAt: 'asc' },
+    });
+    return list.map((c: any) => ({
+      id: c.id,
+      dormitoryId: c.dormitoryId,
+      tenantId: c.tenantId,
+      contractId: c.contractId || null,
+      name: c.name,
+      relationship: c.relationship || null,
+      phone: c.phone || null,
+      nationalIdMasked: c.nationalIdMasked || null,
+      dateOfBirth: c.dateOfBirth || null,
+      status: c.status || (c.deletedAt ? 'removed' : 'active'),
+      createdAt: c.createdAt,
+      updatedAt: c.updatedAt,
+      deletedAt: c.deletedAt || null,
+    } as any));
+  }
+
   public async findEmergencyContacts(tenantId: string, dormitoryId: string): Promise<TenantEmergencyContactEntity[]> {
-    const list = await this.prisma.tenantEmergencyContact.findMany({ where: { tenantId, dormitoryId } });
+    const list = await this.prisma.tenantEmergencyContact.findMany({
+      where: { tenantId, dormitoryId },
+      orderBy: { createdAt: 'asc' },
+    });
     return list.map((c) => ({
       id: c.id,
       dormitoryId: c.dormitoryId,
@@ -648,9 +1177,9 @@ export class PrismaTenantRepository implements ITenantRepository {
       name: c.name,
       relationship: c.relationship,
       phone: c.phone,
-      isPrimary: true,
+      isPrimary: c.isPrimary ?? true,
       createdAt: c.createdAt,
-      updatedAt: c.createdAt,
+      updatedAt: c.updatedAt || c.createdAt,
     } as any));
   }
   public async createEmergencyContact(dormitoryId: string, tenantId: string, data: Partial<TenantEmergencyContactEntity>): Promise<TenantEmergencyContactEntity> {
@@ -662,6 +1191,7 @@ export class PrismaTenantRepository implements ITenantRepository {
         name: data.name || '',
         relationship: data.relationship || '',
         phone: data.phone || '',
+        isPrimary: data.isPrimary ?? true,
       },
     });
     return {
@@ -671,17 +1201,52 @@ export class PrismaTenantRepository implements ITenantRepository {
       name: c.name,
       relationship: c.relationship,
       phone: c.phone,
-      isPrimary: true,
+      isPrimary: c.isPrimary,
       createdAt: c.createdAt,
-      updatedAt: c.createdAt,
+      updatedAt: c.updatedAt,
     } as any;
   }
-  public async updateEmergencyContact(): Promise<any> { return null; }
-  public async deleteEmergencyContact(): Promise<boolean> { return true; }
+  public async updateEmergencyContact(id: string, dormitoryId: string, data: Partial<TenantEmergencyContactEntity>, tenantId?: string): Promise<TenantEmergencyContactEntity | null> {
+    const whereClause: any = { id, dormitoryId };
+    if (tenantId) whereClause.tenantId = tenantId;
+    const existing = await this.prisma.tenantEmergencyContact.findFirst({ where: whereClause });
+    if (!existing) return null;
+    const updated = await this.prisma.tenantEmergencyContact.update({
+      where: { id },
+      data: {
+        ...(data.name !== undefined && { name: data.name }),
+        ...(data.relationship !== undefined && { relationship: data.relationship }),
+        ...(data.phone !== undefined && { phone: data.phone }),
+        ...(data.isPrimary !== undefined && { isPrimary: data.isPrimary }),
+      },
+    });
+    return {
+      id: updated.id,
+      dormitoryId: updated.dormitoryId,
+      tenantId: updated.tenantId,
+      name: updated.name,
+      relationship: updated.relationship,
+      phone: updated.phone,
+      isPrimary: updated.isPrimary,
+      createdAt: updated.createdAt,
+      updatedAt: updated.updatedAt,
+    } as any;
+  }
+  public async deleteEmergencyContact(id: string, dormitoryId: string, tenantId?: string): Promise<boolean> {
+    const whereClause: any = { id, dormitoryId };
+    if (tenantId) whereClause.tenantId = tenantId;
+    const existing = await this.prisma.tenantEmergencyContact.findFirst({ where: whereClause });
+    if (!existing) return false;
+    await this.prisma.tenantEmergencyContact.delete({ where: { id } });
+    return true;
+  }
 
   public async findVehicles(tenantId: string, dormitoryId: string): Promise<TenantVehicleEntity[]> {
-    const list = await this.prisma.tenantVehicle.findMany({ where: { tenantId, dormitoryId } });
-    return list.map((c) => ({
+    const list = await this.prisma.tenantVehicle.findMany({
+      where: { tenantId, dormitoryId, deletedAt: null },
+      orderBy: { createdAt: 'asc' },
+    });
+    return list.map((c: any) => ({
       id: c.id,
       dormitoryId: c.dormitoryId,
       tenantId: c.tenantId,
@@ -690,9 +1255,11 @@ export class PrismaTenantRepository implements ITenantRepository {
       brand: c.brand || null,
       model: c.model || null,
       color: c.color || null,
-      status: 'active',
+      province: c.province || null,
+      status: c.status || 'active',
       createdAt: c.createdAt,
-      updatedAt: c.createdAt,
+      updatedAt: c.updatedAt || c.createdAt,
+      deletedAt: c.deletedAt || null,
     } as any));
   }
   public async createVehicle(dormitoryId: string, tenantId: string, data: Partial<TenantVehicleEntity>): Promise<TenantVehicleEntity> {
@@ -706,6 +1273,8 @@ export class PrismaTenantRepository implements ITenantRepository {
         brand: data.brand || null,
         model: data.model || null,
         color: data.color || null,
+        province: (data as any).province || null,
+        status: data.status || 'active',
       },
     });
     return {
@@ -717,11 +1286,90 @@ export class PrismaTenantRepository implements ITenantRepository {
       brand: c.brand || null,
       model: c.model || null,
       color: c.color || null,
-      status: 'active',
+      province: c.province || null,
+      status: c.status,
       createdAt: c.createdAt,
-      updatedAt: c.createdAt,
+      updatedAt: c.updatedAt,
+      deletedAt: null,
     } as any;
   }
-  public async updateVehicle(): Promise<any> { return null; }
-  public async deleteVehicle(): Promise<boolean> { return true; }
+  public async updateVehicle(id: string, dormitoryId: string, data: Partial<TenantVehicleEntity>, tenantId?: string): Promise<TenantVehicleEntity | null> {
+    const whereClause: any = { id, dormitoryId, deletedAt: null };
+    if (tenantId) whereClause.tenantId = tenantId;
+    const existing = await this.prisma.tenantVehicle.findFirst({ where: whereClause });
+    if (!existing) return null;
+    const updated = await this.prisma.tenantVehicle.update({
+      where: { id },
+      data: {
+        ...(data.type !== undefined && { type: data.type }),
+        ...(data.licensePlate !== undefined && { licensePlate: data.licensePlate }),
+        ...(data.brand !== undefined && { brand: data.brand }),
+        ...(data.model !== undefined && { model: data.model }),
+        ...(data.color !== undefined && { color: data.color }),
+        ...(data.province !== undefined && { province: data.province }),
+        ...(data.status !== undefined && { status: data.status }),
+      },
+    });
+    return {
+      id: updated.id,
+      dormitoryId: updated.dormitoryId,
+      tenantId: updated.tenantId,
+      type: updated.type,
+      licensePlate: updated.licensePlate,
+      brand: updated.brand || null,
+      model: updated.model || null,
+      color: updated.color || null,
+      province: updated.province || null,
+      status: updated.status,
+      createdAt: updated.createdAt,
+      updatedAt: updated.updatedAt,
+      deletedAt: updated.deletedAt || null,
+    } as any;
+  }
+  public async deleteVehicle(id: string, dormitoryId: string, tenantId?: string): Promise<boolean> {
+    const whereClause: any = { id, dormitoryId, deletedAt: null };
+    if (tenantId) whereClause.tenantId = tenantId;
+    const existing = await this.prisma.tenantVehicle.findFirst({ where: whereClause });
+    if (!existing) return false;
+    await this.prisma.tenantVehicle.update({
+      where: { id },
+      data: {
+        status: 'inactive',
+        deletedAt: new Date(),
+      },
+    });
+    return true;
+  }
+
+  public async runInTransaction<T>(fn: (repo: ITenantRepository) => Promise<T>): Promise<T> {
+    return (this.prisma as any).$transaction(async (tx: any) => {
+      const txRepo = new PrismaTenantRepository(tx);
+      return fn(txRepo);
+    });
+  }
+
+  public async getDormitoryPetPolicy(dormitoryId: string): Promise<any | null> {
+    const defaults = await (this.prisma as any).dormitoryPropertyDefaults.findUnique({
+      where: { dormitoryId },
+      select: { petPolicy: true },
+    });
+
+    if (!defaults || !defaults.petPolicy) {
+      return { allowed: 'none', allowedTypes: [] };
+    }
+
+    let parsed = defaults.petPolicy;
+    if (typeof parsed === 'string') {
+      try {
+        parsed = JSON.parse(parsed);
+      } catch {
+        return { allowed: 'none', allowedTypes: [] };
+      }
+    }
+
+    return {
+      allowed: parsed.allowed || 'none',
+      allowedTypes: Array.isArray(parsed.allowedTypes) ? parsed.allowedTypes : [],
+    };
+  }
 }

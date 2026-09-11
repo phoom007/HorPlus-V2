@@ -17,6 +17,7 @@ export interface BillingCycleEntity {
   version: number;
   createdAt: Date;
   updatedAt: Date;
+  rateSnapshot?: BillingRateSnapshotEntity;
 }
 
 export interface BillingRateSnapshotEntity {
@@ -25,8 +26,10 @@ export interface BillingRateSnapshotEntity {
   billingCycleId: string;
   waterBillingType: string;
   waterRate: string;
+  waterTierRates?: any;
   electricityBillingType: string;
   electricityRate: string;
+  electricityTierRates?: any;
   commonFee: string;
   commonFeeMode: string;
   internetFee: string;
@@ -62,8 +65,10 @@ export interface CreateRateSnapshotData {
   billingCycleId: string;
   waterBillingType?: string;
   waterRate?: string;
+  waterTierRates?: any;
   electricityBillingType?: string;
   electricityRate?: string;
+  electricityTierRates?: any;
   commonFee?: string;
   commonFeeMode?: string;
   internetFee?: string;
@@ -83,8 +88,10 @@ export interface CreateRateSnapshotData {
 export interface UpdateRateSnapshotData {
   waterBillingType?: string;
   waterRate?: string;
+  waterTierRates?: any;
   electricityBillingType?: string;
   electricityRate?: string;
+  electricityTierRates?: any;
   commonFee?: string;
   commonFeeMode?: string;
   internetFee?: string;
@@ -166,13 +173,19 @@ export class InMemoryBillingCycleRepository implements IBillingCycleRepository {
     const cycle = this.cycles.get(id);
     if (!cycle) return null;
     if (dormitoryId && cycle.dormitoryId !== dormitoryId) return null;
-    return cycle;
+    return {
+      ...cycle,
+      rateSnapshot: this.snapshots.get(cycle.id) || undefined,
+    };
   }
 
   public async findByCode(dormitoryId: string, cycleCode: string): Promise<BillingCycleEntity | null> {
     for (const c of this.cycles.values()) {
       if (c.dormitoryId === dormitoryId && c.cycleCode === cycleCode) {
-        return c;
+        return {
+          ...c,
+          rateSnapshot: this.snapshots.get(c.id) || undefined,
+        };
       }
     }
     return null;
@@ -228,8 +241,10 @@ export class InMemoryBillingCycleRepository implements IBillingCycleRepository {
     const sortBy = filter.sortBy || 'createdAt';
     const direction = filter.sortDirection === 'desc' ? -1 : 1;
     list.sort((a: any, b: any) => {
-      const valA = a[sortBy] ?? '';
-      const valB = b[sortBy] ?? '';
+      let valA = a[sortBy] ?? '';
+      let valB = b[sortBy] ?? '';
+      if (valA instanceof Date) valA = valA.getTime();
+      if (valB instanceof Date) valB = valB.getTime();
       if (valA < valB) return -1 * direction;
       if (valA > valB) return 1 * direction;
       return 0;
@@ -239,7 +254,10 @@ export class InMemoryBillingCycleRepository implements IBillingCycleRepository {
     const page = filter.page && filter.page > 0 ? filter.page : 1;
     const pageSize = filter.pageSize && filter.pageSize > 0 ? filter.pageSize : 20;
     const start = (page - 1) * pageSize;
-    const items = list.slice(start, start + pageSize);
+    const items = list.slice(start, start + pageSize).map((c) => ({
+      ...c,
+      rateSnapshot: this.snapshots.get(c.id) || undefined,
+    }));
 
     return { items, total };
   }
@@ -300,8 +318,10 @@ export class InMemoryBillingCycleRepository implements IBillingCycleRepository {
       billingCycleId: data.billingCycleId,
       waterBillingType: data.waterBillingType || 'per_unit',
       waterRate: data.waterRate || '0.00',
+      waterTierRates: data.waterTierRates || null,
       electricityBillingType: data.electricityBillingType || 'per_unit',
       electricityRate: data.electricityRate || '0.00',
+      electricityTierRates: data.electricityTierRates || null,
       commonFee: data.commonFee || '0.00',
       commonFeeMode: data.commonFeeMode || 'none',
       internetFee: data.internetFee || '0.00',
@@ -389,6 +409,7 @@ export class PrismaBillingCycleRepository implements IBillingCycleRepository {
       version: c.version,
       createdAt: c.createdAt,
       updatedAt: c.updatedAt,
+      rateSnapshot: c.rateSnapshot ? this.mapSnapshotToEntity(c.rateSnapshot) : undefined,
     };
   }
 
@@ -400,8 +421,10 @@ export class PrismaBillingCycleRepository implements IBillingCycleRepository {
       billingCycleId: s.billingCycleId,
       waterBillingType: s.waterBillingType,
       waterRate: fmt(s.waterRate, '0.00'),
+      waterTierRates: s.waterTierRates || null,
       electricityBillingType: s.electricityBillingType,
       electricityRate: fmt(s.electricityRate, '0.00'),
+      electricityTierRates: s.electricityTierRates || null,
       commonFee: fmt(s.commonFee, '0.00'),
       commonFeeMode: s.commonFeeMode || 'none',
       internetFee: fmt(s.internetFee, '0.00'),
@@ -426,7 +449,7 @@ export class PrismaBillingCycleRepository implements IBillingCycleRepository {
     if (!isUuid(id)) return null;
     const where: any = { id };
     if (dormitoryId) where.dormitoryId = dormitoryId;
-    const c = await this.prisma.billingCycle.findFirst({ where });
+    const c = await this.prisma.billingCycle.findFirst({ where, include: { rateSnapshot: true } });
     return c ? this.mapCycleToEntity(c) : null;
   }
 
@@ -435,6 +458,7 @@ export class PrismaBillingCycleRepository implements IBillingCycleRepository {
       where: {
         dormitory_cycle_code_unique: { dormitoryId, cycleCode },
       },
+      include: { rateSnapshot: true },
     });
     return c ? this.mapCycleToEntity(c) : null;
   }
@@ -524,6 +548,7 @@ export class PrismaBillingCycleRepository implements IBillingCycleRepository {
         skip: (page - 1) * pageSize,
         take: pageSize,
         orderBy: { [sortBy]: sortDirection },
+        include: { rateSnapshot: true },
       }),
     ]);
 
@@ -587,8 +612,10 @@ export class PrismaBillingCycleRepository implements IBillingCycleRepository {
         billingCycleId: data.billingCycleId,
         waterBillingType: data.waterBillingType!,
         waterRate: data.waterRate!,
+        waterTierRates: data.waterTierRates || null,
         electricityBillingType: data.electricityBillingType!,
         electricityRate: data.electricityRate!,
+        electricityTierRates: data.electricityTierRates || null,
         commonFee: data.commonFee!,
         commonFeeMode: data.commonFeeMode!,
         internetFee: data.internetFee!,
@@ -620,8 +647,10 @@ export class PrismaBillingCycleRepository implements IBillingCycleRepository {
     };
     if (data.waterBillingType !== undefined) updateData.waterBillingType = data.waterBillingType;
     if (data.waterRate !== undefined) updateData.waterRate = data.waterRate;
+    if (data.waterTierRates !== undefined) updateData.waterTierRates = data.waterTierRates;
     if (data.electricityBillingType !== undefined) updateData.electricityBillingType = data.electricityBillingType;
     if (data.electricityRate !== undefined) updateData.electricityRate = data.electricityRate;
+    if (data.electricityTierRates !== undefined) updateData.electricityTierRates = data.electricityTierRates;
     if (data.commonFee !== undefined) updateData.commonFee = data.commonFee;
     if (data.commonFeeMode !== undefined) updateData.commonFeeMode = data.commonFeeMode;
     if (data.internetFee !== undefined) updateData.internetFee = data.internetFee;

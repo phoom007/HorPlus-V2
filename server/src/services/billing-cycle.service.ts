@@ -9,6 +9,7 @@ import { getPrismaClient } from '../db/prisma.js';
 import { AppError } from '../types/index.js';
 import {
   IBillingCycleRepository,
+  PrismaBillingCycleRepository,
   BillingCycleEntity,
   BillingRateSnapshotEntity,
   BillingCycleFilterQuery,
@@ -21,12 +22,16 @@ import {
 import { AuditService } from './audit.service.js';
 import { currentCycleResolverService } from './current-cycle-resolver.js';
 import { normalizeUtilityBillingMode } from '../utils/billing-mode-normalizer.util.js';
+import { validateCanonicalUtilityTiers, validateUtilityTierModeConfiguration } from '../utils/utility-tier-validator.util.js';
 import {
   currentBusinessDateInBangkok,
   toBangkokDateString,
   getAdjacentCycleCode,
 } from '../utils/calendar-date.util.js';
 import { LATE_FEE_GRACE_DAYS } from '../utils/monthly-utility-calculator.util.js';
+import { backfillRoomOperationalStatusBaseline } from './room-operational-baseline.service.js';
+import { materializeFirstCyclePeopleSnapshots } from './first-cycle-people-materialization.service.js';
+import { UTILITY_RATE_CONSUMING_BILL_KINDS } from '../utils/utility-rate-consuming.util.js';
 
 export interface CreateBillingCycleDto {
   cycleCode: string;
@@ -38,8 +43,10 @@ export interface CreateBillingCycleDto {
   rateSnapshot?: {
     waterBillingType?: string;
     waterRate?: number | string;
+    waterTierRates?: any;
     electricityBillingType?: string;
     electricityRate?: number | string;
+    electricityTierRates?: any;
     commonFee?: number | string;
     commonFeeMode?: string;
     internetFee?: number | string;
@@ -57,8 +64,10 @@ export interface UpdateCycleRateSnapshotDto {
   expectedVersion: number;
   waterBillingType?: string;
   waterRate?: string;
+  waterTierRates?: any;
   electricityBillingType?: string;
   electricityRate?: string;
+  electricityTierRates?: any;
   commonFee?: string;
   commonFeeMode?: string;
   internetFee?: string;
@@ -234,11 +243,26 @@ export class BillingCycleService {
         let snapshotData: any;
         if (precedingCycle?.rateSnapshot) {
           const pSnap = precedingCycle.rateSnapshot;
+          const waterBillingType = normalizeUtilityBillingMode(pSnap.waterBillingType);
+          const waterTierRates = validateUtilityTierModeConfiguration({
+            mode: waterBillingType,
+            tiers: pSnap.waterTierRates,
+            utilityName: `Water (inherited from cycle '${precedingCycle.cycleCode}')`,
+          });
+          const electricityBillingType = normalizeUtilityBillingMode(pSnap.electricityBillingType);
+          const electricityTierRates = validateUtilityTierModeConfiguration({
+            mode: electricityBillingType,
+            tiers: pSnap.electricityTierRates,
+            utilityName: `Electricity (inherited from cycle '${precedingCycle.cycleCode}')`,
+          });
+
           snapshotData = {
-            waterBillingType: normalizeUtilityBillingMode(pSnap.waterBillingType),
+            waterBillingType,
             waterRate: pSnap.waterRate,
-            electricityBillingType: normalizeUtilityBillingMode(pSnap.electricityBillingType),
+            waterTierRates,
+            electricityBillingType,
             electricityRate: pSnap.electricityRate,
+            electricityTierRates,
             commonFee: pSnap.commonFee,
             commonFeeMode: pSnap.commonFeeMode,
             internetFee: pSnap.internetFee,
@@ -255,11 +279,26 @@ export class BillingCycleService {
             version: 1,
           };
         } else {
+          const waterBillingType = normalizeUtilityBillingMode(settings.waterBillingType);
+          const waterTierRates = validateUtilityTierModeConfiguration({
+            mode: waterBillingType,
+            tiers: (settings as any).waterTierRates,
+            utilityName: 'Water',
+          });
+          const electricityBillingType = normalizeUtilityBillingMode(settings.electricityBillingType);
+          const electricityTierRates = validateUtilityTierModeConfiguration({
+            mode: electricityBillingType,
+            tiers: (settings as any).electricityTierRates,
+            utilityName: 'Electricity',
+          });
+
           snapshotData = {
-            waterBillingType: normalizeUtilityBillingMode(settings.waterBillingType),
+            waterBillingType,
             waterRate: new Prisma.Decimal(settings.waterRate || '0.00').toFixed(2),
-            electricityBillingType: normalizeUtilityBillingMode(settings.electricityBillingType),
+            waterTierRates,
+            electricityBillingType,
             electricityRate: new Prisma.Decimal(settings.electricityRate || '0.00').toFixed(2),
+            electricityTierRates,
             commonFee: new Prisma.Decimal(settings.commonFee || '0.00').toFixed(2),
             commonFeeMode: settings.commonFeeMode || 'room',
             internetFee: new Prisma.Decimal(settings.internetFee || '0.00').toFixed(2),
@@ -299,6 +338,12 @@ export class BillingCycleService {
           },
         });
 
+        // Establish one-time room operational status baseline for existing rooms without history
+        await backfillRoomOperationalStatusBaseline(dormitoryId, tx);
+
+        // Authoritatively materialize first-cycle peopleCount = 1 snapshots for active rooms
+        await materializeFirstCyclePeopleSnapshots(dormitoryId, tx);
+
         return { cycle, rateSnapshot };
       });
 
@@ -334,8 +379,10 @@ export class BillingCycleService {
           billingCycleId: result.rateSnapshot.billingCycleId,
           waterBillingType: result.rateSnapshot.waterBillingType,
           waterRate: new Prisma.Decimal(result.rateSnapshot.waterRate).toFixed(2),
+          waterTierRates: result.rateSnapshot.waterTierRates ?? null,
           electricityBillingType: result.rateSnapshot.electricityBillingType,
           electricityRate: new Prisma.Decimal(result.rateSnapshot.electricityRate).toFixed(2),
+          electricityTierRates: result.rateSnapshot.electricityTierRates ?? null,
           commonFee: new Prisma.Decimal(result.rateSnapshot.commonFee).toFixed(2),
           commonFeeMode: result.rateSnapshot.commonFeeMode,
           internetFee: new Prisma.Decimal(result.rateSnapshot.internetFee).toFixed(2),
@@ -416,6 +463,44 @@ export class BillingCycleService {
     return { items, total: res.total, firstBillingCycleId: earliest?.id || null };
   }
 
+  public async resolveDormitoryOperationalStart(
+    dormitoryId: string,
+    tx?: any
+  ): Promise<{ operationalStartMonth: string; source: 'FINALIZED_DRAFT' | 'PERSISTED_BILLING_CYCLE' | 'CURRENT_OPERATIONAL' }> {
+    const prisma = tx || getPrismaClient();
+
+    // 1. Preferred authority for newly onboarded dormitory: finalized OnboardingDraft
+    const finalizedDraft = await prisma.onboardingDraft.findFirst({
+      where: {
+        provisionalDormitoryId: dormitoryId,
+        finalizedAt: { not: null },
+      },
+      orderBy: { finalizedAt: 'desc' },
+    });
+
+    if (finalizedDraft?.finalizedAt) {
+      const startMonth = toBangkokDateString(finalizedDraft.finalizedAt).slice(0, 7);
+      return { operationalStartMonth: startMonth, source: 'FINALIZED_DRAFT' };
+    }
+
+    // 2. Authoritative for existing active dormitories: earliest persisted BillingCycle
+    const earliestCycle = await prisma.billingCycle.findFirst({
+      where: { dormitoryId },
+      orderBy: { periodStart: 'asc' },
+    });
+
+    if (earliestCycle) {
+      const startMonth = earliestCycle.cycleCode || toBangkokDateString(earliestCycle.periodStart).slice(0, 7);
+      return { operationalStartMonth: startMonth, source: 'PERSISTED_BILLING_CYCLE' };
+    }
+
+    // 3. Fallback for active dormitory with no draft and no cycle:
+    // Fail closed / use current operational initialization month rather than inventing history
+    const todayBangkok = currentBusinessDateInBangkok();
+    const currentMonth = todayBangkok.slice(0, 7);
+    return { operationalStartMonth: currentMonth, source: 'CURRENT_OPERATIONAL' };
+  }
+
   public async getNavigationContext(
     dormitoryId: string
   ): Promise<{
@@ -423,14 +508,11 @@ export class BillingCycleService {
     openedUpperBoundCycleCode: string;
     selectableBillingCycles: SelectableBillingCycleRef[];
   }> {
-    const dorm = await this.dormitoryRepo.findById(dormitoryId);
+    const startAuth = await this.resolveDormitoryOperationalStart(dormitoryId);
+    const historicalFloorCycleCode = startAuth.operationalStartMonth;
 
     const operational = await currentCycleResolverService.resolveOperationalBillingCycle(dormitoryId);
     const opCode = operational.cycleCode || currentBusinessDateInBangkok().slice(0, 7);
-
-    const historicalFloorCycleCode = dorm?.createdAt
-      ? toBangkokDateString(dorm.createdAt).slice(0, 7)
-      : opCode;
 
     const openedUpperBoundCycleCode = getAdjacentCycleCode(opCode, 1);
 
@@ -538,12 +620,13 @@ export class BillingCycleService {
       isLocked = true;
       lockReason = 'งวดนี้ถูกล็อคแล้ว จึงไม่สามารถแก้ไขค่าที่มีผลต่อบิลได้';
     } else {
-      // STRICT ALL-ROOM UNISSUED GATE: Rates are editable ONLY IF every room in cycle is still in unissued state
+      // STRICT ALL-ROOM UNISSUED GATE: Rates are editable ONLY IF no utility-consuming bill in cycle has progressed beyond unissued
       const nonUnissuedBillsCount = await prisma.bill.count({
         where: {
           dormitoryId,
           billingCycleId: cycle.id,
           status: { notIn: ['draft', 'cancelled', 'voided', 'withdrawn', 'superseded'] },
+          billKind: { in: [...UTILITY_RATE_CONSUMING_BILL_KINDS] },
         },
       });
 
@@ -618,11 +701,23 @@ export class BillingCycleService {
       ? '0.00'
       : (data.parkingFee !== undefined ? cleanDec(data.parkingFee, 'parkingFee') : rateSnapshot.parkingFee);
 
-    const waterType = normalizeUtilityBillingMode(data.waterBillingType || rateSnapshot.waterBillingType);
+    const waterType = normalizeUtilityBillingMode(data.waterBillingType !== undefined ? data.waterBillingType : rateSnapshot.waterBillingType);
     const waterRate = data.waterRate !== undefined ? cleanDec(data.waterRate, 'waterRate') : rateSnapshot.waterRate;
+    const candidateWaterTiers = data.waterTierRates !== undefined ? data.waterTierRates : rateSnapshot.waterTierRates;
+    const waterTierRates = validateUtilityTierModeConfiguration({
+      mode: waterType,
+      tiers: candidateWaterTiers,
+      utilityName: 'Water',
+    });
 
-    const electricityType = normalizeUtilityBillingMode(data.electricityBillingType || rateSnapshot.electricityBillingType);
+    const electricityType = normalizeUtilityBillingMode(data.electricityBillingType !== undefined ? data.electricityBillingType : rateSnapshot.electricityBillingType);
     const electricityRate = data.electricityRate !== undefined ? cleanDec(data.electricityRate, 'electricityRate') : rateSnapshot.electricityRate;
+    const candidateElecTiers = data.electricityTierRates !== undefined ? data.electricityTierRates : rateSnapshot.electricityTierRates;
+    const electricityTierRates = validateUtilityTierModeConfiguration({
+      mode: electricityType,
+      tiers: candidateElecTiers,
+      utilityName: 'Electricity',
+    });
 
     const lateType = data.lateFeeType || rateSnapshot.lateFeeType;
     const lateValue = lateType === 'none'
@@ -632,8 +727,10 @@ export class BillingCycleService {
     const effectiveUpdate = {
       waterBillingType: waterType,
       waterRate,
+      waterTierRates: waterTierRates === null ? Prisma.DbNull : (waterTierRates as any),
       electricityBillingType: electricityType,
       electricityRate,
+      electricityTierRates: electricityTierRates === null ? Prisma.DbNull : (electricityTierRates as any),
       commonFee,
       commonFeeMode: commonMode,
       internetFee,
@@ -645,12 +742,13 @@ export class BillingCycleService {
     };
 
     const txResult = await prisma.$transaction(async (tx) => {
-      // 0. Transactional race-safe verification: ensure no room in cycle has progressed beyond unissued
+      // 0. Transactional race-safe verification: ensure no utility-consuming bill in cycle has progressed beyond unissued
       const nonUnissuedCount = await tx.bill.count({
         where: {
           dormitoryId,
           billingCycleId: cycle.id,
           status: { notIn: ['draft', 'cancelled', 'voided', 'withdrawn', 'superseded'] },
+          billKind: { in: [...UTILITY_RATE_CONSUMING_BILL_KINDS] },
         },
       });
       if (nonUnissuedCount > 0) {
@@ -688,13 +786,14 @@ export class BillingCycleService {
         where: { id: rateSnapshot.id },
       });
 
-      // 2. Recalculate any unpaid bills in current editable cycle using authoritative peopleCount
+      // 2. Recalculate any unpaid utility-consuming bills in current editable cycle using authoritative peopleCount
       const unpaidBills = await tx.bill.findMany({
         where: {
           dormitoryId,
           billingCycleId: cycle.id,
           status: { notIn: ['paid', 'partially_paid', 'cancelled', 'voided', 'withdrawn', 'superseded'] },
           cancelledAt: null,
+          billKind: { in: [...UTILITY_RATE_CONSUMING_BILL_KINDS] },
         },
         include: { room: true },
       });
@@ -749,9 +848,14 @@ export class BillingCycleService {
           break;
         }
 
-        // Stop propagation if future cycle is locked, completed, or has paid bills
+        // Stop propagation if future cycle is locked, completed, or has paid utility-consuming bills
         const fcPaidCount = await tx.bill.count({
-          where: { dormitoryId, billingCycleId: fc.id, status: 'paid' },
+          where: {
+            dormitoryId,
+            billingCycleId: fc.id,
+            status: 'paid',
+            billKind: { in: [...UTILITY_RATE_CONSUMING_BILL_KINDS] },
+          },
         });
         if (fc.status === 'locked' || fc.status === 'completed' || fcPaidCount > 0) {
           break;
@@ -803,8 +907,10 @@ export class BillingCycleService {
       billingCycleId: txResult.updatedSnapshot.billingCycleId,
       waterBillingType: txResult.updatedSnapshot.waterBillingType,
       waterRate: new Prisma.Decimal(txResult.updatedSnapshot.waterRate).toFixed(2),
+      waterTierRates: txResult.updatedSnapshot.waterTierRates ?? null,
       electricityBillingType: txResult.updatedSnapshot.electricityBillingType,
       electricityRate: new Prisma.Decimal(txResult.updatedSnapshot.electricityRate).toFixed(2),
+      electricityTierRates: txResult.updatedSnapshot.electricityTierRates ?? null,
       commonFee: new Prisma.Decimal(txResult.updatedSnapshot.commonFee).toFixed(2),
       commonFeeMode: txResult.updatedSnapshot.commonFeeMode,
       internetFee: new Prisma.Decimal(txResult.updatedSnapshot.internetFee).toFixed(2),
@@ -937,11 +1043,15 @@ export class BillingCycleService {
       if (!targetCycles.includes(c)) targetCycles.push(c);
     });
 
-    // 3. Ensure onboarding start month
-    const startCode = toBangkokDateString(dorm.createdAt).slice(0, 7);
+    // 3. Ensure onboarding start month and bound below by startCode floor derived from operational start authority
+    const startAuth = await this.resolveDormitoryOperationalStart(dormitoryId);
+    const startCode = startAuth.operationalStartMonth;
     if (!targetCycles.includes(startCode)) targetCycles.push(startCode);
 
-    for (const code of targetCycles) {
+    // Filter out any cycle earlier than the dormitory onboarding start floor and sort ascending
+    const validTargetCycles = targetCycles.filter((code) => code >= startCode).sort();
+
+    for (const code of validTargetCycles) {
       try {
         await this.createBillingCycle(
           dormitoryId,
@@ -956,11 +1066,30 @@ export class BillingCycleService {
           userId
         );
       } catch (err: any) {
-        // If cycle already exists, overlaps with custom cycle, or settings are missing, gracefully proceed
+        // Tolerated benign race conditions:
+        // 1. Unique constraint collision on (dormitoryId, cycleCode) - Prisma P2002
+        // 2. Already overlapping cycle explicitly defined
+        const isDuplicateOrOverlap =
+          err?.code === 'P2002' ||
+          err?.code === 'OVERLAPPING_BILLING_CYCLE' ||
+          err?.message?.includes('Unique constraint failed') ||
+          err?.message?.includes('OVERLAPPING_BILLING_CYCLE');
+
+        if (!isDuplicateOrOverlap) {
+          throw err;
+        }
       }
     }
+
+    // Authoritatively materialize first-cycle peopleCount = 1 snapshots for active rooms
+    await materializeFirstCyclePeopleSnapshots(dormitoryId);
 
     const res = await this.getBillingCycles(dormitoryId, { pageSize: 50 });
     return res.items;
   }
 }
+
+const defaultPrisma = getPrismaClient();
+export const billingCycleService = new BillingCycleService(
+  new PrismaBillingCycleRepository(defaultPrisma)
+);

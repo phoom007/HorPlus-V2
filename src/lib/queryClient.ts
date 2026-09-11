@@ -1,7 +1,7 @@
 /**
  * @license Apache-2.0
  * TanStack Query Client Configuration & Scoped Query Keys
- * 
+ *
  * Invariants:
  * 1. All server-state queries MUST be explicitly scoped by authoritative dormitoryId.
  * 2. Meter cycle data MUST be scoped by (dormitoryId, billingCycleId).
@@ -31,6 +31,8 @@ export const queryClient = new QueryClient({
  * Deterministic Query Key Factory scoped by Dormitory & Billing Cycle.
  */
 export const queryKeys = {
+  dormitories: ['dormitories'] as const,
+  dormitory: (dormId: string) => ['dormitory', dormId] as const,
   owner: (dormId: string) => ['owner', dormId] as const,
   rooms: (dormId: string) => ['owner', dormId, 'rooms'] as const,
   buildings: (dormId: string) => ['owner', dormId, 'buildings'] as const,
@@ -80,4 +82,24 @@ export function clearDormitoryQueryCache(dormitoryId?: string) {
   } else {
     queryClient.clear();
   }
+}
+
+
+import { httpRequest } from '../data/httpClient';
+
+/**
+ * Shared query fetch function for Meter Billing Preview Context.
+ * Used by getTargetQueriesForTab in Owner shell and OwnerRooms / OwnerMeter useQuery hooks.
+ */
+export async function fetchMeterPreviewContext(dormitoryId: string, billingCycleId: string) {
+  const res = await httpRequest<{ success: boolean; data: any; error?: string }>(
+    'GET',
+    `/api/v1/meters/workspace/preview-context?billingCycleId=${billingCycleId}`,
+    undefined,
+    { dormitoryId }
+  );
+  if (!res || res.success === false) {
+    throw new Error(res?.error || 'ไม่สามารถโหลดข้อมูลอัตราค่าน้ำค่าไฟได้');
+  }
+  return res.data;
 }

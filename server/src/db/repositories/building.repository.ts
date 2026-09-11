@@ -8,6 +8,9 @@ export interface BuildingEntity {
   status: string; // active, inactive, archived
   displayOrder: number;
   numberingPattern?: string | null;
+  monthlyDeposit?: any;
+  termDeposit?: any;
+  dailyDeposit?: any;
   createdAt: Date;
   updatedAt: Date;
   deletedAt?: Date | null;
@@ -22,6 +25,9 @@ export interface CreateBuildingData {
   status?: string;
   displayOrder?: number;
   numberingPattern?: string | null;
+  monthlyDeposit?: any;
+  termDeposit?: any;
+  dailyDeposit?: any;
 }
 
 export interface BuildingFilterQuery {
@@ -197,9 +203,13 @@ export class PrismaBuildingRepository implements IBuildingRepository {
     const pageSize = filter.pageSize && filter.pageSize > 0 ? filter.pageSize : 20;
     const skip = (page - 1) * pageSize;
 
-    const orderBy: any = {};
-    const sortBy = filter.sortBy || 'displayOrder';
-    orderBy[sortBy] = filter.sortDirection || 'asc';
+    const orderBy: any = [];
+    if (filter.sortBy) {
+      orderBy.push({ [filter.sortBy]: filter.sortDirection || 'asc' });
+    } else {
+      orderBy.push({ displayOrder: 'asc' });
+      orderBy.push({ createdAt: 'asc' });
+    }
 
     const [items, total] = await Promise.all([
       this.prisma.building.findMany({ where, skip, take: pageSize, orderBy }),

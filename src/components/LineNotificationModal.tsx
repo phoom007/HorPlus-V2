@@ -19,11 +19,10 @@ export function formatCycleThaiShort(cycle: string) {
   return `${months[idx] || m} ${parseInt(y, 10) + 543}`;
 }
 
+import { LineLogo } from './LineLogo';
+
 export const LineIcon: React.FC<{ className?: string }> = ({ className = "w-5 h-5" }) => (
-  <svg className={className} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <rect width="24" height="24" rx="6" fill="#06C755" />
-    <path d="M12 4C7.58 4 4 7.02 4 10.75c0 3.33 2.76 6.13 6.5 6.67.28.06.67.19.77.43.08.2.05.52.03.73-.04.29-.19 1.15-.22 1.4-.04.39.18.6.51.38 2.58-1.72 5.17-3.55 6.5-5.36.77-1.05 1.25-2.22 1.25-3.5C20 7.02 16.42 4 12 4z" fill="#FFFFFF" />
-  </svg>
+  <LineLogo className={className} />
 );
 
 const getRoomForTenant = (
@@ -68,6 +67,7 @@ const getRoomForTenant = (
 interface LineNotificationModalProps {
   isOpen: boolean;
   onClose: () => void;
+  dormitoryId?: string;
   bills: Bill[];
   tenants: Tenant[];
   rooms: Room[];
@@ -82,6 +82,7 @@ interface LineNotificationModalProps {
 export const LineNotificationModal: React.FC<LineNotificationModalProps> = ({
   isOpen,
   onClose,
+  dormitoryId,
   bills = [],
   tenants = [],
   rooms = [],
@@ -95,6 +96,30 @@ export const LineNotificationModal: React.FC<LineNotificationModalProps> = ({
   const [selectedTenantIdsForLine, setSelectedTenantIdsForLine] = useState<string[]>([]);
   const [isSendingLine, setIsSendingLine] = useState(false);
   const [lineToastSuccess, setLineToastSuccess] = useState<string | null>(null);
+  const [lineStatus, setLineStatus] = useState<{ connected: boolean; isReady: boolean } | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const dormId = dormitoryId || (typeof window !== 'undefined' ? (localStorage.getItem('selected_dormitory_id') || sessionStorage.getItem('active_dormitory_selected_for_session')) : '') || '';
+    if (!dormId) return;
+
+    fetch(`/api/v1/dormitories/${dormId}/line-oa`, {
+      headers: { 'Content-Type': 'application/json' },
+    })
+      .then(res => res.ok ? res.json() : null)
+      .then(json => {
+        if (json?.data || json?.config) {
+          const data = json.data || json.config;
+          setLineStatus({
+            connected: Boolean(data.connected),
+            isReady: Boolean(data.isReady || (data.connected && data.credentialsVerified))
+          });
+        } else {
+          setLineStatus({ connected: false, isReady: false });
+        }
+      })
+      .catch(() => setLineStatus({ connected: false, isReady: false }));
+  }, [isOpen, dormitoryId]);
 
   // In-session delivery notification status map (server-authoritative; no fake localstorage financial state)
   const [lineNotifyMap, setLineNotifyMap] = useState<{ [key: string]: { status: 'sent' | 'resent'; sentAt: string } }>({});
@@ -230,10 +255,17 @@ export const LineNotificationModal: React.FC<LineNotificationModalProps> = ({
               <Calendar className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
               {formatCycleThaiShort(selectedCycle)}
             </span>
-            <span className="px-2.5 py-1 bg-emerald-50 text-emerald-700 border border-emerald-200/80 font-bold text-xs rounded-full flex items-center gap-1 shadow-2xs">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse shrink-0" />
-              พร้อมใช้งาน
-            </span>
+            {lineStatus?.isReady ? (
+              <span className="px-2.5 py-1 bg-emerald-50 text-emerald-700 border border-emerald-200/80 font-bold text-xs rounded-full flex items-center gap-1 shadow-2xs">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
+                พร้อมใช้งาน
+              </span>
+            ) : (
+              <span className="px-2.5 py-1 bg-amber-50 text-amber-800 border border-amber-200/80 font-bold text-xs rounded-full flex items-center gap-1 shadow-2xs">
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse shrink-0" />
+                ยังไม่พร้อมใช้งาน
+              </span>
+            )}
           </div>
         </div>
       }
@@ -453,7 +485,7 @@ export const LineNotificationModal: React.FC<LineNotificationModalProps> = ({
                 </>
               ) : (
                 <>
-                  <Send className="w-3.5 h-3.5 shrink-0" />
+                  <LineLogo className="w-3.5 h-3.5 shrink-0 rounded-xs" />
                   <span className="truncate text-[11px] sm:text-xs">ส่งแจ้งเตือน ({selectedTenantIdsForLine.length})</span>
                 </>
               )}

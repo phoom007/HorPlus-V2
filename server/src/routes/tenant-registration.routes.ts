@@ -1,5 +1,7 @@
 import { Router, Request, Response } from 'express';
+import multer from 'multer';
 import { z } from 'zod';
+import { logger } from '../config/logger.js';
 import { AuthenticationService } from '../services/auth.service.js';
 import { TenantRegistrationService } from '../services/tenant-registration.service.js';
 import { tenantRegistrationInviteService } from '../services/tenant-registration-invite.service.js';
@@ -8,6 +10,7 @@ import { createRequireSessionMiddleware } from '../middleware/require-session.js
 import { requireDormitoryPermission, resolveDormitoryContextMiddleware } from '../middleware/permission.js';
 import { requireDormitoryWriteEntitlement } from '../middleware/entitlement.js';
 import { ApproveRegistrationSchema } from '../schemas/property-tenant-contract.schemas.js';
+import { SignatureStorageService } from '../services/signature-storage.service.js';
 
 export function createTenantRegistrationRouter(
   authService: AuthenticationService,
@@ -105,12 +108,7 @@ export function createTenantRegistrationRouter(
 
       const invite = await tenantRegistrationInviteService.resolveInvite(rawToken.trim());
       const policy = await registrationService.getPublicDormitoryPolicy(invite.dormitoryId);
-      const prisma = getPrismaClient();
-      const rooms = await prisma.room.findMany({
-        where: { dormitoryId: invite.dormitoryId, deletedAt: null },
-        select: { id: true, roomNumber: true, floor: true, monthlyRent: true, depositAmount: true, status: true },
-        orderBy: { roomNumber: 'asc' },
-      });
+      const rooms = await registrationService.getPublicRooms(invite.dormitoryId);
 
       res.json({
         data: {
@@ -120,16 +118,163 @@ export function createTenantRegistrationRouter(
           linePictureUrl: invite.linePictureUrl,
           expiresAt: invite.expiresAt,
           policy,
-          rooms: rooms.map(r => ({
-            id: r.id,
-            roomNumber: r.roomNumber,
-            floor: r.floor,
-            monthlyRent: Number(r.monthlyRent),
-            depositAmount: Number(r.depositAmount),
-            status: r.status,
-          })),
+          rooms,
         },
       });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  });
+
+  // GET /api/v1/tenant-registrations/public-rooms
+  router.get('/public-rooms', async (req: Request, res: Response) => {
+    try {
+      let dormId = '';
+      const rawToken = (req.query.t || req.query.token) as string;
+      if (rawToken && typeof rawToken === 'string' && rawToken.trim()) {
+        const invite = await tenantRegistrationInviteService.resolveInvite(rawToken.trim());
+        dormId = invite.dormitoryId;
+      } else {
+        dormId = getPublicDormitoryId(req);
+      }
+      const rooms = await registrationService.getPublicRooms(dormId);
+      res.json({ data: rooms });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  });
+
+  // POST /api/v1/tenant-registrations/verify-claim
+  const VerifyClaimSchema = z.object({
+    dormitoryId: z.string().uuid().optional(),
+    inviteToken: z.string().optional(),
+    roomId: z.string().min(1, 'กรุณาระบุห้องพัก'),
+    claimInput: z.string().trim().min(1, 'กรุณากรอกชื่อ-นามสกุล หรือ เบอร์โทรศัพท์'),
+  });
+
+  router.post('/verify-claim', async (req: Request, res: Response) => {
+    try {
+      const parsed = VerifyClaimSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: parsed.error.issues[0]?.message || 'ข้อมูลไม่ถูกต้อง',
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+      let dormId = parsed.data.dormitoryId;
+      if (parsed.data.inviteToken) {
+        const invite = await tenantRegistrationInviteService.resolveInvite(parsed.data.inviteToken.trim());
+        dormId = invite.dormitoryId;
+      }
+      if (!dormId) {
+        dormId = getPublicDormitoryId(req);
+      }
+      const rawIp = req.ip || (req.headers['x-forwarded-for'] as string) || 'actor-ip';
+      const actorKey = rawIp.split(',')[0].trim();
+      const result = await registrationService.verifyTenantClaim({
+        dormitoryId: dormId,
+        roomId: parsed.data.roomId,
+        claimInput: parsed.data.claimInput,
+        actorId: actorKey,
+      });
+      res.json({ data: result });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  });
+
+  // POST /api/v1/tenant-registrations/complete-claim
+  const CompleteClaimSchema = z.object({
+    dormitoryId: z.string().uuid().optional(),
+    inviteToken: z.string().optional(),
+    roomId: z.string().min(1, 'กรุณาระบุห้องพัก'),
+    tenantId: z.string().uuid('รหัสผู้เช่าไม่ถูกต้อง'),
+    signatureBase64: z.string().min(1, 'กรุณาเซ็นชื่อยืนยันการรับสิทธิ์'),
+    displayName: z.string().optional(),
+    firstName: z.string().optional(),
+    lastName: z.string().optional(),
+    phone: z.string().optional(),
+    citizenId: z.string().optional(),
+    birthDate: z.string().optional(),
+    address: z.string().optional(),
+    idCardImageUrl: z.string().optional(),
+    emergencyContact: z.object({
+      name: z.string(),
+      relationship: z.string(),
+      phone: z.string(),
+    }).optional(),
+    vehicle: z.object({
+      type: z.string(),
+      licensePlate: z.string(),
+      brand: z.string().optional(),
+    }).optional(),
+    vehicles: z.array(z.object({
+      type: z.string(),
+      licensePlate: z.string(),
+      brand: z.string().optional(),
+    })).optional(),
+    coOccupants: z.array(z.object({
+      name: z.string(),
+      phone: z.string().optional(),
+      citizenId: z.string().optional(),
+    })).optional(),
+    pet: z.object({
+      hasPet: z.boolean(),
+      type: z.string().optional(),
+      name: z.string().optional(),
+      count: z.number().optional(),
+    }).optional(),
+    lineFollowerId: z.string().optional(),
+  });
+
+  router.post('/complete-claim', async (req: Request, res: Response) => {
+    try {
+      const parsed = CompleteClaimSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: parsed.error.issues[0]?.message || 'ข้อมูลไม่ถูกต้อง',
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+      let dormId = parsed.data.dormitoryId;
+      let lineFriendId = parsed.data.lineFollowerId;
+      if (parsed.data.inviteToken) {
+        const invite = await tenantRegistrationInviteService.resolveInvite(parsed.data.inviteToken.trim());
+        dormId = invite.dormitoryId;
+        lineFriendId = lineFriendId || invite.lineFriendId;
+      }
+      if (!dormId) {
+        dormId = getPublicDormitoryId(req);
+      }
+      const resolvedVehicle = parsed.data.vehicle || (parsed.data.vehicles && parsed.data.vehicles[0]) || undefined;
+      const result = await registrationService.completeTenantClaim({
+        dormitoryId: dormId,
+        roomId: parsed.data.roomId,
+        tenantId: parsed.data.tenantId,
+        signatureBase64: parsed.data.signatureBase64,
+        displayName: parsed.data.displayName,
+        firstName: parsed.data.firstName,
+        lastName: parsed.data.lastName,
+        phone: parsed.data.phone,
+        citizenId: parsed.data.citizenId,
+        birthDate: parsed.data.birthDate,
+        address: parsed.data.address,
+        idCardImageUrl: parsed.data.idCardImageUrl,
+        emergencyContact: parsed.data.emergencyContact,
+        vehicle: resolvedVehicle,
+        coOccupants: parsed.data.coOccupants,
+        pet: parsed.data.pet,
+        inviteToken: parsed.data.inviteToken,
+      });
+      res.status(200).json({ data: result });
     } catch (err) {
       handleServiceError(res, err, req);
     }
@@ -149,7 +294,37 @@ export function createTenantRegistrationRouter(
     }),
     signatureBase64: z.string().min(1, 'กรุณาเซ็นชื่อก่อนส่งคำขอลงทะเบียน'),
     expectedPolicyVersion: z.number().int().min(1, 'กรุณาระบุเวอร์ชันของกฎระเบียบที่ถูกต้อง'),
-  }).strict();
+    rentalPlan: z.enum(['monthly', 'term', 'daily']).optional(),
+    proposedRent: z.union([z.number(), z.string()]).optional(),
+    proposedDeposit: z.union([z.number(), z.string()]).optional(),
+    durationMonths: z.number().optional(),
+    startDate: z.string().optional(),
+    citizenId: z.string().optional(),
+    birthDate: z.string().optional(),
+    address: z.string().optional(),
+    idCardImageUrl: z.string().optional(),
+    emergencyContact: z.object({
+      name: z.string(),
+      relationship: z.string(),
+      phone: z.string(),
+    }).optional(),
+    coOccupants: z.array(z.object({
+      name: z.string(),
+      phone: z.string().optional(),
+      citizenId: z.string().optional(),
+    })).optional(),
+    vehicle: z.object({
+      type: z.string(),
+      licensePlate: z.string(),
+      brand: z.string().optional(),
+    }).optional(),
+    pet: z.object({
+      hasPet: z.boolean(),
+      type: z.string().optional(),
+      name: z.string().optional(),
+      count: z.number().optional(),
+    }).optional(),
+  });
 
   router.post('/', async (req: Request, res: Response) => {
     try {
@@ -194,8 +369,81 @@ export function createTenantRegistrationRouter(
         agreedTerms: validData.agreedTerms,
         signatureBase64: validData.signatureBase64,
         expectedPolicyVersion: validData.expectedPolicyVersion,
+        rentalPlan: validData.rentalPlan,
+        proposedRent: validData.proposedRent,
+        proposedDeposit: validData.proposedDeposit,
+        durationMonths: validData.durationMonths,
+        startDate: validData.startDate,
+        citizenId: validData.citizenId,
+        birthDate: validData.birthDate,
+        address: validData.address,
+        idCardImageUrl: validData.idCardImageUrl,
+        emergencyContact: validData.emergencyContact,
+        coOccupants: validData.coOccupants,
+        vehicle: validData.vehicle,
+        pet: validData.pet,
       });
       res.status(201).json({ data: newReq });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  });
+
+  // POST /api/v1/tenant-registrations/:id/resubmit (Public resubmit for rejected/revised requests)
+  router.post('/:id/resubmit', async (req: Request, res: Response) => {
+    try {
+      const parseResult = CreateTenantRegistrationSchema.safeParse(req.body);
+      if (!parseResult.success) {
+        return res.status(400).json({
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: parseResult.error.issues[0]?.message || 'ข้อมูลไม่ถูกต้อง',
+            fieldErrors: parseResult.error.flatten().fieldErrors,
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+      let dormId = parseResult.data.dormitoryId;
+      if (!dormId) {
+        dormId = getPublicDormitoryId(req);
+      }
+      const result = await registrationService.resubmitRequest(req.params.id, dormId, parseResult.data);
+      res.json({ data: result });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  });
+
+  // POST /api/v1/tenant-registrations/:id/confirm-signature (Public tenant final review & signature confirmation)
+  const ConfirmSignatureSchema = z.object({
+    signatureBase64: z.string().min(1, 'กรุณาเซ็นชื่อก่อนยืนยันสัญญา'),
+    dormitoryId: z.string().uuid().optional(),
+  });
+
+  router.post('/:id/confirm-signature', async (req: Request, res: Response) => {
+    try {
+      const parsed = ConfirmSignatureSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: parsed.error.issues[0]?.message || 'ข้อมูลไม่ถูกต้อง',
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+      let dormId = parsed.data.dormitoryId;
+      if (!dormId) {
+        dormId = getPublicDormitoryId(req);
+      }
+      const result = await registrationService.confirmApprovedRegistration(
+        req.params.id,
+        dormId,
+        { signatureBase64: parsed.data.signatureBase64 }
+      );
+      res.json({ data: result });
     } catch (err) {
       handleServiceError(res, err, req);
     }
@@ -210,6 +458,61 @@ export function createTenantRegistrationRouter(
     requireDormitoryPermission(permission),
     requireDormitoryWriteEntitlement,
   ];
+
+  const uploadSingle = multer({
+    storage: multer.memoryStorage(),
+    limits: {
+      fileSize: 5 * 1024 * 1024,
+      files: 1,
+    },
+  }).single('file');
+
+  const handleUploadSingle = (req: Request, res: Response, next: any) => {
+    uploadSingle(req, res, (err: any) => {
+      if (!err) return next();
+      if (err instanceof multer.MulterError) {
+        if (err.code === 'LIMIT_FILE_SIZE') {
+          return res.status(400).json({
+            error: {
+              code: 'FILE_TOO_LARGE',
+              message: 'ขนาดไฟล์เกินขีดจำกัดที่กำหนด (สูงสุด 5MB)',
+              fieldErrors: null,
+              requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+              timestamp: new Date().toISOString(),
+            },
+          });
+        }
+        if (err.code === 'LIMIT_FILE_COUNT' || err.code === 'LIMIT_UNEXPECTED_FILE') {
+          return res.status(400).json({
+            error: {
+              code: 'INVALID_FILE_FIELD',
+              message: 'ต้องระบุไฟล์เพียงไฟล์เดียวในฟิลด์ "file"',
+              fieldErrors: null,
+              requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+              timestamp: new Date().toISOString(),
+            },
+          });
+        }
+        return res.status(400).json({
+          error: {
+            code: 'INVALID_FILE_FIELD',
+            message: 'การอัปโหลดไฟล์ไม่ถูกต้องตามรูปแบบที่กำหนด',
+            fieldErrors: null,
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+      return res.status(500).json({
+        error: {
+          code: 'REGISTRATION_OPERATION_FAILED',
+          message: 'เกิดข้อผิดพลาดในการดำเนินการ กรุณาลองใหม่อีกครั้ง',
+          requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+          timestamp: new Date().toISOString(),
+        },
+      });
+    });
+  };
 
   // GET /api/v1/tenant-registrations
   privateRouter.get('/', requireDormitoryPermission('tenant:read'), async (req: Request, res: Response) => {
@@ -285,7 +588,11 @@ export function createTenantRegistrationRouter(
           },
         });
       }
-      const result = await registrationService.approveRequest(req.params.id, dormId, parsed.data, req.auth?.userId);
+      const approvePayload = {
+        ...parsed.data,
+        requireTenantConfirmation: parsed.data.requireTenantConfirmation !== false,
+      };
+      const result = await registrationService.approveRequest(req.params.id, dormId, approvePayload, req.auth?.userId);
       res.json({ data: result });
     } catch (err) {
       handleServiceError(res, err, req);
@@ -301,6 +608,99 @@ export function createTenantRegistrationRouter(
       res.json({ data: result });
     } catch (err) {
       handleServiceError(res, err, req);
+    }
+  });
+
+  // GET /api/v1/tenant-registrations/:id/identity-document
+  privateRouter.get('/:id/identity-document', requireDormitoryPermission('tenant:read'), async (req: Request, res: Response) => {
+    try {
+      const dormId = getAuthoritativeDormitoryId(req);
+      const doc = await registrationService.getRegistrationIdentityDocument(dormId, req.params.id);
+      res.setHeader('Content-Type', doc.mimeType);
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('Cache-Control', 'private, no-store, no-cache, must-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+      res.setHeader('Content-Disposition', `inline; filename="${doc.filename}"`);
+      return res.send(doc.fileBuffer);
+    } catch (err: any) {
+      if (err?.code === 'IDENTITY_DOCUMENT_NOT_FOUND' || err?.code === 'FILE_NOT_FOUND') {
+        return res.status(404).json({
+          error: {
+            code: 'IDENTITY_DOCUMENT_NOT_FOUND',
+            message: err.message || 'ไม่พบไฟล์เอกสารสำเนาบัตรประชาชน',
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+      handleServiceError(res, err, req);
+    }
+  });
+
+  // POST /api/v1/tenant-registrations/:id/identity-document
+  privateRouter.post('/:id/identity-document', ...mutationGuard('tenant:write'), handleUploadSingle, async (req: Request, res: Response) => {
+    if (!verifyCsrf(req, res)) return;
+    try {
+      const dormId = getAuthoritativeDormitoryId(req);
+      const file = req.file;
+      if (!file || !file.buffer) {
+        return res.status(400).json({
+          error: {
+            code: 'NO_FILE_UPLOADED',
+            message: 'กรุณาเลือกไฟล์เอกสารสำเนาบัตรประชาชนในฟิลด์ "file"',
+            fieldErrors: null,
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+      const result = await registrationService.saveRegistrationIdentityDocument(
+        dormId,
+        req.params.id,
+        file.buffer,
+        req.auth?.userId
+      );
+      res.status(200).json({
+        data: result,
+        message: 'อัปโหลดและประมวลผลสำเนาบัตรประชาชนคำขอลงทะเบียนเรียบร้อยแล้ว',
+      });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  });
+
+  // GET /api/v1/tenant-registrations/:id/tenant-signature
+  privateRouter.get('/:id/tenant-signature', requireDormitoryPermission('tenant:read'), async (req: Request, res: Response) => {
+    try {
+      const dormId = getAuthoritativeDormitoryId(req);
+      const { id } = req.params;
+      const prisma = getPrismaClient();
+      const reg = await prisma.tenantRegistrationRequest.findFirst({
+        where: {
+          dormitoryId: dormId,
+          OR: [
+            { id },
+            { approvedTenantId: id },
+          ],
+        },
+      });
+      if (!reg || !reg.tenantSignatureObjectKey) {
+        return res.status(404).json({ error: { message: 'Tenant signature not found' } });
+      }
+      const signatureService = new SignatureStorageService(prisma);
+      const stream = await signatureService.getSignatureStream(reg.tenantSignatureObjectKey);
+      res.setHeader('Content-Type', 'image/png');
+      res.setHeader('Cache-Control', 'private, max-age=3600');
+      stream.pipe(res);
+    } catch (err: any) {
+      const statusCode = err.statusCode || (err.code === 'SIGNATURE_NOT_FOUND' ? 404 : 500);
+      res.status(statusCode).json({
+        error: {
+          code: err.code || 'SIGNATURE_STREAM_FAILED',
+          message: err.message || 'เกิดข้อผิดพลาดขณะเรียกลายเซ็นผู้เช่า',
+        },
+      });
     }
   });
 

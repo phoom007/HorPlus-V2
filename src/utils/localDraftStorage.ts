@@ -31,7 +31,7 @@ function openDB(): Promise<IDBDatabase> {
   });
 }
 
-function sanitizeDraftForStorage(draft: any): any {
+export function sanitizeDraftForStorage(draft: any): any {
   if (!draft || typeof draft !== 'object') return draft;
   const safe = JSON.parse(JSON.stringify(draft));
 

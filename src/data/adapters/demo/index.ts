@@ -19,7 +19,9 @@ import {
 
   StaffRoleDataSource,
   TenantRegistrationDataSource,
-  DataResult
+  DataResult,
+  TenantProfileDetails,
+  UpdateTenantProfilePayload
 } from '../../contracts';
 
 import {
@@ -29,8 +31,6 @@ import {
   contractRepository,
   meterRepository,
   billingRepository,
-  
-  
   maintenanceRepository,
   announcementRepository,
   notificationRepository,
@@ -48,7 +48,10 @@ import {
   MaintenanceRequest,
   Announcement,
   Notification,
-  AuditLog
+  AuditLog,
+  EmergencyContactInput,
+  VehicleInput,
+  PetItem
 } from '../../../types';
 
 export class DemoDormitoryAdapter implements DormitoryDataSource {
@@ -197,6 +200,195 @@ export class DemoTenantAdapter implements TenantDataSource {
       tenant.coOccupants = tenant.coOccupants.filter((c) => c.id !== coOccupantId);
     }
     return { success: true, data: true };
+  }
+
+  async addEmergencyContact(tenantId: string, contact: EmergencyContactInput): Promise<DataResult<any>> {
+    try {
+      const tenant = tenantRepository.getById(tenantId);
+      if (!tenant) return { success: false, error: { code: 'RESOURCE_NOT_FOUND', message: 'ไม่พบผู้เช่า' } };
+      const newContact = { id: `ec-${Date.now()}`, ...contact };
+      tenant.emergencyContact = { name: contact.name, phone: contact.phone, relation: contact.relationship };
+      return { success: true, data: newContact };
+    } catch {
+      return { success: false, error: { code: 'RESOURCE_NOT_FOUND', message: 'ไม่พบผู้เช่า' } };
+    }
+  }
+
+  async updateEmergencyContact(tenantId: string, contactId: string, contact: Partial<EmergencyContactInput>): Promise<DataResult<any>> {
+    try {
+      const tenant = tenantRepository.getById(tenantId);
+      if (!tenant) return { success: false, error: { code: 'RESOURCE_NOT_FOUND', message: 'ไม่พบผู้เช่า' } };
+      if (tenant.emergencyContact) {
+        if (contact.name !== undefined) tenant.emergencyContact.name = contact.name;
+        if (contact.phone !== undefined) tenant.emergencyContact.phone = contact.phone;
+        if (contact.relationship !== undefined) tenant.emergencyContact.relation = contact.relationship;
+      }
+      return { success: true, data: { id: contactId, ...contact } };
+    } catch {
+      return { success: false, error: { code: 'RESOURCE_NOT_FOUND', message: 'ไม่พบผู้เช่า' } };
+    }
+  }
+
+  async deleteEmergencyContact(tenantId: string, _contactId: string): Promise<DataResult<boolean>> {
+    try {
+      const tenant = tenantRepository.getById(tenantId);
+      if (!tenant) return { success: false, error: { code: 'RESOURCE_NOT_FOUND', message: 'ไม่พบผู้เช่า' } };
+      tenant.emergencyContact = undefined as any;
+      return { success: true, data: true };
+    } catch {
+      return { success: false, error: { code: 'RESOURCE_NOT_FOUND', message: 'ไม่พบผู้เช่า' } };
+    }
+  }
+
+  async addVehicle(tenantId: string, vehicle: VehicleInput): Promise<DataResult<any>> {
+    try {
+      const tenant = tenantRepository.getById(tenantId);
+      if (!tenant) return { success: false, error: { code: 'RESOURCE_NOT_FOUND', message: 'ไม่พบผู้เช่า' } };
+      const newVehicle = { id: `veh-${Date.now()}`, ...vehicle };
+      tenant.vehicles = tenant.vehicles || [];
+      tenant.vehicles.push(newVehicle as any);
+      return { success: true, data: newVehicle };
+    } catch {
+      return { success: false, error: { code: 'RESOURCE_NOT_FOUND', message: 'ไม่พบผู้เช่า' } };
+    }
+  }
+
+  async updateVehicle(tenantId: string, vehicleId: string, vehicle: Partial<VehicleInput>): Promise<DataResult<any>> {
+    try {
+      const tenant = tenantRepository.getById(tenantId);
+      if (!tenant) return { success: false, error: { code: 'RESOURCE_NOT_FOUND', message: 'ไม่พบผู้เช่า' } };
+      const list = tenant.vehicles || [];
+      const target = list.find((v: any) => v.id === vehicleId);
+      if (target) {
+        Object.assign(target, vehicle);
+      }
+      return { success: true, data: target || { id: vehicleId, ...vehicle } };
+    } catch {
+      return { success: false, error: { code: 'RESOURCE_NOT_FOUND', message: 'ไม่พบผู้เช่า' } };
+    }
+  }
+
+  async deleteVehicle(tenantId: string, vehicleId: string): Promise<DataResult<boolean>> {
+    try {
+      const tenant = tenantRepository.getById(tenantId);
+      if (!tenant) return { success: false, error: { code: 'RESOURCE_NOT_FOUND', message: 'ไม่พบผู้เช่า' } };
+      if (tenant.vehicles) {
+        tenant.vehicles = tenant.vehicles.filter((v: any) => v.id !== vehicleId);
+      }
+      return { success: true, data: true };
+    } catch {
+      return { success: false, error: { code: 'RESOURCE_NOT_FOUND', message: 'ไม่พบผู้เช่า' } };
+    }
+  }
+
+  getIdentityDocumentUrl(tenantId: string, dormitoryId?: string): string {
+    const query = dormitoryId ? `?dormitoryId=${encodeURIComponent(dormitoryId)}` : '';
+    return `/api/v1/tenants/${encodeURIComponent(tenantId)}/identity-document${query}`;
+  }
+
+  async updateTenantProfile(tenantId: string, payload: UpdateTenantProfilePayload): Promise<DataResult<any>> {
+    try {
+      const tenant = tenantRepository.getById(tenantId);
+      if (!tenant) return { success: false, error: { code: 'RESOURCE_NOT_FOUND', message: 'ไม่พบผู้เช่า' } };
+
+      tenant.name = payload.displayName;
+      tenant.phone = payload.phone;
+      if (payload.email !== undefined) tenant.email = payload.email || '';
+      if (payload.nationalId !== undefined) tenant.citizenId = payload.nationalId || '';
+      tenant.version = (tenant.version || 1) + 1;
+
+      if (payload.emergencyContact) {
+        tenant.emergencyContact = {
+          name: payload.emergencyContact.name,
+          phone: payload.emergencyContact.phone,
+          relationship: payload.emergencyContact.relationship,
+        };
+      }
+
+      if (payload.vehicles) {
+        tenant.vehicles = payload.vehicles.map((v, idx) => ({
+          id: v.id || `veh-demo-${idx + 1}`,
+          type: v.type as any,
+          licensePlate: v.licensePlate,
+          brand: v.brand || '',
+          model: v.model || '',
+          color: v.color || '',
+          province: v.province || '',
+        }));
+      }
+
+      const submittedPets = payload.pets || [];
+      tenant.pets = submittedPets;
+      tenant.pet = {
+        hasPet: submittedPets.length > 0,
+        type: submittedPets[0]?.type || '',
+        name: submittedPets[0]?.name || '',
+      };
+
+      return {
+        success: true,
+        data: {
+          tenant,
+          emergencyContacts: tenant.emergencyContact ? [tenant.emergencyContact] : [],
+          vehicles: tenant.vehicles || [],
+        },
+      };
+    } catch {
+      return { success: false, error: { code: 'RESOURCE_NOT_FOUND', message: 'ไม่พบผู้เช่า' } };
+    }
+  }
+
+  async uploadIdentityDocument(tenantId: string, file: File | Blob): Promise<DataResult<any>> {
+    const tenant = tenantRepository.getById(tenantId);
+    let newVersion = 1;
+    if (tenant) {
+      tenant.version = (tenant.version || 1) + 1;
+      newVersion = tenant.version;
+    }
+    return {
+      success: true,
+      data: {
+        tenantId,
+        version: newVersion,
+        idCardUploadedAt: new Date().toISOString(),
+        idCardSha256: 'simulated-demo-sha256',
+        idCardMimeType: 'image/webp',
+        idCardByteSize: (file as any).size || 1024,
+      },
+    };
+  }
+
+
+  async getTenantProfile(id: string): Promise<DataResult<TenantProfileDetails>> {
+    const tenant = tenantRepository.getById(id);
+    if (!tenant) {
+      return {
+        success: false,
+        error: { code: 'RESOURCE_NOT_FOUND', message: 'ไม่พบผู้เช่า' },
+      };
+    }
+
+    const contracts = contractRepository.getAll().filter((c) => c.tenantId === id);
+    const bills = billingRepository.getAll().filter((b) => b.tenantId === id);
+    const coOccupants = tenant.coOccupants || [];
+    const emergencyContacts = tenant.emergencyContact ? [tenant.emergencyContact] : [];
+    const vehicles = tenant.vehicles || (tenant.vehicle ? [tenant.vehicle] : []);
+
+    return {
+      success: true,
+      data: {
+        tenant,
+        coOccupants,
+        coOccupantHistory: coOccupants,
+        emergencyContacts,
+        vehicles,
+        contracts,
+        occupancies: [],
+        dailyStays: [],
+        bills,
+        settlements: [],
+      },
+    };
   }
 }
 
@@ -350,13 +542,22 @@ export class DemoMaintenanceAdapter implements MaintenanceDataSource {
     return { success: false, message: res.message, error: { code: 'VALIDATION_ERROR', message: res.message || 'สร้างรายการแจ้งซ่อมไม่สำเร็จ' } };
   }
 
-  async updateStatus(requestId: string, status: MaintenanceRequest['status'], note?: string, actorUserId?: string): Promise<DataResult<MaintenanceRequest>> {
+  async updateStatus(requestId: string, status: MaintenanceRequest['status'], note?: string, actorUserId?: string, extra?: { assignedStaff?: string; cost?: number; imageAfter?: string }): Promise<DataResult<MaintenanceRequest>> {
     const res = maintenanceRepository.updateStatus(requestId, status, note || '', actorUserId);
     if (res.success) {
       const updated = maintenanceRepository.getById(requestId);
-      if (updated) return { success: true, data: updated };
+      if (updated) {
+        if (extra?.assignedStaff !== undefined) (updated as any).assignedStaff = extra.assignedStaff;
+        if (extra?.cost !== undefined) (updated as any).cost = extra.cost;
+        if (extra?.imageAfter !== undefined) (updated as any).imageAfter = extra.imageAfter;
+        return { success: true, data: updated };
+      }
     }
     return { success: false, message: res.message, error: { code: 'VALIDATION_ERROR', message: res.message || 'อัปเดตสถานะการแจ้งซ่อมไม่สำเร็จ' } };
+  }
+
+  async deleteRequest(_requestId: string): Promise<DataResult<boolean>> {
+    return { success: true, data: true };
   }
 }
 
@@ -375,6 +576,19 @@ export class DemoAnnouncementAdapter implements AnnouncementDataSource {
       return { success: true, data: res.announcement };
     }
     return { success: false, message: res.message, error: { code: 'VALIDATION_ERROR', message: res.message || 'สร้างประกาศไม่สำเร็จ' } };
+  }
+
+  async updateAnnouncement(id: string, data: Partial<Announcement>): Promise<DataResult<Announcement>> {
+    const existing = announcementRepository.getById(id);
+    if (existing) {
+      Object.assign(existing, data);
+      return { success: true, data: existing };
+    }
+    return { success: false, error: { code: 'RESOURCE_NOT_FOUND', message: 'ไม่พบประกาศ' } };
+  }
+
+  async deleteAnnouncement(_id: string): Promise<DataResult<boolean>> {
+    return { success: true, data: true };
   }
 }
 

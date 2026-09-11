@@ -7,6 +7,21 @@ import { formatBaht } from '../components/GlobalComponents';
 import { calculateInstallmentSchedule as calculateFrontendSchedule } from '../utils/installmentCalculator';
 import { calculateInstallmentSchedule as calculateBackendSchedule } from '../../server/src/utils/installment-calculator.util.js';
 import { QuickAddRoomContext } from '../types';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+
+const createTestQueryClient = () =>
+  new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+      },
+    },
+  });
+
+const renderWithClient = (ui: React.ReactElement) => {
+  const testClient = createTestQueryClient();
+  return render(<QueryClientProvider client={testClient}>{ui}</QueryClientProvider>);
+};
 
 describe('LOCAL-07: Frontend Quick Add UI Authority & Installment Parity Proof', () => {
   beforeEach(() => {
@@ -56,7 +71,7 @@ describe('LOCAL-07: Frontend Quick Add UI Authority & Installment Parity Proof',
   };
 
   it('proves TERM tab displays 12,000, initializes installment dropdown to 3 (from building.maxTermRentInstallments), and renders exact 4,000.00 live breakdown', () => {
-    render(
+    renderWithClient(
       <QuickAddTenantModal
         isOpen={true}
         onClose={vi.fn()}
@@ -78,7 +93,7 @@ describe('LOCAL-07: Frontend Quick Add UI Authority & Installment Parity Proof',
     expect(installmentSelect.value).toBe('3');
 
     // 4. Live Installment Breakdown Preview
-    expect(screen.getByText('ค่าเช่ารายเทอมทั้งหมด:')).toBeDefined();
+    expect(screen.getByText('ค่าเช่ารวม:')).toBeDefined();
     expect(screen.getByText(/12,000\.00/)).toBeDefined();
     expect(screen.getByText('ตารางแบ่งชำระรายงวด (3 งวด):')).toBeDefined();
     expect(screen.getByText('งวดที่ 1:')).toBeDefined();
@@ -89,7 +104,7 @@ describe('LOCAL-07: Frontend Quick Add UI Authority & Installment Parity Proof',
   });
 
   it('proves MONTHLY tab displays 3500 and DAILY tab displays 550 for Room 101', () => {
-    render(
+    renderWithClient(
       <QuickAddTenantModal
         isOpen={true}
         onClose={vi.fn()}
@@ -100,8 +115,8 @@ describe('LOCAL-07: Frontend Quick Add UI Authority & Installment Parity Proof',
 
     // MONTHLY tab
     fireEvent.click(screen.getByRole('button', { name: 'รายเดือน' }));
-    const monthlyInput = screen.getByDisplayValue('3500') as HTMLInputElement;
-    expect(monthlyInput).toBeDefined();
+    const monthlyInputs = screen.getAllByDisplayValue('3500');
+    expect(monthlyInputs.length).toBeGreaterThanOrEqual(1);
 
     // DAILY tab
     fireEvent.click(screen.getByRole('button', { name: 'รายวัน' }));
@@ -110,13 +125,16 @@ describe('LOCAL-07: Frontend Quick Add UI Authority & Installment Parity Proof',
   });
 
   it('proves opening Room 102 context displays overridden values 13,500 and 650 without stale cache bleed', () => {
+    const testClient = createTestQueryClient();
     const { rerender } = render(
-      <QuickAddTenantModal
-        isOpen={true}
-        onClose={vi.fn()}
-        context={mockRegisteredRoom101Context}
-        onSuccess={vi.fn()}
-      />
+      <QueryClientProvider client={testClient}>
+        <QuickAddTenantModal
+          isOpen={true}
+          onClose={vi.fn()}
+          context={mockRegisteredRoom101Context}
+          onSuccess={vi.fn()}
+        />
+      </QueryClientProvider>
     );
 
     fireEvent.click(screen.getByRole('button', { name: /รายเทอม/ }));
@@ -124,12 +142,14 @@ describe('LOCAL-07: Frontend Quick Add UI Authority & Installment Parity Proof',
 
     // Rerender with Room 102 context
     rerender(
-      <QuickAddTenantModal
-        isOpen={true}
-        onClose={vi.fn()}
-        context={mockRoom102OverriddenContext}
-        onSuccess={vi.fn()}
-      />
+      <QueryClientProvider client={testClient}>
+        <QuickAddTenantModal
+          isOpen={true}
+          onClose={vi.fn()}
+          context={mockRoom102OverriddenContext}
+          onSuccess={vi.fn()}
+        />
+      </QueryClientProvider>
     );
 
     fireEvent.click(screen.getByRole('button', { name: /รายเทอม/ }));
@@ -178,7 +198,7 @@ describe('LOCAL-07: Frontend Quick Add UI Authority & Installment Parity Proof',
   });
 
   it('proves exactly ONE quick-add-error-box is rendered on validation error and its DOM position is after form fields and before footer buttons', async () => {
-    const { container } = render(
+    const { container } = renderWithClient(
       <QuickAddTenantModal
         isOpen={true}
         onClose={vi.fn()}

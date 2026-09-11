@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { normalizeRoomIdentifier } from '../utils/normalization.js';
 
 export const OnboardingDormitoryInputSchema = z.object({
   name: z.string().trim().min(1, 'กรุณาระบุชื่อหอพัก').max(255, 'ชื่อหอพักยาวเกินไป'),
@@ -14,26 +15,58 @@ export const OnboardingDormitoryInputSchema = z.object({
   email: z.string().trim().email('อีเมลหอพักไม่ถูกต้อง').optional().nullable().or(z.literal('')),
   estimatedBuildingCount: z.coerce.number().int().min(1, 'จำนวนอาคารต้องอย่างน้อย 1').max(100).default(1),
   estimatedRoomCount: z.coerce.number().int().min(1, 'จำนวนห้องต้องอย่างน้อย 1').max(150, 'หนึ่งหอพักสามารถสร้างห้องได้สูงสุด 150 ห้อง').default(10),
+  logoUrl: z.string().trim().optional().nullable(),
 }).strict();
+
+export const normalizeMoneyField = (defaultVal = '0.00', msg = 'ต้องเป็นตัวเลขจำนวนเงินที่ถูกต้อง') =>
+  z.union([z.string(), z.number(), z.null(), z.undefined()])
+    .superRefine((val, ctx) => {
+      if (val === null || val === undefined) return;
+      if (typeof val === 'string' && val.trim() === '') return;
+      if (typeof val === 'number') {
+        if (isNaN(val) || val < 0) {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, message: msg });
+        }
+        return;
+      }
+      const str = String(val).replace(/,/g, '').trim();
+      if (!/^\d+(\.\d{1,2})?$/.test(str)) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: msg });
+      }
+    })
+    .transform((val) => {
+      if (val === null || val === undefined) return defaultVal;
+      if (typeof val === 'string' && val.trim() === '') return defaultVal;
+      if (typeof val === 'number') return val.toFixed(2);
+      const str = String(val).replace(/,/g, '').trim();
+      const num = Number(str);
+      return isNaN(num) ? str : Number(num.toFixed(2)).toFixed(2);
+    })
+    .pipe(z.string().regex(/^\d+(\.\d{1,2})?$/, msg));
 
 export const OnboardingBillingInputSchema = z.object({
   billingDay: z.coerce.number().int().min(1).max(28).optional().nullable(),
   dueDay: z.coerce.number({ required_error: 'กรุณาระบุวันครบกำหนดชำระ (dueDay is required)', invalid_type_error: 'วันครบกำหนดชำระต้องเป็นตัวเลข' }).int().min(1, 'วันครบกำหนดชำระต้องอยู่ระหว่างวันที่ 1-28').max(28, 'วันครบกำหนดชำระต้องอยู่ระหว่างวันที่ 1-28'),
-  waterBillingType: z.enum(['per_unit', 'fixed_monthly', 'flat_rate', 'unit', 'flat', 'per_person', 'person', 'room', 'per_room']).default('per_person'),
-  waterRate: z.string().regex(/^\d+(\.\d{1,2})?$/, 'ค่าน้ำต้องเป็นตัวเลขจำนวนเงินที่ถูกต้อง').default('0.00'),
-  electricityBillingType: z.enum(['per_unit', 'fixed_monthly', 'flat_rate', 'unit', 'flat', 'per_person', 'person', 'room', 'per_room']).default('per_unit'),
-  electricityRate: z.string().regex(/^\d+(\.\d{1,2})?$/, 'ค่าไฟต้องเป็นตัวเลขจำนวนเงินที่ถูกต้อง').default('0.00'),
-  commonFee: z.string().regex(/^\d+(\.\d{1,2})?$/, 'ค่าส่วนกลางต้องเป็นตัวเลขจำนวนเงินที่ถูกต้อง').default('0.00'),
+  waterBillingType: z.enum(['per_unit', 'fixed_monthly', 'flat_rate', 'unit', 'flat', 'per_person', 'person', 'room', 'per_room', 'tiered']).default('per_person'),
+  waterRate: normalizeMoneyField('0.00', 'ค่าน้ำต้องเป็นตัวเลขจำนวนเงินที่ถูกต้อง').default('0.00'),
+  waterTierRates: z.array(z.object({ upTo: z.string().nullable(), rate: z.string() })).nullable().optional(),
+  electricityBillingType: z.enum(['per_unit', 'fixed_monthly', 'flat_rate', 'unit', 'flat', 'per_person', 'person', 'room', 'per_room', 'tiered']).default('per_unit'),
+  electricityRate: normalizeMoneyField('0.00', 'ค่าไฟต้องเป็นตัวเลขจำนวนเงินที่ถูกต้อง').default('0.00'),
+  electricityTierRates: z.array(z.object({ upTo: z.string().nullable(), rate: z.string() })).nullable().optional(),
+  commonFee: normalizeMoneyField('0.00', 'ค่าส่วนกลางต้องเป็นตัวเลขจำนวนเงินที่ถูกต้อง').default('0.00'),
   commonFeeMode: z.string().trim().optional().nullable().default('per_room'),
-  internetFee: z.string().regex(/^\d+(\.\d{1,2})?$/, 'ค่าอินเทอร์เน็ตต้องเป็นตัวเลขจำนวนเงินที่ถูกต้อง').default('0.00'),
+  internetFee: normalizeMoneyField('0.00', 'ค่าอินเทอร์เน็ตต้องเป็นตัวเลขจำนวนเงินที่ถูกต้อง').default('0.00'),
   internetFeeMode: z.string().trim().optional().nullable().default('per_person'),
-  parkingRate: z.string().regex(/^\d+(\.\d{1,2})?$/, 'ค่าจอดรถต้องเป็นตัวเลขจำนวนเงินที่ถูกต้อง').optional().nullable().default('0.00'),
+  parkingRate: normalizeMoneyField('0.00', 'ค่าจอดรถต้องเป็นตัวเลขจำนวนเงินที่ถูกต้อง').optional().nullable().default('0.00'),
   parkingFeeMode: z.string().trim().optional().nullable().default('per_room'),
   gracePeriodDays: z.coerce.number().int().min(0).max(90).optional().nullable().default(2).transform(() => 2),
   advanceRentMonths: z.coerce.number().int().min(0).max(12).optional().nullable().default(1),
-  lateFeeType: z.enum(['fixed', 'per_day', 'percentage', 'none']).default('none'),
-  lateFeeValue: z.string().regex(/^\d+(\.\d{1,2})?$/, 'ค่าปรับต้องเป็นตัวเลขจำนวนเงินที่ถูกต้อง').default('0.00'),
+  lateFeeType: z.enum(['fixed', 'fixed_once', 'per_day', 'percentage', 'none'])
+    .default('none')
+    .transform((val) => (val === 'fixed_once' ? 'fixed' : val)),
+  lateFeeValue: normalizeMoneyField('0.00', 'ค่าปรับต้องเป็นตัวเลขจำนวนเงินที่ถูกต้อง').default('0.00'),
   rentBillingType: z.enum(['monthly']).default('monthly'),
+  billingCycle: z.string().trim().optional().nullable(),
 }).strict();
 
 export const OnboardingPaymentInputSchema = z.object({
@@ -208,6 +241,9 @@ export const OnboardingBuildingInputSchema = z.object({
   maximumOccupants: z.coerce.number().int().min(1).optional().nullable().default(2),
   depositAmount: z.coerce.number().min(0).optional().nullable(),
   securityDeposit: z.coerce.number().min(0).optional().nullable(),
+  termDeposit: z.coerce.number().min(0).optional().nullable(),
+  monthlyDeposit: z.coerce.number().min(0).optional().nullable(),
+  dailyDeposit: z.coerce.number().min(0).optional().nullable(),
 }).strict();
 
 export const OnboardingRoomInputSchema = z.object({
@@ -219,11 +255,16 @@ export const OnboardingRoomInputSchema = z.object({
   termRent: z.coerce.number().min(0).optional().nullable(),
   termMonths: z.coerce.number().int().min(1).optional().nullable().default(4),
   depositAmount: z.coerce.number().min(0).optional().nullable(),
+  securityDeposit: z.coerce.number().min(0).optional().nullable(),
+  termDeposit: z.coerce.number().min(0).optional().nullable(),
+  monthlyDeposit: z.coerce.number().min(0).optional().nullable(),
+  dailyDeposit: z.coerce.number().min(0).optional().nullable(),
   depositInheritsBuildingDefault: z.boolean().optional().default(true),
   parkingFee: z.coerce.number().min(0).default(0),
   maximumOccupants: z.coerce.number().int().min(1).optional().nullable().default(2),
-  initialWaterReading: z.coerce.number().min(0).default(0),
-  initialElectricityReading: z.coerce.number().min(0).default(0),
+  // LOCKED POLICY: All new rooms begin with meter baseline = 0. Real meter readings are entered in Meter Workspace.
+  initialWaterReading: z.coerce.number().refine(val => val === 0, { message: 'ค่ามิเตอร์เริ่มต้นสำหรับห้องใหม่ต้องเป็น 0 (initial meter reading must be 0)' }).optional().default(0),
+  initialElectricityReading: z.coerce.number().refine(val => val === 0, { message: 'ค่ามิเตอร์เริ่มต้นสำหรับห้องใหม่ต้องเป็น 0 (initial meter reading must be 0)' }).optional().default(0),
   status: z.enum(['vacant', 'occupied', 'reserved', 'maintenance']).default('vacant'),
 }).strict();
 
@@ -251,6 +292,24 @@ export const CompleteOnboardingInputSchema = z.object({
   signatureSaved: z.boolean().optional(),
   signatureObjectKey: z.string().optional(),
   ownerSignatureUrl: z.string().optional(),
+}).superRefine((data, ctx) => {
+  if (data.rooms && data.rooms.length > 0) {
+    const seen = new Set<string>();
+    for (let i = 0; i < data.rooms.length; i++) {
+      const r = data.rooms[i];
+      const norm = normalizeRoomIdentifier(r.roomNumber);
+      if (norm) {
+        if (seen.has(norm)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['rooms', i, 'roomNumber'],
+            message: `เลขห้อง "${r.roomNumber}" ซ้ำกับอาคารอื่น กรุณาเปลี่ยนเลขห้องหรือเลือกรูปแบบเลขห้องอื่น`,
+          });
+        }
+        seen.add(norm);
+      }
+    }
+  }
 });
 
 export const OnboardingDraftInputSchema = z.object({

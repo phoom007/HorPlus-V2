@@ -34,6 +34,7 @@ import {
   getOwnerFinancialBreakdown,
   resolveOwnerMeterDisplayStatus,
   resolveFinancialComponentTone,
+  isRowDraftDirty,
 } from '../../pages/owner/meters';
 import {
   Room,
@@ -46,6 +47,7 @@ import {
 import {
   calculateMeterUsageUnits,
   calculateMeterRowPreview,
+  calculateProgressiveTieredChargeLocal,
   formatMoneyDisplay,
 } from '../../utils/meterBillingCalculator';
 import {
@@ -57,6 +59,7 @@ import {
 export interface OwnerMeterListCardProps {
   row: MeterRowState;
   idx: number;
+  originalRow?: MeterRowState;
   room?: Room;
   roomCtx?: any;
   tenant?: Tenant;
@@ -122,6 +125,7 @@ export function getComponentItemIcon(label: string, type?: string) {
 export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
   row,
   idx,
+  originalRow,
   room,
   roomCtx,
   tenant,
@@ -173,10 +177,10 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
   const isOverallPaid = displayStatus.isOverallPaid;
   const isRowPaid = !isDailyContext && isMonthlyUtilityPaid;
 
-  const hasElecBaseline = row.elecPrev !== '' && row.elecPrev !== null && row.elecPrev !== undefined;
+  const hasElecBaseline = Boolean(originalRow?.elecPrev !== '' && originalRow?.elecPrev !== null && originalRow?.elecPrev !== undefined);
   const isElecDirectEdit = isFirstCycle || !hasElecBaseline;
 
-  const hasWaterBaseline = row.waterPrev !== '' && row.waterPrev !== null && row.waterPrev !== undefined;
+  const hasWaterBaseline = Boolean(originalRow?.waterPrev !== '' && originalRow?.waterPrev !== null && originalRow?.waterPrev !== undefined);
   const isWaterDirectEdit = isFirstCycle || !hasWaterBaseline;
 
   const isOccupiedOrActive = Boolean(
@@ -189,7 +193,7 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
     roomCtx?.isFutureReservation
   );
 
-  const breakdown = getOwnerFinancialBreakdown(roomCtx);
+  const breakdown = getOwnerFinancialBreakdown(roomCtx, row, rateSnapshot, originalRow);
   const amountDue = breakdown.formattedAmount;
   const chargeComponents = breakdown.components;
 
@@ -220,28 +224,60 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
   const elecItem = backendLineItems.find((it: any) => it.type === 'electricity' || (it.description && it.description.includes('ค่าไฟ')));
   const waterItem = backendLineItems.find((it: any) => it.type === 'water' || (it.description && it.description.includes('ค่าน้ำ')));
 
+  const isMuIssued = monthlyComp && monthlyComp.status !== 'PREVIEW' && monthlyComp.status !== 'INVALID';
+  const isRowDirty = isRowDraftDirty(row, originalRow);
+
   let elecCostText = '-';
-  if (elecItem && elecItem.amount !== undefined && elecItem.amount !== null) {
+  if (isMuIssued && elecItem && elecItem.amount !== undefined && elecItem.amount !== null) {
+    elecCostText = formatComponentDetailAmount(elecItem.amount);
+  } else if (!isRowDirty && elecItem && elecItem.amount !== undefined && elecItem.amount !== null) {
     elecCostText = formatComponentDetailAmount(elecItem.amount);
   } else if (elecUnits >= 0 && row.elecCurr !== '') {
     const rates = rateSnapshot || roomCtx?.rateSnapshot;
-    const elecRate = Number(rates?.electricityRate ?? 0);
-    if (elecRate > 0) {
-      elecCostText = formatComponentDetailAmount(elecUnits * elecRate);
+    const rawElecMode = rates?.electricityBillingType;
+    if (rawElecMode === 'tiered') {
+      const prog = calculateProgressiveTieredChargeLocal({
+        usageUnits: elecUnits,
+        tiers: rates?.electricityTierRates,
+      });
+      if (prog.isValid) {
+        elecCostText = formatComponentDetailAmount(prog.totalAmount);
+      }
+    } else {
+      const elecRate = Number(rates?.electricityRate ?? 0);
+      if (elecRate > 0) {
+        elecCostText = formatComponentDetailAmount(elecUnits * elecRate);
+      }
     }
+  } else if (elecItem && elecItem.amount !== undefined && elecItem.amount !== null) {
+    elecCostText = formatComponentDetailAmount(elecItem.amount);
   }
 
   let waterCostText = '-';
-  if (waterItem && waterItem.amount !== undefined && waterItem.amount !== null) {
+  if (isMuIssued && waterItem && waterItem.amount !== undefined && waterItem.amount !== null) {
+    waterCostText = formatComponentDetailAmount(waterItem.amount);
+  } else if (!isRowDirty && waterItem && waterItem.amount !== undefined && waterItem.amount !== null) {
     waterCostText = formatComponentDetailAmount(waterItem.amount);
   } else if (waterUnits >= 0 && row.waterCurr !== '') {
     const rates = rateSnapshot || roomCtx?.rateSnapshot;
-    const waterRate = Number(rates?.waterRate ?? 0);
     const waterBillingType = rates?.waterBillingType ?? 'per_unit';
-    if (waterRate > 0) {
-      const cost = waterBillingType === 'per_person' ? peopleCountVal * waterRate : waterUnits * waterRate;
-      waterCostText = formatComponentDetailAmount(cost);
+    if (waterBillingType === 'tiered') {
+      const prog = calculateProgressiveTieredChargeLocal({
+        usageUnits: waterUnits,
+        tiers: rates?.waterTierRates,
+      });
+      if (prog.isValid) {
+        waterCostText = formatComponentDetailAmount(prog.totalAmount);
+      }
+    } else {
+      const waterRate = Number(rates?.waterRate ?? 0);
+      if (waterRate > 0) {
+        const cost = waterBillingType === 'per_person' ? peopleCountVal * waterRate : waterUnits * waterRate;
+        waterCostText = formatComponentDetailAmount(cost);
+      }
     }
+  } else if (waterItem && waterItem.amount !== undefined && waterItem.amount !== null) {
+    waterCostText = formatComponentDetailAmount(waterItem.amount);
   }
 
   // Canonical Rent Component Selection (PO Strict Type Requirement)
@@ -392,7 +428,7 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
             if (displayStatus.isDaily) {
               if (displayStatus.statusKey === 'DAILY_OVERDUE') {
                 return (
-                  <span className="inline-flex items-center px-2.5 py-0.5 bg-rose-100 text-rose-800 text-xs font-bold rounded-md border border-rose-200">
+                  <span className="inline-flex items-center px-2.5 py-0.5 bg-rose-100 text-rose-800 text-xs font-bold rounded-md border border-rose-200 whitespace-nowrap shrink-0">
                     <AlertCircle className="w-3 h-3 text-rose-600 mr-1 shrink-0" />
                     {displayStatus.label}
                   </span>
@@ -401,7 +437,7 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
 
               if (displayStatus.statusKey === 'DAILY_PAID') {
                 return (
-                  <span className="inline-flex items-center px-2.5 py-0.5 bg-emerald-100 text-emerald-800 text-xs font-bold rounded-md border border-emerald-200">
+                  <span className="inline-flex items-center px-2.5 py-0.5 bg-emerald-100 text-emerald-800 text-xs font-bold rounded-md border border-emerald-200 whitespace-nowrap shrink-0">
                     <CheckCircle className="w-3 h-3 text-emerald-600 mr-1 shrink-0" />
                     {displayStatus.label}
                   </span>
@@ -409,7 +445,7 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
               }
 
               return (
-                <span className="text-xs font-extrabold px-2.5 py-0.5 rounded-md bg-slate-100 text-slate-600 border border-slate-200">
+                <span className="text-xs font-extrabold px-2.5 py-0.5 rounded-md bg-slate-100 text-slate-600 border border-slate-200 whitespace-nowrap shrink-0">
                   {displayStatus.label}
                 </span>
               );
@@ -417,7 +453,7 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
 
             return (
               <span
-                className={`text-xs font-extrabold px-2.5 py-0.5 rounded-md ${displayStatus.tone === 'success'
+                className={`text-xs font-extrabold px-2.5 py-0.5 rounded-md whitespace-nowrap shrink-0 ${displayStatus.tone === 'success'
                     ? 'bg-emerald-100 text-emerald-800'
                     : displayStatus.tone === 'warning'
                       ? 'bg-amber-100 text-amber-800'

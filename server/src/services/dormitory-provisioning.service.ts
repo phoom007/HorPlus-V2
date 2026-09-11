@@ -19,6 +19,7 @@ import { coinWalletService } from './coin-wallet.service.js';
 import { subscriptionIntentService } from './subscription-intent.service.js';
 import { normalizeUtilityBillingMode } from '../utils/billing-mode-normalizer.util.js';
 import { LATE_FEE_GRACE_DAYS } from '../utils/monthly-utility-calculator.util.js';
+import { CanonicalTierRecord, validateCanonicalUtilityTiers } from '../utils/utility-tier-validator.util.js';
 
 export interface CompleteOwnerOnboardingParams {
   userId: string;
@@ -44,8 +45,10 @@ export interface CompleteOwnerOnboardingParams {
     dueDay?: number;
     waterBillingType?: string;
     waterRate?: string;
+    waterTierRates?: CanonicalTierRecord[] | null;
     electricityBillingType?: string;
     electricityRate?: string;
+    electricityTierRates?: CanonicalTierRecord[] | null;
     commonFee?: string;
     commonFeeMode?: string | null;
     internetFee?: string;
@@ -85,6 +88,9 @@ export interface CompleteOwnerOnboardingParams {
     maxInstallmentMonths?: number | null;
     depositAmount?: number | null;
     securityDeposit?: number | null;
+    termDeposit?: number | null;
+    monthlyDeposit?: number | null;
+    dailyDeposit?: number | null;
     maximumOccupants?: number | null;
   }[];
   rooms?: {
@@ -96,6 +102,10 @@ export interface CompleteOwnerOnboardingParams {
     termRent?: number | null;
     termMonths?: number | null;
     depositAmount?: number | null;
+    securityDeposit?: number | null;
+    termDeposit?: number | null;
+    monthlyDeposit?: number | null;
+    dailyDeposit?: number | null;
     depositInheritsBuildingDefault?: boolean | null;
     parkingFee?: number;
     maximumOccupants?: number;
@@ -688,16 +698,49 @@ export class DormitoryProvisioningService {
           ? Number(billing.billingDay)
           : validatedDueDay;
 
+        const effectiveWaterBillingType = normalizeUtilityBillingMode(billing.waterBillingType || 'per_person');
+        const effectiveElectricityBillingType = normalizeUtilityBillingMode(billing.electricityBillingType || 'per_unit');
+
+        let effectiveWaterTierRates: CanonicalTierRecord[] | null = null;
+        if (effectiveWaterBillingType === 'tiered') {
+          if (billing.waterTierRates === null || billing.waterTierRates === undefined || (Array.isArray(billing.waterTierRates) && billing.waterTierRates.length === 0)) {
+            throw new AppError("INVALID_TIER_CONFIGURATION: Water billing mode is 'tiered' but no tier configuration was provided", 400, 'INVALID_TIER_CONFIGURATION');
+          }
+          effectiveWaterTierRates = validateCanonicalUtilityTiers(billing.waterTierRates);
+        } else {
+          if (billing.waterTierRates) {
+            effectiveWaterTierRates = validateCanonicalUtilityTiers(billing.waterTierRates);
+          } else {
+            effectiveWaterTierRates = null;
+          }
+        }
+
+        let effectiveElectricityTierRates: CanonicalTierRecord[] | null = null;
+        if (effectiveElectricityBillingType === 'tiered') {
+          if (billing.electricityTierRates === null || billing.electricityTierRates === undefined || (Array.isArray(billing.electricityTierRates) && billing.electricityTierRates.length === 0)) {
+            throw new AppError("INVALID_TIER_CONFIGURATION: Electricity billing mode is 'tiered' but no tier configuration was provided", 400, 'INVALID_TIER_CONFIGURATION');
+          }
+          effectiveElectricityTierRates = validateCanonicalUtilityTiers(billing.electricityTierRates);
+        } else {
+          if (billing.electricityTierRates) {
+            effectiveElectricityTierRates = validateCanonicalUtilityTiers(billing.electricityTierRates);
+          } else {
+            effectiveElectricityTierRates = null;
+          }
+        }
+
         await tx.dormitoryBillingSettings.upsert({
           where: { dormitoryId: dormId },
           create: {
             dormitoryId: dormId,
             billingDay: legacyCompatBillingDay,
             dueDay: validatedDueDay,
-            waterBillingType: normalizeUtilityBillingMode(billing.waterBillingType || 'per_person'),
+            waterBillingType: effectiveWaterBillingType,
             waterRate: waterRateStr,
-            electricityBillingType: normalizeUtilityBillingMode(billing.electricityBillingType || 'per_unit'),
+            waterTierRates: effectiveWaterTierRates === null ? Prisma.DbNull : (effectiveWaterTierRates as any),
+            electricityBillingType: effectiveElectricityBillingType,
             electricityRate: electricityRateStr,
+            electricityTierRates: effectiveElectricityTierRates === null ? Prisma.DbNull : (effectiveElectricityTierRates as any),
             commonFee: commonFeeStr,
             commonFeeMode: billing.commonFeeMode || 'per_room',
             internetFee: internetFeeStr,
@@ -713,10 +756,12 @@ export class DormitoryProvisioningService {
           update: {
             billingDay: legacyCompatBillingDay,
             dueDay: validatedDueDay,
-            waterBillingType: normalizeUtilityBillingMode(billing.waterBillingType || 'per_person'),
+            waterBillingType: effectiveWaterBillingType,
             waterRate: waterRateStr,
-            electricityBillingType: normalizeUtilityBillingMode(billing.electricityBillingType || 'per_unit'),
+            waterTierRates: effectiveWaterTierRates === null ? Prisma.DbNull : (effectiveWaterTierRates as any),
+            electricityBillingType: effectiveElectricityBillingType,
             electricityRate: electricityRateStr,
+            electricityTierRates: effectiveElectricityTierRates === null ? Prisma.DbNull : (effectiveElectricityTierRates as any),
             commonFee: commonFeeStr,
             commonFeeMode: billing.commonFeeMode || 'per_room',
             internetFee: internetFeeStr,
@@ -761,35 +806,72 @@ export class DormitoryProvisioningService {
         });
       }
 
-      // Save Dormitory Property Defaults (Step 5 Rules & Pet Policy)
+      // Save Dormitory Property Defaults (Step 5 Rules & Pet Policy, plus defaultDeposit / default rents if provided)
       const resolvedTerms = params.defaultTerms || (typeof params.rules === 'string' ? params.rules : null);
       const resolvedPetPolicy = params.petPolicy || { allowed: 'none', allowedTypes: [] };
+      const rawDefaultDeposit = (params as any).defaultDeposit !== undefined ? (params as any).defaultDeposit : (params as any).deposits?.securityDeposit;
+      const defaultDepositVal = (rawDefaultDeposit !== undefined && rawDefaultDeposit !== null && rawDefaultDeposit !== '' && !isNaN(Number(rawDefaultDeposit)))
+        ? String(rawDefaultDeposit)
+        : undefined;
+
+      const rawDefaultMonthly = (params as any).defaultMonthlyRent;
+      const defaultMonthlyVal = (rawDefaultMonthly !== undefined && rawDefaultMonthly !== null && rawDefaultMonthly !== '' && !isNaN(Number(rawDefaultMonthly)))
+        ? String(rawDefaultMonthly)
+        : undefined;
+
       await tx.dormitoryPropertyDefaults.upsert({
         where: { dormitoryId: dormId },
         create: {
           dormitoryId: dormId,
           defaultTerms: resolvedTerms,
           petPolicy: resolvedPetPolicy,
+          ...(defaultDepositVal !== undefined ? { defaultDeposit: defaultDepositVal } : {}),
+          ...(defaultMonthlyVal !== undefined ? { defaultMonthlyRent: defaultMonthlyVal } : {}),
         },
         update: {
           defaultTerms: resolvedTerms !== null ? resolvedTerms : undefined,
           petPolicy: resolvedPetPolicy,
+          ...(defaultDepositVal !== undefined ? { defaultDeposit: defaultDepositVal } : {}),
+          ...(defaultMonthlyVal !== undefined ? { defaultMonthlyRent: defaultMonthlyVal } : {}),
           updatedAt: now,
         },
       });
 
+      // Preflight validation: Reject duplicate normalized room numbers inside the same building in payload
+      if (rooms && rooms.length > 0) {
+        const seenInPayload = new Map<string, string>();
+        for (const r of rooms) {
+          const norm = normalizeRoomIdentifier(r.roomNumber);
+          if (!norm) continue;
+          const key = `${r.buildingId || 'default'}_${norm}`;
+          if (seenInPayload.has(key)) {
+            throw new AppError(
+              `เลขห้อง "${r.roomNumber}" ซ้ำในอาคารเดียวกัน`,
+              409,
+              'ROOM_NUMBER_ALREADY_EXISTS'
+            );
+          }
+          seenInPayload.set(key, r.roomNumber);
+        }
+      }
+
       // Save Buildings and Rooms if provided (idempotent upsert)
       if (buildings && buildings.length > 0) {
         for (const b of buildings) {
-          const bMonthlyStr = (b.monthlyRent !== undefined && b.monthlyRent !== null) ? String(b.monthlyRent) : null;
-          const bDailyStr = (b.dailyRent !== undefined && b.dailyRent !== null) ? String(b.dailyRent) : null;
-          const bTermStr = (b.termRent !== undefined && b.termRent !== null) ? String(b.termRent) : null;
+          const bMonthlyStr = (b.monthlyRent !== undefined && b.monthlyRent !== null && String(b.monthlyRent) !== '') ? String(b.monthlyRent) : null;
+          const bDailyStr = (b.dailyRent !== undefined && b.dailyRent !== null && String(b.dailyRent) !== '') ? String(b.dailyRent) : null;
+          const bTermStr = (b.termRent !== undefined && b.termRent !== null && String(b.termRent) !== '') ? String(b.termRent) : null;
           const bTermMonths = b.termMonths ?? 4;
           const bMaxInstallments = (b.maxInstallmentMonths !== undefined && b.maxInstallmentMonths !== null)
             ? Math.max(1, Math.min(12, Number(b.maxInstallmentMonths)))
             : 2;
-          const bDepositNum = b.depositAmount !== undefined ? b.depositAmount : b.securityDeposit;
-          const bDepositStr = (bDepositNum !== undefined && bDepositNum !== null) ? String(bDepositNum) : null;
+          const bDepositNum = (b.depositAmount !== undefined && b.depositAmount !== null && String(b.depositAmount) !== '')
+            ? b.depositAmount
+            : ((b.securityDeposit !== undefined && b.securityDeposit !== null && String(b.securityDeposit) !== '') ? b.securityDeposit : null);
+          const bDepositStr = bDepositNum !== null ? String(bDepositNum) : null;
+          const bMonthlyDepositStr = (b.monthlyDeposit !== undefined && b.monthlyDeposit !== null && String(b.monthlyDeposit) !== '') ? String(b.monthlyDeposit) : null;
+          const bTermDepositStr = (b.termDeposit !== undefined && b.termDeposit !== null && String(b.termDeposit) !== '') ? String(b.termDeposit) : null;
+          const bDailyDepositStr = (b.dailyDeposit !== undefined && b.dailyDeposit !== null && String(b.dailyDeposit) !== '') ? String(b.dailyDeposit) : null;
           const bMaxOcc = b.maximumOccupants ?? 2;
           const bNumPattern = b.numberingPattern || b.formatPattern || null;
 
@@ -816,6 +898,9 @@ export class DormitoryProvisioningService {
               termMonths: bTermMonths,
               maxTermRentInstallments: bMaxInstallments,
               depositAmount: bDepositStr,
+              monthlyDeposit: bMonthlyDepositStr,
+              termDeposit: bTermDepositStr,
+              dailyDeposit: bDailyDepositStr,
               maximumOccupants: bMaxOcc,
             },
             update: {
@@ -832,6 +917,9 @@ export class DormitoryProvisioningService {
               termMonths: bTermMonths,
               maxTermRentInstallments: bMaxInstallments,
               depositAmount: bDepositStr,
+              monthlyDeposit: bMonthlyDepositStr,
+              termDeposit: bTermDepositStr,
+              dailyDeposit: bDailyDepositStr,
               maximumOccupants: bMaxOcc,
             },
           });
@@ -839,23 +927,59 @@ export class DormitoryProvisioningService {
           const matchingRooms = (rooms || []).filter((r) => r.buildingId === b.id);
           for (const r of matchingRooms) {
             const normalizedRoomNumber = normalizeRoomIdentifier(r.roomNumber);
-            const rMonthlyStr = (r.monthlyRent !== undefined && r.monthlyRent !== null) ? String(r.monthlyRent) : (bMonthlyStr || '0');
+
+            const rMonthlyStr = (r.monthlyRent !== undefined && r.monthlyRent !== null) ? String(r.monthlyRent) : (bMonthlyStr !== null ? bMonthlyStr : null);
             const rDailyStr = (r.dailyRent !== undefined && r.dailyRent !== null) ? String(r.dailyRent) : bDailyStr;
             const rTermStr = (r.termRent !== undefined && r.termRent !== null) ? String(r.termRent) : bTermStr;
             const rTermMonths = r.termMonths ?? bTermMonths;
 
             const isExplicitRoomDeposit = r.depositAmount !== undefined && r.depositAmount !== null && (bDepositStr === null || String(r.depositAmount) !== bDepositStr) && r.depositInheritsBuildingDefault === false;
             const depositInheritsBuildingDefault = isExplicitRoomDeposit ? false : (r.depositInheritsBuildingDefault !== undefined ? Boolean(r.depositInheritsBuildingDefault) : true);
+
+            const resolveAuthoritativeRoomDeposit = (roomVal: any, buildingVal: string | null, dormDefault: string | undefined, fieldLabel: string): string => {
+              if (roomVal !== undefined && roomVal !== null && String(roomVal) !== '') {
+                return String(roomVal);
+              }
+              if (buildingVal !== null) {
+                return buildingVal;
+              }
+              if (dormDefault !== undefined) {
+                return dormDefault;
+              }
+              throw new AppError(
+                `เงินประกัน (${fieldLabel}) สำหรับห้อง "${r.roomNumber}" ไม่ได้รับการกำหนดค่า กรุณาระบุเงินประกัน`,
+                400,
+                'REQUIRED_ROOM_DEPOSIT_MISSING'
+              );
+            };
+
+            const rMonthlyDeposit = resolveAuthoritativeRoomDeposit((r as any).monthlyDeposit, bMonthlyDepositStr ?? bDepositStr, defaultDepositVal, 'รายเดือน');
+            const rTermDeposit = resolveAuthoritativeRoomDeposit((r as any).termDeposit, bTermDepositStr ?? bDepositStr, defaultDepositVal, 'รายเทอม');
+            const rDailyDeposit = resolveAuthoritativeRoomDeposit((r as any).dailyDeposit, bDailyDepositStr ?? bDepositStr, defaultDepositVal, 'รายวัน');
             const rDepositStr = !depositInheritsBuildingDefault && r.depositAmount !== undefined && r.depositAmount !== null
               ? String(r.depositAmount)
-              : (bDepositStr !== null ? bDepositStr : (r.depositAmount !== undefined && r.depositAmount !== null ? String(r.depositAmount) : '0'));
+              : rMonthlyDeposit;
 
-            const rMaxOcc = r.maximumOccupants ?? bMaxOcc;
+            const rMaxOcc = (r as any).maximumOccupants ?? bMaxOcc;
+
+            const existingRoom = typeof tx.room.findFirst === 'function'
+              ? await tx.room.findFirst({ where: { dormitoryId: dormId, normalizedRoomNumber } })
+              : (typeof tx.room.findUnique === 'function'
+                ? await tx.room.findUnique({ where: { dormitoryId_normalizedRoomNumber: { dormitoryId: dormId, normalizedRoomNumber } } as any })
+                : null);
+            if (existingRoom && existingRoom.buildingId && existingRoom.buildingId !== createdBld.id) {
+              throw new AppError(
+                `เลขห้อง "${r.roomNumber}" ซ้ำกับอาคารอื่นในหอพัก`,
+                409,
+                'ROOM_NUMBER_ALREADY_EXISTS'
+              );
+            }
 
             await tx.room.upsert({
               where: {
-                dormitoryId_normalizedRoomNumber: {
+                dormitoryId_buildingId_normalizedRoomNumber: {
                   dormitoryId: dormId,
+                  buildingId: createdBld.id,
                   normalizedRoomNumber,
                 },
               },
@@ -870,6 +994,9 @@ export class DormitoryProvisioningService {
                 dailyRent: rDailyStr,
                 termRent: rTermStr,
                 termMonths: rTermMonths,
+                termDeposit: rTermDeposit,
+                monthlyDeposit: rMonthlyDeposit,
+                dailyDeposit: rDailyDeposit,
                 depositAmount: rDepositStr,
                 depositInheritsBuildingDefault,
                 maximumOccupants: rMaxOcc,
@@ -884,6 +1011,9 @@ export class DormitoryProvisioningService {
                 dailyRent: rDailyStr,
                 termRent: rTermStr,
                 termMonths: rTermMonths,
+                termDeposit: rTermDeposit,
+                monthlyDeposit: rMonthlyDeposit,
+                dailyDeposit: rDailyDeposit,
                 depositAmount: rDepositStr,
                 depositInheritsBuildingDefault,
                 maximumOccupants: rMaxOcc,

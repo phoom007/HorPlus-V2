@@ -36,7 +36,7 @@ const SCREENSHOTS_DIR = path.join(ROOT_DIR, 'docs/uat/screenshots');
 
 fs.mkdirSync(SCREENSHOTS_DIR, { recursive: true });
 
-assertSafeDatabaseTarget();
+const safety = assertSafeDatabaseTarget();
 
 const prisma = new PrismaClient({
   datasources: {
@@ -51,7 +51,7 @@ async function runBrowserUAT() {
   console.log('  HORPLUS LOCAL-07 — REAL BROWSER UAT EXECUTION');
   console.log('================================================================================');
   console.log('Target UI: http://127.0.0.1:5173');
-  console.log('Target DB: 127.0.0.1:5455/horplus_wave1d_fasttrack_test\n');
+  console.log(`Target DB: 127.0.0.1:${safety.port}/horplus_wave1d_fasttrack_test\n`);
 
   // Verify Git Source Identity
   let currentBranch = '';

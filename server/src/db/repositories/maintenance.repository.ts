@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import { addDecimals, formatDecimal } from '../../utils/decimal-math.util.js';
+import { getPrismaClient } from '../prisma.js';
 const uuidv4 = () => crypto.randomUUID();
 
 export type MaintenanceCategory =
@@ -31,14 +32,20 @@ export interface MaintenanceRequestEntity {
   id: string;
   dormitoryId: string;
   requestNumber: string;
-  tenantId: string;
+  tenantId?: string | null;
   contractId?: string | null;
-  roomId: string;
+  roomId?: string | null;
   category: MaintenanceCategory;
   title: string;
   description: string;
   priority: MaintenancePriority;
+  urgency?: 'low' | 'medium' | 'high' | 'emergency';
   status: MaintenanceStatus;
+  assignedStaff?: string | null;
+  cost?: number | string | null;
+  note?: string | null;
+  imageBefore?: string | null;
+  imageAfter?: string | null;
   preferredDate?: string | null;
   preferredTimeRange?: string | null;
   submittedByTenantId?: string | null;
@@ -453,3 +460,279 @@ export class InMemoryMaintenanceRepository {
     return this.costs.find(c => c.dormitoryId === dormitoryId && c.maintenanceRequestId === requestId) || null;
   }
 }
+
+export interface IMaintenanceRepository {
+  createRequest(data: any): Promise<MaintenanceRequestEntity>;
+  findById(dormitoryId: string, id: string): Promise<MaintenanceRequestEntity | null>;
+  findByTenantId(dormitoryId: string, tenantId: string): Promise<MaintenanceRequestEntity[]>;
+  findAll(dormitoryId: string, filters?: MaintenanceFilterQuery): Promise<{ items: MaintenanceRequestEntity[]; total: number }>;
+  updateRequest(dormitoryId: string, id: string, updates: Partial<MaintenanceRequestEntity>): Promise<MaintenanceRequestEntity | null>;
+  deleteRequest(dormitoryId: string, id: string): Promise<boolean>;
+  createAssignment(data: any): Promise<MaintenanceAssignmentEntity>;
+  getAssignments(dormitoryId: string, requestId: string): Promise<MaintenanceAssignmentEntity[]>;
+  getActiveAssignment(dormitoryId: string, requestId: string): Promise<MaintenanceAssignmentEntity | null>;
+  createUpdate(data: any): Promise<MaintenanceUpdateEntity>;
+  getUpdates(dormitoryId: string, requestId: string, isTenant?: boolean): Promise<MaintenanceUpdateEntity[]>;
+  createComment(data: any): Promise<MaintenanceCommentEntity>;
+  getComments(dormitoryId: string, requestId: string, isTenant?: boolean): Promise<MaintenanceCommentEntity[]>;
+  createAttachment(data: any): Promise<MaintenanceAttachmentEntity>;
+  getAttachments(dormitoryId: string, requestId: string): Promise<MaintenanceAttachmentEntity[]>;
+  recordStatusHistory(data: any): Promise<MaintenanceStatusHistoryEntity>;
+  getStatusHistory(dormitoryId: string, requestId: string): Promise<MaintenanceStatusHistoryEntity[]>;
+  upsertCost(dormitoryId: string, requestId: string, data: any): Promise<MaintenanceCostEntity>;
+  getCost(dormitoryId: string, requestId: string): Promise<MaintenanceCostEntity | null>;
+}
+
+function mapPrismaToEntity(row: any): MaintenanceRequestEntity {
+  return {
+    id: row.id,
+    dormitoryId: row.dormitoryId,
+    requestNumber: row.requestNumber,
+    tenantId: row.tenantId,
+    contractId: row.contractId,
+    roomId: row.roomId,
+    category: row.category as MaintenanceCategory,
+    title: row.title,
+    description: row.description,
+    priority: row.priority as MaintenancePriority,
+    urgency: (row.priority === 'urgent' || row.priority === 'high' ? 'high' : row.priority === 'emergency' ? 'emergency' : row.priority === 'low' ? 'low' : 'medium') as any,
+    status: row.status as MaintenanceStatus,
+    assignedStaff: row.assignedStaff,
+    cost: row.cost ? Number(row.cost) : 0,
+    note: row.note,
+    imageBefore: row.imageBefore,
+    imageAfter: row.imageAfter,
+    preferredDate: row.preferredDate ? row.preferredDate.toISOString().split('T')[0] : null,
+    preferredTimeRange: row.preferredTimeRange,
+    createdByUserId: row.createdByUserId,
+    resolvedAt: row.resolvedAt,
+    closedAt: row.closedAt,
+    cancelledAt: row.cancelledAt,
+    cancellationReason: row.cancellationReason,
+    version: row.version,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    deletedAt: row.deletedAt,
+  };
+}
+
+export class PrismaMaintenanceRepository implements IMaintenanceRepository {
+  private fallbackMemory = new InMemoryMaintenanceRepository();
+
+  private get prisma() {
+    return getPrismaClient();
+  }
+
+  public async createRequest(data: Omit<MaintenanceRequestEntity, 'id' | 'requestNumber' | 'status' | 'version' | 'createdAt' | 'updatedAt'> & { status?: MaintenanceStatus }): Promise<MaintenanceRequestEntity> {
+    const now = new Date();
+    const count = await this.prisma.maintenanceRequest.count({
+      where: { dormitoryId: data.dormitoryId }
+    });
+    const requestNumber = `MNT-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}-${String(count + 1).padStart(5, '0')}`;
+
+    const created = await this.prisma.maintenanceRequest.create({
+      data: {
+        dormitoryId: data.dormitoryId,
+        requestNumber,
+        tenantId: data.tenantId || null,
+        contractId: data.contractId || null,
+        roomId: data.roomId || null,
+        category: data.category || 'other',
+        title: data.title,
+        description: data.description,
+        priority: data.priority || 'normal',
+        status: data.status || 'submitted',
+        assignedStaff: data.assignedStaff || null,
+        cost: data.cost !== undefined && data.cost !== null ? Number(data.cost) : 0,
+        note: data.note || null,
+        imageBefore: data.imageBefore || null,
+        imageAfter: data.imageAfter || null,
+        preferredDate: data.preferredDate ? new Date(data.preferredDate) : null,
+        preferredTimeRange: data.preferredTimeRange || null,
+        createdByUserId: data.createdByUserId || null,
+      }
+    });
+
+    return mapPrismaToEntity(created);
+  }
+
+  public async findById(dormitoryId: string, id: string): Promise<MaintenanceRequestEntity | null> {
+    const found = await this.prisma.maintenanceRequest.findFirst({
+      where: {
+        id,
+        dormitoryId,
+        deletedAt: null
+      }
+    });
+    return found ? mapPrismaToEntity(found) : null;
+  }
+
+  public async findByTenantId(dormitoryId: string, tenantId: string): Promise<MaintenanceRequestEntity[]> {
+    const found = await this.prisma.maintenanceRequest.findMany({
+      where: {
+        dormitoryId,
+        tenantId,
+        deletedAt: null
+      },
+      orderBy: { createdAt: 'desc' }
+    });
+    return found.map(mapPrismaToEntity);
+  }
+
+  public async findAll(dormitoryId: string, filters: MaintenanceFilterQuery = {}): Promise<{ items: MaintenanceRequestEntity[]; total: number }> {
+    const where: any = {
+      dormitoryId,
+      deletedAt: null
+    };
+
+    if (filters.status) {
+      where.status = filters.status;
+    }
+    if (filters.priority) {
+      where.priority = filters.priority;
+    }
+    if (filters.category) {
+      where.category = filters.category;
+    }
+    if (filters.roomId) {
+      where.roomId = filters.roomId;
+    }
+    if (filters.tenantId) {
+      where.tenantId = filters.tenantId;
+    }
+    if (filters.search) {
+      const q = filters.search.trim();
+      where.OR = [
+        { title: { contains: q, mode: 'insensitive' } },
+        { description: { contains: q, mode: 'insensitive' } },
+        { requestNumber: { contains: q, mode: 'insensitive' } }
+      ];
+    }
+
+    const total = await this.prisma.maintenanceRequest.count({ where });
+    const page = filters.page || 1;
+    const pageSize = filters.pageSize || 50;
+    const skip = (page - 1) * pageSize;
+
+    const items = await this.prisma.maintenanceRequest.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      skip,
+      take: pageSize
+    });
+
+    return { items: items.map(mapPrismaToEntity), total };
+  }
+
+  public async updateRequest(dormitoryId: string, id: string, updates: Partial<MaintenanceRequestEntity>): Promise<MaintenanceRequestEntity | null> {
+    const validFields = [
+      'requestNumber', 'tenantId', 'contractId', 'roomId', 'category', 'title',
+      'description', 'priority', 'status', 'assignedStaff', 'cost', 'note',
+      'imageBefore', 'imageAfter', 'preferredDate', 'preferredTimeRange',
+      'createdByUserId', 'resolvedAt', 'closedAt', 'cancelledAt', 'cancellationReason',
+      'version', 'deletedAt'
+    ];
+
+    const dataToUpdate: any = {
+      updatedAt: new Date()
+    };
+
+    for (const key of validFields) {
+      if (key in updates) {
+        dataToUpdate[key] = (updates as any)[key];
+      }
+    }
+
+    if (updates.preferredDate) {
+      dataToUpdate.preferredDate = new Date(updates.preferredDate);
+    }
+    if (updates.cost !== undefined) {
+      dataToUpdate.cost = Number(updates.cost);
+    }
+
+    const updated = await this.prisma.maintenanceRequest.update({
+      where: { id },
+      data: dataToUpdate
+    });
+
+    return mapPrismaToEntity(updated);
+  }
+
+  public async deleteRequest(dormitoryId: string, id: string): Promise<boolean> {
+    try {
+      await this.prisma.maintenanceRequest.update({
+        where: { id },
+        data: { deletedAt: new Date() }
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  // Auxiliary methods delegate to fallback memory / sub-entities
+  public async createAssignment(data: any): Promise<MaintenanceAssignmentEntity> {
+    return this.fallbackMemory.createAssignment(data);
+  }
+  public async getAssignments(dormitoryId: string, requestId: string): Promise<MaintenanceAssignmentEntity[]> {
+    return this.fallbackMemory.getAssignments(dormitoryId, requestId);
+  }
+  public async getActiveAssignment(dormitoryId: string, requestId: string): Promise<MaintenanceAssignmentEntity | null> {
+    return this.fallbackMemory.getActiveAssignment(dormitoryId, requestId);
+  }
+  public async createUpdate(data: any): Promise<MaintenanceUpdateEntity> {
+    return this.fallbackMemory.createUpdate(data);
+  }
+  public async getUpdates(dormitoryId: string, requestId: string, isTenant?: boolean): Promise<MaintenanceUpdateEntity[]> {
+    return this.fallbackMemory.getUpdates(dormitoryId, requestId, isTenant);
+  }
+  public async createComment(data: any): Promise<MaintenanceCommentEntity> {
+    return this.fallbackMemory.createComment(data);
+  }
+  public async getComments(dormitoryId: string, requestId: string, isTenant?: boolean): Promise<MaintenanceCommentEntity[]> {
+    return this.fallbackMemory.getComments(dormitoryId, requestId, isTenant);
+  }
+  public async createAttachment(data: any): Promise<MaintenanceAttachmentEntity> {
+    return this.fallbackMemory.createAttachment(data);
+  }
+  public async getAttachments(dormitoryId: string, requestId: string): Promise<MaintenanceAttachmentEntity[]> {
+    return this.fallbackMemory.getAttachments(dormitoryId, requestId);
+  }
+  public async recordStatusHistory(data: any): Promise<MaintenanceStatusHistoryEntity> {
+    return this.fallbackMemory.recordStatusHistory(data);
+  }
+  public async getStatusHistory(dormitoryId: string, requestId: string): Promise<MaintenanceStatusHistoryEntity[]> {
+    return this.fallbackMemory.getStatusHistory(dormitoryId, requestId);
+  }
+  public async upsertCost(dormitoryId: string, requestId: string, data: any): Promise<MaintenanceCostEntity> {
+    if (data.totalCost || data.laborCost || data.materialCost || data.otherCost) {
+      const total = Number(data.totalCost || data.laborCost || 0);
+      await this.prisma.maintenanceRequest.update({
+        where: { id: requestId },
+        data: { cost: total, note: data.note || undefined }
+      }).catch(() => {});
+    }
+    return this.fallbackMemory.upsertCost(dormitoryId, requestId, data);
+  }
+  public async getCost(dormitoryId: string, requestId: string): Promise<MaintenanceCostEntity | null> {
+    const item = await this.prisma.maintenanceRequest.findUnique({ where: { id: requestId } });
+    if (item && item.cost) {
+      const costStr = String(item.cost);
+      return {
+        id: uuidv4(),
+        dormitoryId,
+        maintenanceRequestId: requestId,
+        laborCost: costStr,
+        materialCost: '0.00',
+        otherCost: '0.00',
+        totalCost: costStr,
+        note: item.note,
+        createdAt: item.createdAt,
+        updatedAt: item.updatedAt,
+        version: 1
+      };
+    }
+    return this.fallbackMemory.getCost(dormitoryId, requestId);
+  }
+}
+

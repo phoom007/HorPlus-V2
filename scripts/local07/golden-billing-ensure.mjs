@@ -141,8 +141,8 @@ export async function ensureGoldenBillingTimeline() {
     },
   });
 
-  // Seed deterministic August meter readings for all occupied rooms
-  const occupiedRooms = dorm.rooms.filter((r) => r.status === 'occupied');
+  // Seed deterministic August meter readings for all occupied monthly rooms (exclude Term 105 and Daily 106)
+  const occupiedRooms = dorm.rooms.filter((r) => r.status === 'occupied' && r.roomNumber !== '105' && r.roomNumber !== '106');
   let augustMetersCreated = 0;
 
   for (const r of occupiedRooms) {
@@ -301,6 +301,39 @@ export async function ensureGoldenBillingTimeline() {
       ...defaultRates,
       source: 'INHERITED',
       inheritedFromBillingCycleId: septCycle.id,
+    },
+  });
+
+  // Cycle 2026-11: Future Draft
+  const novCycle = await prisma.billingCycle.upsert({
+    where: {
+      dormitory_cycle_code_unique: {
+        dormitoryId: dorm.id,
+        cycleCode: '2026-11',
+      },
+    },
+    update: {},
+    create: {
+      dormitoryId: dorm.id,
+      cycleCode: '2026-11',
+      name: 'รอบบิล พฤศจิกายน 2569',
+      periodStart: new Date('2026-11-01'),
+      periodEnd: new Date('2026-11-30'),
+      billingDate: new Date('2026-11-25'),
+      dueDate: new Date('2026-12-05'),
+      status: 'draft',
+    },
+  });
+
+  await prisma.billingRateSnapshot.upsert({
+    where: { billingCycleId: novCycle.id },
+    update: {},
+    create: {
+      dormitoryId: dorm.id,
+      billingCycleId: novCycle.id,
+      ...defaultRates,
+      source: 'INHERITED',
+      inheritedFromBillingCycleId: octCycle.id,
     },
   });
 

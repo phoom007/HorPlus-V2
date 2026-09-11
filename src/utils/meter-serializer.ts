@@ -151,6 +151,9 @@ export function serializeMeterWorkspaceDirtyRow(
   }
 
   if (row.peopleCount !== undefined && row.peopleCount !== null) {
+    if (typeof row.peopleCount === 'string' && row.peopleCount.trim() === '') {
+      throw new Error('กรุณาระบุจำนวนผู้พักอาศัยก่อนบันทึก');
+    }
     const num = Number(row.peopleCount);
     if (isNaN(num) || !Number.isInteger(num) || num < 0) {
       throw new Error('จำนวนผู้พักอาศัยต้องเป็นตัวเลขจำนวนเต็มบวกหรือ 0');

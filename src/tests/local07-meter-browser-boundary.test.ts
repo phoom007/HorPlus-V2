@@ -1,7 +1,8 @@
+// @vitest-environment jsdom
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
- * 
+ *
  * LOCAL-07 Batch 01 — Browser/HTTP Boundary & Pull-Previous Unit Test Suite
  */
 
@@ -12,6 +13,7 @@ import {
   formatCanonicalDecimalString,
 } from '../utils/meter-serializer';
 import { ApiMeterAdapter, ApiBillingAdapter } from '../data/adapters/api';
+import { computeHasPersistedBaseline } from '../pages/owner/meters';
 
 describe('LOCAL-07 Batch 01 — Browser/HTTP Boundary & Pull Previous Suite', () => {
   describe('1. Canonical Frontend Meter Workspace Serializer', () => {

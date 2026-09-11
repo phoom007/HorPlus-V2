@@ -1,4 +1,87 @@
+export function parseOptionalConfiguredNumber(val: any): number | null {
+  if (val === undefined || val === null || val === '') return null;
+  const num = Number(val);
+  return isNaN(num) ? null : num;
+}
+
+export function resolveFirstDefinedNumber(...vals: any[]): number | null {
+  for (const v of vals) {
+    const parsed = parseOptionalConfiguredNumber(v);
+    if (parsed !== null) return parsed;
+  }
+  return null;
+}
+
+export function mapRegistrationBuildingForFinalize(
+  b: any,
+  idx: number,
+  fallbackDeposit?: number | string
+) {
+  const bName = (b.name && b.name.trim()) ? b.name.trim() : '';
+  const rawPrefix = (b.roomPrefix ? b.roomPrefix.trim() : '');
+  const effectiveName = bName || (rawPrefix ? `อาคาร ${rawPrefix}` : `อาคาร ${idx + 1}`);
+  const effectivePrefix = rawPrefix || bName || null;
+
+  const termDep = resolveFirstDefinedNumber(b.termDeposit, b.securityDeposit, fallbackDeposit);
+  const monthlyDep = resolveFirstDefinedNumber(b.monthlyDeposit, b.securityDeposit, fallbackDeposit);
+  const dailyDep = resolveFirstDefinedNumber(b.dailyDeposit, b.securityDeposit, fallbackDeposit);
+
+  const monthlyRent = parseOptionalConfiguredNumber(b.rentRates?.monthly);
+  const dailyRent = parseOptionalConfiguredNumber(b.rentRates?.daily);
+  const termRent = parseOptionalConfiguredNumber(b.rentRates?.term);
+
+  return {
+    id: b.id || `bld-${idx + 1}`,
+    name: effectiveName,
+    code: effectivePrefix,
+    floorsCount: Number(b.totalFloors) || 1,
+    roomsPerFloor: b.roomsPerFloor !== '' && b.roomsPerFloor !== null && b.roomsPerFloor !== undefined ? Number(b.roomsPerFloor) : null,
+    roomPrefix: effectivePrefix,
+    hasElevator: b.hasElevator ?? false,
+    numberingPattern: b.formatPattern || null,
+    description: `อาคาร ${effectiveName}`,
+    monthlyRent,
+    dailyRent,
+    termRent,
+    termMonths: Number(b.rentRates?.termMonths) || 4,
+    maxInstallmentMonths: Number(b.rentRates?.maxInstallmentMonths) || 2,
+    termDeposit: termDep,
+    monthlyDeposit: monthlyDep,
+    dailyDeposit: dailyDep,
+    depositAmount: monthlyDep,
+    securityDeposit: monthlyDep,
+    maximumOccupants: Number(b.rentRates?.maxOccupants) || 2,
+  };
+}
+
+import { formatBuildingDisplayName } from '../../lib/roomRentalSummary';
+import { normalizeRoomIdentifier } from '../../lib/roomNormalizer';
+import {
+  TieredRateEditor,
+  WATER_TIER_PRESET,
+  ELECTRICITY_TIER_PRESET,
+  CanonicalTierRecord,
+  validateCanonicalTiers,
+  normalizeCanonicalTiers,
+} from '../../components/settings/TieredRateEditor';
+
+export const mapRegisterUtilityMode = (mode: string): string => {
+  switch (mode) {
+    case 'unit':
+      return 'per_unit';
+    case 'person':
+      return 'per_person';
+    case 'room':
+      return 'flat_rate';
+    case 'tiered':
+      return 'tiered';
+    default:
+      return 'flat_rate';
+  }
+};
 import React, { useState, useRef } from 'react';
+import { LogoEditorModal } from '../../components/LogoEditorModal';
+import { queryClient, queryKeys } from '../../lib/queryClient';
 import {
   Building2,
   User,
@@ -45,7 +128,8 @@ import {
   Gift,
   Tag,
   Bot,
-  Loader2
+  Loader2,
+  Upload,
 } from 'lucide-react';
 
 import { onboardingClient } from '../../data/onboardingClient';
@@ -54,6 +138,7 @@ import { Dormitory, Building, Room } from '../../types';
 import { normalizeNumericInput } from '../../utils/numericInput';
 import { createPortal } from 'react-dom';
 import { saveRegistrationDraft, getRegistrationDraft, clearRegistrationDraft } from '../../utils/localDraftStorage';
+import { LineLogo } from '../../components/LineLogo';
 
 interface RegisterProps {
   onAddLog?: (action: string, details: string, module: string, targetId?: string) => void;
@@ -133,6 +218,313 @@ const formatBankAccount = (val: string) => {
   return `${digits.slice(0, 3)}-${digits.slice(3, 4)}-${digits.slice(4, 9)}-${digits.slice(9)}`;
 };
 
+export function generateBuildingRoomNumbers(b: {
+  name?: string;
+  totalFloors: number | string;
+  roomsPerFloor: number | string;
+  roomPrefix?: string;
+  formatPattern: string;
+  mode?: 'auto' | 'manual';
+  customRooms?: string[];
+}): string[] {
+  if (b.customRooms && b.customRooms.length === 1 && b.customRooms[0] === '__EMPTY__') {
+    return [];
+  }
+
+  if (b.mode === 'manual' && b.customRooms && b.customRooms.length > 0) {
+    return b.customRooms.filter(r => r !== '__EMPTY__');
+  }
+
+  if (b.mode === 'auto' && b.customRooms && b.customRooms.length > 0) {
+    return b.customRooms.filter(r => r !== '__EMPTY__');
+  }
+
+  const rooms: string[] = [];
+  const prefix = (b.name && b.name.trim()) ? b.name.trim() : (b.roomPrefix ? b.roomPrefix.trim() : '');
+  const maxFloors = Number(b.totalFloors) || 0;
+  const maxRooms = Number(b.roomsPerFloor) || 0;
+
+  for (let floor = 1; floor <= maxFloors; floor++) {
+    for (let rm = 1; rm <= maxRooms; rm++) {
+      const rmStr = rm < 10 ? `0${rm}` : `${rm}`;
+      let roomNum = '';
+
+      switch (b.formatPattern) {
+        case 'prefix_floor_room':
+          roomNum = `${prefix}${floor}${rmStr}`;
+          break;
+        case 'floor_room':
+          roomNum = `${floor}${rmStr}`;
+          break;
+        case 'prefix_floor_slash_room':
+          roomNum = `${prefix}${floor}/${rm}`;
+          break;
+        case 'floor_slash_room':
+          roomNum = `${floor}/${rm}`;
+          break;
+        case 'prefix_dash_floor_room':
+          roomNum = `${prefix ? prefix + '-' : ''}${floor}${rmStr}`;
+          break;
+        default:
+          roomNum = `${prefix}${floor}${rmStr}`;
+      }
+      rooms.push(roomNum);
+    }
+  }
+  return rooms;
+}
+
+export function getRegistrationInitialFormData() {
+  return {
+    dormName: '',
+    dormAddress: '',
+    province: 'กรุงเทพมหานคร',
+    dormType: 'หอพักนักเรียน/นักศึกษา',
+    genderType: 'รวม',
+    logoUrl: null as string | null,
+    hasLogo: false,
+    buildings: [
+      {
+        id: 'b-1',
+        name: '',
+        totalFloors: 1 as number | string,
+        roomsPerFloor: 0 as number | string,
+        hasElevator: false,
+        roomPrefix: '',
+        formatPattern: 'prefix_floor_room',
+        mode: 'auto' as 'auto' | 'manual',
+        customRooms: [] as string[],
+        termDeposit: '' as number | string,
+        monthlyDeposit: '' as number | string,
+        dailyDeposit: '' as number | string,
+        securityDeposit: '' as number | string,
+        rentRates: {
+          monthly: '' as number | string,
+          term: '' as number | string,
+          termMonths: 4 as number | string,
+          maxInstallmentMonths: 2 as number | string,
+          daily: '' as number | string,
+          maxOccupants: 2 as number | string,
+        },
+      },
+    ],
+    utilities: {
+      waterBillingMode: 'person',
+      waterRate: 0 as number | string,
+      waterTierRates: WATER_TIER_PRESET as CanonicalTierRecord[],
+      waterTierReviewed: false,
+      electricBillingMode: 'unit',
+      electricRate: 0 as number | string,
+      electricityTierRates: ELECTRICITY_TIER_PRESET as CanonicalTierRecord[],
+      electricityTierReviewed: false,
+      commonFeeMode: 'room',
+      commonFeeRate: 0 as number | string,
+      internetFeeMode: 'person',
+      internetRate: 0 as number | string,
+      parkingFeeMode: 'room',
+      parkingFeeRate: 0 as number | string,
+    },
+    deposits: {
+      securityDeposit: '' as number | string,
+      advanceRentMonths: 1,
+      dueDateDay: 15 as number | string,
+      gracePeriodDays: 2,
+      lateFeeType: 'none',
+      lateFeeAmount: 0 as number | string,
+    },
+    paymentAccount: {
+      bankName: '',
+      accountNumber: '',
+      accountName: '',
+      bankAccountName: '',
+      promptPayId: '',
+      promptPayName: '',
+    },
+    petPolicy: {
+      allowed: 'none',
+      allowedTypes: [] as string[],
+    },
+    ownerSignatureUrl: '',
+    rulesTemplate: '',
+    lineOA: {
+      oaName: '',
+      channelId: '',
+      channelSecret: '',
+      isConnected: false,
+      botDisplayName: '',
+      botPictureUrl: '',
+      webhookUrl: '',
+      verifiedAt: null,
+      verificationError: null,
+    },
+  };
+}
+
+export function mapRegistrationFormDataToFinalizePayload(params: {
+  formData: any;
+  provDormId: string;
+  activeIntentId: string;
+  selectedPlan?: string;
+  selectedPackageId?: string | null;
+  uploadedSignatureRef?: string | null;
+  appliedPromo?: boolean;
+  validatedPromoCode?: string | null;
+  isReferralBound?: boolean;
+  referralCodeInput?: string;
+  coinToApply?: number;
+}) {
+  const {
+    formData,
+    provDormId,
+    activeIntentId,
+    selectedPlan = 'free',
+    selectedPackageId,
+    uploadedSignatureRef,
+    appliedPromo,
+    validatedPromoCode,
+    isReferralBound,
+    referralCodeInput,
+    coinToApply = 0,
+  } = params;
+
+  const mappedBuildings = formData.buildings.map((b: any, idx: number) =>
+    mapRegistrationBuildingForFinalize(b, idx, formData.deposits?.securityDeposit)
+  );
+
+  const mappedRooms: any[] = [];
+  formData.buildings.forEach((b: any) => {
+    const roomNumbers = generateBuildingRoomNumbers(b);
+    const rentRates = b.rentRates || {};
+    const termDep = resolveFirstDefinedNumber(b.termDeposit, b.securityDeposit, formData.deposits?.securityDeposit);
+    const monthlyDep = resolveFirstDefinedNumber(b.monthlyDeposit, b.securityDeposit, formData.deposits?.securityDeposit);
+    const dailyDep = resolveFirstDefinedNumber(b.dailyDeposit, b.securityDeposit, formData.deposits?.securityDeposit);
+    const monthlyRent = parseOptionalConfiguredNumber(rentRates.monthly);
+    const dailyRent = parseOptionalConfiguredNumber(rentRates.daily);
+    const termRent = parseOptionalConfiguredNumber(rentRates.term);
+
+    roomNumbers.forEach((rNum: string) => {
+      const digitsOnly = rNum.replace(/\D/g, '');
+      const calculatedFloor = digitsOnly ? (parseInt(digitsOnly.charAt(0), 10) || 1) : 1;
+      mappedRooms.push({
+        buildingId: b.id,
+        roomNumber: rNum,
+        floor: calculatedFloor,
+        monthlyRent,
+        dailyRent,
+        termRent,
+        termMonths: Number(rentRates.termMonths) || 4,
+        termDeposit: termDep,
+        monthlyDeposit: monthlyDep,
+        dailyDeposit: dailyDep,
+        depositAmount: monthlyDep,
+        securityDeposit: monthlyDep,
+        maximumOccupants: Number(rentRates.maxOccupants) || 2,
+        status: 'vacant',
+      });
+    });
+  });
+
+  if (mappedBuildings.length === 0 || mappedRooms.length === 0) {
+    throw new Error('กรุณาระบุข้อมูลอาคารและห้องพักอย่างน้อย 1 ห้อง');
+  }
+
+  const seenFinalizeRooms = new Set<string>();
+  for (const room of mappedRooms) {
+    const norm = normalizeRoomIdentifier(room.roomNumber);
+    if (seenFinalizeRooms.has(norm)) {
+      throw new Error(`เลขห้อง "${room.roomNumber}" ซ้ำกับอาคารอื่น กรุณาเปลี่ยนเลขห้องหรือเลือกรูปแบบเลขห้องอื่น`);
+    }
+    seenFinalizeRooms.add(norm);
+  }
+
+  const waterBillingType = mapRegisterUtilityMode(formData.utilities?.waterBillingMode);
+  const elecBillingType = mapRegisterUtilityMode(formData.utilities?.electricBillingMode);
+
+  const isCustomizedWater = Boolean(
+    formData.utilities?.waterTierRates &&
+    JSON.stringify(formData.utilities.waterTierRates) !== JSON.stringify(WATER_TIER_PRESET)
+  );
+
+  const isCustomizedElec = Boolean(
+    formData.utilities?.electricityTierRates &&
+    JSON.stringify(formData.utilities.electricityTierRates) !== JSON.stringify(ELECTRICITY_TIER_PRESET)
+  );
+
+  const rawWaterTiers = formData.utilities?.waterBillingMode === 'tiered'
+    ? (formData.utilities?.waterTierRates || WATER_TIER_PRESET)
+    : (isCustomizedWater ? formData.utilities?.waterTierRates : null);
+
+  const rawElecTiers = formData.utilities?.electricBillingMode === 'tiered'
+    ? (formData.utilities?.electricityTierRates || ELECTRICITY_TIER_PRESET)
+    : (isCustomizedElec ? formData.utilities?.electricityTierRates : null);
+
+  const waterTierRates = rawWaterTiers ? normalizeCanonicalTiers(rawWaterTiers) : null;
+  const electricityTierRates = rawElecTiers ? normalizeCanonicalTiers(rawElecTiers) : null;
+
+  const rawPP = formData.paymentAccount?.promptPayId ? formData.paymentAccount.promptPayId.replace(/\D/g, '') : null;
+  const ppType = rawPP ? (rawPP.length === 13 ? 'national_id' : 'mobile_phone') : null;
+
+  return {
+    provisionalDormitoryId: provDormId,
+    dormitory: {
+      name: formData.dormName,
+      type: formData.dormType || 'apartment',
+      genderPolicy: formData.genderType || 'รวม',
+      addressLine1: formData.dormAddress || null,
+      province: formData.province || null,
+      phone: null,
+      email: null,
+      estimatedBuildingCount: mappedBuildings.length,
+      estimatedRoomCount: mappedRooms.length,
+      logoUrl: formData.logoUrl || null,
+    },
+    billing: {
+      dueDay: Number(formData.deposits?.dueDateDay) || 15,
+      waterBillingType,
+      waterRate: String(formData.utilities?.waterRate ?? '0.00').replace(/,/g, '').trim() || '0.00',
+      waterTierRates: waterTierRates || null,
+      electricityBillingType: elecBillingType,
+      electricityRate: String(formData.utilities?.electricRate ?? '0.00').replace(/,/g, '').trim() || '0.00',
+      electricityTierRates: electricityTierRates || null,
+      commonFee: String(formData.utilities?.commonFeeRate ?? '0.00').replace(/,/g, '').trim() || '0.00',
+      commonFeeMode: formData.utilities?.commonFeeMode || 'none',
+      internetFee: String(formData.utilities?.internetRate ?? '0.00').replace(/,/g, '').trim() || '0.00',
+      internetFeeMode: formData.utilities?.internetFeeMode || 'none',
+      parkingRate: String(formData.utilities?.parkingFeeRate ?? '0.00').replace(/,/g, '').trim() || '0.00',
+      parkingFeeMode: formData.utilities?.parkingFeeMode || 'none',
+      gracePeriodDays: formData.deposits?.gracePeriodDays || 0,
+      advanceRentMonths: formData.deposits?.advanceRentMonths || 1,
+      lateFeeType: formData.deposits?.lateFeeType === 'fixed_once' ? 'fixed' : (formData.deposits?.lateFeeType || 'none'),
+      lateFeeValue: String(formData.deposits?.lateFeeAmount ?? '0.00').replace(/,/g, '').trim() || '0.00',
+      rentBillingType: 'monthly',
+    },
+    payment: {
+      cashAccepted: true,
+      promptPayType: ppType,
+      promptPayValue: rawPP,
+      promptPayAccountName: formData.paymentAccount?.promptPayName || null,
+      bankCode: formData.paymentAccount?.bankName || null,
+      bankAccountName: formData.paymentAccount?.bankAccountName || null,
+      bankAccountNumber: formData.paymentAccount?.accountNumber ? formData.paymentAccount.accountNumber.replace(/\D/g, '') : null,
+    },
+    buildings: mappedBuildings,
+    rooms: mappedRooms,
+    planCode: (selectedPlan || 'free').toUpperCase(),
+    packageId: selectedPlan === 'pro' ? (selectedPackageId || undefined) : undefined,
+    packageIntentId: activeIntentId,
+    promoCode: appliedPromo && validatedPromoCode ? validatedPromoCode : undefined,
+    referralCode: isReferralBound && referralCodeInput ? referralCodeInput.trim() : undefined,
+    coinApplied: coinToApply > 0 ? coinToApply : undefined,
+    ownerSignatureUrl: uploadedSignatureRef,
+    petPolicy: {
+      allowed: formData.petPolicy?.allowed || 'none',
+      allowedTypes: formData.petPolicy?.allowedTypes || [],
+    },
+    defaultTerms: formData.rulesTemplate || undefined,
+    defaultDeposit: parseOptionalConfiguredNumber(formData.deposits?.securityDeposit),
+  };
+}
+
 // 10 Preset Dormitory Rules for Quick Insertion
 const PRESET_DORM_RULES = [
   { id: 'quiet_hours', label: '🤫 งดส่งเสียงดังหลัง 22:00', text: '• ห้ามส่งเสียงดังรบกวนผู้อื่นหลังเวลา 22:00 น.' },
@@ -146,6 +538,206 @@ const PRESET_DORM_RULES = [
   { id: 'cleanliness', label: '🧹 รักษาความสะอาดห้องพัก', text: '• ผู้เช่าต้องดูแลรักษาความสะอาดภายในห้องพัก ไม่ปล่อยให้เกิดกลิ่นหรือคราบสกปรก' },
   { id: 'safety_lock', label: '🔐 ล็อคประตูและดูแลทรัพย์สิน', text: '• กรุณาล็อคประตูห้องพักทุกครั้งเมื่อออกไปข้างนอก ทางหอพักไม่รับผิดชอบกรณีทรัพย์สินสูญหาย' }
 ];
+
+interface DormitoryLogoUploaderProps {
+  provisionalDormitoryId: string | null;
+  ensureProvisionalDormitoryId: () => Promise<string>;
+  logoUrl: string | null;
+  onLogoChange: (newLogoUrl: string | null) => void;
+  onError: (msg: string) => void;
+}
+
+export const DormitoryLogoUploader: React.FC<DormitoryLogoUploaderProps> = ({
+  ensureProvisionalDormitoryId,
+  logoUrl,
+  onLogoChange,
+  onError,
+}) => {
+  const [isUploading, setIsUploading] = useState(false);
+  const [isDragOver, setIsDragOver] = useState(false);
+  const [editorFile, setEditorFile] = useState<File | null>(null);
+  const [isEditorOpen, setIsEditorOpen] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleFile = (file: File) => {
+    if (!file) return;
+
+    if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
+      onError('รองรับเฉพาะไฟล์รูปภาพประเภท PNG, JPG และ WebP เท่านั้น');
+      return;
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      onError('ขนาดไฟล์ต้องไม่เกิน 5MB');
+      return;
+    }
+
+    // Open Logo Editor instead of immediate upload
+    setEditorFile(file);
+    setIsEditorOpen(true);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const handleConfirmEdit = async (processedFile: File) => {
+    try {
+      setIsUploading(true);
+      const dormId = await ensureProvisionalDormitoryId();
+      const res = await onboardingClient.uploadLogo(dormId, processedFile);
+      if (!res?.logoUrl) {
+        throw new Error('เกิดข้อผิดพลาดในการอัปโหลดรูปภาพ');
+      }
+
+      onLogoChange(`${res.logoUrl}?t=${Date.now()}`);
+      setIsEditorOpen(false);
+      setEditorFile(null);
+
+      // Invalidate dormitories query cache for immediate Dormitory Picker refresh
+      queryClient.invalidateQueries({ queryKey: queryKeys.dormitories });
+      queryClient.invalidateQueries({ queryKey: ['auth', 'session'] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.dormitory(dormId) });
+    } catch (err: any) {
+      console.error('[LOGO_UPLOAD_FAILED]', err);
+      onError(err.message || 'ไม่สามารถอัปโหลดโลโก้ได้ กรุณาลองใหม่อีกครั้ง');
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  const handleRemove = async () => {
+    try {
+      setIsUploading(true);
+      const dormId = await ensureProvisionalDormitoryId();
+      await onboardingClient.deleteLogo(dormId);
+      onLogoChange(null);
+
+      // Invalidate dormitories query cache for immediate Dormitory Picker fallback refresh
+      queryClient.invalidateQueries({ queryKey: queryKeys.dormitories });
+      queryClient.invalidateQueries({ queryKey: ['auth', 'session'] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.dormitory(dormId) });
+    } catch (err: any) {
+      console.error('[LOGO_DELETE_FAILED]', err);
+      onError(err.message || 'ไม่สามารถลบโลโก้ได้ กรุณาลองใหม่อีกครั้ง');
+    } finally {
+      setIsUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between">
+        <label className="block text-xs font-bold text-slate-700">
+          โลโก้หอพัก <span className="text-[10px] text-slate-400 font-normal">(ไม่บังคับ)</span>
+        </label>
+      </div>
+
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/png,image/jpeg,image/webp"
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) handleFile(file);
+        }}
+      />
+
+      {logoUrl ? (
+        <div
+          onClick={() => !isUploading && fileInputRef.current?.click()}
+          onDragOver={(e) => {
+            e.preventDefault();
+            setIsDragOver(true);
+          }}
+          onDragLeave={() => setIsDragOver(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setIsDragOver(false);
+            const file = e.dataTransfer.files?.[0];
+            if (file) handleFile(file);
+          }}
+          className={`flex items-center gap-3 p-3 bg-white border-2 rounded-2xl cursor-pointer transition ${isDragOver ? 'border-blue-500 bg-blue-50/50' : 'border-slate-200 hover:border-blue-400'
+            } ${isUploading ? 'opacity-50 pointer-events-none' : ''}`}
+        >
+          <div className="w-16 h-16 rounded-xl border border-slate-100 bg-slate-50 flex items-center justify-center overflow-hidden shrink-0">
+            <img src={logoUrl} alt="Dormitory Logo" className="w-full h-full object-contain" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-xs font-bold text-slate-800">มีโลโก้หอพักแล้ว</p>
+            <p className="text-[10px] text-slate-400">คลิกหรือลากไฟล์ใหม่มาวางที่นี่เพื่อเปลี่ยนรูปภาพ</p>
+          </div>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                fileInputRef.current?.click();
+              }}
+              disabled={isUploading}
+              className="px-3 py-1.5 text-xs font-bold text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-xl transition cursor-pointer shrink-0"
+            >
+              เปลี่ยนรูป
+            </button>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                handleRemove();
+              }}
+              disabled={isUploading}
+              className="p-1.5 text-rose-500 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition cursor-pointer shrink-0"
+              title="ลบโลโก้"
+              aria-label="ลบโลโก้"
+            >
+              <Trash2 className="w-4 h-4" />
+              <span className="sr-only">ลบโลโก้</span>
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div
+          onClick={() => !isUploading && fileInputRef.current?.click()}
+          onDragOver={(e) => {
+            e.preventDefault();
+            setIsDragOver(true);
+          }}
+          onDragLeave={() => setIsDragOver(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setIsDragOver(false);
+            const file = e.dataTransfer.files?.[0];
+            if (file) handleFile(file);
+          }}
+          className={`border-2 border-dashed rounded-2xl p-4 text-center cursor-pointer transition flex flex-col items-center justify-center gap-1.5 ${isDragOver
+            ? 'border-blue-500 bg-blue-50/50'
+            : 'border-slate-200 hover:border-blue-400 bg-white hover:bg-slate-50/50'
+            } ${isUploading ? 'opacity-50 pointer-events-none' : ''}`}
+        >
+          {isUploading ? (
+            <Loader2 className="w-6 h-6 text-blue-500 animate-spin" />
+          ) : (
+            <Upload className="w-6 h-6 text-slate-400" />
+          )}
+          <div className="text-xs font-bold text-slate-700">
+            {isUploading ? 'กำลังอัปโหลด...' : 'คลิกเพื่อเลือกไฟล์ หรือลากไฟล์มาวางที่นี่'}
+          </div>
+          <div className="text-[10px] text-slate-400">รองรับไฟล์ PNG, JPG หรือ WebP ขนาดไม่เกิน 5MB</div>
+        </div>
+      )}
+
+      <LogoEditorModal
+        isOpen={isEditorOpen}
+        imageFile={editorFile}
+        onClose={() => {
+          setIsEditorOpen(false);
+          setEditorFile(null);
+        }}
+        onConfirm={handleConfirmEdit}
+        isSubmitting={isUploading}
+      />
+    </div>
+  );
+};
 
 export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, mode = 'initial' }) => {
   const authContext = React.useContext(AuthContext);
@@ -167,158 +759,12 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
   const [bulkEditingBuildingIdx, setBulkEditingBuildingIdx] = useState<number | null>(null);
   const [bulkRoomsInputText, setBulkRoomsInputText] = useState<string>('');
 
-  // Helper to generate room numbers list
-  const getGeneratedRooms = (b: {
-    totalFloors: number | string;
-    roomsPerFloor: number | string;
-    roomPrefix: string;
-    formatPattern: string;
-    mode: 'auto' | 'manual';
-    customRooms?: string[];
-  }) => {
-    if (b.customRooms && b.customRooms.length === 1 && b.customRooms[0] === '__EMPTY__') {
-      return [];
-    }
-
-    if (b.mode === 'manual' && b.customRooms && b.customRooms.length > 0) {
-      return b.customRooms.filter(r => r !== '__EMPTY__');
-    }
-
-    if (b.mode === 'auto' && b.customRooms && b.customRooms.length > 0) {
-      return b.customRooms.filter(r => r !== '__EMPTY__');
-    }
-
-    const rooms: string[] = [];
-    const prefix = b.roomPrefix ? b.roomPrefix.trim().toUpperCase() : '';
-    const maxFloors = Number(b.totalFloors) || 0;
-    const maxRooms = Number(b.roomsPerFloor) || 0;
-
-    for (let floor = 1; floor <= maxFloors; floor++) {
-      for (let rm = 1; rm <= maxRooms; rm++) {
-        const rmStr = rm < 10 ? `0${rm}` : `${rm}`;
-        let roomNum = '';
-
-        switch (b.formatPattern) {
-          case 'prefix_floor_room': // A101
-            roomNum = `${prefix}${floor}${rmStr}`;
-            break;
-          case 'floor_room': // 101
-            roomNum = `${floor}${rmStr}`;
-            break;
-          case 'prefix_floor_slash_room': // A1/1
-            roomNum = `${prefix}${floor}/${rm}`;
-            break;
-          case 'floor_slash_room': // 1/1
-            roomNum = `${floor}/${rm}`;
-            break;
-          case 'prefix_dash_floor_room': // A-101
-            roomNum = `${prefix ? prefix + '-' : ''}${floor}${rmStr}`;
-            break;
-          default:
-            roomNum = `${prefix}${floor}${rmStr}`;
-        }
-        rooms.push(roomNum);
-      }
-    }
-    return rooms;
-  };
-
-  // Load existing configuration or defaults
-  const getInitialForm = () => {
-    const defaultData = {
-      // 1. Owner & Dorm Info (Clean baseline)
-      dormName: '',
-      dormAddress: '',
-      province: 'กรุงเทพมหานคร',
-      dormType: 'หอพักนักเรียน/นักศึกษา',
-      genderType: 'รวม',
-
-      // 2. Buildings & Flexible Structure
-      buildings: [
-        {
-          id: 'b-1',
-          name: '',
-          totalFloors: 1 as number | string,
-          roomsPerFloor: 0 as number | string,
-          hasElevator: false,
-          roomPrefix: '',
-          formatPattern: 'prefix_floor_room',
-          mode: 'auto' as 'auto' | 'manual',
-          customRooms: [] as string[],
-          securityDeposit: 0 as number | string,
-          rentRates: {
-            monthly: 0 as number | string,
-            term: 0 as number | string,
-            termMonths: 4 as number | string,
-            maxInstallmentMonths: 2 as number | string,
-            daily: 0 as number | string,
-            maxOccupants: 2 as number | string
-          }
-        }
-      ],
-
-      // 3. Utilities & Service Rates (Approved Step 3 defaults)
-      utilities: {
-        waterBillingMode: 'person', // 'unit' | 'person' | 'room' (default: person)
-        waterRate: 0 as number | string,
-
-        electricBillingMode: 'unit', // 'unit' | 'person' | 'room' (default: unit)
-        electricRate: 0 as number | string,
-
-        commonFeeMode: 'room', // 'room' | 'person' (default: room)
-        commonFeeRate: 0 as number | string,
-
-        internetFeeMode: 'person', // 'person' | 'room' | 'free' (default: person)
-        internetRate: 0 as number | string,
-
-        parkingFeeMode: 'room', // 'room' | 'free' (default: room)
-        parkingFeeRate: 0 as number | string
-      },
-
-      // 4. Deposits, Late Fees & Payment Account
-      deposits: {
-        securityDeposit: 0 as number | string,
-        advanceRentMonths: 1,
-        dueDateDay: 15 as number | string,
-        gracePeriodDays: 2,
-        lateFeeType: 'none', // 'none' | 'per_day' | 'fixed_once' (default: none)
-        lateFeeAmount: 0 as number | string
-      },
-
-      paymentAccount: {
-        bankName: '',
-        accountNumber: '',
-        accountName: '',
-        bankAccountName: '',
-        promptPayId: '',
-        promptPayName: ''
-      },
-
-      // 5. Pets, Rules & Signature
-      petPolicy: {
-        allowed: 'none', // 'none' | 'free' | 'conditional' (default: none)
-        allowedTypes: []
-      },
-      ownerSignatureUrl: '',
-      rulesTemplate: '',
-
-      // 6. LINE OA
-      lineOA: {
-        oaName: '',
-        channelId: '',
-        channelSecret: '',
-        isConnected: false,
-        botDisplayName: '',
-        botPictureUrl: '',
-        lineOaId: ''
-      }
-    };
-
-    return defaultData;
-  };
+  const getGeneratedRooms = generateBuildingRoomNumbers;
+  const getInitialForm = () => getRegistrationInitialFormData();
 
   const [formData, setFormData] = useState(getInitialForm());
   const [testingLine, setTestingLine] = useState(false);
+  const [copiedWebhook, setCopiedWebhook] = useState(false);
   const [lineStatusMsg, setLineStatusMsg] = useState<{ type: 'success' | 'error'; msg: string } | null>(
     formData.lineOA.isConnected ? { type: 'success', msg: 'เชื่อมต่อกับ LINE Official Account สำเร็จ (พร้อมใช้งาน)' } : null
   );
@@ -381,14 +827,24 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
         if (draft.formData) {
           const restoredBuildings = Array.isArray(draft.formData.buildings)
             ? draft.formData.buildings.map((b: any) => {
+              const rawName = (typeof b.name === 'string' ? b.name : '').trim();
               const rawPrefix = (typeof b.roomPrefix === 'string' ? b.roomPrefix : '').trim();
-              const pfx = rawPrefix.toUpperCase();
+              const effectiveName = rawName || rawPrefix || '';
+              const rawSecDep = draft.formData?.deposits?.securityDeposit;
+              const draftDormDep = (rawSecDep !== undefined && rawSecDep !== null && rawSecDep !== '') ? rawSecDep : '';
+              const legacyDep = (b.securityDeposit !== undefined && b.securityDeposit !== null && b.securityDeposit !== '') ? b.securityDeposit : draftDormDep;
+              const termDep = (b.termDeposit !== undefined && b.termDeposit !== null && b.termDeposit !== '') ? b.termDeposit : legacyDep;
+              const monthlyDep = (b.monthlyDeposit !== undefined && b.monthlyDeposit !== null && b.monthlyDeposit !== '') ? b.monthlyDeposit : legacyDep;
+              const dailyDep = (b.dailyDeposit !== undefined && b.dailyDeposit !== null && b.dailyDeposit !== '') ? b.dailyDeposit : legacyDep;
+
               return {
                 ...b,
-                roomPrefix: pfx,
-                name: (b.name && b.name.trim())
-                  ? (rawPrefix ? b.name.replace(new RegExp(`(อาคาร\\s*)${rawPrefix}`, 'i'), `$1${pfx}`) : b.name)
-                  : (pfx ? `อาคาร ${pfx}` : 'อาคาร '),
+                name: effectiveName,
+                roomPrefix: rawPrefix,
+                termDeposit: termDep,
+                monthlyDeposit: monthlyDep,
+                dailyDeposit: dailyDep,
+                securityDeposit: monthlyDep,
               };
             })
             : undefined;
@@ -396,6 +852,12 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
           setFormData(prev => ({
             ...prev,
             ...draft.formData,
+            utilities: {
+              ...prev.utilities,
+              ...(draft.formData.utilities || {}),
+              waterTierRates: draft.formData.utilities?.waterTierRates || prev.utilities.waterTierRates,
+              electricityTierRates: draft.formData.utilities?.electricityTierRates || prev.utilities.electricityTierRates,
+            },
             ...(restoredBuildings ? { buildings: restoredBuildings } : {}),
             // Never restore sensitive channelSecret
             lineOA: {
@@ -585,7 +1047,6 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
   // Signature Canvas Drawing
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [isDrawing, setIsDrawing] = useState(false);
-  const [signatureSavedToast, setSignatureSavedToast] = useState<string | null>(null);
   const [webhookCopied, setWebhookCopied] = useState(false);
 
   // Restore signature to canvas if returning to step 5
@@ -597,7 +1058,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
         const img = new Image();
         img.onload = () => {
           ctx.clearRect(0, 0, canvas.width, canvas.height);
-          ctx.drawImage(img, 0, 0);
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
         };
         img.src = formData.ownerSignatureUrl;
       }
@@ -611,8 +1072,12 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
     if (!ctx) return;
     setIsDrawing(true);
     const rect = canvas.getBoundingClientRect();
-    const x = ('touches' in e) ? e.touches[0].clientX - rect.left : e.clientX - rect.left;
-    const y = ('touches' in e) ? e.touches[0].clientY - rect.top : e.clientY - rect.top;
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
+    const x = (clientX - rect.left) * scaleX;
+    const y = (clientY - rect.top) * scaleY;
     ctx.beginPath();
     ctx.moveTo(x, y);
   };
@@ -624,8 +1089,12 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     const rect = canvas.getBoundingClientRect();
-    const x = ('touches' in e) ? e.touches[0].clientX - rect.left : e.clientX - rect.left;
-    const y = ('touches' in e) ? e.touches[0].clientY - rect.top : e.clientY - rect.top;
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
+    const x = (clientX - rect.left) * scaleX;
+    const y = (clientY - rect.top) * scaleY;
     ctx.lineWidth = 3;
     ctx.lineCap = 'round';
     ctx.strokeStyle = '#1e293b';
@@ -643,28 +1112,6 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
     }
   };
 
-  const handleSaveSignature = async () => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const dataUrl = canvas.toDataURL('image/png');
-    setFormData(prev => ({ ...prev, ownerSignatureUrl: dataUrl }));
-    setSignatureSavedToast('บันทึกลายเซ็นเรียบร้อยแล้ว!');
-    setTimeout(() => setSignatureSavedToast(null), 3000);
-
-    try {
-      const provDormId = await ensureProvisionalDormitoryId();
-      if (provDormId) {
-        const uploadRes = await onboardingClient.uploadSignature(provDormId, dataUrl);
-        const safeRef = uploadRes?.data?.url || uploadRes?.url || uploadRes?.data?.objectKey || uploadRes?.objectKey;
-        if (safeRef) {
-          setFormData(prev => ({ ...prev, ownerSignatureUrl: safeRef }));
-        }
-      }
-    } catch (err) {
-      console.warn('Pre-uploading signature failed (will retry at finalization):', err);
-    }
-  };
-
   const clearCanvas = () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -672,7 +1119,6 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
     if (!ctx) return;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     setFormData(prev => ({ ...prev, ownerSignatureUrl: '' }));
-    setSignatureSavedToast(null);
   };
 
   const handleCheckReferral = async () => {
@@ -764,6 +1210,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
       const botDisplayName = lineRes?.data?.botDisplayName || lineRes?.botDisplayName || '';
       const botPictureUrl = lineRes?.data?.botPictureUrl || lineRes?.botPictureUrl || '';
       const lineOaId = lineRes?.data?.lineOaId || lineRes?.lineOaId || '';
+      const webhookUrl = lineRes?.data?.webhookUrl || lineRes?.config?.webhookUrl || lineRes?.webhookUrl || `${window.location.origin}/api/v1/line/webhook/${provDormId}`;
 
       setFormData(prev => ({
         ...prev,
@@ -772,13 +1219,10 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
           isConnected: true,
           botDisplayName,
           botPictureUrl,
+          webhookUrl,
           oaName: lineOaId || prev.lineOA.oaName
         }
       }));
-      setLineStatusMsg({ type: 'success', msg: 'ทดสอบสำเร็จ: เชื่อมต่อ LINE Official Account สำเร็จ (พร้อมใช้งาน)' });
-    } catch (err: any) {
-      setFormData(prev => ({ ...prev, lineOA: { ...prev.lineOA, isConnected: false } }));
-      setLineStatusMsg({ type: 'error', msg: err?.message || 'การเชื่อมต่อ LINE OA ล้มเหลว กรุณาตรวจสอบ Channel ID / Secret' });
     } finally {
       setTestingLine(false);
     }
@@ -795,13 +1239,16 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
       formatPattern: 'prefix_floor_room',
       mode: 'auto' as 'auto' | 'manual',
       customRooms: [] as string[],
-      securityDeposit: 0,
+      termDeposit: '',
+      monthlyDeposit: '',
+      dailyDeposit: '',
+      securityDeposit: '',
       rentRates: {
-        monthly: 0,
-        term: 0,
+        monthly: '',
+        term: '',
         termMonths: 4,
         maxInstallmentMonths: 2,
-        daily: 0,
+        daily: '',
         maxOccupants: 2
       }
     };
@@ -906,7 +1353,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
       }
       for (let i = 0; i < formData.buildings.length; i++) {
         const b = formData.buildings[i];
-        const bLabel = b.roomPrefix ? `อาคาร ${b.roomPrefix}` : (b.name || `อาคารที่ ${i + 1}`);
+        const bLabel = (b.name && b.name.trim()) ? formatBuildingDisplayName(b.name) : (b.roomPrefix ? `อาคาร ${b.roomPrefix}` : `อาคารที่ ${i + 1}`);
 
         if (b.mode === 'auto') {
           if (!b.totalFloors || b.totalFloors <= 0) {
@@ -932,15 +1379,49 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
       if (totalRooms > 150) {
         return { valid: false, error: 'หนึ่งหอพักสามารถสร้างห้องได้สูงสุด 150 ห้อง' };
       }
+
+      // Dorm-wide room uniqueness check across all buildings
+      const seenRooms = new Map<string, { roomNumber: string; buildingName: string }>();
+      for (let i = 0; i < formData.buildings.length; i++) {
+        const b = formData.buildings[i];
+        const bLabel = (b.name && b.name.trim()) ? formatBuildingDisplayName(b.name) : (b.roomPrefix ? `อาคาร ${b.roomPrefix}` : `อาคารที่ ${i + 1}`);
+        const rooms = getGeneratedRooms(b);
+        for (const rNum of rooms) {
+          const norm = normalizeRoomIdentifier(rNum);
+          if (!norm) continue;
+          if (seenRooms.has(norm)) {
+            return {
+              valid: false,
+              error: `เลขห้อง "${rNum}" ซ้ำกับอาคารอื่น กรุณาเปลี่ยนเลขห้องหรือเลือกรูปแบบเลขห้องอื่น`,
+            };
+          }
+          seenRooms.set(norm, { roomNumber: rNum, buildingName: bLabel });
+        }
+      }
     }
 
     if (stepNum === 3) {
       // Check utilities rates
-      if (isNaN(formData.utilities.waterRate) || formData.utilities.waterRate < 0) {
-        return { valid: false, error: 'กรุณากรอก "ค่าน้ำ" ให้ถูกต้อง (ต้องเป็นตัวเลข >= 0)' };
+      if (formData.utilities.waterBillingMode === 'tiered') {
+        const wTiers = formData.utilities.waterTierRates || WATER_TIER_PRESET;
+        if (!validateCanonicalTiers(wTiers)) {
+          return { valid: false, error: 'กรุณากรอกอัตราค่าน้ำแบบขั้นบันไดให้ถูกต้อง' };
+        }
+      } else {
+        if (isNaN(Number(formData.utilities.waterRate)) || Number(formData.utilities.waterRate) < 0) {
+          return { valid: false, error: 'กรุณากรอก "ค่าน้ำ" ให้ถูกต้อง (ต้องเป็นตัวเลข >= 0)' };
+        }
       }
-      if (isNaN(formData.utilities.electricRate) || formData.utilities.electricRate < 0) {
-        return { valid: false, error: 'กรุณากรอก "ค่าไฟฟ้า" ให้ถูกต้อง (ต้องเป็นตัวเลข >= 0)' };
+
+      if (formData.utilities.electricBillingMode === 'tiered') {
+        const eTiers = formData.utilities.electricityTierRates || ELECTRICITY_TIER_PRESET;
+        if (!validateCanonicalTiers(eTiers)) {
+          return { valid: false, error: 'กรุณากรอกอัตราค่าไฟฟ้าแบบขั้นบันไดให้ถูกต้อง' };
+        }
+      } else {
+        if (isNaN(Number(formData.utilities.electricRate)) || Number(formData.utilities.electricRate) < 0) {
+          return { valid: false, error: 'กรุณากรอก "ค่าไฟฟ้า" ให้ถูกต้อง (ต้องเป็นตัวเลข >= 0)' };
+        }
       }
       if (formData.utilities.commonFeeMode !== 'free' && formData.utilities.commonFeeMode !== 'none') {
         if (isNaN(formData.utilities.commonFeeRate) || formData.utilities.commonFeeRate < 0) {
@@ -961,13 +1442,13 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
       // Check building rent rates
       for (let i = 0; i < formData.buildings.length; i++) {
         const b = formData.buildings[i];
-        const bLabel = b.roomPrefix ? `อาคาร ${b.roomPrefix}` : (b.name || `อาคารที่ ${i + 1}`);
+        const bLabel = (b.name && b.name.trim()) ? formatBuildingDisplayName(b.name) : (b.roomPrefix ? `อาคาร ${b.roomPrefix}` : `อาคารที่ ${i + 1}`);
         const rates = b.rentRates;
 
-        if (!rates || isNaN(rates.monthly) || rates.monthly <= 0) {
-          return { valid: false, error: `กรุณากรอก "ค่าเช่ารายเดือน" ของ ${bLabel} ให้ถูกต้อง (ต้องมากกว่า 0)` };
+        if (rates?.monthly !== undefined && rates.monthly !== null && rates.monthly !== '' && (isNaN(Number(rates.monthly)) || Number(rates.monthly) < 0)) {
+          return { valid: false, error: `กรุณากรอก "ค่าเช่ารายเดือน" ของ ${bLabel} ให้ถูกต้อง (ต้องเป็นตัวเลข >= 0)` };
         }
-        if (isNaN(rates.daily) || rates.daily < 0) {
+        if (rates?.daily !== undefined && rates.daily !== null && rates.daily !== '' && (isNaN(Number(rates.daily)) || Number(rates.daily) < 0)) {
           return { valid: false, error: `กรุณากรอก "ค่าเช่ารายวัน" ของ ${bLabel} ให้ถูกต้อง` };
         }
         if (!rates.maxOccupants || rates.maxOccupants <= 0) {
@@ -983,13 +1464,24 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
     }
 
     if (stepNum === 4) {
-      // Check security deposit per building (0 is explicitly valid)
+      // Check rental-mode deposits per building (0 is explicitly valid)
       for (let i = 0; i < formData.buildings.length; i++) {
         const b = formData.buildings[i];
-        const bLabel = b.roomPrefix ? `อาคาร ${b.roomPrefix}` : (b.name || `อาคารที่ ${i + 1}`);
-        const deposit = (b.securityDeposit !== undefined && b.securityDeposit !== '') ? b.securityDeposit : formData.deposits.securityDeposit;
-        if (deposit === undefined || deposit === '' || isNaN(Number(deposit)) || Number(deposit) < 0) {
-          return { valid: false, error: `กรุณากรอก "ค่าประกันความเสียหาย" ของ ${bLabel} ให้ถูกต้อง` };
+        const bLabel = (b.name && b.name.trim()) ? formatBuildingDisplayName(b.name) : (b.roomPrefix ? `อาคาร ${b.roomPrefix}` : `อาคารที่ ${i + 1}`);
+
+        const termDep = b.termDeposit !== undefined && b.termDeposit !== '' ? b.termDeposit : (b.securityDeposit !== undefined && b.securityDeposit !== '' ? b.securityDeposit : formData.deposits.securityDeposit);
+        if (termDep === undefined || termDep === '' || isNaN(Number(termDep)) || Number(termDep) < 0) {
+          return { valid: false, error: `กรุณากรอก "ค่าประกันรายเทอม" ของ ${bLabel} ให้ถูกต้อง (ต้องเป็นตัวเลข >= 0)` };
+        }
+
+        const monthlyDep = b.monthlyDeposit !== undefined && b.monthlyDeposit !== '' ? b.monthlyDeposit : (b.securityDeposit !== undefined && b.securityDeposit !== '' ? b.securityDeposit : formData.deposits.securityDeposit);
+        if (monthlyDep === undefined || monthlyDep === '' || isNaN(Number(monthlyDep)) || Number(monthlyDep) < 0) {
+          return { valid: false, error: `กรุณากรอก "ค่าประกันรายเดือน" ของ ${bLabel} ให้ถูกต้อง (ต้องเป็นตัวเลข >= 0)` };
+        }
+
+        const dailyDep = b.dailyDeposit !== undefined && b.dailyDeposit !== '' ? b.dailyDeposit : (b.securityDeposit !== undefined && b.securityDeposit !== '' ? b.securityDeposit : formData.deposits.securityDeposit);
+        if (dailyDep === undefined || dailyDep === '' || isNaN(Number(dailyDep)) || Number(dailyDep) < 0) {
+          return { valid: false, error: `กรุณากรอก "ค่าประกันรายวัน" ของ ${bLabel} ให้ถูกต้อง (ต้องเป็นตัวเลข >= 0)` };
         }
       }
 
@@ -1117,76 +1609,21 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
       const provDormId = await ensureProvisionalDormitoryId();
 
       // 2. Upload Signature (Object storage path only - fail closed)
+      let uploadedSignatureRef = formData.ownerSignatureUrl;
       if (formData.ownerSignatureUrl) {
         if (formData.ownerSignatureUrl.startsWith('data:')) {
           const uploadRes = await onboardingClient.uploadSignature(provDormId, formData.ownerSignatureUrl);
           const safeRef = uploadRes?.data?.url || uploadRes?.url || uploadRes?.data?.objectKey || uploadRes?.objectKey;
           if (safeRef) {
-            setFormData(prev => ({ ...prev, ownerSignatureUrl: safeRef }));
+            uploadedSignatureRef = safeRef;
+            if (safeRef.startsWith('http')) {
+              setFormData(prev => ({ ...prev, ownerSignatureUrl: safeRef }));
+            }
           }
         }
       } else {
         throw new Error('กรุณาวาดและบันทึกลายเซ็นเจ้าของหอพักในขั้นตอนที่ 5 ก่อนยืนยันสร้างหอพัก');
       }
-
-      // 3. Map Buildings
-      const mappedBuildings = formData.buildings.map((b, idx) => {
-        const normalizedPrefix = (b.roomPrefix ? b.roomPrefix.trim() : '').toUpperCase();
-        return {
-          id: b.id || `bld-${idx + 1}`,
-          name: (b.name && b.name.trim()) ? b.name.trim() : (normalizedPrefix ? `อาคาร ${normalizedPrefix}` : `อาคาร ${idx + 1}`),
-          code: normalizedPrefix || null,
-          floorsCount: Number(b.totalFloors) || 1,
-          roomsPerFloor: b.roomsPerFloor !== '' ? Number(b.roomsPerFloor) : null,
-          roomPrefix: normalizedPrefix || null,
-          hasElevator: b.hasElevator ?? false,
-          numberingPattern: b.formatPattern || null,
-          description: `อาคาร ${(b.name && b.name.trim()) ? b.name.trim() : (normalizedPrefix ? normalizedPrefix : idx + 1)}`,
-          monthlyRent: Number(b.rentRates?.monthly) || 0,
-          dailyRent: b.rentRates?.daily ? Number(b.rentRates.daily) : null,
-          termRent: b.rentRates?.term ? Number(b.rentRates.term) : null,
-          termMonths: Number(b.rentRates?.termMonths) || 4,
-          maxInstallmentMonths: Number(b.rentRates?.maxInstallmentMonths) || 2,
-          depositAmount: b.securityDeposit !== undefined && b.securityDeposit !== '' ? (Number(b.securityDeposit) || 0) : (Number(formData.deposits.securityDeposit) || 0),
-          securityDeposit: b.securityDeposit !== undefined && b.securityDeposit !== '' ? (Number(b.securityDeposit) || 0) : (Number(formData.deposits.securityDeposit) || 0),
-          maximumOccupants: Number(b.rentRates?.maxOccupants) || 2,
-        };
-      });
-
-      // 4. Map Rooms
-      const mappedRooms: any[] = [];
-      formData.buildings.forEach((b) => {
-        const roomNumbers = getGeneratedRooms(b);
-        const rentRates = b.rentRates || { monthly: 0, term: 0, daily: 0, termMonths: 4, maxInstallmentMonths: 2, maxOccupants: 2 };
-        const secDep = b.securityDeposit !== undefined && b.securityDeposit !== '' ? b.securityDeposit : (formData.deposits.securityDeposit ?? 0);
-
-        roomNumbers.forEach((rNum) => {
-          const digitsOnly = rNum.replace(/\D/g, '');
-          const calculatedFloor = digitsOnly ? (parseInt(digitsOnly.charAt(0)) || 1) : 1;
-          mappedRooms.push({
-            buildingId: b.id,
-            roomNumber: rNum,
-            floor: calculatedFloor,
-            monthlyRent: Number(rentRates.monthly) || 0,
-            dailyRent: rentRates.daily ? Number(rentRates.daily) : null,
-            termRent: rentRates.term ? Number(rentRates.term) : null,
-            termMonths: Number(rentRates.termMonths) || 4,
-            depositAmount: Number(secDep) || 0,
-            maximumOccupants: Number(rentRates.maxOccupants) || 2,
-            status: 'vacant',
-          });
-        });
-      });
-
-      if (mappedBuildings.length === 0 || mappedRooms.length === 0) {
-        throw new Error('กรุณาระบุข้อมูลอาคารและห้องพักอย่างน้อย 1 ห้อง');
-      }
-
-      const waterBillingType = formData.utilities.waterBillingMode === 'unit' ? 'per_unit' : (formData.utilities.waterBillingMode === 'person' ? 'per_person' : 'flat_rate');
-      const elecBillingType = formData.utilities.electricBillingMode === 'unit' ? 'per_unit' : (formData.utilities.electricBillingMode === 'person' ? 'per_person' : 'flat_rate');
-
-      const rawPP = formData.paymentAccount.promptPayId ? formData.paymentAccount.promptPayId.replace(/\D/g, '') : null;
-      const ppType = rawPP ? (rawPP.length === 13 ? 'national_id' : 'mobile_phone') : null;
 
       // Ensure quote is refreshed for current provDormId
       const quote = await onboardingClient.getSubscriptionQuote({
@@ -1204,60 +1641,19 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
         throw new Error('รายการคำสั่งซื้อไม่ตรงกับหอพักที่กำลังสร้าง กรุณาลองใหม่อีกครั้ง');
       }
 
-      const payload = {
-        provisionalDormitoryId: provDormId,
-        dormitory: {
-          name: formData.dormName,
-          type: formData.dormType || 'apartment',
-          genderPolicy: formData.genderType || 'รวม',
-          addressLine1: formData.dormAddress || null,
-          province: formData.province || null,
-          phone: null,
-          email: null,
-          estimatedBuildingCount: mappedBuildings.length,
-          estimatedRoomCount: mappedRooms.length,
-        },
-        billing: {
-          dueDay: Number(formData.deposits.dueDateDay),
-          waterBillingType,
-          waterRate: String(formData.utilities.waterRate ?? 0),
-          electricityBillingType: elecBillingType,
-          electricityRate: String(formData.utilities.electricRate ?? 0),
-          commonFee: String(formData.utilities.commonFeeRate ?? 0),
-          commonFeeMode: formData.utilities.commonFeeMode || 'none',
-          internetFee: String(formData.utilities.internetRate ?? 0),
-          internetFeeMode: formData.utilities.internetFeeMode || 'none',
-          parkingRate: String(formData.utilities.parkingFeeRate ?? 0),
-          parkingFeeMode: formData.utilities.parkingFeeMode || 'none',
-          gracePeriodDays: formData.deposits.gracePeriodDays || 0,
-          advanceRentMonths: formData.deposits.advanceRentMonths || 1,
-          lateFeeType: formData.deposits.lateFeeType || 'none',
-          lateFeeValue: String(formData.deposits.lateFeeAmount ?? 0),
-          rentBillingType: 'monthly',
-        },
-        payment: {
-          cashAccepted: true,
-          promptPayType: ppType,
-          promptPayValue: rawPP,
-          promptPayAccountName: formData.paymentAccount.promptPayName || null,
-          bankCode: formData.paymentAccount.bankName || null,
-          bankAccountName: formData.paymentAccount.bankAccountName || null,
-          bankAccountNumber: formData.paymentAccount.accountNumber ? formData.paymentAccount.accountNumber.replace(/\D/g, '') : null,
-        },
-        buildings: mappedBuildings,
-        rooms: mappedRooms,
-        planCode: (selectedPlan || 'free').toUpperCase(),
-        packageId: selectedPlan === 'pro' ? (selectedPackageId || undefined) : undefined,
-        packageIntentId: activeIntentId,
-        promoCode: appliedPromo && validatedPromoCode ? validatedPromoCode : undefined,
-        referralCode: isReferralBound && referralCodeInput ? referralCodeInput.trim() : undefined,
-        coinApplied: coinToApply > 0 ? coinToApply : undefined,
-        petPolicy: {
-          allowed: formData.petPolicy.allowed || 'none',
-          allowedTypes: formData.petPolicy.allowedTypes || [],
-        },
-        defaultTerms: formData.rulesTemplate || undefined,
-      };
+      const payload = mapRegistrationFormDataToFinalizePayload({
+        formData,
+        provDormId,
+        activeIntentId,
+        selectedPlan,
+        selectedPackageId,
+        uploadedSignatureRef,
+        appliedPromo,
+        validatedPromoCode,
+        isReferralBound,
+        referralCodeInput,
+        coinToApply,
+      });
 
       const finalizeRes = await onboardingClient.finalize(payload as any);
       const finalizedDormitoryId = finalizeRes?.data?.dormitory?.id || (finalizeRes?.data as any)?.dormitoryId || provDormId;
@@ -1289,7 +1685,13 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
         window.location.href = '/owner/dashboard';
       }, 2800);
     } catch (e: any) {
-      setValidationError(e?.message || 'เกิดข้อผิดพลาดในการบันทึกข้อมูล');
+      const fieldErrors = e?.fieldErrors || e?.domainError?.details?.fieldErrors || e?.domainError?.details?.error?.fieldErrors || e?.response?.data?.fieldErrors;
+      let msg = e?.message || 'เกิดข้อผิดพลาดในการบันทึกข้อมูล';
+      if (Array.isArray(fieldErrors) && fieldErrors.length > 0) {
+        const details = fieldErrors.map((f: any) => `${f.field ? `${f.field}: ` : ''}${f.message || f.code}`).join(', ');
+        msg = `${msg}: ${details}`;
+      }
+      setValidationError(msg);
     }
   };
 
@@ -1406,6 +1808,20 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
               />
             </div>
 
+            <DormitoryLogoUploader
+              provisionalDormitoryId={provisionalDormitoryId}
+              ensureProvisionalDormitoryId={ensureProvisionalDormitoryId}
+              logoUrl={formData.logoUrl || null}
+              onLogoChange={(newLogoUrl) => {
+                setFormData((prev: any) => ({
+                  ...prev,
+                  logoUrl: newLogoUrl,
+                  hasLogo: Boolean(newLogoUrl),
+                }));
+              }}
+              onError={(err) => setValidationError(err)}
+            />
+
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-1">ที่อยู่หอพัก (สำหรับออกเอกสารสัญญา) <span className="text-rose-500">*</span></label>
               <textarea
@@ -1486,6 +1902,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
             </div>
             <button
               onClick={handleAddBuilding}
+              data-testid="btn-add-building"
               className="px-3.5 py-2 bg-blue-50 hover:bg-blue-100 text-blue-600 rounded-2xl text-xs font-extrabold transition-all flex items-center gap-1.5 cursor-pointer shrink-0"
             >
               <Plus className="w-4 h-4" />
@@ -1533,7 +1950,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                     <div className="flex items-center gap-2">
                       <span className="text-xs font-black text-blue-700 bg-blue-50 border border-blue-100 px-3.5 py-1.5 rounded-xl text-sm flex items-center gap-1.5">
                         <Building2 className="w-4 h-4 text-blue-600" />
-                        {b.roomPrefix ? `อาคาร ${b.roomPrefix}` : (b.name || 'อาคาร ')}
+                        {(b.name && b.name.trim()) ? formatBuildingDisplayName(b.name) : (b.roomPrefix ? `อาคาร ${b.roomPrefix}` : 'อาคาร')}
                       </span>
                     </div>
 
@@ -1557,6 +1974,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                         </button>
                         <button
                           type="button"
+                          data-testid={`btn-building-manual-mode-${idx}`}
                           onClick={() => {
                             const updated = [...formData.buildings];
                             updated[idx].mode = 'manual';
@@ -1589,19 +2007,17 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                     <div className="space-y-4">
                       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
                         <div>
-                          <label className="block text-xs font-bold text-slate-700 mb-1">รหัสตึก</label>
+                          <label className="block text-xs font-bold text-slate-700 mb-1">ชื่ออาคาร</label>
                           <input
                             type="text"
-                            value={b.roomPrefix}
+                            value={b.name || ''}
                             onChange={(e) => {
-                              const val = e.target.value.toUpperCase();
                               const updated = [...formData.buildings];
-                              updated[idx].roomPrefix = val;
-                              updated[idx].name = val ? `อาคาร ${val}` : 'อาคาร ';
+                              updated[idx].name = e.target.value;
                               setFormData({ ...formData, buildings: updated });
                             }}
-                            placeholder="เช่น A, B (เว้นว่างได้)"
-                            className="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:border-blue-500 outline-none font-bold uppercase text-slate-800"
+                            placeholder="เช่น สมบูรณ์, อาคาร A"
+                            className="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:border-blue-500 outline-none font-bold text-slate-800"
                           />
                         </div>
 
@@ -1669,7 +2085,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                         <div>
                           <label className="block text-xs font-bold text-slate-700 mb-1">รูปแบบเลขห้อง</label>
                           {(() => {
-                            const pfx = b.roomPrefix ? b.roomPrefix.trim().toUpperCase() : 'A';
+                            const pfx = (b.name && b.name.trim()) ? b.name.trim() : (b.roomPrefix ? b.roomPrefix.trim() : 'A');
                             return (
                               <select
                                 value={b.formatPattern || 'prefix_floor_room'}
@@ -1698,7 +2114,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                     <div className="space-y-3 bg-white p-4 rounded-2xl border border-slate-200/80">
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pb-2 border-b border-slate-100">
                         <div>
-                          <label className="block text-xs font-bold text-slate-700 mb-1">ชื่อ/รหัสอาคาร</label>
+                          <label className="block text-xs font-bold text-slate-700 mb-1">ชื่ออาคาร</label>
                           <input
                             type="text"
                             value={b.name || ''}
@@ -1958,24 +2374,28 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                     <input
                       type="text"
                       inputMode="decimal"
-                      value={formData.utilities.waterRate}
+                      data-testid="input-register-water-rate"
+                      disabled={formData.utilities.waterBillingMode === 'tiered'}
+                      value={formData.utilities.waterBillingMode === 'tiered' ? 'คิดตามขั้นบันได' : formData.utilities.waterRate}
                       onChange={(e) => {
                         const norm = normalizeNumericInput(e.target.value, true);
-                        setFormData({ ...formData, utilities: { ...formData.utilities, waterRate: norm } });
+                        setFormData(prev => ({ ...prev, utilities: { ...prev.utilities, waterRate: norm } }));
                       }}
-                      className="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl font-black text-slate-800 outline-none"
+                      className="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl font-black text-slate-800 outline-none disabled:opacity-75 disabled:bg-slate-100 disabled:text-slate-500"
                     />
                   </div>
                   <div>
                     <span className="text-[10px] text-slate-400 font-bold block mb-1">รูปแบบการคิด</span>
                     <select
+                      data-testid="select-register-water-mode"
                       value={formData.utilities.waterBillingMode}
-                      onChange={(e) => setFormData({ ...formData, utilities: { ...formData.utilities, waterBillingMode: e.target.value } })}
-                      className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-700 outline-none"
+                      onChange={(e) => setFormData(prev => ({ ...prev, utilities: { ...prev.utilities, waterBillingMode: e.target.value } }))}
+                      className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-700 outline-none cursor-pointer"
                     >
                       <option value="unit">บาท/หน่วย</option>
                       <option value="person">บาท/คน</option>
                       <option value="room">บาท/ห้อง</option>
+                      <option value="tiered">คิดตามขั้นบันได</option>
                     </select>
                   </div>
                 </div>
@@ -1990,24 +2410,28 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                     <input
                       type="text"
                       inputMode="decimal"
-                      value={formData.utilities.electricRate}
+                      data-testid="input-register-electric-rate"
+                      disabled={formData.utilities.electricBillingMode === 'tiered'}
+                      value={formData.utilities.electricBillingMode === 'tiered' ? 'คิดตามขั้นบันได' : formData.utilities.electricRate}
                       onChange={(e) => {
                         const norm = normalizeNumericInput(e.target.value, true);
-                        setFormData({ ...formData, utilities: { ...formData.utilities, electricRate: norm } });
+                        setFormData(prev => ({ ...prev, utilities: { ...prev.utilities, electricRate: norm } }));
                       }}
-                      className="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl font-black text-slate-800 outline-none"
+                      className="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl font-black text-slate-800 outline-none disabled:opacity-75 disabled:bg-slate-100 disabled:text-slate-500"
                     />
                   </div>
                   <div>
                     <span className="text-[10px] text-slate-400 font-bold block mb-1">รูปแบบการคิด</span>
                     <select
+                      data-testid="select-register-electric-mode"
                       value={formData.utilities.electricBillingMode}
-                      onChange={(e) => setFormData({ ...formData, utilities: { ...formData.utilities, electricBillingMode: e.target.value } })}
-                      className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-700 outline-none"
+                      onChange={(e) => setFormData(prev => ({ ...prev, utilities: { ...prev.utilities, electricBillingMode: e.target.value } }))}
+                      className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-700 outline-none cursor-pointer"
                     >
                       <option value="unit">บาท/หน่วย</option>
                       <option value="person">บาท/คน</option>
                       <option value="room">บาท/ห้อง</option>
+                      <option value="tiered">คิดตามขั้นบันได</option>
                     </select>
                   </div>
                 </div>
@@ -2144,6 +2568,47 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                   </div>
                 </div>
               </div>
+
+              {/* Responsive Tiered Rates Editors */}
+              {(formData.utilities.waterBillingMode === 'tiered' || formData.utilities.electricBillingMode === 'tiered') && (
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 pt-2">
+                  {formData.utilities.waterBillingMode === 'tiered' && (
+                    <div className="space-y-1">
+                      <TieredRateEditor
+                        utilityType="water"
+                        tiers={formData.utilities.waterTierRates || WATER_TIER_PRESET}
+                        onChange={(tiers) => {
+                          setFormData(prev => ({
+                            ...prev,
+                            utilities: {
+                              ...prev.utilities,
+                              waterTierRates: tiers,
+                            }
+                          }));
+                        }}
+                      />
+                    </div>
+                  )}
+
+                  {formData.utilities.electricBillingMode === 'tiered' && (
+                    <div className="space-y-1">
+                      <TieredRateEditor
+                        utilityType="electricity"
+                        tiers={formData.utilities.electricityTierRates || ELECTRICITY_TIER_PRESET}
+                        onChange={(tiers) => {
+                          setFormData(prev => ({
+                            ...prev,
+                            utilities: {
+                              ...prev.utilities,
+                              electricityTierRates: tiers,
+                            }
+                          }));
+                        }}
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Rent Rates Per Building (Adjustable per building per user request) */}
@@ -2183,6 +2648,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                             <label className="block text-xs font-bold text-slate-700 mb-1">ค่าเช่ารายเดือน (บาท/เดือน)</label>
                             <input
                               type="text"
+                              data-testid={`input-building-monthly-rent-${bIdx}`}
                               inputMode="decimal"
                               value={rentRates.monthly}
                               onChange={(e) => {
@@ -2322,41 +2788,97 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                 <AlertCircle className="w-4 h-4 text-amber-600" /> เงินมัดจำ / ประกัน & กฎการปรับ
               </h4>
 
-              {/* Per-Building Security Deposit */}
-              <div className="bg-white p-3.5 sm:p-4 rounded-xl border border-slate-200/90 space-y-2.5">
-                <div className="flex items-center justify-between pb-2 border-b border-slate-100">
-                  <label className="block text-xs font-black text-slate-800 flex items-center gap-1.5">
+              {/* Per-Building Security Deposits (Three rental modes) */}
+              <div className="bg-white p-3.5 sm:p-4 rounded-xl border border-slate-200/90 space-y-3">
+                <div className="flex items-center justify-between pb-2 border-b border-slate-100 gap-2">
+                  <label className="block text-xs font-black text-slate-800 flex items-center gap-1.5 min-w-0">
                     <ShieldCheck className="w-4 h-4 text-blue-600 shrink-0" />
-                    ค่าประกัน (บาท) <span className="text-rose-500">*</span>
+                    <span>เงินประกันตามประเภทการเช่า (บาท) <span className="text-rose-500">*</span></span>
                   </label>
-                  <span className="text-[10px] font-black text-blue-700 bg-blue-50 border border-blue-100 px-2 py-0.5 rounded-md">
+                  <span className="text-[10px] font-black text-blue-700 bg-blue-50 border border-blue-100 px-2 py-0.5 rounded-md whitespace-nowrap shrink-0">
                     ตั้งค่าตามตึก
                   </span>
                 </div>
 
-                <div className="space-y-2">
+                <div className="space-y-3">
                   {formData.buildings.map((b, bIdx) => {
-                    const depositVal = b.securityDeposit !== undefined ? b.securityDeposit : (formData.deposits.securityDeposit ?? 0);
+                    const bLabel = (b.name && b.name.trim()) ? formatBuildingDisplayName(b.name) : (b.roomPrefix ? `อาคาร ${b.roomPrefix}` : `อาคารที่ ${bIdx + 1}`);
+                    const legacyDep = b.securityDeposit !== undefined ? b.securityDeposit : (formData.deposits.securityDeposit ?? 0);
+                    const termVal = b.termDeposit !== undefined ? b.termDeposit : legacyDep;
+                    const monthlyVal = b.monthlyDeposit !== undefined ? b.monthlyDeposit : legacyDep;
+                    const dailyVal = b.dailyDeposit !== undefined ? b.dailyDeposit : legacyDep;
+
                     return (
-                      <div key={b.id} className="flex items-center justify-between gap-3 bg-slate-50/80 p-2.5 rounded-xl border border-slate-200/80">
-                        <span className="text-xs font-extrabold text-slate-800 shrink-0 flex items-center gap-1.5">
-                          <Building2 className="w-3.5 h-3.5 text-blue-600" />
-                          {b.roomPrefix ? `อาคาร ${b.roomPrefix}` : (b.name || `อาคารที่ ${bIdx + 1}`)}
-                        </span>
-                        <div className="flex items-center gap-2 max-w-[180px] w-full">
-                          <input
-                            type="text"
-                            inputMode="decimal"
-                            value={depositVal}
-                            onChange={(e) => {
-                              const norm = normalizeNumericInput(e.target.value, true);
-                              const updated = [...formData.buildings];
-                              updated[bIdx].securityDeposit = norm;
-                              setFormData({ ...formData, buildings: updated });
-                            }}
-                            className="w-full px-3 py-1.5 text-xs bg-white border border-slate-200 rounded-lg focus:border-blue-500 outline-none font-black text-slate-800 text-right"
-                          />
-                          <span className="text-xs font-bold text-slate-500 shrink-0">บาท</span>
+                      <div key={b.id} className="bg-slate-50/80 p-3 rounded-xl border border-slate-200/80 space-y-2" data-testid={`building-deposits-${bIdx}`}>
+                        <div className="flex items-center gap-1.5 text-xs font-extrabold text-slate-800 border-b border-slate-200/60 pb-1.5">
+                          <Building2 className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                          <span>{bLabel}</span>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
+                          {/* Term Deposit */}
+                          <div>
+                            <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                              ค่าประกันรายเทอม (บาท)
+                            </label>
+                            <input
+                              type="text"
+                              inputMode="decimal"
+                              value={termVal}
+                              onChange={(e) => {
+                                const norm = normalizeNumericInput(e.target.value, true);
+                                const updated = [...formData.buildings];
+                                updated[bIdx].termDeposit = norm;
+                                setFormData({ ...formData, buildings: updated });
+                              }}
+                              className="w-full px-3 py-1.5 text-xs bg-white border border-slate-200 rounded-lg focus:border-blue-500 outline-none font-black text-slate-800 text-right"
+                              data-testid={`input-term-deposit-${bIdx}`}
+                              placeholder="0"
+                            />
+                          </div>
+
+                          {/* Monthly Deposit */}
+                          <div>
+                            <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                              ค่าประกันรายเดือน (บาท)
+                            </label>
+                            <input
+                              type="text"
+                              inputMode="decimal"
+                              value={monthlyVal}
+                              onChange={(e) => {
+                                const norm = normalizeNumericInput(e.target.value, true);
+                                const updated = [...formData.buildings];
+                                updated[bIdx].monthlyDeposit = norm;
+                                updated[bIdx].securityDeposit = norm;
+                                setFormData({ ...formData, buildings: updated });
+                              }}
+                              className="w-full px-3 py-1.5 text-xs bg-white border border-slate-200 rounded-lg focus:border-blue-500 outline-none font-black text-slate-800 text-right"
+                              data-testid={`input-monthly-deposit-${bIdx}`}
+                              placeholder="0"
+                            />
+                          </div>
+
+                          {/* Daily Deposit */}
+                          <div>
+                            <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                              ค่าประกันรายวัน (บาท)
+                            </label>
+                            <input
+                              type="text"
+                              inputMode="decimal"
+                              value={dailyVal}
+                              onChange={(e) => {
+                                const norm = normalizeNumericInput(e.target.value, true);
+                                const updated = [...formData.buildings];
+                                updated[bIdx].dailyDeposit = norm;
+                                setFormData({ ...formData, buildings: updated });
+                              }}
+                              className="w-full px-3 py-1.5 text-xs bg-white border border-slate-200 rounded-lg focus:border-blue-500 outline-none font-black text-slate-800 text-right"
+                              data-testid={`input-daily-deposit-${bIdx}`}
+                              placeholder="0"
+                            />
+                          </div>
                         </div>
                       </div>
                     );
@@ -2392,11 +2914,11 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
 
               <div className="p-4 bg-amber-50/60 rounded-2xl border border-amber-200/80 space-y-3">
                 <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex items-center gap-1.5 min-w-0">
                     <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
                     <label className="block text-xs font-black text-amber-950">อัตราค่าปรับเมื่อเกินวันกำหนดชำระ</label>
                   </div>
-                  <span className="text-[10px] font-bold text-amber-700 bg-amber-100/80 px-2 py-0.5 rounded-md">
+                  <span className="text-[10px] font-bold text-amber-700 bg-amber-100/80 px-2 py-0.5 rounded-md whitespace-nowrap shrink-0">
                     ค่าปรับ
                   </span>
                 </div>
@@ -2490,8 +3012,9 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                       ธนาคารที่รับโอน <span className="text-rose-500">*</span>
                     </label>
                     <select
+                      data-testid="select-payment-bank-name"
                       value={formData.paymentAccount.bankName}
-                      onChange={(e) => setFormData({ ...formData, paymentAccount: { ...formData.paymentAccount, bankName: e.target.value } })}
+                      onChange={(e) => setFormData(prev => ({ ...prev, paymentAccount: { ...prev.paymentAccount, bankName: e.target.value } }))}
                       className="w-full px-3.5 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:border-blue-500 outline-none font-bold text-slate-800 cursor-pointer"
                     >
                       <option value="">-- เลือกธนาคาร --</option>
@@ -2505,9 +3028,10 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                     <label className="block text-xs font-bold text-slate-700 mb-1">เลขที่บัญชีธนาคาร <span className="text-rose-500">*</span> </label>
                     <input
                       type="text"
+                      data-testid="input-payment-account-number"
                       disabled={!formData.paymentAccount.bankName}
                       value={formData.paymentAccount.accountNumber}
-                      onChange={(e) => setFormData({ ...formData, paymentAccount: { ...formData.paymentAccount, accountNumber: formatBankAccount(e.target.value) } })}
+                      onChange={(e) => setFormData(prev => ({ ...prev, paymentAccount: { ...prev.paymentAccount, accountNumber: formatBankAccount(e.target.value) } }))}
                       placeholder={formData.paymentAccount.bankName ? "XXX-X-XXXXX-X" : "กรุณาเลือกธนาคารก่อน"}
                       className={`w-full px-3.5 py-2 text-xs border rounded-xl outline-none font-bold transition-all ${formData.paymentAccount.bankName
                         ? 'bg-white border-slate-200 focus:border-blue-500 text-slate-800'
@@ -2523,15 +3047,16 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                   </label>
                   <input
                     type="text"
+                    data-testid="input-payment-account-name"
                     value={formData.paymentAccount.bankAccountName || formData.paymentAccount.accountName || ''}
-                    onChange={(e) => setFormData({
-                      ...formData,
+                    onChange={(e) => setFormData(prev => ({
+                      ...prev,
                       paymentAccount: {
-                        ...formData.paymentAccount,
+                        ...prev.paymentAccount,
                         accountName: e.target.value,
                         bankAccountName: e.target.value
                       }
-                    })}
+                    }))}
                     placeholder="เช่น นาย สมศักดิ์ วงศ์สว่าง (บัญชีธนาคาร)"
                     className="w-full px-3.5 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:border-blue-500 outline-none font-bold text-slate-800"
                   />
@@ -2677,9 +3202,11 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
               {/* Owner Electronic Signature */}
               <div className="bg-slate-50/60 p-4 sm:p-5 rounded-2xl border border-slate-100 space-y-3">
                 <div className="flex items-center justify-between flex-wrap gap-2">
-                  <h4 className="text-xs font-black text-slate-700 flex items-center gap-1.5 uppercase tracking-wide">
-                    <PenTool className="w-4 h-4 text-blue-600" /> ลายเซ็นเจ้าของหอพักสำหรับเอกสารสัญญาเช่า
-                  </h4>
+                  <div className="flex items-center gap-2">
+                    <h4 className="text-xs font-black text-slate-700 flex items-center gap-1.5 uppercase tracking-wide">
+                      <PenTool className="w-4 h-4 text-blue-600" /> ลายเซ็นเจ้าของหอพักสำหรับเอกสารสัญญาเช่า
+                    </h4>
+                  </div>
                   <button
                     type="button"
                     onClick={clearCanvas}
@@ -2688,12 +3215,6 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                     ล้างลายเซ็น
                   </button>
                 </div>
-
-                {signatureSavedToast && (
-                  <div className="text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-xl px-2.5 py-1 text-center animate-in fade-in">
-                    {signatureSavedToast}
-                  </div>
-                )}
 
                 <div className="bg-white border border-slate-200 rounded-2xl p-2.5 space-y-2 relative overflow-hidden shadow-3xs">
                   <canvas
@@ -2712,16 +3233,6 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
 
                   <div className="flex items-center justify-between gap-2 pt-1 border-t border-slate-100 flex-wrap">
                     <p className="text-[10px] text-slate-400 font-medium">ใช้นิ้วหรือเมาส์วาดลายเซ็นในกรอบด้านบน</p>
-                    <div className="flex items-center gap-2 ml-auto">
-                      <button
-                        type="button"
-                        onClick={handleSaveSignature}
-                        className="text-[11px] font-black text-emerald-700 bg-emerald-100 hover:bg-emerald-200 border border-emerald-300 px-3.5 py-1 rounded-xl transition-all cursor-pointer flex items-center gap-1.5 shadow-2xs"
-                      >
-                        <Save className="w-3.5 h-3.5" />
-                        <span>บันทึก</span>
-                      </button>
-                    </div>
                   </div>
                 </div>
               </div>
@@ -2818,7 +3329,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
         <div className="bg-white p-4 sm:p-8 rounded-3xl border border-slate-100 shadow-xs space-y-6 animate-in fade-in duration-200">
           <div className="flex items-center justify-between gap-3 pb-3 border-b border-slate-100 flex-wrap">
             <div className="flex items-center gap-2">
-              <Send className="w-5 h-5 text-emerald-600 shrink-0" />
+              <LineLogo className="w-5 h-5 shrink-0 rounded-xs" />
               <div>
                 <h3 className="text-sm sm:text-base font-black text-slate-800">ขั้นตอนที่ 6: เชื่อมต่อ LINE OA</h3>
                 <p className="text-[11px] sm:text-xs text-slate-400 font-medium">ตั้งค่าระบบแจ้งเตือนบิล ค่าน้ำไฟ และรับชำระผ่าน LINE Official Account</p>
@@ -2849,12 +3360,8 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                       className="w-full h-full object-cover"
                       referrerPolicy="no-referrer"
                     />
-                  ) : formData.lineOA.isConnected ? (
-                    <div className="w-full h-full bg-emerald-600 text-white flex items-center justify-center font-black text-xs">
-                      OA
-                    </div>
                   ) : (
-                    <Bot className="w-6 h-6 text-slate-400" />
+                    <LineLogo className={`w-7 h-7 shrink-0 rounded-xs ${!formData.lineOA.isConnected ? 'opacity-60 grayscale' : ''}`} />
                   )}
                 </div>
                 <div>
@@ -2866,8 +3373,8 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                   <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
                     <span className="text-[11px] sm:text-xs text-slate-500 font-bold">LINE ID:</span>
                     <span className={`text-[11px] sm:text-xs font-black px-2 py-0.5 rounded-md ${formData.lineOA.isConnected
-                        ? 'text-emerald-800 bg-emerald-100/90'
-                        : 'text-slate-500 bg-slate-100'
+                      ? 'text-emerald-800 bg-emerald-100/90'
+                      : 'text-slate-500 bg-slate-100'
                       }`}>
                       {formData.lineOA.isConnected
                         ? (formData.lineOA.lineOaId || formData.lineOA.oaName || 'เชื่อมต่อแล้ว')
@@ -2879,8 +3386,8 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
 
               <div className="flex items-center gap-2 shrink-0 self-start sm:self-auto">
                 <span className={`px-3 py-1 rounded-full text-xs font-black flex items-center gap-1.5 whitespace-nowrap shrink-0 ${formData.lineOA.isConnected
-                    ? 'bg-emerald-100 text-emerald-700 border border-emerald-200'
-                    : 'bg-slate-100 text-slate-600 border border-slate-200'
+                  ? 'bg-emerald-100 text-emerald-700 border border-emerald-200'
+                  : 'bg-slate-100 text-slate-600 border border-slate-200'
                   }`}>
                   <span className={`w-2 h-2 rounded-full shrink-0 ${formData.lineOA.isConnected ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'
                     }`} />
@@ -2906,6 +3413,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                         isConnected: false,
                         botDisplayName: '',
                         botPictureUrl: '',
+                        webhookUrl: '',
                         lineOaId: '',
                         oaName: ''
                       }
@@ -2933,6 +3441,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                         isConnected: false,
                         botDisplayName: '',
                         botPictureUrl: '',
+                        webhookUrl: '',
                         lineOaId: '',
                         oaName: ''
                       }
@@ -2943,6 +3452,65 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                   className="w-full px-3.5 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:border-emerald-500 outline-none font-mono text-xs"
                 />
               </div>
+            </div>
+
+            {/* LINE Webhook URL (Above test status button) */}
+            <div className="pt-2">
+              <label className="block text-xs font-bold text-slate-700 mb-1">
+                LINE Webhook URL <span className="text-[11px] font-normal text-slate-400">(นำไปวางใน LINE Developers Console &gt; Messaging API)</span>
+              </label>
+
+              <div className="flex items-center gap-2">
+                <div className="flex-1 relative">
+                  <input
+                    type="text"
+                    readOnly
+                    value={formData.lineOA.isConnected && formData.lineOA.webhookUrl ? formData.lineOA.webhookUrl : ''}
+                    placeholder="กรุณากรอกข้อมูล 2 ช่องด้านบน และกดทดสอบตรวจสถานะ LINE OA ก่อน"
+                    className={`w-full px-3.5 py-2 text-xs rounded-xl outline-none font-mono transition-all border ${formData.lineOA.isConnected && formData.lineOA.webhookUrl
+                      ? 'bg-slate-50 text-emerald-700 border-emerald-300 font-bold select-all'
+                      : 'bg-slate-50 text-slate-400 border-slate-200 cursor-not-allowed placeholder:font-sans placeholder:text-slate-400 placeholder:text-xs'
+                      }`}
+                  />
+                </div>
+
+                <button
+                  type="button"
+                  disabled={!formData.lineOA.isConnected || !formData.lineOA.webhookUrl}
+                  onClick={() => {
+                    if (formData.lineOA.webhookUrl) {
+                      navigator.clipboard.writeText(formData.lineOA.webhookUrl);
+                      setCopiedWebhook(true);
+                      setTimeout(() => setCopiedWebhook(false), 2000);
+                    }
+                  }}
+                  className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shrink-0 shadow-2xs ${formData.lineOA.isConnected && formData.lineOA.webhookUrl
+                    ? copiedWebhook
+                      ? 'bg-emerald-100 text-emerald-700 border border-emerald-300'
+                      : 'bg-white hover:bg-emerald-50 text-slate-700 hover:text-emerald-700 border border-slate-200 hover:border-emerald-300 cursor-pointer active:scale-95'
+                    : 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed opacity-60'
+                    }`}
+                  title={formData.lineOA.isConnected && formData.lineOA.webhookUrl ? 'คัดลอก Webhook URL' : 'กรุณากรอกข้อมูล 2 ช่องด้านบนและกดทดสอบสถานะก่อน'}
+                >
+                  {copiedWebhook ? (
+                    <>
+                      <Check className="w-3.5 h-3.5 text-emerald-600" />
+                      <span className="text-emerald-700 font-extrabold">คัดลอกแล้ว!</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-3.5 h-3.5 text-slate-500" />
+                      <span>คัดลอก</span>
+                    </>
+                  )}
+                </button>
+              </div>
+
+              {!formData.lineOA.isConnected && (
+                <p className="text-[11px] text-amber-600 mt-1.5 flex items-center gap-1 font-medium">
+                  <span>* กรุณากรอก LINE Channel ID และ LINE Channel Secret ด้านบน</span>
+                </p>
+              )}
             </div>
 
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2">
@@ -3077,7 +3645,10 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                 </li>
                 <li className="flex items-start gap-1.5">
                   <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0 mt-0.5" />
-                  <span>โควตา LINE แจ้งเตือน 30 ข้อความ/เดือน</span>
+                  <span className="flex items-center gap-1.5">
+                    <LineLogo className="w-3.5 h-3.5 shrink-0 rounded-xs" />
+                    <span>โควตา LINE แจ้งเตือน 30 ข้อความ/เดือน</span>
+                  </span>
                 </li>
               </ul>
             </div>
@@ -3144,7 +3715,10 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                 </li>
                 <li className="flex items-start gap-1.5">
                   <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0 mt-0.5" />
-                  <span>โควตา LINE แจ้งเตือน 300 ข้อความ/เดือน</span>
+                  <span className="flex items-center gap-1.5">
+                    <LineLogo className="w-3.5 h-3.5 shrink-0 rounded-xs" />
+                    <span>โควตา LINE แจ้งเตือน 300 ข้อความ/เดือน</span>
+                  </span>
                 </li>
                 <li className="flex items-start gap-1.5">
                   <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0 mt-0.5" />

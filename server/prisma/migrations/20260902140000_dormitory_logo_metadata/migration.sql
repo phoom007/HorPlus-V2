@@ -1,0 +1,5 @@
+-- AlterTable
+ALTER TABLE "dormitories" ADD COLUMN IF NOT EXISTS "logo_object_key" VARCHAR(500),
+ADD COLUMN IF NOT EXISTS "logo_mime_type" VARCHAR(100),
+ADD COLUMN IF NOT EXISTS "logo_sha256" VARCHAR(64),
+ADD COLUMN IF NOT EXISTS "logo_updated_at" TIMESTAMPTZ(6);

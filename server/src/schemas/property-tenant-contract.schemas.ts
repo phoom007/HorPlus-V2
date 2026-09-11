@@ -23,6 +23,9 @@ export const CreateRoomSchema = z.object({
   monthlyRent: z.string().regex(/^\d+(\.\d{1,2})?$/, 'จำนวนเงินไม่ถูกต้อง').optional().nullable(),
   termRent: z.string().regex(/^\d+(\.\d{1,2})?$/).optional().nullable(),
   dailyRent: z.string().regex(/^\d+(\.\d{1,2})?$/).optional().nullable(),
+  termDeposit: z.string().regex(/^\d+(\.\d{1,2})?$/).optional().nullable(),
+  monthlyDeposit: z.string().regex(/^\d+(\.\d{1,2})?$/).optional().nullable(),
+  dailyDeposit: z.string().regex(/^\d+(\.\d{1,2})?$/).optional().nullable(),
   depositAmount: z.string().regex(/^\d+(\.\d{1,2})?$/).optional().nullable(),
   depositInheritsBuildingDefault: z.boolean().optional(),
   parkingFee: z.string().regex(/^\d+(\.\d{1,2})?$/).optional().nullable(),
@@ -37,6 +40,9 @@ export const CreateRoomSchema = z.object({
 });
 
 export const UpdateRoomSchema = CreateRoomSchema.partial().extend({
+  termDeposit: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
+  monthlyDeposit: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
+  dailyDeposit: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
   expectedVersion: z.number().int().min(1, 'ต้องระบุ expectedVersion ที่ถูกต้อง'),
 }).strict();
 
@@ -56,8 +62,8 @@ export const ClearRoomOverrideSchema = z.object({
   expectedVersion: z.number().int().min(1, 'ต้องระบุ expectedVersion ที่ถูกต้อง'),
 }).strict();
 
-export const CreateTenantSchema = z.object({
-  firstName: z.string().min(1, 'ชื่อจำเป็นต้องระบุ').max(255),
+export const BaseCreateTenantSchema = z.object({
+  firstName: z.string().max(255).optional(),
   lastName: z.string().max(255).optional().nullable(),
   displayName: z.string().max(255).optional(),
   phone: z.string().min(9, 'เบอร์โทรศัพท์ไม่ถูกต้อง').max(50),
@@ -67,13 +73,85 @@ export const CreateTenantSchema = z.object({
   gender: z.string().optional().nullable(),
   address: z.string().optional().nullable(),
   photoUrl: z.string().optional().nullable(),
-  petInfo: z.any().optional(),
   notes: z.string().optional().nullable(),
 });
 
-export const UpdateTenantSchema = CreateTenantSchema.partial().extend({
+export const CreateTenantSchema = BaseCreateTenantSchema.refine(
+  (data) => Boolean((data.displayName && data.displayName.trim().length > 0) || (data.firstName && data.firstName.trim().length > 0)),
+  {
+    message: 'ชื่อจำเป็นต้องระบุ',
+    path: ['displayName'],
+  }
+);
+
+export const UpdateTenantSchema = BaseCreateTenantSchema.partial().extend({
   version: z.number().int().optional(),
+  status: z.string().optional(),
+  nationalId: z
+    .string()
+    .optional()
+    .nullable()
+    .refine(
+      (val) => {
+        if (!val) return true;
+        const trimmed = val.trim();
+        if (trimmed === '') return true;
+        const digitsOnly = trimmed.replace(/\D/g, '');
+        const isMasked = /[xX]/.test(trimmed);
+        if (isMasked) return true;
+        return digitsOnly.length === 13;
+      },
+      { message: 'เลขประจำตัวประชาชนต้องมี 13 หลัก' }
+    ),
 });
+
+export const UpdateTenantProfileAggregateSchema = z.object({
+  displayName: z.string().min(1, 'ชื่อผู้เช่าจำเป็นต้องระบุ').max(255),
+  phone: z.string().min(9, 'เบอร์โทรศัพท์ไม่ถูกต้อง').max(50),
+  email: z.string().email('อีเมลไม่ถูกต้อง').optional().nullable().or(z.literal('')),
+  nationalId: z
+    .string()
+    .optional()
+    .nullable()
+    .refine(
+      (val) => {
+        if (!val) return true;
+        const trimmed = val.trim();
+        if (trimmed === '') return true;
+        const digitsOnly = trimmed.replace(/\D/g, '');
+        const isMasked = /[xX]/.test(trimmed);
+        if (isMasked) return true;
+        return digitsOnly.length === 13;
+      },
+      { message: 'เลขประจำตัวประชาชนต้องมี 13 หลัก' }
+    ),
+  version: z.number().int().min(1, 'ต้องระบุเวอร์ชัน (version) ที่ถูกต้อง (ขั้นต่ำ 1)'),
+
+  emergencyContact: z.object({
+    id: z.string().optional().nullable(),
+    name: z.string().min(1, 'ชื่อผู้ติดต่อฉุกเฉินจำเป็นต้องระบุ').max(255),
+    phone: z.string().min(9, 'เบอร์โทรศัพท์ผู้ติดต่อฉุกเฉินไม่ถูกต้อง').max(50),
+    relationship: z.string().min(1, 'ความสัมพันธ์ผู้ติดต่อฉุกเฉินจำเป็นต้องระบุ').max(100),
+    isPrimary: z.boolean().default(true),
+  }).optional().nullable(),
+
+  vehicles: z.array(z.object({
+    id: z.string().optional().nullable(),
+    type: z.enum(['car', 'motorcycle', 'none', 'other']).default('car'),
+    licensePlate: z.string().min(1, 'ทะเบียนรถจำเป็นต้องระบุ').max(100),
+    brand: z.string().optional().nullable(),
+    model: z.string().optional().nullable(),
+    color: z.string().optional().nullable(),
+    province: z.string().optional().nullable(),
+  })).default([]),
+
+  pets: z.array(z.object({
+    id: z.string().optional().nullable(),
+    type: z.string().min(1, 'ต้องระบุประเภทสัตว์เลี้ยง'),
+    customType: z.string().optional().nullable(),
+    name: z.string().optional().nullable(),
+  })).default([]),
+}).strict();
 
 export const CreateCoOccupantSchema = z.object({
   name: z.string().min(1, 'ชื่อผู้พักร่วมจำเป็นต้องระบุ').max(255),
@@ -103,7 +181,9 @@ export const CreateVehicleSchema = z.object({
   province: z.string().optional().nullable(),
 });
 
-export const UpdateVehicleSchema = CreateVehicleSchema.partial();
+export const UpdateVehicleSchema = CreateVehicleSchema.partial().extend({
+  status: z.enum(['active', 'inactive']).optional(),
+});
 
 export const CreateContractSchema = z.object({
   roomId: z.string().min(1, 'รูปแบบ Room ID ไม่ถูกต้อง'),
@@ -113,7 +193,7 @@ export const CreateContractSchema = z.object({
   durationMonths: z.number().int().min(1).default(1),
   rentBillingType: z.string().default('monthly'),
   rentAmount: z.string().regex(/^\d+(\.\d{1,2})?$/, 'จำนวนเงินไม่ถูกต้อง'),
-  depositAmount: z.string().regex(/^\d+(\.\d{1,2})?$/).default('0.00'),
+  depositAmount: z.union([z.string().regex(/^\d+(\.\d{1,2})?$/), z.number().min(0)]).optional().nullable(),
   advancePaymentAmount: z.string().regex(/^\d+(\.\d{1,2})?$/).default('0.00'),
   terms: z.string().optional().nullable(),
 });
@@ -125,6 +205,7 @@ export const UpdateContractSchema = CreateContractSchema.partial().extend({
 export const ActivateContractSchema = z.object({
   ownerSignature: z.string().optional().nullable(),
   tenantSignature: z.string().optional().nullable(),
+  depositDeclaredStatus: z.enum(['PAID', 'UNPAID']).optional().nullable(),
 });
 
 export const ExtendContractSchema = z.object({
@@ -145,16 +226,24 @@ export const TerminateContractSchema = z.object({
 });
 
 export const ApproveRegistrationSchema = z.object({
+  roomId: z.string().uuid().optional(),
+  rentalType: z.string().optional(),
+  rentalPlan: z.string().optional(),
   startDate: z.string().min(1, 'กรุณาระบุวันเริ่มสัญญา').refine(val => !isNaN(Date.parse(val)), 'วันเริ่มสัญญาไม่ถูกต้อง'),
   endDate: z.string().min(1, 'กรุณาระบุวันสิ้นสุดสัญญา').refine(val => !isNaN(Date.parse(val)), 'วันสิ้นสุดสัญญาไม่ถูกต้อง'),
   durationMonths: z.union([
     z.number().int().min(1, 'ระยะเวลาสัญญาต้องอย่างน้อย 1 เดือน'),
     z.string().transform(v => parseInt(v, 10)).pipe(z.number().int().min(1, 'ระยะเวลาสัญญาต้องอย่างน้อย 1 เดือน'))
-  ]),
+  ]).optional(),
+  totalDays: z.number().int().min(1).optional(),
+  dailyRate: z.union([
+    z.number().min(0),
+    z.string().regex(/^\d+(\.\d{1,2})?$/)
+  ]).optional(),
   rentAmount: z.union([
     z.number().min(0, 'ค่าเช่าต้องไม่ติดลบ'),
     z.string().regex(/^\d+(\.\d{1,2})?$/, 'ค่าเช่าต้องเป็นตัวเลขที่ถูกต้อง')
-  ]),
+  ]).optional(),
   depositAmount: z.union([
     z.number().min(0, 'เงินมัดจำต้องไม่ติดลบ'),
     z.string().regex(/^\d+(\.\d{1,2})?$/, 'เงินมัดจำต้องเป็นตัวเลขที่ถูกต้อง')
@@ -162,9 +251,12 @@ export const ApproveRegistrationSchema = z.object({
   advancePaymentAmount: z.union([
     z.number().min(0, 'ค่าเช่าล่วงหน้าต้องไม่ติดลบ'),
     z.string().regex(/^\d+(\.\d{1,2})?$/, 'ค่าเช่าล่วงหน้าต้องเป็นตัวเลขที่ถูกต้อง')
-  ]),
+  ]).optional(),
   terms: z.string().optional().nullable(),
+  depositDeclaredStatus: z.enum(['PAID', 'UNPAID']).optional().nullable(),
   confirmReplacement: z.boolean().optional(),
+  requireTenantConfirmation: z.boolean().optional(),
+  legacyDirectApproval: z.boolean().optional(),
 }).strict();
 
 export const PetPolicySchema = z.object({
@@ -188,7 +280,9 @@ export const UpdateDormitoryPropertyChangesSchema = z.object({
 
 export const UpdateDormitoryBillingChangesSchema = z.object({
   waterRate: z.union([z.number(), z.string()]).optional(),
+  waterTierRates: z.array(z.object({ upTo: z.string().nullable().optional(), rate: z.string() })).nullable().optional(),
   electricityRate: z.union([z.number(), z.string()]).optional(),
+  electricityTierRates: z.array(z.object({ upTo: z.string().nullable().optional(), rate: z.string() })).nullable().optional(),
   commonFee: z.union([z.number(), z.string()]).optional(),
   internetFee: z.union([z.number(), z.string()]).optional(),
   waterBillingType: z.string().optional(),

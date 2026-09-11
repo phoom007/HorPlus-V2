@@ -244,6 +244,10 @@ describe('Wave 1G — Strict Defaults, Propagation & Concurrency Integration Tes
           status: 'vacant',
           rentCycle: 'monthly',
           version: 1,
+          monthlyRent: 5000,
+          monthlyDeposit: 5000,
+          termDeposit: 5000,
+          dailyDeposit: 500,
         },
       });
     });
@@ -457,10 +461,10 @@ describe('Wave 1G — Strict Defaults, Propagation & Concurrency Integration Tes
 
       // Create 2 rooms with explicit room overrides (monthlyRent = 5000)
       await prisma.room.create({
-        data: { dormitoryId: dorm.id, buildingId: bld.id, roomNumber: 'RM-OVR1', normalizedRoomNumber: 'RM-OVR1', roomType: 'standard', monthlyRent: new Prisma.Decimal(5000) },
+        data: { dormitoryId: dorm.id, buildingId: bld.id, roomNumber: 'RM-OVR1', normalizedRoomNumber: 'RM-OVR1', roomType: 'standard', monthlyRent: new Prisma.Decimal(5000), monthlyDeposit: new Prisma.Decimal(5000), termDeposit: new Prisma.Decimal(5000), dailyDeposit: new Prisma.Decimal(500) },
       });
       await prisma.room.create({
-        data: { dormitoryId: dorm.id, buildingId: bld.id, roomNumber: 'RM-OVR2', normalizedRoomNumber: 'RM-OVR2', roomType: 'standard', monthlyRent: new Prisma.Decimal(6000) },
+        data: { dormitoryId: dorm.id, buildingId: bld.id, roomNumber: 'RM-OVR2', normalizedRoomNumber: 'RM-OVR2', roomType: 'standard', monthlyRent: new Prisma.Decimal(6000), monthlyDeposit: new Prisma.Decimal(6000), termDeposit: new Prisma.Decimal(6000), dailyDeposit: new Prisma.Decimal(600) },
       });
 
       const applyRes = await defaultsService.applyDefaultPropagation(
@@ -517,7 +521,7 @@ describe('Wave 1G — Strict Defaults, Propagation & Concurrency Integration Tes
       for (let i = 0; i < statuses.length; i++) {
         const st = statuses[i];
         const rm = await prisma.room.create({
-          data: { dormitoryId: dorm.id, buildingId: bld.id, roomNumber: `RM-ST-${i}`, normalizedRoomNumber: `RM-ST-${i}`, roomType: 'standard', monthlyRent: null },
+          data: { dormitoryId: dorm.id, buildingId: bld.id, roomNumber: `RM-ST-${i}`, normalizedRoomNumber: `RM-ST-${i}`, roomType: 'standard', monthlyRent: null, monthlyDeposit: new Prisma.Decimal(5000), termDeposit: new Prisma.Decimal(5000), dailyDeposit: new Prisma.Decimal(500) },
         });
         await prisma.contract.create({
           data: {

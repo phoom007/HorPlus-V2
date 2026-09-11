@@ -10,7 +10,7 @@
  * Unknown / unsupported values FAIL CLOSED by throwing INVALID_BILLING_MODE error.
  */
 
-export type CanonicalUtilityBillingMode = 'per_unit' | 'per_person' | 'fixed';
+export type CanonicalUtilityBillingMode = 'per_unit' | 'per_person' | 'fixed' | 'tiered';
 
 export function normalizeUtilityBillingMode(raw: unknown): CanonicalUtilityBillingMode {
   if (raw === null || raw === undefined || typeof raw !== 'string') {
@@ -31,7 +31,12 @@ export function normalizeUtilityBillingMode(raw: unknown): CanonicalUtilityBilli
     case 'fixed':
     case 'room':
     case 'per_room':
+    case 'flat':
+    case 'flat_rate':
+    case 'fixed_monthly':
       return 'fixed';
+    case 'tiered':
+      return 'tiered';
     default: {
       const err = new Error(`INVALID_BILLING_MODE: Unsupported utility billing mode '${raw}'`);
       (err as any).statusCode = 400;

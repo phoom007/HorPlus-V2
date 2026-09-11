@@ -123,17 +123,18 @@ export class ContractRenewalService {
     const existingFutureContract = await prisma.contract.findFirst({
       where: {
         dormitoryId,
-        roomId,
         previousContractId: contractId,
-        status: { in: ['draft', 'active', 'pending_signature', 'waiting_extension'] },
+        status: { in: ['draft', 'active', 'approved', 'approved_scheduled', 'pending_signature', 'waiting_extension', 'checking_out'] },
+        deletedAt: null,
       },
     });
 
     if (existingFutureContract) {
       return {
         eligible: false,
-        reasonCode: 'FUTURE_CONTRACT_EXISTS',
-        message: 'มีการสร้างสัญญาในรอบถัดไปสำหรับห้องพักนี้แล้ว',
+        reasonCode: 'OBSOLETE_PREDECESSOR_RENEWAL_DENIED',
+        message: 'สัญญาเช่านี้ถูกต่ออายุไปแล้ว ไม่สามารถต่ออายุซ้ำจากสัญญาเดิมได้',
+        successorContract: existingFutureContract,
         futureContract: existingFutureContract,
       };
     }
@@ -252,13 +253,36 @@ export class ContractRenewalService {
         throw new AppError('มีคำขอเช่าห้องนี้รอการอนุมัติอยู่ ไม่อนุญาตให้อนุมัติการต่อสัญญา', 409, 'PENDING_REGISTRATION_LOCK');
       }
 
+      // Verify obsolete predecessor protection: predecessor must not already have a successor
+      const existingSuccessor = await tx.contract.findFirst({
+        where: {
+          dormitoryId,
+          previousContractId: reqRecord.contractId,
+          deletedAt: null,
+          status: { in: ['draft', 'active', 'approved', 'approved_scheduled', 'pending_signature', 'waiting_extension', 'checking_out'] },
+        },
+      });
+      if (existingSuccessor && existingSuccessor.id !== reqRecord.createdContractId) {
+        throw new AppError('สัญญาเช่านี้ถูกต่ออายุไปแล้ว ไม่สามารถต่ออายุซ้ำจากสัญญาเดิมได้', 400, 'OBSOLETE_PREDECESSOR_RENEWAL_DENIED');
+      }
+
       const prevContract = reqRecord.contract;
 
       // Final financial values: Owner override or derived from prior contract
       const finalRent = rentAmount !== undefined ? String(rentAmount) : String(prevContract.rentAmount);
       const finalDeposit = depositAmount !== undefined ? String(depositAmount) : String(prevContract.depositAmount);
       const finalAdvance = advancePaymentAmount !== undefined ? String(advancePaymentAmount) : String(prevContract.advancePaymentAmount);
-      const finalTerms = terms !== undefined ? terms : prevContract.terms;
+
+      // Section C & PO Decision Q2 / Amendment 1:
+      // Renewal terms are server-authoritative from current DormitoryPropertyDefaults.defaultTerms at Owner approval time.
+      // Client-supplied terms must NOT override Settings.
+      const defaults = await tx.dormitoryPropertyDefaults.findUnique({
+        where: { dormitoryId },
+      });
+      const currentDefaultTerms = defaults?.defaultTerms;
+      const finalTerms = (currentDefaultTerms !== null && currentDefaultTerms !== undefined && currentDefaultTerms.trim() !== '')
+        ? currentDefaultTerms
+        : (prevContract.terms ?? null);
 
       // Check if requested start date is in the future relative to current execution date in Asia/Bangkok
       const now = new Date();

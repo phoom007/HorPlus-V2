@@ -21,13 +21,16 @@ import {
 } from 'lucide-react';
 
 // Format Helpers
-export const formatBaht = (amount: number): string => {
-  return new Intl.NumberFormat('th-TH', {
-    style: 'currency',
-    currency: 'THB',
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2
-  }).format(amount).replace('฿', '฿\u00A0');
+export const formatBaht = (amount: number | string | undefined | null): string => {
+  if (amount === undefined || amount === null || amount === '') return '฿\u00A00';
+  const num = typeof amount === 'number' ? amount : Number(amount);
+  if (isNaN(num)) return '฿\u00A00';
+  const isInteger = Number.isInteger(num) || num === Math.floor(num);
+  const formatted = new Intl.NumberFormat('th-TH', {
+    minimumFractionDigits: isInteger ? 0 : 2,
+    maximumFractionDigits: 2,
+  }).format(num);
+  return `฿\u00A0${formatted}`;
 };
 
 export const formatThaiDate = (isoString?: string, showTime = false): string => {
@@ -75,6 +78,8 @@ export const formatOwnerMonthYear = (cycleCodeOrIso?: string): string => {
   return `${months[month - 1]} ${year + 543}`;
 };
 
+export const formatCycleCode = formatOwnerMonthYear;
+
 export const renderOptionalText = (val: any, fallback = '-'): string => {
   if (val === null || val === undefined) return fallback;
   const s = String(val).trim();
@@ -98,9 +103,10 @@ export const formatCountDisplay = (val: string | number | null | undefined): str
   return isNaN(num) ? '0' : Math.max(0, num).toString();
 };
 
-export const normalizeMoneyInput = (val: string | number): number => {
+export const normalizeMoneyInput = (val: string | number | null | undefined): number => {
+  if (val === null || val === undefined || val === '') return 0;
   if (typeof val === 'number') return isNaN(val) ? 0 : val;
-  const clean = String(val).replace(/[^0-9.]/g, '');
+  const clean = String(val).replace(/,/g, '').trim();
   const parsed = parseFloat(clean);
   return isNaN(parsed) ? 0 : parsed;
 };
@@ -422,17 +428,17 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
     primary: {
       btn: 'bg-indigo-600 hover:bg-indigo-700 text-white',
       iconBg: 'bg-indigo-50 text-indigo-600',
-      icon: <Info className="w-6 h-6" />
+      icon: <Info className="w-5 h-5" />
     },
     warning: {
       btn: 'bg-amber-600 hover:bg-amber-700 text-white',
       iconBg: 'bg-amber-50 text-amber-600',
-      icon: <AlertTriangle className="w-6 h-6" />
+      icon: <AlertTriangle className="w-5 h-5" />
     },
     danger: {
       btn: 'bg-rose-600 hover:bg-rose-700 text-white',
       iconBg: 'bg-rose-50 text-rose-600',
-      icon: <Trash2 className="w-6 h-6" />
+      icon: <Trash2 className="w-5 h-5" />
     }
   };
 
@@ -441,11 +447,11 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
     const blocks = msg.split('\n\n').filter(Boolean);
 
     if (blocks.length === 1 && !msg.includes('\n')) {
-      return <p className="text-xs sm:text-sm text-slate-600 leading-relaxed mt-1.5">{msg}</p>;
+      return <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">{msg}</p>;
     }
 
     return (
-      <div className="space-y-2.5 mt-2">
+      <div className="space-y-2.5">
         {blocks.map((block, bIdx) => {
           const lines = block.split('\n').filter(l => l.trim().length > 0);
           const isBulletList = lines.length > 0 && lines.every(l => {
@@ -488,12 +494,12 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
 
       {/* Panel */}
       <div className="bg-white rounded-3xl p-5 sm:p-6 shadow-2xl border border-slate-100 max-w-md w-full relative z-10 animate-in fade-in zoom-in-95 duration-150">
+        <h3 className="text-base font-black text-slate-900 leading-tight mb-3.5">{title}</h3>
         <div className="flex gap-3.5 items-start">
-          <div className={`p-3 rounded-2xl shrink-0 ${colors[type].iconBg}`}>
+          <div className={`w-10 h-10 rounded-xl shrink-0 flex items-center justify-center ${colors[type].iconBg} mt-0.5`}>
             {colors[type].icon}
           </div>
           <div className="flex-1 min-w-0">
-            <h3 className="text-base font-black text-slate-900 leading-tight">{title}</h3>
             {renderFormattedMessage(message)}
           </div>
         </div>
@@ -916,37 +922,91 @@ export const PrintView: React.FC<PrintViewProps> = ({ children, title = 'พิ�
   const contentRef = React.useRef<HTMLDivElement>(null);
 
   const handlePrint = () => {
-    // Add temporary print styles to ensure only the printable area is visible
+    if (!contentRef.current) return;
+
+    // Remove any pre-existing print container/styles idempotently
+    const oldRoot = document.getElementById('horplus-print-root');
+    if (oldRoot) oldRoot.remove();
+    const oldStyle = document.getElementById('horplus-print-style');
+    if (oldStyle) oldStyle.remove();
+
+    // Create top-level print root attached directly to document.body
+    const printRoot = document.createElement('div');
+    printRoot.id = 'horplus-print-root';
+    printRoot.className = 'printable-area';
+    printRoot.innerHTML = contentRef.current.innerHTML;
+    document.body.appendChild(printRoot);
+
+    // Add print styles to isolate horplus-print-root and ensure single A4 page formatting
     const style = document.createElement('style');
+    style.id = 'horplus-print-style';
     style.innerHTML = `
       @media print {
-        body * {
-          visibility: hidden;
+        body > *:not(#horplus-print-root) {
+          display: none !important;
         }
-        .printable-area, .printable-area * {
-          visibility: visible;
-        }
-        .printable-area {
-          position: absolute;
-          left: 0;
-          top: 0;
-          width: 100%;
+        html, body {
+          background: #ffffff !important;
+          color: #0f172a !important;
           margin: 0 !important;
           padding: 0 !important;
-          box-shadow: none !important;
+          width: 100% !important;
+          height: auto !important;
+          min-height: 0 !important;
+          overflow: visible !important;
+          -webkit-print-color-adjust: exact !important;
+          print-color-adjust: exact !important;
         }
-        @page { size: A4; margin: 1cm; }
+        #horplus-print-root,
+        #horplus-print-root * {
+          visibility: visible !important;
+          -webkit-print-color-adjust: exact !important;
+          print-color-adjust: exact !important;
+        }
+        #horplus-print-root {
+          display: block !important;
+          position: static !important;
+          width: 100% !important;
+          max-width: 100% !important;
+          margin: 0 auto !important;
+          padding: 0 !important;
+          background: #ffffff !important;
+          box-shadow: none !important;
+          border: none !important;
+          overflow: visible !important;
+          page-break-inside: avoid !important;
+          break-inside: avoid !important;
+        }
+        #horplus-print-root .printable-area {
+          background: #ffffff !important;
+          box-shadow: none !important;
+          border: none !important;
+          padding: 0 !important;
+          margin: 0 auto !important;
+          max-width: 100% !important;
+          overflow: visible !important;
+        }
+        @page {
+          size: A4 portrait;
+          margin: 12mm 15mm;
+        }
       }
     `;
     document.head.appendChild(style);
 
-    // Trigger browser print
-    window.print();
+    const cleanup = () => {
+      window.removeEventListener('afterprint', cleanup);
+      const root = document.getElementById('horplus-print-root');
+      if (root) root.remove();
+      const st = document.getElementById('horplus-print-style');
+      if (st) st.remove();
+    };
 
-    // Clean up
-    setTimeout(() => {
-      document.head.removeChild(style);
-    }, 1000);
+    window.addEventListener('afterprint', cleanup);
+
+    // Synchronous print invocation within user gesture
+    window.focus();
+    window.print();
   };
 
   return (
@@ -971,3 +1031,5 @@ export const PrintView: React.FC<PrintViewProps> = ({ children, title = 'พิ�
     </div>
   );
 };
+
+export { formatBillingUnit, formatBillingQuantity, formatBillingRate, resolveBillingDisplayUnit, isNonZeroAmount, filterNonZeroBillItems } from '../types';

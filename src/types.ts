@@ -69,6 +69,7 @@ export interface Dormitory {
 export interface Building {
   id: string;
   name: string; // e.g. "อาคาร A", "อาคาร B"
+  code?: string;
   floorsCount: number;
   description?: string;
   termMonths?: number;
@@ -77,6 +78,11 @@ export interface Building {
   termRent?: number;
   dailyRent?: number;
   depositAmount?: number;
+  monthlyDeposit?: number;
+  termDeposit?: number;
+  dailyDeposit?: number;
+  securityDeposit?: number;
+  version?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -86,6 +92,9 @@ export interface QuickAddEffectiveRates {
   termRent: number | null;
   dailyRent: number | null;
   depositAmount: number;
+  monthlyDeposit?: number | null;
+  termDeposit?: number | null;
+  dailyDeposit?: number | null;
 }
 
 export interface QuickAddBuildingContext {
@@ -99,12 +108,20 @@ export interface QuickAddRoomContext {
   roomId: string;
   dormitoryId: string;
   roomNumber: string;
-  buildingId: string;
+  buildingId?: string;
   effective: QuickAddEffectiveRates;
   building?: QuickAddBuildingContext | null;
+  roomType?: string;
+  floor?: number;
+  currentCatalogRates?: Array<{ type: string; price: number; unit: string }>;
 }
 
 export type RoomStatus = 'vacant' | 'occupied' | 'reserved' | 'maintenance';
+
+export interface CurrentOperationalActions {
+  canSetMaintenance: boolean;
+  maintenanceBlockReason: 'ACTIVE_OCCUPANCY' | 'ACTIVE_RESERVATION' | null;
+}
 
 export interface Room {
   id: string;
@@ -116,6 +133,9 @@ export interface Room {
   termRent?: number; // Rent per term (รายเทอม)
   dailyRent?: number; // Rent per day (รายวัน)
   rentCycle?: 'term' | 'monthly' | 'daily';
+  termDeposit?: number;
+  monthlyDeposit?: number;
+  dailyDeposit?: number;
   depositAmount: number;
   depositStatus?: 'paid' | 'unpaid'; // Status of deposit payment (จ่ายแล้ว/ยังไม่จ่าย)
   parkingFee?: number;
@@ -127,6 +147,9 @@ export interface Room {
   currentTenantId?: string;
   notes?: string;
   images: string[];
+  version?: number;
+  activeRentalSummary?: ActiveRentalSummary | null;
+  currentOperationalActions?: CurrentOperationalActions | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -137,6 +160,19 @@ export interface CoOccupant {
   phone: string;
   relationship?: string;
   citizenId?: string;
+  addedAt?: string;
+}
+
+export interface CoOccupantHistoryItem {
+  id: string;
+  coOccupantId?: string;
+  name: string;
+  phone: string;
+  relationship?: string;
+  citizenId?: string;
+  action: 'added' | 'removed' | string;
+  timestamp: string;
+  note?: string;
 }
 
 export interface EmergencyContact {
@@ -151,9 +187,23 @@ export interface Vehicle {
   brand?: string;
 }
 
+export interface VehicleItem {
+  id?: string;
+  type: 'car' | 'motorcycle' | 'none';
+  licensePlate: string;
+  brand?: string;
+}
+
 export interface Pet {
   hasPet: boolean;
   type?: string;
+  name?: string;
+}
+
+export interface PetItem {
+  id?: string;
+  type: string;
+  customType?: string;
   name?: string;
 }
 
@@ -170,8 +220,88 @@ export interface Tenant {
   pet: Pet;
   rentalHistory: string[]; // Room history IDs
   status: 'active' | 'inactive' | 'pending';
+  lifecycleStage?: TenantLifecycleStage;
+  rentalType?: 'MONTHLY' | 'TERM' | 'DAILY' | 'monthly' | 'term' | 'daily' | string;
+  roomId?: string;
+  requestedRoomId?: string | null;
+  registrationRequestId?: string | null;
+  rentalPlan?: string | null;
+  requestedRent?: number | null;
+  requestedDeposit?: number | null;
+  requestedStartDate?: string | null;
+  requestedEndDate?: string | null;
+  requestedDurationMonths?: number | null;
+  requestedDays?: number | null;
+  requestedDailyRate?: number | null;
+  requestedAttachments?: Array<{ name: string; type?: string; size?: number; url?: string }> | null;
+  acceptanceSnapshot?: any | null;
+  lineFriendId?: string | null;
   createdAt: string;
   updatedAt: string;
+  // Presentation-only view-model aggregate extensions (UI baseline compatibility):
+  // NOTE: These fields are UI-only aggregates and must NEVER be serialized directly to canonical backend PUT /tenants
+  vehicles?: VehicleItem[];
+  pets?: PetItem[];
+  coOccupantHistory?: CoOccupantHistoryItem[];
+}
+
+export interface TenantProfileViewModel extends Tenant {
+  // Explicit view model type documenting presentation-only aggregate collections
+  vehicles?: VehicleItem[];
+  pets?: PetItem[];
+  coOccupantHistory?: CoOccupantHistoryItem[];
+}
+
+/**
+ * 6-Stage Registration Lifecycle for Tenant Domain (Phase 2)
+ */
+export type TenantLifecycleStage =
+  | 'OWNER_CREATED'
+  | 'WAITING_LINE_BIND'
+  | 'TENANT_FILLING_DATA'
+  | 'WAITING_OWNER_APPROVAL'
+  | 'WAITING_SIGNATURE'
+  | 'REGISTERED';
+
+export interface EmergencyContactInput {
+  name: string;
+  phone: string;
+  relationship: string;
+  isPrimary?: boolean;
+}
+
+export interface VehicleInput {
+  type: 'car' | 'motorcycle' | 'none' | 'other' | string;
+  licensePlate: string;
+  brand?: string | null;
+  model?: string | null;
+  color?: string | null;
+  province?: string | null;
+}
+
+export interface TenantStayHistoryItem {
+  id: string;
+  roomId: string;
+  roomNumber?: string;
+  startedAt: string;
+  endedAt?: string | null;
+  status: 'ACTIVE' | 'ENDED' | string;
+  endedReason?: string | null;
+  rentalType?: 'monthly' | 'term' | 'daily' | string;
+}
+
+export interface TenantReturnContext {
+  source: 'meters' | 'rooms';
+  tenantId: string;
+  roomId?: string;
+  cycleId?: string;
+  cycleCode?: string;
+  viewMode?: 'grid' | 'list' | 'floor';
+  selectedBuilding?: string;
+  selectedStatus?: string;
+  searchQuery?: string;
+  scrollTop?: number;
+  scrollY?: number;
 }
 
 export type ContractStatus = 'draft' | 'pending_signature' | 'active' | 'approved_scheduled' | 'scheduled' | 'SCHEDULED' | 'expiring_soon' | 'expired' | 'terminated' | 'waiting_extension' | 'checking_out';
@@ -186,6 +316,7 @@ export interface Contract {
   durationMonths: number;
   rentAmount: number;
   depositAmount: number;
+  advancePaymentAmount?: string | number; // Canonical field; backend may expose Decimal as string or number
   depositStatus?: 'paid' | 'unpaid';
   depositType?: 'refundable' | 'deduct_rent';
   terms: string;
@@ -288,11 +419,33 @@ export interface MeterReading {
 
 export type BillStatus = 'draft' | 'pending' | 'checking' | 'paid' | 'overdue' | 'rejected' | 'cancelled';
 
+export interface CanonicalTierBreakdownItem {
+  lowerExclusive: string;
+  upperInclusive: string | null;
+  billedUnits: string;
+  rate: string;
+  amount: string;
+}
+
+export interface CanonicalTieredBillItemMetadata {
+  mode?: string;
+  usageUnits?: string;
+  tierBreakdown?: CanonicalTierBreakdownItem[];
+  [key: string]: unknown;
+}
+
 export interface BillItem {
-  id: string;
+  id?: string;
+  type?: string;
+  code?: string | null;
   description: string;
-  amount: number;
-  category: 'rent' | 'water' | 'electricity' | 'parking' | 'fine' | 'other' | 'discount';
+  quantity?: number | string | null;
+  unit?: string | null;
+  unitPrice?: number | string | null;
+  amount: number | string;
+  category?: 'rent' | 'water' | 'electricity' | 'parking' | 'fine' | 'other' | 'discount' | string;
+  metadata?: CanonicalTieredBillItemMetadata | null | Record<string, any>;
+  displayOrder?: number;
 }
 
 export interface Bill {
@@ -302,6 +455,8 @@ export interface Bill {
   billingCycleId?: string;
   billKind?: 'MONTHLY_UTILITY' | 'DEPOSIT' | 'RENT' | string;
   outstandingAmount?: number | string;
+  paidAmount?: number | string;
+  subtotal?: number | string;
   roomId: string;
   tenantId: string;
   items: BillItem[];
@@ -314,6 +469,13 @@ export interface Bill {
   paymentMethod?: 'promptpay' | 'cash';
   paidAt?: string;
   slipImage?: string;
+  Payment?: Array<{
+    id?: string;
+    status: string;
+    amount?: number | string;
+    paymentDate?: string | null;
+    metadata?: Record<string, any> | null;
+  }>;
   createdAt: string;
   updatedAt: string;
 }
@@ -564,12 +726,144 @@ export const formatItemDescription = (desc: string): string => {
   return str;
 };
 
+export function formatBillingUnit(unit?: string | null): string {
+  if (!unit) return '';
+  const u = String(unit).trim().toLowerCase();
+  switch (u) {
+    case 'unit':
+      return 'หน่วย';
+    case 'person':
+      return 'คน';
+    case 'room':
+      return 'ห้อง';
+    case 'charge':
+      return 'รายการ';
+    case 'vehicle':
+      return 'คัน';
+    case 'month':
+      return 'เดือน';
+    case 'day':
+      return 'วัน';
+    case 'installment':
+      return 'งวด';
+    case 'bill':
+      return 'บิล';
+    case 'หน่วย':
+      return 'หน่วย';
+    case 'คน':
+      return 'คน';
+    case 'ห้อง':
+      return 'ห้อง';
+    case 'รายการ':
+      return 'รายการ';
+    case 'คัน':
+      return 'คัน';
+    case 'เดือน':
+      return 'เดือน';
+    case 'วัน':
+      return 'วัน';
+    case 'งวด':
+      return 'งวด';
+    case 'บิล':
+      return 'บิล';
+    default:
+      return unit.trim();
+  }
+}
+
+export function formatBillingQuantity(quantity?: number | string | null, unit?: string | null): string {
+  if (quantity === undefined || quantity === null || quantity === '') return '-';
+  const num = Number(quantity);
+  if (isNaN(num)) return '-';
+  const formattedNum = num % 1 === 0 ? num.toString() : num.toLocaleString('th-TH', { maximumFractionDigits: 2 });
+  const thaiUnit = formatBillingUnit(unit);
+  return thaiUnit ? `${formattedNum} ${thaiUnit}` : formattedNum;
+}
+
+export function formatBillingRate(unitPrice?: number | string | null, unit?: string | null): string {
+  if (unitPrice === undefined || unitPrice === null || unitPrice === '') return '-';
+  const val = Number(unitPrice);
+  if (isNaN(val)) return '-';
+  const formattedVal = val.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const thaiUnit = formatBillingUnit(unit);
+  return thaiUnit ? `${formattedVal} บาท/${thaiUnit}` : `${formattedVal} บาท`;
+}
+
+/**
+ * Resolves the display unit for a BillItem.
+ * Precedence:
+ * 1. Persisted `unit` (if provided, non-empty, and non-null)
+ * 2. Verified deterministic fallback by `type` (only where source proves a single canonical unit)
+ * 3. `null` / empty (no guessed unit)
+ */
+export function resolveBillingDisplayUnit(params: {
+  unit?: string | null;
+  type?: string | null;
+}): string | null {
+  if (params.unit && String(params.unit).trim() !== '') {
+    const u = String(params.unit).trim().toLowerCase();
+    if (u === 'bill') return 'charge';
+    return u;
+  }
+
+  if (!params.type) return null;
+
+  const normalizedType = String(params.type).trim().toLowerCase();
+  switch (normalizedType) {
+    case 'water':
+      return 'unit';
+    case 'electric':
+    case 'electricity':
+      return 'unit';
+    case 'common':
+    case 'common_fee':
+      return 'room';
+    case 'manual_outstanding':
+    case 'other_fee':
+      return 'charge';
+    default:
+      // Ambiguous types (rent, deposit, internet, parking, surcharge, late_fee, etc.)
+      // do not guess a fallback unit.
+      return null;
+  }
+}
+
+/**
+ * Helper to determine if a financial line item has a non-zero amount.
+ * Items with exactly 0.00 amount are suppressed from user-facing expense breakdowns.
+ */
+export function isNonZeroAmount(amount?: number | string | null): boolean {
+  if (amount === undefined || amount === null || amount === '') return false;
+  const num = Number(amount);
+  if (isNaN(num)) return false;
+  return num !== 0;
+}
+
+/**
+ * Filters out zero-amount items from an array of bill items or line items.
+ */
+export function filterNonZeroBillItems<T extends { amount?: number | string | null }>(items?: T[] | null): T[] {
+  if (!items || !Array.isArray(items)) return [];
+  return items.filter(it => isNonZeroAmount(it.amount));
+}
+
+export interface ActiveRentalSummary {
+  type: 'TERM' | 'MONTHLY' | 'DAILY';
+  rentAmount: number;
+  depositAmount?: number | null;
+  source: 'CONTRACT_SNAPSHOT' | 'CONTRACT' | 'PROVISIONAL_TERM' | 'DAILY_STAY' | string;
+  termInstallmentCount?: number | null;
+}
+
 export type FieldSource = 'DORMITORY' | 'BUILDING' | 'ROOM' | 'CONTRACT_SNAPSHOT';
 
 export interface RoomFieldSources {
   monthlyRent?: FieldSource;
   termRent?: FieldSource;
   dailyRent?: FieldSource;
+  termDeposit?: FieldSource;
+  monthlyDeposit?: FieldSource;
+  dailyDeposit?: FieldSource;
   depositAmount?: FieldSource;
   advancePaymentAmount?: FieldSource;
   parkingFee?: FieldSource;
@@ -589,6 +883,9 @@ export interface EffectiveValues {
   monthlyRent: number;
   termRent?: number | null;
   dailyRent?: number | null;
+  termDeposit?: number;
+  monthlyDeposit?: number;
+  dailyDeposit?: number;
   depositAmount: number;
   advancePaymentAmount: number;
   parkingFee: number;

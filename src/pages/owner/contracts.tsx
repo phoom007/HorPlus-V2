@@ -54,6 +54,9 @@ import {
 import { Contract, Tenant, Room, Bill, BillItem, BLOCKING_CONTRACT_STATUSES } from '../../types';
 import { getDataProvider } from '../../data/dataProvider';
 import { httpRequest } from '../../data/httpClient';
+import { formatOwnerRoomOptionLabel } from '../../utils/room-label.util';
+import { resolveLandlordSignerName } from '../../utils/landlord-signer.util';
+import { getPaymentSettings, PaymentSettingsDTO } from '../../services/payment-settings.service';
 
 export interface PendingContractSubmission {
   id: string;
@@ -92,6 +95,8 @@ export const savePendingContractSubmissions = (_subs: PendingContractSubmission[
 };
 
 interface OwnerContractsProps {
+  dormitoryId?: string;
+  buildings?: Array<{ id: string; name: string }>;
   contracts: Contract[];
   tenants: Tenant[];
   rooms: Room[];
@@ -108,6 +113,8 @@ interface OwnerContractsProps {
 }
 
 export const OwnerContracts: React.FC<OwnerContractsProps> = ({
+  dormitoryId,
+  buildings: propBuildings = [],
   contracts,
   tenants,
   rooms,
@@ -122,6 +129,32 @@ export const OwnerContracts: React.FC<OwnerContractsProps> = ({
   onClearInitialContractId,
   onBackToTenants
 }) => {
+  const getDormId = () => dormitoryId || (typeof window !== 'undefined' ? (localStorage.getItem('selected_dormitory_id') || sessionStorage.getItem('active_dormitory_selected_for_session')) : '') || '';
+  const effectiveDormId = getDormId();
+
+  const [paymentSettings, setPaymentSettings] = useState<PaymentSettingsDTO | null>(null);
+  const [fetchedBuildings, setFetchedBuildings] = useState<Array<{ id: string; name: string }>>([]);
+
+  React.useEffect(() => {
+    if (!effectiveDormId) return;
+    getPaymentSettings(effectiveDormId)
+      .then(setPaymentSettings)
+      .catch((err) => console.warn('Failed to load payment settings for landlord signature:', err));
+  }, [effectiveDormId]);
+
+  React.useEffect(() => {
+    if (propBuildings && propBuildings.length > 0) return;
+    if (!effectiveDormId) return;
+    getDataProvider().properties?.getBuildings?.()
+      .then((res: any) => {
+        if (res?.data && Array.isArray(res.data)) {
+          setFetchedBuildings(res.data);
+        }
+      })
+      .catch(() => {});
+  }, [effectiveDormId, propBuildings]);
+
+  const localBuildings = (propBuildings && propBuildings.length > 0) ? propBuildings : fetchedBuildings;
   const [searchQuery, setSearchQuery] = useState('');
   const [cycleFilter, setCycleFilter] = useState<'cycle' | 'all'>('all');
   const DataProvider = getDataProvider();
@@ -580,8 +613,6 @@ export const OwnerContracts: React.FC<OwnerContractsProps> = ({
       return 'ไม่พบข้อมูลระยะเวลา';
     }
   };
-
-  const getDormId = () => localStorage.getItem('selected_dormitory_id') || sessionStorage.getItem('active_dormitory_selected_for_session') || '';
 
   const handleConfirmTerminate = async () => {
     try {
@@ -1047,7 +1078,7 @@ export const OwnerContracts: React.FC<OwnerContractsProps> = ({
                       }`}
                     >
                       <div className="flex items-center justify-between w-full">
-                        <span className="text-xs font-extrabold">ห้อง {room.roomNumber}</span>
+                        <span className="text-xs font-extrabold">ห้อง {formatOwnerRoomOptionLabel(room, localBuildings)}</span>
                         {!isSelectable && (
                           <span className="text-[9px] font-bold text-red-500 bg-red-50 px-1.5 py-0.5 rounded-md">มีผู้เช่าอื่น</span>
                         )}
@@ -1504,13 +1535,16 @@ export const OwnerContracts: React.FC<OwnerContractsProps> = ({
                   </div>
 
                   <div className="space-y-3">
-                    <p className="text-[10px] text-slate-400 font-bold uppercase">ลงชื่อ นิติหอพัก / ผู้เช่าร่วม</p>
+                    <p className="text-[10px] text-slate-400 font-bold uppercase">ลงชื่อ นิติหอพัก / ผู้ให้เช่า</p>
                     {(selectedContract.ownerSignature || dorm?.ownerSignature) ? (
                       <img src={selectedContract.ownerSignature || dorm?.ownerSignature} alt="ลายเซ็นผู้ให้เช่า" className="h-10 mx-auto border border-slate-100 rounded-lg p-1 bg-slate-50/50 object-contain" />
                     ) : (
                       <div className="h-10 border border-dashed border-slate-200 rounded-lg" />
                     )}
-                    <p className="font-extrabold text-slate-800">({dorm?.promptPayName || dorm?.name || 'กรรมการนิติบุคคล HorPlus'})</p>
+                    {(() => {
+                      const signerName = resolveLandlordSignerName(paymentSettings);
+                      return signerName ? <p className="font-extrabold text-slate-800">({signerName})</p> : null;
+                    })()}
                   </div>
                 </div>
 

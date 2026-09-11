@@ -65,7 +65,8 @@
         "cycleName": "รอบบิล กรกฎาคม 2569",
         "totalBills": 11,
         "paidBillsCount": 7,
-        "unpaidBillsCount": 4,
+        "partialBillsCount": 1,
+        "unpaidBillsCount": 3,
         "financialBreakdown": {
           "fixedRentTotal": 52900,
           "waterUnitsTotal": 136,
@@ -79,10 +80,10 @@
           "otherFeesTotal": 600,
           "fineTotal": 0,
           "totalBilledAmount": 65899,
-          "totalPaidRevenue": 41994,
-          "totalOutstandingUnpaid": 23905,
-          "paidPercent": 64,
-          "unpaidPercent": 36,
+          "totalPaidRevenue": 44094,
+          "totalOutstandingUnpaid": 21805,
+          "paidPercent": 67,
+          "unpaidPercent": 33,
           "averageRevenuePerUser": 5991
         },
         "billsList": [
@@ -209,8 +210,10 @@
             "parking": 0,
             "surcharge": 0,
             "total": 6100,
-            "status": "UNPAID",
-            "receipt": null
+            "paidAmount": 2100,
+            "outstandingAmount": 4000,
+            "status": "PARTIALLY_PAID",
+            "receipt": "RCP-202607-302-P1"
           },
           {
             "room": "303",

@@ -49,7 +49,7 @@ export class InMemoryRoleRepository implements IRoleRepository {
         name: 'ผู้จัดการ',
         permissions: {
           rooms: ['view', 'create', 'update'],
-          tenants: ['view', 'create', 'update', 'document:read'],
+          tenants: ['view', 'create', 'update', 'archive', 'document:read', 'document:write'],
           contracts: ['view', 'create', 'update'],
           bills: ['view', 'generate'],
           maintenance: ['view', 'update', 'close'],

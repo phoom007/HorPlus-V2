@@ -10,6 +10,7 @@ import { SensitiveFieldService } from '../services/sensitive-field.service.js';
 import { generatePromptPayPayload, maskPromptPayDisplay, generatePromptPayQrSvg } from '../services/promptpay-payload.service.js';
 import { billingOrchestrationService } from '../services/billing-orchestration.service.js';
 import { CreateCoOccupantSchema } from '../schemas/property-tenant-contract.schemas.js';
+import { isBillVisibleToTenant, getTenantRentCutoffDate } from '../utils/tenant-visibility.util.js';
 
 type TenantContextResult = {
   error?: undefined;
@@ -50,48 +51,89 @@ async function resolveTenantContext(req: Request): Promise<TenantContextResult> 
     return { error: { code: 'FORBIDDEN', message: 'Not a tenant', statusCode: 403 } };
   }
 
-  const tenant = await prisma.tenant.findFirst({
-    where: { linkedUserId: userId, dormitoryId: membership.dormitoryId }
+  const requestedRoomId = (req.headers['x-room-id'] as string) || (req.query.roomId as string);
+
+  const tenants = await prisma.tenant.findMany({
+    where: { linkedUserId: userId, dormitoryId: membership.dormitoryId, deletedAt: null }
   });
 
-  if (!tenant) {
+  if (tenants.length === 0) {
     return { error: { code: 'FORBIDDEN', message: 'Tenant record not found', statusCode: 403 } };
   }
 
-  const contract = await prisma.contract.findFirst({
-    where: { tenantId: tenant.id, status: 'active' }
+  const tenantIds = tenants.map(t => t.id);
+
+  const contracts = await prisma.contract.findMany({
+    where: { tenantId: { in: tenantIds }, status: 'active' }
   });
+
+  let contract = requestedRoomId
+    ? contracts.find(c => c.roomId === requestedRoomId)
+    : contracts[0];
+
+  if (!contract && contracts.length > 0) {
+    contract = contracts[0];
+  }
+
+  const tenant = (contract ? tenants.find(t => t.id === contract.tenantId) : null) || tenants[0];
 
   return {
     tenant,
     dormitoryId: membership.dormitoryId,
     contract: contract || null,
-    roomId: contract?.roomId || undefined
+    roomId: contract?.roomId || requestedRoomId || undefined
   };
 }
 
-async function getTenantBillWhere(prisma: any, ctx: { dormitoryId: string; tenant: { id: string } }) {
+async function getTenantBillWhere(prisma: any, ctx: { dormitoryId: string; tenant: { id: string }; roomId?: string }, asOfDate: Date = new Date()) {
+  const contractWhere: any = {
+    tenantId: ctx.tenant.id,
+    dormitoryId: ctx.dormitoryId,
+  };
+  if (ctx.roomId) {
+    contractWhere.roomId = ctx.roomId;
+  }
   const contracts = await prisma.contract.findMany({
-    where: { tenantId: ctx.tenant.id, dormitoryId: ctx.dormitoryId },
+    where: contractWhere,
     select: { id: true }
   });
   const contractIds = contracts.map((c: any) => c.id);
+  const cutoffDate = getTenantRentCutoffDate(asOfDate);
+
+  const orConditions: any[] = [];
+  if (ctx.roomId) {
+    orConditions.push({ roomId: ctx.roomId });
+  } else {
+    orConditions.push({ tenantId: ctx.tenant.id });
+  }
+  if (contractIds.length > 0) {
+    orConditions.push({ contractId: { in: contractIds } });
+  }
 
   return {
     dormitoryId: ctx.dormitoryId,
     status: { not: 'cancelled' },
-    OR: [
-      { tenantId: ctx.tenant.id },
-      ...(contractIds.length > 0 ? [{ contractId: { in: contractIds } }] : [])
-    ]
+    OR: orConditions,
+    // Future RENT Bill Visibility Gate: hide RENT bills before their billing cycle periodStart in Asia/Bangkok
+    NOT: {
+      AND: [
+        { billKind: 'RENT' },
+        {
+          billingCycle: {
+            periodStart: { gt: cutoffDate }
+          }
+        }
+      ]
+    }
   };
 }
 
-async function checkBillOwnership(prisma: any, billId: string, ctx: { dormitoryId: string; tenant: { id: string } }) {
+async function checkBillOwnership(prisma: any, billId: string, ctx: { dormitoryId: string; tenant: { id: string } }, asOfDate: Date = new Date()) {
   const bill = await prisma.bill.findUnique({
     where: { id: billId },
     include: {
       items: true,
+      billingCycle: true,
       Payment: {
         include: { receipt: true },
         orderBy: { createdAt: 'desc' }
@@ -100,6 +142,11 @@ async function checkBillOwnership(prisma: any, billId: string, ctx: { dormitoryI
   });
 
   if (!bill || bill.dormitoryId !== ctx.dormitoryId || bill.status === 'cancelled') {
+    return null;
+  }
+
+  // Future RENT Bill Visibility Gate: authoritative check in Asia/Bangkok
+  if (!isBillVisibleToTenant(bill, asOfDate)) {
     return null;
   }
 
@@ -128,6 +175,211 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
     router.use(authService.requireAuth());
   }
 
+  // 0. Tenant Active Rooms & Available Rooms for Renting Additional Room
+  router.get('/rooms', async (req: Request, res: Response) => {
+    try {
+      const userId = req.auth?.userId;
+      if (!userId) {
+        return res.status(401).json({ error: { code: 'UNAUTHORIZED', message: 'Not logged in' } });
+      }
+
+      const tenants = await prisma.tenant.findMany({
+        where: { linkedUserId: userId, deletedAt: null },
+        include: {
+          dormitory: true,
+          contracts: {
+            where: { status: 'active' },
+            include: {
+              room: {
+                include: {
+                  building: true
+                }
+              }
+            }
+          },
+          occupancies: {
+            where: { status: 'ACTIVE' },
+            include: {
+              room: {
+                include: {
+                  building: true
+                }
+              }
+            }
+          }
+        }
+      });
+
+      const roomList: any[] = [];
+      const seenRoomIds = new Set<string>();
+
+      for (const t of tenants) {
+        for (const c of t.contracts) {
+          if (c.room && !seenRoomIds.has(c.room.id)) {
+            seenRoomIds.add(c.room.id);
+            roomList.push({
+              roomId: c.room.id,
+              roomNumber: c.room.roomNumber,
+              floor: c.room.floor,
+              buildingId: c.room.buildingId,
+              buildingName: c.room.building?.name || 'อาคารหลัก',
+              dormitoryId: t.dormitoryId,
+              dormitoryName: t.dormitory.name,
+              contractId: c.id,
+              contractNumber: c.contractNumber,
+              monthlyRent: Number(c.rentAmount || c.room.monthlyRent || 0),
+              status: c.status,
+              tenantId: t.id,
+              tenantName: `${t.firstName || ''} ${t.lastName || ''}`.trim() || t.displayName
+            });
+          }
+        }
+
+        for (const occ of t.occupancies) {
+          if (occ.room && !seenRoomIds.has(occ.room.id)) {
+            seenRoomIds.add(occ.room.id);
+            roomList.push({
+              roomId: occ.room.id,
+              roomNumber: occ.room.roomNumber,
+              floor: occ.room.floor,
+              buildingId: occ.room.buildingId,
+              buildingName: occ.room.building?.name || 'อาคารหลัก',
+              dormitoryId: t.dormitoryId,
+              dormitoryName: t.dormitory.name,
+              contractId: null,
+              contractNumber: null,
+              monthlyRent: Number(occ.room.monthlyRent || 0),
+              status: occ.status,
+              tenantId: t.id,
+              tenantName: `${t.firstName || ''} ${t.lastName || ''}`.trim() || t.displayName
+            });
+          }
+        }
+      }
+
+      res.json({
+        success: true,
+        rooms: roomList
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message, requestId: req.requestId } });
+    }
+  });
+
+  router.get('/available-rooms', async (req: Request, res: Response) => {
+    try {
+      const ctx = await resolveTenantContext(req);
+      if (ctx.error) {
+        return res.status(ctx.error.statusCode).json({ error: { code: ctx.error.code, message: ctx.error.message } });
+      }
+
+      const rooms = await prisma.room.findMany({
+        where: {
+          dormitoryId: ctx.dormitoryId,
+          status: { in: ['vacant', 'reserved'] },
+          deletedAt: null,
+          ...(ctx.roomId ? { id: { not: ctx.roomId } } : {})
+        },
+        include: {
+          building: true
+        },
+        orderBy: [
+          { roomNumber: 'asc' }
+        ]
+      });
+
+      rooms.sort((a, b) => {
+        const bldCompare = (a.building?.name || '').localeCompare(b.building?.name || '', 'th');
+        if (bldCompare !== 0) return bldCompare;
+        return a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true, sensitivity: 'base' });
+      });
+
+      res.json({
+        success: true,
+        data: rooms.map(r => ({
+          id: r.id,
+          roomNumber: r.roomNumber,
+          floor: r.floor,
+          buildingId: r.buildingId,
+          buildingName: r.building?.name || 'อาคารหลัก',
+          monthlyRent: Number(r.monthlyRent || 0),
+          status: r.status
+        }))
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message, requestId: req.requestId } });
+    }
+  });
+
+  router.get('/utilities', async (req: Request, res: Response) => {
+    try {
+      const ctx = await resolveTenantContext(req);
+      if (ctx.error) {
+        return res.status(ctx.error.statusCode).json({ error: { code: ctx.error.code, message: ctx.error.message } });
+      }
+
+      if (!ctx.roomId) {
+        return res.json({ success: true, data: { water: null, electric: null, readings: [] } });
+      }
+
+      const readings = await prisma.meterReading.findMany({
+        where: {
+          dormitoryId: ctx.dormitoryId,
+          roomId: ctx.roomId,
+        },
+        orderBy: { readAt: 'desc' },
+        take: 12
+      });
+
+      const latestWater = readings.find(r => r.meterType.toLowerCase() === 'water');
+      const latestElectric = readings.find(r => r.meterType.toLowerCase() === 'electric');
+
+      const room = ctx.roomId ? await prisma.room.findUnique({
+        where: { id: ctx.roomId },
+        select: { waterRate: true, electricityRate: true }
+      }) : null;
+
+      const billingSettings = await prisma.dormitoryBillingSettings.findUnique({
+        where: { dormitoryId: ctx.dormitoryId }
+      });
+
+      const waterUnitPrice = Number(room?.waterRate ?? billingSettings?.waterRate ?? 18);
+      const electricUnitPrice = Number(room?.electricityRate ?? billingSettings?.electricityRate ?? 8);
+
+      res.json({
+        success: true,
+        data: {
+          latestWater: latestWater ? {
+            id: latestWater.id,
+            previousReading: Number(latestWater.previousReading || 0),
+            currentReading: Number(latestWater.currentReading || 0),
+            usageUnits: Number(latestWater.usageUnits || 0),
+            unitPrice: waterUnitPrice,
+            readAt: latestWater.readAt.toISOString()
+          } : null,
+          latestElectric: latestElectric ? {
+            id: latestElectric.id,
+            previousReading: Number(latestElectric.previousReading || 0),
+            currentReading: Number(latestElectric.currentReading || 0),
+            usageUnits: Number(latestElectric.usageUnits || 0),
+            unitPrice: electricUnitPrice,
+            readAt: latestElectric.readAt.toISOString()
+          } : null,
+          readings: readings.map(r => ({
+            id: r.id,
+            meterType: r.meterType,
+            previousReading: Number(r.previousReading || 0),
+            currentReading: Number(r.currentReading || 0),
+            usageUnits: Number(r.usageUnits || 0),
+            readAt: r.readAt.toISOString()
+          }))
+        }
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message, requestId: req.requestId } });
+    }
+  });
+
   // 1. Tenant Profile & Room Members
   router.get('/profile', async (req: Request, res: Response) => {
     try {
@@ -144,7 +396,15 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
         where: { tenantId: tenant.id, dormitoryId: ctx.dormitoryId, deletedAt: null }
       });
 
-      const phone = tenant.phone ? `${tenant.phone.slice(0, 3)}***${tenant.phone.slice(-4)}` : null;
+      const phone = tenant.phone || null;
+      let rawCitizenId = tenant.nationalIdMasked || null;
+      if (tenant.nationalIdEncrypted) {
+        try {
+          rawCitizenId = sensitiveFieldService.decrypt(tenant.nationalIdEncrypted);
+        } catch (e) {
+          rawCitizenId = tenant.nationalIdMasked || null;
+        }
+      }
 
       res.json({
         id: tenant.id,
@@ -157,6 +417,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
         status: tenant.status,
         pictureUrl: tenant.photoUrl || null,
         nationalIdMasked: tenant.nationalIdMasked || null,
+        citizenId: rawCitizenId,
         dormitory: dorm ? {
           id: dorm.id,
           name: dorm.name,
@@ -262,7 +523,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
           method: p.method,
           amount: p.amount.toString(),
           status: p.status,
-          paymentDate: p.paymentDate.toISOString(),
+          paymentDate: p.paymentDate ? p.paymentDate.toISOString() : null,
           rejectedReason: p.rejectedReason || null,
           reversalReason: p.reversalReason || null,
           reviewedAt: p.reviewedAt ? p.reviewedAt.toISOString() : null,
@@ -536,7 +797,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
         method: p.method,
         amount: p.amount.toString(),
         status: p.status,
-        paymentDate: p.paymentDate.toISOString(),
+        paymentDate: p.paymentDate ? p.paymentDate.toISOString() : null,
         rejectedReason: p.rejectedReason || null,
         reversalReason: p.reversalReason || null,
         reviewedAt: p.reviewedAt ? p.reviewedAt.toISOString() : null,
@@ -606,7 +867,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
       }
 
       const billingState = ctx.roomId
-        ? await roomBillingStateService.getRoomBillingState(ctx.dormitoryId, ctx.roomId)
+        ? await roomBillingStateService.getTenantRoomBillingState(ctx.dormitoryId, ctx.roomId, ctx.tenant.id, new Date())
         : { state: 'no_bill' as const, outstandingAmount: '0.00', statusText: 'ไม่มีรายการค้างชำระ' };
 
       const room = ctx.roomId ? await prisma.room.findUnique({ where: { id: ctx.roomId } }) : null;
@@ -650,7 +911,8 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
       }
 
       const requests = await maintenanceService.getTenantRequests(ctx.dormitoryId, ctx.tenant.id);
-      return res.json({ success: true, data: requests });
+      const filtered = ctx.roomId ? requests.filter((r: any) => !r.roomId || r.roomId === ctx.roomId) : requests;
+      return res.json({ success: true, data: filtered });
     } catch (err: any) {
       return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message, requestId: req.requestId } });
     }

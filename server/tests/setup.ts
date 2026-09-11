@@ -6,5 +6,7 @@ import { getPrismaClient } from '../src/db/prisma.js';
 afterAll(async () => {
   await disconnectRedis();
   const prisma = getPrismaClient();
-  await prisma.$disconnect();
+  if (typeof (prisma as any)?.$disconnect === 'function') {
+    await prisma.$disconnect();
+  }
 });

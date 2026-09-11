@@ -75,6 +75,10 @@ model Dormitory {
   createdAt              DateTime  @default(now()) @map("created_at") @db.Timestamptz()
   updatedAt              DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
   deletedAt              DateTime? @map("deleted_at") @db.Timestamptz()
+  logoObjectKey          String?   @map("logo_object_key") @db.VarChar(500)
+  logoMimeType           String?   @map("logo_mime_type") @db.VarChar(100)
+  logoSha256             String?   @map("logo_sha256") @db.VarChar(64)
+  logoUpdatedAt          DateTime? @map("logo_updated_at") @db.Timestamptz()
 
   members                    DormitoryMember[]
   roles                      Role[]
@@ -124,6 +128,7 @@ model Dormitory {
   outboxEvents               LocalNotificationOutbox[]
   staffNotices               StaffNotification[]
   roomBillingCycleSnapshots  RoomBillingCycleSnapshot[]
+  roomOperationalStatusChanges RoomOperationalStatusChange[]
   roomNextCycleCorrections   RoomNextCycleCorrection[]
   provisionalRentalTerms     ProvisionalRentalTerm[]
   dailyStays                 DailyStay[]
@@ -131,6 +136,11 @@ model Dormitory {
   combinedPaymentGroups      CombinedPaymentGroup[]
   tenantRegistrationInvites  TenantRegistrationInvite[]
   tenantRegistrationIntents  TenantRegistrationIntent[]
+  paymentAllocations         PaymentAllocation[]
+  combinedPaymentGroupBillTargets CombinedPaymentGroupBillTarget[]
+  paymentEvidenceVerifications PaymentEvidenceVerification[]
+  maintenanceRequests        MaintenanceRequest[]
+  announcements              Announcement[]
 
   @@map("dormitories")
 }
@@ -142,8 +152,10 @@ model DormitoryBillingSettings {
   dueDay                     Int      @map("due_day")
   waterBillingType           String   @default("per_person") @map("water_billing_type") @db.VarChar(50)
   waterRate                  Decimal  @default(0.00) @map("water_rate") @db.Decimal(12, 2)
+  waterTierRates             Json?    @map("water_tier_rates")
   electricityBillingType     String   @default("per_unit") @map("electricity_billing_type") @db.VarChar(50)
   electricityRate            Decimal  @default(0.00) @map("electricity_rate") @db.Decimal(12, 2)
+  electricityTierRates       Json?    @map("electricity_tier_rates")
   commonFee                  Decimal  @default(0.00) @map("common_fee") @db.Decimal(12, 2)
   commonFeeMode              String   @default("per_room") @map("common_fee_mode") @db.VarChar(50)
   internetFee                Decimal  @default(0.00) @map("internet_fee") @db.Decimal(12, 2)
@@ -385,6 +397,9 @@ model Building {
   maxTermRentInstallments Int       @default(1) @map("max_term_rent_installments")
   dailyRent               Decimal?  @map("daily_rent") @db.Decimal(12, 2)
   depositAmount           Decimal?  @map("deposit_amount") @db.Decimal(12, 2)
+  monthlyDeposit          Decimal?  @map("monthly_deposit") @db.Decimal(12, 2)
+  termDeposit             Decimal?  @map("term_deposit") @db.Decimal(12, 2)
+  dailyDeposit            Decimal?  @map("daily_deposit") @db.Decimal(12, 2)
   advancePaymentAmount    Decimal?  @map("advance_payment_amount") @db.Decimal(12, 2)
   waterRate               Decimal?  @map("water_rate") @db.Decimal(12, 2)
   electricityRate         Decimal?  @map("electricity_rate") @db.Decimal(12, 2)
@@ -425,6 +440,9 @@ model Room {
   termRent                       Decimal?  @map("term_rent") @db.Decimal(12, 2)
   termMonths                     Int?      @default(6) @map("term_months")
   dailyRent                      Decimal?  @map("daily_rent") @db.Decimal(12, 2)
+  termDeposit                    Decimal   @map("term_deposit") @db.Decimal(12, 2)
+  monthlyDeposit                 Decimal   @map("monthly_deposit") @db.Decimal(12, 2)
+  dailyDeposit                   Decimal   @map("daily_deposit") @db.Decimal(12, 2)
   depositAmount                  Decimal?  @map("deposit_amount") @db.Decimal(12, 2)
   depositInheritsBuildingDefault Boolean   @default(true) @map("deposit_inherits_building_default")
   advancePaymentAmount           Decimal?  @map("advance_payment_amount") @db.Decimal(12, 2)
@@ -462,11 +480,14 @@ model Room {
   renewalRequests           TenantRenewalRequest[]
   settlements               ContractSettlement[]
   roomBillingCycleSnapshots RoomBillingCycleSnapshot[]
+  operationalStatusChanges  RoomOperationalStatusChange[]
   roomNextCycleCorrections  RoomNextCycleCorrection[]
   provisionalRentalTerms    ProvisionalRentalTerm[]
   dailyStays                DailyStay[]
+  receipts                  Receipt[]
+  maintenanceRequests       MaintenanceRequest[]
 
-  @@unique([dormitoryId, normalizedRoomNumber], map: "dormitory_normalized_room_number_unique")
+  @@unique([dormitoryId, buildingId, normalizedRoomNumber], map: "dormitory_building_normalized_room_number_unique")
   @@map("rooms")
 }
 
@@ -516,6 +537,7 @@ model Tenant {
   provisionalRentalTerms ProvisionalRentalTerm[]
   dailyStays             DailyStay[]
   combinedPaymentGroups  CombinedPaymentGroup[]
+  maintenanceRequests    MaintenanceRequest[]
   lineFriendId           String?                  @map("line_friend_id") @db.Uuid
   lineFriend             DormitoryLineFriend?     @relation(fields: [lineFriendId], references: [id], onDelete: SetNull)
 
@@ -733,6 +755,8 @@ model BillingCycle {
   meterReadings             MeterReading[]
   bills                     Bill[]
   roomBillingCycleSnapshots RoomBillingCycleSnapshot[]
+  roomOperationalStatusChanges RoomOperationalStatusChange[]
+  receipts                  Receipt[]
 
   @@unique([dormitoryId, cycleCode], name: "dormitory_cycle_code_unique")
   @@map("billing_cycles")
@@ -744,8 +768,10 @@ model BillingRateSnapshot {
   billingCycleId              String   @unique @map("billing_cycle_id") @db.Uuid
   waterBillingType            String   @map("water_billing_type") @db.VarChar(50)
   waterRate                   Decimal  @map("water_rate") @db.Decimal(12, 2)
+  waterTierRates              Json?    @map("water_tier_rates")
   electricityBillingType      String   @map("electricity_billing_type") @db.VarChar(50)
   electricityRate             Decimal  @map("electricity_rate") @db.Decimal(12, 2)
+  electricityTierRates        Json?    @map("electricity_tier_rates")
   commonFee                   Decimal  @map("common_fee") @db.Decimal(12, 2)
   commonFeeMode               String   @map("common_fee_mode") @db.VarChar(50)
   internetFee                 Decimal  @map("internet_fee") @db.Decimal(12, 2)
@@ -935,6 +961,8 @@ model Bill {
   Payment               Payment[]
   Receipt               Receipt[]
   paymentUploadIntents  PaymentUploadIntent[]
+  allocations           PaymentAllocation[]
+  paymentGroupBillTargets CombinedPaymentGroupBillTarget[]
 
   @@unique([dormitoryId, billNumber], name: "dormitory_bill_number_unique")
   @@index([provisionalRentalTermId])
@@ -961,6 +989,7 @@ model BillItem {
 
   dormitory Dormitory @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
   bill      Bill      @relation(fields: [billId], references: [id], onDelete: Cascade)
+  allocations PaymentAllocation[]
 
   @@map("bill_items")
 }
@@ -1057,6 +1086,7 @@ model ProvisionalRentalTerm {
   durationMonths       Int       @default(1) @map("duration_months")
   unitRentAmount       Decimal   @default(0.00) @map("unit_rent_amount") @db.Decimal(12, 2)
   totalRentAmount      Decimal   @default(0.00) @map("total_rent_amount") @db.Decimal(12, 2)
+  depositAmount        Decimal?  @map("deposit_amount") @db.Decimal(12, 2)
   termMonthsSnapshot   Int?      @map("term_months_snapshot")
   termInstallmentCount Int?      @map("term_installment_count")
   status               String    @default("ACTIVE") @db.VarChar(50) // RESERVED, ACTIVE, CONVERTED, ENDED, CANCELLED
@@ -1113,13 +1143,14 @@ model TenantMoveOutRequest {
 model Payment {
   id               String    @id @default(uuid()) @db.Uuid
   dormitoryId      String    @map("dormitory_id") @db.Uuid
-  billId           String    @map("bill_id") @db.Uuid
+  billId           String?   @map("bill_id") @db.Uuid
+  dailyStayInvoiceId String? @map("daily_stay_invoice_id") @db.Uuid
   tenantId         String?   @map("tenant_id") @db.Uuid
   paymentGroupId   String?   @map("payment_group_id") @db.Uuid
   method           String    @db.VarChar(50)
   amount           Decimal   @db.Decimal(12, 2)
   status           String    @default("PENDING") @db.VarChar(50)
-  paymentDate      DateTime  @map("payment_date") @db.Timestamptz()
+  paymentDate      DateTime? @map("payment_date") @db.Timestamptz()
   evidenceUrl      String?   @map("evidence_url") @db.Text
   fileHash         String?   @unique @map("file_hash") @db.VarChar(255)
   reviewedByUserId String?   @map("reviewed_by_user_id") @db.Uuid
@@ -1133,14 +1164,18 @@ model Payment {
   createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz()
   updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
 
-  dormitory       Dormitory              @relation(fields: [dormitoryId], references: [id], onDelete: Restrict)
-  bill            Bill                   @relation(fields: [billId], references: [id], onDelete: Restrict)
-  tenant          Tenant?                @relation(fields: [tenantId], references: [id], onDelete: Restrict)
-  paymentGroup    CombinedPaymentGroup?  @relation(fields: [paymentGroupId], references: [id], onDelete: SetNull)
-  statusHistories PaymentStatusHistory[]
-  receipt         Receipt?
+  dormitory        Dormitory              @relation(fields: [dormitoryId], references: [id], onDelete: Restrict)
+  bill             Bill?                  @relation(fields: [billId], references: [id], onDelete: Restrict)
+  dailyStayInvoice DailyStayInvoice?      @relation(fields: [dailyStayInvoiceId], references: [id], onDelete: Restrict)
+  tenant           Tenant?                @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  paymentGroup     CombinedPaymentGroup?  @relation(fields: [paymentGroupId], references: [id], onDelete: SetNull)
+  statusHistories  PaymentStatusHistory[]
+  receipt          Receipt?
+  allocations      PaymentAllocation[]
+  verification     PaymentEvidenceVerification?
 
   @@unique([idempotencyKey], name: "payment_idempotency_key_unique")
+  @@index([dormitoryId, dailyStayInvoiceId], name: "idx_payments_dorm_daily_invoice")
   @@map("payments")
 }
 
@@ -1161,26 +1196,45 @@ model PaymentStatusHistory {
 }
 
 model Receipt {
-  id             String    @id @default(uuid()) @db.Uuid
-  dormitoryId    String    @map("dormitory_id") @db.Uuid
-  paymentId      String    @unique @map("payment_id") @db.Uuid
-  billId         String    @map("bill_id") @db.Uuid
-  receiptNumber  String    @map("receipt_number") @db.VarChar(100)
-  snapshotData   Json      @map("snapshot_data")
-  isVoided       Boolean   @default(false) @map("is_voided")
-  voidedAt       DateTime? @map("voided_at") @db.Timestamptz()
-  voidedByUserId String?   @map("voided_by_user_id") @db.Uuid
-  voidReason     String?   @map("void_reason") @db.Text
-  issuedAt       DateTime  @default(now()) @map("issued_at") @db.Timestamptz()
-  issuedByUserId String?   @map("issued_by_user_id") @db.Uuid
-  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz()
-  updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+  id                 String                @id @default(uuid()) @db.Uuid
+  dormitoryId        String                @map("dormitory_id") @db.Uuid
+  paymentId          String?               @unique @map("payment_id") @db.Uuid
+  paymentGroupId     String?               @map("payment_group_id") @db.Uuid
+  billId             String?               @map("bill_id") @db.Uuid
+  dailyStayInvoiceId String?               @map("daily_stay_invoice_id") @db.Uuid
+  receiptKind        String                @default("EVENT") @map("receipt_kind") @db.VarChar(50) // EVENT | FINAL_SETTLEMENT
+  settlementScopeKey String?               @map("settlement_scope_key") @db.VarChar(255)
+  roomId             String?               @map("room_id") @db.Uuid
+  billingCycleId     String?               @map("billing_cycle_id") @db.Uuid
+  receiptNumber      String                @map("receipt_number") @db.VarChar(100)
+  snapshotData       Json                  @map("snapshot_data")
+  isVoided           Boolean               @default(false) @map("is_voided")
+  voidedAt           DateTime?             @map("voided_at") @db.Timestamptz()
+  voidedByUserId     String?               @map("voided_by_user_id") @db.Uuid
+  voidReason         String?               @map("void_reason") @db.Text
+  issuedAt           DateTime              @default(now()) @map("issued_at") @db.Timestamptz()
+  issuedByUserId     String?               @map("issued_by_user_id") @db.Uuid
+  createdAt          DateTime              @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt          DateTime              @updatedAt @map("updated_at") @db.Timestamptz()
 
-  dormitory Dormitory @relation(fields: [dormitoryId], references: [id], onDelete: Restrict)
-  payment   Payment   @relation(fields: [paymentId], references: [id], onDelete: Restrict)
-  bill      Bill      @relation(fields: [billId], references: [id], onDelete: Restrict)
+  dormitory          Dormitory             @relation(fields: [dormitoryId], references: [id], onDelete: Restrict)
+  payment            Payment?              @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  paymentGroup       CombinedPaymentGroup? @relation(fields: [paymentGroupId], references: [id], onDelete: SetNull)
+  bill               Bill?                 @relation(fields: [billId], references: [id], onDelete: Restrict)
+  dailyStayInvoice   DailyStayInvoice?     @relation(fields: [dailyStayInvoiceId], references: [id], onDelete: SetNull)
+  room               Room?                 @relation(fields: [roomId], references: [id], onDelete: SetNull)
+  billingCycle       BillingCycle?         @relation(fields: [billingCycleId], references: [id], onDelete: SetNull)
 
   @@unique([dormitoryId, receiptNumber], name: "dormitory_receipt_number_unique")
+  // Note: Active Final Settlement uniqueness (at most 1 active non-voided receipt per scope)
+  // is enforced authoritatively at DB level via partial unique index "receipts_active_final_settlement_unique"
+  // (WHERE receipt_kind = 'FINAL_SETTLEMENT' AND settlement_scope_key IS NOT NULL AND is_voided = false)
+  // to allow 0..N historical voided receipts per settlement scope.
+  @@index([dormitoryId, settlementScopeKey], name: "idx_receipts_dorm_settlement_scope")
+  @@index([dormitoryId, paymentGroupId], name: "idx_receipts_dorm_group")
+  @@index([dormitoryId, dailyStayInvoiceId], name: "idx_receipts_dorm_daily_invoice")
+  @@index([dormitoryId, receiptKind], name: "idx_receipts_dorm_kind")
+  @@index([dormitoryId, roomId, billingCycleId], name: "idx_receipts_dorm_room_cycle")
   @@map("receipts")
 }
 
@@ -1251,6 +1305,10 @@ model CombinedPaymentGroup {
   payments             Payment[]
   paymentUploadIntents PaymentUploadIntent[]
   bills                Bill[]
+  allocations          PaymentAllocation[]
+  receipts             Receipt[]
+  billTargets          CombinedPaymentGroupBillTarget[]
+  verification         PaymentEvidenceVerification?
 
   @@map("combined_payment_groups")
 }
@@ -1967,6 +2025,9 @@ model DailyStayInvoice {
   dormitory Dormitory              @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
   dailyStay DailyStay              @relation(fields: [dailyStayId], references: [id], onDelete: Cascade)
   items     DailyStayInvoiceItem[]
+  receipts  Receipt[]
+  payments  Payment[]
+  allocations PaymentAllocation[]
 
   @@unique([dormitoryId, invoiceNumber], name: "dormitory_daily_invoice_number_unique")
   @@index([dormitoryId])
@@ -1985,8 +2046,191 @@ model DailyStayInvoiceItem {
   createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz()
   updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
 
-  invoice DailyStayInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  invoice     DailyStayInvoice    @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  allocations PaymentAllocation[]
 
   @@index([invoiceId])
   @@map("daily_stay_invoice_items")
+}
+
+
+model RoomOperationalStatusChange {
+  id                      String       @id @default(uuid()) @db.Uuid
+  dormitoryId             String       @map("dormitory_id") @db.Uuid
+  roomId                  String       @map("room_id") @db.Uuid
+  effectiveBillingCycleId String       @map("effective_billing_cycle_id") @db.Uuid
+  status                  String       @map("status") @db.VarChar(50) // vacant, occupied, maintenance
+  updatedByUserId         String?      @map("updated_by_user_id") @db.Uuid
+  version                 Int          @default(1)
+  createdAt               DateTime     @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt               DateTime     @updatedAt @map("updated_at") @db.Timestamptz()
+
+  dormitory             Dormitory    @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
+  room                  Room         @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  effectiveBillingCycle BillingCycle @relation(fields: [effectiveBillingCycleId], references: [id], onDelete: Cascade)
+
+  @@unique([dormitoryId, roomId, effectiveBillingCycleId], name: "dormitory_room_effective_cycle_unique")
+  @@index([dormitoryId, roomId])
+  @@index([effectiveBillingCycleId])
+  @@map("room_operational_status_changes")
+}
+
+model PaymentAllocation {
+  id                     String                @id @default(uuid()) @db.Uuid
+  dormitoryId            String                @map("dormitory_id") @db.Uuid
+  paymentGroupId         String?               @map("payment_group_id") @db.Uuid
+  paymentId              String?               @map("payment_id") @db.Uuid
+  billId                 String?               @map("bill_id") @db.Uuid
+  billItemId             String?               @map("bill_item_id") @db.Uuid
+  dailyStayInvoiceId     String?               @map("daily_stay_invoice_id") @db.Uuid
+  dailyStayInvoiceItemId String?               @map("daily_stay_invoice_item_id") @db.Uuid
+  allocatedAmount        Decimal               @map("allocated_amount") @db.Decimal(12, 2)
+  allocationOrder        Int                   @default(0) @map("allocation_order")
+  createdAt              DateTime              @default(now()) @map("created_at") @db.Timestamptz()
+
+  dormitory              Dormitory             @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
+  paymentGroup           CombinedPaymentGroup? @relation(fields: [paymentGroupId], references: [id], onDelete: SetNull)
+  payment                Payment?              @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+  bill                   Bill?                 @relation(fields: [billId], references: [id], onDelete: Cascade)
+  billItem               BillItem?             @relation(fields: [billItemId], references: [id], onDelete: SetNull)
+  dailyStayInvoice       DailyStayInvoice?     @relation(fields: [dailyStayInvoiceId], references: [id], onDelete: Restrict)
+  dailyStayInvoiceItem   DailyStayInvoiceItem? @relation(fields: [dailyStayInvoiceItemId], references: [id], onDelete: SetNull)
+
+  @@index([dormitoryId, billId], name: "idx_allocation_dorm_bill")
+  @@index([dormitoryId, paymentGroupId], name: "idx_allocation_dorm_group")
+  @@index([dormitoryId, paymentId], name: "idx_allocation_dorm_payment")
+  @@index([dormitoryId, dailyStayInvoiceId], name: "idx_allocations_dorm_daily_invoice")
+  @@index([dormitoryId, dailyStayInvoiceItemId], name: "idx_allocations_dorm_daily_item")
+  @@map("payment_allocations")
+}
+
+model CombinedPaymentGroupBillTarget {
+  id             String               @id @default(uuid()) @db.Uuid
+  dormitoryId    String               @map("dormitory_id") @db.Uuid
+  paymentGroupId String               @map("payment_group_id") @db.Uuid
+  billId         String               @map("bill_id") @db.Uuid
+  targetOrder    Int                  @default(0) @map("target_order")
+  createdAt      DateTime             @default(now()) @map("created_at") @db.Timestamptz()
+
+  dormitory      Dormitory            @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
+  paymentGroup   CombinedPaymentGroup @relation(fields: [paymentGroupId], references: [id], onDelete: Cascade)
+  bill           Bill                 @relation(fields: [billId], references: [id], onDelete: Cascade)
+
+  @@unique([paymentGroupId, billId], name: "cpg_target_group_bill_unique")
+  @@index([dormitoryId, paymentGroupId], name: "idx_cpg_target_dorm_group")
+  @@index([dormitoryId, billId], name: "idx_cpg_target_dorm_bill")
+  @@map("combined_payment_group_bill_targets")
+}
+
+model PaymentEvidenceVerification {
+  id                 String                @id @default(uuid()) @db.Uuid
+  dormitoryId        String                @map("dormitory_id") @db.Uuid
+  paymentId          String?               @unique @map("payment_id") @db.Uuid
+  paymentGroupId     String?               @unique @map("payment_group_id") @db.Uuid
+  provider           String                @default("NONE") @db.VarChar(50)
+  status             String                @default("UNVERIFIED") @db.VarChar(50)
+  claimedTransferAt  DateTime?             @map("claimed_transfer_at") @db.Timestamptz()
+  verifiedTransferAt DateTime?             @map("verified_transfer_at") @db.Timestamptz()
+  verifiedAmount     Decimal?              @map("verified_amount") @db.Decimal(12, 2)
+  providerReference  String?               @map("provider_reference") @db.VarChar(255)
+  payloadHash        String?               @map("payload_hash") @db.VarChar(255)
+  verifiedAt         DateTime?             @map("verified_at") @db.Timestamptz()
+  createdAt          DateTime              @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt          DateTime              @updatedAt @map("updated_at") @db.Timestamptz()
+
+  dormitory          Dormitory             @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
+  payment            Payment?              @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  paymentGroup       CombinedPaymentGroup? @relation(fields: [paymentGroupId], references: [id], onDelete: Cascade)
+
+  @@index([dormitoryId, status], name: "idx_verification_dorm_status")
+  @@map("payment_evidence_verifications")
+}
+
+model MaintenanceRequest {
+  id                 String    @id @default(uuid()) @db.Uuid
+  dormitoryId        String    @map("dormitory_id") @db.Uuid
+  requestNumber      String    @map("request_number") @db.VarChar(100)
+  tenantId           String?   @map("tenant_id") @db.Uuid
+  contractId         String?   @map("contract_id") @db.Uuid
+  roomId             String?   @map("room_id") @db.Uuid
+  category           String    @default("other") @db.VarChar(100)
+  title              String    @db.VarChar(255)
+  description        String    @db.Text
+  priority           String    @default("normal") @db.VarChar(50)
+  status             String    @default("submitted") @db.VarChar(50)
+  assignedStaff      String?   @map("assigned_staff") @db.VarChar(255)
+  cost               Decimal   @default(0.00) @db.Decimal(12, 2)
+  note               String?   @db.Text
+  imageBefore        String?   @map("image_before") @db.Text
+  imageAfter         String?   @map("image_after") @db.Text
+  preferredDate      DateTime? @map("preferred_date") @db.Date
+  preferredTimeRange String?   @map("preferred_time_range") @db.VarChar(100)
+  createdByUserId    String?   @map("created_by_user_id") @db.Uuid
+  resolvedAt         DateTime? @map("resolved_at") @db.Timestamptz()
+  closedAt           DateTime? @map("closed_at") @db.Timestamptz()
+  cancelledAt        DateTime? @map("cancelled_at") @db.Timestamptz()
+  cancellationReason String?   @map("cancellation_reason") @db.Text
+  version            Int       @default(1)
+  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt          DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+  deletedAt          DateTime? @map("deleted_at") @db.Timestamptz()
+
+  dormitory          Dormitory @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
+  room               Room?     @relation(fields: [roomId], references: [id], onDelete: SetNull)
+  tenant             Tenant?   @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+
+  @@index([dormitoryId, status], name: "idx_maintenance_dorm_status")
+  @@index([dormitoryId, roomId], name: "idx_maintenance_dorm_room")
+  @@map("maintenance_requests")
+}
+
+model Announcement {
+  id               String                 @id @default(uuid()) @db.Uuid
+  dormitoryId      String                 @map("dormitory_id") @db.Uuid
+  title            String                 @db.VarChar(255)
+  summary          String?                @db.Text
+  content          String                 @db.Text
+  type             String                 @default("general") @db.VarChar(100)
+  targetType       String                 @default("all") @map("target_type") @db.VarChar(50)
+  targetBuildingId String?                @map("target_building_id") @db.Uuid
+  customTarget     String?                @map("custom_target") @db.VarChar(255)
+  targetRooms      String?                @map("target_rooms") @db.Text
+  attachmentUrl    String?                @map("attachment_url") @db.Text
+  linkUrl          String?                @map("link_url") @db.Text
+  author           String?                @db.VarChar(255)
+  isPinned         Boolean                @default(false) @map("is_pinned")
+  status           String                 @default("published") @db.VarChar(50)
+  priority         String                 @default("normal") @db.VarChar(50)
+  publishDate      DateTime               @default(now()) @map("publish_date") @db.Timestamptz()
+  publishedAt      DateTime?              @map("published_at") @db.Timestamptz()
+  archivedAt       DateTime?              @map("archived_at") @db.Timestamptz()
+  createdByUserId  String?                @map("created_by_user_id") @db.Uuid
+  version          Int                    @default(1)
+  createdAt        DateTime               @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt        DateTime               @updatedAt @map("updated_at") @db.Timestamptz()
+  deletedAt        DateTime?              @map("deleted_at") @db.Timestamptz()
+
+  dormitory        Dormitory              @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
+  audiences        AnnouncementAudience[]
+
+  @@index([dormitoryId, status], name: "idx_announcement_dorm_status")
+  @@index([dormitoryId, isPinned], name: "idx_announcement_dorm_pinned")
+  @@map("announcements")
+}
+
+model AnnouncementAudience {
+  id             String       @id @default(uuid()) @db.Uuid
+  dormitoryId    String       @map("dormitory_id") @db.Uuid
+  announcementId String       @map("announcement_id") @db.Uuid
+  targetType     String       @map("target_type") @db.VarChar(50)
+  buildingId     String?      @map("building_id") @db.Uuid
+  floor          String?      @db.VarChar(50)
+  roomId         String?      @map("room_id") @db.Uuid
+  tenantId       String?      @map("tenant_id") @db.Uuid
+  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz()
+
+  announcement   Announcement @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+
+  @@index([dormitoryId, announcementId], name: "idx_ann_audience_dorm_ann")
+  @@map("announcement_audiences")
 }

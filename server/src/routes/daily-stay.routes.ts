@@ -15,6 +15,7 @@ import { LocalStorageProvider } from '../services/local-storage.service.js';
 import { processAndSecureTenantIdCardImage } from '../services/image-security.service.js';
 import { resolveDormitoryContextMiddleware, requireDormitoryPermission } from '../middleware/permission.js';
 import { requireDormitoryWriteEntitlement } from '../middleware/entitlement.js';
+import { getPrismaClient } from '../db/prisma.js';
 
 export function createDailyStayRouter(
   authService: AuthenticationService,
@@ -259,20 +260,34 @@ export function createDailyStayRouter(
     }
   });
 
-  // 2. Owner Quick Add Daily Stay (1-step atomic create & approve)
-  const OwnerQuickAddSchema = z.object({
-    dormitoryId: z.string().uuid().optional(),
-    roomId: z.string().min(1, 'กรุณาระบุห้องพัก'),
-    fullName: z.string().trim().min(1, 'กรุณาระบุชื่อ-นามสกุล'),
-    phone: z.string().trim().max(50).optional().nullable(),
-    startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'รูปแบบวันที่ไม่ถูกต้อง (YYYY-MM-DD)'),
-    endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'รูปแบบวันที่ไม่ถูกต้อง (YYYY-MM-DD)'),
-    checkInTime: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/, 'รูปแบบเวลาไม่ถูกต้อง (HH:mm)').optional().nullable(),
-    checkOutTime: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/, 'รูปแบบเวลาไม่ถูกต้อง (HH:mm)').optional().nullable(),
-    dailyRateAmount: MoneyDecimalStringSchema.optional(),
-    depositAmount: MoneyDecimalStringSchema.optional(),
-    depositDeclaredStatus: z.enum(['PAID', 'UNPAID']).optional(),
-  });
+  const OwnerQuickAddSchema = z
+    .object({
+      dormitoryId: z.string().uuid().optional(),
+      roomId: z.string().min(1, 'กรุณาระบุห้องพัก'),
+      fullName: z.string().trim().min(1, 'กรุณาระบุชื่อ-นามสกุล'),
+      phone: z.string().trim().max(50).optional().nullable(),
+      startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'รูปแบบวันที่ไม่ถูกต้อง (YYYY-MM-DD)'),
+      endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'รูปแบบวันที่ไม่ถูกต้อง (YYYY-MM-DD)'),
+      checkInTime: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/, 'รูปแบบเวลาไม่ถูกต้อง (HH:mm)').optional().nullable(),
+      checkOutTime: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/, 'รูปแบบเวลาไม่ถูกต้อง (HH:mm)').optional().nullable(),
+      dailyRateAmount: MoneyDecimalStringSchema.optional(),
+      depositAmount: MoneyDecimalStringSchema.optional(),
+      depositDeclaredStatus: z.enum(['PAID', 'UNPAID']).optional(),
+      depositPaymentMethod: z.enum(['CASH', 'BANK_TRANSFER']).optional().nullable(),
+    })
+    .refine(
+      (data) => {
+        const depAmt = Number(data.depositAmount || 0);
+        if (data.depositDeclaredStatus === 'PAID' && depAmt > 0) {
+          return !!data.depositPaymentMethod && ['CASH', 'BANK_TRANSFER'].includes(data.depositPaymentMethod);
+        }
+        return true;
+      },
+      {
+        message: 'กรุณาระบุช่องทางการชำระเงินประกัน (เงินสด หรือ โอนเงิน)',
+        path: ['depositPaymentMethod'],
+      }
+    );
 
   const upload = multer({
     storage: multer.memoryStorage(),
@@ -299,8 +314,17 @@ export function createDailyStayRouter(
           } catch {}
         }
 
+        const idempotencyKey = ((req.headers['x-idempotency-key'] || req.headers['idempotency-key']) as string)?.trim() || null;
+        if (!idempotencyKey) {
+          const err = new Error('Owner Quick Add requires a non-blank idempotency key.');
+          (err as any).statusCode = 400;
+          (err as any).code = 'IDEMPOTENCY_KEY_REQUIRED';
+          throw err;
+        }
+
         const parsed = OwnerQuickAddSchema.parse(rawBody);
         const userId = req.auth!.userId;
+        const prisma = getPrismaClient();
 
         let idCardData: {
           idCardObjectKey: string;
@@ -313,21 +337,56 @@ export function createDailyStayRouter(
 
         if (req.file && req.file.buffer && req.file.buffer.length > 0) {
           const secured = await processAndSecureTenantIdCardImage(req.file.buffer);
-          const objectKey = `tenants/${dormId}/${uuidv4()}${secured.extension}`;
-          await localStorageProvider.saveFile(objectKey, secured.buffer);
-          writtenObjectKey = objectKey;
 
-          idCardData = {
-            idCardObjectKey: objectKey,
-            idCardSha256: secured.sha256,
-            idCardMimeType: secured.mimeType,
-            idCardByteSize: secured.byteSize,
-            idCardUploadedAt: new Date(),
-            idCardUploadedByUserId: req.auth?.userId || null,
-          };
+          // Check if there is already a completed idempotency claim for this request
+          const existingClaim = await prisma.idempotencyKey.findUnique({
+            where: {
+              user_operation_idempotency_unique: {
+                userId,
+                operation: 'ownerQuickAddDailyStay',
+                idempotencyKey,
+              },
+            },
+          });
+
+          if (existingClaim && existingClaim.status === 'completed' && existingClaim.responseBody) {
+            const cachedResult = existingClaim.responseBody as any;
+            const existingObjectKey = cachedResult?.tenant?.idCardObjectKey || null;
+            idCardData = {
+              idCardObjectKey: existingObjectKey || `cached-${dormId}`,
+              idCardSha256: secured.sha256,
+              idCardMimeType: secured.mimeType,
+              idCardByteSize: secured.byteSize,
+              idCardUploadedAt: new Date(),
+              idCardUploadedByUserId: req.auth?.userId || null,
+            };
+          } else {
+            const objectKey = `tenants/${dormId}/${uuidv4()}${secured.extension}`;
+            await localStorageProvider.saveFile(objectKey, secured.buffer);
+            writtenObjectKey = objectKey;
+
+            idCardData = {
+              idCardObjectKey: objectKey,
+              idCardSha256: secured.sha256,
+              idCardMimeType: secured.mimeType,
+              idCardByteSize: secured.byteSize,
+              idCardUploadedAt: new Date(),
+              idCardUploadedByUserId: req.auth?.userId || null,
+            };
+          }
         }
 
-        const result = await dailyStayService.ownerQuickAddDailyStay(dormId, parsed, userId, idCardData);
+        const result = await dailyStayService.ownerQuickAddDailyStay(dormId, parsed, userId, idCardData, idempotencyKey);
+
+        // Replay cleanup: if a staged file was written but the returned tenant has a different objectKey, clean duplicate
+        if (writtenObjectKey && result?.tenant?.idCardObjectKey && result.tenant.idCardObjectKey !== writtenObjectKey) {
+          try {
+            await localStorageProvider.deleteFile(writtenObjectKey);
+          } catch (delErr) {
+            console.error('[CLEANUP REPLAY ERROR] Failed to unlink duplicate staged ID card file:', delErr);
+          }
+          writtenObjectKey = null;
+        }
 
         res.status(201).json({
           data: result,
@@ -517,9 +576,10 @@ export function createDailyStayRouter(
     }
   );
 
-  // 9. Settle Daily Stay Invoice Item (Canonical Payment / Cash Collection Action)
+  // 9. Settle Daily Stay Invoice Item (Canonical Payment Action: CASH or BANK_TRANSFER)
   const SettleItemSchema = z.object({
-    itemType: z.enum(['DAILY_RENT', 'RENT', 'DEPOSIT']),
+    itemType: z.enum(['DAILY_RENT', 'RENT', 'DEPOSIT', 'OTHER_FEE', 'ALL']),
+    method: z.enum(['CASH', 'BANK_TRANSFER']).optional(),
   });
 
   router.post(
@@ -535,17 +595,22 @@ export function createDailyStayRouter(
         const invoiceId = req.params.id;
         const parsed = SettleItemSchema.parse(req.body);
         const userId = req.auth!.userId;
+        const idempotencyKey = ((req.headers['x-idempotency-key'] || req.headers['idempotency-key']) as string)?.trim() || null;
 
         const result = await dailyStayService.settleDailyStayInvoiceItem(
           dormId,
           invoiceId,
           parsed.itemType,
-          userId
+          userId,
+          {
+            method: parsed.method,
+            idempotencyKey,
+          }
         );
 
         res.json({
           data: result,
-          message: `บันทึกการชำระเงิน ${parsed.itemType} สำเร็จ`,
+          message: `บันทึกการชำระเงิน ${parsed.itemType} (${parsed.method === 'BANK_TRANSFER' ? 'โอนเงิน' : 'เงินสด'}) สำเร็จ`,
         });
       } catch (err: any) {
         if (err instanceof z.ZodError) {

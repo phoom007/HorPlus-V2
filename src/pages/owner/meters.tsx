@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   TrendingUp,
   Save,
@@ -43,7 +43,20 @@ import { queryKeys, STALE_TIMES } from '../../lib/queryClient';
 import { meterDraftStore, deriveMeterDraftPatches } from '../../lib/meterDraftStore';
 import { OwnerMeterListCard } from '../../components/meters/OwnerMeterListCard';
 import { MeterOtherFeesModal } from '../../components/meters/MeterOtherFeesModal';
-import { calculateMeterRowPreview, calculateMeterUsageUnits, RoomPreviewContext, parseScaled2, formatScaled2, formatMoneyDisplay } from '../../utils/meterBillingCalculator';
+import { sortRoomsByBuildingAndNumber } from '../../utils/roomSorter';
+import {
+  calculateMeterRowPreview,
+  calculateMeterUsageUnits,
+  parseMeterIntegerReading,
+  isMeterBasedUtilityMode,
+  calculateProgressiveTieredChargeLocal,
+  RoomPreviewContext,
+  parseScaled2,
+  formatScaled2,
+  parseSatang,
+  formatSatang,
+  formatMoneyDisplay,
+} from '../../utils/meterBillingCalculator';
 import { isCycleInRollingThreeMonthWindow, toBangkokDateString, normalizeBangkokDate, formatShortThaiBuddhistDate } from '../../utils/calendarDate';
 import { Room, Building, QuickAddRoomContext, Bill, BillItem, Tenant, Contract, BillStatus, calculateRoomRentForCycle } from '../../types';
 import { getDataProvider } from '../../data/dataProvider';
@@ -106,6 +119,9 @@ export interface OwnerMetersProps {
 export interface MeterRowState {
   roomId: string;
   roomNumber: string;
+  buildingId?: string;
+  buildingCode?: string;
+  buildingName?: string;
   waterPrev: number | string;
   waterCurr: number | string;
   elecPrev: number | string;
@@ -122,6 +138,30 @@ export interface MeterRowState {
   editElecPrev?: boolean;
   otherFees?: { description: string; amount: number | string }[];
   snapshotVersion?: number;
+  parkingQuantity?: number | string;
+}
+
+export function calculateParkingCostHelper(
+  row: { peopleCount?: number; parkingQuantity?: number | string },
+  rateSnapshot?: { parkingFeeMode?: string; parkingFee?: number | string } | null,
+  fallbackVehicleCount: number = 0
+): number {
+  if (row.peopleCount === 0) return 0;
+  const mode = rateSnapshot?.parkingFeeMode || 'per_room';
+  if (mode === 'free' || mode === 'none') return 0;
+  const fee = Number(rateSnapshot?.parkingFee) || 0;
+  if (fee <= 0) return 0;
+
+  if (mode === 'per_vehicle' || mode === 'vehicle') {
+    if (row.parkingQuantity !== undefined && row.parkingQuantity !== null && !isNaN(Number(row.parkingQuantity))) {
+      return Number(row.parkingQuantity) * fee;
+    }
+    return fallbackVehicleCount * fee;
+  } else if (mode === 'per_person' || mode === 'person') {
+    return (row.peopleCount || 0) * fee;
+  } else {
+    return fee;
+  }
 }
 
 export function getTenantForRoomAndCycleHelper(
@@ -138,15 +178,28 @@ export function getTenantForRoomAndCycleHelper(
   const cycleStartStr = `${cycle}-01`;
   const daysInMonth = new Date(cy, cm, 0).getDate();
   const cycleEndStr = `${cycle}-${String(daysInMonth).padStart(2, '0')}`;
+  const nextMonthDate = new Date(Date.UTC(cy, cm, 1));
+  const cycleEndExclusive = `${nextMonthDate.getUTCFullYear()}-${String(nextMonthDate.getUTCMonth() + 1).padStart(2, '0')}-${String(nextMonthDate.getUTCDate()).padStart(2, '0')}`;
 
   const activeContract = (contracts || []).find(c => {
     if (c.roomId !== roomId) return false;
     const startValStr = normalizeBangkokDate(c.startDate);
-    const endValStr = normalizeBangkokDate(c.endDate);
+    let endValStr = normalizeBangkokDate(c.endDate);
+
+    if (
+      (c.status === 'terminated' || (c.status as string) === 'TERMINATED') &&
+      ((c as any).terminationEffectiveDate || (c as any).terminatedAt)
+    ) {
+      const termDateStr = normalizeBangkokDate((c as any).terminationEffectiveDate || (c as any).terminatedAt);
+      if (!endValStr || termDateStr < endValStr) {
+        endValStr = termDateStr;
+      }
+    }
+
     const createdStr = (c as any).createdAt ? normalizeBangkokDate((c as any).createdAt) : startValStr;
     const effectiveStartStr = startValStr > createdStr ? startValStr : createdStr;
 
-    return effectiveStartStr <= cycleEndStr && endValStr >= cycleStartStr;
+    return effectiveStartStr < cycleEndExclusive && endValStr > cycleStartStr;
   });
 
   if (!activeContract) return undefined;
@@ -159,12 +212,26 @@ export function buildRowsFromWorkspace(params: {
   bills: Bill[];
   contracts?: Contract[];
   tenants?: Tenant[];
+  buildings?: Building[];
   selectedBillingCycleId?: string;
   selectedCycleCode?: string;
   selectedCycle?: string;
   currentDormId?: string;
+  isFirstCycle?: boolean;
 }): { rows: MeterRowState[]; originalRows: MeterRowState[] } {
-  const { workspaceData, rooms, bills, contracts = [], tenants = [], selectedBillingCycleId, selectedCycleCode, selectedCycle, currentDormId } = params;
+  const {
+    workspaceData,
+    rooms,
+    bills,
+    contracts = [],
+    tenants = [],
+    buildings = [],
+    selectedBillingCycleId,
+    selectedCycleCode,
+    selectedCycle,
+    currentDormId,
+    isFirstCycle,
+  } = params;
   if (!workspaceData) {
     return { rows: [], originalRows: [] };
   }
@@ -198,34 +265,36 @@ export function buildRowsFromWorkspace(params: {
     }
   });
 
-  const activeRooms = [...rooms].sort((a, b) =>
-    a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true, sensitivity: 'base' })
-  );
+  const activeRooms = sortRoomsByBuildingAndNumber(rooms, buildings || []);
 
   const rows: MeterRowState[] = activeRooms.map(r => {
     const roomReadings = readingsByRoom[r.id] || {};
     const cycleTenant = getTenantForRoomAndCycleHelper(r.id, selectedCycleCode || selectedCycle || '', contracts, rooms, tenants);
 
-    const rawWaterBaseline = r.initialWaterMeter !== undefined && r.initialWaterMeter !== null && String(r.initialWaterMeter).trim() !== '' ? String(r.initialWaterMeter) : (r as any).initialWaterReading !== undefined && (r as any).initialWaterReading !== null && String((r as any).initialWaterReading).trim() !== '' ? String((r as any).initialWaterReading) : '';
-    const rawElecBaseline = r.initialElectricMeter !== undefined && r.initialElectricMeter !== null && String(r.initialElectricMeter).trim() !== '' ? String(r.initialElectricMeter) : (r as any).initialElectricityReading !== undefined && (r as any).initialElectricityReading !== null && String((r as any).initialElectricityReading).trim() !== '' ? String((r as any).initialElectricityReading) : '';
-
     const waterPrev = roomReadings.waterPrev !== undefined && roomReadings.waterPrev !== null && String(roomReadings.waterPrev).trim() !== ''
       ? formatMeterReadingDisplay(roomReadings.waterPrev)
-      : (rawWaterBaseline ? formatMeterReadingDisplay(rawWaterBaseline) : '');
+      : '';
     const waterCurr = roomReadings.waterCurr !== undefined && roomReadings.waterCurr !== null && String(roomReadings.waterCurr).trim() !== ''
       ? formatMeterReadingDisplay(roomReadings.waterCurr)
       : '';
 
     const elecPrev = roomReadings.elecPrev !== undefined && roomReadings.elecPrev !== null && String(roomReadings.elecPrev).trim() !== ''
       ? formatMeterReadingDisplay(roomReadings.elecPrev)
-      : (rawElecBaseline ? formatMeterReadingDisplay(rawElecBaseline) : '');
+      : '';
     const elecCurr = roomReadings.elecCurr !== undefined && roomReadings.elecCurr !== null && String(roomReadings.elecCurr).trim() !== ''
       ? formatMeterReadingDisplay(roomReadings.elecCurr)
       : '';
 
-    const tenantDefaultPeople = cycleTenant ? (1 + (cycleTenant.coOccupants?.length || 0)) : 0;
+    const tenantDefaultPeople = cycleTenant ? (1 + (cycleTenant.coOccupants?.length || 0)) : 1;
     const snap = snapshotMap[r.id];
-    const rowPeople = snap?.peopleCount !== undefined ? Math.max(0, snap.peopleCount) : tenantDefaultPeople;
+    let rowPeople: number;
+    if (snap?.peopleCount !== undefined) {
+      rowPeople = Math.max(0, snap.peopleCount);
+    } else if (isFirstCycle) {
+      rowPeople = 1;
+    } else {
+      rowPeople = tenantDefaultPeople;
+    }
 
     const existingMonthlyUtilityBill = (bills || []).find(b =>
       (b.cycleId === selectedBillingCycleId || b.cycleId === selectedCycleCode || (b as any).billingCycleId === selectedBillingCycleId || (b as any).cycleMonth === selectedCycleCode) &&
@@ -236,13 +305,29 @@ export function buildRowsFromWorkspace(params: {
     const previewRooms = workspaceData?.previewContext?.rooms || workspaceData?.rooms || [];
     const roomCtx = previewRooms.find((ctx: any) => ctx.roomId === r.id);
     const overallFinancialStatus = (roomCtx?.overallFinancialStatus as BillStatus) || (roomCtx?.billStatus as BillStatus) || (existingMonthlyUtilityBill ? existingMonthlyUtilityBill.status : 'draft');
-    const monthlyUtilityBillStatus = (roomCtx?.monthlyUtilityBillStatus as string) || (existingMonthlyUtilityBill ? existingMonthlyUtilityBill.status : 'draft');
-    const isMonthlyUtilityPaid = Boolean(roomCtx?.isMonthlyUtilityPaid || monthlyUtilityBillStatus === 'paid');
-    const isPaid = overallFinancialStatus === 'paid' || Boolean(roomCtx?.isPaid);
+    const monthlyUtilityBillStatus =
+      (roomCtx?.monthlyUtilityBillStatus as string)
+      || (existingMonthlyUtilityBill
+          ? existingMonthlyUtilityBill.status
+          : 'draft');
+    const isMonthlyUtilityPaid =
+      Boolean(
+        roomCtx?.isMonthlyUtilityPaid
+        || monthlyUtilityBillStatus === 'paid'
+      );
+    const isPaid =
+      overallFinancialStatus === 'paid'
+      || Boolean(roomCtx?.isPaid);
+    const bld = (buildings || []).find(b => b.id === r.buildingId);
+    const bCode = bld?.code || (bld?.name ? bld.name.replace(/^อาคาร\s*/, '').trim() : 'A');
+    const bName = bld?.name || `อาคาร ${bCode}`;
 
     return {
       roomId: r.id,
       roomNumber: r.roomNumber,
+      buildingId: r.buildingId,
+      buildingCode: bCode,
+      buildingName: bName,
       waterPrev,
       waterCurr,
       elecPrev,
@@ -263,6 +348,7 @@ export function buildRowsFromWorkspace(params: {
       editElecPrev: false,
       otherFees: snap?.otherFees || [],
       snapshotVersion: snap?.version || 0,
+      parkingQuantity: roomCtx?.parkingQuantity !== undefined ? String(roomCtx.parkingQuantity) : undefined,
     };
   });
 
@@ -282,6 +368,7 @@ export function buildRowsFromWorkspace(params: {
           peopleCount: draftPatch.peopleCount !== undefined ? draftPatch.peopleCount : serverRow.peopleCount,
           overdueAmount: draftPatch.overdueAmount !== undefined ? draftPatch.overdueAmount : serverRow.overdueAmount,
           isReplaced: draftPatch.isReplaced !== undefined ? draftPatch.isReplaced : serverRow.isReplaced,
+          parkingQuantity: serverRow.parkingQuantity,
           // serverRow.otherFees is authoritative from server query
           // serverRow.snapshotVersion is authoritative from server query
         };
@@ -335,18 +422,66 @@ export function formatComponentDetailAmount(amt: number | string): string {
   return num.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+export function calculateAutoScrollDelta(
+  clientY: number,
+  containerRect: { top: number; bottom: number },
+  edgeThreshold = 35,
+  scrollStep = 10
+): number {
+  if (clientY < containerRect.top + edgeThreshold) {
+    return -scrollStep;
+  }
+  if (clientY > containerRect.bottom - edgeThreshold) {
+    return scrollStep;
+  }
+  return 0;
+}
+
+export function isRowDraftDirty(row?: any, originalRow?: any): boolean {
+  if (!row) return false;
+  if (originalRow) {
+    return (
+      String(row.waterCurr ?? '') !== String(originalRow.waterCurr ?? '') ||
+      String(row.waterPrev ?? '') !== String(originalRow.waterPrev ?? '') ||
+      String(row.elecCurr ?? '') !== String(originalRow.elecCurr ?? '') ||
+      String(row.elecPrev ?? '') !== String(originalRow.elecPrev ?? '') ||
+      String(row.peopleCount ?? '') !== String(originalRow.peopleCount ?? '') ||
+      String(row.overdueAmount ?? '') !== String(originalRow.overdueAmount ?? '') ||
+      JSON.stringify(row.otherFees || []) !== JSON.stringify(originalRow.otherFees || [])
+    );
+  }
+  return (
+    (row.waterCurr !== undefined && row.waterCurr !== '') ||
+    (row.elecCurr !== undefined && row.elecCurr !== '') ||
+    (row.waterPrev !== undefined && row.waterPrev !== '') ||
+    (row.elecPrev !== undefined && row.elecPrev !== '')
+  );
+}
+
 export function getOwnerFinancialBreakdown(
   roomCtxOrRow: any,
-  roomCtxIfSecond?: any,
-  _rateSnapshot?: any,
-  _bills?: any,
-  _selectedBillingCycleId?: any
+  rowOrRoomCtx?: any,
+  rateSnapshotParam?: any,
+  originalRowParam?: any
 ): OwnerFinancialBreakdown {
-  const roomCtx = (roomCtxIfSecond && (roomCtxIfSecond.chargeComponents || roomCtxIfSecond.amountDue !== undefined || roomCtxIfSecond.roomId))
-    ? roomCtxIfSecond
-    : roomCtxOrRow;
+  let roomCtx: any = null;
+  let row: any = null;
+  let rateSnapshot: any = rateSnapshotParam;
+  let originalRow: any = originalRowParam;
 
-  const amountDue = roomCtx?.amountDue ?? '0.00';
+  if (roomCtxOrRow && (roomCtxOrRow.chargeComponents || roomCtxOrRow.amountDue !== undefined || roomCtxOrRow.roomId || roomCtxOrRow.billingSource)) {
+    roomCtx = roomCtxOrRow;
+    row = rowOrRoomCtx;
+  } else if (rowOrRoomCtx && (rowOrRoomCtx.chargeComponents || rowOrRoomCtx.amountDue !== undefined || rowOrRoomCtx.roomId || rowOrRoomCtx.billingSource)) {
+    roomCtx = rowOrRoomCtx;
+    row = roomCtxOrRow;
+  } else {
+    roomCtx = roomCtxOrRow;
+  }
+
+  const effectiveRateSnapshot = rateSnapshot || roomCtx?.rateSnapshot;
+
+  const rawAmountDue = roomCtx?.amountDue ?? '0.00';
   const components: TopLevelFinancialComponent[] = (roomCtx?.chargeComponents || []).map((c: any) => {
     const rawAmt = c.amount ?? '0.00';
     const status = (c.status || 'UNPAID') as TopLevelFinancialComponent['status'];
@@ -369,9 +504,68 @@ export function getOwnerFinancialBreakdown(
     };
   });
 
+  // Precedence Rules A, B, C:
+  // A. Issued/persisted financial Bill: SERVER persisted BillItem wins.
+  // B. Unissued server PREVIEW + NO unsaved row changes: SERVER preview displayed.
+  // C. Unissued server PREVIEW + current row has unsaved changes: LOCAL exact preview overlay.
+  const overallStatus = (roomCtx?.overallFinancialStatus as string) || (roomCtx?.billStatus as string) || row?.billStatus || 'draft';
+  const muStatus = (roomCtx?.monthlyUtilityBillStatus as string) || (row as any)?.monthlyUtilityBillStatus || row?.billStatus || 'draft';
+  const isMuPaid = Boolean(roomCtx?.isMonthlyUtilityPaid || (row as any)?.isMonthlyUtilityPaid || muStatus === 'paid');
+  const isMuIssued = (muStatus !== 'draft' && muStatus !== 'cancelled') || isMuPaid;
+  const isDailyContext = roomCtx?.billingSource === 'DAILY_STAY';
+  const hasNoServerComponents = components.length === 0 && Boolean(row && (row.waterCurr !== '' || row.elecCurr !== ''));
+  const isDirty = isRowDraftDirty(row, originalRow);
+
+  if (!isMuIssued && !isDailyContext && row && (isDirty || hasNoServerComponents)) {
+    const localPreview = calculateMeterRowPreview(roomCtx, effectiveRateSnapshot, row);
+
+    const monthlyIdx = components.findIndex(c => c.type === 'monthly_utility' || c.type === 'legacy_combined');
+    const previewAmountNum = parseFloat(localPreview.totalAmount) || 0;
+    const previewFormatted = formatMoneyDisplay(localPreview.totalAmount);
+    const previewStatus: TopLevelFinancialComponent['status'] = localPreview.status === 'INVALID' ? 'INVALID' : 'PREVIEW';
+    const previewTitle = localPreview.status === 'INVALID' ? (localPreview.errorMessage || 'รูปแบบการคิดค่าบริการไม่ถูกต้อง') : 'ยังไม่ออกบิล (พรีวิว)';
+
+    if (monthlyIdx >= 0) {
+      components[monthlyIdx] = {
+        ...components[monthlyIdx],
+        amount: previewAmountNum,
+        formattedAmount: previewFormatted,
+        status: previewStatus,
+        title: previewTitle,
+        errorMessage: localPreview.errorMessage,
+      };
+    } else {
+      components.push({
+        type: 'monthly_utility',
+        label: 'บิลรายเดือน',
+        amount: previewAmountNum,
+        formattedAmount: previewFormatted,
+        status: previewStatus,
+        title: previewTitle,
+        errorMessage: localPreview.errorMessage,
+        lineItems: [],
+      });
+    }
+
+    // Recompute total operational amountDue using exact Satang arithmetic
+    let totalSatang = 0n;
+    for (const c of components) {
+      if (c.status !== 'PAID') {
+        totalSatang += parseSatang(c.formattedAmount);
+      }
+    }
+    const finalAmountStr = formatSatang(totalSatang);
+
+    return {
+      operationalAmount: parseFloat(finalAmountStr) || 0,
+      formattedAmount: formatMoneyDisplay(finalAmountStr),
+      components,
+    };
+  }
+
   return {
-    operationalAmount: typeof amountDue === 'number' ? amountDue : parseFloat(String(amountDue).replace(/,/g, '')) || 0,
-    formattedAmount: formatMoneyDisplay(amountDue),
+    operationalAmount: typeof rawAmountDue === 'number' ? rawAmountDue : parseFloat(String(rawAmountDue).replace(/,/g, '')) || 0,
+    formattedAmount: formatMoneyDisplay(rawAmountDue),
     components,
   };
 }
@@ -536,6 +730,36 @@ export function mapErrorMessageToThai(raw: any): string {
   if (code === 'CANNOT_CLEAR_METER_READING_FOR_ISSUED_BILL') {
     return 'ห้องนี้มีบิลที่ออกแล้ว หากต้องการล้างเลขมิเตอร์ปัจจุบัน กรุณายกเลิกบิลก่อน';
   }
+  if (code === 'UNSUPPORTED_AMOUNT') {
+    return 'ยอดเงินที่ชำระไม่ตรงกับยอดคงเหลือของบิล';
+  }
+  if (code === 'ALREADY_PAID') {
+    return 'บิลนี้ได้รับการชำระเงินแล้ว';
+  }
+  if (code === 'PAYMENT_IN_PROGRESS') {
+    return 'มีรายการชำระเงินที่อยู่ระหว่างรอการตรวจสอบสำหรับบิลนี้แล้ว';
+  }
+  if (code === 'BILL_NOT_FOUND') {
+    return 'ไม่พบข้อมูลบิลที่ระบุ';
+  }
+  if (code === 'FORBIDDEN') {
+    return 'ไม่มีสิทธิ์ดำเนินการกับบิลนี้';
+  }
+  if (code === 'IDEMPOTENCY_MISMATCH') {
+    return 'ข้อมูลการทำรายการไม่ตรงกับ Idempotency Key เดิม';
+  }
+  if (code === 'CONCURRENT_REQUEST_IN_PROGRESS') {
+    return 'มีคำขอกำลังประมวลผลอยู่ กรุณารอสักครู่';
+  }
+  if (code === 'DUPLICATE_PAYMENT_EVIDENCE') {
+    return 'มีการแนบหลักฐานการชำระเงินนี้ไปแล้ว';
+  }
+  if (code === 'ACTIVE_REVIEW_EXISTS') {
+    return 'มีรายการชำระเงินที่รอตรวจสอบอยู่แล้ว';
+  }
+  if (code === 'INTERNAL_ERROR') {
+    return 'ระบบไม่สามารถดำเนินการได้ กรุณาลองใหม่อีกครั้ง';
+  }
   if (code === 'MISSING_WATER_METER_READING' || code === 'MISSING_METER_READING') {
     return 'กรุณากรอกเลขมิเตอร์น้ำของงวดนี้ก่อนออกบิล';
   }
@@ -583,6 +807,15 @@ export function mapErrorMessageToThai(raw: any): string {
   if (msg.includes('CANNOT_CLEAR_METER_READING_FOR_ISSUED_BILL')) {
     return 'ห้องนี้มีบิลที่ออกแล้ว หากต้องการล้างเลขมิเตอร์ปัจจุบัน กรุณายกเลิกบิลก่อน';
   }
+  if (msg.includes('UNSUPPORTED_AMOUNT')) {
+    return 'ยอดเงินที่ชำระไม่ตรงกับยอดคงเหลือของบิล';
+  }
+  if (msg.includes('ALREADY_PAID')) {
+    return 'บิลนี้ได้รับการชำระเงินแล้ว';
+  }
+  if (msg.includes('PAYMENT_IN_PROGRESS')) {
+    return 'มีรายการชำระเงินที่อยู่ระหว่างรอการตรวจสอบสำหรับบิลนี้แล้ว';
+  }
   if (msg.includes('BILLING_CYCLE_NOT_FOUND')) {
     return 'ไม่พบข้อมูลรอบบิล';
   }
@@ -594,6 +827,14 @@ export function mapErrorMessageToThai(raw: any): string {
   }
   if (msg.includes('STALE_VERSION')) {
     return 'ข้อมูลถูกแก้ไขโดยผู้อื่น กรุณารีเฟรชหน้านี้';
+  }
+
+  // Mask database / Prisma / SQL internal leaks
+  if (
+    /prisma|select\s+|insert\s+|update\s+|delete\s+|where\s+|constraint|foreign\s+key|table\s+"|column\s+"/i.test(msg) ||
+    /prisma/i.test(String(raw?.stack || ''))
+  ) {
+    return 'ระบบไม่สามารถดำเนินการได้ กรุณาลองใหม่อีกครั้ง';
   }
 
   return msg || 'เกิดข้อผิดพลาดในการดำเนินการ';
@@ -646,20 +887,11 @@ export function computeHasPersistedBaseline(params: {
 
   const applicableRooms = rooms.filter((room) => {
     if ((room.status as string) === 'archived') return false;
-    if (room.rentCycle === 'daily') return false;
-    if (previewRooms && previewRooms.length > 0) {
-      const ctx = previewRooms.find((p) => p.roomId === room.id);
-      if (ctx) {
-        if (ctx.billingSource === 'DAILY_STAY' || ctx.isDailyUnpaid) return false;
-        if (ctx.billingSource === 'NONE') return false;
-        return true;
-      }
-    }
     return true;
   });
 
   if (applicableRooms.length === 0) {
-    return true;
+    return false;
   }
 
   const waterBaselineByRoom = new Map<string, any>();
@@ -725,6 +957,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         bills,
         contracts,
         tenants,
+        buildings,
         selectedBillingCycleId,
         selectedCycleCode,
         selectedCycle,
@@ -732,7 +965,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       });
     }
     return null;
-  }, []);
+  }, [buildings]);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [viewMode, setViewMode] = useState<'table' | 'list'>(() => {
@@ -794,6 +1027,9 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   const [isQuickFillOpen, setIsQuickFillOpen] = useState(false);
   const [quickFillText, setQuickFillText] = useState('');
   const [templateUsed, setTemplateUsed] = useState(false);
+  const [templateMode, setTemplateMode] = useState<'FULL' | 'METER_ONLY'>('FULL');
+  const [isSpreadsheetMode, setIsSpreadsheetMode] = useState(false);
+
   const [quickAddModalOpen, setQuickAddModalOpen] = useState(false);
   const [selectedQuickAddContext, setSelectedQuickAddContext] = useState<QuickAddRoomContext | null>(null);
   const [quickAddLoadingRoomId, setQuickAddLoadingRoomId] = useState<string | null>(null);
@@ -853,9 +1089,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   const originalRowsRef = React.useRef<MeterRowState[]>(initialBuilt?.originalRows || []);
   const originalRowsCycleIdRef = React.useRef<string>(initialBuilt ? selectedBillingCycleId || '' : '');
   const meterRowsRef = React.useRef<MeterRowState[]>(meterRows);
-  useEffect(() => {
-    meterRowsRef.current = meterRows;
-  }, [meterRows]);
+  meterRowsRef.current = meterRows;
 
   const historyRef = React.useRef<MeterRowState[][]>([JSON.parse(JSON.stringify(initialBuilt?.rows || []))]);
   const historyIndexRef = React.useRef<number>(0);
@@ -995,8 +1229,481 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
 
   // Authoritative billing mode derived strictly from rateSnapshot (fail-closed, no default assumption)
   const isRateSnapshotReady = Boolean(previewContextQuery.isSuccess && rateSnapshot);
-  const isWaterUnit = isRateSnapshotReady ? (rateSnapshot.waterBillingType === 'per_unit') : false;
-  const isElecUnit = isRateSnapshotReady ? (rateSnapshot.electricityBillingType === 'per_unit') : false;
+  const isWaterUnit = isRateSnapshotReady ? isMeterBasedUtilityMode(rateSnapshot.waterBillingType) : false;
+  const isElecUnit = isRateSnapshotReady ? isMeterBasedUtilityMode(rateSnapshot.electricityBillingType) : false;
+
+  // Pure Canonical Normalization & Validation Authority for Meters & Spreadsheet (Amendment 4)
+  const sanitizeMeterReadingPure = (val: string): string => {
+    if (!val) return '';
+    return val.replace(/[^0-9]/g, '').slice(0, 5);
+  };
+
+  const normalizeMeterValuePure = (val: string): string => {
+    if (!val || val.trim() === '') return '';
+    const trimmed = val.trim().replace(/[^0-9]/g, '').slice(0, 5);
+    if (!trimmed) return '';
+    return trimmed.replace(/^0+(?=\d)/, '');
+  };
+
+  const validateAndNormalizeSpreadsheetValue = (
+    colKey: 'elecPrev' | 'elecCurr' | 'waterPrev' | 'waterCurr' | 'peopleCount',
+    rawVal: any,
+    prevVal?: any
+  ): { valid: boolean; value: string | number; errorMessage?: string } => {
+    if (rawVal === undefined || rawVal === null) {
+      return { valid: false, value: '', errorMessage: 'กรุณาระบุค่า' };
+    }
+    const strVal = String(rawVal).trim();
+
+    if (colKey === 'peopleCount') {
+      if (strVal === '') {
+        return { valid: true, value: '' };
+      }
+      if (/^[0-9]$/.test(strVal)) {
+        return { valid: true, value: parseInt(strVal, 10) };
+      }
+      return { valid: false, value: rawVal, errorMessage: 'จำนวนคนต้องเป็นตัวเลข 0 ถึง 9' };
+    } else {
+      if (strVal === '') {
+        return { valid: true, value: '' };
+      }
+
+      // Canonical meter integer reading validation: 0..99999, non-numeric, negative, decimal rejection
+      const parsed = parseMeterIntegerReading(strVal);
+      if (!parsed.isValid) {
+        return { valid: false, value: rawVal, errorMessage: parsed.errorMessage || 'ค่ามิเตอร์ไม่ถูกต้อง' };
+      }
+
+      // Compare against previous reading using canonical rules & rollover
+      if (
+        (colKey === 'elecCurr' || colKey === 'waterCurr') &&
+        prevVal !== undefined &&
+        prevVal !== null &&
+        String(prevVal).trim() !== ''
+      ) {
+        const prevParsed = parseMeterIntegerReading(prevVal);
+        if (prevParsed.isValid) {
+          const usageRes = calculateMeterUsageUnits(prevParsed.value, parsed.value);
+          if (!usageRes.isValid) {
+            return {
+              valid: false,
+              value: rawVal,
+              errorMessage:
+                usageRes.errorMessage ||
+                `ค่ามิเตอร์ปัจจุบัน (${parsed.value}) ต้องไม่น้อยกว่าค่ามิเตอร์เดิม (${prevParsed.value})`,
+            };
+          }
+        }
+      }
+
+      return { valid: true, value: String(parsed.value) };
+    }
+  };
+
+  // Spreadsheet Columns Authority
+  const spreadsheetColumns = useMemo(() => {
+    const cols: Array<{ key: 'buildingCode' | 'roomNumber' | 'elecPrev' | 'elecCurr' | 'waterPrev' | 'waterCurr' | 'peopleCount'; editable: boolean }> = [
+      { key: 'buildingCode', editable: false },
+      { key: 'roomNumber', editable: false },
+    ];
+    if (isElecUnit) {
+      cols.push({ key: 'elecPrev', editable: true });
+      cols.push({ key: 'elecCurr', editable: true });
+    }
+    if (isWaterUnit) {
+      cols.push({ key: 'waterPrev', editable: true });
+      cols.push({ key: 'waterCurr', editable: true });
+    }
+    cols.push({ key: 'peopleCount', editable: true });
+    return cols;
+  }, [isElecUnit, isWaterUnit]);
+
+  // Spreadsheet Real Drag-Fill Handle, Range Selection & Rejected Cell State
+  const [activeSpreadsheetCell, setActiveSpreadsheetCell] = useState<{
+    rowIndex: number;
+    colKey: 'elecPrev' | 'elecCurr' | 'waterPrev' | 'waterCurr' | 'peopleCount';
+  } | null>(null);
+
+  const [selectedSpreadsheetRange, setSelectedSpreadsheetRange] = useState<{
+    startRow: number;
+    endRow: number;
+    startCol: number;
+    endCol: number;
+  } | null>(null);
+  const isSelectingRangeRef = useRef(false);
+  const rangeAnchorRef = useRef<{ row: number; col: number } | null>(null);
+  const [rejectedSpreadsheetCells, setRejectedSpreadsheetCells] = useState<Record<string, string | boolean>>({});
+
+  const [dragFillRange, setDragFillRange] = useState<{
+    startRow: number;
+    targetRow: number;
+    startCol?: number;
+    targetCol?: number;
+    colKey: 'elecPrev' | 'elecCurr' | 'waterPrev' | 'waterCurr' | 'peopleCount';
+  } | null>(null);
+
+  const isDraggingFillRef = useRef(false);
+  const dragFillStateRef = useRef<{
+    startRow: number;
+    targetRow: number;
+    startCol: number;
+    targetCol: number;
+    colKey: 'elecPrev' | 'elecCurr' | 'waterPrev' | 'waterCurr' | 'peopleCount';
+  } | null>(null);
+
+  const spreadsheetScrollContainerRef = useRef<HTMLDivElement | null>(null);
+
+  const handleFocusCell = (rowIndex: number, colKey: 'elecPrev' | 'elecCurr' | 'waterPrev' | 'waterCurr' | 'peopleCount') => {
+    setActiveSpreadsheetCell({ rowIndex, colKey });
+    const colIdx = spreadsheetColumns.findIndex(c => c.key === colKey);
+    const validColIdx = colIdx >= 0 ? colIdx : 2;
+    setSelectedSpreadsheetRange({ startRow: rowIndex, endRow: rowIndex, startCol: validColIdx, endCol: validColIdx });
+    setRejectedSpreadsheetCells(prev => {
+      const cellKey = `${rowIndex}:${colKey}`;
+      if (!prev[cellKey]) return prev;
+      const next = { ...prev };
+      delete next[cellKey];
+      return next;
+    });
+  };
+
+  const handlePointerDownCell = (
+    e: React.PointerEvent,
+    rowIndex: number,
+    colKey: 'elecPrev' | 'elecCurr' | 'waterPrev' | 'waterCurr' | 'peopleCount'
+  ) => {
+    if ((e.target as HTMLElement)?.getAttribute('data-testid') === 'drag-fill-handle') return;
+    document.body.style.userSelect = 'none';
+    isSelectingRangeRef.current = true;
+    const colIdx = spreadsheetColumns.findIndex(c => c.key === colKey);
+    const validColIdx = colIdx >= 0 ? colIdx : 2;
+    rangeAnchorRef.current = { row: rowIndex, col: validColIdx };
+    setActiveSpreadsheetCell({ rowIndex, colKey });
+    setSelectedSpreadsheetRange({ startRow: rowIndex, endRow: rowIndex, startCol: validColIdx, endCol: validColIdx });
+    setRejectedSpreadsheetCells(prev => {
+      const cellKey = `${rowIndex}:${colKey}`;
+      if (!prev[cellKey]) return prev;
+      const next = { ...prev };
+      delete next[cellKey];
+      return next;
+    });
+  };
+
+  const handlePointerEnterCell = (
+    rowIndex: number,
+    colKey: 'elecPrev' | 'elecCurr' | 'waterPrev' | 'waterCurr' | 'peopleCount'
+  ) => {
+    if (!isSelectingRangeRef.current || !rangeAnchorRef.current) return;
+    const colIdx = spreadsheetColumns.findIndex(c => c.key === colKey);
+    const validColIdx = colIdx >= 0 ? colIdx : 2;
+    setSelectedSpreadsheetRange({
+      startRow: Math.min(rangeAnchorRef.current.row, rowIndex),
+      endRow: Math.max(rangeAnchorRef.current.row, rowIndex),
+      startCol: Math.min(rangeAnchorRef.current.col, validColIdx),
+      endCol: Math.max(rangeAnchorRef.current.col, validColIdx),
+    });
+  };
+
+  const isCellInRangeSelected = (r: number, cKey: string) => {
+    if (!selectedSpreadsheetRange) return false;
+    const minR = Math.min(selectedSpreadsheetRange.startRow, selectedSpreadsheetRange.endRow);
+    const maxR = Math.max(selectedSpreadsheetRange.startRow, selectedSpreadsheetRange.endRow);
+    if (r < minR || r > maxR) return false;
+    const minC = Math.min(selectedSpreadsheetRange.startCol, selectedSpreadsheetRange.endCol);
+    const maxC = Math.max(selectedSpreadsheetRange.startCol, selectedSpreadsheetRange.endCol);
+    const colIdx = spreadsheetColumns.findIndex(col => col.key === cKey);
+    return colIdx >= minC && colIdx <= maxC;
+  };
+
+  const isCellInFillPreview = (r: number, cKey: string) => {
+    if (!dragFillRange) return false;
+    const minR = Math.min(dragFillRange.startRow, dragFillRange.targetRow);
+    const maxR = Math.max(dragFillRange.startRow, dragFillRange.targetRow);
+    if (r < minR || r > maxR) return false;
+    if (dragFillRange.targetCol === undefined || dragFillRange.startCol === undefined) {
+      return dragFillRange.colKey === cKey;
+    }
+    const minC = Math.min(dragFillRange.startCol, dragFillRange.targetCol);
+    const maxC = Math.max(dragFillRange.startCol, dragFillRange.targetCol);
+    const colIdx = spreadsheetColumns.findIndex(col => col.key === cKey);
+    return colIdx >= minC && colIdx <= maxC;
+  };
+
+  const selectedSpreadsheetRangeRef = useRef(selectedSpreadsheetRange);
+  selectedSpreadsheetRangeRef.current = selectedSpreadsheetRange;
+  const activeSpreadsheetCellRef = useRef(activeSpreadsheetCell);
+  activeSpreadsheetCellRef.current = activeSpreadsheetCell;
+  const spreadsheetColumnsRef = useRef(spreadsheetColumns);
+  spreadsheetColumnsRef.current = spreadsheetColumns;
+  const rejectedSpreadsheetCellsRef = useRef(rejectedSpreadsheetCells);
+  rejectedSpreadsheetCellsRef.current = rejectedSpreadsheetCells;
+
+  const dragRafIdRef = useRef<number | null>(null);
+  const isComponentMountedRef = useRef<boolean>(true);
+  const lastPointerCoordsRef = useRef<{ clientX: number; clientY: number } | null>(null);
+
+  useEffect(() => {
+    isComponentMountedRef.current = true;
+    return () => {
+      isComponentMountedRef.current = false;
+      if (dragRafIdRef.current !== null) {
+        cancelAnimationFrame(dragRafIdRef.current);
+        dragRafIdRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isSpreadsheetMode) {
+      if (dragRafIdRef.current !== null) {
+        cancelAnimationFrame(dragRafIdRef.current);
+        dragRafIdRef.current = null;
+      }
+      return;
+    }
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (isDraggingFillRef.current) {
+          isDraggingFillRef.current = false;
+          dragFillStateRef.current = null;
+          setDragFillRange(null);
+          document.body.style.userSelect = '';
+        }
+        isSelectingRangeRef.current = false;
+        rangeAnchorRef.current = null;
+        setSelectedSpreadsheetRange(null);
+        setRejectedSpreadsheetCells({});
+      } else if ((e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'C')) {
+        const range = selectedSpreadsheetRangeRef.current;
+        const activeCell = activeSpreadsheetCellRef.current;
+        const cols = spreadsheetColumnsRef.current;
+        const rows = meterRowsRef.current;
+
+        if (range || activeCell) {
+          const minR = range ? Math.min(range.startRow, range.endRow) : activeCell!.rowIndex;
+          const maxR = range ? Math.max(range.startRow, range.endRow) : activeCell!.rowIndex;
+          const anchorCol = activeCell ? cols.findIndex(c => c.key === activeCell.colKey) : 2;
+          const minC = range ? Math.min(range.startCol, range.endCol) : anchorCol;
+          const maxC = range ? Math.max(range.startCol, range.endCol) : anchorCol;
+
+          const lines: string[] = [];
+          for (let r = minR; r <= maxR; r++) {
+            const cells: string[] = [];
+            for (let c = minC; c <= maxC; c++) {
+              const col = cols[c];
+              if (col) {
+                cells.push(String(rows[r]?.[col.key as keyof MeterRowState] ?? ''));
+              }
+            }
+            lines.push(cells.join('\t'));
+          }
+          if (lines.length > 0 && navigator.clipboard?.writeText) {
+            navigator.clipboard.writeText(lines.join('\n'));
+          }
+        }
+      } else if ((e.key === 'Delete' || e.key === 'Backspace') && !isDraggingFillRef.current) {
+        const range = selectedSpreadsheetRangeRef.current;
+        const isMultiCellRange = Boolean(range && (range.startRow !== range.endRow || range.startCol !== range.endCol));
+        const activeTag = (document.activeElement as HTMLElement)?.tagName?.toLowerCase();
+        const isEditingInput = activeTag === 'input' || activeTag === 'textarea';
+
+        // Single cell input text editing must behave normally; range delete applies to multi-cell range or non-input selection
+        if (isMultiCellRange || (!isEditingInput && range)) {
+          e.preventDefault();
+          const minR = Math.min(range!.startRow, range!.endRow);
+          const maxR = Math.max(range!.startRow, range!.endRow);
+          const minC = Math.min(range!.startCol, range!.endCol);
+          const maxC = Math.max(range!.startCol, range!.endCol);
+
+          const currentRows = meterRowsRef.current;
+          const cols = spreadsheetColumnsRef.current;
+          const updated = [...currentRows];
+          const nextRejected = { ...rejectedSpreadsheetCellsRef.current };
+          let hasChange = false;
+          let hasRejectedChange = false;
+
+          for (let r = minR; r <= maxR; r++) {
+            if (!updated[r]) continue;
+            const isRowPaid = Boolean(updated[r].isPaid || updated[r].billStatus === 'paid' || updated[r].isLocked);
+            if (isRowPaid) continue;
+            let rowCopy = { ...updated[r] };
+            for (let c = minC; c <= maxC; c++) {
+              const col = cols[c];
+              if (col && col.editable) {
+                rowCopy[col.key as keyof MeterRowState] = '' as any;
+                hasChange = true;
+                const cellKey = `${r}:${col.key}`;
+                if (nextRejected[cellKey] !== undefined) {
+                  delete nextRejected[cellKey];
+                  hasRejectedChange = true;
+                }
+              }
+            }
+            updated[r] = rowCopy;
+          }
+
+          if (hasChange) {
+            setMeterRows(updated);
+            pushHistory(updated);
+          }
+          if (hasRejectedChange) {
+            setRejectedSpreadsheetCells(nextRejected);
+          }
+        }
+      }
+    };
+    const handleGlobalPointerUp = () => {
+      isSelectingRangeRef.current = false;
+      rangeAnchorRef.current = null;
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('pointerup', handleGlobalPointerUp);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('pointerup', handleGlobalPointerUp);
+    };
+  }, [isSpreadsheetMode]);
+
+  const handlePointerDownFillHandle = (
+    e: React.PointerEvent<HTMLDivElement>,
+    rowIndex: number,
+    colKey: 'elecPrev' | 'elecCurr' | 'waterPrev' | 'waterCurr' | 'peopleCount'
+  ) => {
+    e.preventDefault();
+    e.stopPropagation();
+    try {
+      (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    } catch {}
+    isDraggingFillRef.current = true;
+    const colIdx = spreadsheetColumns.findIndex(c => c.key === colKey);
+    const validColIdx = colIdx >= 0 ? colIdx : 2;
+    dragFillStateRef.current = {
+      startRow: rowIndex,
+      targetRow: rowIndex,
+      startCol: validColIdx,
+      targetCol: validColIdx,
+      colKey,
+    };
+    setDragFillRange({
+      startRow: rowIndex,
+      targetRow: rowIndex,
+      startCol: validColIdx,
+      targetCol: validColIdx,
+      colKey,
+    });
+    document.body.style.userSelect = 'none';
+  };
+
+  const handlePointerMoveFillHandle = (e: React.PointerEvent) => {
+    if (!isDraggingFillRef.current || !dragFillStateRef.current) return;
+    const container = spreadsheetScrollContainerRef.current;
+    if (!container) return;
+
+    const rect = container.getBoundingClientRect();
+    const delta = calculateAutoScrollDelta(e.clientY, rect, 35, 10);
+    if (delta !== 0) {
+      container.scrollTop += delta;
+    }
+
+    lastPointerCoordsRef.current = { clientX: e.clientX, clientY: e.clientY };
+
+    if (dragRafIdRef.current === null) {
+      dragRafIdRef.current = requestAnimationFrame(() => {
+        dragRafIdRef.current = null;
+        if (!isComponentMountedRef.current || !isDraggingFillRef.current || !dragFillStateRef.current) return;
+        const coords = lastPointerCoordsRef.current;
+        if (!coords) return;
+
+        let foundRow = dragFillStateRef.current.targetRow;
+        let foundCol = dragFillStateRef.current.targetCol;
+
+        // O(1) point hit testing via elementFromPoint
+        const targetEl = document.elementFromPoint(coords.clientX, coords.clientY);
+        const cell = targetEl?.closest('td[data-cell-row]');
+        if (cell) {
+          const rIdx = parseInt(cell.getAttribute('data-cell-row') || '-1', 10);
+          const colKey = cell.getAttribute('data-cell-col');
+          if (rIdx >= 0) foundRow = rIdx;
+          if (colKey) {
+            const cIdx = spreadsheetColumnsRef.current.findIndex(c => c.key === colKey);
+            if (cIdx >= 0) foundCol = cIdx;
+          }
+        } else {
+          const rowEl = targetEl?.closest('tr[data-row-index]');
+          if (rowEl) {
+            const rIdx = parseInt(rowEl.getAttribute('data-row-index') || '-1', 10);
+            if (rIdx >= 0) foundRow = rIdx;
+          }
+        }
+
+        if (foundRow !== dragFillStateRef.current.targetRow || foundCol !== dragFillStateRef.current.targetCol) {
+          dragFillStateRef.current.targetRow = foundRow;
+          dragFillStateRef.current.targetCol = foundCol;
+          setDragFillRange({ ...dragFillStateRef.current });
+        }
+      });
+    }
+  };
+
+  const handlePointerUpFillHandle = (e: React.PointerEvent) => {
+    if (!isDraggingFillRef.current) return;
+    if (dragRafIdRef.current !== null) {
+      cancelAnimationFrame(dragRafIdRef.current);
+      dragRafIdRef.current = null;
+    }
+    try {
+      (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+    } catch {}
+    isDraggingFillRef.current = false;
+    document.body.style.userSelect = '';
+
+    if (dragFillStateRef.current) {
+      const { startRow, targetRow, startCol = 2, targetCol = 2, colKey } = dragFillStateRef.current;
+      const minRow = Math.min(startRow, targetRow);
+      const maxRow = Math.max(startRow, targetRow);
+      const minCol = Math.min(startCol, targetCol);
+      const maxCol = Math.max(startCol, targetCol);
+      const sourceVal = meterRows[startRow]?.[colKey];
+
+      if (sourceVal !== undefined && (minRow !== maxRow || minCol !== maxCol)) {
+        const updated = [...meterRows];
+        const newRejectedCells = { ...rejectedSpreadsheetCells };
+        let hasChanges = false;
+        for (let r = minRow; r <= maxRow; r++) {
+          const targetRow = updated[r];
+          const isRowPaid = Boolean(targetRow?.isPaid || targetRow?.billStatus === 'paid' || targetRow?.isLocked);
+          if (isRowPaid) continue; // Locked/paid row preserved unchanged!
+
+          for (let c = minCol; c <= maxCol; c++) {
+            const col = spreadsheetColumns[c];
+            if (!col || !col.editable) continue;
+            const prevVal = col.key === 'elecCurr' ? targetRow.elecPrev : (col.key === 'waterCurr' ? targetRow.waterPrev : undefined);
+            const norm = validateAndNormalizeSpreadsheetValue(col.key as any, sourceVal, prevVal);
+            const cellKey = `${r}:${col.key}`;
+            if (norm.valid) {
+              updated[r] = {
+                ...updated[r],
+                [col.key]: norm.value,
+              };
+              delete newRejectedCells[cellKey];
+              hasChanges = true;
+            } else {
+              newRejectedCells[cellKey] = norm.errorMessage || true;
+            }
+          }
+        }
+        setMeterRows(updated);
+        setRejectedSpreadsheetCells(newRejectedCells);
+        if (hasChanges) {
+          pushHistory(updated);
+          showToast(`คัดลอกข้อมูลเรียบร้อยแล้ว`);
+        }
+      }
+    }
+    setDragFillRange(null);
+    dragFillStateRef.current = null;
+  };
 
   const isMeterWorkspaceReady = Boolean(meterWorkspaceQuery.isSuccess);
   const isSelectedCycleAuthorityReady = Boolean(
@@ -1176,32 +1883,44 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     if (bill && Array.isArray(bill.items)) {
       const waterItem = bill.items.find(item => item.category === 'water' || (item as any).type === 'water');
       if (waterItem) {
-        const match = waterItem.description?.match(/\(([\d.]+)\s*หน่วย\)/);
-        if (match) {
-          waterCurr = waterPrev + Number(match[1]);
+        if ((waterItem as any).metadata?.currentReading !== undefined && (waterItem as any).metadata?.currentReading !== null) {
+          waterCurr = Number((waterItem as any).metadata.currentReading);
         } else {
-          const isUnit = rateSnapshot ? (rateSnapshot.waterBillingType === 'per_unit') : false;
-          if (isUnit) {
-            const rate = rateSnapshot?.waterRate ? Number(rateSnapshot.waterRate) : 0;
-            waterCurr = rate > 0 ? (waterPrev + Number(waterItem.amount) / rate) : waterPrev;
+          const match = waterItem.description?.match(/\(([\d.]+)\s*หน่วย\)/) || waterItem.description?.match(/\(([\d.]+)\s*-\s*([\d.]+)\)/);
+          if (match && match[2]) {
+            waterCurr = Number(match[2]);
+          } else if (match && match[1]) {
+            waterCurr = waterPrev + Number(match[1]);
           } else {
-            waterCurr = waterPrev;
+            const isUnit = rateSnapshot ? isMeterBasedUtilityMode(rateSnapshot.waterBillingType) : false;
+            if (isUnit) {
+              const rate = rateSnapshot?.waterRate ? Number(rateSnapshot.waterRate) : 0;
+              waterCurr = rate > 0 ? (waterPrev + Number(waterItem.amount) / rate) : waterPrev;
+            } else {
+              waterCurr = waterPrev;
+            }
           }
         }
       }
 
       const elecItem = bill.items.find(item => item.category === 'electricity' || (item as any).type === 'electricity');
       if (elecItem) {
-        const match = elecItem.description?.match(/\(([\d.]+)\s*หน่วย\)/);
-        if (match) {
-          elecCurr = elecPrev + Number(match[1]);
+        if ((elecItem as any).metadata?.currentReading !== undefined && (elecItem as any).metadata?.currentReading !== null) {
+          elecCurr = Number((elecItem as any).metadata.currentReading);
         } else {
-          const isUnit = rateSnapshot ? (rateSnapshot.electricityBillingType === 'per_unit') : false;
-          if (isUnit) {
-            const rate = rateSnapshot?.electricityRate ? Number(rateSnapshot.electricityRate) : 0;
-            elecCurr = rate > 0 ? (elecPrev + Number(elecItem.amount) / rate) : elecPrev;
+          const match = elecItem.description?.match(/\(([\d.]+)\s*หน่วย\)/) || elecItem.description?.match(/\(([\d.]+)\s*-\s*([\d.]+)\)/);
+          if (match && match[2]) {
+            elecCurr = Number(match[2]);
+          } else if (match && match[1]) {
+            elecCurr = elecPrev + Number(match[1]);
           } else {
-            elecCurr = elecPrev;
+            const isUnit = rateSnapshot ? isMeterBasedUtilityMode(rateSnapshot.electricityBillingType) : false;
+            if (isUnit) {
+              const rate = rateSnapshot?.electricityRate ? Number(rateSnapshot.electricityRate) : 0;
+              elecCurr = rate > 0 ? (elecPrev + Number(elecItem.amount) / rate) : elecPrev;
+            } else {
+              elecCurr = elecPrev;
+            }
           }
         }
       }
@@ -1262,19 +1981,25 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
             }
           }
 
-          const currHousehold = pRoom.currentHouseholdPeopleCount ?? 0;
-          if (row.peopleCount !== currHousehold) {
-            nextRow.peopleCount = currHousehold;
+          let targetPeopleCount = row.peopleCount;
+          if (pRoom.previousCyclePeopleCount !== null && pRoom.previousCyclePeopleCount !== undefined) {
+            targetPeopleCount = pRoom.previousCyclePeopleCount;
+          } else if (pRoom.currentHouseholdPeopleCount !== null && pRoom.currentHouseholdPeopleCount !== undefined) {
+            targetPeopleCount = pRoom.currentHouseholdPeopleCount;
+          }
+
+          if (row.peopleCount !== targetPeopleCount) {
+            nextRow.peopleCount = targetPeopleCount;
             newFlashing[`${row.roomId}-peopleCount`] = true;
           }
 
-          // Compare previousCyclePeopleCount vs currentHouseholdPeopleCount for toast (Section 5)
+          // Compare previousCyclePeopleCount vs current for toast (Section 5)
           if (pRoom.previousCyclePeopleCount !== null && pRoom.previousCyclePeopleCount !== undefined) {
-            if (pRoom.previousCyclePeopleCount !== currHousehold) {
+            if (pRoom.previousCyclePeopleCount !== targetPeopleCount) {
               peopleChanges.push({
                 roomNumber: row.roomNumber,
                 prev: pRoom.previousCyclePeopleCount,
-                curr: currHousehold,
+                curr: targetPeopleCount,
               });
             }
           }
@@ -1317,43 +2042,66 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     }
   };
 
-  const getTemplateFormatString = () => {
-    const sampleRoom = meterRows[0]?.roomNumber || "A101";
+  const getTemplateFormatString = (mode: 'FULL' | 'METER_ONLY' = templateMode) => {
+    const rawBld = meterRows[0]?.buildingCode || "A";
+    const sampleBld = rawBld.replace(/^BLD-/, '').replace(/^อาคาร\s*/, '') || "A";
+    const sampleRoom = meterRows[0]?.roomNumber || "101";
+    const sampleIdent = `${sampleBld} ${sampleRoom}`;
     const sampleElec = formatMeterReadingDisplay(meterRows[0]?.elecPrev || 500);
     const sampleWater = formatMeterReadingDisplay(meterRows[0]?.waterPrev || 500);
     const samplePeople = formatCountDisplay(meterRows[0]?.peopleCount ?? 0);
-    const sampleOverdue = formatMeterReadingDisplay(meterRows[0]?.overdueAmount || 50);
+
+    if (mode === 'METER_ONLY') {
+      if (isElecUnit && isWaterUnit) {
+        return `${sampleIdent} : ไฟ ${sampleElec} : น้ำ ${sampleWater}`;
+      } else if (isElecUnit && !isWaterUnit) {
+        return `${sampleIdent} : ไฟ ${sampleElec}`;
+      } else if (!isElecUnit && isWaterUnit) {
+        return `${sampleIdent} : น้ำ ${sampleWater}`;
+      }
+    }
 
     if (isElecUnit && isWaterUnit) {
-      return `${sampleRoom} : ไฟ ${sampleElec} : น้ำ ${sampleWater} : ${samplePeople} คน : ค้าง ${sampleOverdue}`;
+      return `${sampleIdent} : ไฟ ${sampleElec} : น้ำ ${sampleWater} : ${samplePeople} คน`;
     } else if (isElecUnit && !isWaterUnit) {
-      return `${sampleRoom} : ไฟ ${sampleElec} : ${samplePeople} คน : ค้าง ${sampleOverdue}`;
+      return `${sampleIdent} : ไฟ ${sampleElec} : ${samplePeople} คน`;
     } else if (!isElecUnit && isWaterUnit) {
-      return `${sampleRoom} : น้ำ ${sampleWater} : ${samplePeople} คน : ค้าง ${sampleOverdue}`;
+      return `${sampleIdent} : น้ำ ${sampleWater} : ${samplePeople} คน`;
     } else {
-      return `${sampleRoom} : ${samplePeople} คน : ค้าง ${sampleOverdue}`;
+      return `${sampleIdent} : ${samplePeople} คน`;
     }
   };
 
-  const generateTemplateText = (freshHouseholdMap?: Map<string, number>) => {
-    const sortedRows = [...meterRows].sort((a, b) => a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true, sensitivity: 'base' }));
+  const generateTemplateText = (mode: 'FULL' | 'METER_ONLY' = templateMode, freshHouseholdMap?: Map<string, number>) => {
+    const buildingOrderMap = new Map<string, number>();
+    (buildings || []).forEach((bld, idx) => {
+      if (bld?.id) buildingOrderMap.set(bld.id, idx);
+    });
+
+    const sortedRows = [...meterRows].sort((a, b) => {
+      const roomA = rooms.find(r => r.id === a.roomId);
+      const roomB = rooms.find(r => r.id === b.roomId);
+      const bldIdxA = roomA?.buildingId && buildingOrderMap.has(roomA.buildingId) ? buildingOrderMap.get(roomA.buildingId)! : 999999;
+      const bldIdxB = roomB?.buildingId && buildingOrderMap.has(roomB.buildingId) ? buildingOrderMap.get(roomB.buildingId)! : 999999;
+      if (bldIdxA !== bldIdxB) return bldIdxA - bldIdxB;
+      return a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true, sensitivity: 'base' });
+    });
 
     return sortedRows.map(row => {
-      const parts = [row.roomNumber];
+      const rawBld = row.buildingCode || 'A';
+      const bCode = rawBld.replace(/^BLD-/, '').replace(/^อาคาร\s*/, '') || 'A';
+      const parts = [`${bCode} ${row.roomNumber}`];
       if (isElecUnit) {
         parts.push(`ไฟ ${formatMeterReadingDisplay(row.elecPrev)}`);
       }
       if (isWaterUnit) {
         parts.push(`น้ำ ${formatMeterReadingDisplay(row.waterPrev)}`);
       }
-      const freshCount = freshHouseholdMap?.get(row.roomId);
-      const roomCtx = previewContext?.rooms?.find(r => r.roomId === row.roomId);
-      const householdCount = freshCount !== undefined ? freshCount : (roomCtx?.currentHouseholdPeopleCount !== undefined ? roomCtx.currentHouseholdPeopleCount : row.peopleCount);
-      parts.push(`${formatCountDisplay(householdCount)} คน`);
-      if (Number(row.overdueAmount) > 0) {
-        parts.push(`ค้าง ${formatMeterReadingDisplay(row.overdueAmount)}`);
-      } else {
-        parts.push(`ค้าง `);
+      if (mode === 'FULL') {
+        const freshCount = freshHouseholdMap?.get(row.roomId);
+        const roomCtx = previewContext?.rooms?.find(r => r.roomId === row.roomId);
+        const householdCount = freshCount !== undefined ? freshCount : (roomCtx?.currentHouseholdPeopleCount !== undefined ? roomCtx.currentHouseholdPeopleCount : row.peopleCount);
+        parts.push(`${formatCountDisplay(householdCount)} คน`);
       }
       return parts.join(' : ');
     }).join('\n');
@@ -1362,30 +2110,55 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   const parseQuickFillText = (text: string) => {
     const lines = text.split('\n');
 
-    const matchedCount = meterRows.filter(row => {
-      return lines.some(line => {
-        const firstPart = line.split(':')[0]?.trim();
-        return firstPart && row?.roomNumber && firstPart.toLowerCase() === row.roomNumber.toLowerCase();
-      });
-    }).length;
+    const matchRowForLine = (firstPart: string) => {
+      if (!firstPart) return undefined;
+      const trimmed = firstPart.trim();
+      const tokens = trimmed.split(/\s+/);
+
+      if (tokens.length >= 2) {
+        let bCode = tokens[0].toUpperCase().replace(/^BLD-/, '').replace(/^อาคาร\s*/, '');
+        let rNum = tokens.slice(1).join(' ');
+        if (!bCode && tokens[0].startsWith('อาคาร') && tokens.length >= 3) {
+          bCode = tokens[1].toUpperCase().replace(/^BLD-/, '').replace(/^อาคาร\s*/, '');
+          rNum = tokens.slice(2).join(' ');
+        }
+        if (bCode) {
+          const matched = meterRows.find(r => {
+            const rB = (r.buildingCode || '').toUpperCase().replace(/^BLD-/, '').replace(/^อาคาร\s*/, '');
+            const rName = (r.buildingName || '').toUpperCase().replace(/^BLD-/, '').replace(/^อาคาร\s*/, '');
+            return (rB === bCode || rName === bCode) &&
+              r.roomNumber.toLowerCase() === rNum.toLowerCase();
+          });
+          if (matched) return matched;
+        }
+      }
+
+      // Fallback: match roomNumber directly if unique across dormitory
+      const matchingRooms = meterRows.filter(r => r.roomNumber.toLowerCase() === trimmed.toLowerCase());
+      if (matchingRooms.length === 1) {
+        return matchingRooms[0];
+      }
+      return undefined;
+    };
 
     const newFlashing: { [key: string]: boolean } = {};
+    let matchedCount = 0;
 
     const updatedRows = meterRows.map(row => {
       const matchedLine = lines.find(line => {
         const firstPart = line.split(':')[0]?.trim();
-        return firstPart && row?.roomNumber && firstPart.toLowerCase() === row.roomNumber.toLowerCase();
+        const matched = matchRowForLine(firstPart);
+        return matched && matched.roomId === row.roomId;
       });
 
       if (!matchedLine) return row;
+      matchedCount++;
 
       const parts = matchedLine.split(':').map(p => p.trim());
 
       let waterCurr = row.waterCurr;
       let elecCurr = row.elecCurr;
       let peopleCount = row.peopleCount;
-      let overdueAmount = row.overdueAmount;
-      let otherFees = [...(row.otherFees || [])];
 
       parts.slice(1).forEach(part => {
         const trimmedPart = part.trim();
@@ -1400,49 +2173,18 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         } else if (trimmedPart.includes('คน')) {
           const match = trimmedPart.match(/\d+/);
           if (match) peopleCount = normalizeSingleDigitCount(match[0]);
-        } else if (trimmedPart.startsWith('ค้างชำระ') || trimmedPart.startsWith('ค้าง')) {
-          // Alias rule: "ค้าง <amount>" or "ค้างชำระ <amount>" -> description = 'ค้างชำระ', amount = <amount>
-          const match = trimmedPart.match(/\d+(\.\d{1,2})?/);
-          if (match) {
-            const amt = match[0];
-            const desc = 'ค้างชำระ';
-            const existingIdx = otherFees.findIndex(f => f.description === desc);
-            if (existingIdx >= 0) {
-              otherFees[existingIdx] = { ...otherFees[existingIdx], amount: amt };
-            } else {
-              otherFees.push({ description: desc, amount: amt });
-            }
-          }
-        } else {
-          // Arbitrary other fee: e.g. "ค่าทำความสะอาด 50", "ค่าปรับ 100"
-          const numMatch = trimmedPart.match(/(\d+(\.\d{1,2})?)$/);
-          if (numMatch) {
-            const amt = numMatch[1];
-            const desc = trimmedPart.substring(0, trimmedPart.length - amt.length).trim();
-            if (desc) {
-              const existingIdx = otherFees.findIndex(f => f.description.toLowerCase() === desc.toLowerCase());
-              if (existingIdx >= 0) {
-                otherFees[existingIdx] = { ...otherFees[existingIdx], amount: amt };
-              } else {
-                otherFees.push({ description: desc, amount: amt });
-              }
-            }
-          }
         }
       });
 
       if (waterCurr !== row.waterCurr) newFlashing[`${row.roomId}-waterCurr`] = true;
       if (elecCurr !== row.elecCurr) newFlashing[`${row.roomId}-elecCurr`] = true;
       if (peopleCount !== row.peopleCount) newFlashing[`${row.roomId}-peopleCount`] = true;
-      if (overdueAmount !== row.overdueAmount) newFlashing[`${row.roomId}-overdueAmount`] = true;
 
       return {
         ...row,
         waterCurr,
         elecCurr,
         peopleCount,
-        overdueAmount,
-        otherFees,
       };
     });
 
@@ -1502,10 +2244,21 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     const wPrev = Number(row.waterPrev) || 0;
     const units = row.isReplaced ? wCurr : Math.max(0, wCurr - wPrev);
 
-    if (mode === 'per_unit' || mode === 'unit') {
+    if (mode === 'tiered') {
+      if (row.waterPrev === '' || row.waterCurr === '') return 0;
+      const usageRes = calculateMeterUsageUnits(row.waterPrev, row.waterCurr);
+      if (!usageRes.isValid) return 0;
+      const prog = calculateProgressiveTieredChargeLocal({
+        usageUnits: usageRes.usageUnits,
+        tiers: rateSnapshot?.waterTierRates,
+      });
+      return prog.isValid ? Number(prog.totalAmount) : 0;
+    } else if (mode === 'per_unit' || mode === 'unit') {
       return units * rate;
     } else if (mode === 'per_person' || mode === 'person') {
       return (Number(row.peopleCount) || 0) * rate;
+    } else if (mode === 'free' || mode === 'none') {
+      return 0;
     } else {
       return rate;
     }
@@ -1518,10 +2271,21 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     const ePrev = Number(row.elecPrev) || 0;
     const units = row.isReplaced ? eCurr : Math.max(0, eCurr - ePrev);
 
-    if (mode === 'per_unit' || mode === 'unit') {
+    if (mode === 'tiered') {
+      if (row.elecPrev === '' || row.elecCurr === '') return 0;
+      const usageRes = calculateMeterUsageUnits(row.elecPrev, row.elecCurr);
+      if (!usageRes.isValid) return 0;
+      const prog = calculateProgressiveTieredChargeLocal({
+        usageUnits: usageRes.usageUnits,
+        tiers: rateSnapshot?.electricityTierRates,
+      });
+      return prog.isValid ? Number(prog.totalAmount) : 0;
+    } else if (mode === 'per_unit' || mode === 'unit') {
       return units * rate;
     } else if (mode === 'per_person' || mode === 'person') {
       return (Number(row.peopleCount) || 0) * rate;
+    } else if (mode === 'free' || mode === 'none') {
+      return 0;
     } else {
       return rate;
     }
@@ -1555,23 +2319,15 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   };
 
   const getParkingCost = (row: MeterRowState) => {
-    if (row.peopleCount === 0) return 0;
-    const mode = rateSnapshot?.parkingFeeMode || 'per_room';
-    if (mode === 'free' || mode === 'none') return 0;
-    const fee = Number(rateSnapshot?.parkingFee) || 0;
-    if (fee <= 0) return 0;
-
-    if (mode === 'per_vehicle' || mode === 'vehicle') {
-      const tenant = getTenantForRoomAndCycle(row.roomId, selectedCycle);
-      if (tenant && (tenant as any).vehicle && (tenant as any).vehicle.type && (tenant as any).vehicle.type !== 'none') {
-        return fee;
-      }
-      return 0;
-    } else if (mode === 'per_person' || mode === 'person') {
-      return (row.peopleCount || 0) * fee;
-    } else {
-      return fee;
+    const tenant = getTenantForRoomAndCycle(row.roomId, selectedCycle);
+    const tenantVehicles = (tenant as any)?.vehicles;
+    let fallbackCount = 0;
+    if (Array.isArray(tenantVehicles) && tenantVehicles.length > 0) {
+      fallbackCount = tenantVehicles.length;
+    } else if (tenant && (tenant as any).vehicle && (tenant as any).vehicle.type && (tenant as any).vehicle.type !== 'none') {
+      fallbackCount = 1;
     }
+    return calculateParkingCostHelper(row, rateSnapshot, fallbackCount);
   };
 
   // Initialize meter rows based on rooms list, stored states, and bills
@@ -1633,10 +2389,12 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       bills,
       contracts,
       tenants,
+      buildings,
       selectedBillingCycleId,
       selectedCycleCode,
       selectedCycle,
       currentDormId,
+      isFirstCycle,
     });
 
     // Merge any locally confirmed snapshotVersions in originalRowsRef ONLY if for the SAME cycle
@@ -1659,7 +2417,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     setMeterRows(built.rows);
     resetHistory(built.rows);
     setLoadedCycle(selectedBillingCycleId);
-  }, [meterWorkspaceQuery.data, selectedBillingCycleId, rooms, bills, contracts, tenants]);
+  }, [meterWorkspaceQuery.data, selectedBillingCycleId, rooms, bills, contracts, tenants, buildings]);
 
   // Synchronize unsaved deltas to isolated in-memory draft store
   useEffect(() => {
@@ -1708,10 +2466,13 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       const nextRows = prev.map(row => {
         if (row.roomId === roomId) {
           const currentVal = row[field];
-          const normalized = normalizeMeterValueOnBlur(String(currentVal ?? ''));
-          if (normalized !== currentVal) {
-            changed = true;
-            return { ...row, [field]: normalized };
+          if (field === 'elecCurr' || field === 'waterCurr' || field === 'elecPrev' || field === 'waterPrev') {
+            const prevVal = field === 'elecCurr' ? row.elecPrev : (field === 'waterCurr' ? row.waterPrev : undefined);
+            const norm = validateAndNormalizeSpreadsheetValue(field, currentVal, prevVal);
+            if (norm.valid && String(norm.value) !== String(currentVal ?? '')) {
+              changed = true;
+              return { ...row, [field]: norm.value };
+            }
           }
         }
         return row;
@@ -1818,9 +2579,13 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
           const field = editableFields[fieldIdx];
           const rawVal = cells[cellIdx].trim();
 
-          const val = field === 'peopleCount'
-            ? normalizeSingleDigitCount(rawVal)
-            : sanitizeMeterReadingTyping(rawVal);
+          let val = rawVal;
+          if (field === 'peopleCount' || field === 'elecPrev' || field === 'elecCurr' || field === 'waterPrev' || field === 'waterCurr') {
+            const prevVal = field === 'elecCurr' ? row.elecPrev : (field === 'waterCurr' ? row.waterPrev : undefined);
+            const norm = validateAndNormalizeSpreadsheetValue(field, rawVal, prevVal);
+            val = String(norm.value);
+          }
+
           if (row[field] !== val) {
             (row as any)[field] = val;
             newFlashing[`${row.roomId}-${field}`] = true;
@@ -2087,6 +2852,19 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     const isCurrentlyIssued = muStatus !== 'draft' && muStatus !== 'cancelled';
     const targetAction = isCurrentlyIssued ? 'cancel' : 'issue';
 
+    if (targetAction === 'issue') {
+      const pCount = row.peopleCount;
+      if (pCount === '' || pCount === null || pCount === undefined) {
+        showToast(`กรุณาระบุจำนวนผู้พักอาศัยห้อง ${row.roomNumber} ก่อนออกบิล`, 'error');
+        const rIdx = meterRows.findIndex(r => r.roomId === row.roomId);
+        const el = document.querySelector(
+          `input[data-row="${rIdx}"][data-col="peopleCount"], td[data-cell-row="${rIdx}"][data-cell-col="peopleCount"] input, input[name="peopleCount-${row.roomId}"]`
+        ) as HTMLInputElement | null;
+        el?.focus();
+        return;
+      }
+    }
+
     let dirtyRowData: any = undefined;
     if (targetAction === 'issue') {
       const orig = (originalRowsRef.current || []).find(o => o.roomId === row.roomId);
@@ -2103,7 +2881,12 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       if (!orig || row.isReplaced !== orig.isReplaced) { dirtyObj.isReplaced = row.isReplaced; hasChanges = true; }
 
       if (hasChanges) {
-        dirtyRowData = serializeMeterWorkspaceDirtyRow(dirtyObj);
+        try {
+          dirtyRowData = serializeMeterWorkspaceDirtyRow(dirtyObj);
+        } catch (serErr: any) {
+          showToast(mapErrorMessageToThai(serErr) || serErr?.message || 'ข้อมูลมิเตอร์ไม่ถูกต้อง', 'error');
+          return;
+        }
       }
     }
 
@@ -2123,11 +2906,11 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         queryClient.invalidateQueries({ queryKey: queryKeys.meterPreviewContext(currentDormId, selectedBillingCycleId) });
         queryClient.invalidateQueries({ queryKey: queryKeys.bills(currentDormId) });
       } else {
-        showToast(mapErrorMessageToThai(res?.error?.message) || 'เกิดข้อผิดพลาดในการเปลี่ยนสถานะบิล', 'error');
+        showToast(mapErrorMessageToThai(res?.error) || 'เกิดข้อผิดพลาดในการเปลี่ยนสถานะบิล', 'error');
       }
     } catch (err: any) {
       setIsSaving(false);
-      showToast(mapErrorMessageToThai(err.message) || 'เกิดข้อผิดพลาดในการเปลี่ยนสถานะบิล', 'error');
+      showToast(mapErrorMessageToThai(err) || 'เกิดข้อผิดพลาดในการเปลี่ยนสถานะบิล', 'error');
     }
   };
 
@@ -2136,42 +2919,85 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       showToast('ข้อมูลหรือสิทธิ์การคิดรอบบิลยังไม่พร้อมใช้งาน', 'error');
       return;
     }
-    setIsSaving(true);
-    try {
-      // Exclude Daily rows from dirty rows payload for monthly bulk billing
-      const rawDirtyRows = meterRows.filter(r => {
-        const roomCtx = previewContext?.rooms?.find((ctx: any) => ctx.roomId === r.roomId);
-        if (roomCtx?.billingSource === 'DAILY_STAY') return false;
 
-        const orig = (originalRowsRef.current || []).find(o => o.roomId === r.roomId);
-        if (!orig) return true;
-        return (
-          r.waterCurr !== orig.waterCurr ||
-          r.waterPrev !== orig.waterPrev ||
-          r.elecCurr !== orig.elecCurr ||
-          r.elecPrev !== orig.elecPrev ||
-          r.peopleCount !== orig.peopleCount ||
-          r.overdueAmount !== orig.overdueAmount ||
-          JSON.stringify(r.otherFees || []) !== JSON.stringify(orig.otherFees || []) ||
-          r.isReplaced !== orig.isReplaced
-        );
-      }).map(r => {
+    // Option B: Fail closed if any row has blank peopleCount
+    for (let rIdx = 0; rIdx < meterRows.length; rIdx++) {
+      const row = meterRows[rIdx];
+      const isRowPaid = Boolean(row.isPaid || row.billStatus === 'paid' || row.isLocked);
+      if (isRowPaid) continue;
+      if (row.peopleCount === '' || row.peopleCount === undefined || row.peopleCount === null) {
+        showToast(`กรุณาระบุจำนวนผู้พักอาศัยห้อง ${row.roomNumber} ก่อนออกบิล`, 'error');
+        return;
+      }
+    }
+    const previewRoomsList = previewContext?.rooms || [];
+    for (const r of meterRows) {
+        const roomCtx = previewRoomsList.find((ctx: any) => ctx.roomId === r.roomId);
+        if (roomCtx?.billingSource === 'DAILY_STAY' || roomCtx?.isDailyUnpaid) {
+          continue;
+        }
         const orig = (originalRowsRef.current || []).find(o => o.roomId === r.roomId);
         const dirtyObj: any = { roomId: r.roomId };
-        if (!orig || r.waterCurr !== orig.waterCurr) dirtyObj.waterCurr = r.waterCurr;
-        if (!orig || r.waterPrev !== orig.waterPrev) dirtyObj.waterPrev = r.waterPrev;
-        if (!orig || r.elecCurr !== orig.elecCurr) dirtyObj.elecCurr = r.elecCurr;
-        if (!orig || r.elecPrev !== orig.elecPrev) dirtyObj.elecPrev = r.elecPrev;
-        if (!orig || r.peopleCount !== orig.peopleCount) dirtyObj.peopleCount = r.peopleCount;
-        if (!orig || r.overdueAmount !== orig.overdueAmount) dirtyObj.manualOutstandingAmount = r.overdueAmount;
-        if (!orig || JSON.stringify(r.otherFees || []) !== JSON.stringify(orig.otherFees || [])) dirtyObj.otherFees = r.otherFees;
-        if (!orig || r.isReplaced !== orig.isReplaced) dirtyObj.isReplaced = r.isReplaced;
-        return dirtyObj;
-      });
+        let hasDelta = false;
+
+        if (orig) {
+          if (r.waterCurr !== orig.waterCurr) {
+            dirtyObj.waterCurr = r.waterCurr;
+            hasDelta = true;
+          }
+          if (r.waterPrev !== orig.waterPrev) {
+            dirtyObj.waterPrev = r.waterPrev;
+            hasDelta = true;
+          }
+          if (r.elecCurr !== orig.elecCurr) {
+            dirtyObj.elecCurr = r.elecCurr;
+            hasDelta = true;
+          }
+          if (r.elecPrev !== orig.elecPrev) {
+            dirtyObj.elecPrev = r.elecPrev;
+            hasDelta = true;
+          }
+          if (r.peopleCount !== orig.peopleCount) {
+            dirtyObj.peopleCount = r.peopleCount;
+            hasDelta = true;
+          }
+          if (r.overdueAmount !== orig.overdueAmount) {
+            dirtyObj.manualOutstandingAmount = r.overdueAmount;
+            hasDelta = true;
+          }
+          if (JSON.stringify(r.otherFees || []) !== JSON.stringify(orig.otherFees || [])) {
+            dirtyObj.otherFees = r.otherFees;
+            hasDelta = true;
+          }
+          if (r.isReplaced !== orig.isReplaced) {
+            dirtyObj.isReplaced = r.isReplaced;
+            hasDelta = true;
+          }
+        } else {
+          if (r.waterCurr !== undefined) dirtyObj.waterCurr = r.waterCurr;
+          if (r.waterPrev !== undefined) dirtyObj.waterPrev = r.waterPrev;
+          if (r.elecCurr !== undefined) dirtyObj.elecCurr = r.elecCurr;
+          if (r.elecPrev !== undefined) dirtyObj.elecPrev = r.elecPrev;
+          if (r.peopleCount !== undefined) dirtyObj.peopleCount = r.peopleCount;
+          if (r.overdueAmount !== undefined) dirtyObj.manualOutstandingAmount = r.overdueAmount;
+          if (r.otherFees !== undefined) dirtyObj.otherFees = r.otherFees;
+          if (r.isReplaced !== undefined) dirtyObj.isReplaced = r.isReplaced;
+          hasDelta = true;
+        }
+
+        if (hasDelta) {
+          if (orig?.snapshotVersion !== undefined) {
+            dirtyObj.expectedVersion = orig.snapshotVersion;
+          }
+          rawDirtyRows.push(dirtyObj);
+        }
+      }
 
       const dirtyRows = serializeMeterWorkspaceDirtyRows(rawDirtyRows);
 
       // Single real backend operation
+      setIsSaving(true);
+      try {
       const res = await getDataProvider().billing.generateBulkBills(
         selectedBillingCycleId,
         undefined,
@@ -2215,11 +3041,11 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         queryClient.invalidateQueries({ queryKey: queryKeys.meterPreviewContext(currentDormId, selectedBillingCycleId) });
         queryClient.invalidateQueries({ queryKey: queryKeys.bills(currentDormId) });
       } else {
-        showToast(mapErrorMessageToThai(res?.error?.message), 'error');
+        showToast(mapErrorMessageToThai(res?.error), 'error');
       }
     } catch (err: any) {
       setIsSaving(false);
-      showToast(mapErrorMessageToThai(err.message), 'error');
+      showToast(mapErrorMessageToThai(err), 'error');
     }
   };
 
@@ -2228,6 +3054,19 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
     if (!selectedBillingCycleId) {
       showToast('ยังไม่ได้ตั้งค่ารอบคำนวณ', 'error');
       return;
+    }
+
+    // Option B: Fail closed if any row has blank peopleCount
+    for (let rIdx = 0; rIdx < meterRows.length; rIdx++) {
+      const row = meterRows[rIdx];
+      const isRowPaid = Boolean(row.isPaid || row.billStatus === 'paid' || row.isLocked);
+      if (isRowPaid) continue;
+      if (row.peopleCount === '' || row.peopleCount === undefined || row.peopleCount === null) {
+        showToast(`กรุณาระบุจำนวนผู้พักอาศัยห้อง ${row.roomNumber} ก่อนบันทึก`, 'error');
+        const el = document.querySelector(`input[data-row="${rIdx}"][data-col="peopleCount"], td[data-cell-row="${rIdx}"][data-cell-col="peopleCount"] input`) as HTMLInputElement | null;
+        el?.focus();
+        return;
+      }
     }
 
     // Missing baseline check for per_unit utilities
@@ -2272,23 +3111,73 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       return;
     }
 
+    const rawDirtyRows: any[] = [];
+    for (const r of meterRows) {
+      const orig = (originalRowsRef.current || []).find(o => o.roomId === r.roomId);
+      const dirtyObj: any = { roomId: r.roomId };
+      let hasDelta = false;
+
+      if (orig) {
+        if (r.waterCurr !== orig.waterCurr) {
+          dirtyObj.waterCurr = r.waterCurr;
+          hasDelta = true;
+        }
+        if (r.waterPrev !== orig.waterPrev) {
+          dirtyObj.waterPrev = r.waterPrev;
+          hasDelta = true;
+        }
+        if (r.elecCurr !== orig.elecCurr) {
+          dirtyObj.elecCurr = r.elecCurr;
+          hasDelta = true;
+        }
+        if (r.elecPrev !== orig.elecPrev) {
+          dirtyObj.elecPrev = r.elecPrev;
+          hasDelta = true;
+        }
+        if (r.peopleCount !== orig.peopleCount) {
+          dirtyObj.peopleCount = r.peopleCount;
+          hasDelta = true;
+        }
+        if (r.overdueAmount !== orig.overdueAmount) {
+          dirtyObj.manualOutstandingAmount = r.overdueAmount;
+          hasDelta = true;
+        }
+        if (JSON.stringify(r.otherFees || []) !== JSON.stringify(orig.otherFees || [])) {
+          dirtyObj.otherFees = r.otherFees;
+          hasDelta = true;
+        }
+        if (r.isReplaced !== orig.isReplaced) {
+          dirtyObj.isReplaced = r.isReplaced;
+          hasDelta = true;
+        }
+      } else {
+        if (r.waterCurr !== undefined) dirtyObj.waterCurr = r.waterCurr;
+        if (r.waterPrev !== undefined) dirtyObj.waterPrev = r.waterPrev;
+        if (r.elecCurr !== undefined) dirtyObj.elecCurr = r.elecCurr;
+        if (r.elecPrev !== undefined) dirtyObj.elecPrev = r.elecPrev;
+        if (r.peopleCount !== undefined) dirtyObj.peopleCount = r.peopleCount;
+        if (r.overdueAmount !== undefined) dirtyObj.manualOutstandingAmount = r.overdueAmount;
+        if (r.otherFees !== undefined) dirtyObj.otherFees = r.otherFees;
+        if (r.isReplaced !== undefined) dirtyObj.isReplaced = r.isReplaced;
+        hasDelta = true;
+      }
+
+      if (hasDelta) {
+        if (orig?.snapshotVersion !== undefined) {
+          dirtyObj.expectedVersion = orig.snapshotVersion;
+        }
+        rawDirtyRows.push(dirtyObj);
+      }
+    }
+
+    if (rawDirtyRows.length === 0) {
+      showToast('ไม่มีข้อมูลที่เปลี่ยนแปลง', 'info');
+      return;
+    }
+
     setIsSaving(true);
     try {
-      const dirtyRows = meterRows.map(r => {
-        const orig = (originalRowsRef.current || []).find(o => o.roomId === r.roomId);
-        const dirtyObj: any = { roomId: r.roomId };
-        if (!orig || r.waterCurr !== orig.waterCurr) dirtyObj.waterCurr = r.waterCurr;
-        if (!orig || r.waterPrev !== orig.waterPrev) dirtyObj.waterPrev = r.waterPrev;
-        if (!orig || r.elecCurr !== orig.elecCurr) dirtyObj.elecCurr = r.elecCurr;
-        if (!orig || r.elecPrev !== orig.elecPrev) dirtyObj.elecPrev = r.elecPrev;
-        if (!orig || r.peopleCount !== orig.peopleCount) dirtyObj.peopleCount = r.peopleCount;
-        if (!orig || r.overdueAmount !== orig.overdueAmount) dirtyObj.manualOutstandingAmount = r.overdueAmount;
-        if (!orig || JSON.stringify(r.otherFees || []) !== JSON.stringify(orig.otherFees || [])) dirtyObj.otherFees = r.otherFees;
-        if (!orig || r.isReplaced !== orig.isReplaced) dirtyObj.isReplaced = r.isReplaced;
-        return dirtyObj;
-      });
-
-      const serializedDirtyRows = serializeMeterWorkspaceDirtyRows(dirtyRows);
+      const serializedDirtyRows = serializeMeterWorkspaceDirtyRows(rawDirtyRows);
 
       const res = await getDataProvider().meters.saveBulkWorkspace?.(selectedBillingCycleId, serializedDirtyRows);
       setIsSaving(false);
@@ -2298,6 +3187,20 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         setSaveSuccess(true);
         if (saveSuccessTimeoutRef.current) clearTimeout(saveSuccessTimeoutRef.current);
         saveSuccessTimeoutRef.current = setTimeout(() => setSaveSuccess(false), 3000);
+
+        const savedRows = (res as any)?.savedRows || (res as any)?.data?.savedRows;
+        if (Array.isArray(savedRows) && savedRows.length > 0) {
+          const versionMap = new Map(savedRows.map((s: any) => [s.roomId, s.version]));
+          setMeterRows(prev => prev.map(row => {
+            const v = versionMap.get(row.roomId);
+            return v !== undefined ? { ...row, snapshotVersion: v } : row;
+          }));
+          meterRowsRef.current = meterRowsRef.current.map(row => {
+            const v = versionMap.get(row.roomId);
+            return v !== undefined ? { ...row, snapshotVersion: v } : row;
+          });
+        }
+
         originalRowsRef.current = JSON.parse(JSON.stringify(meterRowsRef.current));
         originalRowsCycleIdRef.current = selectedBillingCycleId;
         resetHistory(meterRowsRef.current);
@@ -2305,11 +3208,11 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         queryClient.invalidateQueries({ queryKey: queryKeys.meterPreviewContext(currentDormId, selectedBillingCycleId) });
         queryClient.invalidateQueries({ queryKey: queryKeys.bills(currentDormId) });
       } else {
-        showToast(mapErrorMessageToThai(res?.error?.message) || 'เกิดข้อผิดพลาดในการบันทึกข้อมูลมิเตอร์', 'error');
+        showToast(mapErrorMessageToThai(res?.error) || 'เกิดข้อผิดพลาดในการบันทึกข้อมูลมิเตอร์', 'error');
       }
     } catch (err: any) {
       setIsSaving(false);
-      showToast(mapErrorMessageToThai(err.message) || 'เกิดข้อผิดพลาดในการบันทึกข้อมูลมิเตอร์', 'error');
+      showToast(mapErrorMessageToThai(err) || 'เกิดข้อผิดพลาดในการบันทึกข้อมูลมิเตอร์', 'error');
     }
   };
 
@@ -2356,16 +3259,17 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
           <span>ยังไม่ได้ตั้งค่ารอบคำนวณ</span>
         </div>
       )}
-      {/* Floating Toast Notification (Mobile: Centered above bottom nav, White/Red/Green/Amber bg, Smooth Fade) */}
+      {/* Floating Toast Notification (Mobile: Centered above bottom nav, Consistent White Fade for Success, Smooth Fade) */}
       {(saveSuccess || toastMessage) && (
         <div
+          role="status"
+          aria-live="polite"
+          data-testid="toast-notification"
           className={`fixed bottom-20 left-1/2 -translate-x-1/2 sm:bottom-8 sm:right-8 sm:left-auto sm:translate-x-0 z-[9999] px-4.5 py-3 rounded-2xl shadow-2xl border flex items-center gap-2.5 text-xs font-bold transition-all duration-500 ease-in-out ${toastType === 'error'
             ? 'bg-rose-50 border-rose-200 text-rose-800'
             : toastType === 'warning'
               ? 'bg-amber-50 border-amber-200 text-amber-800'
-              : toastType === 'success'
-                ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
-                : 'bg-sky-50 border-sky-200 text-sky-800'
+              : 'bg-white border-slate-200/90 text-slate-800'
             } ${isToastFading
               ? 'opacity-0 translate-y-3 pointer-events-none'
               : 'opacity-100 translate-y-0 animate-in fade-in slide-in-from-bottom-3 duration-300'
@@ -2375,10 +3279,8 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
             <AlertCircle className="w-4.5 h-4.5 text-rose-500 shrink-0" />
           ) : toastType === 'warning' ? (
             <AlertTriangle className="w-4.5 h-4.5 text-amber-500 shrink-0" />
-          ) : toastType === 'success' ? (
-            <CheckCircle2 className="w-4.5 h-4.5 text-emerald-500 shrink-0" />
           ) : (
-            <Info className="w-4.5 h-4.5 text-sky-500 shrink-0" />
+            <CheckCircle2 className="w-4.5 h-4.5 text-emerald-500 shrink-0" />
           )}
           <span className="whitespace-pre-line">{toastMessage || "บันทึกข้อมูลสำเร็จ"}</span>
         </div>
@@ -2550,10 +3452,17 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
               </thead>
               <tbody className="divide-y divide-gray-100 font-semibold">
                 {filteredRows.map((row, idx) => {
-                  const waterUsageRes = (row.waterPrev !== '' && row.waterCurr !== '') ? calculateMeterUsageUnits(row.waterPrev, row.waterCurr) : { isValid: true, usageUnits: 0 };
-                  const elecUsageRes = (row.elecPrev !== '' && row.elecCurr !== '') ? calculateMeterUsageUnits(row.elecPrev, row.elecCurr) : { isValid: true, usageUnits: 0 };
-                  const waterUnits = row.isReplaced ? Number(row.waterCurr) : (waterUsageRes.isValid ? waterUsageRes.usageUnits : -1);
-                  const elecUnits = row.isReplaced ? Number(row.elecCurr) : (elecUsageRes.isValid ? elecUsageRes.usageUnits : -1);
+                  const waterNorm = (row.waterCurr !== '') ? validateAndNormalizeSpreadsheetValue('waterCurr', row.waterCurr, row.waterPrev) : { valid: true, value: '' };
+                  const elecNorm = (row.elecCurr !== '') ? validateAndNormalizeSpreadsheetValue('elecCurr', row.elecCurr, row.elecPrev) : { valid: true, value: '' };
+                  const isWaterInvalid = !waterNorm.valid && row.waterCurr !== '';
+                  const isElecInvalid = !elecNorm.valid && row.elecCurr !== '';
+                  const waterErrorTitle = isWaterInvalid ? waterNorm.errorMessage : undefined;
+                  const elecErrorTitle = isElecInvalid ? elecNorm.errorMessage : undefined;
+
+                  const waterUsageRes = (row.waterPrev !== '' && row.waterCurr !== '' && !isWaterInvalid) ? calculateMeterUsageUnits(row.waterPrev, row.waterCurr) : { isValid: !isWaterInvalid, usageUnits: 0 };
+                  const elecUsageRes = (row.elecPrev !== '' && row.elecCurr !== '' && !isElecInvalid) ? calculateMeterUsageUnits(row.elecPrev, row.elecCurr) : { isValid: !isElecInvalid, usageUnits: 0 };
+                  const waterUnits = row.isReplaced ? Number(row.waterCurr) : (isWaterInvalid ? -1 : waterUsageRes.usageUnits);
+                  const elecUnits = row.isReplaced ? Number(row.elecCurr) : (isElecInvalid ? -1 : elecUsageRes.usageUnits);
 
                   const waterCost = getWaterCost(row);
                   const elecCost = getElectricCost(row);
@@ -2574,10 +3483,11 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                   const isBillIssued = row.billStatus !== 'draft' && row.billStatus !== 'cancelled';
                   const isRowPaid = !isDailyContext && (row.isPaid || row.billStatus === 'paid');
 
-                  const hasElecBaseline = row.elecPrev !== '' && row.elecPrev !== null && row.elecPrev !== undefined;
+                  const origRow = (originalRowsRef.current || []).find((o) => o.roomId === row.roomId);
+                  const hasElecBaseline = Boolean(origRow?.elecPrev !== '' && origRow?.elecPrev !== null && origRow?.elecPrev !== undefined);
                   const isElecDirectEdit = isFirstCycle || !hasElecBaseline;
 
-                  const hasWaterBaseline = row.waterPrev !== '' && row.waterPrev !== null && row.waterPrev !== undefined;
+                  const hasWaterBaseline = Boolean(origRow?.waterPrev !== '' && origRow?.waterPrev !== null && origRow?.waterPrev !== undefined);
                   const isWaterDirectEdit = isFirstCycle || !hasWaterBaseline;
 
                   return (
@@ -2702,10 +3612,11 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                               data-col="elecCurr"
                               className={`w-20 px-2 py-1 text-xs border rounded-lg bg-white text-slate-800 text-center font-bold focus:outline-indigo-500 transition-all duration-300 disabled:bg-slate-50 disabled:text-slate-500 disabled:border-transparent ${flashingCells[`${row.roomId}-elecCurr`]
                                 ? 'animate-vibrant-flash shadow-md z-10'
-                                : elecUnits < 0
-                                  ? 'border-rose-300 ring-2 ring-rose-100 bg-rose-50'
+                                : isElecInvalid
+                                  ? 'border-rose-400 ring-2 ring-rose-500 bg-rose-50'
                                   : 'border-gray-200'
                                 }`}
+                              title={elecErrorTitle}
                             />
                           </div>
                         </td>
@@ -2826,10 +3737,11 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                               data-col="waterCurr"
                               className={`w-20 px-2 py-1 text-xs border rounded-lg bg-white text-slate-800 text-center font-bold focus:outline-indigo-500 transition-all duration-300 disabled:bg-slate-50 disabled:text-slate-500 disabled:border-transparent ${flashingCells[`${row.roomId}-waterCurr`]
                                 ? 'animate-vibrant-flash shadow-md z-10'
-                                : waterUnits < 0
-                                  ? 'border-rose-300 ring-2 ring-rose-100 bg-rose-50'
+                                : isWaterInvalid
+                                  ? 'border-rose-400 ring-2 ring-rose-500 bg-rose-50'
                                   : 'border-gray-200'
                                 }`}
+                              title={waterErrorTitle}
                             />
                           </div>
                         </td>
@@ -2915,7 +3827,8 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                       {/* Calculated Total & Financial Breakdown */}
                       <td className="p-4 text-right">
                         {(() => {
-                          const breakdown = getOwnerFinancialBreakdown(roomCtx);
+                          const orig = (originalRowsRef.current || []).find((o) => o.roomId === row.roomId);
+                          const breakdown = getOwnerFinancialBreakdown(roomCtx, row, rateSnapshot, orig);
                           const amountDue = breakdown.formattedAmount;
                           const chargeComponents = breakdown.components;
                           const isExpanded = Boolean(expandedBreakdowns[row.roomId]);
@@ -3294,6 +4207,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                   key={row.roomId}
                   row={row}
                   idx={idx}
+                  originalRow={(originalRowsRef.current || []).find(r => r.roomId === row.roomId)}
                   room={rooms.find(r => r.id === row.roomId)}
                   roomCtx={previewContext?.rooms?.find((r: any) => r.roomId === row.roomId)}
                   rateSnapshot={rateSnapshot}
@@ -3379,7 +4293,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
       {/* Quick Fill Modal */}
       {isQuickFillOpen && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl p-6 max-w-lg w-full shadow-2xl border border-gray-100 flex flex-col gap-5 animate-in fade-in zoom-in-95 duration-200">
+          <div className={`bg-white rounded-3xl p-6 ${isSpreadsheetMode ? 'max-w-4xl' : 'max-w-lg'} w-full shadow-2xl border border-gray-100 flex flex-col gap-5 animate-in fade-in zoom-in-95 duration-200`}>
 
             {/* Header */}
             <div className="flex items-center justify-between gap-4">
@@ -3389,7 +4303,9 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                 </div>
                 <div>
                   <h4 className="text-base font-extrabold text-slate-900 leading-tight">กรอกแบบรวดเร็ว</h4>
-                  <p className="text-[11px] text-gray-400 font-bold mt-0.5 leading-none">วางข้อมูลหลายห้อง ระบบจะใส่ลงตารางให้</p>
+                  <p className="text-[11px] text-gray-400 font-bold mt-0.5 leading-none">
+                    {isSpreadsheetMode ? 'โหมดตาราง สามารถคัดลอก/วาง (Paste) จาก Excel ได้' : 'วางข้อมูลหลายห้อง ระบบจะใส่ลงตารางให้'}
+                  </p>
                 </div>
               </div>
               <button
@@ -3397,6 +4313,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                 onClick={() => {
                   setIsQuickFillOpen(false);
                   setTemplateUsed(false);
+                  setIsSpreadsheetMode(false);
                 }}
                 className="text-rose-500 bg-rose-50 hover:bg-rose-100 border border-rose-100 rounded-full p-2 cursor-pointer flex items-center justify-center transition-all shadow-sm"
               >
@@ -3404,84 +4321,603 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
               </button>
             </div>
 
-            {/* Template Section & Textarea Container with stable, non-jittery height */}
-            <div className="flex flex-col gap-4 h-[320px] justify-between shrink-0">
-              {/* Template Section: only show if text is <= 1 line */}
-              {quickFillText.split('\n').filter(l => l.trim()).length <= 1 && (
-                <div className="bg-slate-50 border border-slate-100 rounded-2xl p-4 flex flex-col gap-2 shrink-0 h-[112px] justify-center">
-                  <span className="text-xs font-black text-slate-800 leading-none text-left">รูปแบบ</span>
-                  <div className="bg-white border border-gray-200 rounded-xl p-3 font-mono text-xs text-slate-600 flex items-center justify-start text-left shadow-2xs leading-relaxed whitespace-nowrap overflow-x-auto select-all no-scrollbar">
-                    {getTemplateFormatString()}
-                  </div>
-                  <span className="text-[10px] text-gray-400 font-bold leading-none mt-0.5 text-left">ถ้าไม่มีค้าง ไม่ต้องใส่ข้อมูลค้างก็ได้</span>
-                </div>
-              )}
-
-              {/* Input Text Area - Single, Persistent to preserve focus */}
+            {isSpreadsheetMode ? (
+              /* Spreadsheet / Excel Connected Grid Mode */
               <div
-                className="flex flex-col gap-1 w-full shrink-0 transition-all duration-300"
-                style={{
-                  height: quickFillText.split('\n').filter(l => l.trim()).length <= 1 ? '192px' : '320px'
+                className="flex flex-col gap-2 h-[340px] overflow-hidden border border-slate-300 rounded-2xl bg-white shadow-2xs"
+                onPaste={(e) => {
+                  const text = e.clipboardData.getData('text');
+                  if (!text) return;
+                  const lines = text.trim().split(/\r?\n/);
+                  if (lines.length === 0) return;
+
+                  // Amendment 5:
+                  // MODE A: Active spreadsheet cell / range exists -> relative rectangular paste beginning at anchor
+                  if (activeSpreadsheetCell && activeSpreadsheetCell.rowIndex >= 0) {
+                    e.preventDefault();
+                    const anchorRow = activeSpreadsheetCell.rowIndex;
+                    const anchorColIndex = spreadsheetColumns.findIndex(c => c.key === activeSpreadsheetCell.colKey);
+                    const startCol = anchorColIndex >= 0 ? anchorColIndex : 2;
+
+                    const updated = [...meterRows];
+                    const newRejectedCells = { ...rejectedSpreadsheetCells };
+                    let pasteCount = 0;
+
+                    lines.forEach((line, lineOffset) => {
+                      const targetRow = anchorRow + lineOffset;
+                      if (targetRow >= updated.length) return;
+
+                      const targetRowObj = updated[targetRow];
+                      const isRowPaid = Boolean(targetRowObj?.isPaid || targetRowObj?.billStatus === 'paid' || targetRowObj?.isLocked);
+                      if (isRowPaid) return; // Locked/paid row preserved unchanged!
+
+                      const cells = line.split('\t');
+                      cells.forEach((cellVal, colOffset) => {
+                        const targetCol = startCol + colOffset;
+                        if (targetCol >= spreadsheetColumns.length) return;
+
+                        const col = spreadsheetColumns[targetCol];
+                        // Building and Room remain strictly immutable
+                        if (!col || !col.editable) return;
+
+                        const cellKey = `${targetRow}:${col.key}`;
+                        const prevVal = col.key === 'elecCurr' ? updated[targetRow].elecPrev : (col.key === 'waterCurr' ? updated[targetRow].waterPrev : undefined);
+                        const norm = validateAndNormalizeSpreadsheetValue(col.key as any, cellVal, prevVal);
+                        updated[targetRow] = {
+                          ...updated[targetRow],
+                          [col.key]: norm.value,
+                        };
+                        if (norm.valid) {
+                          delete newRejectedCells[cellKey];
+                        } else {
+                          newRejectedCells[cellKey] = norm.errorMessage || true;
+                        }
+                        pasteCount++;
+                      });
+                    });
+
+                    setMeterRows(updated);
+                    setRejectedSpreadsheetCells(newRejectedCells);
+                    if (pasteCount > 0) {
+                      pushHistory(updated);
+                      showToast(`วางข้อมูลสำเร็จ (${pasteCount} ช่อง)`);
+                    }
+                    return;
+                  }
+
+                  // MODE B: No active spreadsheet cell / external import -> row-matching Excel paste
+                  let matchCount = 0;
+                  const updated = [...meterRows];
+                  const newRejectedCells = { ...rejectedSpreadsheetCells };
+                  lines.forEach(line => {
+                    const cells = line.split('\t').map(c => c.trim());
+                    if (cells.length >= 2) {
+                      let bCode = cells[0];
+                      let rNum = cells[1];
+                      let elecPrevVal = cells[2];
+                      let elecCurrVal = cells[3];
+                      let waterPrevVal = cells[4];
+                      let waterCurrVal = cells[5];
+                      let peopleVal = cells[6];
+
+                      const normB = bCode.toUpperCase().replace(/^BLD-/, '').replace(/^อาคาร\s*/, '');
+
+                      let rowIdx = updated.findIndex(r => {
+                        const rB = (r.buildingCode || '').toUpperCase().replace(/^BLD-/, '').replace(/^อาคาร\s*/, '');
+                        const rName = (r.buildingName || '').toUpperCase().replace(/^BLD-/, '').replace(/^อาคาร\s*/, '');
+                        return (rB === normB || rName === normB) &&
+                          r.roomNumber.toLowerCase() === rNum.toLowerCase();
+                      });
+
+                      if (rowIdx < 0) {
+                        rowIdx = updated.findIndex(r => r.roomNumber.toLowerCase() === bCode.toLowerCase());
+                        if (rowIdx >= 0) {
+                          elecPrevVal = cells[1];
+                          elecCurrVal = cells[2];
+                          waterPrevVal = cells[3];
+                          waterCurrVal = cells[4];
+                          peopleVal = cells[5];
+                        }
+                      }
+
+                      if (rowIdx >= 0) {
+                        const targetRowObj = updated[rowIdx];
+                        const isRowPaid = Boolean(targetRowObj?.isPaid || targetRowObj?.billStatus === 'paid' || targetRowObj?.isLocked);
+                        if (isRowPaid) return; // Locked/paid row preserved unchanged!
+
+                        matchCount++;
+                        if (elecPrevVal !== undefined && elecPrevVal !== '') {
+                          const cellKey = `${rowIdx}:elecPrev`;
+                          const norm = validateAndNormalizeSpreadsheetValue('elecPrev', elecPrevVal);
+                          updated[rowIdx].elecPrev = norm.value as string;
+                          if (norm.valid) {
+                            delete newRejectedCells[cellKey];
+                          } else {
+                            newRejectedCells[cellKey] = norm.errorMessage || true;
+                          }
+                        }
+                        if (elecCurrVal !== undefined && elecCurrVal !== '') {
+                          const cellKey = `${rowIdx}:elecCurr`;
+                          const norm = validateAndNormalizeSpreadsheetValue('elecCurr', elecCurrVal, updated[rowIdx].elecPrev);
+                          updated[rowIdx].elecCurr = norm.value as string;
+                          if (norm.valid) {
+                            delete newRejectedCells[cellKey];
+                          } else {
+                            newRejectedCells[cellKey] = norm.errorMessage || true;
+                          }
+                        }
+                        if (waterPrevVal !== undefined && waterPrevVal !== '') {
+                          const cellKey = `${rowIdx}:waterPrev`;
+                          const norm = validateAndNormalizeSpreadsheetValue('waterPrev', waterPrevVal);
+                          updated[rowIdx].waterPrev = norm.value as string;
+                          if (norm.valid) {
+                            delete newRejectedCells[cellKey];
+                          } else {
+                            newRejectedCells[cellKey] = norm.errorMessage || true;
+                          }
+                        }
+                        if (waterCurrVal !== undefined && waterCurrVal !== '') {
+                          const cellKey = `${rowIdx}:waterCurr`;
+                          const norm = validateAndNormalizeSpreadsheetValue('waterCurr', waterCurrVal, updated[rowIdx].waterPrev);
+                          updated[rowIdx].waterCurr = norm.value as string;
+                          if (norm.valid) {
+                            delete newRejectedCells[cellKey];
+                          } else {
+                            newRejectedCells[cellKey] = norm.errorMessage || true;
+                          }
+                        }
+                        if (peopleVal !== undefined && peopleVal !== '') {
+                          const cellKey = `${rowIdx}:peopleCount`;
+                          const norm = validateAndNormalizeSpreadsheetValue('peopleCount', peopleVal);
+                          updated[rowIdx].peopleCount = norm.value as number;
+                          if (norm.valid) {
+                            delete newRejectedCells[cellKey];
+                          } else {
+                            newRejectedCells[cellKey] = norm.errorMessage || true;
+                          }
+                        }
+                      }
+                    }
+                  });
+                  setMeterRows(updated);
+                  setRejectedSpreadsheetCells(newRejectedCells);
+                  if (matchCount > 0) {
+                    pushHistory(updated);
+                    showToast(`วางข้อมูลสำเร็จ ${matchCount} ห้อง`);
+                  }
                 }}
               >
-                <textarea
-                  ref={quickFillInputRef}
-                  value={quickFillText}
-                  onChange={(e) => setQuickFillText(e.target.value)}
-                  wrap="off"
-                  placeholder="วางข้อมูลหลายห้องที่นี่ . . ."
-                  className="w-full h-full p-4 border border-gray-200 rounded-2xl bg-white text-slate-800 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 resize-none transition-all placeholder:text-gray-300 shadow-2xs overflow-x-auto whitespace-pre"
-                />
+                <div
+                  ref={spreadsheetScrollContainerRef}
+                  className="overflow-x-auto overflow-y-auto h-full"
+                  onPointerMove={handlePointerMoveFillHandle}
+                  onPointerUp={handlePointerUpFillHandle}
+                >
+                  <table className="w-full text-left text-xs border-collapse border border-slate-300 font-sans">
+                    <thead className="bg-slate-100 text-slate-800 font-extrabold sticky top-0 z-30 border-b border-slate-300 select-none shadow-xs">
+                      <tr>
+                        <th className="py-2 px-2.5 whitespace-nowrap border border-slate-300 text-center w-16">อาคาร</th>
+                        <th className="py-2 px-2.5 whitespace-nowrap border border-slate-300 text-center w-20">ห้อง</th>
+                        {isElecUnit && <th className="py-2 px-2.5 whitespace-nowrap border border-slate-300 text-center">มิเตอร์ไฟเดิม</th>}
+                        {isElecUnit && <th className="py-2 px-2.5 whitespace-nowrap border border-slate-300 text-center bg-indigo-50 text-indigo-900">มิเตอร์ไฟใหม่</th>}
+                        {isWaterUnit && <th className="py-2 px-2.5 whitespace-nowrap border border-slate-300 text-center">มิเตอร์น้ำเดิม</th>}
+                        {isWaterUnit && <th className="py-2 px-2.5 whitespace-nowrap border border-slate-300 text-center bg-blue-50 text-blue-900">มิเตอร์น้ำใหม่</th>}
+                        <th className="py-2 px-2.5 whitespace-nowrap border border-slate-300 text-center w-20">จำนวนคน</th>
+                      </tr>
+                    </thead>
+                    <tbody className="font-mono text-slate-800">
+                      {meterRows.map((row, rowIdx) => {
+                        const isRowPaid = Boolean(row.isPaid || row.billStatus === 'paid' || row.isLocked);
+                        return (
+                        <tr key={row.roomId} data-row-index={rowIdx} className={`hover:bg-slate-50/80 transition-colors ${isRowPaid ? 'bg-slate-50/60' : ''}`}>
+                          <td
+                            data-cell-row={rowIdx}
+                            data-cell-col="buildingCode"
+                            onPointerDown={(e) => handlePointerDownCell(e, rowIdx, 'buildingCode' as any)}
+                            onPointerEnter={() => handlePointerEnterCell(rowIdx, 'buildingCode' as any)}
+                            className={`p-0 border border-slate-300 text-center select-none text-slate-500 font-bold font-sans bg-slate-50/50 h-8 ${isCellInRangeSelected(rowIdx, 'buildingCode') ? 'bg-indigo-50/70 border-indigo-400' : ''}`}
+                          >
+                            {(row.buildingCode || 'A').replace(/^BLD-/, '').replace(/^อาคาร\s*/, '') || 'A'}
+                          </td>
+                          <td
+                            data-cell-row={rowIdx}
+                            data-cell-col="roomNumber"
+                            onPointerDown={(e) => handlePointerDownCell(e, rowIdx, 'roomNumber' as any)}
+                            onPointerEnter={() => handlePointerEnterCell(rowIdx, 'roomNumber' as any)}
+                            className={`p-0 border border-slate-300 text-center select-none font-bold text-slate-900 bg-slate-50/50 h-8 ${isCellInRangeSelected(rowIdx, 'roomNumber') ? 'bg-indigo-50/70 border-indigo-400' : ''}`}
+                          >
+                            {row.roomNumber}
+                          </td>
+                          {isElecUnit && (() => {
+                            const isActive = activeSpreadsheetCell?.rowIndex === rowIdx && activeSpreadsheetCell?.colKey === 'elecPrev';
+                            const isFillPreview = isCellInFillPreview(rowIdx, 'elecPrev');
+                            const isSelected = isCellInRangeSelected(rowIdx, 'elecPrev');
+                            const cellKey = `${rowIdx}:elecPrev`;
+                            const isRejected = Boolean(rejectedSpreadsheetCells[cellKey]);
+                            const errTitle = typeof rejectedSpreadsheetCells[cellKey] === 'string' ? (rejectedSpreadsheetCells[cellKey] as string) : (isRejected ? 'ข้อมูลไม่ถูกต้องตามรูปแบบ (ถูกปฏิเสธ)' : undefined);
+                            return (
+                              <td
+                                data-cell-row={rowIdx}
+                                data-cell-col="elecPrev"
+                                onPointerDown={(e) => handlePointerDownCell(e, rowIdx, 'elecPrev')}
+                                onPointerEnter={() => handlePointerEnterCell(rowIdx, 'elecPrev')}
+                                title={errTitle}
+                                className={`p-0 border border-slate-300 relative ${isRejected ? 'bg-rose-50 border-rose-400 ring-2 ring-rose-500 ring-inset z-10' : (isActive ? 'ring-2 ring-indigo-600 ring-inset z-10' : '')} ${isSelected ? 'bg-indigo-50/70 border-indigo-400' : ''} ${isFillPreview ? 'bg-indigo-100/70 border-indigo-500' : ''}`}
+                              >
+                                <input
+                                  type="text"
+                                  value={row.elecPrev}
+                                  disabled={isRowPaid}
+                                  onFocus={() => handleFocusCell(rowIdx, 'elecPrev')}
+                                  onClick={() => handleFocusCell(rowIdx, 'elecPrev')}
+                                  onPointerDown={(e) => handlePointerDownCell(e, rowIdx, 'elecPrev')}
+                                  onPointerEnter={() => handlePointerEnterCell(rowIdx, 'elecPrev')}
+                                  onChange={(e) => {
+                                    const v = e.target.value;
+                                    const norm = validateAndNormalizeSpreadsheetValue('elecPrev', v);
+                                    setMeterRows(prev => prev.map(r => r.roomId === row.roomId ? { ...r, elecPrev: v } : r));
+                                    setRejectedSpreadsheetCells(prev => {
+                                      const next = { ...prev };
+                                      if (norm.valid) {
+                                        delete next[cellKey];
+                                      } else {
+                                        next[cellKey] = norm.errorMessage || true;
+                                      }
+                                      return next;
+                                    });
+                                  }}
+                                  className={`w-full h-8 px-2 text-center bg-transparent border-0 text-xs font-mono font-bold text-slate-700 focus:outline-none focus:bg-indigo-50/50 focus:ring-1 focus:ring-indigo-500 ${isRowPaid ? 'cursor-not-allowed opacity-60' : ''}`}
+                                />
+                                {isActive && !isRowPaid && (
+                                  <div
+                                    data-testid="drag-fill-handle"
+                                    onPointerDown={(e) => handlePointerDownFillHandle(e, rowIdx, 'elecPrev')}
+                                    className="absolute -bottom-1 -right-1 w-2.5 h-2.5 bg-indigo-600 border border-white cursor-crosshair z-20 shadow-xs select-none"
+                                    title="ลากเพื่อเติมข้อมูลอัตโนมัติ"
+                                  />
+                                )}
+                              </td>
+                            );
+                          })()}
+                          {isElecUnit && (() => {
+                            const isActive = activeSpreadsheetCell?.rowIndex === rowIdx && activeSpreadsheetCell?.colKey === 'elecCurr';
+                            const isFillPreview = isCellInFillPreview(rowIdx, 'elecCurr');
+                            const isSelected = isCellInRangeSelected(rowIdx, 'elecCurr');
+                            const cellKey = `${rowIdx}:elecCurr`;
+                            const isRejected = Boolean(rejectedSpreadsheetCells[cellKey]);
+                            const errTitle = typeof rejectedSpreadsheetCells[cellKey] === 'string' ? (rejectedSpreadsheetCells[cellKey] as string) : (isRejected ? 'ข้อมูลไม่ถูกต้องตามรูปแบบ (ถูกปฏิเสธ)' : undefined);
+                            return (
+                              <td
+                                data-cell-row={rowIdx}
+                                data-cell-col="elecCurr"
+                                onPointerDown={(e) => handlePointerDownCell(e, rowIdx, 'elecCurr')}
+                                onPointerEnter={() => handlePointerEnterCell(rowIdx, 'elecCurr')}
+                                title={errTitle}
+                                className={`p-0 border border-slate-300 relative bg-indigo-50/20 ${isRejected ? 'bg-rose-50 border-rose-400 ring-2 ring-rose-500 ring-inset z-10' : (isActive ? 'ring-2 ring-indigo-600 ring-inset z-10' : '')} ${isSelected ? 'bg-indigo-50/70 border-indigo-400' : ''} ${isFillPreview ? 'bg-indigo-100/70 border-indigo-500' : ''}`}
+                              >
+                                <input
+                                  type="text"
+                                  value={row.elecCurr}
+                                  disabled={isRowPaid}
+                                  onFocus={() => handleFocusCell(rowIdx, 'elecCurr')}
+                                  onClick={() => handleFocusCell(rowIdx, 'elecCurr')}
+                                  onPointerDown={(e) => handlePointerDownCell(e, rowIdx, 'elecCurr')}
+                                  onPointerEnter={() => handlePointerEnterCell(rowIdx, 'elecCurr')}
+                                  onChange={(e) => {
+                                    const v = e.target.value;
+                                    const norm = validateAndNormalizeSpreadsheetValue('elecCurr', v, row.elecPrev);
+                                    setMeterRows(prev => prev.map(r => r.roomId === row.roomId ? { ...r, elecCurr: v } : r));
+                                    setRejectedSpreadsheetCells(prev => {
+                                      const next = { ...prev };
+                                      if (norm.valid) {
+                                        delete next[cellKey];
+                                      } else {
+                                        next[cellKey] = norm.errorMessage || true;
+                                      }
+                                      return next;
+                                    });
+                                  }}
+                                  className={`w-full h-8 px-2 text-center bg-transparent border-0 text-xs font-mono font-bold text-indigo-950 focus:outline-none focus:bg-indigo-50 focus:ring-1 focus:ring-indigo-500 ${isRowPaid ? 'cursor-not-allowed opacity-60' : ''}`}
+                                />
+                                {isActive && !isRowPaid && (
+                                  <div
+                                    data-testid="drag-fill-handle"
+                                    onPointerDown={(e) => handlePointerDownFillHandle(e, rowIdx, 'elecCurr')}
+                                    className="absolute -bottom-1 -right-1 w-2.5 h-2.5 bg-indigo-600 border border-white cursor-crosshair z-20 shadow-xs select-none"
+                                    title="ลากเพื่อเติมข้อมูลอัตโนมัติ"
+                                  />
+                                )}
+                              </td>
+                            );
+                          })()}
+                          {isWaterUnit && (() => {
+                            const isActive = activeSpreadsheetCell?.rowIndex === rowIdx && activeSpreadsheetCell?.colKey === 'waterPrev';
+                            const isFillPreview = isCellInFillPreview(rowIdx, 'waterPrev');
+                            const isSelected = isCellInRangeSelected(rowIdx, 'waterPrev');
+                            const cellKey = `${rowIdx}:waterPrev`;
+                            const isRejected = Boolean(rejectedSpreadsheetCells[cellKey]);
+                            const errTitle = typeof rejectedSpreadsheetCells[cellKey] === 'string' ? (rejectedSpreadsheetCells[cellKey] as string) : (isRejected ? 'ข้อมูลไม่ถูกต้องตามรูปแบบ (ถูกปฏิเสธ)' : undefined);
+                            return (
+                              <td
+                                data-cell-row={rowIdx}
+                                data-cell-col="waterPrev"
+                                onPointerDown={(e) => handlePointerDownCell(e, rowIdx, 'waterPrev')}
+                                onPointerEnter={() => handlePointerEnterCell(rowIdx, 'waterPrev')}
+                                title={errTitle}
+                                className={`p-0 border border-slate-300 relative ${isRejected ? 'bg-rose-50 border-rose-400 ring-2 ring-rose-500 ring-inset z-10' : (isActive ? 'ring-2 ring-indigo-600 ring-inset z-10' : '')} ${isSelected ? 'bg-indigo-50/70 border-indigo-400' : ''} ${isFillPreview ? 'bg-indigo-100/70 border-indigo-500' : ''}`}
+                              >
+                                <input
+                                  type="text"
+                                  value={row.waterPrev}
+                                  disabled={isRowPaid}
+                                  onFocus={() => handleFocusCell(rowIdx, 'waterPrev')}
+                                  onClick={() => handleFocusCell(rowIdx, 'waterPrev')}
+                                  onPointerDown={(e) => handlePointerDownCell(e, rowIdx, 'waterPrev')}
+                                  onPointerEnter={() => handlePointerEnterCell(rowIdx, 'waterPrev')}
+                                  onChange={(e) => {
+                                    const v = e.target.value;
+                                    const norm = validateAndNormalizeSpreadsheetValue('waterPrev', v);
+                                    setMeterRows(prev => prev.map(r => r.roomId === row.roomId ? { ...r, waterPrev: v } : r));
+                                    setRejectedSpreadsheetCells(prev => {
+                                      const next = { ...prev };
+                                      if (norm.valid) {
+                                        delete next[cellKey];
+                                      } else {
+                                        next[cellKey] = norm.errorMessage || true;
+                                      }
+                                      return next;
+                                    });
+                                  }}
+                                  className={`w-full h-8 px-2 text-center bg-transparent border-0 text-xs font-mono font-bold text-slate-700 focus:outline-none focus:bg-blue-50/50 focus:ring-1 focus:ring-blue-500 ${isRowPaid ? 'cursor-not-allowed opacity-60' : ''}`}
+                                />
+                                {isActive && !isRowPaid && (
+                                  <div
+                                    data-testid="drag-fill-handle"
+                                    onPointerDown={(e) => handlePointerDownFillHandle(e, rowIdx, 'waterPrev')}
+                                    className="absolute -bottom-1 -right-1 w-2.5 h-2.5 bg-indigo-600 border border-white cursor-crosshair z-20 shadow-xs select-none"
+                                    title="ลากเพื่อเติมข้อมูลอัตโนมัติ"
+                                  />
+                                )}
+                              </td>
+                            );
+                          })()}
+                          {isWaterUnit && (() => {
+                            const isActive = activeSpreadsheetCell?.rowIndex === rowIdx && activeSpreadsheetCell?.colKey === 'waterCurr';
+                            const isFillPreview = isCellInFillPreview(rowIdx, 'waterCurr');
+                            const isSelected = isCellInRangeSelected(rowIdx, 'waterCurr');
+                            const cellKey = `${rowIdx}:waterCurr`;
+                            const isRejected = Boolean(rejectedSpreadsheetCells[cellKey]);
+                            const errTitle = typeof rejectedSpreadsheetCells[cellKey] === 'string' ? (rejectedSpreadsheetCells[cellKey] as string) : (isRejected ? 'ข้อมูลไม่ถูกต้องตามรูปแบบ (ถูกปฏิเสธ)' : undefined);
+                            return (
+                              <td
+                                data-cell-row={rowIdx}
+                                data-cell-col="waterCurr"
+                                onPointerDown={(e) => handlePointerDownCell(e, rowIdx, 'waterCurr')}
+                                onPointerEnter={() => handlePointerEnterCell(rowIdx, 'waterCurr')}
+                                title={errTitle}
+                                className={`p-0 border border-slate-300 relative bg-blue-50/20 ${isRejected ? 'bg-rose-50 border-rose-400 ring-2 ring-rose-500 ring-inset z-10' : (isActive ? 'ring-2 ring-indigo-600 ring-inset z-10' : '')} ${isSelected ? 'bg-indigo-50/70 border-indigo-400' : ''} ${isFillPreview ? 'bg-indigo-100/70 border-indigo-500' : ''}`}
+                              >
+                                <input
+                                  type="text"
+                                  value={row.waterCurr}
+                                  disabled={isRowPaid}
+                                  onFocus={() => handleFocusCell(rowIdx, 'waterCurr')}
+                                  onClick={() => handleFocusCell(rowIdx, 'waterCurr')}
+                                  onPointerDown={(e) => handlePointerDownCell(e, rowIdx, 'waterCurr')}
+                                  onPointerEnter={() => handlePointerEnterCell(rowIdx, 'waterCurr')}
+                                  onChange={(e) => {
+                                    const v = e.target.value;
+                                    const norm = validateAndNormalizeSpreadsheetValue('waterCurr', v, row.waterPrev);
+                                    setMeterRows(prev => prev.map(r => r.roomId === row.roomId ? { ...r, waterCurr: v } : r));
+                                    setRejectedSpreadsheetCells(prev => {
+                                      const next = { ...prev };
+                                      if (norm.valid) {
+                                        delete next[cellKey];
+                                      } else {
+                                        next[cellKey] = norm.errorMessage || true;
+                                      }
+                                      return next;
+                                    });
+                                  }}
+                                  className={`w-full h-8 px-2 text-center bg-transparent border-0 text-xs font-mono font-bold text-blue-950 focus:outline-none focus:bg-blue-50 focus:ring-1 focus:ring-blue-500 ${isRowPaid ? 'cursor-not-allowed opacity-60' : ''}`}
+                                />
+                                {isActive && !isRowPaid && (
+                                  <div
+                                    data-testid="drag-fill-handle"
+                                    onPointerDown={(e) => handlePointerDownFillHandle(e, rowIdx, 'waterCurr')}
+                                    className="absolute -bottom-1 -right-1 w-2.5 h-2.5 bg-indigo-600 border border-white cursor-crosshair z-20 shadow-xs select-none"
+                                    title="ลากเพื่อเติมข้อมูลอัตโนมัติ"
+                                  />
+                                )}
+                              </td>
+                            );
+                          })()}
+                          {(() => {
+                            const isActive = activeSpreadsheetCell?.rowIndex === rowIdx && activeSpreadsheetCell?.colKey === 'peopleCount';
+                            const isFillPreview = isCellInFillPreview(rowIdx, 'peopleCount');
+                            const isSelected = isCellInRangeSelected(rowIdx, 'peopleCount');
+                            const cellKey = `${rowIdx}:peopleCount`;
+                            const isRejected = Boolean(rejectedSpreadsheetCells[cellKey]);
+                            const errTitle = typeof rejectedSpreadsheetCells[cellKey] === 'string' ? (rejectedSpreadsheetCells[cellKey] as string) : (isRejected ? 'ข้อมูลไม่ถูกต้องตามรูปแบบ (ถูกปฏิเสธ)' : undefined);
+                            return (
+                              <td
+                                data-cell-row={rowIdx}
+                                data-cell-col="peopleCount"
+                                onPointerDown={(e) => handlePointerDownCell(e, rowIdx, 'peopleCount')}
+                                onPointerEnter={() => handlePointerEnterCell(rowIdx, 'peopleCount')}
+                                title={errTitle}
+                                className={`p-0 border border-slate-300 relative ${isRejected ? 'bg-rose-50 border-rose-400 ring-2 ring-rose-500 ring-inset z-10' : (isActive ? 'ring-2 ring-indigo-600 ring-inset z-10' : '')} ${isSelected ? 'bg-indigo-50/70 border-indigo-400' : ''} ${isFillPreview ? 'bg-indigo-100/70 border-indigo-500' : ''}`}
+                              >
+                                <input
+                                  type="number"
+                                  min={0}
+                                  value={row.peopleCount}
+                                  disabled={isRowPaid}
+                                  onFocus={() => handleFocusCell(rowIdx, 'peopleCount')}
+                                  onClick={() => handleFocusCell(rowIdx, 'peopleCount')}
+                                  onPointerDown={(e) => handlePointerDownCell(e, rowIdx, 'peopleCount')}
+                                  onPointerEnter={() => handlePointerEnterCell(rowIdx, 'peopleCount')}
+                                  onChange={(e) => {
+                                    const v = parseInt(e.target.value, 10);
+                                    const norm = validateAndNormalizeSpreadsheetValue('peopleCount', isNaN(v) ? '' : v);
+                                    setMeterRows(prev => prev.map(r => r.roomId === row.roomId ? { ...r, peopleCount: norm.valid ? (norm.value as number) : (v as any) } : r));
+                                    setRejectedSpreadsheetCells(prev => {
+                                      const next = { ...prev };
+                                      if (norm.valid) {
+                                        delete next[cellKey];
+                                      } else {
+                                        next[cellKey] = norm.errorMessage || true;
+                                      }
+                                      return next;
+                                    });
+                                  }}
+                                  className={`w-full h-8 px-2 text-center bg-transparent border-0 text-xs font-mono font-bold text-slate-800 focus:outline-none focus:bg-indigo-50/50 focus:ring-1 focus:ring-indigo-500 ${isRowPaid ? 'cursor-not-allowed opacity-60' : ''}`}
+                                />
+                                {isActive && !isRowPaid && (
+                                  <div
+                                    data-testid="drag-fill-handle"
+                                    onPointerDown={(e) => handlePointerDownFillHandle(e, rowIdx, 'peopleCount')}
+                                    className="absolute -bottom-1 -right-1 w-2.5 h-2.5 bg-indigo-600 border border-white cursor-crosshair z-20 shadow-xs select-none"
+                                    title="ลากเพื่อเติมข้อมูลอัตโนมัติ"
+                                  />
+                                )}
+                              </td>
+                            );
+                          })()}
+                        </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               </div>
-            </div>
+            ) : (
+              /* Template Section & Textarea Container with stable, non-jittery height */
+              <div className="flex flex-col gap-4 h-[320px] justify-between shrink-0">
+                {/* Template Section: only show if text is <= 1 line */}
+                {quickFillText.split('\n').filter(l => l.trim()).length <= 1 && (
+                  <div className="bg-slate-50 border border-slate-100 rounded-2xl p-4 flex flex-col gap-2 shrink-0 h-[100px] justify-center">
+                    <span className="text-xs font-black text-slate-800 leading-none text-left">
+                      รูปแบบ ({templateMode === 'METER_ONLY' ? 'เฉพาะมิเตอร์' : 'ทั้งหมด'})
+                    </span>
+                    <div className="bg-white border border-gray-200 rounded-xl p-3 font-mono text-xs text-slate-600 flex items-center justify-start text-left shadow-2xs leading-relaxed whitespace-nowrap overflow-x-auto select-all no-scrollbar">
+                      {getTemplateFormatString(templateMode)}
+                    </div>
+                  </div>
+                )}
+
+                {/* Input Text Area - Single, Persistent to preserve focus */}
+                <div
+                  className="flex flex-col gap-1 w-full shrink-0 transition-all duration-300"
+                  style={{
+                    height: quickFillText.split('\n').filter(l => l.trim()).length <= 1 ? '192px' : '320px'
+                  }}
+                >
+                  <textarea
+                    ref={quickFillInputRef}
+                    value={quickFillText}
+                    onChange={(e) => setQuickFillText(e.target.value)}
+                    wrap="off"
+                    placeholder="วางข้อมูลหลายห้องที่นี่ . . ."
+                    className="w-full h-full p-4 border border-gray-200 rounded-2xl bg-white text-slate-800 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 resize-none transition-all placeholder:text-gray-300 shadow-2xs overflow-x-auto whitespace-pre"
+                  />
+                </div>
+              </div>
+            )}
 
             {/* Footer Buttons */}
             <div className="flex items-center justify-between gap-2.5 mt-2 flex-nowrap">
-              {templateUsed ? (
-                <button
-                  type="button"
-                  disabled
-                  className="border border-gray-200 bg-gray-50 text-gray-400 px-2.5 sm:px-4 py-2.5 rounded-xl text-[10px] sm:text-xs font-black flex items-center gap-1 cursor-not-allowed select-none whitespace-nowrap shrink-0"
-                >
-                  <Sparkles className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-gray-300 shrink-0" />
-                  ใช้แม่แบบแล้ว
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={async () => {
-                    let freshHouseholdMap = new Map<string, number>();
-                    try {
-                      const res = await httpRequest<{ success: boolean; data: Array<{ roomId: string; currentHouseholdPeopleCount: number }> }>(
-                        'GET',
-                        `/api/v1/meters/workspace/household-counts?billingCycleId=${selectedBillingCycleId}`,
-                        undefined,
-                        { headers: currentDormId ? { 'x-dormitory-id': currentDormId } : {} }
-                      );
-                      if (res?.data && Array.isArray(res.data)) {
-                        res.data.forEach(h => freshHouseholdMap.set(h.roomId, h.currentHouseholdPeopleCount));
-                      } else {
-                        showToast('ไม่สามารถดึงจำนวนคนปัจจุบันได้ กรุณาลองอีกครั้ง');
-                        return;
-                      }
-                    } catch {
-                      showToast('ไม่สามารถดึงจำนวนคนปัจจุบันได้ กรุณาลองอีกครั้ง');
-                      return;
-                    }
+              <div className="flex items-center gap-2 shrink-0">
+                {!isSpreadsheetMode && (
+                  (!isElecUnit && !isWaterUnit) ? (
+                    templateUsed ? (
+                      <button
+                        type="button"
+                        disabled
+                        className="border border-gray-200 bg-gray-50 text-gray-400 px-2.5 sm:px-4 py-2.5 rounded-xl text-[10px] sm:text-xs font-black flex items-center gap-1 cursor-not-allowed select-none whitespace-nowrap shrink-0"
+                      >
+                        <Sparkles className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-gray-300 shrink-0" />
+                        ใช้แม่แบบแล้ว
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          let freshHouseholdMap = new Map<string, number>();
+                          try {
+                            const res = await httpRequest<{ success: boolean; data: Array<{ roomId: string; currentHouseholdPeopleCount: number }> }>(
+                              'GET',
+                              `/api/v1/meters/workspace/household-counts?billingCycleId=${selectedBillingCycleId}`,
+                              undefined,
+                              { headers: currentDormId ? { 'x-dormitory-id': currentDormId } : {} }
+                            );
+                            if (res?.data && Array.isArray(res.data)) {
+                              res.data.forEach(h => freshHouseholdMap.set(h.roomId, h.currentHouseholdPeopleCount));
+                            }
+                          } catch { }
 
-                    const txt = generateTemplateText(freshHouseholdMap);
-                    setQuickFillText(txt);
-                    setTemplateUsed(true);
-                    setTimeout(() => {
-                      quickFillInputRef.current?.focus();
-                    }, 50);
-                  }}
-                  className="border border-emerald-200 bg-emerald-50/50 hover:bg-emerald-50 text-emerald-600 px-2.5 sm:px-4 py-2.5 rounded-xl text-[10px] sm:text-xs font-black transition-all flex items-center gap-1 cursor-pointer shadow-2xs active:scale-98 whitespace-nowrap shrink-0"
+                          const txt = generateTemplateText('FULL', freshHouseholdMap);
+                          setQuickFillText(txt);
+                          setTemplateUsed(true);
+                          setTimeout(() => {
+                            quickFillInputRef.current?.focus();
+                          }, 50);
+                        }}
+                        className="border border-emerald-200 bg-emerald-50/50 hover:bg-emerald-50 text-emerald-600 px-2.5 sm:px-4 py-2.5 rounded-xl text-[10px] sm:text-xs font-black transition-all flex items-center gap-1 cursor-pointer shadow-2xs active:scale-98 whitespace-nowrap shrink-0"
+                      >
+                        <Sparkles className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-emerald-500 shrink-0" />
+                        ใช้แม่แบบ
+                      </button>
+                    )
+                  ) : (
+                    /* Meter-driven toggle */
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const nextMode = templateMode === 'FULL' ? 'METER_ONLY' : 'FULL';
+                        setTemplateMode(nextMode);
+
+                        let freshHouseholdMap = new Map<string, number>();
+                        try {
+                          const res = await httpRequest<{ success: boolean; data: Array<{ roomId: string; currentHouseholdPeopleCount: number }> }>(
+                            'GET',
+                            `/api/v1/meters/workspace/household-counts?billingCycleId=${selectedBillingCycleId}`,
+                            undefined,
+                            { headers: currentDormId ? { 'x-dormitory-id': currentDormId } : {} }
+                          );
+                          if (res?.data && Array.isArray(res.data)) {
+                            res.data.forEach(h => freshHouseholdMap.set(h.roomId, h.currentHouseholdPeopleCount));
+                          }
+                        } catch { }
+
+                        const txt = generateTemplateText(nextMode, freshHouseholdMap);
+                        setQuickFillText(txt);
+                        setTimeout(() => {
+                          quickFillInputRef.current?.focus();
+                        }, 50);
+                      }}
+                      className="border border-emerald-200 bg-emerald-50/50 hover:bg-emerald-50 text-emerald-600 px-2.5 sm:px-4 py-2.5 rounded-xl text-[10px] sm:text-xs font-black transition-all flex items-center gap-1 cursor-pointer shadow-2xs active:scale-98 whitespace-nowrap shrink-0"
+                    >
+                      <Sparkles className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-emerald-500 shrink-0" />
+                      <span>{templateMode === 'FULL' ? 'แม่แบบ (เฉพาะมิเตอร์)' : 'แม่แบบ (ทั้งหมด)'}</span>
+                    </button>
+                  )
+                )}
+
+                {/* Excel Mode Icon Button */}
+                <button
+                  type="button"
+                  onClick={() => setIsSpreadsheetMode(!isSpreadsheetMode)}
+                  className={`p-2 rounded-xl border transition-all cursor-pointer flex items-center justify-center ${isSpreadsheetMode ? 'bg-emerald-100 border-emerald-300 shadow-2xs' : 'bg-white hover:bg-slate-50 border-gray-200'}`}
+                  title={isSpreadsheetMode ? 'สลับไปยังโหมดข้อความ' : 'สลับไปยังโหมดตาราง Excel'}
                 >
-                  <Sparkles className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-emerald-500 shrink-0" />
-                  ใช้แม่แบบ
+                  <img
+                    src="https://upload.wikimedia.org/wikipedia/commons/thumb/6/60/Microsoft_Office_Excel_%282025%E2%80%93present%29.svg/330px-Microsoft_Office_Excel_%282025%E2%80%93present%29.svg.png"
+                    alt="Excel Mode"
+                    className="w-4 h-4 sm:w-5 sm:h-5 object-contain"
+                  />
                 </button>
-              )}
+              </div>
 
               <div className="flex items-center gap-1.5 flex-nowrap shrink-0">
                 <button
@@ -3489,47 +4925,50 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                   onClick={() => {
                     setIsQuickFillOpen(false);
                     setTemplateUsed(false);
+                    setIsSpreadsheetMode(false);
                   }}
                   className="border border-gray-200 hover:bg-gray-50 text-slate-600 px-2.5 sm:px-4 py-2.5 rounded-xl text-[10px] sm:text-xs font-bold transition-all cursor-pointer active:scale-98 whitespace-nowrap shrink-0"
                 >
-                  ยกเลิก
+                  {isSpreadsheetMode ? 'ปิด' : 'ยกเลิก'}
                 </button>
 
-                {quickFillText.trim() === '' ? (
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      try {
-                        const text = await navigator.clipboard.readText();
-                        if (text) {
-                          setQuickFillText(text);
-                          showToast("วางข้อมูลจากคลิปบอร์ดแล้ว!");
-                        } else {
-                          showToast("คลิปบอร์ดว่างเปล่า หรือกรุณากดวาง (Ctrl+V)");
+                {!isSpreadsheetMode && (
+                  quickFillText.trim() === '' ? (
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          const text = await navigator.clipboard.readText();
+                          if (text) {
+                            setQuickFillText(text);
+                            showToast("วางข้อมูลจากคลิปบอร์ดแล้ว!");
+                          } else {
+                            showToast("คลิปบอร์ดว่างเปล่า หรือกรุณากดวาง (Ctrl+V)");
+                          }
+                          setTimeout(() => {
+                            quickFillInputRef.current?.focus();
+                          }, 50);
+                        } catch (e) {
+                          showToast("กรุณากดวาง (Ctrl+V) ข้อความด้วยตนเอง");
+                          setTimeout(() => {
+                            quickFillInputRef.current?.focus();
+                          }, 50);
                         }
-                        setTimeout(() => {
-                          quickFillInputRef.current?.focus();
-                        }, 50);
-                      } catch (e) {
-                        showToast("กรุณากดวาง (Ctrl+V) ข้อความด้วยตนเอง");
-                        setTimeout(() => {
-                          quickFillInputRef.current?.focus();
-                        }, 50);
-                      }
-                    }}
-                    className="bg-slate-950 hover:bg-slate-900 text-white font-bold text-[10px] sm:text-xs px-3 sm:px-5 py-2.5 rounded-xl transition-all shadow-md shadow-slate-950/10 cursor-pointer active:scale-98 flex items-center gap-1 whitespace-nowrap shrink-0"
-                  >
-                    วางข้อความที่คัดลอก
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    disabled={!isMutationReady}
-                    onClick={handleApplyQuickFill}
-                    className="bg-slate-950 hover:bg-slate-900 disabled:opacity-50 text-white font-bold text-[10px] sm:text-xs px-3 sm:px-5 py-2.5 rounded-xl transition-all shadow-md shadow-slate-950/10 cursor-pointer active:scale-98 flex items-center gap-1 whitespace-nowrap shrink-0"
-                  >
-                    ต่อไป
-                  </button>
+                      }}
+                      className="bg-slate-950 hover:bg-slate-900 text-white font-bold text-[10px] sm:text-xs px-3 sm:px-5 py-2.5 rounded-xl transition-all shadow-md shadow-slate-950/10 cursor-pointer active:scale-98 flex items-center gap-1 whitespace-nowrap shrink-0"
+                    >
+                      วางข้อความที่คัดลอก
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={!isMutationReady}
+                      onClick={handleApplyQuickFill}
+                      className="bg-slate-950 hover:bg-slate-900 disabled:opacity-50 text-white font-bold text-[10px] sm:text-xs px-3 sm:px-5 py-2.5 rounded-xl transition-all shadow-md shadow-slate-950/10 cursor-pointer active:scale-98 flex items-center gap-1 whitespace-nowrap shrink-0"
+                    >
+                      ต่อไป
+                    </button>
+                  )
                 )}
               </div>
             </div>
@@ -3544,6 +4983,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
         onClose={() => {
           setIsLineModalOpen(false);
         }}
+        dormitoryId={dormitoryId}
         bills={bills}
         tenants={tenants}
         rooms={rooms}

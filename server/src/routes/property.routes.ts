@@ -259,9 +259,7 @@ export function createPropertyRouter(
       };
       const result = await roomService.getRooms(dormId, query);
       const { defaultsService } = await import('../services/defaults.service.js');
-      const enrichedItems = await Promise.all(
-        result.items.map((room) => defaultsService.buildAuthoritativeRoomResponse(dormId, room))
-      );
+      const enrichedItems = await defaultsService.buildAuthoritativeRoomsResponseBatch(dormId, result.items);
       res.json({ data: enrichedItems, pagination: { total: result.total, page: query.page, pageSize: query.pageSize } });
     } catch (err) {
       handleServiceError(res, err, req);
@@ -337,7 +335,10 @@ export function createPropertyRouter(
             monthlyRent: Number(effective.monthlyRent.value ?? 0),
             termRent: effective.termRent.value !== null && effective.termRent.value !== undefined ? Number(effective.termRent.value) : null,
             dailyRent: effective.dailyRent.value !== null && effective.dailyRent.value !== undefined ? Number(effective.dailyRent.value) : null,
-            depositAmount: Number(effective.depositAmount.value ?? 0),
+            monthlyDeposit: Number(effective.monthlyDeposit.value ?? 0),
+            termDeposit: Number(effective.termDeposit.value ?? 0),
+            dailyDeposit: Number(effective.dailyDeposit.value ?? 0),
+            depositAmount: Number(effective.monthlyDeposit.value ?? 0),
             advancePaymentAmount: Number(effective.advancePaymentAmount.value ?? 0),
             parkingFee: Number(effective.parkingFee.value ?? 0),
           },
@@ -345,7 +346,10 @@ export function createPropertyRouter(
             monthlyRent: effective.monthlyRent.source,
             termRent: effective.termRent.source,
             dailyRent: effective.dailyRent.source,
-            depositAmount: effective.depositAmount.source,
+            monthlyDeposit: effective.monthlyDeposit.source,
+            termDeposit: effective.termDeposit.source,
+            dailyDeposit: effective.dailyDeposit.source,
+            depositAmount: effective.monthlyDeposit.source,
             advancePaymentAmount: effective.advancePaymentAmount.source,
             parkingFee: effective.parkingFee.source,
           },
@@ -393,7 +397,9 @@ export function createPropertyRouter(
         });
       }
       const room = await roomService.createRoom(dormId, parsed.data as any, req.auth?.userId);
-      res.status(201).json({ data: room });
+      const { defaultsService } = await import('../services/defaults.service.js');
+      const enriched = await defaultsService.buildAuthoritativeRoomResponse(dormId, room);
+      res.status(201).json({ data: enriched });
     } catch (err) {
       handleServiceError(res, err, req);
     }
@@ -426,7 +432,14 @@ export function createPropertyRouter(
         actorUserId: req.auth?.userId,
         requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
       });
-      res.json({ data: room });
+      const { defaultsService } = await import('../services/defaults.service.js');
+      const enriched = await defaultsService.buildAuthoritativeRoomResponse(dormId, room);
+      res.json({
+        data: {
+          ...enriched,
+          effectiveRoomStatusCycleId: (room as any).effectiveRoomStatusCycleId ?? null,
+        },
+      });
     } catch (err) {
       handleServiceError(res, err, req);
     }

@@ -4,6 +4,8 @@ import { ITenantRepository } from '../db/repositories/tenant.repository.js';
 import { AuditService } from './audit.service.js';
 import { DocumentPdfService } from './document-pdf.service.js';
 import { getPrismaClient } from '../db/prisma.js';
+import { acquireRoomAvailabilityLock } from '../utils/occupancy-interval.util.js';
+import { createDepositBillForAgreementInTx } from '../utils/deposit-billing.util.js';
 
 export class ContractService {
   constructor(
@@ -57,18 +59,65 @@ export class ContractService {
       throw err;
     }
 
+    // Determine default agreement deposit by rentBillingType before branching (Single Authority)
+    const rentBillingType = data.rentBillingType || 'monthly';
+    let contractDeposit: string;
+    if (data.depositAmount !== null && data.depositAmount !== undefined && String(data.depositAmount).trim() !== '') {
+      contractDeposit = String(data.depositAmount);
+    } else {
+      const r = room as any;
+      if (rentBillingType === 'term') {
+        if (r.termDeposit !== null && r.termDeposit !== undefined) {
+          contractDeposit = String(r.termDeposit);
+        } else {
+          const err = new Error('ไม่พบข้อมูลเงินประกันรายเทอมสำหรับห้องพักนี้');
+          (err as any).code = 'ROOM_DEPOSIT_NOT_CONFIGURED';
+          (err as any).statusCode = 409;
+          throw err;
+        }
+      } else if (rentBillingType === 'daily') {
+        if (r.dailyDeposit !== null && r.dailyDeposit !== undefined) {
+          contractDeposit = String(r.dailyDeposit);
+        } else {
+          const err = new Error('ไม่พบข้อมูลเงินประกันรายวันสำหรับห้องพักนี้');
+          (err as any).code = 'ROOM_DEPOSIT_NOT_CONFIGURED';
+          (err as any).statusCode = 409;
+          throw err;
+        }
+      } else {
+        if (r.monthlyDeposit !== null && r.monthlyDeposit !== undefined) {
+          contractDeposit = String(r.monthlyDeposit);
+        } else {
+          const err = new Error('ไม่พบข้อมูลเงินประกันรายเดือนสำหรับห้องพักนี้');
+          (err as any).code = 'ROOM_DEPOSIT_NOT_CONFIGURED';
+          (err as any).statusCode = 409;
+          throw err;
+        }
+      }
+    }
+
     // Idempotency: exact duplicate check using Prisma transaction and row-level lock
     const prisma = getPrismaClient();
-    
+
     // Check if this is an in-memory mock or real DB to apply transactions appropriately
     // If it's Prisma, we can safely use $transaction
     if (this.contractRepo.constructor.name === 'PrismaContractRepository') {
       const contract = await prisma.$transaction(async (tx) => {
         // Ensure atomicity: Lock the room for new contract creation
-        // This prevents race conditions where two requests might pass validation
-        // and create overlapping contracts.
+        // Unified shared advisory lock (Part A & B) followed by row lock
+        await acquireRoomAvailabilityLock(tx, dormitoryId, data.roomId);
         await tx.$executeRaw`SELECT id FROM rooms WHERE id = ${data.roomId}::uuid FOR UPDATE`;
-        
+
+        const currentRoom = await tx.room.findFirst({
+          where: { id: data.roomId, dormitoryId, deletedAt: null },
+        });
+        if (currentRoom?.status === 'maintenance') {
+          const err = new Error('ไม่สามารถสร้างสัญญาสำหรับห้องที่อยู่ระหว่างปิดปรับปรุงได้');
+          (err as any).code = 'ROOM_UNDER_MAINTENANCE';
+          (err as any).statusCode = 409;
+          throw err;
+        }
+
         // Look for exact duplicate
         const duplicate = await tx.contract.findFirst({
           where: {
@@ -81,7 +130,7 @@ export class ContractService {
             status: data.status || 'draft'
           }
         });
-        
+
         if (duplicate) {
           return {
             ...duplicate,
@@ -111,8 +160,10 @@ export class ContractService {
           throw err;
         }
 
-        // Create the contract using the transaction client
+        // Create the contract using the transaction client (using pre-resolved single authority contractDeposit)
+
         const contractNumber = data.contractNumber || `CTR${Date.now().toString().slice(-6)}`;
+
         const created = await tx.contract.create({
           data: {
             id: data.id,
@@ -124,15 +175,15 @@ export class ContractService {
             startDate,
             endDate,
             durationMonths: data.durationMonths || 1,
-            rentBillingType: data.rentBillingType || 'monthly',
+            rentBillingType,
             rentAmount: data.rentAmount,
-            depositAmount: data.depositAmount || '0.00',
+            depositAmount: contractDeposit,
             advancePaymentAmount: data.advancePaymentAmount || '0.00',
             terms: data.terms || null,
             createdByUserId: actorUserId,
           },
         });
-        
+
         return {
           ...created,
           rentAmount: created.rentAmount ? created.rentAmount.toString() : '0.00',
@@ -140,7 +191,7 @@ export class ContractService {
           advancePaymentAmount: created.advancePaymentAmount ? created.advancePaymentAmount.toString() : '0.00'
         };
       });
-      
+
       // Log audit
       if (this.auditService && actorUserId) {
         await this.auditService.log({
@@ -171,6 +222,8 @@ export class ContractService {
 
     const contract = await this.contractRepo.create(dormitoryId, {
       ...data,
+      rentBillingType,
+      depositAmount: contractDeposit,
       startDate,
       endDate,
       createdByUserId: actorUserId,
@@ -192,7 +245,7 @@ export class ContractService {
   public async activateContract(
     id: string,
     dormitoryId: string,
-    payload: { ownerSignature?: string | null; tenantSignature?: string | null; selectedInstallments?: number | null },
+    payload: { ownerSignature?: string | null; tenantSignature?: string | null; selectedInstallments?: number | null; depositDeclaredStatus?: 'PAID' | 'UNPAID' | null },
     actorUserId?: string
   ) {
     const contract = await this.getContractById(id, dormitoryId);
@@ -222,11 +275,18 @@ export class ContractService {
     // Check if we can use transactions
     if (this.contractRepo.constructor.name === 'PrismaContractRepository') {
       const updated = await prisma.$transaction(async (tx: any) => {
-        // 1. Lock the room and fetch room data
+        // 1. Unified shared advisory lock (Part A & B) followed by row lock
+        await acquireRoomAvailabilityLock(tx, dormitoryId, contract.roomId);
         await tx.$executeRaw`SELECT id FROM rooms WHERE id = ${contract.roomId}::uuid FOR UPDATE`;
         const room = await tx.room.findFirst({ where: { id: contract.roomId } });
         if (!room) {
           throw new Error('ไม่พบห้องพักที่ระบุในสัญญา');
+        }
+        if (room.status === 'maintenance') {
+          const err = new Error('ไม่สามารถเปิดใช้งานสัญญาสำหรับห้องที่อยู่ระหว่างปิดปรับปรุงได้');
+          (err as any).code = 'ROOM_UNDER_MAINTENANCE';
+          (err as any).statusCode = 409;
+          throw err;
         }
 
         // 2. Double check status inside transaction
@@ -316,8 +376,8 @@ export class ContractService {
             roomId: contract.roomId,
             tenantId: contract.tenantId,
             exactRoomNumber: room.roomNumber,
-            resolvedRent: contract.rentAmount || (resolvedRentType === 'term' && room.termRent ? room.termRent : resolvedDefaults.monthlyRent.value),
-            resolvedDeposit: contract.depositAmount || resolvedDefaults.depositAmount.value,
+            resolvedRent: contract.rentAmount !== null && contract.rentAmount !== undefined ? contract.rentAmount : (resolvedRentType === 'term' && room.termRent ? room.termRent : resolvedDefaults.monthlyRent.value),
+            resolvedDeposit: contract.depositAmount !== null && contract.depositAmount !== undefined ? contract.depositAmount : (resolvedRentType === 'term' ? ((room as any).termDeposit ?? resolvedDefaults.depositAmount.value) : (resolvedRentType === 'daily' ? ((room as any).dailyDeposit ?? resolvedDefaults.depositAmount.value) : ((room as any).monthlyDeposit ?? resolvedDefaults.depositAmount.value))),
             resolvedAdvancePayment: contract.advancePaymentAmount || resolvedDefaults.advancePaymentAmount.value,
             resolvedWaterRate: resolvedDefaults.waterRate.value,
             resolvedElectricityRate: resolvedDefaults.electricityRate.value,
@@ -415,6 +475,26 @@ export class ContractService {
               startedAt: contract.startDate || now,
               status: 'ACTIVE',
             },
+          });
+        }
+
+        // 8.6. Create one-time Deposit Bill for committed Contract
+        const depAmt = contract.depositAmount !== null && contract.depositAmount !== undefined
+          ? Number(contract.depositAmount)
+          : Number(snapshot.resolvedDeposit || 0);
+
+        if (depAmt > 0) {
+          const declaredStatus = payload.depositDeclaredStatus || 'UNPAID';
+          await createDepositBillForAgreementInTx(tx, {
+            dormitoryId,
+            roomId: contract.roomId,
+            tenantId: contract.tenantId,
+            contractId: id,
+            agreementType: isTermRent ? 'TERM' : 'MONTHLY',
+            startDate: contract.startDate || now,
+            depositAmount: depAmt,
+            depositDeclaredStatus: declaredStatus,
+            actorUserId: safeActorUserId,
           });
         }
 
@@ -699,6 +779,25 @@ export class ContractService {
       currentTenantId: null,
       currentContractId: null,
     });
+
+    // End active occupancies for this contract and room
+    const prisma = getPrismaClient();
+    if (prisma) {
+      await prisma.occupancy.updateMany({
+        where: {
+          OR: [
+            { contractId: id, status: 'ACTIVE' },
+            { roomId: contract.roomId, tenantId: contract.tenantId, status: 'ACTIVE' },
+          ],
+        },
+        data: {
+          status: 'ENDED',
+          endedAt: now,
+          endedByUserId: actorUserId || null,
+          endedReason: payload.terminationReason || 'บอกเลิกสัญญา',
+        },
+      });
+    }
 
     // Check if tenant has other active contracts
     const tenantContracts = await this.contractRepo.findAll(dormitoryId, { tenantId: contract.tenantId });

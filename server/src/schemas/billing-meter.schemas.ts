@@ -11,8 +11,10 @@ export const CreateBillingCycleSchema = z.object({
     .object({
       waterBillingType: z.string().optional(),
       waterRate: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
+      waterTierRates: z.array(z.object({ upTo: z.string().nullable().optional(), rate: z.string() })).nullable().optional(),
       electricityBillingType: z.string().optional(),
       electricityRate: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
+      electricityTierRates: z.array(z.object({ upTo: z.string().nullable().optional(), rate: z.string() })).nullable().optional(),
       commonFee: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
       commonFeeMode: z.string().optional(),
       internetFee: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
@@ -142,12 +144,14 @@ export const GenerateBillSchema = z.object({
     )
     .optional(),
   discountAmount: z.string().regex(/^\d+(\.\d{1,2})?$/).optional(),
+  billKind: z.enum(['LEGACY_COMBINED', 'MONTHLY_UTILITY', 'RENT', 'DEPOSIT']).optional(),
 });
 
 export const BulkGenerateBillSchema = z.object({
   billingCycleId: z.string().min(1, 'Billing Cycle ID จำเป็นต้องระบุ'),
   roomIds: z.array(z.string()).optional(),
   dirtyRows: z.array(SaveMeterWorkspaceRowSchema).optional(),
+  billKind: z.enum(['LEGACY_COMBINED', 'MONTHLY_UTILITY', 'RENT', 'DEPOSIT']).optional(),
 });
 
 export const CancelBillSchema = z.object({
@@ -165,7 +169,11 @@ export const CreateProvisionalRentalTermSchema = z
     durationMonths: z.number().int().min(1).optional(),
     unitRentAmount: z.string().regex(/^\d+(\.\d{1,2})?$/, 'ค่าเช่าต้องเป็นตัวเลขทศนิยมไม่เกิน 2 ตำแหน่งและไม่ติดลบ'),
     totalRentAmount: z.string().regex(/^\d+(\.\d{1,2})?$/, 'ค่าเช่ารวมต้องเป็นตัวเลขทศนิยมไม่เกิน 2 ตำแหน่งและไม่ติดลบ').optional(),
+    depositAmount: z.string().regex(/^\d+(\.\d{1,2})?$/, 'เงินประกันต้องเป็นตัวเลขทศนิยมไม่เกิน 2 ตำแหน่งและไม่ติดลบ').optional().nullable(),
+    depositDeclaredStatus: z.enum(['PAID', 'UNPAID']).optional().nullable(),
     termInstallmentCount: z.number().int().min(1).max(12).optional(),
+    migratedPaidPeriods: z.array(z.string().regex(/^\d{4}-\d{2}$/)).optional(),
+    migratedPaidInstallments: z.array(z.number().int().min(1)).optional(),
   })
   .superRefine((val, ctx) => {
     if (val.rentalType === 'TERM' && (val.termInstallmentCount === undefined || val.termInstallmentCount === null)) {

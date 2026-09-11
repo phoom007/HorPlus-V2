@@ -182,8 +182,9 @@ export function createApiRouter(deps: AppApiDependencies | AuthenticationService
     protectedRouter.use('/move-out', moveOutRouter);
     protectedRouter.use('/contract-renewals', createContractRenewalRouter(fullDeps.authService));
     protectedRouter.use('/settlements', createSettlementRouter(fullDeps.authService));
-    protectedRouter.use('/maintenance-requests', createMaintenanceRouter());
-    protectedRouter.use('/maintenance', createMaintenanceRouter());
+    const maintenanceRouter = createMaintenanceRouter();
+    protectedRouter.use('/maintenance-requests', maintenanceRouter);
+    protectedRouter.use('/maintenance', maintenanceRouter);
     protectedRouter.use('/announcements', createAnnouncementRouter());
     protectedRouter.use('/payments', createPaymentRouter(fullDeps.authService));
     protectedRouter.use('/receipts', createReceiptRouter(fullDeps.authService));

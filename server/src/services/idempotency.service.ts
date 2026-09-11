@@ -1,5 +1,6 @@
 import { PrismaClient } from '@prisma/client';
 import crypto from 'crypto';
+import { AppError } from '../types/index.js';
 
 const prisma = new PrismaClient();
 
@@ -49,7 +50,7 @@ export class IdempotencyService {
 
     if (existing) {
       if (existing.requestHash !== requestHash) {
-        throw new Error('IDEMPOTENCY_MISMATCH');
+        throw new AppError('IDEMPOTENCY_MISMATCH: Idempotency key payload mismatch.', 409, 'IDEMPOTENCY_MISMATCH');
       }
 
       if (existing.status === 'completed' && existing.responseBody) {
@@ -58,7 +59,7 @@ export class IdempotencyService {
       }
 
       if (existing.status === 'processing') {
-        throw new Error('CONCURRENT_REQUEST_IN_PROGRESS');
+        throw new AppError('CONCURRENT_REQUEST_IN_PROGRESS: A request with this idempotency key is already processing.', 409, 'CONCURRENT_REQUEST_IN_PROGRESS');
       }
 
       // If previously failed, allow clean retry by transitioning to processing
@@ -123,7 +124,7 @@ export class IdempotencyService {
           responseStatus: 400,
           responseBody: { error: err.message || 'Operation failed' }
         }
-      }).catch(() => {});
+      });
 
       throw err;
     }

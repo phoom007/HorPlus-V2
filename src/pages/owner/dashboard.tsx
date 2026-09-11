@@ -39,6 +39,7 @@ import {
   Send
 } from 'lucide-react';
 import { formatBaht } from '../../components/GlobalComponents';
+import { LineLogo } from '../../components/LineLogo';
 import { LineNotificationModal } from '../../components/LineNotificationModal';
 import {
   Bill,
@@ -447,13 +448,6 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({
       bgClass: 'bg-purple-50 text-purple-600'
     },
     {
-      id: 'contracts',
-      title: 'สัญญาเช่า',
-      target: 'contracts',
-      icon: FileText,
-      bgClass: 'bg-amber-50 text-amber-600'
-    },
-    {
       id: 'maintenance',
       title: 'งานแจ้งซ่อม',
       target: 'maintenance',
@@ -677,7 +671,7 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({
                 id: 'line',
                 desktopLabel: '3. ส่ง LINE',
                 mobileLabel: 'ส่ง LINE',
-                icon: Send,
+                icon: LineLogo,
                 isDone: step2Done,
                 isCurrent: currentStepIdx === 2,
                 onClick: () => setIsLineModalOpen(true)

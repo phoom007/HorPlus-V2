@@ -1,4 +1,6 @@
 import {
+  IMaintenanceRepository,
+  PrismaMaintenanceRepository,
   InMemoryMaintenanceRepository,
   MaintenanceRequestEntity,
   MaintenanceCategory,
@@ -48,40 +50,24 @@ export interface UpdateMaintenanceStatusInput {
 
 export class MaintenanceService {
   constructor(
-    private maintenanceRepo: InMemoryMaintenanceRepository = new InMemoryMaintenanceRepository(),
+    private maintenanceRepo: IMaintenanceRepository = new PrismaMaintenanceRepository(),
     private roomRepo: InMemoryRoomRepository = new InMemoryRoomRepository(),
     private tenantRepo: InMemoryTenantRepository = new InMemoryTenantRepository(),
     private membershipRepo: IMembershipRepository = new InMemoryMembershipRepository(),
     private notificationService: NotificationService = new NotificationService()
   ) {}
 
-  public getRepository(): InMemoryMaintenanceRepository {
+  public getRepository(): IMaintenanceRepository {
     return this.maintenanceRepo;
   }
 
   // State Machine transition rules
   private validateStatusTransition(current: MaintenanceStatus, next: MaintenanceStatus, actorType: string, roleCode?: string) {
-    if (current === 'cancelled') {
+    if (current === 'cancelled' && actorType !== 'owner' && actorType !== 'manager') {
       throw new Error('MAINTENANCE_REQUEST_CANCELLED: Cancelled maintenance requests cannot be updated');
     }
-    if (current === 'closed' && next !== 'in_progress') {
+    if (current === 'closed' && (next as any) !== 'in_progress' && (next as any) !== 'inprogress' && actorType !== 'owner' && actorType !== 'manager') {
       throw new Error('MAINTENANCE_REQUEST_ALREADY_CLOSED: Closed maintenance requests can only be reopened to in_progress');
-    }
-
-    const allowedMap: Record<MaintenanceStatus, MaintenanceStatus[]> = {
-      submitted: ['acknowledged', 'assigned', 'cancelled'],
-      acknowledged: ['assigned', 'in_progress', 'cancelled'],
-      assigned: ['in_progress', 'waiting_parts', 'cancelled'],
-      in_progress: ['waiting_parts', 'resolved', 'cancelled'],
-      waiting_parts: ['in_progress', 'resolved', 'cancelled'],
-      resolved: ['closed', 'in_progress'],
-      closed: ['in_progress'],
-      cancelled: []
-    };
-
-    const allowed = allowedMap[current] || [];
-    if (!allowed.includes(next)) {
-      throw new Error(`INVALID_MAINTENANCE_STATUS_TRANSITION: Cannot transition maintenance request from ${current} to ${next}`);
     }
 
     // Role restrictions
@@ -99,6 +85,27 @@ export class MaintenanceService {
       } else {
         throw new Error('FORBIDDEN: Tenants are only permitted to cancel their requests');
       }
+      return;
+    }
+
+    // State transition verification
+
+    const allowedMap: Record<string, string[]> = {
+      submitted: ['acknowledged', 'assigned', 'in_progress', 'inprogress', 'cancelled'],
+      acknowledged: ['assigned', 'in_progress', 'inprogress', 'cancelled'],
+      assigned: ['in_progress', 'inprogress', 'waiting_parts', 'cancelled'],
+      in_progress: ['waiting_parts', 'resolved', 'completed', 'cancelled'],
+      inprogress: ['waiting_parts', 'resolved', 'completed', 'cancelled'],
+      waiting_parts: ['in_progress', 'inprogress', 'resolved', 'completed', 'cancelled'],
+      resolved: ['closed', 'in_progress', 'inprogress'],
+      completed: ['closed', 'in_progress', 'inprogress'],
+      closed: ['in_progress', 'inprogress'],
+      cancelled: []
+    };
+
+    const allowed = allowedMap[current] || [];
+    if (!allowed.includes(next)) {
+      throw new Error(`INVALID_MAINTENANCE_STATUS_TRANSITION: Cannot transition maintenance request from ${current} to ${next}`);
     }
   }
 
@@ -297,7 +304,7 @@ export class MaintenanceService {
       changedByUserId: input.assignedByUserId
     });
 
-    const room = await this.roomRepo.findById(input.dormitoryId, req.roomId);
+    const room = req.roomId ? await this.roomRepo.findById(input.dormitoryId, req.roomId) : null;
 
     await this.maintenanceRepo.createUpdate({
       dormitoryId: input.dormitoryId,
@@ -316,7 +323,7 @@ export class MaintenanceService {
       targetUserId: member.userId,
       category: 'MAINTENANCE_ASSIGNED',
       title: 'ได้รับมอบหมายงานแจ้งซ่อม',
-      body: `คุณได้รับมอบหมายงานแจ้งซ่อม #${req.requestNumber} [${req.title}] ห้อง ${room?.roomNumber || req.roomId}`,
+      body: `คุณได้รับมอบหมายงานแจ้งซ่อม #${req.requestNumber} [${req.title}] ห้อง ${room?.roomNumber || 'ส่วนกลาง'}`,
       metadata: { requestId: req.id, requestNumber: req.requestNumber }
     });
 
@@ -336,7 +343,7 @@ export class MaintenanceService {
       status: input.status
     };
 
-    if (input.status === 'resolved') {
+    if (input.status === 'resolved' || (input.status as any) === 'completed') {
       updates.resolvedAt = now;
       if (input.actorUserId) updates.resolvedByUserId = input.actorUserId;
     } else if (input.status === 'closed') {
@@ -373,16 +380,18 @@ export class MaintenanceService {
     });
 
     // Create In-App Notification for Tenant
-    const room = await this.roomRepo.findById(input.dormitoryId, req.roomId);
-    await this.notificationService.createInAppNotification({
-      dormitoryId: input.dormitoryId,
-      targetType: 'tenant',
-      targetTenantId: req.tenantId,
-      category: 'MAINTENANCE_STATUS_UPDATED',
-      title: 'อัปเดตสถานะการแจ้งซ่อม',
-      body: `รายการแจ้งซ่อม #${req.requestNumber} [${req.title}] เปลี่ยนสถานะเป็น ${input.status}`,
-      metadata: { requestId: req.id, status: input.status }
-    });
+    if (req.tenantId) {
+      const room = req.roomId ? await this.roomRepo.findById(input.dormitoryId, req.roomId) : null;
+      await this.notificationService.createInAppNotification({
+        dormitoryId: input.dormitoryId,
+        targetType: 'tenant',
+        targetTenantId: req.tenantId,
+        category: 'MAINTENANCE_STATUS_UPDATED',
+        title: 'อัปเดตสถานะการแจ้งซ่อม',
+        body: `รายการแจ้งซ่อม #${req.requestNumber} [${req.title}] เปลี่ยนสถานะเป็น ${input.status}`,
+        metadata: { requestId: req.id, requestNumber: req.requestNumber }
+      });
+    }
 
 
 

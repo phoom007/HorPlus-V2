@@ -31,6 +31,7 @@ export interface ClaimTenantDto {
   roomId?: string;
   roomNumber?: string;
   claimInput: string; // phone or full name
+  allowAdditionalRoom?: boolean;
 }
 
 interface EvaluatedTenantCandidate {
@@ -342,7 +343,7 @@ export class TenantClaimService {
         },
       });
 
-      if (existingLinkedTenant) {
+      if (existingLinkedTenant && !data.allowAdditionalRoom) {
         if (this.auditService) {
           await this.auditService.logSecurityEvent({
             action: 'tenant.claim.user_already_linked',
@@ -367,6 +368,13 @@ export class TenantClaimService {
         const err = new Error('ไม่พบข้อมูลผู้เช่าที่ตรงกับข้อมูลที่ระบุ');
         (err as any).statusCode = 404;
         (err as any).code = 'CLAIM_MATCH_FAILED';
+        throw err;
+      }
+
+      if (existingLinkedTenant && candidate.id === existingLinkedTenant.id) {
+        const err = new Error('คุณได้เชื่อมต่อห้องพักนี้ไว้แล้ว');
+        (err as any).statusCode = 400;
+        (err as any).code = 'CLAIM_ALREADY_LINKED';
         throw err;
       }
 

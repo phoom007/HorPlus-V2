@@ -21,6 +21,16 @@ describe('Environment Validation', () => {
     expect(env.CORS_ORIGINS).toEqual(['http://localhost:5173', 'http://localhost:3000']);
   });
 
+  it('defaults CORS_ORIGINS to both localhost and 127.0.0.1 loopback origins', () => {
+    const rawEnv = {
+      NODE_ENV: 'development',
+      DATABASE_URL: 'postgresql://user:pass@localhost:5432/db',
+    };
+
+    const env = validateEnv(rawEnv);
+    expect(env.CORS_ORIGINS).toEqual(['http://localhost:5173', 'http://127.0.0.1:5173']);
+  });
+
   it('fails if DATABASE_URL is missing', () => {
     const rawEnv = {
       REDIS_URL: 'redis://localhost:6379',
@@ -55,7 +65,7 @@ describe('Environment Validation', () => {
     it('allows startup for horplus_test database', () => {
       expect(() => validateEnv({ NODE_ENV: 'test', E2E_TEST_MODE: 'true', DATABASE_URL: 'postgresql://user:pass@localhost:5432/horplus_test' })).not.toThrow();
     });
-    
+
     it('fatally stops for horplus_pilot database', () => {
       expect(() => validateEnv({ NODE_ENV: 'test', E2E_TEST_MODE: 'true', DATABASE_URL: 'postgresql://user:pass@localhost:5432/horplus_pilot' })).toThrow(/unauthorized database 'horplus_pilot'/);
     });
@@ -81,4 +91,3 @@ describe('Environment Validation', () => {
     });
   });
 });
-

@@ -1,22 +1,24 @@
-version: '3.8'
 services:
   db:
-    image: postgres:15
+    image: postgres:16-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-horplus}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-horplus_test_password}
       POSTGRES_DB: ${POSTGRES_DB:-horplus_wave1d_fasttrack_test}
       HORPLUS_APP_DB_USER: ${HORPLUS_APP_DB_USER:-horplus_app}
-      HORPLUS_APP_DB_PASSWORD: ${HORPLUS_APP_DB_PASSWORD:-password}
+      HORPLUS_APP_DB_PASSWORD: ${HORPLUS_APP_DB_PASSWORD:-horplus_test_password}
     volumes:
       - ./docker/bootstrap-runtime-role.sh:/docker-entrypoint-initdb.d/01_bootstrap_runtime_role.sh
+      - horplus_v2_db_data:/var/lib/postgresql/data
     ports:
-      - "5455:5432"
+      - "${LOCAL07_DB_PORT:-15555}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-horplus} -d ${POSTGRES_DB:-horplus_wave1d_fasttrack_test}"]
       interval: 5s
       timeout: 5s
       retries: 5
+      start_period: 10s
 
   redis:
     image: redis:7-alpine
@@ -39,8 +41,8 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3000
-      DATABASE_URL: postgresql://${HORPLUS_APP_DB_USER:-horplus_app}:${HORPLUS_APP_DB_PASSWORD:-password}@db:5432/${POSTGRES_DB:-horplus_wave1d_fasttrack_test}?schema=public
-      DIRECT_URL: postgresql://${POSTGRES_USER:-horplus}:${POSTGRES_PASSWORD:-password}@db:5432/${POSTGRES_DB:-horplus_wave1d_fasttrack_test}?schema=public
+      DATABASE_URL: postgresql://${HORPLUS_APP_DB_USER:-horplus_app}:${HORPLUS_APP_DB_PASSWORD:-horplus_test_password}@db:5432/${POSTGRES_DB:-horplus_wave1d_fasttrack_test}?schema=public
+      DIRECT_URL: postgresql://${POSTGRES_USER:-horplus}:${POSTGRES_PASSWORD:-horplus_test_password}@db:5432/${POSTGRES_DB:-horplus_wave1d_fasttrack_test}?schema=public
       REDIS_URL: redis://redis:6379
       LOG_LEVEL: info
       SESSION_ENCRYPTION_KEY: prod_session_secret_key_32_chars_long_0001
@@ -51,3 +53,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+
+volumes:
+  horplus_v2_db_data:
+    name: horplus_wave1d_fasttrack_postgres_data
+    external: true

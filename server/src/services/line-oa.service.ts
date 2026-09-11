@@ -152,6 +152,156 @@ export function buildTenantRegistrationFlexMessage(dormitoryName: string, regist
   };
 }
 
+export function buildTenantApprovalOutcomeFlexMessage(
+  dormitoryName: string,
+  roomNumber: string,
+  isApproved: boolean,
+  reason?: string,
+  appUrl?: string
+) {
+  const isOk = Boolean(isApproved);
+  const headerBgColor = isOk ? '#06C755' : '#EF4444';
+  const headerTitle = isOk ? 'อนุมัติคำขอเช่าห้องพักเรียบร้อยแล้ว' : 'แจ้งผลการพิจารณาคำขอเช่าห้องพัก';
+  const statusBadgeColor = isOk ? '#166534' : '#991B1B';
+  const statusText = isOk ? 'อนุมัติแล้ว' : 'ไม่อนุมัติ';
+
+  const bodyContents: any[] = [
+    {
+      type: 'box',
+      layout: 'horizontal',
+      contents: [
+        {
+          type: 'text',
+          text: 'สถานะ',
+          size: 'sm',
+          color: '#64748B',
+          flex: 2,
+        },
+        {
+          type: 'text',
+          text: statusText,
+          size: 'sm',
+          color: statusBadgeColor,
+          weight: 'bold',
+          flex: 4,
+          align: 'end',
+        },
+      ],
+    },
+    {
+      type: 'box',
+      layout: 'horizontal',
+      contents: [
+        {
+          type: 'text',
+          text: 'ห้องพัก',
+          size: 'sm',
+          color: '#64748B',
+          flex: 2,
+        },
+        {
+          type: 'text',
+          text: `ห้อง ${roomNumber}`,
+          size: 'sm',
+          color: '#0F172A',
+          weight: 'bold',
+          flex: 4,
+          align: 'end',
+        },
+      ],
+    },
+  ];
+
+  if (!isOk && reason) {
+    bodyContents.push({
+      type: 'box',
+      layout: 'vertical',
+      margin: 'md',
+      contents: [
+        {
+          type: 'text',
+          text: 'เหตุผล:',
+          size: 'xs',
+          color: '#64748B',
+        },
+        {
+          type: 'text',
+          text: reason,
+          size: 'sm',
+          color: '#EF4444',
+          wrap: true,
+        },
+      ],
+    });
+  } else if (isOk) {
+    bodyContents.push({
+      type: 'text',
+      text: 'ท่านสามารถเข้าสู่ระบบผู้เช่าเพื่อตรวจสอบข้อมูลห้องพัก สัญญา และใบแจ้งหนี้ได้ทันที',
+      size: 'xs',
+      color: '#475569',
+      margin: 'md',
+      wrap: true,
+    });
+  }
+
+  const targetUrl = `${appUrl || 'http://localhost:5173'}/tenant`;
+
+  return {
+    type: 'flex',
+    altText: `ผลการพิจารณาคำขอเช่าห้องพัก ${roomNumber} - ${dormitoryName}`,
+    contents: {
+      type: 'bubble',
+      header: {
+        type: 'box',
+        layout: 'vertical',
+        backgroundColor: headerBgColor,
+        paddingAll: '20px',
+        contents: [
+          {
+            type: 'text',
+            text: dormitoryName,
+            color: '#FFFFFF',
+            size: 'xs',
+            weight: 'regular',
+          },
+          {
+            type: 'text',
+            text: headerTitle,
+            color: '#FFFFFF',
+            size: 'md',
+            weight: 'bold',
+            wrap: true,
+          },
+        ],
+      },
+      body: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'sm',
+        paddingAll: '20px',
+        contents: bodyContents,
+      },
+      footer: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'sm',
+        contents: [
+          {
+            type: 'button',
+            style: 'primary',
+            color: isOk ? '#06C755' : '#4F46E5',
+            action: {
+              type: 'uri',
+              label: 'เข้าสู่ระบบผู้เช่า',
+              uri: targetUrl,
+            },
+          },
+        ],
+      },
+    },
+  };
+}
+
 export class LineOaService {
   private friendService: LineFriendService;
   private inviteService: TenantRegistrationInviteService;
@@ -838,5 +988,22 @@ export class LineOaService {
     }
 
     return result;
+  }
+
+  async pushOutcomeNotification(
+    dormitoryId: string,
+    toLineUserId: string,
+    flexMessage: any
+  ): Promise<boolean> {
+    try {
+      const accessToken = await this.resolveAccessToken(dormitoryId);
+      if (!accessToken) return false;
+      const retryKey = crypto.randomUUID();
+      const res = await this.lineAdapter.pushMessage(toLineUserId, flexMessage, accessToken, retryKey);
+      return res.outcome === 'ACCEPTED' || res.outcome === 'ALREADY_ACCEPTED';
+    } catch (err: any) {
+      console.warn('Failed to push LINE outcome notification:', err.message);
+      return false;
+    }
   }
 }

@@ -4,7 +4,9 @@ import { ISubscriptionRepository } from '../db/repositories/subscription.reposit
 import { IContractRepository } from '../db/repositories/contract.repository.js';
 import { AuditService } from './audit.service.js';
 import { AppError } from '../types/index.js';
+import { evaluateMaintenanceEligibilityFromRecords, resolveCurrentMaintenanceEligibilityByRoom, acquireRoomAvailabilityLock } from '../utils/occupancy-interval.util.js';
 import { subscriptionEntitlementService } from './subscription-entitlement.service.js';
+import { currentCycleResolverService } from './current-cycle-resolver.js';
 
 export interface RoomFilterQuery {
   buildingId?: string;
@@ -162,10 +164,11 @@ export class RoomService {
         throw new AppError('ไม่สามารถเพิ่มห้องพักในอาคารที่ถูกจัดเก็บแล้วได้', 400, 'BUILDING_ARCHIVED');
       }
 
-      // Check Dormitory-scoped Duplicate Room
+      // Check Building-scoped Duplicate Room
       const existingRoom = await tx.room.findFirst({
         where: {
           dormitoryId,
+          buildingId: data.buildingId,
           normalizedRoomNumber,
           deletedAt: null,
         },
@@ -173,7 +176,7 @@ export class RoomService {
 
       if (existingRoom) {
         throw new AppError(
-          `หมายเลขห้องพัก "${data.roomNumber}" มีอยู่แล้วในหอพักนี้`,
+          `หมายเลขห้องพัก "${data.roomNumber}" มีอยู่แล้วในอาคารนี้`,
           409,
           'ROOM_NUMBER_ALREADY_EXISTS'
         );
@@ -183,7 +186,17 @@ export class RoomService {
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${dormitoryId}))`;
       }
 
-      await subscriptionEntitlementService.assertRoomCreationAllowed(dormitoryId, new Date(), tx);
+      // Seed cycle deposits from DormitoryPropertyDefaults.defaultDeposit if omitted
+      const dormPropertyDefaults = tx.dormitoryPropertyDefaults
+        ? await tx.dormitoryPropertyDefaults.findUnique({
+            where: { dormitoryId },
+          })
+        : null;
+      const defaultDepositStr = dormPropertyDefaults?.defaultDeposit ? String(dormPropertyDefaults.defaultDeposit) : '0.00';
+
+      const termDeposit = data.termDeposit !== undefined && data.termDeposit !== null ? data.termDeposit : (data.depositAmount || defaultDepositStr);
+      const monthlyDeposit = data.monthlyDeposit !== undefined && data.monthlyDeposit !== null ? data.monthlyDeposit : (data.depositAmount || defaultDepositStr);
+      const dailyDeposit = data.dailyDeposit !== undefined && data.dailyDeposit !== null ? data.dailyDeposit : (data.depositAmount || defaultDepositStr);
 
       const created = await tx.room.create({
         data: {
@@ -193,11 +206,15 @@ export class RoomService {
           normalizedRoomNumber,
           floor: data.floor || 1,
           roomType: data.roomType || 'standard',
+          status: data.status || 'vacant',
           rentCycle: data.rentCycle || 'monthly',
-          monthlyRent: data.monthlyRent || null,
-          termRent: data.termRent || null,
-          dailyRent: data.dailyRent || null,
-          depositAmount: data.depositAmount || null,
+          monthlyRent: (data.monthlyRent !== undefined && data.monthlyRent !== null && String(data.monthlyRent) !== '') ? String(data.monthlyRent) : null,
+          termRent: (data.termRent !== undefined && data.termRent !== null && String(data.termRent) !== '') ? String(data.termRent) : null,
+          dailyRent: (data.dailyRent !== undefined && data.dailyRent !== null && String(data.dailyRent) !== '') ? String(data.dailyRent) : null,
+          termDeposit,
+          monthlyDeposit,
+          dailyDeposit,
+          depositAmount: data.depositAmount || monthlyDeposit,
           parkingFee: data.parkingFee || null,
           maximumOccupants: data.maximumOccupants || 2,
           waterMeterNumber: data.waterMeterNumber || null,
@@ -210,6 +227,20 @@ export class RoomService {
           version: 1,
         },
       });
+
+      const operational = await currentCycleResolverService.resolveOperationalBillingCycle(dormitoryId, tx);
+      if (operational && operational.billingCycleId) {
+        await tx.roomOperationalStatusChange.create({
+          data: {
+            dormitoryId,
+            roomId: created.id,
+            effectiveBillingCycleId: operational.billingCycleId,
+            status: created.status || 'vacant',
+            updatedByUserId: userId || null,
+            version: 1,
+          },
+        });
+      }
 
       await tx.auditLog.create({
         data: {
@@ -269,6 +300,11 @@ export class RoomService {
     const { getPrismaClient } = await import('../db/prisma.js');
 
     const runInTx = async (tx: any) => {
+      // 1. Advisory room lock for availability-affecting mutations (Part A & B)
+      if (changes.status !== undefined) {
+        await acquireRoomAvailabilityLock(tx, targetDormId, id);
+      }
+
       const existing = await tx.room.findFirst({
         where: { id, dormitoryId: targetDormId, deletedAt: null },
       });
@@ -292,10 +328,12 @@ export class RoomService {
         }
         normalizedRoomNumber = validation.normalized;
 
-        if (normalizedRoomNumber !== existing.normalizedRoomNumber) {
+        const targetBuildingId = changes.buildingId || existing.buildingId;
+        if (normalizedRoomNumber !== existing.normalizedRoomNumber || (changes.buildingId && changes.buildingId !== existing.buildingId)) {
           const duplicate = await tx.room.findFirst({
             where: {
               dormitoryId: targetDormId,
+              buildingId: targetBuildingId,
               normalizedRoomNumber,
               id: { not: id },
               deletedAt: null,
@@ -303,9 +341,38 @@ export class RoomService {
           });
           if (duplicate) {
             throw new AppError(
-              `หมายเลขห้องพัก "${changes.roomNumber}" มีอยู่แล้วในหอพักนี้`,
+              `หมายเลขห้องพัก "${changes.roomNumber || existing.roomNumber}" มีอยู่แล้วในอาคารนี้`,
               409,
               'ROOM_NUMBER_ALREADY_EXISTS'
+            );
+          }
+        }
+      }
+
+      // Product Decision F1: Maintenance Occupancy & Reservation Guard (Part I Single Shared Authority)
+      if (changes.status !== undefined && changes.status !== existing.status && changes.status === 'maintenance') {
+        const now = new Date();
+        const eligibilityMap = await resolveCurrentMaintenanceEligibilityByRoom(
+          targetDormId,
+          [id],
+          tx,
+          now
+        );
+        const eligibility = eligibilityMap.get(id);
+
+        if (!eligibility || !eligibility.canSetMaintenance) {
+          const reason = eligibility?.maintenanceBlockReason;
+          if (reason === 'ACTIVE_RESERVATION') {
+            throw new AppError(
+              'ไม่สามารถปิดปรับปรุงได้ เนื่องจากห้องนี้มีการจองล่วงหน้า',
+              409,
+              'ROOM_HAS_ACTIVE_RESERVATION'
+            );
+          } else {
+            throw new AppError(
+              'ไม่สามารถปิดปรับปรุงได้ เนื่องจากห้องนี้มีผู้เช่าพักอยู่',
+              409,
+              'ROOM_HAS_ACTIVE_OCCUPANCY'
             );
           }
         }
@@ -336,6 +403,43 @@ export class RoomService {
         throw err;
       }
 
+      let effectiveStatusCycleId: string | null = null;
+      if (changes.status !== undefined && changes.status !== existing.status) {
+        const operational = await currentCycleResolverService.resolveOperationalBillingCycle(targetDormId, tx);
+        if (!operational || !operational.billingCycleId) {
+          throw new AppError(
+            'ไม่พบข้อมูลงวดบิลที่เปิดใช้งานอยู่ในปัจจุบัน ไม่สามารถเปลี่ยนสถานะห้องพักได้',
+            422,
+            'OPERATIONAL_BILLING_CYCLE_UNAVAILABLE'
+          );
+        }
+
+        effectiveStatusCycleId = operational.billingCycleId;
+
+        await tx.roomOperationalStatusChange.upsert({
+          where: {
+            dormitory_room_effective_cycle_unique: {
+              dormitoryId: targetDormId,
+              roomId: id,
+              effectiveBillingCycleId: operational.billingCycleId,
+            },
+          },
+          create: {
+            dormitoryId: targetDormId,
+            roomId: id,
+            effectiveBillingCycleId: operational.billingCycleId,
+            status: changes.status,
+            updatedByUserId: userId || null,
+            version: 1,
+          },
+          update: {
+            status: changes.status,
+            updatedByUserId: userId || null,
+            version: { increment: 1 },
+          },
+        });
+      }
+
       const updated = await tx.room.findUnique({ where: { id } });
 
       await tx.auditLog.create({
@@ -351,7 +455,10 @@ export class RoomService {
         },
       });
 
-      return updated;
+      return {
+        ...updated,
+        effectiveRoomStatusCycleId: effectiveStatusCycleId,
+      };
     };
 
     try {

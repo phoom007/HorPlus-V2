@@ -26,6 +26,8 @@ if (process.env.NODE_ENV === 'production') {
 import { chromium } from 'playwright';
 import { assertSafeDatabaseTarget } from './db-safety-guard.mjs';
 import { createAllSessions, createGoldenOwnerSession } from './login-helper.mjs';
+import { assertNoActiveRefresh } from './refresh-lock.mjs';
+import { runPreflight } from './preflight.mjs';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -53,10 +55,59 @@ const PERSONA_MAP = {
 };
 
 async function main() {
-  // 1. Safety Guard
+  // 1. Refresh Mutual Exclusion Guard
+  assertNoActiveRefresh('UAT Browser Launcher');
+
+  // 2. Safety Guard
   const safety = assertSafeDatabaseTarget();
 
-  // 2. Resolve Persona Argument
+  // 3. Full-Stack Preflight Readiness Gate
+  let preflight = await runPreflight({ silent: true });
+  if (!preflight.passed && !preflight.checks.uatSessions && preflight.checks.apiReady && preflight.checks.frontend && preflight.checks.postgres && preflight.checks.redis) {
+    console.log('⚠️ UAT session expired or probe returned 401. Auto-refreshing UAT sessions...');
+    await createAllSessions();
+    preflight = await runPreflight({ silent: true });
+  }
+
+  if (!preflight.passed) {
+    if (!preflight.checks.apiLiveness || !preflight.checks.apiReady) {
+      console.error('\n❌ UAT BLOCKED: Backend API unavailable on 127.0.0.1:3001');
+      console.error('   Start/recover the backend before Product Owner UAT.');
+      console.error('   Browser was NOT opened.\n');
+    } else if (!preflight.checks.frontend) {
+      console.error('\n❌ UAT BLOCKED: Frontend dev server unavailable on 127.0.0.1:5173');
+      console.error('   Start frontend dev server (npm run dev) before Product Owner UAT.');
+      console.error('   Browser was NOT opened.\n');
+    } else if (!preflight.checks.postgres) {
+      console.error(`\n❌ UAT BLOCKED: PostgreSQL database unavailable on 127.0.0.1:${safety.port}`);
+      console.error('   Start database container (npm run uat:infra:up) before Product Owner UAT.');
+      console.error('   Browser was NOT opened.\n');
+    } else if (!preflight.checks.redis) {
+      console.error('\n❌ UAT BLOCKED: Redis service unavailable on 127.0.0.1:6380');
+      console.error('   Start Redis container (npm run uat:infra:up) before Product Owner UAT.');
+      console.error('   Browser was NOT opened.\n');
+    } else if (!preflight.checks.uatSessions) {
+      console.error('\n❌ UAT BLOCKED: UAT session validation failed');
+      console.error(`   ${preflight.errors.uatSessions || 'Please run npm run uat:refresh to generate valid sessions.'}`);
+      console.error('   Browser was NOT opened.\n');
+    } else {
+      console.error('\n❌ UAT BLOCKED: Full-stack preflight verification failed');
+      for (const [key, msg] of Object.entries(preflight.errors)) {
+        console.error(`   - [${key}]: ${msg}`);
+      }
+      console.error('   Browser was NOT opened.\n');
+    }
+    process.exit(1);
+  }
+
+  console.log('✅ PostgreSQL ready');
+  console.log('✅ Redis ready');
+  console.log('✅ API ready on 3001');
+  console.log('✅ Frontend ready on 5173');
+  console.log('✅ Owner session ready');
+  console.log('Opening Comprehensive Owner UAT...\n');
+
+  // 4. Resolve Persona Argument
   const rawArg = (process.argv[2] || 'register').toLowerCase().trim();
   const persona = PERSONA_MAP[rawArg];
 
@@ -117,9 +168,34 @@ async function main() {
   const context = await browser.newContext({
     storageState: sessionFile,
     viewport: null, // Full window
+    acceptDownloads: true,
+  });
+
+  const handleDownload = async (download) => {
+    try {
+      const suggestedFilename = download.suggestedFilename();
+      const userDownloads = path.join(process.env.USERPROFILE || ROOT_DIR, 'Downloads');
+      if (!fs.existsSync(userDownloads)) {
+        fs.mkdirSync(userDownloads, { recursive: true });
+      }
+      const targetPath = path.join(userDownloads, suggestedFilename);
+      await download.saveAs(targetPath);
+      console.log('\n================================================================================');
+      console.log('📥 [UAT Download Success] บันทึกไฟล์สำเร็จเรียบร้อย!');
+      console.log(`📄 ชื่อไฟล์:  ${suggestedFilename}`);
+      console.log(`📁 ปลายทาง: ${targetPath}`);
+      console.log('================================================================================\n');
+    } catch (err) {
+      console.error(`⚠️ [UAT Download Warning] ${err.message}`);
+    }
+  };
+
+  context.on('page', (newPage) => {
+    newPage.on('download', handleDownload);
   });
 
   const page = await context.newPage();
+  page.on('download', handleDownload);
 
   try {
     await page.goto(persona.url, { waitUntil: 'domcontentloaded', timeout: 15000 });

@@ -61,7 +61,7 @@ export class CurrentCycleResolverService {
     const todayBangkokStartUtc = getBangkokStartOfDayUtc(todayBangkok);
 
     // 1. Check for latest qualifying activated Monthly Utility cycle at or after current Bangkok month
-    const activeFutureBills = await db.bill.findMany({
+    const activeFutureBills = db.bill ? await db.bill.findMany({
       where: {
         dormitoryId,
         billKind: { in: ['MONTHLY_UTILITY', 'LEGACY_COMBINED'] },
@@ -74,7 +74,7 @@ export class CurrentCycleResolverService {
       include: { billingCycle: true },
       orderBy: { createdAt: 'desc' },
       take: 50,
-    });
+    }) : [];
 
     if (activeFutureBills.length > 0) {
       const sorted = [...activeFutureBills].sort((a: any, b: any) => {
@@ -98,7 +98,7 @@ export class CurrentCycleResolverService {
     }
 
     // 2. Base default: Cycle matching current Asia/Bangkok business month (YYYY-MM or active date range)
-    let currentCycle = await db.billingCycle.findFirst({
+    let currentCycle = db.billingCycle ? await db.billingCycle.findFirst({
       where: {
         dormitoryId,
         OR: [
@@ -110,7 +110,7 @@ export class CurrentCycleResolverService {
         ],
       },
       orderBy: { periodStart: 'desc' },
-    });
+    }) : null;
 
     if (currentCycle) {
       return {
@@ -122,23 +122,23 @@ export class CurrentCycleResolverService {
     }
 
     // 3. Fallback to onboarding start cycle or earliest cycle (normalized via Asia/Bangkok date utility)
-    const dorm = await db.dormitory.findUnique({
+    const dorm = db.dormitory ? await db.dormitory.findUnique({
       where: { id: dormitoryId },
       select: { createdAt: true },
-    });
+    }) : null;
 
     const createdDate = dorm?.createdAt || new Date();
     const startCode = toBangkokDateString(createdDate).slice(0, 7);
 
-    let startCycle = await db.billingCycle.findFirst({
+    let startCycle = db.billingCycle ? await db.billingCycle.findFirst({
       where: { dormitoryId, cycleCode: startCode },
-    });
+    }) : null;
 
     if (!startCycle) {
-      startCycle = await db.billingCycle.findFirst({
+      startCycle = db.billingCycle ? await db.billingCycle.findFirst({
         where: { dormitoryId },
         orderBy: { periodStart: 'asc' },
-      });
+      }) : null;
     }
 
     const fallbackCode = startCycle?.cycleCode || currentYearMonth;

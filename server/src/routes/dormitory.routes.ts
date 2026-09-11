@@ -7,6 +7,8 @@ import { ISubscriptionRepository } from '../db/repositories/subscription.reposit
 import { IPlanRepository } from '../db/repositories/plan.repository.js';
 import { SensitiveFieldService } from '../services/sensitive-field.service.js';
 import { SignatureStorageService } from '../services/signature-storage.service.js';
+import { dormitoryLogoService } from '../services/dormitory-logo.service.js';
+import { tenantRegistrationService } from '../services/tenant-registration.service.js';
 import { createRequireSessionMiddleware } from '../middleware/require-session.js';
 import { createRequireDormitoryContextMiddleware } from '../middleware/require-dormitory.js';
 import { createRequirePermissionMiddleware } from '../middleware/require-permission.js';
@@ -18,6 +20,8 @@ import {
   OnboardingPaymentInputSchema,
   PaymentSettingsInputSchema,
 } from '../types/onboarding-validation.js';
+import { validateCanonicalUtilityTiers } from '../utils/utility-tier-validator.util.js';
+import { normalizeUtilityBillingMode } from '../utils/billing-mode-normalizer.util.js';
 
 import multer from 'multer';
 const upload = multer({ limits: { fileSize: 5 * 1024 * 1024 } });
@@ -33,6 +37,7 @@ export function createDormitoryRouter(
   roleRepo: any
 ): Router {
   const router = Router();
+  const prisma = getPrismaClient();
   const requireSession = createRequireSessionMiddleware(authService);
   const requireDormitory = createRequireDormitoryContextMiddleware(membershipRepo, roleRepo);
 
@@ -77,6 +82,7 @@ export function createDormitoryRouter(
       const dorm = await dormitoryRepo.findById(mem.dormitoryId);
       if (dorm && dorm.status === 'active') {
         seenDormIds.add(dorm.id);
+        const hasLogo = Boolean((dorm as any).logoObjectKey);
         dormList.push({
           id: dorm.id,
           name: dorm.name,
@@ -85,6 +91,8 @@ export function createDormitoryRouter(
           roleCode: mem.roleCode || 'OWNER',
           status: dorm.status,
           createdAt: dorm.createdAt,
+          hasLogo,
+          logoUrl: hasLogo ? `/api/v1/dormitories/${dorm.id}/logo` : null,
         });
       }
     }
@@ -99,10 +107,11 @@ export function createDormitoryRouter(
             status: 'active',
             id: { notIn: Array.from(seenDormIds) }
           },
-          select: { id: true, name: true, code: true, type: true, status: true, createdAt: true }
+          select: { id: true, name: true, code: true, type: true, status: true, createdAt: true, logoObjectKey: true }
         });
         for (const dorm of legacyDorms) {
           console.warn(`WAVE0_LEGACY_COMPAT: Dormitory ${dorm.id} accessible via createdByUserId fallback for user ${userId}. Membership backfill required.`);
+          const hasLogo = Boolean((dorm as any).logoObjectKey);
           dormList.push({
             id: dorm.id,
             name: dorm.name,
@@ -111,6 +120,8 @@ export function createDormitoryRouter(
             roleCode: 'OWNER',
             status: dorm.status,
             createdAt: dorm.createdAt,
+            hasLogo,
+            logoUrl: hasLogo ? `/api/v1/dormitories/${dorm.id}/logo` : null,
             _legacyCreatorFallback: true,
           });
         }
@@ -166,12 +177,20 @@ export function createDormitoryRouter(
   // GET /api/v1/dormitories/:dormitoryId/billing-settings (PS-001 Public Billing DTO Isolation)
   router.get('/:dormitoryId/billing-settings', requireSession, requireDormitory, requireBillingView, async (req: Request, res: Response) => {
     const dormitoryId = req.params.dormitoryId;
-    let settings: any = await billingRepo.findByDormitoryId(dormitoryId);
-    if (!settings) {
-      const prisma = getPrismaClient();
-      if (prisma?.dormitoryBillingSettings) {
-        settings = await prisma.dormitoryBillingSettings.findUnique({ where: { dormitoryId } });
-      }
+    let settings: any = null;
+    try {
+      settings = await billingRepo.findByDormitoryId(dormitoryId);
+    } catch (err: any) {
+      console.error('GET billing settings internal error:', err);
+      return res.status(500).json({
+        error: {
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'เกิดข้อผิดพลาดภายในระบบ',
+          fieldErrors: null,
+          requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+          timestamp: new Date().toISOString(),
+        },
+      });
     }
 
     if (!settings) {
@@ -186,8 +205,10 @@ export function createDormitoryRouter(
       dueDay: settings.dueDay,
       waterBillingType: settings.waterBillingType,
       waterRate: String(settings.waterRate),
+      waterTierRates: settings.waterTierRates ?? null,
       electricityBillingType: settings.electricityBillingType,
       electricityRate: String(settings.electricityRate),
+      electricityTierRates: settings.electricityTierRates ?? null,
       commonFee: String(settings.commonFee),
       internetFee: String(settings.internetFee),
       lateFeeType: settings.lateFeeType,
@@ -218,24 +239,142 @@ export function createDormitoryRouter(
     }
 
     const dormitoryId = req.params.dormitoryId;
-    let current = await billingRepo.findByDormitoryId(dormitoryId);
-    if (!current) {
-      current = await billingRepo.create({ dormitoryId });
+
+    let current: any = null;
+    try {
+      current = await billingRepo.findByDormitoryId(dormitoryId);
+      if (!current) {
+        current = await billingRepo.create({ dormitoryId });
+      }
+    } catch (err: any) {
+      console.error('PATCH billing settings initialization error:', err);
+      return res.status(500).json({
+        error: {
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'เกิดข้อผิดพลาดภายในระบบ',
+          fieldErrors: null,
+          requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+          timestamp: new Date().toISOString(),
+        },
+      });
     }
 
-    const updated = await billingRepo.update(dormitoryId, parsed.data as any);
-    res.json({ data: updated });
+    try {
+      const effectiveWaterBillingType = normalizeUtilityBillingMode(
+        parsed.data.waterBillingType !== undefined ? parsed.data.waterBillingType : current.waterBillingType
+      );
+      const effectiveElectricityBillingType = normalizeUtilityBillingMode(
+        parsed.data.electricityBillingType !== undefined ? parsed.data.electricityBillingType : current.electricityBillingType
+      );
+
+      let effectiveWaterTierRates: any = undefined;
+      if (effectiveWaterBillingType === 'tiered') {
+        const candidate = parsed.data.waterTierRates !== undefined ? parsed.data.waterTierRates : current.waterTierRates;
+        if (!candidate || (Array.isArray(candidate) && candidate.length === 0)) {
+          const err = new Error("INVALID_TIER_CONFIGURATION: Water billing mode is 'tiered' but no tier configuration was provided");
+          (err as any).statusCode = 400;
+          (err as any).code = 'INVALID_TIER_CONFIGURATION';
+          throw err;
+        }
+        effectiveWaterTierRates = validateCanonicalUtilityTiers(candidate);
+      } else {
+        // Preserve inactive saved tiers unless client explicitly updated them
+        if (parsed.data.waterTierRates !== undefined) {
+          effectiveWaterTierRates = parsed.data.waterTierRates ? validateCanonicalUtilityTiers(parsed.data.waterTierRates) : null;
+        } else {
+          effectiveWaterTierRates = current.waterTierRates ?? null;
+        }
+      }
+
+      let effectiveElectricityTierRates: any = undefined;
+      if (effectiveElectricityBillingType === 'tiered') {
+        const candidate = parsed.data.electricityTierRates !== undefined ? parsed.data.electricityTierRates : current.electricityTierRates;
+        if (!candidate || (Array.isArray(candidate) && candidate.length === 0)) {
+          const err = new Error("INVALID_TIER_CONFIGURATION: Electricity billing mode is 'tiered' but no tier configuration was provided");
+          (err as any).statusCode = 400;
+          (err as any).code = 'INVALID_TIER_CONFIGURATION';
+          throw err;
+        }
+        effectiveElectricityTierRates = validateCanonicalUtilityTiers(candidate);
+      } else {
+        // Preserve inactive saved tiers unless client explicitly updated them
+        if (parsed.data.electricityTierRates !== undefined) {
+          effectiveElectricityTierRates = parsed.data.electricityTierRates ? validateCanonicalUtilityTiers(parsed.data.electricityTierRates) : null;
+        } else {
+          effectiveElectricityTierRates = current.electricityTierRates ?? null;
+        }
+      }
+
+      const updatePayload: any = {
+        ...parsed.data,
+        waterBillingType: effectiveWaterBillingType,
+        waterTierRates: effectiveWaterTierRates,
+        electricityBillingType: effectiveElectricityBillingType,
+        electricityTierRates: effectiveElectricityTierRates,
+      };
+
+      const updated = await billingRepo.update(dormitoryId, updatePayload as any);
+      if (!updated) {
+        return res.status(404).json({
+          error: {
+            code: 'DORMITORY_BILLING_SETTINGS_NOT_FOUND',
+            message: 'ไม่พบการตั้งค่าการเรียกเก็บเงินของหอพัก',
+            fieldErrors: null,
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+
+      res.json({ data: updated });
+    } catch (err: any) {
+      if (
+        err.code === 'INVALID_TIER_CONFIGURATION' ||
+        err.code === 'INVALID_BILLING_MODE' ||
+        err.message?.startsWith('INVALID_TIER_CONFIGURATION') ||
+        err.message?.startsWith('INVALID_BILLING_MODE')
+      ) {
+        return res.status(400).json({
+          error: {
+            code: err.code || 'INVALID_TIER_CONFIGURATION',
+            message: err.message,
+            fieldErrors: null,
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+
+      console.error('PATCH billing settings internal error:', err);
+      return res.status(500).json({
+        error: {
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'เกิดข้อผิดพลาดภายในระบบ',
+          fieldErrors: null,
+          requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+          timestamp: new Date().toISOString(),
+        },
+      });
+    }
   });
 
   // GET /api/v1/dormitories/:dormitoryId/payment-settings (PS-002, PS-003, PS-008)
   router.get('/:dormitoryId/payment-settings', requireSession, requireDormitory, requirePaymentView, async (req: Request, res: Response) => {
     const dormitoryId = req.params.dormitoryId;
-    let settings: any = await billingRepo.findByDormitoryId(dormitoryId);
-    if (!settings) {
-      const prisma = getPrismaClient();
-      if (prisma?.dormitoryBillingSettings) {
-        settings = await prisma.dormitoryBillingSettings.findUnique({ where: { dormitoryId } });
-      }
+    let settings: any = null;
+    try {
+      settings = await billingRepo.findByDormitoryId(dormitoryId);
+    } catch (err: any) {
+      console.error('GET payment settings internal error:', err);
+      return res.status(500).json({
+        error: {
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'เกิดข้อผิดพลาดภายในระบบ',
+          fieldErrors: null,
+          requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+          timestamp: new Date().toISOString(),
+        },
+      });
     }
 
     if (!settings) {
@@ -320,13 +459,33 @@ export function createDormitoryRouter(
     }
 
     const dormitoryId = req.params.dormitoryId;
-    const prisma = getPrismaClient();
 
     let currentSettings: any = null;
-    if (prisma?.dormitoryBillingSettings) {
-      currentSettings = await prisma.dormitoryBillingSettings.findUnique({ where: { dormitoryId } });
-    } else {
+    try {
       currentSettings = await billingRepo.findByDormitoryId(dormitoryId);
+    } catch (err: any) {
+      console.error('PATCH payment settings findByDormitoryId error:', err.message);
+      return res.status(500).json({
+        error: {
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'เกิดข้อผิดพลาดภายในระบบ',
+          fieldErrors: null,
+          requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+          timestamp: new Date().toISOString(),
+        },
+      });
+    }
+
+    if (!currentSettings) {
+      return res.status(404).json({
+        error: {
+          code: 'DORMITORY_BILLING_SETTINGS_NOT_FOUND',
+          message: 'ไม่พบการตั้งค่าการเรียกเก็บเงินของหอพัก',
+          fieldErrors: null,
+          requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+          timestamp: new Date().toISOString(),
+        },
+      });
     }
 
     let finalPromptPayEnc: string | null = currentSettings?.promptPayValueEncrypted ?? null;
@@ -436,25 +595,31 @@ export function createDormitoryRouter(
     };
 
     let updated: any;
-    if (prisma?.dormitoryBillingSettings) {
-      if (currentSettings) {
-        updated = await prisma.dormitoryBillingSettings.update({
-          where: { dormitoryId },
-          data: updateData,
-        });
-      } else {
-        return res.status(404).json({
-          error: {
-            code: 'DORMITORY_BILLING_SETTINGS_NOT_FOUND',
-            message: 'ไม่พบการตั้งค่าการเรียกเก็บเงินของหอพัก',
-            fieldErrors: null,
-            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
-            timestamp: new Date().toISOString(),
-          },
-        });
-      }
-    } else {
+    try {
       updated = await billingRepo.update(dormitoryId, updateData);
+    } catch (err: any) {
+      console.error('PATCH payment settings update error:', err.message);
+      return res.status(500).json({
+        error: {
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'เกิดข้อผิดพลาดภายในระบบ',
+          fieldErrors: null,
+          requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+          timestamp: new Date().toISOString(),
+        },
+      });
+    }
+
+    if (!updated) {
+      return res.status(404).json({
+        error: {
+          code: 'DORMITORY_BILLING_SETTINGS_NOT_FOUND',
+          message: 'ไม่พบการตั้งค่าการเรียกเก็บเงินของหอพัก',
+          fieldErrors: null,
+          requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+          timestamp: new Date().toISOString(),
+        },
+      });
     }
 
     if (!decryptedPromptPay && updated.promptPayValueEncrypted) {
@@ -648,6 +813,284 @@ export function createDormitoryRouter(
 
   router.get('/:dormitoryId/signature', requireSession, requireDormitory, requireDormitoryView, handleGetSignature);
   router.get('/:dormitoryId/signatures', requireSession, requireDormitory, requireDormitoryView, handleGetSignature);
+
+  // GET /api/v1/dormitories/:dormitoryId/contracts/:contractId/tenant-signature
+  router.get('/:dormitoryId/contracts/:contractId/tenant-signature', requireSession, requireDormitory, requireDormitoryView, async (req: Request, res: Response) => {
+    try {
+      const { dormitoryId, contractId } = req.params;
+      const contract = await prisma.contract.findFirst({
+        where: { id: contractId, dormitoryId },
+      });
+      if (!contract || !contract.tenantSignature) {
+        return res.status(404).json({ error: { message: 'Tenant signature not found' } });
+      }
+      const signatureService = new SignatureStorageService(prisma);
+      const stream = await signatureService.getSignatureStream(contract.tenantSignature);
+      res.setHeader('Content-Type', 'image/png');
+      res.setHeader('Cache-Control', 'private, max-age=3600');
+      stream.pipe(res);
+    } catch (err: any) {
+      const statusCode = err.statusCode || (err.code === 'SIGNATURE_NOT_FOUND' ? 404 : 500);
+      res.status(statusCode).json({
+        error: {
+          code: err.code || 'SIGNATURE_STREAM_FAILED',
+          message: err.message || 'เกิดข้อผิดพลาดขณะเรียกลายเซ็นผู้เช่า',
+        },
+      });
+    }
+  });
+
+  // GET /api/v1/dormitories/:dormitoryId/contracts/:contractId/owner-signature
+  router.get('/:dormitoryId/contracts/:contractId/owner-signature', requireSession, requireDormitory, requireDormitoryView, async (req: Request, res: Response) => {
+    try {
+      const { dormitoryId, contractId } = req.params;
+      const contract = await prisma.contract.findFirst({
+        where: { id: contractId, dormitoryId },
+      });
+      if (!contract) {
+        return res.status(404).json({ error: { message: 'Contract not found' } });
+      }
+      const signatureService = new SignatureStorageService(prisma);
+      let objectKey = contract.ownerSignature;
+      if (!objectKey) {
+        // Presentation fallback to current Settings signature without mutating contract
+        const latestOwnerSig = await signatureService.getLatestSignatureRecord(dormitoryId);
+        objectKey = latestOwnerSig?.objectKey || null;
+      }
+      if (!objectKey) {
+        return res.status(404).json({ error: { message: 'Owner signature not found' } });
+      }
+      const stream = await signatureService.getSignatureStream(objectKey);
+      res.setHeader('Content-Type', 'image/png');
+      res.setHeader('Cache-Control', 'private, max-age=3600');
+      stream.pipe(res);
+    } catch (err: any) {
+      const statusCode = err.statusCode || (err.code === 'SIGNATURE_NOT_FOUND' ? 404 : 500);
+      res.status(statusCode).json({
+        error: {
+          code: err.code || 'SIGNATURE_STREAM_FAILED',
+          message: err.message || 'เกิดข้อผิดพลาดขณะเรียกลายเซ็นเจ้าของหอพัก',
+        },
+      });
+    }
+  });
+
+  // GET /api/v1/dormitories/:dormitoryId/contracts/:contractId/signatures/:party
+  router.get('/:dormitoryId/contracts/:contractId/signatures/:party', requireSession, requireDormitory, requireDormitoryView, async (req: Request, res: Response) => {
+    try {
+      const { dormitoryId, contractId, party } = req.params;
+      if (party !== 'tenant' && party !== 'owner') {
+        return res.status(400).json({ error: { message: 'Invalid party parameter' } });
+      }
+      const contract = await prisma.contract.findFirst({
+        where: { id: contractId, dormitoryId },
+      });
+      if (!contract) {
+        return res.status(404).json({ error: { message: 'Contract not found' } });
+      }
+      const signatureService = new SignatureStorageService(prisma);
+      let objectKey = party === 'tenant' ? contract.tenantSignature : contract.ownerSignature;
+      if (party === 'owner' && !objectKey) {
+        // Presentation fallback to current Settings signature without mutating contract
+        const latestOwnerSig = await signatureService.getLatestSignatureRecord(dormitoryId);
+        objectKey = latestOwnerSig?.objectKey || null;
+      }
+      if (!objectKey) {
+        return res.status(404).json({ error: { message: `${party} signature not found` } });
+      }
+      const stream = await signatureService.getSignatureStream(objectKey);
+      res.setHeader('Content-Type', 'image/png');
+      res.setHeader('Cache-Control', 'private, max-age=3600');
+      stream.pipe(res);
+    } catch (err: any) {
+      const statusCode = err.statusCode || (err.code === 'SIGNATURE_NOT_FOUND' ? 404 : 500);
+      res.status(statusCode).json({
+        error: {
+          code: err.code || 'SIGNATURE_STREAM_FAILED',
+          message: err.message || 'เกิดข้อผิดพลาดขณะเรียกลายเซ็น',
+        },
+      });
+    }
+  });
+
+  // GET /api/v1/dormitories/:dormitoryId/tenant-registrations/:requestId/tenant-signature
+  router.get('/:dormitoryId/tenant-registrations/:requestId/tenant-signature', requireSession, requireDormitory, requireDormitoryView, async (req: Request, res: Response) => {
+    try {
+      const { dormitoryId, requestId } = req.params;
+      const reg = await prisma.tenantRegistrationRequest.findFirst({
+        where: {
+          dormitoryId,
+          OR: [
+            { id: requestId },
+            { approvedTenantId: requestId },
+          ],
+        },
+      });
+      if (!reg || !reg.tenantSignatureObjectKey) {
+        return res.status(404).json({ error: { message: 'Tenant signature not found' } });
+      }
+      const signatureService = new SignatureStorageService(prisma);
+      const stream = await signatureService.getSignatureStream(reg.tenantSignatureObjectKey);
+      res.setHeader('Content-Type', 'image/png');
+      res.setHeader('Cache-Control', 'private, max-age=3600');
+      stream.pipe(res);
+    } catch (err: any) {
+      const statusCode = err.statusCode || (err.code === 'SIGNATURE_NOT_FOUND' ? 404 : 500);
+      res.status(statusCode).json({
+        error: {
+          code: err.code || 'SIGNATURE_STREAM_FAILED',
+          message: err.message || 'เกิดข้อผิดพลาดขณะเรียกลายเซ็นผู้เช่า',
+        },
+      });
+    }
+  });
+
+  // GET /api/v1/dormitories/:dormitoryId/tenant-registrations/:requestId/identity-document
+  router.get('/:dormitoryId/tenant-registrations/:requestId/identity-document', requireSession, requireDormitory, requireDormitoryView, async (req: Request, res: Response) => {
+    try {
+      const { dormitoryId, requestId } = req.params;
+      const doc = await tenantRegistrationService.getRegistrationIdentityDocument(dormitoryId, requestId);
+      res.setHeader('Content-Type', doc.mimeType);
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('Cache-Control', 'private, no-store, no-cache, must-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+      res.setHeader('Content-Disposition', `inline; filename="${doc.filename}"`);
+      return res.send(doc.fileBuffer);
+    } catch (err: any) {
+      if (err?.code === 'IDENTITY_DOCUMENT_NOT_FOUND' || err?.code === 'FILE_NOT_FOUND' || err?.code === 'REGISTRATION_NOT_FOUND') {
+        return res.status(404).json({
+          error: {
+            code: 'IDENTITY_DOCUMENT_NOT_FOUND',
+            message: err.message || 'ไม่พบไฟล์เอกสารสำเนาบัตรประชาชน',
+          },
+        });
+      }
+      res.status(err.status || err.statusCode || 500).json({
+        error: {
+          code: err.code || 'IDENTITY_DOCUMENT_ERROR',
+          message: err.message || 'เกิดข้อผิดพลาดในการดึงเอกสาร',
+        },
+      });
+    }
+  });
+
+  // POST /api/v1/dormitories/:dormitoryId/logo (Owner Round 2.4E Dormitory Logo Upload)
+  const handlePostLogo = async (req: Request, res: Response) => {
+    if (!verifyCsrfToken(req, res)) return;
+
+    try {
+      const contentType = req.headers['content-type'] || '';
+      if (!contentType.includes('multipart/form-data')) {
+        return res.status(400).json({
+          error: {
+            code: 'INVALID_CONTENT_TYPE',
+            message: 'รองรับเฉพาะการอัปโหลดแบบ multipart/form-data เท่านั้น',
+            fieldErrors: null,
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+
+      if (!req.file || !req.file.buffer) {
+        return res.status(400).json({
+          error: {
+            code: 'EMPTY_FILE',
+            message: 'กรุณาเลือกไฟล์โลโก้หอพัก',
+            fieldErrors: null,
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+
+      const dormitoryId = req.params.dormitoryId;
+      const result = await dormitoryLogoService.uploadLogo({
+        dormitoryId,
+        buffer: req.file.buffer,
+        originalName: req.file.originalname,
+      });
+
+      res.status(200).json({ data: result });
+    } catch (err: any) {
+      const statusCode = err.status || err.statusCode || 500;
+      res.status(statusCode).json({
+        error: {
+          code: err.code || 'LOGO_UPLOAD_FAILED',
+          message: err.message || 'เกิดข้อผิดพลาดขณะอัปโหลดโลโก้หอพัก',
+          fieldErrors: null,
+          requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+          timestamp: new Date().toISOString(),
+        },
+      });
+    }
+  };
+
+  // GET /api/v1/dormitories/:dormitoryId/logo (Owner Round 2.4E Dormitory Logo Stream)
+  const handleGetLogo = async (req: Request, res: Response) => {
+    try {
+      const dormitoryId = req.params.dormitoryId;
+      const { stream, mimeType } = await dormitoryLogoService.getLogoStream(dormitoryId);
+
+      res.setHeader('Content-Type', mimeType);
+      res.setHeader('Cache-Control', 'public, max-age=3600');
+      stream.pipe(res);
+    } catch (err: any) {
+      const statusCode = err.status || err.statusCode || 404;
+      res.status(statusCode).json({
+        error: {
+          code: err.code || 'LOGO_STREAM_FAILED',
+          message: err.message || 'ไม่พบโลโก้หอพัก',
+          fieldErrors: null,
+          requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+          timestamp: new Date().toISOString(),
+        },
+      });
+    }
+  };
+
+  // DELETE /api/v1/dormitories/:dormitoryId/logo (Owner Round 2.4E Dormitory Logo Delete)
+  const handleDeleteLogo = async (req: Request, res: Response) => {
+    if (!verifyCsrfToken(req, res)) return;
+
+    try {
+      const dormitoryId = req.params.dormitoryId;
+      const result = await dormitoryLogoService.deleteLogo(dormitoryId);
+
+      res.status(200).json({ data: result });
+    } catch (err: any) {
+      const statusCode = err.status || err.statusCode || 500;
+      res.status(statusCode).json({
+        error: {
+          code: err.code || 'LOGO_DELETE_FAILED',
+          message: err.message || 'เกิดข้อผิดพลาดขณะลบโลโก้หอพัก',
+          fieldErrors: null,
+          requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+          timestamp: new Date().toISOString(),
+        },
+      });
+    }
+  };
+
+  router.post(
+    '/:dormitoryId/logo',
+    requireSession,
+    requireDormitory,
+    requireDormitoryUpdate,
+    requireDormitoryWriteEntitlement,
+    upload.single('file'),
+    handlePostLogo
+  );
+  router.get('/:dormitoryId/logo', handleGetLogo);
+  router.delete(
+    '/:dormitoryId/logo',
+    requireSession,
+    requireDormitory,
+    requireDormitoryUpdate,
+    requireDormitoryWriteEntitlement,
+    handleDeleteLogo
+  );
 
   return router;
 }

@@ -1,15 +1,17 @@
+import { generateNextBillNumberInTx } from '../utils/bill-number.util.js';
 import {
   IBillRepository,
   BillEntity,
   BillItemEntity,
   BillFilterQuery,
   CreateBillItemData,
+  PrismaBillRepository,
 } from '../db/repositories/bill.repository.js';
-import { IBillingCycleRepository } from '../db/repositories/billing-cycle.repository.js';
-import { IMeterRepository } from '../db/repositories/meter.repository.js';
-import { IContractRepository } from '../db/repositories/contract.repository.js';
-import { IRoomRepository } from '../db/repositories/room.repository.js';
-import { ITenantRepository } from '../db/repositories/tenant.repository.js';
+import { IBillingCycleRepository, PrismaBillingCycleRepository } from '../db/repositories/billing-cycle.repository.js';
+import { IMeterRepository, PrismaMeterRepository } from '../db/repositories/meter.repository.js';
+import { IContractRepository, PrismaContractRepository } from '../db/repositories/contract.repository.js';
+import { IRoomRepository, PrismaRoomRepository } from '../db/repositories/room.repository.js';
+import { ITenantRepository, PrismaTenantRepository } from '../db/repositories/tenant.repository.js';
 import { AuditService } from './audit.service.js';
 import { billingOrchestrationService } from './billing-orchestration.service.js';
 import { resolveProvisionalBillingSource as sharedResolveProvisionalBillingSource } from './provisional-billing-source.service.js';
@@ -19,6 +21,8 @@ import { toDecimal, addDecimals, mulDecimals, divDecimals, formatDecimal, subDec
 import { calculateInstallmentSchedule } from '../utils/installment-calculator.util.js';
 import { normalizeUtilityBillingMode } from '../utils/billing-mode-normalizer.util.js';
 import { calculateCanonicalMonthlyUtility } from '../utils/monthly-utility-calculator.util.js';
+import { isAgreementEligibleForBillingCycle } from '../utils/calendar-date.util.js';
+import { resolveCycleAwareVehicleCount, resolveCurrentActiveVehicleCount } from '../utils/vehicle-billing.util.js';
 import { getPrismaClient } from '../db/prisma.js';
 
 /**
@@ -189,6 +193,93 @@ export class BillingService {
     });
   }
 
+  /**
+   * Authoritatively resolves the active billing agreement (Contract or ProvisionalRentalTerm) for a room in a cycle.
+   *
+   * Priority 1: Eligible active Contract (status active, deletedAt null, overlapping cycle: startDate <= periodEnd && endDate >= periodStart)
+   * Priority 2: Eligible active ProvisionalRentalTerm (status ACTIVE, deletedAt null, overlapping cycle: startDate <= periodEnd && endDate >= periodStart)
+   *
+   * Rejections:
+   * - If active contracts exist for the room but none overlap target cycle -> CONTRACT_NOT_ELIGIBLE_FOR_CYCLE (400)
+   * - If no active contracts exist, but active provisional terms exist out of cycle -> PROVISIONAL_TERM_NOT_ELIGIBLE_FOR_CYCLE (400)
+   * - If no active contract or provisional term exists -> NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM (404)
+   */
+  public async resolveActiveAgreementBillingSource(
+    dormitoryId: string,
+    roomId: string,
+    billingCycle: { periodStart: Date | string; periodEnd: Date | string },
+    tx?: any
+  ): Promise<{ contract: any | null; provisionalTerm: any | null }> {
+    // 1. Fetch cycle-eligible contracts for room (cleanly separated from physical-active semantics)
+    const activeContracts = typeof (this.contractRepo as any).findCycleEligibleContractsForRoom === 'function'
+      ? await (this.contractRepo as any).findCycleEligibleContractsForRoom(dormitoryId, roomId, tx)
+      : await this.contractRepo.findActiveContractsForRoom(dormitoryId, roomId);
+
+    if (activeContracts && activeContracts.length > 0) {
+      const overlappingContracts = activeContracts.filter((c: any) =>
+        isAgreementEligibleForBillingCycle({
+          agreementStartDate: c.startDate,
+          agreementEndDate: c.endDate,
+          cyclePeriodStart: billingCycle.periodStart,
+          cyclePeriodEnd: billingCycle.periodEnd,
+          status: c.status,
+          terminationEffectiveDate: c.terminationEffectiveDate || (c.status === 'terminated' ? c.terminatedAt : null),
+        })
+      );
+
+      if (overlappingContracts.length === 0) {
+        const err = new Error('CONTRACT_NOT_ELIGIBLE_FOR_CYCLE');
+        (err as any).statusCode = 400;
+        (err as any).code = 'CONTRACT_NOT_ELIGIBLE_FOR_CYCLE';
+        (err as any).message = 'สัญญาเช่าไม่อยู่ในช่วงเวลาของรอบบิลนี้';
+        throw err;
+      }
+
+      overlappingContracts.sort((a: any, b: any) => {
+        const aStart = new Date(a.startDate).getTime();
+        const bStart = new Date(b.startDate).getTime();
+        if (aStart !== bStart) return aStart - bStart;
+        const aCreated = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+        const bCreated = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+        return bCreated - aCreated;
+      });
+
+      return { contract: overlappingContracts[0], provisionalTerm: null };
+    }
+
+    // 2. If no active contracts exist, resolve ProvisionalRentalTerm (Priority 2)
+    const provisionalTerm = await this.resolveProvisionalBillingSource(dormitoryId, roomId, billingCycle, tx);
+
+    if (provisionalTerm) {
+      return { contract: null, provisionalTerm };
+    }
+
+    const prisma = getPrismaClient();
+    const client = tx || prisma;
+    const anyActiveTerm = await client.provisionalRentalTerm.findFirst({
+      where: {
+        dormitoryId,
+        roomId,
+        status: 'ACTIVE',
+        deletedAt: null,
+      },
+    });
+
+    if (anyActiveTerm) {
+      const err = new Error('PROVISIONAL_TERM_NOT_ELIGIBLE_FOR_CYCLE');
+      (err as any).statusCode = 400;
+      (err as any).code = 'PROVISIONAL_TERM_NOT_ELIGIBLE_FOR_CYCLE';
+      (err as any).message = 'ข้อตกลงเช่าชั่วคราวไม่อยู่ในช่วงเวลาของรอบบิลนี้';
+      throw err;
+    }
+
+    const err = new Error('NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM');
+    (err as any).statusCode = 404;
+    (err as any).code = 'NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM';
+    (err as any).message = 'ห้องพักไม่มีสัญญาหรือข้อตกลงเช่าที่พร้อมออกบิลสำหรับงวดนี้';
+    throw err;
+  }
+
   public async generateBillPreview(
     dormitoryId: string,
     billingCycleId: string,
@@ -198,6 +289,9 @@ export class BillingService {
     asOfDate?: Date | string | null,
     billDueDate?: Date | string | null
   ): Promise<BillPreviewResult> {
+    const prisma = getPrismaClient();
+    const client = tx || prisma;
+
     const cycle = await this.billingCycleRepo.findById(billingCycleId, dormitoryId);
     if (!cycle) {
       const err = new Error('BILLING_CYCLE_NOT_FOUND');
@@ -234,41 +328,13 @@ export class BillingService {
       throw err;
     }
 
-    // 1. Resolve Contract (Priority 1) or ACTIVE ProvisionalRentalTerm (Priority 2)
-    const activeContracts = await this.contractRepo.findActiveContractsForRoom(dormitoryId, roomId);
-    let contract = activeContracts.length > 0 ? activeContracts[0] : null;
-    let provisionalTerm: any = null;
-
-    const prisma = getPrismaClient();
-    const client = tx || prisma;
-
-    if (!contract) {
-      provisionalTerm = await this.resolveProvisionalBillingSource(dormitoryId, roomId, cycle, tx);
-
-      if (!provisionalTerm) {
-        // Check if there is an active provisional term out of cycle range
-        const anyActive = await client.provisionalRentalTerm.findFirst({
-          where: {
-            dormitoryId,
-            roomId,
-            status: 'ACTIVE',
-            deletedAt: null,
-          },
-        });
-        if (anyActive) {
-          const err = new Error('PROVISIONAL_TERM_NOT_ELIGIBLE_FOR_CYCLE');
-          (err as any).statusCode = 400;
-          (err as any).code = 'PROVISIONAL_TERM_NOT_ELIGIBLE_FOR_CYCLE';
-          (err as any).message = 'ข้อตกลงเช่าชั่วคราวไม่อยู่ในช่วงเวลาของรอบบิลนี้';
-          throw err;
-        }
-        const err = new Error('NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM');
-        (err as any).statusCode = 404;
-        (err as any).code = 'NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM';
-        (err as any).message = 'ห้องพักไม่มีสัญญาหรือข้อตกลงเช่าที่พร้อมออกบิลสำหรับงวดนี้';
-        throw err;
-      }
-    }
+    // 1. Resolve Contract (Priority 1) or ACTIVE ProvisionalRentalTerm (Priority 2) with cycle eligibility
+    const { contract, provisionalTerm } = await this.resolveActiveAgreementBillingSource(
+      dormitoryId,
+      roomId,
+      cycle,
+      tx
+    );
 
     const tenantId = contract ? contract.tenantId : provisionalTerm.tenantId;
     const tenant = tenantId ? await this.tenantRepo.findById(tenantId, dormitoryId) : null;
@@ -375,8 +441,10 @@ export class BillingService {
     }
 
     let waterUsageStr = '0.00';
+    let waterRateStr = formatDecimal(waterRate);
     let waterItemAmount = '0.00';
     let elecUsageStr = '0.00';
+    let elecRateStr = formatDecimal(elecRate);
     let elecItemAmount = '0.00';
     let commonItemAmount = '0.00';
     let internetItemAmount = '0.00';
@@ -407,8 +475,17 @@ export class BillingService {
       let vehicleCount = 0;
       const parkingMode = (rateSnapshot as any).parkingFeeMode || 'room';
       if (parkingMode === 'vehicle' || parkingMode === 'per_vehicle') {
-        const vehicles = tenantId ? await this.tenantRepo.findVehicles(tenantId, dormitoryId) : [];
-        vehicleCount = vehicles.length;
+        let vehicles: any[] = [];
+        if (tenantId) {
+          if (client?.tenantVehicle?.findMany) {
+            vehicles = await client.tenantVehicle.findMany({
+              where: { tenantId, dormitoryId, deletedAt: null },
+            });
+          } else {
+            vehicles = await this.tenantRepo.findVehicles(tenantId, dormitoryId);
+          }
+        }
+        vehicleCount = resolveCurrentActiveVehicleCount(vehicles);
       }
 
       const cycleSnapshot = await client.roomBillingCycleSnapshot.findUnique({
@@ -456,8 +533,10 @@ export class BillingService {
 
       items.push(...utilityResult.items);
       waterUsageStr = utilityResult.waterUsage;
+      waterRateStr = utilityResult.waterRate;
       waterItemAmount = utilityResult.waterAmount;
       elecUsageStr = utilityResult.electricityUsage;
+      elecRateStr = utilityResult.electricityRate;
       elecItemAmount = utilityResult.electricityAmount;
       commonItemAmount = utilityResult.commonFee;
       internetItemAmount = utilityResult.internetFee;
@@ -480,10 +559,10 @@ export class BillingService {
       tenantId: tenantId || (tenant ? tenant.id : ''),
       rentAmount: rentItemAmount,
       waterUsage: waterUsageStr,
-      waterRate: formatDecimal(waterRate),
+      waterRate: waterRateStr,
       waterAmount: waterItemAmount,
       electricityUsage: elecUsageStr,
-      electricityRate: formatDecimal(elecRate),
+      electricityRate: elecRateStr,
       electricityAmount: elecItemAmount,
       commonFee: commonItemAmount,
       internetFee: internetItemAmount,
@@ -542,36 +621,13 @@ export class BillingService {
       throw err;
     }
 
-    // Derive/validate active contract or active provisional rental term for room
-    const activeContracts = await this.contractRepo.findActiveContractsForRoom(dormitoryId, data.roomId);
-    let contract = activeContracts.length > 0 ? activeContracts[0] : null;
-    let provisionalTerm: any = null;
-
-    if (!contract) {
-      provisionalTerm = await this.resolveProvisionalBillingSource(dormitoryId, data.roomId, cycle, existingTx);
-
-      if (!provisionalTerm) {
-        const anyActive = await (existingTx || prisma).provisionalRentalTerm.findFirst({
-          where: {
-            dormitoryId,
-            roomId: data.roomId,
-            status: 'ACTIVE',
-            deletedAt: null,
-          },
-        });
-        if (anyActive) {
-          const err = new Error('PROVISIONAL_TERM_NOT_ELIGIBLE_FOR_CYCLE');
-          (err as any).statusCode = 400;
-          (err as any).code = 'PROVISIONAL_TERM_NOT_ELIGIBLE_FOR_CYCLE';
-          (err as any).message = 'ข้อตกลงเช่าชั่วคราวไม่อยู่ในช่วงเวลาของรอบบิลนี้';
-          throw err;
-        }
-        const err = new Error('NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM');
-        (err as any).statusCode = 404;
-        (err as any).code = 'NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM';
-        throw err;
-      }
-    }
+    // Derive/validate active contract or active provisional rental term for room with cycle eligibility
+    const { contract, provisionalTerm } = await this.resolveActiveAgreementBillingSource(
+      dormitoryId,
+      data.roomId,
+      cycle,
+      existingTx
+    );
 
     const effectiveContractId = contract ? contract.id : null;
     const effectiveProvisionalRentalTermId = provisionalTerm ? provisionalTerm.id : null;
@@ -593,9 +649,20 @@ export class BillingService {
       throw err;
     }
 
-    const billingDate = resolveBillIssueDate(issuanceNow);
-    const dueDate = resolveBillDueDate(issuanceNow, settings.dueDay);
     const billKind = data.billKind || 'LEGACY_COMBINED';
+
+    let billingDate: Date;
+    let dueDate: Date;
+
+    if (billKind === 'RENT') {
+      billingDate = new Date(cycle.periodStart);
+      dueDate = cycle.dueDate
+        ? new Date(cycle.dueDate)
+        : resolveBillDueDate(new Date(cycle.periodStart), settings.dueDay);
+    } else {
+      billingDate = data.billingDate ? new Date(data.billingDate) : resolveBillIssueDate(issuanceNow);
+      dueDate = data.dueDate ? new Date(data.dueDate) : resolveBillDueDate(issuanceNow, settings.dueDay);
+    }
 
     const executeInTx = async (tx: any) => {
       await this.billRepo.executeRawLock(data.roomId, tx);
@@ -649,6 +716,14 @@ export class BillingService {
         });
       }
 
+      if (billKind === 'RENT' && billItems.length === 0) {
+        const err = new Error('NO_RENT_DUE_FOR_CYCLE');
+        (err as any).statusCode = 400;
+        (err as any).code = 'NO_RENT_DUE_FOR_CYCLE';
+        (err as any).message = 'ไม่มีรายการค่าเช่าที่ต้องชำระในรอบบิลนี้';
+        throw err;
+      }
+
       let subtotalDec = toDecimal('0.00');
       for (const item of billItems) {
         subtotalDec = addDecimals(subtotalDec, item.amount);
@@ -657,10 +732,12 @@ export class BillingService {
       const discountDec = toDecimal(data.discountAmount || '0.00');
       const rawTotal = subDecimals(subtotalDec, discountDec);
       const totalDec = compareDecimals(rawTotal, '0.00') < 0 ? toDecimal('0.00') : rawTotal;
+      const isZeroTotal = isZeroDecimal(totalDec);
+      const effectiveStatus = isZeroTotal ? 'paid' : 'unpaid';
+      const effectiveOutstanding = isZeroTotal ? '0.00' : formatDecimal(totalDec);
+      const effectivePaidAmount = '0.00';
 
-      const countRes = await this.billRepo.findAll(dormitoryId, { billingCycleId: data.billingCycleId }, tx);
-      const billSeq = (countRes.total + 1).toString().padStart(4, '0');
-      const billNumber = `INV-${cycle.cycleCode}-${billSeq}`;
+      const billNumber = await generateNextBillNumberInTx(tx, dormitoryId, cycle.cycleCode);
 
       let createdData;
       try {
@@ -674,13 +751,14 @@ export class BillingService {
             tenantId: effectiveTenantId,
             billKind,
             billNumber,
-            status: 'unpaid',
+            status: effectiveStatus,
             billingDate,
             dueDate,
             subtotal: formatDecimal(subtotalDec),
             discountAmount: formatDecimal(discountDec),
             totalAmount: formatDecimal(totalDec),
-            outstandingAmount: formatDecimal(totalDec),
+            paidAmount: effectivePaidAmount,
+            outstandingAmount: effectiveOutstanding,
             rateSnapshotId: rateSnapshot?.id,
             generatedByUserId: userId,
             generatedAt: issuanceNow,
@@ -736,7 +814,8 @@ export class BillingService {
     billingCycleId: string,
     roomIds?: string[],
     userId?: string,
-    dirtyRows?: any[]
+    dirtyRows?: any[],
+    requestedBillKind?: 'LEGACY_COMBINED' | 'MONTHLY_UTILITY' | 'RENT' | 'DEPOSIT'
   ): Promise<{
     generatedCount: number;
     bills: BillEntity[];
@@ -744,6 +823,7 @@ export class BillingService {
     excluded: Array<{ roomId: string; reason: string }>;
     failed: Array<{ roomId: string; error: string; code: string }>;
   }> {
+    const targetBillKind = requestedBillKind || 'MONTHLY_UTILITY';
     const cycle = await this.billingCycleRepo.findById(billingCycleId, dormitoryId);
     if (!cycle) {
       const err = new Error('BILLING_CYCLE_NOT_FOUND');
@@ -809,7 +889,7 @@ export class BillingService {
             await meterService.saveSingleRoomWorkspaceInTx(dormitoryId, billingCycleId, dirtyRow, userId, tx);
             const { bill, created } = await this.generateBill(
               dormitoryId,
-              { billingCycleId, roomId, billKind: 'MONTHLY_UTILITY' },
+              { billingCycleId, roomId, billKind: targetBillKind },
               userId,
               issuanceNow,
               tx
@@ -825,7 +905,9 @@ export class BillingService {
           if (
             err.code === 'MISSING_METER_READING' ||
             err.code === 'NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM' ||
+            err.code === 'CONTRACT_NOT_ELIGIBLE_FOR_CYCLE' ||
             err.code === 'PROVISIONAL_TERM_NOT_ELIGIBLE_FOR_CYCLE' ||
+            err.code === 'NO_RENT_DUE_FOR_CYCLE' ||
             err.code === 'BILL_ALREADY_EXISTS' ||
             err.code === 'ROOM_ENTITLEMENT_LOCKED' ||
             err.code === 'ROOM_NOT_FOUND'
@@ -841,32 +923,21 @@ export class BillingService {
         }
       } else {
         // Standard room issuance without dirty row
-        const activeContracts = await this.contractRepo.findActiveContractsForRoom(dormitoryId, roomId);
-        let contract = activeContracts.length > 0 ? activeContracts[0] : null;
-        let provisionalTerm: any = null;
-
-        if (!contract) {
-          provisionalTerm = await this.resolveProvisionalBillingSource(dormitoryId, roomId, cycle);
-        }
-
-        if (!contract && !provisionalTerm) {
-          excluded.push({ roomId, reason: 'NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM' });
-          continue;
-        }
-
-        const existing = await this.billRepo.findActiveMonthlyUtilityByRoomAndCycle(dormitoryId, billingCycleId, roomId);
-        if (existing) {
-          excluded.push({ roomId, reason: 'BILL_ALREADY_EXISTS' });
-          continue;
-        }
-
         try {
+          await this.resolveActiveAgreementBillingSource(dormitoryId, roomId, cycle);
+
+          const existing = await this.billRepo.findByCycleAndRoom(dormitoryId, billingCycleId, roomId, targetBillKind);
+          if (existing) {
+            excluded.push({ roomId, reason: 'BILL_ALREADY_EXISTS' });
+            continue;
+          }
+
           const { bill, created } = await this.generateBill(
             dormitoryId,
             {
               billingCycleId,
               roomId,
-              billKind: 'MONTHLY_UTILITY',
+              billKind: targetBillKind,
             },
             userId,
             issuanceNow
@@ -881,7 +952,9 @@ export class BillingService {
           if (
             err.code === 'MISSING_METER_READING' ||
             err.code === 'NO_ACTIVE_CONTRACT_OR_PROVISIONAL_TERM' ||
+            err.code === 'CONTRACT_NOT_ELIGIBLE_FOR_CYCLE' ||
             err.code === 'PROVISIONAL_TERM_NOT_ELIGIBLE_FOR_CYCLE' ||
+            err.code === 'NO_RENT_DUE_FOR_CYCLE' ||
             err.code === 'BILL_ALREADY_EXISTS' ||
             err.code === 'ROOM_ENTITLEMENT_LOCKED' ||
             err.code === 'ROOM_NOT_FOUND'
@@ -898,8 +971,8 @@ export class BillingService {
       }
     }
 
-    // Update cycle status to generated if at least one bill generated
-    if (cycle.status === 'draft' && generatedBills.length > 0) {
+    // Update cycle status to generated if at least one bill generated (RENT alone does not activate operational cycle)
+    if (cycle.status === 'draft' && generatedBills.length > 0 && targetBillKind !== 'RENT') {
       await this.billingCycleRepo.update(billingCycleId, dormitoryId, {
         status: 'generated',
         generatedAt: issuanceNow,
@@ -913,6 +986,63 @@ export class BillingService {
       excluded,
       failed,
     };
+  }
+
+  public async generateRecurringRentBills(
+    dormitoryId: string,
+    billingCycleId: string,
+    roomIds?: string[],
+    userId?: string
+  ) {
+    return this.bulkGenerateBills(dormitoryId, billingCycleId, roomIds, userId, undefined, 'RENT');
+  }
+
+  public async reconcileRecurringRentBillsForAllDormitories(asOfDate: Date = new Date()): Promise<number> {
+    const prisma = getPrismaClient();
+    let totalGenerated = 0;
+    try {
+      const { billingCycleService } = await import('./billing-cycle.service.js');
+      const { toBangkokDateString, getAdjacentCycleCode } = await import('../utils/calendar-date.util.js');
+
+      const activeDorms = await prisma.dormitory.findMany({
+        where: { status: 'active' },
+        select: { id: true },
+      });
+
+      for (const dorm of activeDorms) {
+        try {
+          await billingCycleService.ensureRollingBillingCycles(dorm.id);
+        } catch (err: any) {
+          // continue for other dorms
+        }
+      }
+
+      const bkkDateStr = toBangkokDateString(asOfDate);
+      const currentCalCycle = bkkDateStr.slice(0, 7);
+      const nextCalCycle = getAdjacentCycleCode(currentCalCycle, 1);
+
+      const cycles = await prisma.billingCycle.findMany({
+        where: {
+          dormitoryId: { in: activeDorms.map((d) => d.id) },
+          status: { notIn: ['completed', 'locked'] },
+          cycleCode: { gte: currentCalCycle, lte: nextCalCycle },
+        },
+        select: { id: true, dormitoryId: true, cycleCode: true },
+        orderBy: { periodStart: 'asc' },
+      });
+
+      for (const cycle of cycles) {
+        try {
+          const res = await this.generateRecurringRentBills(cycle.dormitoryId, cycle.id);
+          totalGenerated += res.generatedCount;
+        } catch (err: any) {
+          // Continue reconciling next cycles
+        }
+      }
+    } catch (err: any) {
+      console.error('[BillingService] reconcileRecurringRentBillsForAllDormitories error', err);
+    }
+    return totalGenerated;
   }
 
   public async getBills(
@@ -1013,4 +1143,319 @@ export class BillingService {
   }> {
     return this.billRepo.getSummary(dormitoryId, billingCycleId);
   }
+
+  public async resolveBillDirectRecalculationEligibilityInTx(
+    dormitoryId: string,
+    billId: string,
+    tx?: any
+  ): Promise<BillRecalculationEligibilityResult> {
+    return resolveBillDirectRecalculationEligibilityInTx(dormitoryId, billId, tx);
+  }
+
+  /**
+   * Authoritative dynamic parking synchronization for completely open/unpaid Monthly Utility Bills.
+   * Product Owner Decisions:
+   * 1. Mutable parking requires BOTH:
+   *    - paidAmount === 0 (no payments received)
+   *    - canonical direct-recalculation eligibility = eligible (no submitted slips, payments under review, allocations, or receipts)
+   * 2. Price and mode are governed strictly by the bill's cycle BillingRateSnapshot.
+   * 3. Vehicle quantity dynamically reflects current active TenantVehicle records.
+   * 4. BillItem synchronization is idempotent using canonical item type ('parking') or code ('PARKING'),
+   *    preserving all other line items (rent, water, electricity, common, internet, custom).
+   * 5. Recomputes bill subtotal, fine, total, outstanding using canonical decimal math.
+   */
+  public async syncOpenUnpaidMonthlyBillParkingInTx(
+    dormitoryId: string,
+    tenantId: string,
+    tx?: any
+  ): Promise<void> {
+    const prisma = tx || getPrismaClient();
+
+    // Find candidate rooms for this tenant
+    const activeContracts = await prisma.contract.findMany({
+      where: { tenantId, dormitoryId, deletedAt: null },
+      select: { roomId: true },
+    });
+    const activeProvs = prisma.provisionalRentalTerm
+      ? await prisma.provisionalRentalTerm.findMany({
+          where: { tenantId, dormitoryId, deletedAt: null },
+          select: { roomId: true },
+        })
+      : [];
+    const roomIds = Array.from(
+      new Set([
+        ...activeContracts.map((c: any) => c.roomId),
+        ...activeProvs.map((p: any) => p.roomId),
+      ])
+    );
+
+    // Query open Monthly Utility bills for this tenant/room
+    const candidateBills = await prisma.bill.findMany({
+      where: {
+        dormitoryId,
+        billKind: 'MONTHLY_UTILITY',
+        status: { in: ['UNPAID', 'ISSUED', 'OVERDUE', 'DRAFT', 'PUBLISHED'] },
+        OR: [
+          { tenantId },
+          ...(roomIds.length > 0 ? [{ roomId: { in: roomIds } }] : []),
+        ],
+      },
+      include: {
+        items: true,
+      },
+    });
+
+    if (!candidateBills || candidateBills.length === 0) {
+      return;
+    }
+
+    // Query current active vehicles for this tenant
+    const rawVehicles = await prisma.tenantVehicle.findMany({
+      where: {
+        dormitoryId,
+        tenantId,
+        deletedAt: null,
+      },
+    });
+    const currentActiveCount = resolveCurrentActiveVehicleCount(rawVehicles);
+
+    for (const bill of candidateBills) {
+      // 1. Strict Payment Freeze Boundary: paidAmount must be strictly 0
+      const paidNum = Number(bill.paidAmount || 0);
+      if (paidNum > 0) {
+        continue; // FROZEN — money already received
+      }
+
+      // 2. Strict Financial Evidence Guard: must be eligible for direct recalculation
+      const eligibility = await resolveBillDirectRecalculationEligibilityInTx(dormitoryId, bill.id, tx);
+      if (!eligibility.eligible) {
+        continue; // FROZEN — pending slips, payment under review, allocations, etc.
+      }
+
+      // 3. Billing Rate Snapshot Authority: read rate and mode from snapshot
+      const rateSnapshot = await this.billingCycleRepo.findRateSnapshot(bill.billingCycleId, dormitoryId);
+      if (!rateSnapshot) {
+        continue;
+      }
+
+      const rawParkingMode = (rateSnapshot as any).parkingFeeMode || 'room';
+      // Only per_vehicle mode dynamically reacts to vehicle count changes
+      if (rawParkingMode !== 'vehicle' && rawParkingMode !== 'per_vehicle') {
+        continue;
+      }
+
+      const parkingRate = toDecimal((rateSnapshot as any).parkingFee ?? '0.00');
+      const vQtyDec = toDecimal(currentActiveCount.toString());
+      const newParkingAmountDec = mulDecimals(vQtyDec, parkingRate);
+
+      // 4. Idempotent BillItem synchronization using canonical type/code
+      await prisma.billItem.deleteMany({
+        where: {
+          billId: bill.id,
+          dormitoryId,
+          OR: [
+            { type: 'parking' },
+            { code: 'PARKING' },
+          ],
+        },
+      });
+
+      if (currentActiveCount > 0 && !isZeroDecimal(parkingRate)) {
+        await prisma.billItem.create({
+          data: {
+            dormitoryId,
+            billId: bill.id,
+            type: 'parking',
+            code: 'PARKING',
+            description: `ค่าที่จอดรถ (${currentActiveCount} คัน)`,
+            quantity: formatDecimal(vQtyDec),
+            unit: 'vehicle',
+            unitPrice: formatDecimal(parkingRate),
+            amount: formatDecimal(newParkingAmountDec),
+            metadata: {
+              mode: 'vehicle',
+              vehicleCount: currentActiveCount,
+              rateSnapshotId: rateSnapshot.id,
+            },
+            displayOrder: 5,
+          },
+        });
+      }
+
+      // 5. Recompute bill totals via existing billing authority math
+      const allCurrentItems = await prisma.billItem.findMany({
+        where: { billId: bill.id, dormitoryId },
+      });
+
+      let subtotalDec = toDecimal('0.00');
+      let fineDec = toDecimal('0.00');
+      for (const item of allCurrentItems) {
+        if (item.type === 'late_fee' || item.type === 'fine') {
+          fineDec = addDecimals(fineDec, item.amount);
+        } else {
+          subtotalDec = addDecimals(subtotalDec, item.amount);
+        }
+      }
+      const discountDec = toDecimal(bill.discountAmount || '0.00');
+      const rawTotal = subDecimals(addDecimals(subtotalDec, fineDec), discountDec);
+      const totalDec = compareDecimals(rawTotal, '0.00') < 0 ? toDecimal('0.00') : rawTotal;
+      const paidDec = toDecimal('0.00');
+      const outstandingDec = totalDec;
+
+      await prisma.bill.update({
+        where: { id: bill.id },
+        data: {
+          subtotal: formatDecimal(subtotalDec),
+          fineAmount: formatDecimal(fineDec),
+          totalAmount: formatDecimal(totalDec),
+          paidAmount: formatDecimal(paidDec),
+          outstandingAmount: formatDecimal(outstandingDec),
+          version: { increment: 1 },
+        },
+      });
+
+      if (this.auditService) {
+        await this.auditService.log({
+          dormitoryId,
+          actorUserId: 'system',
+          action: 'VEHICLE_MUTATION_PARKING_SYNC',
+          resourceType: 'bill',
+          resourceId: bill.id,
+          details: {
+            tenantId,
+            vehicleCount: currentActiveCount,
+            newParkingAmount: formatDecimal(newParkingAmountDec),
+            newTotal: formatDecimal(totalDec),
+          },
+        });
+      }
+    }
+  }
 }
+
+export interface BillRecalculationEligibilityResult {
+  eligible: boolean;
+  code?: string;
+  message?: string;
+  bill?: any;
+}
+
+/**
+ * Canonical Bill Recalculation Eligibility Guard (Owner Decisions 1A & 2A Authority).
+ * Inspects full relational graph to guarantee that issued bills with any financial evidence
+ * cannot be recalculated directly from meter workspace.
+ */
+export async function resolveBillDirectRecalculationEligibilityInTx(
+  dormitoryId: string,
+  billId: string,
+  tx?: any
+): Promise<BillRecalculationEligibilityResult> {
+  const prisma = tx || getPrismaClient();
+
+  const bill = await prisma.bill.findFirst({
+    where: { id: billId, dormitoryId },
+    include: {
+      Payment: true,
+      allocations: true,
+      Receipt: true,
+      paymentGroupBillTargets: {
+        include: { paymentGroup: true },
+      },
+      paymentUploadIntents: true,
+    },
+  });
+
+  if (!bill) {
+    return {
+      eligible: false,
+      code: 'BILL_NOT_FOUND',
+      message: 'ไม่พบบิลที่ต้องการคำนวณใหม่',
+    };
+  }
+
+  if (bill.billKind !== 'MONTHLY_UTILITY') {
+    return {
+      eligible: false,
+      code: 'INVALID_BILL_KIND_FOR_METER_SYNC',
+      message: 'สามารถปรับยอดได้เฉพาะบิลค่าใช้จ่ายรายเดือน (MONTHLY_UTILITY) เท่านั้น',
+      bill,
+    };
+  }
+
+  const rawStatus = (bill.status || '').toUpperCase();
+  if (['CANCELLED', 'VOID', 'VOIDED'].includes(rawStatus)) {
+    return {
+      eligible: false,
+      code: 'BILL_CANCELLED',
+      message: 'บิลนี้ถูกยกเลิกแล้ว ไม่สามารถแก้ไขได้',
+      bill,
+    };
+  }
+
+  // Financial Evidence Check
+  const paidAmountNum = Number(bill.paidAmount || 0);
+  const isPaidOrPartial = ['PAID', 'PARTIALLY_PAID', 'REFUNDED', 'REVERSED'].includes(rawStatus) || paidAmountNum > 0;
+
+  const hasApprovedOrReviewPayment = (bill.Payment || []).some((p: any) => {
+    const st = (p.status || '').toUpperCase();
+    return ['APPROVED', 'VERIFIED', 'UNDER_REVIEW', 'PENDING'].includes(st);
+  });
+
+  const hasPaymentAllocations = (bill.allocations || []).some((a: any) => Number(a.allocatedAmount || 0) > 0);
+
+  const hasApprovedOrReviewGroup = (bill.paymentGroupBillTargets || []).some((t: any) => {
+    const st = (t.paymentGroup?.status || '').toUpperCase();
+    return ['APPROVED', 'PARTIALLY_APPROVED', 'UNDER_REVIEW', 'PENDING'].includes(st);
+  });
+
+  const hasReceipts = (bill.Receipt || []).some((r: any) => {
+    const st = (r.status || '').toUpperCase();
+    return st !== 'CANCELLED' && st !== 'VOID';
+  });
+
+  const hasActiveUploadIntent = (bill.paymentUploadIntents || []).some((u: any) => {
+    const st = (u.status || '').toUpperCase();
+    return ['PENDING', 'SUBMITTED', 'UNDER_REVIEW'].includes(st);
+  });
+
+  if (
+    isPaidOrPartial ||
+    hasApprovedOrReviewPayment ||
+    hasPaymentAllocations ||
+    hasApprovedOrReviewGroup ||
+    hasReceipts ||
+    hasActiveUploadIntent
+  ) {
+    return {
+      eligible: false,
+      code: 'BILL_HAS_FINANCIAL_EVIDENCE',
+      message: 'บิลนี้มีรายการชำระเงินหรือสลิปที่เกี่ยวข้องแล้ว\nไม่สามารถแก้ยอดโดยตรงได้',
+      bill,
+    };
+  }
+
+  // Allowed editable statuses: UNPAID, ISSUED, OVERDUE, DRAFT, PUBLISHED
+  if (!['UNPAID', 'ISSUED', 'OVERDUE', 'DRAFT', 'PUBLISHED'].includes(rawStatus)) {
+    return {
+      eligible: false,
+      code: 'BILL_STATUS_NOT_ELIGIBLE',
+      message: 'สถานะของบิลไม่อนุญาตให้แก้ไขยอดโดยตรง',
+      bill,
+    };
+  }
+
+  return {
+    eligible: true,
+    bill,
+  };
+}
+
+const defaultPrisma = getPrismaClient();
+export const billingService = new BillingService(
+  new PrismaBillRepository(defaultPrisma),
+  new PrismaBillingCycleRepository(defaultPrisma),
+  new PrismaMeterRepository(defaultPrisma),
+  new PrismaContractRepository(defaultPrisma),
+  new PrismaRoomRepository(defaultPrisma),
+  new PrismaTenantRepository(defaultPrisma)
+);

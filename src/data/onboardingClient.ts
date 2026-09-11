@@ -28,8 +28,16 @@ export interface CompleteOnboardingPayload {
     dueDay?: number;
     waterBillingType?: string;
     waterRate?: string;
+    waterTierRates?: Array<{
+      upTo: string | null;
+      rate: string;
+    }> | null;
     electricityBillingType?: string;
     electricityRate?: string;
+    electricityTierRates?: Array<{
+      upTo: string | null;
+      rate: string;
+    }> | null;
     commonFee?: string;
     commonFeeMode?: string;
     internetFee?: string;
@@ -189,6 +197,33 @@ export const onboardingClient = {
     }
 
     return httpRequest<any>('POST', `/dormitories/${dormitoryId}/signatures`, body, { headers });
+  },
+
+  async uploadLogo(dormitoryId: string, file: File): Promise<{ logoUrl: string; hasLogo: boolean }> {
+    const fd = new FormData();
+    fd.append('file', file);
+    const res = await httpRequest<{ data: { logoUrl: string; hasLogo?: boolean; dormitoryId?: string } }>(
+      'POST',
+      `/dormitories/${dormitoryId}/logo`,
+      fd,
+      { headers: { 'X-Dormitory-Id': dormitoryId }, dormitoryId }
+    );
+    return {
+      logoUrl: res.data.logoUrl,
+      hasLogo: res.data.hasLogo ?? true,
+    };
+  },
+
+  async deleteLogo(dormitoryId: string): Promise<{ success: boolean }> {
+    const res = await httpRequest<{ data: { success?: boolean } }>(
+      'DELETE',
+      `/dormitories/${dormitoryId}/logo`,
+      undefined,
+      { headers: { 'X-Dormitory-Id': dormitoryId }, dormitoryId }
+    );
+    return {
+      success: Boolean(res.data?.success),
+    };
   },
 
   async getLineConfig(dormitoryId: string) {

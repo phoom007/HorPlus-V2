@@ -6,6 +6,14 @@ export const BLOCKING_CONTRACT_STATUSES = [
   'checking_out',
 ];
 
+export const CYCLE_ELIGIBLE_CONTRACT_STATUSES = [
+  'active',
+  'approved_scheduled',
+  'expiring_soon',
+  'waiting_extension',
+  'checking_out',
+];
+
 import { v4 as uuidv4 } from 'uuid';
 import { PrismaClient } from '@prisma/client';
 import { getPrismaClient } from '../prisma.js';
@@ -67,7 +75,7 @@ export interface CreateContractData {
   durationMonths?: number;
   rentBillingType?: string;
   rentAmount: string;
-  depositAmount?: string;
+  depositAmount?: string | number | null;
   advancePaymentAmount?: string;
   terms?: string | null;
   createdByUserId?: string | null;
@@ -96,6 +104,7 @@ export interface IContractRepository {
   findByContractNumber(dormitoryId: string, contractNumber: string): Promise<ContractEntity | null>;
   findAll(dormitoryId: string, filter?: ContractFilterQuery): Promise<{ items: ContractEntity[]; total: number }>;
   findActiveContractsForRoom(dormitoryId: string, roomId: string): Promise<ContractEntity[]>;
+  findCycleEligibleContractsForRoom(dormitoryId: string, roomId: string, tx?: any): Promise<ContractEntity[]>;
   findOverlappingContractsForRoom(dormitoryId: string, roomId: string, startDate: Date, endDate: Date, excludeContractId?: string): Promise<ContractEntity[]>;
   countActiveByDormitory(dormitoryId: string): Promise<number>;
   countExpiringByDormitory(dormitoryId: string, days?: number): Promise<number>;
@@ -163,6 +172,16 @@ export class InMemoryContractRepository implements IContractRepository {
         c.roomId === roomId &&
         !c.deletedAt &&
         BLOCKING_CONTRACT_STATUSES.includes(c.status)
+    );
+  }
+
+  public async findCycleEligibleContractsForRoom(dormitoryId: string, roomId: string): Promise<ContractEntity[]> {
+    return Array.from(this.contracts.values()).filter(
+      (c) =>
+        c.dormitoryId === dormitoryId &&
+        c.roomId === roomId &&
+        !c.deletedAt &&
+        CYCLE_ELIGIBLE_CONTRACT_STATUSES.includes(c.status)
     );
   }
 
@@ -260,7 +279,7 @@ export class InMemoryContractRepository implements IContractRepository {
       durationMonths: data.durationMonths || 1,
       rentBillingType: data.rentBillingType || 'monthly',
       rentAmount: data.rentAmount,
-      depositAmount: data.depositAmount || '0.00',
+      depositAmount: data.depositAmount !== undefined && data.depositAmount !== null ? String(data.depositAmount) : '0.00',
       advancePaymentAmount: data.advancePaymentAmount || '0.00',
       terms: data.terms || null,
       tenantSignature: null,
@@ -425,6 +444,14 @@ export class PrismaContractRepository implements IContractRepository {
   public async findActiveContractsForRoom(dormitoryId: string, roomId: string): Promise<ContractEntity[]> {
     const items = await this.prisma.contract.findMany({
       where: { dormitoryId, roomId, status: 'active', deletedAt: null },
+    });
+    return items.map((c: any) => this.mapContractToEntity(c));
+  }
+
+  public async findCycleEligibleContractsForRoom(dormitoryId: string, roomId: string, tx?: any): Promise<ContractEntity[]> {
+    const client = tx || this.prisma;
+    const items = await client.contract.findMany({
+      where: { dormitoryId, roomId, status: { in: CYCLE_ELIGIBLE_CONTRACT_STATUSES }, deletedAt: null },
     });
     return items.map((c: any) => this.mapContractToEntity(c));
   }

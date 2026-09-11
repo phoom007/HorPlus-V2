@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import {
   IMeterRepository,
   MeterDeviceEntity,
@@ -14,14 +15,17 @@ import { billingOrchestrationService } from './billing-orchestration.service.js'
 import { ENTITLEMENT_ROOM_LIMITS } from './entitlement.service.js';
 import { subscriptionEntitlementService } from './subscription-entitlement.service.js';
 import { AppError } from '../types/index.js';
+import { resolveBillDirectRecalculationEligibilityInTx } from './billing.service.js';
+import { materializeFirstCyclePeopleSnapshots } from './first-cycle-people-materialization.service.js';
 import { getPrismaClient } from '../db/prisma.js';
 import { toDecimal, formatDecimal, compareDecimals, divDecimals, mulDecimals, subDecimals, addDecimals, isZeroDecimal } from '../utils/decimal-math.util.js';
 import { calculateInstallmentSchedule } from '../utils/installment-calculator.util.js';
-import { currentBusinessDateInBangkok, toBangkokDateString, normalizeBangkokDate, getBangkokStartOfDayUtc } from '../utils/calendar-date.util.js';
+import { currentBusinessDateInBangkok, toBangkokDateString, normalizeBangkokDate, getBangkokStartOfDayUtc, isAgreementEligibleForBillingCycle } from '../utils/calendar-date.util.js';
 import { calculateMeterUsageUnits, parseMeterIntegerReading, calculateMeterRowPreview, TransientRowDraft, RoomPreviewContext } from '../utils/meter-billing-calculator.util.js';
 import { calculateCanonicalMonthlyUtility } from '../utils/monthly-utility-calculator.util.js';
 import { normalizeUtilityBillingMode } from '../utils/billing-mode-normalizer.util.js';
 import { resolveDailyTimestampsAndPricing } from './daily-stay.service.js';
+import { syncDailyStayOtherFeesInTx } from '../utils/daily-other-fee-sync.util.js';
 import {
   getContractPhysicalInterval,
   getProvisionalTermPhysicalInterval,
@@ -29,6 +33,7 @@ import {
   doHalfOpenIntervalsOverlap,
   hasBookableGapInCycle,
 } from '../utils/occupancy-interval.util.js';
+import { resolveCycleAwareVehicleCount, resolveCurrentActiveVehicleCount } from '../utils/vehicle-billing.util.js';
 
 function addDays(dateStr: string, days: number): string {
   const [y, m, d] = dateStr.split('-').map(Number);
@@ -282,31 +287,7 @@ export class MeterService {
       }
     }
 
-    // 3. Active MeterDevice initial reading
-    const device = await this.meterRepo.findDeviceByRoomAndType(dormitoryId, roomId, meterType, client);
-    if (device && device.initialReading !== undefined && device.initialReading !== null && String(device.initialReading).trim() !== '') {
-      return parseAuthoritativeMeterReading(device.initialReading, 'meter device initial reading');
-    }
-
-    // 4. Room initial meter value
-    const room = await this.roomRepo.findById(roomId, dormitoryId);
-    if (room) {
-      const roomObj = room as any;
-      if (meterType === 'water') {
-        const val = room.initialWaterReading ?? roomObj.initialWaterMeter;
-        if (val !== undefined && val !== null && String(val).trim() !== '') {
-          return parseAuthoritativeMeterReading(val, 'room initial reading');
-        }
-      }
-      if (meterType === 'electricity') {
-        const val = room.initialElectricityReading ?? roomObj.initialElectricMeter;
-        if (val !== undefined && val !== null && String(val).trim() !== '') {
-          return parseAuthoritativeMeterReading(val, 'room initial reading');
-        }
-      }
-    }
-
-    // 5. No authoritative baseline exists (NONE)
+    // 3. No authoritative prior baseline exists (NONE)
     return null;
   }
 
@@ -577,6 +558,21 @@ export class MeterService {
     return updated;
   }
 
+  private async resolveIsFirstBillingCycle(dormitoryId: string, billingCycleId: string): Promise<boolean> {
+    if (typeof (this.billingCycleRepo as any)?.findAll === 'function') {
+      const result = await this.billingCycleRepo.findAll(dormitoryId, {
+        page: 1,
+        pageSize: 1,
+        sortBy: 'periodStart',
+        sortDirection: 'asc',
+      });
+      const earliest = result.items?.[0];
+      return earliest ? earliest.id === billingCycleId : false;
+    }
+    const cycle = await this.billingCycleRepo.findById(billingCycleId, dormitoryId);
+    return cycle ? Boolean((cycle as any).isFirstCycle) : false;
+  }
+
   public async saveSingleRoomWorkspaceInTx(
     dormitoryId: string,
     billingCycleId: string,
@@ -606,11 +602,7 @@ export class MeterService {
 
     let firstCycle = isFirstCycle;
     if (firstCycle === undefined) {
-      const earliest = await client.billingCycle.findFirst({
-        where: { dormitoryId },
-        orderBy: { periodStart: 'asc' },
-      });
-      firstCycle = earliest ? earliest.id === billingCycleId : false;
+      firstCycle = await this.resolveIsFirstBillingCycle(dormitoryId, billingCycleId);
     }
 
     // 1. Water reading if entered and per_unit
@@ -618,8 +610,16 @@ export class MeterService {
       (row.waterCurr !== undefined && row.waterCurr !== null && String(row.waterCurr).trim() !== '') ||
       (row.waterPrev !== undefined && row.waterPrev !== null && String(row.waterPrev).trim() !== '')
     ) {
-      if (waterMode === 'per_unit') {
+      if (waterMode === 'per_unit' || waterMode === 'tiered') {
         let authPrev: string | null = null;
+        const serverAuthPrev = await this.resolveAuthoritativePreviousReading(
+          dormitoryId,
+          billingCycleId,
+          row.roomId,
+          'water',
+          tx
+        );
+
         if (row.waterPrev !== undefined && row.waterPrev !== null && String(row.waterPrev).trim() !== '') {
           const parsed = parseMeterIntegerReading(row.waterPrev);
           if (!parsed.isValid) {
@@ -628,7 +628,14 @@ export class MeterService {
             (err as any).code = 'INVALID_METER_READING';
             throw err;
           }
-          authPrev = String(parsed.value);
+          const suppliedPrev = String(parsed.value);
+          if (serverAuthPrev !== null && !firstCycle && suppliedPrev !== serverAuthPrev) {
+            const err = new Error(`PREVIOUS_READING_CONFLICT: ค่ามิเตอร์น้ำเดิมที่ส่งมา (${suppliedPrev}) ไม่ตรงกับฐานข้อมูล (${serverAuthPrev})`);
+            (err as any).statusCode = 400;
+            (err as any).code = 'PREVIOUS_READING_CONFLICT';
+            throw err;
+          }
+          authPrev = suppliedPrev;
         } else {
           const existingReading = await this.meterRepo.findReadingByCycleRoomAndType(
             dormitoryId,
@@ -640,13 +647,7 @@ export class MeterService {
           if (existingReading && existingReading.previousReading !== undefined && existingReading.previousReading !== null) {
             authPrev = String(existingReading.previousReading).replace(/\.00$/, '');
           } else {
-            authPrev = await this.resolveAuthoritativePreviousReading(
-              dormitoryId,
-              billingCycleId,
-              row.roomId,
-              'water',
-              tx
-            );
+            authPrev = serverAuthPrev;
           }
         }
 
@@ -760,8 +761,16 @@ export class MeterService {
       (row.elecCurr !== undefined && row.elecCurr !== null && String(row.elecCurr).trim() !== '') ||
       (row.elecPrev !== undefined && row.elecPrev !== null && String(row.elecPrev).trim() !== '')
     ) {
-      if (elecMode === 'per_unit') {
+      if (elecMode === 'per_unit' || elecMode === 'tiered') {
         let authPrev: string | null = null;
+        const serverAuthPrev = await this.resolveAuthoritativePreviousReading(
+          dormitoryId,
+          billingCycleId,
+          row.roomId,
+          'electricity',
+          tx
+        );
+
         if (row.elecPrev !== undefined && row.elecPrev !== null && String(row.elecPrev).trim() !== '') {
           const parsed = parseMeterIntegerReading(row.elecPrev);
           if (!parsed.isValid) {
@@ -770,7 +779,14 @@ export class MeterService {
             (err as any).code = 'INVALID_METER_READING';
             throw err;
           }
-          authPrev = String(parsed.value);
+          const suppliedPrev = String(parsed.value);
+          if (serverAuthPrev !== null && !firstCycle && suppliedPrev !== serverAuthPrev) {
+            const err = new Error(`PREVIOUS_READING_CONFLICT: ค่ามิเตอร์ไฟฟ้าเดิมที่ส่งมา (${suppliedPrev}) ไม่ตรงกับฐานข้อมูล (${serverAuthPrev})`);
+            (err as any).statusCode = 400;
+            (err as any).code = 'PREVIOUS_READING_CONFLICT';
+            throw err;
+          }
+          authPrev = suppliedPrev;
         } else {
           const existingReading = await this.meterRepo.findReadingByCycleRoomAndType(
             dormitoryId,
@@ -782,13 +798,7 @@ export class MeterService {
           if (existingReading && existingReading.previousReading !== undefined && existingReading.previousReading !== null) {
             authPrev = String(existingReading.previousReading).replace(/\.00$/, '');
           } else {
-            authPrev = await this.resolveAuthoritativePreviousReading(
-              dormitoryId,
-              billingCycleId,
-              row.roomId,
-              'electricity',
-              tx
-            );
+            authPrev = serverAuthPrev;
           }
         }
 
@@ -995,7 +1005,7 @@ export class MeterService {
               dormitoryId,
               billingCycleId,
               roomId: row.roomId,
-              peopleCount: row.peopleCount !== undefined ? Math.max(0, row.peopleCount) : 0,
+              peopleCount: row.peopleCount !== undefined ? Math.max(0, row.peopleCount) : 1,
               manualOutstandingAmount: row.manualOutstandingAmount !== undefined ? toDecimal(String(row.manualOutstandingAmount)) : toDecimal('0.00'),
               otherFees: cleanOtherFees,
               source: 'MANUAL',
@@ -1012,6 +1022,37 @@ export class MeterService {
             throw err;
           }
           throw createErr;
+        }
+      }
+
+      if (row.otherFees !== undefined) {
+        // Sync otherFees to active DailyStayInvoice if room has an active daily stay in this cycle
+        const cycle = await client.billingCycle.findUnique({ where: { id: billingCycleId } });
+        if (cycle) {
+          const cycleStart = new Date(cycle.periodStart);
+          const cycleEndExclusive = new Date(new Date(cycle.periodEnd).getTime() + 24 * 3600 * 1000);
+          const roomDailyStays = await client.dailyStay.findMany({
+            where: {
+              dormitoryId,
+              roomId: row.roomId,
+              deletedAt: null,
+              status: { in: ['ACTIVE', 'RESERVED', 'CHECKED_OUT', 'COMPLETED'] },
+            },
+            include: { invoice: { include: { items: true } } },
+            orderBy: { startDate: 'desc' },
+          });
+
+          const activeStay = roomDailyStays.find((d: any) => {
+            const dIv = getDailyStayPhysicalInterval(d);
+            return doHalfOpenIntervalsOverlap({ start: cycleStart, end: cycleEndExclusive }, dIv);
+          });
+
+          if (activeStay && activeStay.invoice) {
+            const inv = activeStay.invoice;
+            if (inv.status !== 'CANCELLED') {
+              await syncDailyStayOtherFeesInTx(client, inv.id, inv.status, cleanOtherFees);
+            }
+          }
         }
       }
 
@@ -1037,7 +1078,7 @@ export class MeterService {
     return {
       roomId: row.roomId,
       version: existingSnap?.version ?? 1,
-      peopleCount: existingSnap?.peopleCount ?? (row.peopleCount !== undefined ? Math.max(0, row.peopleCount) : 0),
+      peopleCount: existingSnap?.peopleCount ?? (row.peopleCount !== undefined ? Math.max(0, row.peopleCount) : 1),
       manualOutstandingAmount: existingSnap ? formatDecimal(toDecimal(String(existingSnap.manualOutstandingAmount))) : '0.00',
       otherFees: existingSnap && Array.isArray(existingSnap.otherFees) ? (existingSnap.otherFees as any[]) : [],
     };
@@ -1052,15 +1093,19 @@ export class MeterService {
     userId?: string,
     tx?: any
   ): Promise<void> {
-    if (activeBill.billKind !== 'MONTHLY_UTILITY') {
-      const err = new Error('INVALID_BILL_KIND_FOR_METER_SYNC: Only MONTHLY_UTILITY bills can be synchronized from Meter Workspace');
+    const eligibility = await resolveBillDirectRecalculationEligibilityInTx(dormitoryId, activeBill.id, tx);
+    if (!eligibility.eligible) {
+      if (eligibility.code === 'BILL_HAS_FINANCIAL_EVIDENCE') {
+        throw new AppError(
+          eligibility.message || 'บิลนี้มีรายการชำระเงินหรือสลิปที่เกี่ยวข้องแล้ว\nไม่สามารถแก้ยอดโดยตรงได้',
+          409,
+          'BILL_HAS_FINANCIAL_EVIDENCE'
+        );
+      }
+      const err = new Error(eligibility.message || 'BILL_NOT_ELIGIBLE_FOR_RECALCULATION');
       (err as any).statusCode = 400;
-      (err as any).code = 'INVALID_BILL_KIND_FOR_METER_SYNC';
+      (err as any).code = eligibility.code || 'BILL_NOT_ELIGIBLE_FOR_RECALCULATION';
       throw err;
-    }
-
-    if (activeBill.status === 'paid' || activeBill.status === 'PAID') {
-      return;
     }
 
     let preview: any;
@@ -1071,7 +1116,7 @@ export class MeterService {
         roomId,
         tx,
         'MONTHLY_UTILITY',
-        new Date(),
+        activeBill.billingDate || new Date(),
         activeBill.dueDate
       );
     } catch (err: any) {
@@ -1123,23 +1168,29 @@ export class MeterService {
 
     // 2. Compute new totals
     let subtotalDec = toDecimal('0.00');
+    let fineDec = toDecimal('0.00');
     for (const item of newItems) {
-      subtotalDec = addDecimals(subtotalDec, item.amount);
+      if (item.type === 'late_fee' || item.type === 'fine') {
+        fineDec = addDecimals(fineDec, item.amount);
+      } else {
+        subtotalDec = addDecimals(subtotalDec, item.amount);
+      }
     }
     const discountDec = toDecimal(activeBill.discountAmount || '0.00');
-    const rawTotal = subDecimals(subtotalDec, discountDec);
+    const rawTotal = subDecimals(addDecimals(subtotalDec, fineDec), discountDec);
     const totalDec = compareDecimals(rawTotal, '0.00') < 0 ? toDecimal('0.00') : rawTotal;
-    const paidDec = toDecimal(activeBill.paidAmount || '0.00');
-    const outstandingDec = subDecimals(totalDec, paidDec);
-    const finalOutstanding = compareDecimals(outstandingDec, '0.00') < 0 ? toDecimal('0.00') : outstandingDec;
+    const paidDec = toDecimal('0.00');
+    const outstandingDec = totalDec;
 
-    // 3. Update Bill header
+    // 3. Update Bill header in-place (preserving id, billNumber, billingDate, dueDate, generatedAt, generatedByUserId)
     await prisma.bill.update({
       where: { id: activeBill.id },
       data: {
         subtotal: formatDecimal(subtotalDec),
+        fineAmount: formatDecimal(fineDec),
         totalAmount: formatDecimal(totalDec),
-        outstandingAmount: formatDecimal(finalOutstanding),
+        paidAmount: formatDecimal(paidDec),
+        outstandingAmount: formatDecimal(outstandingDec),
         version: { increment: 1 },
       },
     });
@@ -1148,10 +1199,15 @@ export class MeterService {
       await this.auditService.log({
         dormitoryId,
         actorUserId: userId || 'system',
-        action: 'bill.sync_on_meter_save',
+        action: 'METER_WORKSPACE_RECALCULATION',
         resourceType: 'bill',
         resourceId: activeBill.id,
-        details: { roomId, newTotal: formatDecimal(totalDec) },
+        details: {
+          roomId,
+          oldTotal: activeBill.totalAmount,
+          newTotal: formatDecimal(totalDec),
+          reason: 'METER_WORKSPACE_RECALCULATION',
+        },
       });
     }
   }
@@ -1178,12 +1234,7 @@ export class MeterService {
     }
 
     const rateSnapshot = await this.billingCycleRepo.findRateSnapshot(data.billingCycleId, dormitoryId);
-    const prisma = getPrismaClient();
-    const earliest = await prisma.billingCycle.findFirst({
-      where: { dormitoryId },
-      orderBy: { periodStart: 'asc' },
-    });
-    const isFirstCycle = earliest ? earliest.id === data.billingCycleId : false;
+    const isFirstCycle = await this.resolveIsFirstBillingCycle(dormitoryId, data.billingCycleId);
 
     return this.meterRepo.withTransaction(async (tx) => {
       let snapshot = rateSnapshot;
@@ -1215,25 +1266,51 @@ export class MeterService {
       const savedRows: SavedRoomSnapshotMeta[] = [];
 
       for (const row of data.rows) {
+        const hasMutationIntent =
+          row.waterPrev !== undefined ||
+          row.waterCurr !== undefined ||
+          row.elecPrev !== undefined ||
+          row.elecCurr !== undefined ||
+          row.peopleCount !== undefined ||
+          row.manualOutstandingAmount !== undefined ||
+          row.otherFees !== undefined ||
+          row.isReplaced !== undefined;
+
+        if (!hasMutationIntent) {
+          // NO-OP / skipped untouched clean row
+          continue;
+        }
+
         let activeBill: any = null;
         if (this.billRepo) {
           activeBill = await this.billRepo.findActiveMonthlyUtilityByRoomAndCycle(dormitoryId, data.billingCycleId, row.roomId, tx);
           if (activeBill && activeBill.status !== 'cancelled' && activeBill.status !== 'void') {
-            if (activeBill.status === 'paid' || activeBill.status === 'PAID') {
-              const err = new Error('ROOM_LOCKED_PAID');
-              (err as any).statusCode = 400;
-              (err as any).code = 'ROOM_LOCKED_PAID';
-              (err as any).message = 'บิลนี้ชำระเงินแล้ว ไม่สามารถแก้ไขข้อมูลมิเตอร์ได้';
-              throw err;
+            const eligibility = await resolveBillDirectRecalculationEligibilityInTx(dormitoryId, activeBill.id, tx);
+            if (!eligibility.eligible) {
+              if (eligibility.code === 'BILL_HAS_FINANCIAL_EVIDENCE') {
+                throw new AppError(
+                  eligibility.message || 'บิลนี้มีรายการชำระเงินหรือสลิปที่เกี่ยวข้องแล้ว\nไม่สามารถแก้ยอดโดยตรงได้',
+                  409,
+                  'BILL_HAS_FINANCIAL_EVIDENCE'
+                );
+              }
+              if (eligibility.code === 'ROOM_LOCKED_PAID' || activeBill.status === 'paid' || activeBill.status === 'PAID') {
+                throw new AppError('บิลนี้ชำระเงินแล้ว ไม่สามารถแก้ไขข้อมูลมิเตอร์ได้', 400, 'ROOM_LOCKED_PAID');
+              }
+              throw new AppError(
+                eligibility.message || 'บิลไม่สามารถแก้ไขยอดโดยตรงได้',
+                eligibility.code === 'BILL_NOT_FOUND' ? 404 : 400,
+                eligibility.code || 'BILL_NOT_ELIGIBLE'
+              );
             }
 
             // Strict Issued-Bill Integrity: Ensure required per_unit meter readings cannot be cleared/omitted
             const waterMode = normalizeUtilityBillingMode(snapshot?.waterBillingType || 'per_unit');
             const elecMode = normalizeUtilityBillingMode(snapshot?.electricityBillingType || 'per_unit');
-            const isWaterPerUnit = waterMode === 'per_unit' && !isZeroDecimal(snapshot?.waterRate ?? '0.00');
-            const isElecPerUnit = elecMode === 'per_unit' && !isZeroDecimal(snapshot?.electricityRate ?? '0.00');
+            const isWaterMeterRequired = (waterMode === 'per_unit' && !isZeroDecimal(snapshot?.waterRate ?? '0.00')) || waterMode === 'tiered';
+            const isElecMeterRequired = (elecMode === 'per_unit' && !isZeroDecimal(snapshot?.electricityRate ?? '0.00')) || elecMode === 'tiered';
 
-            if (isWaterPerUnit) {
+            if (isWaterMeterRequired) {
               const isClearingWater = row.waterCurr === null || (row.waterCurr !== undefined && String(row.waterCurr).trim() === '');
               if (isClearingWater) {
                 const err = new Error('CANNOT_CLEAR_METER_READING_FOR_ISSUED_BILL');
@@ -1242,19 +1319,9 @@ export class MeterService {
                 (err as any).message = 'ห้องนี้มีบิลที่ออกแล้ว หากต้องการล้างเลขมิเตอร์ปัจจุบัน กรุณายกเลิกบิลก่อน';
                 throw err;
               }
-              if (row.waterCurr === undefined) {
-                const existingW = await this.meterRepo.findReadingByCycleRoomAndType(dormitoryId, data.billingCycleId, row.roomId, 'water', tx);
-                if (existingW?.currentReading === null || existingW?.currentReading === undefined || String(existingW.currentReading).trim() === '') {
-                  const err = new Error('CANNOT_CLEAR_METER_READING_FOR_ISSUED_BILL');
-                  (err as any).statusCode = 400;
-                  (err as any).code = 'CANNOT_CLEAR_METER_READING_FOR_ISSUED_BILL';
-                  (err as any).message = 'ห้องนี้มีบิลที่ออกแล้ว หากต้องการล้างเลขมิเตอร์ปัจจุบัน กรุณายกเลิกบิลก่อน';
-                  throw err;
-                }
-              }
             }
 
-            if (isElecPerUnit) {
+            if (isElecMeterRequired) {
               const isClearingElec = row.elecCurr === null || (row.elecCurr !== undefined && String(row.elecCurr).trim() === '');
               if (isClearingElec) {
                 const err = new Error('CANNOT_CLEAR_METER_READING_FOR_ISSUED_BILL');
@@ -1262,16 +1329,6 @@ export class MeterService {
                 (err as any).code = 'CANNOT_CLEAR_METER_READING_FOR_ISSUED_BILL';
                 (err as any).message = 'ห้องนี้มีบิลที่ออกแล้ว หากต้องการล้างเลขมิเตอร์ปัจจุบัน กรุณายกเลิกบิลก่อน';
                 throw err;
-              }
-              if (row.elecCurr === undefined) {
-                const existingE = await this.meterRepo.findReadingByCycleRoomAndType(dormitoryId, data.billingCycleId, row.roomId, 'electricity', tx);
-                if (existingE?.currentReading === null || existingE?.currentReading === undefined || String(existingE.currentReading).trim() === '') {
-                  const err = new Error('CANNOT_CLEAR_METER_READING_FOR_ISSUED_BILL');
-                  (err as any).statusCode = 400;
-                  (err as any).code = 'CANNOT_CLEAR_METER_READING_FOR_ISSUED_BILL';
-                  (err as any).message = 'ห้องนี้มีบิลที่ออกแล้ว หากต้องการล้างเลขมิเตอร์ปัจจุบัน กรุณายกเลิกบิลก่อน';
-                  throw err;
-                }
               }
             }
           }
@@ -1392,7 +1449,16 @@ export class MeterService {
         return { action: 'cancel', cancelled: true, status: 'cancelled' };
       }
 
-      if (activeBill.status === 'paid') {
+      const eligibility = await resolveBillDirectRecalculationEligibilityInTx(dormitoryId, activeBill.id);
+      if (!eligibility.eligible && eligibility.code === 'BILL_HAS_FINANCIAL_EVIDENCE') {
+        throw new AppError(
+          eligibility.message || 'บิลนี้มีรายการชำระเงินหรือสลิปที่เกี่ยวข้องแล้ว\nไม่สามารถแก้ยอดโดยตรงได้',
+          409,
+          'BILL_HAS_FINANCIAL_EVIDENCE'
+        );
+      }
+
+      if (activeBill.status === 'paid' || activeBill.status === 'PAID') {
         const err = new Error('BILL_CANNOT_BE_CANCELLED: Paid bill cannot be cancelled from meter workspace');
         (err as any).statusCode = 400;
         (err as any).code = 'BILL_CANNOT_BE_CANCELLED';
@@ -1546,6 +1612,27 @@ export class MeterService {
     const billTotal = toDecimal(bill.totalAmount ? bill.totalAmount.toString() : '0.00');
     const rawKind = (bill.billKind || '').toString().trim().toUpperCase();
 
+    // Authoritative collectible outstanding resolution (Option B - Compact Outstanding Presentation)
+    const billOutstandingDec = (() => {
+      if (isPaid) return toDecimal('0.00');
+      if (bill.outstandingAmount !== undefined && bill.outstandingAmount !== null) {
+        return toDecimal(bill.outstandingAmount.toString());
+      }
+      const totalDec = toDecimal(bill.totalAmount ? bill.totalAmount.toString() : '0.00');
+      const paidDec = toDecimal(bill.paidAmount ? bill.paidAmount.toString() : '0.00');
+      const diffDec = subDecimals(totalDec, paidDec);
+      return compareDecimals(diffDec, toDecimal('0.00')) > 0 ? diffDec : toDecimal('0.00');
+    })();
+
+    const paidAmtDec = toDecimal(bill.paidAmount ? bill.paidAmount.toString() : '0.00');
+    const rawStatus = (bill.status || '').toString().trim().toUpperCase();
+    const hasPartialPayment = !isPaid && (
+      !isZeroDecimal(paidAmtDec) ||
+      compareDecimals(billOutstandingDec, billTotal) < 0 ||
+      rawStatus === 'PARTIAL' ||
+      rawStatus === 'PARTIALLY_PAID'
+    );
+
     const components: Array<{
       type: string;
       label: string;
@@ -1569,63 +1656,77 @@ export class MeterService {
     });
 
     if (rawKind === 'LEGACY_COMBINED') {
-      const allItems = bill.items || [];
-      const rentItems = allItems.filter((it: any) => (it.type || '').toString().toLowerCase() === 'rent');
-      const depositItems = allItems.filter((it: any) => (it.type || '').toString().toLowerCase() === 'deposit');
-      const utilityItems = allItems.filter((it: any) => {
-        const t = (it.type || '').toString().toLowerCase();
-        return t !== 'rent' && t !== 'deposit';
-      });
-
-      const rentTotalDec = rentItems.reduce((acc: any, it: any) => addDecimals(acc, toDecimal(it.amount?.toString() || '0.00')), toDecimal('0.00'));
-      const depositTotalDec = depositItems.reduce((acc: any, it: any) => addDecimals(acc, toDecimal(it.amount?.toString() || '0.00')), toDecimal('0.00'));
-      const utilityTotalDec = utilityItems.reduce((acc: any, it: any) => addDecimals(acc, toDecimal(it.amount?.toString() || '0.00')), toDecimal('0.00'));
-
-      const componentSumDec = addDecimals(addDecimals(rentTotalDec, depositTotalDec), utilityTotalDec);
-
-      // Strict Reconciliation Invariant: Fail closed if immutable item sum does not equal bill total
-      if (!isZeroDecimal(billTotal) && compareDecimals(componentSumDec, billTotal) !== 0) {
-        throw new Error(`HISTORICAL_FINANCIAL_DECOMPOSITION_RECONCILIATION_FAILED: Bill ${bill.billNumber || bill.id} total (${formatDecimal(billTotal)}) does not match decomposed items sum (${formatDecimal(componentSumDec)})`);
-      }
-
-      if (!isZeroDecimal(rentTotalDec)) {
-        const rentLabel = billingSource === 'PROVISIONAL_TERM' ? 'ค่าเช่า (เทอม)' : 'ค่าเช่า (เดือน)';
+      if (hasPartialPayment) {
+        // C.7: Collapse partial LEGACY_COMBINED to single 'บิลรวมเดิม' component with outstanding balance
         components.push({
-          type: 'rent',
-          label: rentLabel,
-          amount: formatDecimal(rentTotalDec),
-          status: isPaid ? 'PAID' : 'UNPAID',
+          type: 'legacy_combined',
+          label: 'บิลรวมเดิม',
+          amount: formatDecimal(billOutstandingDec),
+          status: 'UNPAID',
           paidAt: bill.paidAt ? bill.paidAt.toISOString() : null,
           occurredInDisplayedPeriod: true,
-          includedInAmountDue: isUnpaid,
-          lineItems: rentItems.map(mapItem),
+          includedInAmountDue: true,
+          lineItems: [],
         });
-      }
+      } else {
+        const allItems = bill.items || [];
+        const rentItems = allItems.filter((it: any) => (it.type || '').toString().toLowerCase() === 'rent');
+        const depositItems = allItems.filter((it: any) => (it.type || '').toString().toLowerCase() === 'deposit');
+        const utilityItems = allItems.filter((it: any) => {
+          const t = (it.type || '').toString().toLowerCase();
+          return t !== 'rent' && t !== 'deposit';
+        });
 
-      if (!isZeroDecimal(depositTotalDec)) {
-        components.push({
-          type: 'deposit',
-          label: 'ค่าประกัน',
-          amount: formatDecimal(depositTotalDec),
-          status: isPaid ? 'PAID' : 'UNPAID',
-          paidAt: bill.paidAt ? bill.paidAt.toISOString() : null,
-          occurredInDisplayedPeriod: true,
-          includedInAmountDue: isUnpaid,
-          lineItems: depositItems.map(mapItem),
-        });
-      }
+        const rentTotalDec = rentItems.reduce((acc: any, it: any) => addDecimals(acc, toDecimal(it.amount?.toString() || '0.00')), toDecimal('0.00'));
+        const depositTotalDec = depositItems.reduce((acc: any, it: any) => addDecimals(acc, toDecimal(it.amount?.toString() || '0.00')), toDecimal('0.00'));
+        const utilityTotalDec = utilityItems.reduce((acc: any, it: any) => addDecimals(acc, toDecimal(it.amount?.toString() || '0.00')), toDecimal('0.00'));
 
-      if (!isZeroDecimal(utilityTotalDec)) {
-        components.push({
-          type: 'monthly_utility',
-          label: 'บิลรายเดือน',
-          amount: formatDecimal(utilityTotalDec),
-          status: isPaid ? 'PAID' : 'UNPAID',
-          paidAt: bill.paidAt ? bill.paidAt.toISOString() : null,
-          occurredInDisplayedPeriod: true,
-          includedInAmountDue: isUnpaid,
-          lineItems: utilityItems.map(mapItem),
-        });
+        const componentSumDec = addDecimals(addDecimals(rentTotalDec, depositTotalDec), utilityTotalDec);
+
+        // Strict Reconciliation Invariant: Fail closed if immutable item sum does not equal bill total
+        if (!isZeroDecimal(billTotal) && compareDecimals(componentSumDec, billTotal) !== 0) {
+          throw new Error(`HISTORICAL_FINANCIAL_DECOMPOSITION_RECONCILIATION_FAILED: Bill ${bill.billNumber || bill.id} total (${formatDecimal(billTotal)}) does not match decomposed items sum (${formatDecimal(componentSumDec)})`);
+        }
+
+        if (!isZeroDecimal(rentTotalDec)) {
+          const rentLabel = billingSource === 'PROVISIONAL_TERM' ? 'ค่าเช่า (เทอม)' : 'ค่าเช่า (เดือน)';
+          components.push({
+            type: 'rent',
+            label: rentLabel,
+            amount: formatDecimal(rentTotalDec),
+            status: isPaid ? 'PAID' : 'UNPAID',
+            paidAt: bill.paidAt ? bill.paidAt.toISOString() : null,
+            occurredInDisplayedPeriod: true,
+            includedInAmountDue: isUnpaid,
+            lineItems: rentItems.map(mapItem),
+          });
+        }
+
+        if (!isZeroDecimal(depositTotalDec)) {
+          components.push({
+            type: 'deposit',
+            label: 'ค่าประกัน',
+            amount: formatDecimal(depositTotalDec),
+            status: isPaid ? 'PAID' : 'UNPAID',
+            paidAt: bill.paidAt ? bill.paidAt.toISOString() : null,
+            occurredInDisplayedPeriod: true,
+            includedInAmountDue: isUnpaid,
+            lineItems: depositItems.map(mapItem),
+          });
+        }
+
+        if (!isZeroDecimal(utilityTotalDec)) {
+          components.push({
+            type: 'monthly_utility',
+            label: 'บิลรายเดือน',
+            amount: formatDecimal(utilityTotalDec),
+            status: isPaid ? 'PAID' : 'UNPAID',
+            paidAt: bill.paidAt ? bill.paidAt.toISOString() : null,
+            occurredInDisplayedPeriod: true,
+            includedInAmountDue: isUnpaid,
+            lineItems: utilityItems.map(mapItem),
+          });
+        }
       }
     } else {
       let billType = 'monthly_utility';
@@ -1642,10 +1743,12 @@ export class MeterService {
         label = 'บิลรายเดือน';
       }
 
+      const compAmount = isPaid ? billTotal : billOutstandingDec;
+
       components.push({
         type: billType,
         label,
-        amount: formatDecimal(billTotal),
+        amount: formatDecimal(compAmount),
         status: isPaid ? 'PAID' : 'UNPAID',
         paidAt: bill.paidAt ? bill.paidAt.toISOString() : null,
         occurredInDisplayedPeriod: true,
@@ -1675,6 +1778,11 @@ export class MeterService {
       tenantId: string | null;
       tenantName: string | null;
       billingSource: 'CONTRACT' | 'PROVISIONAL_MONTHLY' | 'PROVISIONAL_TERM' | 'DAILY_STAY' | 'NONE';
+      agreementType: 'MONTHLY' | 'TERM' | 'DAILY' | null;
+      agreementDepositAmount: string | null;
+      cyclePresentationState: 'ACTIVE_AGREEMENT' | 'RESERVED_IN_CYCLE' | 'DAILY_FINANCIAL_TAIL' | 'NO_AGREEMENT_IN_CYCLE';
+      effectiveRoomOperationalStatus: 'vacant' | 'occupied' | 'maintenance' | 'UNKNOWN';
+      effectiveRoomStatusSourceCycleId: string | null;
       rentAmount: string;
       rentDescription: string;
       isLineLinked: boolean;
@@ -1693,6 +1801,8 @@ export class MeterService {
       dailyCheckOutDate?: string | null;
       isDailyUnpaid: boolean;
       hasBookableGap: boolean;
+      agreementRentPaymentStatus: 'PAID' | 'UNPAID' | 'PARTIAL' | 'NOT_ISSUED' | 'UNKNOWN';
+      agreementDepositPaymentStatus: 'PAID' | 'UNPAID' | 'PARTIAL' | 'NOT_ISSUED' | 'UNKNOWN';
     }>;
   }> {
     const cycle = await this.billingCycleRepo.findById(billingCycleId, dormitoryId);
@@ -1725,19 +1835,22 @@ export class MeterService {
     });
     const rooms = roomsResult.items || [];
 
+    const isFirstCycle = await this.resolveIsFirstBillingCycle(dormitoryId, billingCycleId);
+
     const [cYear, cMonth] = cycle.cycleCode.split('-').map(Number);
     const cycleStartStr = `${cYear}-${String(cMonth).padStart(2, '0')}-01`;
     const cycleEndStr = normalizeBangkokDate(cycle.periodEnd);
     const nextMonthStr = cMonth === 12 ? `${cYear + 1}-01-01` : `${cYear}-${String(cMonth + 1).padStart(2, '0')}-01`;
     const cycleStart = getBangkokStartOfDayUtc(cycleStartStr);
     const cycleEndExclusive = getBangkokStartOfDayUtc(nextMonthStr);
+    const cycleEnd = new Date(cycleEndExclusive.getTime() - 1000);
     const now = new Date();
 
     // 1. Load active & historical contracts
     const allContracts = await prisma.contract.findMany({
       where: {
         dormitoryId,
-        status: { in: ['active', 'approved', 'expiring_soon', 'pending_signature', 'waiting_extension', 'checking_out', 'ended', 'terminated'] },
+        status: { in: ['active', 'approved_scheduled', 'expiring_soon', 'pending_signature', 'waiting_extension', 'checking_out', 'ended', 'terminated'] },
         deletedAt: null,
       },
       include: {
@@ -1748,12 +1861,14 @@ export class MeterService {
     });
 
     const visibleContracts = allContracts.filter((c) => {
-      const occStartStr = normalizeBangkokDate(c.startDate);
-      const occEndStr = normalizeBangkokDate(c.endDate);
-      const recordVisibleFromStr = normalizeBangkokDate(c.createdAt || c.startDate);
-      const effectiveStartStr = occStartStr > recordVisibleFromStr ? occStartStr : recordVisibleFromStr;
-
-      return effectiveStartStr <= cycleEndStr && occEndStr >= cycleStartStr;
+      return isAgreementEligibleForBillingCycle({
+        agreementStartDate: c.startDate,
+        agreementEndDate: c.endDate,
+        cyclePeriodStart: cycle.periodStart,
+        cyclePeriodEnd: cycle.periodEnd,
+        status: c.status,
+        terminationEffectiveDate: (c as any).terminationEffectiveDate || (c.status === 'terminated' ? (c as any).terminatedAt : null),
+      });
     });
 
     // 2. Load active & historical provisional rental terms for this cycle
@@ -1770,12 +1885,12 @@ export class MeterService {
     });
 
     const visibleProvisionalTerms = allProvisionalTerms.filter((p) => {
-      const occStartStr = normalizeBangkokDate(p.startDate);
-      const occEndStr = normalizeBangkokDate(p.endDate);
-      const recordVisibleFromStr = normalizeBangkokDate(p.createdAt || p.startDate);
-      const effectiveStartStr = occStartStr > recordVisibleFromStr ? occStartStr : recordVisibleFromStr;
-
-      return effectiveStartStr <= cycleEndStr && occEndStr >= cycleStartStr;
+      return isAgreementEligibleForBillingCycle({
+        agreementStartDate: p.startDate,
+        agreementEndDate: p.endDate,
+        cyclePeriodStart: cycle.periodStart,
+        cyclePeriodEnd: cycle.periodEnd,
+      });
     });
 
     // 3. Load daily stays and evaluate real-time occupancy for this cycle
@@ -1796,6 +1911,7 @@ export class MeterService {
       orderBy: [{ startDate: 'asc' }, { createdAt: 'desc' }],
     });
 
+    const cycleDailyStays: typeof allDailyStays = [];
     const activeDailyStays: typeof allDailyStays = [];
     const futureDailyStays: typeof allDailyStays = [];
 
@@ -1813,6 +1929,8 @@ export class MeterService {
       const belongsToCycle = checkInAt.getTime() < cycleEndExclusive.getTime() && effectiveCheckOutAt.getTime() > cycleStart.getTime();
       if (!belongsToCycle) continue;
 
+      cycleDailyStays.push(d);
+
       if (now.getTime() < checkInAt.getTime() && (d.status === 'ACTIVE' || d.status === 'RESERVED')) {
         futureDailyStays.push(d);
       } else if (checkInAt.getTime() <= now.getTime() && now.getTime() < effectiveCheckOutAt.getTime() && (d.status === 'ACTIVE' || d.status === 'RESERVED')) {
@@ -1823,7 +1941,7 @@ export class MeterService {
     // 4. Future contracts & provisional terms starting strictly within this cycle
     const futureContracts = allContracts.filter((c) => {
       const startStr = toBangkokDateString(c.startDate);
-      return startStr >= cycleStartStr && startStr <= cycleEndStr && ['active', 'expiring_soon', 'pending_signature', 'waiting_extension'].includes(c.status);
+      return startStr >= cycleStartStr && startStr <= cycleEndStr && ['active', 'approved_scheduled', 'expiring_soon', 'pending_signature', 'waiting_extension'].includes(c.status);
     });
 
     const futureProvisionalTerms = allProvisionalTerms.filter((p) => {
@@ -1844,7 +1962,7 @@ export class MeterService {
     const householdCounts = await this.getHouseholdCountsByCycle(dormitoryId, billingCycleId);
     const householdMap = new Map(householdCounts.map((h) => [h.roomId, h.currentHouseholdPeopleCount]));
 
-    // Vehicles for per-vehicle parking mode
+    // Vehicles for per-vehicle parking mode (cycle-aware against explicit asOfBusinessDate)
     const allTenantIds = Array.from(
       new Set([
         ...visibleContracts.map((c) => c.tenantId),
@@ -1860,13 +1978,14 @@ export class MeterService {
           where: {
             dormitoryId,
             tenantId: { in: allTenantIds },
-            deletedAt: null,
           },
         })
       : [];
     const vehicleCountMap = new Map<string, number>();
-    for (const v of vehicles) {
-      vehicleCountMap.set(v.tenantId, (vehicleCountMap.get(v.tenantId) || 0) + 1);
+    for (const tid of allTenantIds) {
+      const tenantVehicles = vehicles.filter((v) => v.tenantId === tid);
+      const count = resolveCurrentActiveVehicleCount(tenantVehicles);
+      vehicleCountMap.set(tid, count);
     }
 
     const roomContractMap = new Map<string, typeof visibleContracts[0]>();
@@ -1879,9 +1998,18 @@ export class MeterService {
       if (!roomProvisionalMap.has(p.roomId)) roomProvisionalMap.set(p.roomId, p);
     }
 
-    const roomDailyStayMap = new Map<string, typeof activeDailyStays[0]>();
-    for (const d of activeDailyStays) {
-      if (!roomDailyStayMap.has(d.roomId)) roomDailyStayMap.set(d.roomId, d);
+    const roomDailyStayMap = new Map<string, typeof allDailyStays[0]>();
+    for (const d of cycleDailyStays) {
+      const existing = roomDailyStayMap.get(d.roomId);
+      if (!existing) {
+        roomDailyStayMap.set(d.roomId, d);
+      } else {
+        const isExistingActive = activeDailyStays.some(a => a.id === existing.id);
+        const isCurrentActive = activeDailyStays.some(a => a.id === d.id);
+        if (!isExistingActive && isCurrentActive) {
+          roomDailyStayMap.set(d.roomId, d);
+        }
+      }
     }
 
     const roomFutureContractMap = new Map<string, typeof futureContracts[0]>();
@@ -1917,6 +2045,64 @@ export class MeterService {
       billsByRoomMap.set(b.roomId, list);
     }
 
+    // Batch load agreement lifecycle deposit & payment bills for all contracts & terms
+    const allRepContractIds = Array.from(new Set([...visibleContracts.map((c) => c.id), ...futureContracts.map((c) => c.id)]));
+    const allRepProvisionalIds = Array.from(new Set([...visibleProvisionalTerms.map((p) => p.id), ...futureProvisionalTerms.map((p) => p.id)]));
+
+    const lifecycleBills = (allRepContractIds.length > 0 || allRepProvisionalIds.length > 0)
+      ? await prisma.bill.findMany({
+          where: {
+            dormitoryId,
+            status: { notIn: ['cancelled', 'void'] },
+            OR: [
+              ...(allRepContractIds.length > 0 ? [{ contractId: { in: allRepContractIds } }] : []),
+              ...(allRepProvisionalIds.length > 0 ? [{ provisionalRentalTermId: { in: allRepProvisionalIds } }] : []),
+            ],
+          },
+          include: {
+            items: true,
+          },
+        })
+      : [];
+
+    const lifecycleBillsByContractMap = new Map<string, typeof lifecycleBills>();
+    const lifecycleBillsByProvisionalMap = new Map<string, typeof lifecycleBills>();
+    for (const b of lifecycleBills) {
+      if (b.contractId) {
+        const list = lifecycleBillsByContractMap.get(b.contractId) || [];
+        list.push(b);
+        lifecycleBillsByContractMap.set(b.contractId, list);
+      }
+      if (b.provisionalRentalTermId) {
+        const list = lifecycleBillsByProvisionalMap.get(b.provisionalRentalTermId) || [];
+        list.push(b);
+        lifecycleBillsByProvisionalMap.set(b.provisionalRentalTermId, list);
+      }
+    }
+
+    // Load effective room operational status changes up to this cycle
+    const allStatusChanges = await prisma.roomOperationalStatusChange.findMany({
+      where: {
+        dormitoryId,
+        effectiveBillingCycle: {
+          periodStart: { lte: cycle.periodStart },
+        },
+      },
+      include: {
+        effectiveBillingCycle: { select: { id: true, periodStart: true } },
+      },
+      orderBy: [
+        { effectiveBillingCycle: { periodStart: 'desc' } },
+        { createdAt: 'desc' },
+      ],
+    });
+    const statusByRoomMap = new Map<string, { status: string; cycleId: string }>();
+    for (const sc of allStatusChanges) {
+      if (!statusByRoomMap.has(sc.roomId)) {
+        statusByRoomMap.set(sc.roomId, { status: sc.status, cycleId: sc.effectiveBillingCycleId });
+      }
+    }
+
     // Load meter readings for this cycle
     const cycleReadings = await prisma.meterReading.findMany({
       where: {
@@ -1933,6 +2119,8 @@ export class MeterService {
 
     const roomContexts = rooms.map((room) => {
       let billingSource: 'CONTRACT' | 'PROVISIONAL_MONTHLY' | 'PROVISIONAL_TERM' | 'DAILY_STAY' | 'NONE' = 'NONE';
+      let agreementType: 'MONTHLY' | 'TERM' | 'DAILY' | null = null;
+      let agreementDepositAmount: string | null = null;
       let rentAmount = '0.00';
       let rentDescription = 'ค่าเช่าห้องพัก';
       let tenantId: string | null = null;
@@ -1957,9 +2145,16 @@ export class MeterService {
 
       if (contract) {
         billingSource = 'CONTRACT';
+        agreementType = (contract.rentBillingType || '').toUpperCase() === 'TERM' ? 'TERM' : 'MONTHLY';
         tenantId = contract.tenantId;
         tenantName = contract.tenant ? (contract.tenant.displayName || `${contract.tenant.firstName || ''} ${contract.tenant.lastName || ''}`.trim()) : null;
         isLineLinked = Boolean(contract.tenant?.linkedUserId);
+
+        const snapObj = contract.snapshot as any;
+        const snapDep = snapObj?.resolvedDeposit != null && snapObj?.resolvedDeposit !== ''
+          ? snapObj.resolvedDeposit
+          : (contract.depositAmount != null ? contract.depositAmount.toString() : null);
+        agreementDepositAmount = snapDep != null ? formatDecimal(toDecimal(snapDep)) : null;
 
         const endStr = toBangkokDateString(contract.endDate);
         if (endStr >= cycleStartStr && endStr <= cycleEndStr) {
@@ -1996,11 +2191,14 @@ export class MeterService {
           if (endStr >= cycleStartStr && endStr <= cycleEndStr) {
             contractEndDate = endStr;
           }
+          agreementDepositAmount = prov.depositAmount != null ? formatDecimal(toDecimal(prov.depositAmount.toString())) : null;
           if (prov.rentalType === 'MONTHLY') {
             billingSource = 'PROVISIONAL_MONTHLY';
+            agreementType = 'MONTHLY';
             rentAmount = formatDecimal(toDecimal(prov.unitRentAmount.toString()));
           } else {
             billingSource = 'PROVISIONAL_TERM';
+            agreementType = 'TERM';
             const totalRent = Number(prov.totalRentAmount);
             const installments = prov.termInstallmentCount || 1;
             const termStart = new Date(prov.startDate);
@@ -2019,6 +2217,7 @@ export class MeterService {
         }
       } else if (dailyStay) {
         billingSource = 'DAILY_STAY';
+        agreementType = 'DAILY';
         tenantId = dailyStay.tenantId;
         tenantName = dailyStay.applicantFullName || (dailyStay.tenant ? (dailyStay.tenant.displayName || `${dailyStay.tenant.firstName || ''} ${dailyStay.tenant.lastName || ''}`.trim()) : 'ผู้พักรายวัน');
         rentAmount = formatDecimal(toDecimal(dailyStay.totalRentAmount.toString()));
@@ -2027,6 +2226,7 @@ export class MeterService {
 
             const depositItem = dailyStay.invoice?.items.find((i) => i.itemType === 'DEPOSIT');
             dailyDepositAmount = depositItem ? formatDecimal(depositItem.amount) : formatDecimal(dailyStay.depositAmount);
+            agreementDepositAmount = dailyDepositAmount;
             const isPaid = depositItem?.status === 'DECLARED_PAID' || depositItem?.status === 'SETTLED' || dailyStay.depositDeclaredStatus === 'PAID';
             const paidAt = depositItem?.paidAt || null;
             dailyDepositStatus = isPaid ? 'PAID' : 'UNPAID';
@@ -2115,7 +2315,6 @@ export class MeterService {
       const distinctDailyStayIds = new Set(roomDailyStaysInCycle.map((d) => d.id));
       const historicalDailyCount = distinctDailyStayIds.size;
 
-      const now = new Date();
       let isDailyRentPaid = false;
       let isDailyOverdue = false;
       let isDailyActive = false;
@@ -2135,13 +2334,13 @@ export class MeterService {
           const rentItem = activeDailyStay.invoice?.items.find((i) => i.itemType === 'RENT' || i.itemType === 'DAILY_RENT');
           const isPaid = rentItem
             ? (rentItem.status === 'SETTLED' || rentItem.status === 'DECLARED_PAID')
-            : (activeDailyStay.status === 'COMPLETED' || activeDailyStay.invoice?.status === 'PAID');
+            : (activeDailyStay.status === 'COMPLETED' || activeDailyStay.invoice?.status === 'PAID' || activeDailyStay.invoice?.status === 'SETTLED');
 
           const iv = getDailyStayPhysicalInterval(activeDailyStay);
-          const isOverdue = now.getTime() > iv.end.getTime();
+          const isCheckedOut = now.getTime() > iv.end.getTime();
           isDailyRentPaid = isPaid;
-          isDailyOverdue = isOverdue && !isPaid;
-          isDailyActive = now.getTime() <= iv.end.getTime();
+          isDailyOverdue = isCheckedOut && !isPaid;
+          isDailyActive = now.getTime() >= iv.start.getTime() && now.getTime() <= iv.end.getTime() && (activeDailyStay.status === 'ACTIVE' || activeDailyStay.status === 'RESERVED');
           isDailyUnpaid = !isPaid;
         }
       }
@@ -2150,7 +2349,7 @@ export class MeterService {
         const rentItem = d.invoice?.items.find((i) => i.itemType === 'RENT' || i.itemType === 'DAILY_RENT');
         const isRentPaid = rentItem
           ? (rentItem.status === 'SETTLED' || rentItem.status === 'DECLARED_PAID')
-          : (d.status === 'COMPLETED' || d.invoice?.status === 'PAID');
+          : (d.status === 'COMPLETED' || d.invoice?.status === 'PAID' || d.invoice?.status === 'SETTLED');
         if (!isRentPaid) {
           const iv = getDailyStayPhysicalInterval(d);
           if (now.getTime() > iv.end.getTime()) {
@@ -2175,6 +2374,10 @@ export class MeterService {
         isDailyFinancialTail = true;
         rentAmount = formatDecimal(toDecimal(unpaidDailyStay.totalRentAmount.toString()));
         rentDescription = 'ค่าเช่ารายวัน';
+        agreementType = 'DAILY';
+        const depositItem = unpaidDailyStay.invoice?.items?.find((i) => i.itemType === 'DEPOSIT');
+        const depAmt = depositItem ? formatDecimal(depositItem.amount) : (unpaidDailyStay.depositAmount != null ? formatDecimal(unpaidDailyStay.depositAmount) : null);
+        agreementDepositAmount = depAmt;
       } else if (billingSource === 'NONE' && roomDailyStaysInCycle.length > 0 && !tenantName) {
         tenantName = dailyTenantName;
         tenantId = dailyTenantId;
@@ -2220,40 +2423,76 @@ export class MeterService {
       let amountDueDec = toDecimal('0.00');
 
       if (billingSource === 'DAILY_STAY' || (billingSource === 'NONE' && unpaidDailyStay)) {
-        if (showDailyDepositLine) {
-          const depAmt = toDecimal(dailyDepositAmount || '0.00');
-          const isDepositPaid = Boolean(isDailyDepositPaidInDisplayedPeriod);
-          if (!isZeroDecimal(depAmt)) {
-            chargeComponents.push({
-              type: 'deposit',
-              label: 'ค่าประกัน',
-              amount: formatDecimal(depAmt),
-              status: isDepositPaid ? 'PAID' : 'UNPAID',
-              paidAt: dailyDepositPaidAt,
-              occurredInDisplayedPeriod: true,
-              includedInAmountDue: !isDepositPaid,
-              lineItems: [],
-            });
-            if (!isDepositPaid) {
-              amountDueDec = addDecimals(amountDueDec, depAmt);
+        if (primaryDailyStay?.invoice?.items && primaryDailyStay.invoice.items.length > 0) {
+          for (const item of primaryDailyStay.invoice.items) {
+            const itemAmt = toDecimal(item.amount ? item.amount.toString() : '0.00');
+            const isItemPaid = item.status === 'SETTLED' || item.status === 'DECLARED_PAID' || primaryDailyStay.invoice?.status === 'PAID';
+            let compType = 'other_fee';
+            let compLabel = item.description || 'ค่าใช้จ่ายอื่นๆ';
+
+            if (item.itemType === 'DEPOSIT') {
+              compType = 'deposit';
+              compLabel = 'ค่าประกัน';
+            } else if (item.itemType === 'DAILY_RENT' || item.itemType === 'RENT') {
+              compType = 'rent';
+              compLabel = 'ค่าเช่า (วัน)';
+            } else if (item.itemType === 'OTHER_FEE') {
+              compType = 'other_fee';
+              compLabel = item.description || 'ค่าใช้จ่ายอื่นๆ';
+            }
+
+            if (!isZeroDecimal(itemAmt)) {
+              chargeComponents.push({
+                type: compType,
+                label: compLabel,
+                amount: formatDecimal(itemAmt),
+                status: isItemPaid ? 'PAID' : 'UNPAID',
+                paidAt: isItemPaid ? ((primaryDailyStay.invoice as any)?.settledAt ? toBangkokDateString((primaryDailyStay.invoice as any).settledAt) : null) : null,
+                occurredInDisplayedPeriod: true,
+                includedInAmountDue: !isItemPaid,
+                lineItems: [],
+              });
+              if (!isItemPaid) {
+                amountDueDec = addDecimals(amountDueDec, itemAmt);
+              }
             }
           }
-        }
+        } else {
+          if (showDailyDepositLine) {
+            const depAmt = toDecimal(dailyDepositAmount || '0.00');
+            const isDepositPaid = Boolean(isDailyDepositPaidInDisplayedPeriod);
+            if (!isZeroDecimal(depAmt)) {
+              chargeComponents.push({
+                type: 'deposit',
+                label: 'ค่าประกัน',
+                amount: formatDecimal(depAmt),
+                status: isDepositPaid ? 'PAID' : 'UNPAID',
+                paidAt: dailyDepositPaidAt,
+                occurredInDisplayedPeriod: true,
+                includedInAmountDue: !isDepositPaid,
+                lineItems: [],
+              });
+              if (!isDepositPaid) {
+                amountDueDec = addDecimals(amountDueDec, depAmt);
+              }
+            }
+          }
 
-        const rentAmt = toDecimal(rentAmount || '0.00');
-        if (!isZeroDecimal(rentAmt)) {
-          chargeComponents.push({
-            type: 'rent',
-            label: 'ค่าเช่า (วัน)',
-            amount: formatDecimal(rentAmt),
-            status: isDailyRentPaid ? 'PAID' : 'UNPAID',
-            paidAt: null,
-            occurredInDisplayedPeriod: true,
-            includedInAmountDue: !isDailyRentPaid,
-            lineItems: [],
-          });
-          if (!isDailyRentPaid) {
-            amountDueDec = addDecimals(amountDueDec, rentAmt);
+          const rentAmt = toDecimal(rentAmount || '0.00');
+          if (!isZeroDecimal(rentAmt)) {
+            chargeComponents.push({
+              type: 'rent',
+              label: 'ค่าเช่า (วัน)',
+              amount: formatDecimal(rentAmt),
+              status: isDailyRentPaid ? 'PAID' : 'UNPAID',
+              paidAt: null,
+              occurredInDisplayedPeriod: true,
+              includedInAmountDue: !isDailyRentPaid,
+              lineItems: [],
+            });
+            if (!isDailyRentPaid) {
+              amountDueDec = addDecimals(amountDueDec, rentAmt);
+            }
           }
         }
       } else {
@@ -2263,7 +2502,16 @@ export class MeterService {
         for (const bill of roomBills) {
           const isPaid = bill.status === 'paid' || bill.status === 'PAID';
           const isUnpaid = !isPaid;
-          const billOutstanding = toDecimal((bill.outstandingAmount ?? (isPaid ? '0.00' : bill.totalAmount)).toString());
+          const billOutstanding = (() => {
+            if (isPaid) return toDecimal('0.00');
+            if (bill.outstandingAmount !== undefined && bill.outstandingAmount !== null) {
+              return toDecimal(bill.outstandingAmount.toString());
+            }
+            const totalDec = toDecimal(bill.totalAmount ? bill.totalAmount.toString() : '0.00');
+            const paidDec = toDecimal(bill.paidAmount ? bill.paidAmount.toString() : '0.00');
+            const diffDec = subDecimals(totalDec, paidDec);
+            return compareDecimals(diffDec, toDecimal('0.00')) > 0 ? diffDec : toDecimal('0.00');
+          })();
 
           if (isUnpaid) {
             amountDueDec = addDecimals(amountDueDec, billOutstanding);
@@ -2273,7 +2521,7 @@ export class MeterService {
           for (const comp of decomposed) {
             if (comp.type === 'rent') {
               hasRentBill = true;
-            } else if (comp.type === 'monthly_utility') {
+            } else if (comp.type === 'monthly_utility' || comp.type === 'legacy_combined') {
               hasMonthlyUtilityBill = true;
             }
             chargeComponents.push(comp);
@@ -2301,7 +2549,9 @@ export class MeterService {
                 previousReading: elecReading.previousReading != null ? elecReading.previousReading.toString() : undefined,
                 currentReading: elecReading.currentReading != null ? elecReading.currentReading.toString() : undefined,
               } : null,
-              peopleCount: snapshotPeopleCount ?? currentHouseholdPeopleCount ?? 0,
+              peopleCount: snapshotPeopleCount !== null
+                ? snapshotPeopleCount
+                : (isFirstCycle ? 1 : (currentHouseholdPeopleCount > 0 ? currentHouseholdPeopleCount : 1)),
               parkingQuantity,
               manualOutstanding: snapshotManualOutstanding ?? '0.00',
               otherFees: snapshotOtherFees ?? [],
@@ -2465,12 +2715,165 @@ export class MeterService {
 
       const isOverallPaid = overallFinancialStatus === 'paid';
 
+      // Derive Agreement Rent & Deposit Payment Status for Selected Cycle
+      let agreementRentPaymentStatus: 'PAID' | 'UNPAID' | 'PARTIAL' | 'NOT_ISSUED' | 'UNKNOWN' = 'UNKNOWN';
+      let agreementDepositPaymentStatus: 'PAID' | 'UNPAID' | 'PARTIAL' | 'NOT_ISSUED' | 'UNKNOWN' = 'UNKNOWN';
+
+      const helperDeriveBillPaymentStatus = (bill: any): 'PAID' | 'UNPAID' | 'PARTIAL' | 'NOT_ISSUED' | 'UNKNOWN' => {
+        if (!bill) return 'NOT_ISSUED';
+        const st = (bill.status || '').toLowerCase();
+        if (st === 'paid') return 'PAID';
+        if (st === 'partial') return 'PARTIAL';
+
+        const total = Number(bill.totalAmount ?? 0);
+        const paid = Number(bill.paidAmount ?? 0);
+        const outstanding = Number(bill.outstandingAmount ?? (total - paid));
+
+        if (paid > 0 && outstanding > 0) return 'PARTIAL';
+        if (outstanding === 0 && (paid > 0 || total === 0)) return 'PAID';
+        if (paid === 0 && outstanding > 0) return 'UNPAID';
+        if (st === 'issued' || st === 'pending' || st === 'unpaid') return 'UNPAID';
+        return 'UNKNOWN';
+      };
+
+      if (billingSource === 'DAILY_STAY' || (billingSource === 'NONE' && unpaidDailyStay)) {
+        const dStay = primaryDailyStay || unpaidDailyStay;
+        const rentItem = dStay?.invoice?.items?.find((i: any) => i.itemType === 'RENT' || i.itemType === 'DAILY_RENT');
+        if (rentItem) {
+          const itemSt = (rentItem.status || '').toUpperCase();
+          if (itemSt === 'PAID' || itemSt === 'SETTLED') {
+            agreementRentPaymentStatus = 'PAID';
+          } else if (['UNPAID', 'OUTSTANDING', 'ISSUED', 'PENDING'].includes(itemSt)) {
+            agreementRentPaymentStatus = 'UNPAID';
+          } else if (itemSt === 'PARTIAL') {
+            agreementRentPaymentStatus = 'PARTIAL';
+          } else {
+            agreementRentPaymentStatus = 'UNKNOWN';
+          }
+        } else if (dStay?.invoice) {
+          agreementRentPaymentStatus = isDailyRentPaid ? 'PAID' : (isDailyUnpaid ? 'UNPAID' : 'UNKNOWN');
+        } else {
+          agreementRentPaymentStatus = 'NOT_ISSUED';
+        }
+
+        const depositItem = dStay?.invoice?.items?.find((i: any) => i.itemType === 'DEPOSIT' || i.itemType === 'RENT_DEPOSIT');
+        if (depositItem) {
+          const depItemSt = (depositItem.status || '').toUpperCase();
+          if (depItemSt === 'PAID' || depItemSt === 'SETTLED') {
+            agreementDepositPaymentStatus = 'PAID';
+          } else if (['UNPAID', 'OUTSTANDING', 'ISSUED', 'PENDING'].includes(depItemSt)) {
+            agreementDepositPaymentStatus = 'UNPAID';
+          } else if (depItemSt === 'PARTIAL') {
+            agreementDepositPaymentStatus = 'PARTIAL';
+          } else {
+            agreementDepositPaymentStatus = 'UNKNOWN';
+          }
+        } else if (Number(dailyDepositAmount) > 0) {
+          if (dailyDepositStatus === 'PAID') {
+            agreementDepositPaymentStatus = 'PAID';
+          } else if (dailyDepositStatus === 'UNPAID') {
+            agreementDepositPaymentStatus = 'UNPAID';
+          } else {
+            agreementDepositPaymentStatus = 'NOT_ISSUED';
+          }
+        } else {
+          agreementDepositPaymentStatus = 'UNKNOWN';
+        }
+      } else if (billingSource === 'CONTRACT' || billingSource === 'PROVISIONAL_MONTHLY' || billingSource === 'PROVISIONAL_TERM' || isFutureReservation) {
+        const repContract = contract || futureC;
+        const repProv = prov || futureP;
+
+        // 1. Rent in selected cycle
+        const cycleRentBill = roomBills.find((b) => {
+          const isLinked = (repContract && b.contractId === repContract.id) || (repProv && b.provisionalRentalTermId === repProv.id);
+          const isRentKind = (b.billKind || '').toString().trim().toUpperCase() === 'RENT' || (b.billKind || '').toString().trim().toUpperCase() === 'MONTHLY_RENT';
+          const hasRentItem = b.items?.some((it) => it.type?.toLowerCase() === 'rent' || it.type?.toLowerCase() === 'monthly_rent' || it.type?.toLowerCase() === 'term_rent');
+          return isLinked && (isRentKind || hasRentItem);
+        });
+
+        if (cycleRentBill) {
+          const isCombined = (cycleRentBill.billKind || '').toString().trim().toUpperCase() === 'LEGACY_COMBINED' || (cycleRentBill.items && cycleRentBill.items.length > 1);
+          const st = (cycleRentBill.status || '').toLowerCase();
+          if (isCombined && (st === 'partial' || (Number(cycleRentBill.paidAmount) > 0 && Number(cycleRentBill.outstandingAmount) > 0))) {
+            agreementRentPaymentStatus = 'UNKNOWN';
+          } else {
+            agreementRentPaymentStatus = helperDeriveBillPaymentStatus(cycleRentBill);
+          }
+        } else {
+          const rentComp = chargeComponents.find((c) => c.type === 'rent');
+          if (rentComp) {
+            if (rentComp.status === 'PAID') {
+              agreementRentPaymentStatus = 'PAID';
+            } else if (rentComp.status === 'UNPAID') {
+              agreementRentPaymentStatus = 'UNPAID';
+            } else if (rentComp.status === 'PREVIEW') {
+              agreementRentPaymentStatus = 'NOT_ISSUED';
+            } else {
+              agreementRentPaymentStatus = 'UNKNOWN';
+            }
+          } else if (repContract || repProv) {
+            agreementRentPaymentStatus = 'NOT_ISSUED';
+          }
+        }
+
+        // 2. Deposit across agreement lifecycle (paid once per agreement)
+        const relevantLifecycleBills = repContract
+          ? (lifecycleBillsByContractMap.get(repContract.id) || [])
+          : (repProv ? (lifecycleBillsByProvisionalMap.get(repProv.id) || []) : []);
+
+        // Find paid deposit bill first across lifecycle, otherwise any deposit bill
+        const paidDepBill = relevantLifecycleBills.find((b) => {
+          const isDepKind = (b.billKind || '').toString().trim().toUpperCase() === 'DEPOSIT';
+          const hasDepItem = b.items?.some((it: any) => it.type?.toLowerCase() === 'deposit' || it.type?.toLowerCase() === 'rent_deposit');
+          const isPaid = (b.status || '').toLowerCase() === 'paid' || (Number(b.outstandingAmount) === 0 && Number(b.paidAmount) > 0);
+          return (isDepKind || hasDepItem) && isPaid;
+        });
+
+        const depBill = paidDepBill || relevantLifecycleBills.find((b) =>
+          (b.billKind || '').toString().trim().toUpperCase() === 'DEPOSIT' ||
+          b.items?.some((it: any) => it.type?.toLowerCase() === 'deposit' || it.type?.toLowerCase() === 'rent_deposit')
+        );
+
+        if (depBill) {
+          const isCombined = (depBill.billKind || '').toString().trim().toUpperCase() === 'LEGACY_COMBINED' || (depBill.items && depBill.items.length > 1);
+          const st = (depBill.status || '').toLowerCase();
+          if (isCombined && (st === 'partial' || (Number(depBill.paidAmount) > 0 && Number(depBill.outstandingAmount) > 0))) {
+            agreementDepositPaymentStatus = 'UNKNOWN';
+          } else {
+            agreementDepositPaymentStatus = helperDeriveBillPaymentStatus(depBill);
+          }
+        } else {
+          const expectedDepAmount = Number(agreementDepositAmount || repContract?.depositAmount || repProv?.depositAmount || 0);
+          if (expectedDepAmount > 0) {
+            agreementDepositPaymentStatus = 'NOT_ISSUED';
+          } else {
+            agreementDepositPaymentStatus = 'UNKNOWN';
+          }
+        }
+      }
+
+      let cyclePresentationState: 'ACTIVE_AGREEMENT' | 'RESERVED_IN_CYCLE' | 'DAILY_FINANCIAL_TAIL' | 'NO_AGREEMENT_IN_CYCLE' = 'NO_AGREEMENT_IN_CYCLE';
+      if (billingSource === 'CONTRACT' || billingSource === 'PROVISIONAL_MONTHLY' || billingSource === 'PROVISIONAL_TERM' || billingSource === 'DAILY_STAY') {
+        cyclePresentationState = 'ACTIVE_AGREEMENT';
+      } else if (isFutureReservation) {
+        cyclePresentationState = 'RESERVED_IN_CYCLE';
+      } else if (unpaidDailyStay) {
+        cyclePresentationState = 'DAILY_FINANCIAL_TAIL';
+      } else {
+        cyclePresentationState = 'NO_AGREEMENT_IN_CYCLE';
+      }
+
       return {
         roomId: room.id,
         roomNumber: room.roomNumber,
         tenantId,
         tenantName,
         billingSource,
+        agreementType,
+        agreementDepositAmount,
+        cyclePresentationState,
+        effectiveRoomOperationalStatus: (statusByRoomMap.get(room.id)?.status as any) || 'UNKNOWN',
+        effectiveRoomStatusSourceCycleId: statusByRoomMap.get(room.id)?.cycleId || null,
         rentAmount,
         rentDescription,
         isLineLinked,
@@ -2506,6 +2909,8 @@ export class MeterService {
         overallFinancialStatus,
         monthlyUtilityBillStatus,
         isMonthlyUtilityPaid,
+        agreementRentPaymentStatus,
+        agreementDepositPaymentStatus,
       };
     });
 
@@ -2585,6 +2990,9 @@ export class MeterService {
     // 4. Load previous cycle snapshots (if previous cycle exists) - STRICTLY READ ONLY
     const prevSnapshotMap = new Map<string, number>();
     if (previousCycle) {
+      // Authoritatively ensure first-cycle peopleCount = 1 snapshots exist if previous was earliest cycle
+      await materializeFirstCyclePeopleSnapshots(dormitoryId);
+
       const prevSnapshots = await prisma.roomBillingCycleSnapshot.findMany({
         where: {
           dormitoryId,
@@ -2605,7 +3013,7 @@ export class MeterService {
       const prevWater = readingMap[room.id]?.waterCurr || null;
       const prevElec = readingMap[room.id]?.elecCurr || null;
       const prevPeople = prevSnapshotMap.has(room.id) ? prevSnapshotMap.get(room.id)! : null;
-      const householdCount = householdMap.get(room.id) ?? 0;
+      const householdCount = householdMap.get(room.id) ?? (prevPeople !== null ? prevPeople : 1);
 
       return {
         roomId: room.id,
@@ -2639,3 +3047,51 @@ export interface SaveMeterWorkspaceRowDto {
 }
 
 export const meterService = new MeterService();
+
+
+export async function resolveRoomOperationalStatusForCycle(
+  dormitoryId: string,
+  roomId: string,
+  targetBillingCycleId: string,
+  prismaClient?: any
+): Promise<{
+  status: 'vacant' | 'occupied' | 'maintenance' | 'UNKNOWN';
+  sourceCycleId: string | null;
+}> {
+  const prisma = prismaClient || getPrismaClient();
+
+  const targetCycle = await prisma.billingCycle.findFirst({
+    where: { id: targetBillingCycleId, dormitoryId },
+    select: { id: true, periodStart: true },
+  });
+
+  if (!targetCycle) {
+    return { status: 'UNKNOWN', sourceCycleId: null };
+  }
+
+  const latestChange = await prisma.roomOperationalStatusChange.findFirst({
+    where: {
+      dormitoryId,
+      roomId,
+      effectiveBillingCycle: {
+        periodStart: { lte: targetCycle.periodStart },
+      },
+    },
+    include: {
+      effectiveBillingCycle: { select: { id: true, periodStart: true } },
+    },
+    orderBy: [
+      { effectiveBillingCycle: { periodStart: 'desc' } },
+      { createdAt: 'desc' },
+    ],
+  });
+
+  if (!latestChange) {
+    return { status: 'UNKNOWN', sourceCycleId: null };
+  }
+
+  return {
+    status: latestChange.status as any,
+    sourceCycleId: latestChange.effectiveBillingCycleId,
+  };
+}

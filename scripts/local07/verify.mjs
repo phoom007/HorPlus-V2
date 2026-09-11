@@ -14,7 +14,7 @@
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 const { PrismaClient } = require('../../server/node_modules/@prisma/client/index.js');
-import { assertSafeDatabaseTarget } from './db-safety-guard.mjs';
+import { assertSafeDatabaseTarget, REQUIRED_SAFETY_CONFIG } from './db-safety-guard.mjs';
 import { FRESH_DORM, COMP_DORM, REGISTRATION_OWNER } from './constants.mjs';
 import { CANONICAL_SUBSCRIPTION_CATALOG } from '../../server/src/config/subscription-catalog.js';
 import fs from 'fs';
@@ -56,7 +56,7 @@ export async function runVerification() {
   console.log('--- 1. Safety Guard Verification ---');
   try {
     const safety = assertSafeDatabaseTarget();
-    assert(safety.port === '5455' && safety.database === 'horplus_wave1d_fasttrack_test', 'Database strictly targets port 5455 & horplus_wave1d_fasttrack_test');
+    assert(safety.port === REQUIRED_SAFETY_CONFIG.DB_PORT && safety.database === 'horplus_wave1d_fasttrack_test', `Database strictly targets port ${REQUIRED_SAFETY_CONFIG.DB_PORT} & horplus_wave1d_fasttrack_test`);
     assert(safety.redisPort === '6380', 'Redis strictly targets port 6380');
   } catch (err) {
     assert(false, 'Database safety guard failed', err.message);
@@ -144,9 +144,10 @@ export async function runVerification() {
   assert(Boolean(compDormDb), 'Comprehensive Dormitory exists in DB');
   assert(Boolean(compDormDb?.propertyDefaults?.defaultTerms), 'Comprehensive Owner has defaultTerms');
   assert(compDormDb?.propertyDefaults?.petPolicy?.allowed === 'conditional', 'Comprehensive Owner has conditional petPolicy');
+  const sampleRegistrationRequest = compDormDb?.tenantRegistrationRequests?.find(r => r.status === 'pending_owner_approval') || compDormDb?.tenantRegistrationRequests?.[0];
   assert(compDormDb?.tenantRegistrationRequests?.length > 0, 'Comprehensive Owner has pending tenant registration request');
-  assert(Boolean(compDormDb?.tenantRegistrationRequests[0]?.acceptanceSnapshotSha256), 'Tenant registration request has canonical acceptanceSnapshotSha256');
-  assert(Boolean(compDormDb?.tenantRegistrationRequests[0]?.tenantSignatureObjectKey), 'Tenant registration request has tenantSignatureObjectKey');
+  assert(Boolean(sampleRegistrationRequest?.acceptanceSnapshotSha256), 'Tenant registration request has canonical acceptanceSnapshotSha256');
+  assert(Boolean(sampleRegistrationRequest?.tenantSignatureObjectKey), 'Tenant registration request has tenantSignatureObjectKey');
   const totalRooms = compDormDb?.buildings.reduce((sum, b) => sum + b.rooms.length, 0) || 0;
   assert(totalRooms === 18, 'Total room count is exactly 18', totalRooms);
 
@@ -156,33 +157,43 @@ export async function runVerification() {
   const reservedRooms = allRooms.filter(r => r.status === 'reserved');
   const maintenanceRooms = allRooms.filter(r => r.status === 'maintenance');
 
-  assert(occupiedRooms.length === 11, 'Occupied rooms count is exactly 11', occupiedRooms.length);
-  assert(vacantRooms.length === 5, 'Vacant rooms count is exactly 5', vacantRooms.length);
-  assert(reservedRooms.length === 1, 'Reserved rooms count is exactly 1', reservedRooms.length);
+  assert(occupiedRooms.length === 13, 'Occupied rooms count is exactly 13', occupiedRooms.length);
+  assert(vacantRooms.length === 4, 'Vacant rooms count is exactly 4', vacantRooms.length);
+  assert(reservedRooms.length === 0, 'Reserved rooms count is exactly 0', reservedRooms.length);
   assert(maintenanceRooms.length === 1, 'Maintenance rooms count is exactly 1', maintenanceRooms.length);
 
   // Billing Cycle July 2026 verification
   const julyCycle = compDormDb?.billingCycles.find(c => c.cycleCode === '2026-07');
   assert(Boolean(julyCycle), 'Billing cycle 2026-07 exists and is open');
-  assert(julyCycle?.bills.length === 11, 'July bills count is 11', julyCycle?.bills.length);
+  assert(julyCycle?.bills.length === 16, 'July bills count is 16', julyCycle?.bills.length);
 
-  const paidBills = julyCycle?.bills.filter(b => b.status === 'paid') || [];
-  const unpaidBills = julyCycle?.bills.filter(b => b.status === 'unpaid') || [];
+  const normalizeBillStatus = (status) => {
+    const s = String(status || '').toUpperCase();
+    if (s === 'PAID') return 'PAID';
+    if (s === 'PARTIAL' || s === 'PARTIALLY_PAID') return 'PARTIALLY_PAID';
+    if (s === 'UNPAID') return 'UNPAID';
+    return s;
+  };
 
-  assert(paidBills.length === 7, 'Paid bills count is exactly 7', paidBills.length);
-  assert(unpaidBills.length === 4, 'Unpaid bills count is exactly 4', unpaidBills.length);
+  const paidBills = julyCycle?.bills.filter(b => normalizeBillStatus(b.status) === 'PAID') || [];
+  const partialBills = julyCycle?.bills.filter(b => normalizeBillStatus(b.status) === 'PARTIALLY_PAID') || [];
+  const unpaidBills = julyCycle?.bills.filter(b => normalizeBillStatus(b.status) === 'UNPAID') || [];
+
+  assert(paidBills.length === 8, 'Paid bills count is exactly 8', paidBills.length);
+  assert(partialBills.length === 1, 'Partial bills count is exactly 1 (Room 302 July prior partial)', partialBills.length);
+  assert(unpaidBills.length === 7, 'Unpaid bills count is exactly 7', unpaidBills.length);
 
   const totalBilled = julyCycle?.bills.reduce((sum, b) => sum + Number(b.totalAmount), 0) || 0;
-  const totalPaid = paidBills.reduce((sum, b) => sum + Number(b.totalAmount), 0);
-  const totalUnpaid = unpaidBills.reduce((sum, b) => sum + Number(b.totalAmount), 0);
+  const totalPaid = (julyCycle?.bills.reduce((sum, b) => sum + Number(b.paidAmount || 0), 0)) || 0;
+  const totalUnpaid = (julyCycle?.bills.reduce((sum, b) => sum + Number(b.outstandingAmount || 0), 0)) || 0;
 
-  assert(Math.round(totalBilled) === 65899, 'Total billed in July 2026 equals ฿65,899.00', totalBilled);
-  assert(Math.round(totalPaid) === 41994, 'Total paid in July 2026 equals ฿41,994.00', totalPaid);
-  assert(Math.round(totalUnpaid) === 23905, 'Total unpaid in July 2026 equals ฿23,905.00', totalUnpaid);
+  assert(Math.round(totalBilled) === 88399, 'Total billed in July 2026 equals ฿88,399.00', totalBilled);
+  assert(Math.round(totalPaid) === 48594, 'Total paid in July 2026 equals ฿48,594.00 (฿46,494 + ฿2,100 partial)', totalPaid);
+  assert(Math.round(totalUnpaid) === 39805, 'Total unpaid in July 2026 equals ฿39,805.00 (฿35,805 + ฿4,000 partial)', totalUnpaid);
 
   // Receipts count verification
   const receiptsCount = julyCycle?.bills.reduce((sum, b) => sum + b.Receipt.length, 0) || 0;
-  assert(receiptsCount === 7, 'Receipts issued count is exactly 7', receiptsCount);
+  assert(receiptsCount === 9, 'Receipts issued count is exactly 9 (7 regular + 1 deposit + 1 Room 302 prior partial)', receiptsCount);
 
   // 4. Session State Manifest Verification
   console.log('\n--- 4. Session Manifest & Playwright Storage State Verification ---');
@@ -211,17 +222,20 @@ export async function runVerification() {
   assert(Boolean(weeraContract), 'Comprehensive Monthly contract CTR-2026-204 exists');
   assert(weeraContract?.createdAt?.toISOString().startsWith('2026-07'), 'Room 204 Contract.createdAt is strictly in July 2026', weeraContract?.createdAt?.toISOString());
   assert(weeraContract?.startDate?.toISOString().startsWith('2026-06-01'), 'Room 204 Contract startDate is 2026-06-01', weeraContract?.startDate?.toISOString());
-  assert(weeraContract?.endDate?.toISOString().startsWith('2026-08-01'), 'Room 204 Contract endDate is 2026-08-01', weeraContract?.endDate?.toISOString());
+  assert(weeraContract?.endDate?.toISOString().startsWith('2026-07-31'), 'Room 204 Contract endDate is 2026-07-31 (canonical start + 2 months - 1 day)', weeraContract?.endDate?.toISOString());
+  assert(weeraContract?.durationMonths === 2, 'Room 204 Contract durationMonths is 2', weeraContract?.durationMonths);
+  assert(weeraContract?.terminationEffectiveDate?.toISOString().startsWith('2026-08-01'), 'Room 204 Contract terminationEffectiveDate is 2026-08-01 (handover date)', weeraContract?.terminationEffectiveDate?.toISOString());
+  assert(weeraContract?.status === 'terminated', 'Room 204 Contract status is terminated', weeraContract?.status);
 
-  const { MeterService } = require('../../server/dist/services/meter.service.js');
-  const { BillingService } = require('../../server/dist/services/billing.service.js');
-  const { PrismaMeterRepository } = require('../../server/dist/db/repositories/meter.repository.js');
-  const { PrismaBillingCycleRepository } = require('../../server/dist/db/repositories/billing-cycle.repository.js');
-  const { PrismaRoomRepository } = require('../../server/dist/db/repositories/room.repository.js');
-  const { PrismaBillRepository } = require('../../server/dist/db/repositories/bill.repository.js');
-  const { PrismaContractRepository } = require('../../server/dist/db/repositories/contract.repository.js');
-  const { PrismaTenantRepository } = require('../../server/dist/db/repositories/tenant.repository.js');
-  const { AuditService } = require('../../server/dist/services/audit.service.js');
+  const { MeterService } = await import('../../server/src/services/meter.service.ts');
+  const { BillingService } = await import('../../server/src/services/billing.service.ts');
+  const { PrismaMeterRepository } = await import('../../server/src/db/repositories/meter.repository.ts');
+  const { PrismaBillingCycleRepository } = await import('../../server/src/db/repositories/billing-cycle.repository.ts');
+  const { PrismaRoomRepository } = await import('../../server/src/db/repositories/room.repository.ts');
+  const { PrismaBillRepository } = await import('../../server/src/db/repositories/bill.repository.ts');
+  const { PrismaContractRepository } = await import('../../server/src/db/repositories/contract.repository.ts');
+  const { PrismaTenantRepository } = await import('../../server/src/db/repositories/tenant.repository.ts');
+  const { AuditService } = await import('../../server/src/services/audit.service.ts');
 
   const meterRepo = new PrismaMeterRepository(prisma);
   const cycleRepo = new PrismaBillingCycleRepository(prisma);
@@ -250,6 +264,7 @@ export async function runVerification() {
   const cycleJulyDb = compDormDb?.billingCycles.find(c => c.cycleCode === '2026-07');
   const cycleAugDb = compDormDb?.billingCycles.find(c => c.cycleCode === '2026-08');
   const cycleSeptDb = compDormDb?.billingCycles.find(c => c.cycleCode === '2026-09');
+  const cycleOctDb = compDormDb?.billingCycles.find(c => c.cycleCode === '2026-10');
 
   const room204Db = allRooms.find(r => r.roomNumber === '204');
   const room105Db = allRooms.find(r => r.roomNumber === '105');
@@ -263,13 +278,31 @@ export async function runVerification() {
     const r105July = julyPreview.rooms.find(r => r.roomId === room105Db?.id);
     assert(Boolean(r105July?.tenantId) && r105July?.billingSource === 'PROVISIONAL_TERM', 'Room 105 (Term) is visible in July 2026 as PROVISIONAL_TERM');
     assert(r105July?.tenantName === 'นางสาวพิมพา สดใส', 'Room 105 tenant name is นางสาวพิมพา สดใส in July');
+
+    const pimpaProv = await prisma.provisionalRentalTerm.findFirst({
+      where: { dormitoryId: COMP_DORM.id, roomId: room105Db?.id },
+      include: {
+        occupancy: {
+          include: {
+            registration: true,
+          },
+        },
+      },
+    });
+    const pimpaTerms = pimpaProv?.occupancy?.registration?.acceptanceSnapshot?.terms;
+    assert(Boolean(pimpaTerms) && pimpaTerms.includes('Term 4 เดือน'), 'Room 105 has authoritative frozen historical registration terms snapshot');
+
+    const c105 = await prisma.contract.findFirst({
+      where: { dormitoryId: COMP_DORM.id, contractNumber: 'CTR-2026-105-TERM' },
+    });
+    assert(Boolean(c105?.terms) && c105?.terms.includes('พ.ย. 2569 - ก.พ. 2570'), 'Room 105 future contract has authoritative frozen contract terms');
+    assert(c105?.terms !== pimpaTerms, 'Room 105 shows two distinct authoritative agreement terms sources');
   }
 
   if (cycleAugDb && room204Db) {
     const augPreview = await meterService.getMeterBillingPreviewContext(COMP_DORM.id, cycleAugDb.id);
     const r204Aug = augPreview.rooms.find(r => r.roomId === room204Db.id);
-    assert(r204Aug?.tenantId === weeraContract?.tenantId, 'Room 204 (Weera) is visible in August 2026 (endDate 2026-08-01 intersects August)');
-    assert(r204Aug?.tenantName === 'นายวีระ กล้าหาญ', 'Room 204 tenant name is นายวีระ กล้าหาญ in August');
+    assert(r204Aug?.tenantId === null && r204Aug?.billingSource === 'NONE', 'Room 204 (Weera) is absent in August 2026 (contract ended August 1 under half-open policy B)');
 
     const r105Aug = augPreview.rooms.find(r => r.roomId === room105Db?.id);
     assert(Boolean(r105Aug?.tenantId) && r105Aug?.billingSource === 'PROVISIONAL_TERM', 'Room 105 (Term) is visible in August 2026 as PROVISIONAL_TERM');
@@ -294,17 +327,19 @@ export async function runVerification() {
   if (cycleAugDb && room106Db) {
     const augPreview = await meterService.getMeterBillingPreviewContext(COMP_DORM.id, cycleAugDb.id);
     const r106Aug = augPreview.rooms.find(r => r.roomId === room106Db.id);
-    assert(r106Aug?.billingSource === 'DAILY_STAY', 'Room 106 is ACTIVE Daily stay in August 2026');
+    assert(r106Aug?.billingSource === 'DAILY_STAY', 'Room 106 has billingSource DAILY_STAY in August 2026');
     assert(r106Aug?.isDailyUnpaid === true, 'Room 106 has isDailyUnpaid = true in August 2026');
-    assert(r106Aug?.isDailyOverdue === false, 'Room 106 has isDailyOverdue = false in August 2026 (active before checkout)');
+    assert(r106Aug?.isDailyOverdue === true, 'Room 106 has isDailyOverdue = true in August 2026 (checked-out unpaid historical stay)');
+    assert(r106Aug?.isDailyActive === false, 'Room 106 has isDailyActive = false in August 2026 (today is after checkout)');
   }
 
   if (cycleAugDb && room206Db) {
     const augPreview = await meterService.getMeterBillingPreviewContext(COMP_DORM.id, cycleAugDb.id);
     const r206Aug = augPreview.rooms.find(r => r.roomId === room206Db.id);
-    assert(r206Aug?.billingSource === 'DAILY_STAY', 'Room 206 is ACTIVE Daily stay in August 2026');
-    assert(r206Aug?.isDailyRentPaid === true, 'Room 206 has isDailyRentPaid = true in August 2026 (active paid daily stay)');
+    assert(r206Aug?.billingSource === 'DAILY_STAY', 'Room 206 has billingSource DAILY_STAY in August 2026');
+    assert(r206Aug?.isDailyRentPaid === true, 'Room 206 has isDailyRentPaid = true in August 2026 (paid daily stay)');
     assert(r206Aug?.isDailyOverdue === false, 'Room 206 has isDailyOverdue = false in August 2026');
+    assert(r206Aug?.isDailyActive === false, 'Room 206 has isDailyActive = false in August 2026 (today is after checkout)');
   }
 
   if (cycleJulyDb && room205Db) {
@@ -336,7 +371,14 @@ export async function runVerification() {
   if (cycleSeptDb && room205Db) {
     const septPreview = await meterService.getMeterBillingPreviewContext(COMP_DORM.id, cycleSeptDb.id);
     const r205Sept = septPreview.rooms.find(r => r.roomId === room205Db.id);
-    assert(r205Sept?.hasBookableGap === true, 'Room 205 has hasBookableGap = true in September 2026 (future reservation starts Sept 15)');
+    assert(r205Sept?.hasBookableGap === true, 'Room 205 has hasBookableGap = true in September 2026 (future reservation starts Oct 1)');
+  }
+
+  if (cycleSeptDb && room106Db) {
+    const septPreview = await meterService.getMeterBillingPreviewContext(COMP_DORM.id, cycleSeptDb.id);
+    const r106Sept = septPreview.rooms.find(r => r.roomId === room106Db.id);
+    assert(r106Sept?.billingSource === 'DAILY_STAY', 'Room 106 has billingSource DAILY_STAY in September 2026');
+    assert(r106Sept?.isDailyActive === true, 'Room 106 has isDailyActive = true on UAT date (active stay spans 2026-09-05 to 2026-09-10)');
   }
 
   // 8. Charge Component Matrix Verification (0, 1, 2, 3 components in August 2026)
@@ -363,23 +405,24 @@ export async function runVerification() {
     assert(r101Aug?.chargeComponents?.length === 1, 'Room 101 has 1 charge component in August 2026', r101Aug?.chargeComponents?.length);
     assert(Number(r101Aug?.amountDue) === 1268, 'Room 101 amountDue is 1268.00 in August 2026');
 
-    // 3 Components (RENT + DEPOSIT + INVALID utility): Room 201
+    // 2 Components (RENT + INVALID utility): Room 201
     const r201Aug = augPreview.rooms.find(r => r.roomId === room201Db.id);
-    assert(r201Aug?.chargeComponents?.length === 3, 'Room 201 has 3 charge components in August 2026', r201Aug?.chargeComponents?.length);
-    assert(Number(r201Aug?.amountDue) === 4800, 'Room 201 amountDue is 4800.00 in August 2026 (unpaid rent only)');
+    assert(r201Aug?.chargeComponents?.length === 2, 'Room 201 has 2 charge components in August 2026 (RENT + utility)', r201Aug?.chargeComponents?.length);
+    assert(Number(r201Aug?.amountDue) === 6156, 'Room 201 amountDue is 6156.00 in August 2026 (unpaid rent 4,800 + monthly utility 1,356)', r201Aug?.amountDue);
 
     // 3 Components: Room 202 (RENT + DEPOSIT + MONTHLY_UTILITY)
     const r202Aug = augPreview.rooms.find(r => r.roomId === room202Db.id);
     assert(r202Aug?.chargeComponents?.length === 3, 'Room 202 has 3 charge components in August 2026', r202Aug?.chargeComponents?.length);
-    assert(Number(r202Aug?.amountDue) === 6000, 'Room 202 amountDue is 6000.00 in August 2026 (unpaid rent + utility)');
+    assert(Number(r202Aug?.amountDue) === 6450, 'Room 202 amountDue is 6450.00 in August 2026 (unpaid rent 4,800 + deposit paid 4,800 + unpaid utility 1,650)', r202Aug?.amountDue);
 
     // Multi-Cycle Parity: July 2026 Room 101 (Decomposed into Rent 4500 + MU 950, 0 combined labels)
     if (cycleJulyDb) {
       const julPreview = await meterService.getMeterBillingPreviewContext(COMP_DORM.id, cycleJulyDb.id);
       const r101Jul = julPreview.rooms.find(r => r.roomId === room101Db.id);
-      assert(r101Jul?.chargeComponents?.length === 2, 'Room 101 has 2 decomposed charge components in July 2026 (Rent + MU)', r101Jul?.chargeComponents?.length);
-      assert(r101Jul?.chargeComponents[0]?.type === 'rent' && r101Jul?.chargeComponents[0]?.amount === '4500.00', 'Room 101 July Rent component is 4500.00');
-      assert(r101Jul?.chargeComponents[1]?.type === 'monthly_utility' && r101Jul?.chargeComponents[1]?.amount === '950.00', 'Room 101 July MU component is 950.00');
+      assert(r101Jul?.chargeComponents?.length === 3, 'Room 101 has 3 decomposed charge components in July 2026 (Rent + Deposit + MU)', r101Jul?.chargeComponents?.length);
+      assert(r101Jul?.chargeComponents?.some(c => c.type === 'rent' && c.amount === '4500.00'), 'Room 101 July Rent component is 4500.00');
+      assert(r101Jul?.chargeComponents?.some(c => c.type === 'monthly_utility' && c.amount === '950.00'), 'Room 101 July MU component is 950.00');
+      assert(r101Jul?.chargeComponents?.some(c => c.type === 'deposit' && c.amount === '4500.00'), 'Room 101 July Deposit component is 4500.00');
       assert(!r101Jul?.chargeComponents?.some(c => c.type === 'legacy_combined' || (c.label && c.label.includes('รวมค่าเช่า'))), 'Room 101 July has no combined component');
     }
   }
@@ -510,16 +553,16 @@ export async function runVerification() {
       `Critical August Save Invariant: Room 101 bill total remains unchanged (${totalBefore} -> ${totalAfter}, delta = 0.00)`
     );
 
-    // 12b. Unissued room (e.g. Room 102 in August) saving baseline-only (blank current) succeeds
-    const room102Db = allRooms.find(r => r.roomNumber === '102');
-    if (room102Db) {
+    // 12b. Unissued room (e.g. Room 105 in August) saving baseline-only (blank current) succeeds
+    const room105Db = allRooms.find(r => r.roomNumber === '105');
+    if (room105Db) {
       const saveRes = await meterService.saveBulkMeterWorkspace(
         COMP_DORM.id,
         {
           billingCycleId: cycleAugDb.id,
           rows: [
             {
-              roomId: room102Db.id,
+              roomId: room105Db.id,
               waterPrev: 110,
               waterCurr: null,
               elecPrev: 560,
@@ -531,10 +574,10 @@ export async function runVerification() {
         billingService
       );
       assert(saveRes.savedCount === 1, 'Unissued room baseline-only save succeeds');
-      const r102Water = await prisma.meterReading.findFirst({
-        where: { roomId: room102Db.id, billingCycleId: cycleAugDb.id, meterType: 'water' },
+      const r105Water = await prisma.meterReading.findFirst({
+        where: { roomId: room105Db.id, billingCycleId: cycleAugDb.id, meterType: 'water' },
       });
-      assert(r102Water?.previousReading !== null && r102Water?.currentReading === null, 'Unissued room persists baseline and null current');
+      assert(r105Water?.previousReading !== null && r105Water?.currentReading === null, 'Unissued room persists baseline and null current');
     }
 
     // 12c. Issued room (Room 101 with INV-202608-101) clearing current reading fails closed
@@ -564,6 +607,386 @@ export async function runVerification() {
     }
     assert(threwClosed === true, 'Clearing current meter reading on issued unpaid bill fails closed with CANNOT_CLEAR_METER_READING_FOR_ISSUED_BILL');
   }
+
+  // 13. Executable 5-State Owner Rooms Financial Oracle Matrix (Production MeterService Authority)
+  console.log('\n--- 13. Executable 5-State Owner Rooms Financial Oracle Matrix ---');
+  assert(Boolean(cycleJulyDb), 'Oracle Fixture Precondition: cycle 2026-07 exists in DB');
+  assert(Boolean(cycleAugDb), 'Oracle Fixture Precondition: cycle 2026-08 exists in DB');
+  assert(Boolean(cycleSeptDb), 'Oracle Fixture Precondition: cycle 2026-09 exists in DB');
+  assert(Boolean(cycleOctDb), 'Oracle Fixture Precondition: cycle 2026-10 exists in DB');
+
+  const r101Db = allRooms.find(r => r.roomNumber === '101');
+  const r102Db = allRooms.find(r => r.roomNumber === '102');
+  const r103Db = allRooms.find(r => r.roomNumber === '103');
+  const r104Db = allRooms.find(r => r.roomNumber === '104');
+  const r106Db = allRooms.find(r => r.roomNumber === '106');
+  const r201Db = allRooms.find(r => r.roomNumber === '201');
+  const r202Db = allRooms.find(r => r.roomNumber === '202');
+  const r203Db = allRooms.find(r => r.roomNumber === '203');
+  const r205Db = allRooms.find(r => r.roomNumber === '205');
+  const r206Db = allRooms.find(r => r.roomNumber === '206');
+  const r303Db = allRooms.find(r => r.roomNumber === '303');
+
+  assert(Boolean(r101Db), 'Oracle Fixture Precondition: Room 101 exists in DB');
+  assert(Boolean(r102Db), 'Oracle Fixture Precondition: Room 102 exists in DB');
+  assert(Boolean(r103Db), 'Oracle Fixture Precondition: Room 103 exists in DB');
+  assert(Boolean(r104Db), 'Oracle Fixture Precondition: Room 104 exists in DB');
+  assert(Boolean(r106Db), 'Oracle Fixture Precondition: Room 106 exists in DB');
+  assert(Boolean(r201Db), 'Oracle Fixture Precondition: Room 201 exists in DB');
+  assert(Boolean(r202Db), 'Oracle Fixture Precondition: Room 202 exists in DB');
+  assert(Boolean(r203Db), 'Oracle Fixture Precondition: Room 203 exists in DB');
+  assert(Boolean(r205Db), 'Oracle Fixture Precondition: Room 205 exists in DB');
+  assert(Boolean(r206Db), 'Oracle Fixture Precondition: Room 206 exists in DB');
+  assert(Boolean(r303Db), 'Oracle Fixture Precondition: Room 303 exists in DB');
+
+  const julyPreview = await meterService.getMeterBillingPreviewContext(COMP_DORM.id, cycleJulyDb.id);
+  const augPreview = await meterService.getMeterBillingPreviewContext(COMP_DORM.id, cycleAugDb.id);
+  const septPreview = await meterService.getMeterBillingPreviewContext(COMP_DORM.id, cycleSeptDb.id);
+  const octPreview = await meterService.getMeterBillingPreviewContext(COMP_DORM.id, cycleOctDb.id);
+
+    // Matrix Scenario A: RENT PAID (July 2026 Room 101)
+    const p101Jul = julyPreview.rooms.find(r => r.roomId === r101Db?.id);
+    const p101Aug = augPreview.rooms.find(r => r.roomId === r101Db?.id);
+    assert(
+      p101Jul?.agreementRentPaymentStatus === 'PAID',
+      'Matrix A: RENT PAID -> Room 101 (2026-07) rent status is PAID (จ่ายแล้ว)',
+      p101Jul?.agreementRentPaymentStatus
+    );
+
+    // June Cycle Absence Check (July is first operational cycle)
+    assert(
+      !compDormDb?.billingCycles.some(c => c.cycleCode === '2026-06'),
+      'Comprehensive Owner has NO June 2026 cycle (July 2026 is the first operational cycle)'
+    );
+
+    // Matrix Scenario A2: ROOM 101 DEPOSIT ORACLE & SINGLE SEEDED BILL IDENTITY
+    const r101DepositBills = await prisma.bill.findMany({
+      where: { dormitoryId: COMP_DORM.id, roomId: r101Db.id, billKind: 'DEPOSIT' },
+    });
+    assert(
+      r101DepositBills.length === 1,
+      `Room 101 Deposit Bill single identity invariant (found ${r101DepositBills.length}, expected 1)`
+    );
+    assert(
+      r101DepositBills[0]?.billNumber === 'INV-202607-101-D',
+      `Room 101 Deposit Bill is the seeded July Deposit Bill INV-202607-101-D without duplicates (${r101DepositBills[0]?.billNumber})`
+    );
+    assert(
+      p101Jul?.agreementDepositPaymentStatus === 'PAID',
+      'Matrix A2: DEPOSIT PAID -> Room 101 (2026-07) deposit status is PAID (ชำระแล้ว)',
+      p101Jul?.agreementDepositPaymentStatus
+    );
+    assert(
+      p101Aug?.agreementDepositPaymentStatus === 'PAID',
+      'Matrix A2: DEPOSIT PAID LIFECYCLE -> Room 101 (2026-08) deposit status is PAID (ชำระแล้ว)',
+      p101Aug?.agreementDepositPaymentStatus
+    );
+
+    // Matrix Scenario A3: ROOM 102 DEPOSIT UNPAID IN JULY
+    const r102DepositBills = await prisma.bill.findMany({
+      where: { dormitoryId: COMP_DORM.id, roomId: r102Db.id, billKind: 'DEPOSIT' },
+    });
+    assert(
+      r102DepositBills.length === 1 && r102DepositBills[0]?.billNumber === 'INV-202607-102-D',
+      'Room 102 Deposit Bill is INV-202607-102-D'
+    );
+    const p102Jul = julyPreview.rooms.find(r => r.roomId === r102Db?.id);
+    assert(
+      p102Jul?.agreementDepositPaymentStatus === 'UNPAID',
+      'Matrix A3: DEPOSIT UNPAID -> Room 102 (2026-07) deposit status is UNPAID (รอชำระ)',
+      p102Jul?.agreementDepositPaymentStatus
+    );
+
+    // Matrix Scenario B: RENT UNPAID (August 2026 Room 201)
+    const p201Aug = augPreview.rooms.find(r => r.roomId === r201Db?.id);
+    assert(
+      p201Aug?.agreementRentPaymentStatus === 'UNPAID',
+      'Matrix B: RENT UNPAID -> Room 201 (2026-08) rent status is UNPAID (รอชำระ)',
+      p201Aug?.agreementRentPaymentStatus
+    );
+
+    // Matrix Scenario C: RENT PARTIAL (August 2026 Room 203)
+    const p203Aug = augPreview.rooms.find(r => r.roomId === r203Db?.id);
+    assert(
+      p203Aug?.agreementRentPaymentStatus === 'PARTIAL',
+      'Matrix C: RENT PARTIAL -> Room 203 (2026-08) rent status is PARTIAL (ชำระบางส่วน: 2000/4800)',
+      p203Aug?.agreementRentPaymentStatus
+    );
+
+    // Matrix Scenario D: RENT NOT_ISSUED (August 2026 Room 303)
+    const p303Aug = augPreview.rooms.find(r => r.roomId === r303Db?.id);
+    assert(
+      p303Aug?.agreementRentPaymentStatus === 'NOT_ISSUED',
+      'Matrix D: RENT NOT_ISSUED -> Room 303 (2026-08) active contract with no issued bill evaluates to NOT_ISSUED (ยังไม่ออกบิล)',
+      p303Aug?.agreementRentPaymentStatus
+    );
+
+    // Matrix Scenario E: DEPOSIT PAID (August 2026 Room 202)
+    const p202Aug = augPreview.rooms.find(r => r.roomId === r202Db?.id);
+    assert(
+      p202Aug?.agreementDepositPaymentStatus === 'PAID',
+      'Matrix E: DEPOSIT PAID -> Room 202 (2026-08) deposit status is PAID (จ่ายแล้ว: INV-202608-202-D)',
+      p202Aug?.agreementDepositPaymentStatus
+    );
+
+    // Matrix Scenario F: SAME AGREEMENT in later cycle (September 2026 Room 202)
+    const p202Sept = septPreview.rooms.find(r => r.roomId === r202Db?.id);
+    assert(
+      p202Sept?.agreementDepositPaymentStatus === 'PAID',
+      'Matrix F: SAME AGREEMENT in later cycle -> Room 202 (2026-09) inherits August paid deposit as PAID without new deposit bill',
+      p202Sept?.agreementDepositPaymentStatus
+    );
+
+    // Matrix Scenario F2: DEPOSIT LIFECYCLE (3 Cycles: August, September, October Room 202)
+    const p202Oct = octPreview.rooms.find(r => r.roomId === r202Db?.id);
+    assert(
+      p202Aug?.agreementDepositPaymentStatus === 'PAID' &&
+      p202Sept?.agreementDepositPaymentStatus === 'PAID' &&
+      p202Oct?.agreementDepositPaymentStatus === 'PAID',
+      'Matrix F2: DEPOSIT LIFECYCLE (3 Cycles) -> Room 202 deposit is PAID in August (2026-08), September (2026-09), and October (2026-10)',
+      `Aug: ${p202Aug?.agreementDepositPaymentStatus}, Sept: ${p202Sept?.agreementDepositPaymentStatus}, Oct: ${p202Oct?.agreementDepositPaymentStatus}`
+    );
+
+    // Matrix Scenario F3: ONE-TIME DEPOSIT CHARGE IN START CYCLE (August Room 202)
+    const r202AugDepCompCount = p202Aug?.chargeComponents?.filter(c => c.type === 'deposit')?.length || 0;
+    const r202SeptDepCompCount = p202Sept?.chargeComponents?.filter(c => c.type === 'deposit')?.length || 0;
+    const r202OctDepCompCount = p202Oct?.chargeComponents?.filter(c => c.type === 'deposit')?.length || 0;
+    assert(
+      r202AugDepCompCount === 1 && r202SeptDepCompCount === 0 && r202OctDepCompCount === 0,
+      'Matrix F3: ONE-TIME DEPOSIT CHARGE -> Room 202 has exactly 1 deposit charge in start cycle (Aug) and 0 in subsequent cycles (Sept, Oct)',
+      `Aug: ${r202AugDepCompCount}, Sept: ${r202SeptDepCompCount}, Oct: ${r202OctDepCompCount}`
+    );
+
+    // Matrix Scenario G: DEPOSIT NOT_ISSUED (August 2026 Room 303)
+    assert(
+      p303Aug?.agreementDepositPaymentStatus === 'NOT_ISSUED',
+      'Matrix G: DEPOSIT NOT_ISSUED -> Room 303 (2026-08) requires deposit but no deposit bill issued evaluates to NOT_ISSUED (ยังไม่ออกบิล)',
+      p303Aug?.agreementDepositPaymentStatus
+    );
+
+    // Matrix Scenario H: DAILY RENT UNPAID & PAID (August 2026 Room 106 & 206)
+    const p106Aug = augPreview.rooms.find(r => r.roomId === r106Db?.id);
+    const p206Aug = augPreview.rooms.find(r => r.roomId === r206Db?.id);
+    assert(
+      p106Aug?.agreementRentPaymentStatus === 'UNPAID',
+      'Matrix H: DAILY RENT -> Room 106 (2026-08) daily stay rent status is UNPAID (รอชำระ)',
+      p106Aug?.agreementRentPaymentStatus
+    );
+    assert(
+      p206Aug?.agreementRentPaymentStatus === 'PAID',
+      'Matrix H2: DAILY RENT PAID -> Room 206 (2026-08) daily stay rent status is PAID (จ่ายแล้ว)',
+      p206Aug?.agreementRentPaymentStatus
+    );
+
+    // Matrix Scenario I: DAILY DEPOSIT -> Room 106 (2026-08) daily stay deposit status is UNPAID (รอชำระ)
+    assert(
+      p106Aug?.agreementDepositPaymentStatus === 'UNPAID',
+      'Matrix I: DAILY DEPOSIT -> Room 106 (2026-08) daily stay deposit status is UNPAID (รอชำระ)',
+      p106Aug?.agreementDepositPaymentStatus
+    );
+
+    // Matrix Scenario J: RESERVED IN CYCLE (October 2026 Room 205)
+    const p205Oct = octPreview.rooms.find(r => r.roomId === r205Db?.id);
+    assert(
+      p205Oct?.cyclePresentationState === 'RESERVED_IN_CYCLE' && p205Oct?.agreementRentPaymentStatus === 'NOT_ISSUED',
+      'Matrix J: RESERVED IN CYCLE -> Room 205 (2026-10) is RESERVED_IN_CYCLE with rent status NOT_ISSUED (ยังไม่ออกบิล)',
+      `State: ${p205Oct?.cyclePresentationState}, Rent: ${p205Oct?.agreementRentPaymentStatus}`
+    );
+
+    // Matrix Scenario K: Ambiguous LEGACY_COMBINED Partial -> Room 104 (2026-08) combined partial bill resolves rent & deposit to UNKNOWN (ไม่พบข้อมูลการชำระ)
+    const p104Aug = augPreview.rooms.find(r => r.roomId === r104Db?.id);
+    assert(
+      p104Aug?.agreementRentPaymentStatus === 'UNKNOWN' && p104Aug?.agreementDepositPaymentStatus === 'UNKNOWN',
+      'Matrix K: Ambiguous LEGACY_COMBINED Partial -> Room 104 (2026-08) combined partial bill resolves rent & deposit to UNKNOWN (ไม่พบข้อมูลการชำระ)',
+      `Rent: ${p104Aug?.agreementRentPaymentStatus}, Deposit: ${p104Aug?.agreementDepositPaymentStatus}`
+    );
+
+    // --- R3.7a Verification Checks ---
+    console.log('\n--- 11. R3.7a Financial Strictness & Canonical Authority Verification ---');
+
+    // Check 1: Room 304 Canonical Quick Add Eligibility
+    const r304Db = await prisma.room.findFirst({
+      where: { dormitoryId: COMP_DORM.id, roomNumber: '304' },
+      include: { contracts: { where: { deletedAt: null, status: 'active' } } },
+    });
+    assert(
+      r304Db?.status === 'vacant' && r304Db?.contracts.length === 0,
+      'R3.7a Check 1: Room 304 is canonically vacant with 0 active contracts (eligible for Quick Add)',
+      `Status: ${r304Db?.status}, Active Contracts: ${r304Db?.contracts.length}`
+    );
+
+    // Check 2: Room 202 Complete Canonical PAID Deposit Evidence
+    const b202Dep = await prisma.bill.findFirst({
+      where: { dormitoryId: COMP_DORM.id, billNumber: 'INV-202608-202-D' },
+      include: {
+        items: true,
+      },
+    });
+    const p202Dep = await prisma.payment.findFirst({
+      where: { billId: b202Dep?.id },
+      include: {
+        receipt: true,
+        statusHistories: true,
+      },
+    });
+    const b202Histories = await prisma.billStatusHistory.findMany({
+      where: { billId: b202Dep?.id },
+    });
+    assert(
+      b202Dep?.status === 'paid' &&
+      Number(b202Dep?.paidAmount) === 4800 &&
+      Number(b202Dep?.outstandingAmount) === 0 &&
+      b202Dep?.paidAt !== null,
+      'R3.7a Check 2a: Room 202 deposit Bill has complete paid state (paid, paidAmount=4800, outstanding=0, paidAt)',
+      `Status: ${b202Dep?.status}, PaidAmount: ${b202Dep?.paidAmount}, Outstanding: ${b202Dep?.outstandingAmount}, PaidAt: ${b202Dep?.paidAt}`
+    );
+    assert(
+      p202Dep?.status === 'APPROVED' &&
+      Number(p202Dep?.amount) === 4800 &&
+      p202Dep?.statusHistories?.some(h => h.toStatus === 'APPROVED'),
+      'R3.7a Check 2b: Room 202 deposit Payment has APPROVED status and PaymentStatusHistory',
+      `PaymentStatus: ${p202Dep?.status}, HistoryCount: ${p202Dep?.statusHistories?.length}`
+    );
+    assert(
+      b202Histories?.some(h => h.toStatus === 'PAID'),
+      'R3.7a Check 2c: Room 202 deposit Bill has BillStatusHistory record (toStatus=PAID)',
+      `BillHistoryCount: ${b202Histories?.length}`
+    );
+    assert(
+      p202Dep?.receipt?.receiptNumber === 'RCP-202608-202-D' &&
+      Number(p202Dep?.receipt?.snapshotData?.totalAmount) === 4800,
+      'R3.7a Check 2d: Room 202 deposit has canonical Receipt (RCP-202608-202-D, totalAmount=4800)',
+      `ReceiptNumber: ${p202Dep?.receipt?.receiptNumber}, Total: ${p202Dep?.receipt?.snapshotData?.totalAmount}`
+    );
+
+    // Check 3: Room 303 Deposit status is NOT_ISSUED
+    const b303Dep = await prisma.bill.findFirst({
+      where: { dormitoryId: COMP_DORM.id, roomId: r303Db?.id, items: { some: { type: 'deposit' } } },
+    });
+    assert(
+      !b303Dep && p303Aug?.agreementDepositPaymentStatus === 'NOT_ISSUED',
+      'R3.7a Check 3: Room 303 requires deposit but has no deposit bill -> NOT_ISSUED',
+      `DepositBill: ${b303Dep?.id || 'none'}, Evaluated: ${p303Aug?.agreementDepositPaymentStatus}`
+    );
+
+    // Check 4: First Operational Cycle Baseline Authority (Fresh Dorm)
+    const freshAugCycle = await prisma.billingCycle.findFirst({
+      where: { dormitoryId: freshDormDb.id, cycleCode: '2026-08' },
+    });
+    const freshJulyCycle = await prisma.billingCycle.findFirst({
+      where: { dormitoryId: freshDormDb.id, cycleCode: '2026-07' },
+    });
+    const freshAugBaselineCount = await prisma.roomOperationalStatusChange.count({
+      where: { dormitoryId: freshDormDb.id, effectiveBillingCycleId: freshAugCycle?.id },
+    });
+    const freshJulyBaselineCount = freshJulyCycle
+      ? await prisma.roomOperationalStatusChange.count({
+          where: { dormitoryId: freshDormDb.id, effectiveBillingCycleId: freshJulyCycle.id },
+        })
+      : 0;
+    assert(
+      freshAugBaselineCount === FRESH_DORM.rooms.length && freshJulyBaselineCount === 0,
+      `R3.7a Check 4: Fresh Dorm established baseline for first cycle (2026-08: ${freshAugBaselineCount}/${FRESH_DORM.rooms.length}) and 0 for pre-onboarding July`,
+      `Aug: ${freshAugBaselineCount}, July: ${freshJulyBaselineCount}`
+    );
+
+    // 14. Room 302 Canonical Financial Graph & Pending Group Verification
+    console.log('\n--- 14. Room 302 Canonical Financial Graph & Pending Group Verification ---');
+    const room302Db = allRooms.find(r => r.roomNumber === '302');
+    assert(Boolean(room302Db), 'Room 302 exists in DB');
+
+    const bill302July = await prisma.bill.findFirst({
+      where: { dormitoryId: COMP_DORM.id, roomId: room302Db.id, billingCycleId: cycleJulyDb.id },
+      include: {
+        items: true,
+        allocations: true,
+        Receipt: true,
+        Payment: { include: { statusHistories: true } },
+      },
+    });
+
+    assert(Boolean(bill302July), 'Room 302 July bill exists');
+    assert(Number(bill302July.totalAmount) === 6100, 'Room 302 July Bill total is ฿6,100.00', Number(bill302July.totalAmount));
+    assert(Number(bill302July.paidAmount) === 2100, 'Room 302 July Bill paid is ฿2,100.00', Number(bill302July.paidAmount));
+    assert(Number(bill302July.outstandingAmount) === 4000, 'Room 302 July Bill outstanding is ฿4,000.00', Number(bill302July.outstandingAmount));
+    assert(bill302July.status === 'PARTIALLY_PAID', 'Room 302 July Bill status is canonical PARTIALLY_PAID', bill302July.status);
+
+    // Prior Approved Payment, Allocations & Audit Actor Identity
+    const priorApprovedPayment = bill302July.Payment.find(p => p.status === 'APPROVED');
+    assert(Boolean(priorApprovedPayment), 'Room 302 July has an APPROVED prior Payment');
+    assert(Number(priorApprovedPayment?.amount) === 2100, 'Approved prior Payment amount is ฿2,100.00', Number(priorApprovedPayment?.amount));
+    assert(priorApprovedPayment?.reviewedByUserId === COMP_DORM.owner.id, 'Prior Payment reviewedByUserId is Comprehensive Owner ID', priorApprovedPayment?.reviewedByUserId);
+    assert(Boolean(priorApprovedPayment?.reviewedAt), 'Prior Payment reviewedAt is populated');
+    assert(
+      priorApprovedPayment?.statusHistories?.some(h => h.changedByUserId === COMP_DORM.owner.id && h.toStatus === 'APPROVED'),
+      'Prior Payment status history recorded Comprehensive Owner as changedByUserId'
+    );
+
+    const approvedAllocationsSum = bill302July.allocations.reduce((sum, a) => sum + Number(a.allocatedAmount), 0);
+    assert(approvedAllocationsSum === 2100, 'Approved prior PaymentAllocation sum against July Bill is ฿2,100.00', approvedAllocationsSum);
+
+    const unbackedPaidDelta = Number(bill302July.paidAmount) - approvedAllocationsSum;
+    assert(unbackedPaidDelta === 0, 'Bill.paidAmount - approved allocation sum is exactly 0 (No phantom paidAmount)', unbackedPaidDelta);
+
+    const legacyUnallocatedPaidAmount = Math.max(Number(bill302July.paidAmount) - approvedAllocationsSum, 0);
+    assert(legacyUnallocatedPaidAmount === 0, 'legacyUnallocatedPaidAmount is exactly 0 for modern Room 302 fixture', legacyUnallocatedPaidAmount);
+
+    // Prior Bill Status History Audit
+    const bill302Histories = await prisma.billStatusHistory.findMany({
+      where: { billId: bill302July.id },
+    });
+    assert(
+      bill302Histories.some(h => h.toStatus === 'PARTIALLY_PAID' && h.changedByUserId === COMP_DORM.owner.id),
+      'Room 302 Bill status history has toStatus=PARTIALLY_PAID and changedByUserId=Comprehensive Owner'
+    );
+
+    // Prior Receipt
+    assert(bill302July.Receipt.length === 1, 'Room 302 July has exactly 1 prior event Receipt', bill302July.Receipt.length);
+    const priorReceipt = bill302July.Receipt[0];
+    assert(
+      Number(priorReceipt?.snapshotData?.totalAmount || priorReceipt?.snapshotData?.total) === 2100,
+      'Prior receipt snapshot total is ฿2,100.00',
+      priorReceipt?.snapshotData?.totalAmount || priorReceipt?.snapshotData?.total
+    );
+    assert(priorReceipt?.issuedByUserId === COMP_DORM.owner.id, 'Prior Receipt issuedByUserId is Comprehensive Owner ID');
+    assert(
+      priorReceipt?.snapshotData?.receiverName === COMP_DORM.owner.name,
+      'Prior Receipt receiverName is Comprehensive Owner display name',
+      priorReceipt?.snapshotData?.receiverName
+    );
+
+    // Pending Combined Payment Group
+    const bill302Aug = await prisma.bill.findFirst({
+      where: { dormitoryId: COMP_DORM.id, roomId: room302Db.id, billingCycleId: cycleAugDb.id, billKind: 'RENT' },
+    });
+    assert(Boolean(bill302Aug), 'Room 302 August bill exists');
+    assert(Number(bill302Aug.outstandingAmount) === 5000, 'Room 302 August Bill outstanding is ฿5,000.00', Number(bill302Aug.outstandingAmount));
+
+    const pendingGroup = await prisma.combinedPaymentGroup.findFirst({
+      where: {
+        dormitoryId: COMP_DORM.id,
+        status: 'UNDER_REVIEW',
+        payments: { some: { bill: { roomId: room302Db.id } } },
+      },
+      include: {
+        payments: true,
+        billTargets: true,
+        receipts: true,
+      },
+    });
+
+    assert(Boolean(pendingGroup), 'Room 302 pending combined group exists in UNDER_REVIEW status');
+    assert(Number(pendingGroup?.totalAmount) === 6500, 'Pending group total is ฿6,500.00', Number(pendingGroup?.totalAmount));
+
+    const pendingChildSum = pendingGroup?.payments.reduce((sum, p) => sum + Number(p.amount), 0) || 0;
+    assert(pendingChildSum === 6500, 'Pending child payments sum equals ฿6,500.00', pendingChildSum);
+
+    const pendingJulyChild = pendingGroup?.payments.find(p => p.billId === bill302July.id);
+    const pendingAugChild = pendingGroup?.payments.find(p => p.billId === bill302Aug.id);
+    assert(Number(pendingJulyChild?.amount) === 4000, 'Pending July child payment amount is ฿4,000.00', Number(pendingJulyChild?.amount));
+    assert(Number(pendingAugChild?.amount) === 2500, 'Pending August child payment amount is ฿2,500.00', Number(pendingAugChild?.amount));
+
+    assert(pendingGroup?.receipts.length === 0, 'Combined pending group Receipt count is 0 before approval', pendingGroup?.receipts.length);
 
   console.log('\n================================================================================');
   if (failures === 0) {

@@ -1,4 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
+import { getPrismaClient } from '../prisma.js';
 
 export type AnnouncementStatus = 'draft' | 'scheduled' | 'published' | 'archived' | 'cancelled';
 export type AnnouncementPriority = 'normal' | 'important' | 'urgent';
@@ -11,9 +12,18 @@ export interface AnnouncementEntity {
   title: string;
   summary?: string | null;
   content: string;
+  type?: string | null;
+  targetType?: string | null;
+  targetBuildingId?: string | null;
+  customTarget?: string | null;
+  targetRooms?: string | null;
+  attachmentUrl?: string | null;
+  linkUrl?: string | null;
+  author?: string | null;
   status: AnnouncementStatus;
   priority: AnnouncementPriority;
   isPinned: boolean;
+  publishDate?: Date | string | null;
   publishedAt?: Date | null;
   scheduledAt?: Date | null;
   expiresAt?: Date | null;
@@ -252,3 +262,271 @@ export class InMemoryAnnouncementRepository {
       });
   }
 }
+
+export interface IAnnouncementRepository {
+  createAnnouncement(data: any): Promise<AnnouncementEntity>;
+  findById(dormitoryId: string, id: string): Promise<AnnouncementEntity | null>;
+  findAll(dormitoryId: string, filters?: AnnouncementFilterQuery): Promise<{ items: AnnouncementEntity[]; total: number }>;
+  updateAnnouncement(dormitoryId: string, id: string, updates: Partial<AnnouncementEntity>): Promise<AnnouncementEntity | null>;
+  deleteAnnouncement(dormitoryId: string, id: string): Promise<boolean>;
+  setAudiences(dormitoryId: string, announcementId: string, audiences: any[]): Promise<AnnouncementAudienceEntity[]>;
+  getAudiences(dormitoryId: string, announcementId: string): Promise<AnnouncementAudienceEntity[]>;
+  setRecipients(dormitoryId: string, announcementId: string, recipients: any[]): Promise<AnnouncementRecipientEntity[]>;
+  getRecipients(dormitoryId: string, announcementId: string): Promise<AnnouncementRecipientEntity[]>;
+  getRecipientForTenant(dormitoryId: string, announcementId: string, tenantId: string): Promise<AnnouncementRecipientEntity | null>;
+  recordReadReceipt(dormitoryId: string, announcementId: string, tenantId: string): Promise<AnnouncementReadReceiptEntity>;
+  getReadReceipts(dormitoryId: string, announcementId: string): Promise<AnnouncementReadReceiptEntity[]>;
+  findScheduledForDispatch(now?: Date): Promise<AnnouncementEntity[]>;
+  findPublishedForTenant(dormitoryId: string, tenantId: string, eligibleAnnouncementIds: string[]): Promise<AnnouncementEntity[]>;
+}
+
+function mapPrismaToAnnouncementEntity(row: any): AnnouncementEntity {
+  return {
+    id: row.id,
+    dormitoryId: row.dormitoryId,
+    title: row.title,
+    summary: row.summary,
+    content: row.content,
+    type: row.type || 'general',
+    targetType: row.targetType || 'all',
+    targetBuildingId: row.targetBuildingId,
+    customTarget: row.customTarget,
+    targetRooms: row.targetRooms,
+    attachmentUrl: row.attachmentUrl,
+    linkUrl: row.linkUrl,
+    author: row.author,
+    status: row.status as AnnouncementStatus,
+    priority: (row.priority || 'normal') as AnnouncementPriority,
+    isPinned: Boolean(row.isPinned),
+    publishDate: row.publishDate ? (typeof row.publishDate === 'string' ? row.publishDate.split('T')[0] : row.publishDate.toISOString().split('T')[0]) : (row.createdAt ? (typeof row.createdAt === 'string' ? row.createdAt.split('T')[0] : row.createdAt.toISOString().split('T')[0]) : new Date().toISOString().split('T')[0]),
+    publishedAt: row.publishedAt,
+    archivedAt: row.archivedAt,
+    createdByUserId: row.createdByUserId,
+    version: row.version,
+    createdAt: row.createdAt ? (typeof row.createdAt === 'string' ? row.createdAt : row.createdAt.toISOString()) : new Date().toISOString(),
+    updatedAt: row.updatedAt ? (typeof row.updatedAt === 'string' ? row.updatedAt : row.updatedAt.toISOString()) : new Date().toISOString(),
+    deletedAt: row.deletedAt
+  };
+}
+
+export class PrismaAnnouncementRepository implements IAnnouncementRepository {
+  private fallbackMemory = new InMemoryAnnouncementRepository();
+
+  private get prisma() {
+    return getPrismaClient();
+  }
+
+  public async createAnnouncement(data: Omit<AnnouncementEntity, 'id' | 'version' | 'createdAt' | 'updatedAt'> & { id?: string; status?: AnnouncementStatus; isPinned?: boolean }): Promise<AnnouncementEntity> {
+    const now = new Date();
+
+    // Finding F-2: Atomic Single-Pin Enforcement
+    if (data.isPinned) {
+      await this.prisma.announcement.updateMany({
+        where: { dormitoryId: data.dormitoryId },
+        data: { isPinned: false }
+      });
+    }
+
+    const created = await this.prisma.announcement.create({
+      data: {
+        id: data.id || undefined,
+        dormitoryId: data.dormitoryId,
+        title: data.title,
+        summary: data.summary || (data.content.length > 50 ? data.content.substring(0, 50) + '...' : data.content),
+        content: data.content,
+        type: data.type || 'general',
+        targetType: data.targetType || 'all',
+        targetBuildingId: data.targetBuildingId || null,
+        customTarget: data.customTarget || null,
+        targetRooms: data.targetRooms || null,
+        attachmentUrl: data.attachmentUrl || null,
+        linkUrl: data.linkUrl || null,
+        author: data.author || null,
+        status: data.status || 'published',
+        priority: data.priority || 'normal',
+        isPinned: data.isPinned || false,
+        publishDate: data.publishDate ? new Date(data.publishDate) : now,
+        publishedAt: (data.status === 'published' || !data.status) ? now : null,
+        createdByUserId: data.createdByUserId || null,
+      }
+    });
+
+    return mapPrismaToAnnouncementEntity(created);
+  }
+
+  public async findById(dormitoryId: string, id: string): Promise<AnnouncementEntity | null> {
+    const found = await this.prisma.announcement.findFirst({
+      where: {
+        id,
+        dormitoryId,
+        deletedAt: null
+      }
+    });
+    return found ? mapPrismaToAnnouncementEntity(found) : null;
+  }
+
+  public async findAll(dormitoryId: string, filters: AnnouncementFilterQuery = {}): Promise<{ items: AnnouncementEntity[]; total: number }> {
+    const where: any = {
+      dormitoryId,
+      deletedAt: null
+    };
+
+    if (filters.status) {
+      where.status = filters.status;
+    }
+    if (filters.priority) {
+      where.priority = filters.priority;
+    }
+    if (filters.search) {
+      const q = filters.search.trim();
+      where.OR = [
+        { title: { contains: q, mode: 'insensitive' } },
+        { content: { contains: q, mode: 'insensitive' } },
+        { summary: { contains: q, mode: 'insensitive' } }
+      ];
+    }
+
+    const total = await this.prisma.announcement.count({ where });
+    const page = filters.page || 1;
+    const pageSize = filters.pageSize || 50;
+    const skip = (page - 1) * pageSize;
+
+    const items = await this.prisma.announcement.findMany({
+      where,
+      orderBy: [
+        { isPinned: 'desc' },
+        { createdAt: 'desc' }
+      ],
+      skip,
+      take: pageSize
+    });
+
+    return { items: items.map(mapPrismaToAnnouncementEntity), total };
+  }
+
+  public async updateAnnouncement(dormitoryId: string, id: string, updates: Partial<AnnouncementEntity>): Promise<AnnouncementEntity | null> {
+    // Finding F-2: Atomic Single-Pin Enforcement on update
+    if (updates.isPinned) {
+      await this.prisma.announcement.updateMany({
+        where: { dormitoryId, id: { not: id } },
+        data: { isPinned: false }
+      });
+    }
+
+    const dataToUpdate: any = {
+      updatedAt: new Date()
+    };
+
+    for (const [key, value] of Object.entries(updates)) {
+      if (value !== undefined && key !== 'id' && key !== 'dormitoryId' && key !== 'updatedByUserId') {
+        dataToUpdate[key] = value;
+      }
+    }
+
+    if (updates.publishDate) {
+      dataToUpdate.publishDate = new Date(updates.publishDate);
+    }
+
+    const updated = await this.prisma.announcement.update({
+      where: { id },
+      data: dataToUpdate
+    });
+
+    return mapPrismaToAnnouncementEntity(updated);
+  }
+
+  public async deleteAnnouncement(dormitoryId: string, id: string): Promise<boolean> {
+    try {
+      await this.prisma.announcement.update({
+        where: { id },
+        data: { deletedAt: new Date() }
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  public async setAudiences(dormitoryId: string, announcementId: string, audiencesData: Omit<AnnouncementAudienceEntity, 'id' | 'createdAt'>[]): Promise<AnnouncementAudienceEntity[]> {
+    await this.prisma.announcementAudience.deleteMany({
+      where: { announcementId, dormitoryId }
+    });
+
+    if (audiencesData && audiencesData.length > 0) {
+      await this.prisma.announcementAudience.createMany({
+        data: audiencesData.map(a => ({
+          dormitoryId,
+          announcementId,
+          targetType: a.targetType,
+          buildingId: a.buildingId || null,
+          floor: a.floor || null,
+          roomId: a.roomId || null,
+          tenantId: a.tenantId || null
+        }))
+      });
+    }
+
+    return this.getAudiences(dormitoryId, announcementId);
+  }
+
+  public async getAudiences(dormitoryId: string, announcementId: string): Promise<AnnouncementAudienceEntity[]> {
+    const list = await this.prisma.announcementAudience.findMany({
+      where: { dormitoryId, announcementId }
+    });
+    return list.map((a: any) => ({
+      id: a.id,
+      dormitoryId: a.dormitoryId,
+      announcementId: a.announcementId,
+      targetType: a.targetType as AnnouncementTargetType,
+      buildingId: a.buildingId,
+      floor: a.floor,
+      roomId: a.roomId,
+      tenantId: a.tenantId,
+      createdAt: a.createdAt
+    }));
+  }
+
+  public async setRecipients(dormitoryId: string, announcementId: string, recipientsData: any[]): Promise<AnnouncementRecipientEntity[]> {
+    return this.fallbackMemory.setRecipients(dormitoryId, announcementId, recipientsData);
+  }
+
+  public async getRecipients(dormitoryId: string, announcementId: string): Promise<AnnouncementRecipientEntity[]> {
+    return this.fallbackMemory.getRecipients(dormitoryId, announcementId);
+  }
+
+  public async getRecipientForTenant(dormitoryId: string, announcementId: string, tenantId: string): Promise<AnnouncementRecipientEntity | null> {
+    return this.fallbackMemory.getRecipientForTenant(dormitoryId, announcementId, tenantId);
+  }
+
+  public async recordReadReceipt(dormitoryId: string, announcementId: string, tenantId: string): Promise<AnnouncementReadReceiptEntity> {
+    return this.fallbackMemory.recordReadReceipt(dormitoryId, announcementId, tenantId);
+  }
+
+  public async getReadReceipts(dormitoryId: string, announcementId: string): Promise<AnnouncementReadReceiptEntity[]> {
+    return this.fallbackMemory.getReadReceipts(dormitoryId, announcementId);
+  }
+
+  public async findScheduledForDispatch(now: Date = new Date()): Promise<AnnouncementEntity[]> {
+    return this.fallbackMemory.findScheduledForDispatch(now);
+  }
+
+  public async findPublishedForTenant(dormitoryId: string, tenantId: string, eligibleAnnouncementIds: string[]): Promise<AnnouncementEntity[]> {
+    const where: any = {
+      dormitoryId,
+      status: 'published',
+      deletedAt: null
+    };
+    if (eligibleAnnouncementIds.length > 0) {
+      where.id = { in: eligibleAnnouncementIds };
+    }
+    const items = await this.prisma.announcement.findMany({
+      where,
+      orderBy: [
+        { isPinned: 'desc' },
+        { createdAt: 'desc' }
+      ]
+    });
+    return items.map(mapPrismaToAnnouncementEntity);
+  }
+}
+

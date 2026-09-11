@@ -3085,7 +3085,7 @@ describe('HORPLUS LOCAL-07 — Master Verification Suite', () => {
           { dormitoryId: dorm.id, billId: createdBill.id, type: 'water', description: 'ค่าน้ำ (3 คน)', amount: '300.00', quantity: '3.00', unitPrice: '100.00', unit: 'person', metadata: { mode: 'person', peopleCount: 3 } },
           { dormitoryId: dorm.id, billId: createdBill.id, type: 'electricity', description: 'ค่าไฟฟ้า (100 หน่วย)', amount: '800.00', quantity: '100.00', unitPrice: '8.00', unit: 'unit' },
           { dormitoryId: dorm.id, billId: createdBill.id, type: 'common_fee', description: 'ค่าส่วนกลาง', amount: '200.00', quantity: '1.00', unitPrice: '200.00', unit: 'room' },
-          { dormitoryId: dorm.id, billId: createdBill.id, type: 'internet', description: 'ค่าบริการอินเทอร์เน็ต (3 คน)', amount: '450.00', quantity: '3.00', unitPrice: '150.00', unit: 'person', metadata: { mode: 'person', peopleCount: 3 } },
+          { dormitoryId: dorm.id, billId: createdBill.id, type: 'internet', description: 'ค่าอินเทอร์เน็ต (3 คน)', amount: '450.00', quantity: '3.00', unitPrice: '150.00', unit: 'person', metadata: { mode: 'person', peopleCount: 3 } },
           { dormitoryId: dorm.id, billId: createdBill.id, type: 'parking', description: 'ค่าที่จอดรถ (2 คัน)', amount: '500.00', quantity: '2.00', unitPrice: '250.00', unit: 'vehicle', metadata: { mode: 'vehicle', vehicleCount: 2 } },
         ],
       });

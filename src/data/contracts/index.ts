@@ -7,6 +7,7 @@ import {
   Dormitory,
   Building,
   Room,
+  RoomStatus,
   Tenant,
   Contract,
   MeterReading,
@@ -14,7 +15,10 @@ import {
   MaintenanceRequest,
   Announcement,
   Notification,
-  AuditLog
+  AuditLog,
+  EmergencyContactInput,
+  VehicleInput,
+  PetItem
 } from '../../types';
 
 // Domain Error Types
@@ -31,11 +35,14 @@ export type DomainErrorCode =
   | 'DUPLICATE_SLIP'
   | 'PAYMENT_ALREADY_PROCESSED'
   | 'DEPENDENCY_UNAVAILABLE'
+  | 'GROUP_ALLOCATION_RECONCILIATION_FAILED'
+  | 'GROUP_REJECTION_REQUIRED'
   | 'REPLACEMENT_CONFIRMATION_REQUIRED'
   | 'SETTLEMENT_LOCKED'
   | 'PENDING_REGISTRATION_LOCK'
   | 'POLICY_VERSION_MISMATCH'
-  | 'INTERNAL_ERROR';
+  | 'INTERNAL_ERROR'
+  | (string & {});
 
 export interface DomainError {
   code: DomainErrorCode;
@@ -72,6 +79,112 @@ export interface RoomDataSource {
   deleteRoom(roomId: string, actorUserId?: string): Promise<DataResult<boolean>>;
 }
 
+export interface TenantOccupancyRecord {
+  id: string;
+  dormitoryId: string;
+  roomId: string;
+  tenantId: string;
+  contractId?: string | null;
+  startedAt: string | Date;
+  endedAt?: string | Date | null;
+  status: string;
+  endedReason?: string | null;
+  createdAt: string | Date;
+  updatedAt: string | Date;
+  room?: Room | null;
+  contract?: Contract | null;
+}
+
+export interface TenantDailyStayRecord {
+  id: string;
+  dormitoryId: string;
+  roomId: string;
+  tenantId?: string | null;
+  occupancyId?: string | null;
+  requestSource?: string;
+  applicantFullName?: string | null;
+  applicantPhone?: string | null;
+  startDate: string | Date;
+  endDate: string | Date;
+  checkInAt?: string | Date | null;
+  checkOutAt?: string | Date | null;
+  inclusiveDayCount: number;
+  dailyRateAmount: string | number;
+  totalRentAmount: string | number;
+  depositAmount: string | number;
+  depositDeclaredStatus?: string;
+  status: string;
+  createdAt: string | Date;
+  updatedAt: string | Date;
+  room?: Room | null;
+  invoice?: any;
+}
+
+export interface TenantSettlementRecord {
+  id: string;
+  dormitoryId: string;
+  tenantId: string;
+  contractId: string;
+  roomId: string;
+  depositAmount: string | number;
+  unpaidBillAmount: string | number;
+  damageChargeTotal: string | number;
+  netSettlement: string | number;
+  settlementDirection: string;
+  settlementStatus: string;
+  confirmedAt?: string | Date | null;
+  confirmedByUserId?: string | null;
+  createdAt: string | Date;
+  updatedAt: string | Date;
+  items?: any[];
+  room?: Room | null;
+  contract?: Contract | null;
+}
+
+export interface TenantProfileDetails {
+  tenant: Tenant | any;
+  coOccupants: any[];
+  coOccupantHistory?: any[];
+  emergencyContacts: any[];
+  vehicles: any[];
+  contracts: any[];
+  occupancies: TenantOccupancyRecord[];
+  dailyStays: TenantDailyStayRecord[];
+  provisionalRentalTerms?: any[];
+  bills: any[];
+  settlements: TenantSettlementRecord[];
+}
+
+export interface UpdateTenantProfilePayload {
+  displayName: string;
+  phone: string;
+  email?: string | null;
+  nationalId?: string | null;
+  version: number;
+  emergencyContact?: {
+    id?: string | null;
+    name: string;
+    phone: string;
+    relationship: string;
+    isPrimary?: boolean;
+  } | null;
+  vehicles?: Array<{
+    id?: string | null;
+    type: 'car' | 'motorcycle' | 'none' | 'other';
+    licensePlate: string;
+    brand?: string | null;
+    model?: string | null;
+    color?: string | null;
+    province?: string | null;
+  }>;
+  pets?: Array<{
+    id?: string | null;
+    type: string;
+    customType?: string | null;
+    name?: string | null;
+  }>;
+}
+
 export interface TenantDataSource {
   getAll(): Promise<Tenant[]>;
   getById(id: string): Promise<Tenant | null>;
@@ -81,6 +194,16 @@ export interface TenantDataSource {
   addCoOccupant(tenantId: string, coOccupant: { name: string; phone?: string; relationship?: string }): Promise<DataResult<any>>;
   updateCoOccupant(tenantId: string, coOccupantId: string, coOccupant: { name?: string; phone?: string; relationship?: string }): Promise<DataResult<any>>;
   removeCoOccupant(tenantId: string, coOccupantId: string): Promise<DataResult<boolean>>;
+  addEmergencyContact(tenantId: string, contact: EmergencyContactInput): Promise<DataResult<any>>;
+  updateEmergencyContact(tenantId: string, contactId: string, contact: Partial<EmergencyContactInput>): Promise<DataResult<any>>;
+  deleteEmergencyContact(tenantId: string, contactId: string): Promise<DataResult<boolean>>;
+  addVehicle(tenantId: string, vehicle: VehicleInput): Promise<DataResult<any>>;
+  updateVehicle(tenantId: string, vehicleId: string, vehicle: Partial<VehicleInput>): Promise<DataResult<any>>;
+  deleteVehicle(tenantId: string, vehicleId: string): Promise<DataResult<boolean>>;
+  getIdentityDocumentUrl(tenantId: string, dormitoryId?: string): string;
+  uploadIdentityDocument(tenantId: string, file: File | Blob): Promise<DataResult<any>>;
+  getTenantProfile(id: string): Promise<DataResult<TenantProfileDetails>>;
+  updateTenantProfile(tenantId: string, payload: UpdateTenantProfilePayload): Promise<DataResult<TenantProfileDetails | any>>;
 }
 
 export interface ContractDataSource {
@@ -135,13 +258,16 @@ export interface MaintenanceDataSource {
   getById(id: string): Promise<MaintenanceRequest | null>;
   getByTenantId(tenantId: string): Promise<MaintenanceRequest[]>;
   createRequest(data: Omit<MaintenanceRequest, 'id' | 'createdAt' | 'updatedAt' | 'updates'>, actorUserId?: string): Promise<DataResult<MaintenanceRequest>>;
-  updateStatus(requestId: string, status: MaintenanceRequest['status'], note?: string, actorUserId?: string): Promise<DataResult<MaintenanceRequest>>;
+  updateStatus(requestId: string, status: MaintenanceRequest['status'], note?: string, actorUserId?: string, extra?: { assignedStaff?: string; cost?: number; imageAfter?: string }): Promise<DataResult<MaintenanceRequest>>;
+  deleteRequest?(requestId: string): Promise<DataResult<boolean>>;
 }
 
 export interface AnnouncementDataSource {
   getAll(): Promise<Announcement[]>;
   getById(id: string): Promise<Announcement | null>;
   createAnnouncement(data: Omit<Announcement, 'id' | 'createdAt'>, actorUserId?: string): Promise<DataResult<Announcement>>;
+  updateAnnouncement?(id: string, data: Partial<Announcement>): Promise<DataResult<Announcement>>;
+  deleteAnnouncement?(id: string): Promise<DataResult<boolean>>;
 }
 
 export interface NotificationDataSource {
@@ -169,11 +295,70 @@ export interface TenantRegistrationDataSource {
   approveRequest(params: { requestId: string; tenantId: string; contractId: string }): Promise<DataResult<any>>;
   rejectRequest(requestId: string, reason: string): Promise<DataResult<any>>;
   updateRequestRoom?(requestId: string, requestedRoomId: string): Promise<DataResult<any>>;
+  confirmRegistrationSignature?(requestId: string, signatureBase64: string): Promise<DataResult<any>>;
 }
+
+export interface CreateRoomPayload {
+  buildingId: string;
+  roomNumber: string;
+  floor?: number;
+  roomType?: string;
+  status?: RoomStatus;
+  rentCycle?: 'monthly' | 'term' | 'daily';
+  monthlyRent?: string | number | null;
+  termRent?: string | number | null;
+  dailyRent?: string | number | null;
+  termDeposit?: string | number | null;
+  monthlyDeposit?: string | number | null;
+  dailyDeposit?: string | number | null;
+  depositAmount?: string | number | null;
+  depositInheritsBuildingDefault?: boolean;
+  parkingFee?: string | number | null;
+  maximumOccupants?: number;
+  waterMeterNumber?: string | null;
+  electricityMeterNumber?: string | null;
+  initialWaterReading?: string | number | null;
+  initialElectricityReading?: string | number | null;
+  amenities?: string[];
+  images?: string[];
+  notes?: string | null;
+}
+
+export interface UpdateRoomChanges {
+  roomNumber?: string;
+  buildingId?: string;
+  floor?: number;
+  roomType?: string;
+  status?: RoomStatus;
+  rentCycle?: 'monthly' | 'term' | 'daily';
+  monthlyRent?: string | number | null;
+  termRent?: string | number | null;
+  dailyRent?: string | number | null;
+  termDeposit?: string | number | null;
+  monthlyDeposit?: string | number | null;
+  dailyDeposit?: string | number | null;
+  depositAmount?: string | number | null;
+  depositInheritsBuildingDefault?: boolean;
+  parkingFee?: string | number | null;
+  maximumOccupants?: number;
+  waterMeterNumber?: string | null;
+  electricityMeterNumber?: string | null;
+  initialWaterReading?: string | number | null;
+  initialElectricityReading?: string | number | null;
+  amenities?: string[];
+  images?: string[];
+  notes?: string | null;
+}
+
+export type RoomMutationResult = Room & {
+  effectiveRoomStatusCycleId?: string | null;
+};
 
 export interface PropertyDataSource {
   getAuthoritativeRooms(params?: Record<string, any>): Promise<DataResult<{ items: Room[]; pagination: any }>>;
   getAuthoritativeRoom(id: string): Promise<DataResult<Room>>;
+  createRoom(payload: CreateRoomPayload): Promise<DataResult<RoomMutationResult>>;
+  updateRoom(roomId: string, changes: UpdateRoomChanges, expectedVersion: number): Promise<DataResult<RoomMutationResult>>;
   getAuthoritativeBuildings(): Promise<DataResult<Building[]>>;
   getAuthoritativeBuilding(id: string): Promise<DataResult<Building>>;
   getDormitoryDefaults(): Promise<DataResult<{ property: any; billing: any }>>;
@@ -206,6 +391,7 @@ export interface OccupancyDataSource {
 
 export interface HorPlusDataProvider {
   dormitories: DormitoryDataSource;
+  dormitory?: DormitoryDataSource;
   rooms: RoomDataSource;
   tenants: TenantDataSource;
   contracts: ContractDataSource;

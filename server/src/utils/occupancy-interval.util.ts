@@ -15,6 +15,7 @@ import {
   toBangkokDateString,
 } from './calendar-date.util.js';
 import { resolveDailyTimestampsAndPricing } from '../services/daily-stay.service.js';
+import { getPrismaClient } from '../db/prisma.js';
 
 /**
  * Returns UTC Date for the start of the given Bangkok date (00:00:00.000 Asia/Bangkok).
@@ -232,4 +233,274 @@ export function hasBookableGapInCycle(
   }
 
   return true; // Gap exists before, after, or between intervals
+}
+
+export interface RoomMaintenanceEligibility {
+  canSetMaintenance: boolean;
+  maintenanceBlockReason: 'ACTIVE_OCCUPANCY' | 'ACTIVE_RESERVATION' | null;
+  message?: string;
+  blockingRecord?: {
+    kind: 'CONTRACT' | 'PROVISIONAL_TERM' | 'DAILY_STAY';
+    id: string;
+    interval: PhysicalInterval;
+  };
+}
+
+/**
+ * Authoritatively evaluates whether a room can be changed to 'maintenance' status.
+ *
+ * Rules (Product Decision F1):
+ * 1. Physical Occupancy NOW: start <= now < end on valid non-deleted record -> ROOM_HAS_ACTIVE_OCCUPANCY
+ * 2. Committed Future Reservation: start > now on valid non-deleted record -> ROOM_HAS_ACTIVE_RESERVATION
+ * 3. Historical ended records (end <= now) or cancelled / void / rejected / soft-deleted records NEVER block.
+ */
+export function evaluateMaintenanceEligibilityFromRecords(params: {
+  contracts?: any[];
+  provisionals?: any[];
+  dailyStays?: any[];
+  now?: Date;
+}): RoomMaintenanceEligibility {
+  const now = params.now || new Date();
+  const contracts = Array.isArray(params.contracts) ? params.contracts : [];
+  const provisionals = Array.isArray(params.provisionals) ? params.provisionals : [];
+  const dailyStays = Array.isArray(params.dailyStays) ? params.dailyStays : [];
+
+  // --- Step 1: Active Physical Occupancy Check (NOW) ---
+  // 1a. Contract active physical occupancy
+  for (const c of contracts) {
+    if (c.deletedAt) continue;
+    const st = (c.status || '').toLowerCase();
+    if (['cancelled', 'void', 'rejected', 'draft'].includes(st)) continue;
+    const interval = getContractPhysicalInterval(c);
+    if (interval.start <= now && now < interval.end) {
+      return {
+        canSetMaintenance: false,
+        maintenanceBlockReason: 'ACTIVE_OCCUPANCY',
+        message: 'ไม่สามารถปิดปรับปรุงได้ เนื่องจากห้องนี้มีผู้เช่าพักอยู่',
+        blockingRecord: { kind: 'CONTRACT', id: c.id, interval },
+      };
+    }
+  }
+
+  // 1b. Provisional term active physical occupancy
+  for (const p of provisionals) {
+    if (p.deletedAt) continue;
+    const st = (p.status || '').toUpperCase();
+    if (['CANCELLED', 'REJECTED', 'ENDED'].includes(st)) continue;
+    const interval = getProvisionalTermPhysicalInterval(p);
+    if (interval.start <= now && now < interval.end) {
+      return {
+        canSetMaintenance: false,
+        maintenanceBlockReason: 'ACTIVE_OCCUPANCY',
+        message: 'ไม่สามารถปิดปรับปรุงได้ เนื่องจากห้องนี้มีผู้เช่าพักอยู่',
+        blockingRecord: { kind: 'PROVISIONAL_TERM', id: p.id, interval },
+      };
+    }
+  }
+
+  // 1c. Daily stay active physical occupancy (only committed active/checked-in statuses)
+  for (const d of dailyStays) {
+    if (d.deletedAt) continue;
+    const st = (d.status || '').toUpperCase();
+    if (!['ACTIVE', 'RESERVED', 'CHECKED_IN'].includes(st)) continue;
+    if (d.actualCheckedOutAt && new Date(d.actualCheckedOutAt) <= now) continue;
+    const interval = getDailyStayPhysicalInterval(d);
+    if (interval.start <= now && now < interval.end) {
+      return {
+        canSetMaintenance: false,
+        maintenanceBlockReason: 'ACTIVE_OCCUPANCY',
+        message: 'ไม่สามารถปิดปรับปรุงได้ เนื่องจากห้องนี้มีผู้เช่าพักอยู่',
+        blockingRecord: { kind: 'DAILY_STAY', id: d.id, interval },
+      };
+    }
+  }
+
+  // --- Step 2: Committed Future Reservation Check (start > now) ---
+  // 2a. Future Contract reservation (exclude draft/cancelled/void/rejected; terminated contracts evaluated by canonical interval)
+  for (const c of contracts) {
+    if (c.deletedAt) continue;
+    const st = (c.status || '').toLowerCase();
+    if (['cancelled', 'void', 'rejected', 'draft'].includes(st)) continue;
+    const interval = getContractPhysicalInterval(c);
+    if (interval.start > now && now < interval.end) {
+      return {
+        canSetMaintenance: false,
+        maintenanceBlockReason: 'ACTIVE_RESERVATION',
+        message: 'ไม่สามารถปิดปรับปรุงได้ เนื่องจากห้องนี้มีการจองล่วงหน้า',
+        blockingRecord: { kind: 'CONTRACT', id: c.id, interval },
+      };
+    }
+  }
+
+  // 2b. Future Provisional reservation (only committed RESERVED / ACTIVE)
+  for (const p of provisionals) {
+    if (p.deletedAt) continue;
+    const st = (p.status || '').toUpperCase();
+    if (st !== 'RESERVED' && st !== 'ACTIVE') continue;
+    const interval = getProvisionalTermPhysicalInterval(p);
+    if (interval.start > now && now < interval.end) {
+      return {
+        canSetMaintenance: false,
+        maintenanceBlockReason: 'ACTIVE_RESERVATION',
+        message: 'ไม่สามารถปิดปรับปรุงได้ เนื่องจากห้องนี้มีการจองล่วงหน้า',
+        blockingRecord: { kind: 'PROVISIONAL_TERM', id: p.id, interval },
+      };
+    }
+  }
+
+  // 2c. Future Daily stay reservation (only committed RESERVED / ACTIVE - PENDING_APPROVAL does not block)
+  for (const d of dailyStays) {
+    if (d.deletedAt) continue;
+    const st = (d.status || '').toUpperCase();
+    if (st !== 'RESERVED' && st !== 'ACTIVE') continue;
+    const interval = getDailyStayPhysicalInterval(d);
+    if (interval.start > now && now < interval.end) {
+      return {
+        canSetMaintenance: false,
+        maintenanceBlockReason: 'ACTIVE_RESERVATION',
+        message: 'ไม่สามารถปิดปรับปรุงได้ เนื่องจากห้องนี้มีการจองล่วงหน้า',
+        blockingRecord: { kind: 'DAILY_STAY', id: d.id, interval },
+      };
+    }
+  }
+
+  return {
+    canSetMaintenance: true,
+    maintenanceBlockReason: null,
+  };
+}
+
+export interface CurrentOperationalActions {
+  canSetMaintenance: boolean;
+  maintenanceBlockReason: 'ACTIVE_OCCUPANCY' | 'ACTIVE_RESERVATION' | null;
+}
+
+/**
+ * Acquires a transactional advisory lock for a specific room within a dormitory.
+ * Serializes room availability mutations (Contract, Provisional, DailyStay, Maintenance toggle).
+ */
+export async function acquireRoomAvailabilityLock(
+  tx: any,
+  dormitoryId: string,
+  roomId: string
+): Promise<void> {
+  if (typeof tx?.$executeRaw === 'function') {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${dormitoryId + ':' + roomId}))`;
+  }
+}
+
+/**
+ * Canonical server-side batch resolver for Room Current Operational Maintenance Eligibility (Decision F1).
+ * Batch-loads non-deleted/non-ended contracts, provisional terms, and daily stays for the given roomIds,
+ * evaluating canonical physical intervals without N+1 query overhead.
+ */
+export async function resolveCurrentMaintenanceEligibilityByRoom(
+  dormitoryId: string,
+  roomIds: string[],
+  dbClient?: any,
+  now: Date = new Date()
+): Promise<Map<string, CurrentOperationalActions>> {
+  const db = dbClient || getPrismaClient();
+  const resultMap = new Map<string, CurrentOperationalActions>();
+
+  if (!roomIds || roomIds.length === 0) {
+    return resultMap;
+  }
+
+  // 1. Batch load contracts (include terminated to evaluate canonical physical interval)
+  const contracts = db.contract ? await db.contract.findMany({
+    where: {
+      dormitoryId,
+      roomId: { in: roomIds },
+      deletedAt: null,
+      status: { notIn: ['cancelled', 'void', 'rejected', 'draft'] },
+    },
+    select: {
+      id: true,
+      roomId: true,
+      status: true,
+      startDate: true,
+      endDate: true,
+      terminatedAt: true,
+      terminationEffectiveDate: true,
+      deletedAt: true,
+    },
+  }) : [];
+
+  // 2. Batch load provisional terms (only committed statuses)
+  const provisionals = db.provisionalRentalTerm ? await db.provisionalRentalTerm.findMany({
+    where: {
+      dormitoryId,
+      roomId: { in: roomIds },
+      deletedAt: null,
+      status: { in: ['ACTIVE', 'RESERVED'] },
+    },
+    select: {
+      id: true,
+      roomId: true,
+      status: true,
+      startDate: true,
+      endDate: true,
+      deletedAt: true,
+    },
+  }) : [];
+
+  // 3. Batch load daily stays (only committed statuses)
+  const dailyStays = db.dailyStay ? await db.dailyStay.findMany({
+    where: {
+      dormitoryId,
+      roomId: { in: roomIds },
+      deletedAt: null,
+      status: { in: ['ACTIVE', 'RESERVED', 'CHECKED_IN'] },
+    },
+    select: {
+      id: true,
+      roomId: true,
+      status: true,
+      startDate: true,
+      endDate: true,
+      checkInAt: true,
+      checkOutAt: true,
+      actualCheckedOutAt: true,
+      deletedAt: true,
+    },
+  }) : [];
+
+  // Group by roomId
+  const contractsByRoom = new Map<string, any[]>();
+  const provisionalsByRoom = new Map<string, any[]>();
+  const dailyStaysByRoom = new Map<string, any[]>();
+
+  for (const c of contracts) {
+    if (!contractsByRoom.has(c.roomId)) contractsByRoom.set(c.roomId, []);
+    contractsByRoom.get(c.roomId)!.push(c);
+  }
+  for (const p of provisionals) {
+    if (!provisionalsByRoom.has(p.roomId)) provisionalsByRoom.set(p.roomId, []);
+    provisionalsByRoom.get(p.roomId)!.push(p);
+  }
+  for (const d of dailyStays) {
+    if (!dailyStaysByRoom.has(d.roomId)) dailyStaysByRoom.set(d.roomId, []);
+    dailyStaysByRoom.get(d.roomId)!.push(d);
+  }
+
+  for (const roomId of roomIds) {
+    const roomContracts = contractsByRoom.get(roomId) || [];
+    const roomProvisionals = provisionalsByRoom.get(roomId) || [];
+    const roomDailyStays = dailyStaysByRoom.get(roomId) || [];
+
+    const evalResult = evaluateMaintenanceEligibilityFromRecords({
+      contracts: roomContracts,
+      provisionals: roomProvisionals,
+      dailyStays: roomDailyStays,
+      now,
+    });
+
+    resultMap.set(roomId, {
+      canSetMaintenance: evalResult.canSetMaintenance,
+      maintenanceBlockReason: evalResult.maintenanceBlockReason,
+    });
+  }
+
+  return resultMap;
 }

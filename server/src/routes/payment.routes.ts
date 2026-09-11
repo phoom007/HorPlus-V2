@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { z } from 'zod';
+import crypto from 'crypto';
 import { paymentService } from '../services/payment.service.js';
 import { localStorageProvider } from '../services/local-storage.service.js';
 import { AuthenticationService } from '../services/auth.service.js';
@@ -8,9 +9,9 @@ import { requireDormitoryPermission } from '../middleware/permission.js';
 import { requireDormitoryWriteEntitlement } from '../middleware/entitlement.js';
 import { resolveAuthoritativeDormitoryContext } from '../middleware/dormitory-context.js';
 import { logger } from '../config/logger.js';
-import { PrismaClient } from '@prisma/client';
+import { AppError } from '../types/index.js';
+import { getPrismaClient } from '../db/prisma.js';
 import multer from 'multer';
-import crypto from 'crypto';
 
 const upload = multer({
   limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
@@ -24,7 +25,7 @@ const upload = multer({
   }
 });
 
-const prisma = new PrismaClient();
+const prisma = getPrismaClient();
 
 export interface ImageValidationResult {
   mimeType: 'image/jpeg' | 'image/png' | 'image/webp';
@@ -51,7 +52,6 @@ export function detectAndValidateImage(buffer: Buffer, expectedMime?: string | n
     buffer[6] === 0x1A &&
     buffer[7] === 0x0A
   ) {
-    // Structural check: Must contain IEND chunk (49 45 4E 44)
     const iendIndex = buffer.indexOf(Buffer.from([0x49, 0x45, 0x4E, 0x44]));
     if (iendIndex === -1) {
       throw new Error('INVALID_FILE_STRUCTURE: Corrupt PNG image missing IEND chunk');
@@ -61,7 +61,6 @@ export function detectAndValidateImage(buffer: Buffer, expectedMime?: string | n
   }
   // Check JPEG: FF D8 FF
   else if (buffer[0] === 0xFF && buffer[1] === 0xD8 && buffer[2] === 0xFF) {
-    // Structural check: Must end with or contain EOI (FF D9)
     const eoiIndex = buffer.lastIndexOf(Buffer.from([0xFF, 0xD9]));
     if (eoiIndex === -1 || eoiIndex < 3) {
       throw new Error('INVALID_FILE_STRUCTURE: Corrupt JPEG image missing EOI marker');
@@ -71,10 +70,9 @@ export function detectAndValidateImage(buffer: Buffer, expectedMime?: string | n
   }
   // Check WebP: RIFF at 0..3 and WEBP at 8..11
   else if (
-    buffer[0] === 0x52 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x46 && // RIFF
-    buffer[8] === 0x57 && buffer[9] === 0x45 && buffer[10] === 0x42 && buffer[11] === 0x50 // WEBP
+    buffer[0] === 0x52 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x46 &&
+    buffer[8] === 0x57 && buffer[9] === 0x45 && buffer[10] === 0x42 && buffer[11] === 0x50
   ) {
-    // Check chunk type at 12..15 (VP8 , VP8L, VP8X)
     const chunkType = buffer.toString('ascii', 12, 16);
     if (!['VP8 ', 'VP8L', 'VP8X'].includes(chunkType)) {
       throw new Error('INVALID_FILE_STRUCTURE: Invalid WebP chunk header');
@@ -129,6 +127,275 @@ export function createPaymentRouter(authService: AuthenticationService) {
     return isOk;
   };
 
+  const handlePaymentError = (res: Response, req: Request, err: any) => {
+    const requestId = (req.headers['x-request-id'] as string) || (req as any).id || (req as any).requestId || 'req-unknown';
+    const timestamp = new Date().toISOString();
+
+    if (err instanceof z.ZodError) {
+      return res.status(400).json({
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'ข้อมูลการทำรายการไม่ถูกต้อง',
+          fieldErrors: err.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
+          requestId,
+          timestamp,
+        },
+      });
+    }
+
+    if (err?.code === 'P2002') {
+      const targetStr = JSON.stringify(err.meta?.target || '') + (err.message || '');
+      if (
+        targetStr.includes('payload_hash') ||
+        targetStr.includes('payloadHash') ||
+        targetStr.includes('file_hash') ||
+        targetStr.includes('fileHash') ||
+        targetStr.includes('idx_verification_payload_hash_unique')
+      ) {
+        return res.status(409).json({
+          error: {
+            code: 'DUPLICATE_PAYMENT_EVIDENCE',
+            message: 'มีการแนบหลักฐานการชำระเงินนี้ไปแล้ว',
+            fieldErrors: null,
+            requestId,
+            timestamp,
+          },
+        });
+      }
+    }
+
+    if (err instanceof AppError) {
+      return res.status(err.statusCode).json({
+        error: {
+          code: err.code || err.errorCode || 'PAYMENT_ERROR',
+          message: err.message,
+          fieldErrors: err.fieldErrors || null,
+          requestId,
+          timestamp,
+        },
+      });
+    }
+
+    const rawCode = err.code || (typeof err.message === 'string' ? err.message : '');
+
+    switch (rawCode) {
+      case 'GROUP_REVERSAL_REQUIRED':
+        return res.status(400).json({
+          error: {
+            code: 'GROUP_REVERSAL_REQUIRED',
+            message: 'ไม่อนุญาตให้ยกเลิกรายการย่อยของการรวมจ่าย กรุณายกเลิกทั้งกลุ่มรายการ',
+            fieldErrors: null,
+            requestId,
+            timestamp,
+          },
+        });
+      case 'GROUP_APPROVAL_REQUIRED':
+        return res.status(400).json({
+          error: {
+            code: 'GROUP_APPROVAL_REQUIRED',
+            message: 'รายการนี้เป็นส่วนหนึ่งของการรวมจ่าย กรุณาอนุมัติทั้งกลุ่มรายการ',
+            fieldErrors: null,
+            requestId,
+            timestamp,
+          },
+        });
+      case 'GROUP_REJECTION_REQUIRED':
+        return res.status(400).json({
+          error: {
+            code: 'GROUP_REJECTION_REQUIRED',
+            message: 'รายการนี้เป็นส่วนหนึ่งของการรวมจ่าย กรุณาปฏิเสธทั้งกลุ่มรายการ',
+            fieldErrors: null,
+            requestId,
+            timestamp,
+          },
+        });
+      case 'GROUP_ALLOCATION_RECONCILIATION_FAILED':
+        return res.status(400).json({
+          error: {
+            code: 'GROUP_ALLOCATION_RECONCILIATION_FAILED',
+            message: 'ยอดคงเหลือของบิลมีการเปลี่ยนแปลงหลังส่งสลิป กรุณาตรวจสอบรายการใหม่ก่อนอนุมัติ',
+            fieldErrors: null,
+            requestId,
+            timestamp,
+          },
+        });
+      case 'COMBINED_GROUP_NOT_FOUND':
+        return res.status(404).json({
+          error: {
+            code: 'COMBINED_GROUP_NOT_FOUND',
+            message: 'ไม่พบกลุ่มรายการชำระเงิน',
+            fieldErrors: null,
+            requestId,
+            timestamp,
+          },
+        });
+      case 'INVALID_GROUP_STATE':
+        return res.status(400).json({
+          error: {
+            code: 'INVALID_GROUP_STATE',
+            message: 'สถานะกลุ่มรายการไม่ถูกต้องสำหรับการดำเนินการ',
+            fieldErrors: null,
+            requestId,
+            timestamp,
+          },
+        });
+      case 'INVALID_STATE':
+        return res.status(400).json({
+          error: {
+            code: 'INVALID_STATE',
+            message: 'สถานะรายการไม่ถูกต้องสำหรับการดำเนินการ',
+            fieldErrors: null,
+            requestId,
+            timestamp,
+          },
+        });
+      case 'UNSUPPORTED_AMOUNT':
+        return res.status(400).json({
+          error: {
+            code: 'UNSUPPORTED_AMOUNT',
+            message: 'ยอดเงินที่ชำระไม่ตรงกับยอดคงเหลือของบิล',
+            fieldErrors: null,
+            requestId,
+            timestamp,
+          },
+        });
+      case 'PAYMENT_EXCEEDS_ELIGIBLE_OUTSTANDING':
+        return res.status(400).json({
+          error: {
+            code: 'PAYMENT_EXCEEDS_ELIGIBLE_OUTSTANDING',
+            message: 'ยอดในสลิปเกินกว่ายอดที่ต้องชำระจริง กรุณาติดต่อเจ้าของหอพัก',
+            fieldErrors: null,
+            requestId,
+            timestamp,
+          },
+        });
+      case 'FORBIDDEN_CROSS_ROOM':
+        return res.status(400).json({
+          error: {
+            code: 'FORBIDDEN_CROSS_ROOM',
+            message: 'ไม่อนุญาตให้จัดสรรการชำระเงินข้ามห้องพัก',
+            fieldErrors: null,
+            requestId,
+            timestamp,
+          },
+        });
+      case 'NO_ELIGIBLE_BILLS':
+        return res.status(400).json({
+          error: {
+            code: 'NO_ELIGIBLE_BILLS',
+            message: 'ไม่พบบิลที่มียอดค้างชำระสำหรับห้องนี้',
+            fieldErrors: null,
+            requestId,
+            timestamp,
+          },
+        });
+      case 'FINANCIAL_STATE_INCONSISTENT':
+        return res.status(400).json({
+          error: {
+            code: 'FINANCIAL_STATE_INCONSISTENT',
+            message: 'ข้อมูลทางการเงินไม่สอดคล้องกับระบบ',
+            fieldErrors: null,
+            requestId,
+            timestamp,
+          },
+        });
+      case 'ALREADY_PAID':
+        return res.status(400).json({
+          error: {
+            code: 'ALREADY_PAID',
+            message: 'บิลนี้ได้รับการชำระเงินแล้ว',
+            fieldErrors: null,
+            requestId,
+            timestamp,
+          },
+        });
+      case 'BILL_NOT_FOUND':
+      case 'NOT_FOUND':
+        return res.status(404).json({
+          error: {
+            code: 'BILL_NOT_FOUND',
+            message: 'ไม่พบข้อมูลบิลที่ระบุ',
+            fieldErrors: null,
+            requestId,
+            timestamp,
+          },
+        });
+      case 'FORBIDDEN':
+      case 'FORBIDDEN_BILL_OWNERSHIP':
+      case 'FORBIDDEN_INTENT_MISMATCH':
+        return res.status(403).json({
+          error: {
+            code: 'FORBIDDEN',
+            message: 'ไม่มีสิทธิ์ดำเนินการกับบิลนี้',
+            fieldErrors: null,
+            requestId,
+            timestamp,
+          },
+        });
+      case 'PAYMENT_IN_PROGRESS':
+        return res.status(409).json({
+          error: {
+            code: 'PAYMENT_IN_PROGRESS',
+            message: 'มีรายการชำระเงินที่อยู่ระหว่างรอการตรวจสอบสำหรับบิลนี้แล้ว',
+            fieldErrors: null,
+            requestId,
+            timestamp,
+          },
+        });
+      case 'ACTIVE_REVIEW_EXISTS':
+        return res.status(409).json({
+          error: {
+            code: 'ACTIVE_REVIEW_EXISTS',
+            message: 'มีรายการชำระเงินที่รอตรวจสอบอยู่แล้ว',
+            fieldErrors: null,
+            requestId,
+            timestamp,
+          },
+        });
+      case 'IDEMPOTENCY_MISMATCH':
+        return res.status(422).json({
+          error: {
+            code: 'IDEMPOTENCY_MISMATCH',
+            message: 'ข้อมูลการทำรายการไม่ตรงกับ Idempotency Key เดิม',
+            fieldErrors: null,
+            requestId,
+            timestamp,
+          },
+        });
+      case 'CONCURRENT_REQUEST_IN_PROGRESS':
+        return res.status(409).json({
+          error: {
+            code: 'CONCURRENT_REQUEST_IN_PROGRESS',
+            message: 'มีคำขอกำลังประมวลผลอยู่ กรุณารอสักครู่',
+            fieldErrors: null,
+            requestId,
+            timestamp,
+          },
+        });
+      case 'DUPLICATE_PAYMENT_EVIDENCE':
+        return res.status(409).json({
+          error: {
+            code: 'DUPLICATE_PAYMENT_EVIDENCE',
+            message: 'มีการแนบหลักฐานการชำระเงินนี้ไปแล้ว',
+            fieldErrors: null,
+            requestId,
+            timestamp,
+          },
+        });
+      default:
+        logger.error({ err, requestId }, 'Unhandled payment error caught in payment error boundary');
+        return res.status(500).json({
+          error: {
+            code: 'INTERNAL_ERROR',
+            message: 'ระบบไม่สามารถดำเนินการได้ กรุณาลองใหม่อีกครั้ง',
+            fieldErrors: null,
+            requestId,
+            timestamp,
+          },
+        });
+    }
+  };
+
   // Tenant: create upload intent
   router.post('/slip/intent', requireAuth, requireDormitoryWriteEntitlement, requireCsrf, async (req, res) => {
     try {
@@ -148,7 +415,6 @@ export function createPaymentRouter(authService: AuthenticationService) {
       });
       const data = schema.parse(req.body);
 
-      // Verify bill belongs to tenant
       const bill = await prisma.bill.findUnique({ where: { id: data.billId } });
       if (!bill || bill.tenantId !== tenant.id || bill.dormitoryId !== dormitoryId) {
         return res.status(403).json({ error: 'Forbidden' });
@@ -159,13 +425,12 @@ export function createPaymentRouter(authService: AuthenticationService) {
       }
 
       const activePayment = await prisma.payment.findFirst({
-        where: { billId: bill.id, status: { in: ['PENDING', 'UNDER_REVIEW', 'APPROVED'] } }
+        where: { billId: bill.id, status: { in: ['PENDING', 'UNDER_REVIEW'] } }
       });
       if (activePayment) {
         return res.status(400).json({ error: 'ACTIVE_REVIEW_EXISTS' });
       }
 
-      // Create PaymentUploadIntent in DB with 15-minute TTL
       const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
       const intent = await prisma.paymentUploadIntent.create({
         data: {
@@ -186,7 +451,7 @@ export function createPaymentRouter(authService: AuthenticationService) {
         expiresAt
       });
     } catch (err: any) {
-      res.status(400).json({ error: err.message });
+      handlePaymentError(res, req, err);
     }
   });
 
@@ -197,91 +462,68 @@ export function createPaymentRouter(authService: AuthenticationService) {
       if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
       const auth = (req as any).auth;
-      const context = (req as any).dormitoryContext || (await resolveAuthoritativeDormitoryContext(req));
-      const dormitoryId = context.dormitoryId;
-      const intentId = req.params.intentId;
-      const intent = await prisma.paymentUploadIntent.findUnique({ where: { id: intentId } });
-
-      if (!intent || intent.dormitoryId !== dormitoryId) return res.status(404).json({ error: 'Intent not found' });
-      if (intent.status !== 'CREATED') return res.status(409).json({ error: 'Intent already consumed or uploaded' });
-      if (intent.expiresAt < new Date()) return res.status(400).json({ error: 'Intent expired' });
+      const intent = await prisma.paymentUploadIntent.findUnique({ where: { id: req.params.intentId } });
+      if (!intent) return res.status(404).json({ error: 'Upload intent not found' });
       if (intent.authenticatedUserId !== auth.userId) return res.status(403).json({ error: 'Forbidden' });
+      if (intent.status !== 'CREATED') return res.status(400).json({ error: 'Intent already used or invalid' });
+      if (intent.expiresAt < new Date()) return res.status(400).json({ error: 'Intent expired' });
 
-      const buffer = req.file.buffer;
+      const validation = detectAndValidateImage(req.file.buffer, intent.expectedMimeType);
+      const hash = crypto.createHash('sha256').update(req.file.buffer).digest('hex');
 
-      // 1. Structural and MIME validation against expected MIME
-      const validation = detectAndValidateImage(buffer, intent.expectedMimeType);
-
-      // 2. Expected size validation
-      if (intent.expectedSize && buffer.length !== intent.expectedSize) {
-        return res.status(400).json({ error: 'SIZE_MISMATCH: Uploaded size differs from expected size' });
-      }
-
-      // 3. Compute SHA-256 server-side only
-      const fileHash = crypto.createHash('sha256').update(buffer).digest('hex');
-
-      // 4. Check duplicate globally
-      const duplicateIntent = await prisma.paymentUploadIntent.findFirst({
-        where: { sha256: fileHash, status: { in: ['UPLOADED', 'CONSUMED'] } }
+      const existingVerification = await prisma.paymentEvidenceVerification.findFirst({
+        where: { payloadHash: hash }
       });
-      const duplicatePayment = await prisma.payment.findFirst({
-        where: { fileHash: fileHash }
-      });
-      if (duplicateIntent || duplicatePayment) {
-        return res.status(409).json({ error: 'DUPLICATE_PAYMENT_EVIDENCE' });
-      }
-
-      // 5. Generate secure object key and write file
-      objectKey = `payments/${intent.dormitoryId}/${intent.billId}/${intent.id}_${crypto.randomBytes(8).toString('hex')}${validation.extension}`;
-      await localStorageProvider.saveFile(objectKey, buffer);
-
-      // 6. Update database record with verified MIME and size
-      try {
-        await prisma.paymentUploadIntent.update({
-          where: { id: intent.id },
-          data: {
-            status: 'UPLOADED',
-            verifiedMimeType: validation.mimeType,
-            verifiedSize: validation.size,
-            objectKey,
-            sha256: fileHash,
-            uploadedAt: new Date()
-          }
-        });
-      } catch (dbErr: any) {
-        // Concurrency unique collision or constraint error
-        if (dbErr.code === 'P2002' || (dbErr.message && dbErr.message.includes('unique'))) {
-          throw new Error('DUPLICATE_PAYMENT_EVIDENCE');
+      const existingDuplicate = await prisma.payment.findFirst({
+        where: {
+          fileHash: hash,
+          status: { in: ['PENDING', 'UNDER_REVIEW', 'APPROVED'] }
         }
-        throw dbErr;
+      });
+      if (existingVerification || existingDuplicate) {
+        const reqId = (req.headers['x-request-id'] as string) || (req as any).id || 'req-unknown';
+        return res.status(409).json({
+          error: {
+            code: 'DUPLICATE_PAYMENT_EVIDENCE',
+            message: 'มีการแนบหลักฐานการชำระเงินนี้ไปแล้ว',
+            fieldErrors: null,
+            requestId: reqId,
+            timestamp: new Date().toISOString(),
+          },
+        });
       }
 
-      // Return success without exposing raw internal objectKey or fileHash to client
-      res.json({ success: true, intentId: intent.id });
+      const ext = validation.extension;
+      objectKey = `slips/${intent.dormitoryId}/${intent.id}${ext}`;
+      await localStorageProvider.saveFile(objectKey, req.file.buffer);
+
+      await prisma.paymentUploadIntent.update({
+        where: { id: intent.id },
+        data: {
+          status: 'UPLOADED',
+          objectKey,
+          sha256: hash,
+          verifiedMimeType: validation.mimeType,
+          verifiedSize: validation.size,
+          uploadedAt: new Date()
+        }
+      });
+
+      res.json({ success: true, objectKey, sha256: hash });
     } catch (err: any) {
       if (objectKey) {
-        try {
-          await localStorageProvider.deleteFile(objectKey);
-        } catch {}
+        try { await localStorageProvider.deleteFile(objectKey); } catch (e) {}
       }
-
-      if (err.message === 'DUPLICATE_PAYMENT_EVIDENCE') {
-        return res.status(409).json({ error: 'DUPLICATE_PAYMENT_EVIDENCE' });
-      }
-      if (err.message === 'INVALID_MIME_TYPE' || err.message.startsWith('MIME_TYPE_MISMATCH') || err.message.startsWith('INVALID_FILE')) {
-        return res.status(400).json({ error: err.message });
-      }
-      res.status(400).json({ error: err.message });
+      handlePaymentError(res, req, err);
     }
   });
 
-  // Tenant: confirm upload and submit payment
+  // Tenant: Submit slip referencing intent
   router.post('/slip/submit', requireAuth, requireDormitoryWriteEntitlement, requireCsrf, async (req, res) => {
     try {
       const auth = (req as any).auth;
       const context = (req as any).dormitoryContext || (await resolveAuthoritativeDormitoryContext(req));
       const dormitoryId = context.dormitoryId;
-      if (!dormitoryId) return res.status(400).json({ error: 'Missing dormitoryId' });
 
       const tenant = await ensureTenant(req, res, dormitoryId);
       if (!tenant) return res.status(403).json({ error: 'Forbidden' });
@@ -289,19 +531,17 @@ export function createPaymentRouter(authService: AuthenticationService) {
       const schema = z.object({
         billId: z.string(),
         amount: z.string(),
-        paymentDate: z.string(),
-        intentId: z.string()
+        intentId: z.string(),
+        paymentDate: z.string().transform((val) => new Date(val))
       });
       const data = schema.parse(req.body);
-
       const idempotencyKey = (req.headers['x-idempotency-key'] || req.headers['idempotency-key']) as string | undefined;
 
       const payment = await paymentService.submitSlip({
         dormitoryId,
-        billId: data.billId,
         tenantId: tenant.id,
         amount: data.amount,
-        paymentDate: new Date(data.paymentDate),
+        paymentDate: data.paymentDate,
         intentId: data.intentId,
         idempotencyKey,
         actorUserId: auth.userId
@@ -309,20 +549,11 @@ export function createPaymentRouter(authService: AuthenticationService) {
 
       res.json(payment);
     } catch (err: any) {
-      if (err.message === 'IDEMPOTENCY_MISMATCH') {
-        return res.status(422).json({ error: 'IDEMPOTENCY_MISMATCH' });
-      }
-      if (err.message === 'CONCURRENT_REQUEST_IN_PROGRESS') {
-        return res.status(409).json({ error: 'CONCURRENT_REQUEST_IN_PROGRESS' });
-      }
-      if (err.message === 'DUPLICATE_PAYMENT_EVIDENCE') {
-        return res.status(409).json({ error: err.message });
-      }
-      res.status(400).json({ error: err.message });
+      handlePaymentError(res, req, err);
     }
   });
 
-  // Owner: Record Cash
+  // Owner: Record Cash (Strictly Single-Bill)
   router.post('/cash', requireAuth, requireDormitoryPermission('payment:write'), requireDormitoryWriteEntitlement, requireCsrf, async (req, res) => {
     try {
       const auth = (req as any).auth;
@@ -330,18 +561,32 @@ export function createPaymentRouter(authService: AuthenticationService) {
       const dormitoryId = context.dormitoryId;
 
       if (!ensureOwnerOrManager(req, res, dormitoryId)) {
-        return res.status(403).json({ error: 'Forbidden' });
+        return res.status(403).json({
+          error: {
+            code: 'FORBIDDEN',
+            message: 'ไม่มีสิทธิ์บันทึกการรับเงินสด',
+            requestId: (req.headers['x-request-id'] as string) || (req as any).id || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
       }
 
       const schema = z.object({
         billId: z.string(),
-        amount: z.string()
+        amount: z.string(),
       });
       const data = schema.parse(req.body);
 
       const bill = await prisma.bill.findUnique({ where: { id: data.billId } });
       if (!bill || bill.dormitoryId !== dormitoryId) {
-        return res.status(403).json({ error: 'Forbidden' });
+        return res.status(403).json({
+          error: {
+            code: 'FORBIDDEN',
+            message: 'ไม่มีสิทธิ์ดำเนินการกับบิลนี้',
+            requestId: (req.headers['x-request-id'] as string) || (req as any).id || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
       }
 
       const idempotencyKey = (req.headers['x-idempotency-key'] || req.headers['idempotency-key']) as string | undefined;
@@ -350,56 +595,52 @@ export function createPaymentRouter(authService: AuthenticationService) {
         dormitoryId,
         ...data,
         userId: auth.userId,
-        idempotencyKey
+        idempotencyKey,
       });
 
       res.json(payment);
     } catch (err: any) {
-      if (err.message === 'IDEMPOTENCY_MISMATCH') {
-        return res.status(422).json({ error: 'IDEMPOTENCY_MISMATCH' });
-      }
-      if (err.message === 'CONCURRENT_REQUEST_IN_PROGRESS') {
-        return res.status(409).json({ error: 'CONCURRENT_REQUEST_IN_PROGRESS' });
-      }
-      res.status(400).json({ error: err.message });
+      handlePaymentError(res, req, err);
     }
   });
 
-  // Owner: Record Cash Payment for Multiple Bills Atomically
-  router.post('/combined-cash', requireAuth, requireDormitoryPermission('payment:write'), requireDormitoryWriteEntitlement, requireCsrf, async (req, res) => {
+  // Owner: Record Combined Cash for multiple bills (Same Tenant + Same Room)
+  router.post('/cash/combined', requireAuth, requireDormitoryPermission('payment:write'), requireDormitoryWriteEntitlement, requireCsrf, async (req, res) => {
     try {
       const auth = (req as any).auth;
       const context = (req as any).dormitoryContext || (await resolveAuthoritativeDormitoryContext(req));
       const dormitoryId = context.dormitoryId;
 
       if (!ensureOwnerOrManager(req, res, dormitoryId)) {
-        return res.status(403).json({ error: 'Forbidden' });
+        return res.status(403).json({
+          error: {
+            code: 'FORBIDDEN',
+            message: 'ไม่มีสิทธิ์บันทึกการรับเงินสด',
+            requestId: (req.headers['x-request-id'] as string) || (req as any).id || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
       }
 
       const schema = z.object({
-        billIds: z.array(z.string().uuid()).min(1, 'ต้องระบุรายการบิลอย่างน้อย 1 รายการ'),
-        notes: z.string().optional(),
+        billIds: z.array(z.string()).min(1),
+        amount: z.string().optional(),
       });
       const data = schema.parse(req.body);
+
       const idempotencyKey = (req.headers['x-idempotency-key'] || req.headers['idempotency-key']) as string | undefined;
 
       const result = await paymentService.recordCombinedCash({
         dormitoryId,
         billIds: data.billIds,
+        amount: data.amount,
         userId: auth.userId,
-        notes: data.notes,
         idempotencyKey,
       });
 
       res.json(result);
     } catch (err: any) {
-      if (err.message === 'IDEMPOTENCY_MISMATCH') {
-        return res.status(422).json({ error: 'IDEMPOTENCY_MISMATCH' });
-      }
-      if (err.message === 'CONCURRENT_REQUEST_IN_PROGRESS') {
-        return res.status(409).json({ error: 'CONCURRENT_REQUEST_IN_PROGRESS' });
-      }
-      res.status(400).json({ error: err.message });
+      handlePaymentError(res, req, err);
     }
   });
 
@@ -411,11 +652,11 @@ export function createPaymentRouter(authService: AuthenticationService) {
       const dormitoryId = context.dormitoryId;
 
       const paymentRecord = await prisma.payment.findUnique({ where: { id: req.params.paymentId } });
-      if (!paymentRecord) return res.status(404).json({ error: 'Not found' });
-      if (paymentRecord.dormitoryId !== dormitoryId) return res.status(403).json({ error: 'Forbidden' });
+      if (!paymentRecord) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'ไม่พบรายการชำระเงิน' } });
+      if (paymentRecord.dormitoryId !== dormitoryId) return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'ไม่มีสิทธิ์' } });
 
       if (!ensureOwnerOrManager(req, res, dormitoryId)) {
-        return res.status(403).json({ error: 'Forbidden' });
+        return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'ไม่มีสิทธิ์' } });
       }
 
       const idempotencyKey = (req.headers['x-idempotency-key'] || req.headers['idempotency-key']) as string | undefined;
@@ -424,18 +665,12 @@ export function createPaymentRouter(authService: AuthenticationService) {
         dormitoryId,
         paymentId: req.params.paymentId,
         userId: auth.userId,
-        idempotencyKey
+        idempotencyKey,
       });
 
       res.json(payment);
     } catch (err: any) {
-      if (err.message === 'IDEMPOTENCY_MISMATCH') {
-        return res.status(422).json({ error: 'IDEMPOTENCY_MISMATCH' });
-      }
-      if (err.message === 'CONCURRENT_REQUEST_IN_PROGRESS') {
-        return res.status(409).json({ error: 'CONCURRENT_REQUEST_IN_PROGRESS' });
-      }
-      res.status(400).json({ error: err.message });
+      handlePaymentError(res, req, err);
     }
   });
 
@@ -447,16 +682,15 @@ export function createPaymentRouter(authService: AuthenticationService) {
       const dormitoryId = context.dormitoryId;
 
       const paymentRecord = await prisma.payment.findUnique({ where: { id: req.params.paymentId } });
-      if (!paymentRecord) return res.status(404).json({ error: 'Not found' });
-      if (paymentRecord.dormitoryId !== dormitoryId) return res.status(403).json({ error: 'Forbidden' });
+      if (!paymentRecord) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'ไม่พบรายการชำระเงิน' } });
+      if (paymentRecord.dormitoryId !== dormitoryId) return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'ไม่มีสิทธิ์' } });
 
       if (!ensureOwnerOrManager(req, res, dormitoryId)) {
-        return res.status(403).json({ error: 'Forbidden' });
+        return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'ไม่มีสิทธิ์' } });
       }
 
       const schema = z.object({ reason: z.string().min(1) });
       const data = schema.parse(req.body);
-
       const idempotencyKey = (req.headers['x-idempotency-key'] || req.headers['idempotency-key']) as string | undefined;
 
       const payment = await paymentService.rejectPayment({
@@ -464,18 +698,12 @@ export function createPaymentRouter(authService: AuthenticationService) {
         paymentId: req.params.paymentId,
         userId: auth.userId,
         reason: data.reason,
-        idempotencyKey
+        idempotencyKey,
       });
 
       res.json(payment);
     } catch (err: any) {
-      if (err.message === 'IDEMPOTENCY_MISMATCH') {
-        return res.status(422).json({ error: 'IDEMPOTENCY_MISMATCH' });
-      }
-      if (err.message === 'CONCURRENT_REQUEST_IN_PROGRESS') {
-        return res.status(409).json({ error: 'CONCURRENT_REQUEST_IN_PROGRESS' });
-      }
-      res.status(400).json({ error: err.message });
+      handlePaymentError(res, req, err);
     }
   });
 
@@ -487,20 +715,19 @@ export function createPaymentRouter(authService: AuthenticationService) {
       const dormitoryId = context.dormitoryId;
 
       const paymentRecord = await prisma.payment.findUnique({ where: { id: req.params.paymentId } });
-      if (!paymentRecord) return res.status(404).json({ error: 'Not found' });
-      if (paymentRecord.dormitoryId !== dormitoryId) return res.status(403).json({ error: 'Forbidden' });
+      if (!paymentRecord) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'ไม่พบรายการชำระเงิน' } });
+      if (paymentRecord.dormitoryId !== dormitoryId) return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'ไม่มีสิทธิ์' } });
 
       const isOwner = auth?.memberships?.find((m: any) => {
         const code = (m.roleCode || m.role || m.roleId || '').toLowerCase();
         return m.dormitoryId === dormitoryId && code.includes('owner');
       });
       if (!isOwner) {
-        return res.status(403).json({ error: 'Forbidden: Owner only' });
+        return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Forbidden: Owner only' } });
       }
 
       const schema = z.object({ reason: z.string().min(1) });
       const data = schema.parse(req.body);
-
       const idempotencyKey = (req.headers['x-idempotency-key'] || req.headers['idempotency-key']) as string | undefined;
 
       const payment = await paymentService.reversePayment({
@@ -508,18 +735,12 @@ export function createPaymentRouter(authService: AuthenticationService) {
         paymentId: req.params.paymentId,
         userId: auth.userId,
         reason: data.reason,
-        idempotencyKey
+        idempotencyKey,
       });
 
       res.json(payment);
     } catch (err: any) {
-      if (err.message === 'IDEMPOTENCY_MISMATCH') {
-        return res.status(422).json({ error: 'IDEMPOTENCY_MISMATCH' });
-      }
-      if (err.message === 'CONCURRENT_REQUEST_IN_PROGRESS') {
-        return res.status(409).json({ error: 'CONCURRENT_REQUEST_IN_PROGRESS' });
-      }
-      res.status(400).json({ error: err.message });
+      handlePaymentError(res, req, err);
     }
   });
 
@@ -563,7 +784,7 @@ export function createPaymentRouter(authService: AuthenticationService) {
       res.setHeader('Content-Type', ext);
       res.send(fileBuffer);
     } catch (err: any) {
-      res.status(404).json({ error: err.message });
+      handlePaymentError(res, req, err);
     }
   });
 
@@ -581,19 +802,61 @@ export function createPaymentRouter(authService: AuthenticationService) {
       const payments = await prisma.payment.findMany({
         where: { dormitoryId },
         include: {
-          bill: { include: { tenant: true, room: true } },
+          bill: {
+            include: {
+              tenant: true,
+              room: true,
+              items: true,
+              allocations: true,
+              billingCycle: true,
+            },
+          },
           receipt: true,
+          allocations: true,
+          paymentGroup: {
+            include: {
+              allocations: true,
+              receipts: true,
+              payments: {
+                include: {
+                  bill: {
+                    include: {
+                      items: true,
+                      billingCycle: true,
+                      room: true,
+                      tenant: true,
+                    },
+                  },
+                },
+              },
+              billTargets: {
+                include: {
+                  bill: {
+                    include: {
+                      items: true,
+                      billingCycle: true,
+                      room: true,
+                      tenant: true,
+                    },
+                  },
+                },
+              },
+              verification: true,
+            },
+          },
+          verification: true,
           statusHistories: { orderBy: { effectiveAt: 'desc' } }
         },
         orderBy: { createdAt: 'desc' }
       });
       res.json(payments);
     } catch (err: any) {
-      res.status(400).json({ error: err.message });
+      handlePaymentError(res, req, err);
     }
   });
+
   // Tenant: Create upload intent for multiple bills combined with 1 slip
-  router.post('/combined-slip-intent', requireAuth, async (req, res) => {
+  router.post('/combined-slip-intent', requireAuth, requireDormitoryWriteEntitlement, requireCsrf, async (req, res) => {
     try {
       const auth = (req as any).auth;
       const context = (req as any).dormitoryContext || (await resolveAuthoritativeDormitoryContext(req));
@@ -620,12 +883,12 @@ export function createPaymentRouter(authService: AuthenticationService) {
 
       res.json(result);
     } catch (err: any) {
-      res.status(400).json({ error: err.message });
+      handlePaymentError(res, req, err);
     }
   });
 
   // Tenant: Submit combined slip payment referencing intent
-  router.post('/submit-combined-slip', requireAuth, requireCsrf, async (req, res) => {
+  router.post('/submit-combined-slip', requireAuth, requireDormitoryWriteEntitlement, requireCsrf, async (req, res) => {
     try {
       const auth = (req as any).auth;
       const context = (req as any).dormitoryContext || (await resolveAuthoritativeDormitoryContext(req));
@@ -648,38 +911,121 @@ export function createPaymentRouter(authService: AuthenticationService) {
         paymentDate: paymentDate ? new Date(paymentDate) : new Date(),
         amount,
         actorUserId: auth.userId,
-        idempotencyKey: req.headers['idempotency-key'] as string | undefined,
+        idempotencyKey: (req.headers['x-idempotency-key'] || req.headers['idempotency-key']) as string | undefined,
       });
 
       res.json(result);
     } catch (err: any) {
-      res.status(400).json({ error: err.message });
+      handlePaymentError(res, req, err);
     }
   });
 
-  // Owner: Approve combined payment group atomically
-  router.post('/combined-groups/:id/approve', requireAuth, requireCsrf, async (req, res) => {
-    try {
-      const auth = (req as any).auth;
-      const context = (req as any).dormitoryContext || (await resolveAuthoritativeDormitoryContext(req));
-      const dormitoryId = context.dormitoryId;
+    // Owner: Approve combined payment group atomically
+  router.post(
+    '/combined-groups/:id/approve',
+    requireAuth,
+    requireCsrf,
+    requireDormitoryPermission('payment:write'),
+    requireDormitoryWriteEntitlement,
+    async (req, res) => {
+      try {
+        const auth = (req as any).auth;
+        const context = (req as any).dormitoryContext || (await resolveAuthoritativeDormitoryContext(req));
+        const dormitoryId = context.dormitoryId;
 
-      if (!ensureOwnerOrManager(req, res, dormitoryId)) {
-        return res.status(403).json({ error: 'Forbidden' });
+        if (!ensureOwnerOrManager(req, res, dormitoryId)) {
+          return res.status(403).json({ error: 'Forbidden' });
+        }
+
+        const result = await paymentService.approvePaymentGroup({
+          dormitoryId,
+          groupId: req.params.id,
+          userId: auth.userId,
+          notes: req.body?.notes,
+          idempotencyKey: (req.headers['x-idempotency-key'] || req.headers['idempotency-key']) as string | undefined,
+        });
+
+        res.json(result);
+      } catch (err: any) {
+        handlePaymentError(res, req, err);
       }
-
-      const result = await paymentService.approvePaymentGroup({
-        dormitoryId,
-        groupId: req.params.id,
-        userId: auth.userId,
-        notes: req.body?.notes,
-      });
-
-      res.json(result);
-    } catch (err: any) {
-      res.status(400).json({ error: err.message });
     }
-  });
+  );
+
+  // Owner: Reject combined payment group atomically
+  router.post(
+    '/combined-groups/:id/reject',
+    requireAuth,
+    requireCsrf,
+    requireDormitoryPermission('payment:write'),
+    requireDormitoryWriteEntitlement,
+    async (req, res) => {
+      try {
+        const auth = (req as any).auth;
+        const context = (req as any).dormitoryContext || (await resolveAuthoritativeDormitoryContext(req));
+        const dormitoryId = context.dormitoryId;
+
+        if (!ensureOwnerOrManager(req, res, dormitoryId)) {
+          return res.status(403).json({ error: 'Forbidden' });
+        }
+
+        const reason = req.body?.reason;
+        if (!reason || typeof reason !== 'string' || !reason.trim()) {
+          return res.status(400).json({ error: 'เหตุผลในการปฏิเสธมีความจำเป็น' });
+        }
+
+        const result = await paymentService.rejectPaymentGroup({
+          dormitoryId,
+          groupId: req.params.id,
+          userId: auth.userId,
+          reason: reason.trim(),
+          notes: req.body?.notes,
+          idempotencyKey: (req.headers['x-idempotency-key'] || req.headers['idempotency-key']) as string | undefined,
+        });
+
+        res.json(result);
+      } catch (err: any) {
+        handlePaymentError(res, req, err);
+      }
+    }
+  );
+
+  // Owner: Reverse combined payment group atomically
+  router.post(
+    '/combined-groups/:id/reverse',
+    requireAuth,
+    requireCsrf,
+    requireDormitoryPermission('payment:write'),
+    requireDormitoryWriteEntitlement,
+    async (req, res) => {
+      try {
+        const auth = (req as any).auth;
+        const context = (req as any).dormitoryContext || (await resolveAuthoritativeDormitoryContext(req));
+        const dormitoryId = context.dormitoryId;
+
+        if (!ensureOwnerOrManager(req, res, dormitoryId)) {
+          return res.status(403).json({ error: 'Forbidden' });
+        }
+
+        const reason = req.body?.reason;
+        if (!reason || typeof reason !== 'string' || !reason.trim()) {
+          return res.status(400).json({ error: 'เหตุผลในการยกเลิกมีความจำเป็น' });
+        }
+
+        const result = await paymentService.reversePaymentGroup({
+          dormitoryId,
+          groupId: req.params.id,
+          userId: auth.userId,
+          reason: reason.trim(),
+          idempotencyKey: (req.headers['x-idempotency-key'] || req.headers['idempotency-key']) as string | undefined,
+        });
+
+        res.json(result);
+      } catch (err: any) {
+        handlePaymentError(res, req, err);
+      }
+    }
+  );
 
   return router;
 }

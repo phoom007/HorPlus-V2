@@ -40,6 +40,9 @@ export function normalizeOnboardingDraftPayload(rawPayload: any): Record<string,
       const totalFloors = parseNum(bObj.totalFloors ?? bObj.floorsCount ?? bObj.floorCount, 1);
       const roomsPerFloor = parseNum(bObj.roomsPerFloor ?? bObj.roomsCount, 0);
       const securityDeposit = parseNum(bObj.securityDeposit ?? bObj.depositAmount, 0);
+      const termDeposit = parseNum(bObj.termDeposit, securityDeposit);
+      const monthlyDeposit = parseNum(bObj.monthlyDeposit, securityDeposit);
+      const dailyDeposit = parseNum(bObj.dailyDeposit, securityDeposit);
 
       return {
         id: (bObj.id ?? `b-${idx + 1}`).toString(),
@@ -52,6 +55,9 @@ export function normalizeOnboardingDraftPayload(rawPayload: any): Record<string,
         mode: (bObj.mode ?? 'auto').toString(),
         customRooms: Array.isArray(bObj.customRooms) ? bObj.customRooms : [],
         securityDeposit,
+        termDeposit,
+        monthlyDeposit,
+        dailyDeposit,
         rentRates: {
           monthly,
           daily,
