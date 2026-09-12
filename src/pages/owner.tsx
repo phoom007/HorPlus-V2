@@ -19,6 +19,7 @@ import {
   ShieldCheck,
   Settings,
   LogOut,
+  Crown,
   ChevronRight,
   ChevronLeft,
   Calendar as CalendarIcon,
@@ -373,13 +374,13 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
       setSeenTenantIds(allTIds);
       try {
         localStorage.setItem(`HorPlus_seen_tenants_${selectedCycle}`, JSON.stringify(allTIds));
-      } catch {}
+      } catch { }
     } else if (tabId === 'contracts') {
       const allCIds = (queryClient.getQueryData<Contract[]>(queryKeys.contracts(activeDormitoryId)) || []).map(c => c.id);
       setSeenContractIds(allCIds);
       try {
         localStorage.setItem(`HorPlus_seen_contracts_${selectedCycle}`, JSON.stringify(allCIds));
-      } catch {}
+      } catch { }
     }
   };
 
@@ -718,7 +719,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
       } else {
         setSeenTenantIds((tenants || []).map(t => t.id));
       }
-    } catch {}
+    } catch { }
   }, [selectedCycle, tenantIdsStr]);
 
   const hasUnviewedTenants = (tenants || []).some(t => !seenTenantIds.includes(t.id));
@@ -742,7 +743,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
       } else {
         setSeenContractIds((contracts || []).map(c => c.id));
       }
-    } catch {}
+    } catch { }
   }, [selectedCycle, contractIdsStr]);
 
   const hasUnviewedContracts = (contracts || []).some(c => !seenContractIds.includes(c.id));
@@ -776,7 +777,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
         staleTime: q.staleTime,
       });
       if (p && typeof (p as any).catch === 'function') {
-        (p as any).catch(() => {});
+        (p as any).catch(() => { });
       }
     }
   }, [activeDormitoryId, isRegistrationMode, selectedBillingCycleId, billingCyclesQuery.data?.operationalBillingCycleId, queryClient]);
@@ -882,7 +883,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
       if (res.ok) {
         queryClient.invalidateQueries({ queryKey: queryKeys.notifications(activeDormitoryId) });
       }
-    } catch (e) {}
+    } catch (e) { }
   };
 
   const handleMarkAllStaffNoticesAsRead = async () => {
@@ -891,7 +892,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
       if (res.ok) {
         queryClient.invalidateQueries({ queryKey: queryKeys.notifications(activeDormitoryId) });
       }
-    } catch (e) {}
+    } catch (e) { }
   };
 
   const handleDeleteNotification = async (id: string | number) => {
@@ -906,7 +907,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
     }
   };
 
-  const handleAddLog = (_action: string, _details: string, _type: string, _id: string) => {};
+  const handleAddLog = (_action: string, _details: string, _type: string, _id: string) => { };
 
   // State saving handlers with targeted query invalidation
   const handleSaveRooms = (_newRooms: Room[], impact: RoomMutationImpact = { kind: 'refresh' }) => {
@@ -958,7 +959,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
     { id: 'announcements', label: 'ประชาสัมพันธ์', icon: Megaphone, roles: ['owner', 'manager'] },
     { id: 'reports', label: 'รายงานสถิติ', icon: BarChart4, roles: ['owner', 'manager'] },
     { id: 'users', label: 'จัดการผู้ใช้งาน', icon: ShieldCheck, roles: ['owner'] },
-    { id: 'subscription', label: 'Subscription / แพ็กเกจ', icon: CreditCard, roles: ['owner'] },
+    { id: 'subscription', label: 'ต่อแพ็กเกจ', icon: Crown, roles: ['owner'] },
     { id: 'settings', label: 'ตั้งค่าระบบ', icon: Settings, roles: ['owner'] }
   ];
 
@@ -971,9 +972,9 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
   // Fail-closed menu filtering: during registration mode, show ALL normal owner menus so owner can see what HorPlus contains, but disable them
   let allowedMenuItems = isRegistrationMode
     ? [
-        menuItems.find(item => item.id === 'register')!,
-        ...menuItems.filter(item => item.roles.includes('owner') && item.id !== 'register')
-      ].filter(Boolean)
+      menuItems.find(item => item.id === 'register')!,
+      ...menuItems.filter(item => item.roles.includes('owner') && item.id !== 'register')
+    ].filter(Boolean)
     : (userRole ? menuItems.filter(item => item.roles.includes(userRole) && item.id !== 'register') : []);
 
   const renderSubView = () => {
@@ -1289,7 +1290,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
       case 'users':
         return <OwnerUsers onAddLog={handleAddLog} />;
       case 'subscription':
-        return <SubscriptionPage dormitoryId={validDormId} />;
+        return <SubscriptionPage dormitoryId={validDormId} rooms={rooms} onDetailViewChange={setIsDetailViewOpen} />;
       case 'settings':
         return (
           <OwnerSettings
@@ -1366,13 +1367,12 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
                       onTouchStart={() => { if (!isDisabled) prefetchTab(item.id); }}
                       title={isDisabled ? 'กรุณาลงทะเบียนหอพักให้เสร็จก่อนใช้งานเมนูนี้' : ''}
                       disabled={isDisabled}
-                      className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold transition-all ${
-                        isActive
-                          ? 'bg-[#2b64f6] text-white shadow-md shadow-blue-500/20'
-                          : isDisabled
-                            ? 'text-slate-300 cursor-not-allowed opacity-60'
-                            : 'hover:bg-slate-50 hover:text-slate-900 text-slate-500'
-                      }`}
+                      className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold transition-all ${isActive
+                        ? 'bg-[#2b64f6] text-white shadow-md shadow-blue-500/20'
+                        : isDisabled
+                          ? 'text-slate-300 cursor-not-allowed opacity-60'
+                          : 'hover:bg-slate-50 hover:text-slate-900 text-slate-500'
+                        }`}
                     >
                       <div className="flex items-center gap-2.5">
                         <Icon className={`w-4 h-4 ${isActive ? 'text-white' : 'text-slate-400'}`} />
@@ -1450,13 +1450,12 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
                   onTouchStart={() => { if (!isDisabled) prefetchTab(item.id); }}
                   title={isDisabled ? 'กรุณาลงทะเบียนหอพักให้เสร็จก่อนใช้งานเมนูนี้' : ''}
                   disabled={isDisabled}
-                  className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition-all ${
-                    isActive
-                      ? 'bg-blue-600 text-white shadow-md shadow-blue-600/20'
-                      : isDisabled
-                        ? 'text-slate-300 cursor-not-allowed opacity-60'
-                        : 'hover:bg-slate-50 hover:text-slate-900 text-slate-500'
-                  }`}
+                  className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition-all ${isActive
+                    ? 'bg-blue-600 text-white shadow-md shadow-blue-600/20'
+                    : isDisabled
+                      ? 'text-slate-300 cursor-not-allowed opacity-60'
+                      : 'hover:bg-slate-50 hover:text-slate-900 text-slate-500'
+                    }`}
                 >
                   <div className="flex items-center gap-2.5">
                     <Icon className={`w-4 h-4 ${isActive ? 'text-white' : 'text-slate-400'}`} />
@@ -1633,9 +1632,8 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
                 <button
                   onClick={handlePrevCycle}
                   disabled={selectableBillingCycles.length === 0 || selectableBillingCycles.findIndex(c => c.id === selectedBillingCycleId || c.cycleCode === selectedCycleCode) <= 0}
-                  className={`p-1.5 hover:bg-white text-slate-500 hover:text-slate-900 rounded-xl transition-all cursor-pointer ${
-                    selectableBillingCycles.length === 0 || selectableBillingCycles.findIndex(c => c.id === selectedBillingCycleId || c.cycleCode === selectedCycleCode) <= 0 ? 'opacity-25 cursor-not-allowed' : ''
-                  }`}
+                  className={`p-1.5 hover:bg-white text-slate-500 hover:text-slate-900 rounded-xl transition-all cursor-pointer ${selectableBillingCycles.length === 0 || selectableBillingCycles.findIndex(c => c.id === selectedBillingCycleId || c.cycleCode === selectedCycleCode) <= 0 ? 'opacity-25 cursor-not-allowed' : ''
+                    }`}
                   aria-label="ก่อนหน้า"
                   data-testid="prev-cycle-button"
                 >
@@ -1659,9 +1657,8 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
                 <button
                   onClick={handleNextCycle}
                   disabled={selectableBillingCycles.length === 0 || selectableBillingCycles.findIndex(c => c.id === selectedBillingCycleId || c.cycleCode === selectedCycleCode) >= selectableBillingCycles.length - 1}
-                  className={`p-1.5 hover:bg-white text-slate-500 hover:text-slate-900 rounded-xl transition-all cursor-pointer ${
-                    selectableBillingCycles.length === 0 || selectableBillingCycles.findIndex(c => c.id === selectedBillingCycleId || c.cycleCode === selectedCycleCode) >= selectableBillingCycles.length - 1 ? 'opacity-25 cursor-not-allowed' : ''
-                  }`}
+                  className={`p-1.5 hover:bg-white text-slate-500 hover:text-slate-900 rounded-xl transition-all cursor-pointer ${selectableBillingCycles.length === 0 || selectableBillingCycles.findIndex(c => c.id === selectedBillingCycleId || c.cycleCode === selectedCycleCode) >= selectableBillingCycles.length - 1 ? 'opacity-25 cursor-not-allowed' : ''
+                    }`}
                   aria-label="ถัดไป"
                   data-testid="next-cycle-button"
                 >
@@ -1863,11 +1860,10 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
         {/* Dynamic page container */}
         <main
           id="owner-main-content"
-          className={`flex-1 ${
-            isDetailViewOpen
-              ? 'p-0 overflow-hidden bg-slate-50 flex flex-col'
-              : 'overflow-y-auto bg-slate-50/70 p-4 md:p-6 pb-24 md:pb-6'
-          }`}
+          className={`flex-1 ${isDetailViewOpen
+            ? 'p-0 overflow-hidden bg-slate-50 flex flex-col'
+            : 'overflow-y-auto bg-slate-50/70 p-4 md:p-6 pb-24 md:pb-6'
+            }`}
         >
           {renderSubView()}
         </main>
@@ -1900,9 +1896,8 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
                         onMouseEnter={() => prefetchTab(item.id)}
                         onFocus={() => prefetchTab(item.id)}
                         onTouchStart={() => prefetchTab(item.id)}
-                        className={`flex flex-col items-center gap-1 py-1 px-3 rounded-xl transition-all ${
-                          isActive ? 'text-[#2b64f6] font-extrabold scale-105' : 'text-slate-400 hover:text-slate-600'
-                        }`}
+                        className={`flex flex-col items-center gap-1 py-1 px-3 rounded-xl transition-all ${isActive ? 'text-[#2b64f6] font-extrabold scale-105' : 'text-slate-400 hover:text-slate-600'
+                          }`}
                       >
                         <Icon className={`w-5 h-5 ${isActive ? 'stroke-[2.5px]' : 'stroke-[2px]'}`} />
                         <span className="text-[9px] font-bold tracking-tight">{item.label}</span>

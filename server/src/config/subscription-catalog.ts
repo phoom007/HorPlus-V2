@@ -118,5 +118,16 @@ export const CANONICAL_SUBSCRIPTION_CATALOG: SubscriptionCatalogRelease = {
       enabled: true,
       maximumRedemptionsPerDormitory: 1,
     },
+    {
+      code: 'HNY2027',
+      normalizedCode: 'HNY2027',
+      extensionDays: 0,
+      benefitType: 'PERCENT_DISCOUNT',
+      benefitUnit: 'PERCENT',
+      benefitValue: 10,
+      globalMaxRedemptions: 50,
+      enabled: true,
+      maximumRedemptionsPerDormitory: 1,
+    },
   ],
 };

@@ -216,6 +216,7 @@ export class SubscriptionIntentService {
       let promoBenefitValue: number | null = null;
       let promoBenefitLabel: string | null = null;
       let validatedPromoCode: string | null = null;
+      let promoDiscountAmount = new Prisma.Decimal(0);
       if (params.promoCode && params.promoCode.trim()) {
         const promoRes = await promoService.validatePromo(params.promoCode, userId, dormitoryId, tx);
         if (promoRes.valid && promoRes.eligible) {
@@ -224,6 +225,15 @@ export class SubscriptionIntentService {
           promoBenefitValue = promoRes.benefitValue ?? (promoBenefitUnit === 'MONTH' ? promoRes.promoBonusMonths : 0);
           promoBenefitLabel = promoRes.benefitLabel || (promoBenefitUnit === 'DAY' ? `${promoBenefitValue} วัน` : `${promoBenefitValue} เดือน`);
           validatedPromoCode = promoRes.code;
+
+          if (promoRes.benefitType === 'PERCENT_DISCOUNT' && promoBenefitValue && promoBenefitValue > 0) {
+            const discountRate = new Prisma.Decimal(promoBenefitValue).dividedBy(100);
+            promoDiscountAmount = priceAfterTrial.times(discountRate).round();
+            priceAfterTrial = priceAfterTrial.minus(promoDiscountAmount);
+            if (priceAfterTrial.lessThan(new Prisma.Decimal(0))) {
+              priceAfterTrial = new Prisma.Decimal(0);
+            }
+          }
         }
       }
 
@@ -301,11 +311,11 @@ export class SubscriptionIntentService {
           coinRequested,
           coinApplied,
           finalPayableAmount,
-          checkoutVersion: 2, // Explicit Version 2 for LOCAL-07 lifecycle
           isZeroPayValidated: isZeroPay,
+          checkoutVersion: 2, // Explicit Version 2 for LOCAL-07 lifecycle
           currencySnapshot: 'THB',
           catalogVersion: 2,
-          expiresAt: new Date(Date.now() + 15 * 60 * 1000), // 15 minutes quote TTL
+          expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24h validity
         },
       });
 
@@ -314,6 +324,7 @@ export class SubscriptionIntentService {
         dormitoryId,
         packageId: targetPackageId,
         isFreePlan,
+        packageName: pkg?.plan?.name || (isFreePlan ? 'HorPlus Free' : 'HorPlus PRO'),
         durationMonths,
         basePrice: basePrice.toFixed(2),
         referencePrice: referencePrice ? referencePrice.toFixed(2) : null,
@@ -325,6 +336,7 @@ export class SubscriptionIntentService {
         promoBenefitUnit,
         promoBenefitValue,
         promoBenefitLabel,
+        promoDiscountAmount: promoDiscountAmount.toFixed(2),
         referralCode: validatedReferralCode,
         totalAvailableCoin,
         coinApplied,

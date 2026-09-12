@@ -91,7 +91,7 @@ export interface RawMeterDirtyRowInput {
   waterCurr?: number | string | null;
   elecPrev?: number | string | null;
   elecCurr?: number | string | null;
-  peopleCount?: number | null;
+  peopleCount?: number | string | null;
   manualOutstandingAmount?: number | string | null;
   overdueAmount?: number | string | null; // UI alias
   otherFees?: Array<{ description: string; amount: number | string }>;

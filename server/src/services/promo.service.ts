@@ -183,16 +183,23 @@ export class PromoService {
       });
 
       if (existingRedemption) {
-        return {
-          valid: false,
-          eligible: false,
-          code: normalizedCode,
-          trialMonths: initialTrialMonths,
-          promoBonusMonths: 0,
-          totalTrialMonths: initialTrialMonths,
-          message: 'บัญชีนี้เคยใช้สิทธิ์โปรโมชันนี้ไปแล้ว',
-          errorCode: 'PROMO_ALREADY_REDEEMED',
-        };
+        const isCurrentDormHolder =
+          promo.benefitType === 'PERCENT_DISCOUNT' &&
+          dormitoryId &&
+          existingRedemption.dormitoryId === dormitoryId;
+
+        if (!isCurrentDormHolder) {
+          return {
+            valid: false,
+            eligible: false,
+            code: normalizedCode,
+            trialMonths: initialTrialMonths,
+            promoBonusMonths: 0,
+            totalTrialMonths: initialTrialMonths,
+            message: 'บัญชีนี้เคยใช้สิทธิ์โปรโมชันนี้ไปแล้ว',
+            errorCode: 'PROMO_ALREADY_REDEEMED',
+          };
+        }
       }
     }
 
@@ -214,7 +221,7 @@ export class PromoService {
     }
 
     // Check benefit configuration validity
-    if (promo.benefitType !== 'TRIAL_EXTENSION' || promo.benefitValue <= 0) {
+    if ((promo.benefitType !== 'TRIAL_EXTENSION' && promo.benefitType !== 'PERCENT_DISCOUNT') || promo.benefitValue <= 0) {
       return {
         valid: false,
         eligible: false,
@@ -228,26 +235,30 @@ export class PromoService {
     }
 
     // Canonical Promo Unit Calculation:
+    // If benefitType is PERCENT_DISCOUNT: unit is PERCENT, bonus months is 0, discount percentage applied during quote
     // If unit is MONTH: promoBonusMonths equals benefitValue (e.g. 2 months)
-    // If unit is DAY: promoBonusMonths is 0 (exact days duration applied during activation, no fabricated rounded months)
-    const promoUnit = (promo.benefitUnit || 'MONTH').toUpperCase();
+    // If unit is DAY: promoBonusMonths is 0 (exact days duration applied during activation)
+    const isDiscount = promo.benefitType === 'PERCENT_DISCOUNT';
+    const promoUnit = (promo.benefitUnit || (isDiscount ? 'PERCENT' : 'MONTH')).toUpperCase();
     const promoValue = promo.benefitValue;
-    const promoBonusMonths = promoUnit === 'MONTH' ? promoValue : 0;
+    const promoBonusMonths = (!isDiscount && promoUnit === 'MONTH') ? promoValue : 0;
     const totalTrialMonths = initialTrialMonths + promoBonusMonths;
-    const unitLabel = promoUnit === 'DAY' ? `${promoValue} วัน` : `${promoValue} เดือน`;
+    const unitLabel = isDiscount ? `ส่วนลด ${promoValue}%` : (promoUnit === 'DAY' ? `${promoValue} วัน` : `${promoValue} เดือน`);
 
     return {
       valid: true,
       eligible: true,
       code: normalizedCode,
       benefitType: promo.benefitType,
-      benefitUnit: promo.benefitUnit,
+      benefitUnit: promoUnit,
       benefitValue: promo.benefitValue,
       benefitLabel: unitLabel,
       trialMonths: initialTrialMonths,
       promoBonusMonths: promoBonusMonths,
       totalTrialMonths: totalTrialMonths,
-      message: `ใช้รหัสโปรโมชัน ${normalizedCode} สำเร็จ (รับสิทธิ์เพิ่ม ${unitLabel})`,
+      message: isDiscount
+        ? `ใช้รหัสโปรโมชัน ${normalizedCode} สำเร็จ (รับ${unitLabel})`
+        : `ใช้รหัสโปรโมชัน ${normalizedCode} สำเร็จ (รับสิทธิ์เพิ่ม ${unitLabel})`,
       promoCodeEntity: promo,
     };
   }
@@ -294,7 +305,7 @@ export class PromoService {
       }
 
       if (
-        promo.benefitType !== 'TRIAL_EXTENSION' ||
+        (promo.benefitType !== 'TRIAL_EXTENSION' && promo.benefitType !== 'PERCENT_DISCOUNT') ||
         typeof promo.benefitValue !== 'number' ||
         promo.benefitValue <= 0
       ) {
@@ -325,7 +336,7 @@ export class PromoService {
       });
 
       if (existingAccountRedemption) {
-        throw new AppError('บัญชีนี้เคยใช้สิทธิ์โปรโมชันนี้ไปแล้ว (Promo code has already been redeemed by this account / PROMO_ALREADY_REDEEMED)', 409, 'PROMO_ALREADY_REDEEMED');
+        throw new AppError('บัญชีนี้เคยใช้สิทธิ์โปรโมชันนี้ไปแล้ว', 409, 'PROMO_ALREADY_REDEEMED');
       }
 
       // 3. Check dormitory-level redemption if dormitoryId provided
@@ -337,7 +348,7 @@ export class PromoService {
           },
         });
         if (existingDormRedemption) {
-          throw new AppError('หอพักนี้เคยใช้สิทธิ์โปรโมชันนี้ไปแล้ว (Promo code has already been redeemed for this dormitory / PROMO_ALREADY_REDEEMED)', 409, 'PROMO_ALREADY_REDEEMED');
+          throw new AppError('หอพักนี้เคยใช้สิทธิ์โปรโมชันนี้ไปแล้ว', 409, 'PROMO_ALREADY_REDEEMED');
         }
       }
 
@@ -349,12 +360,13 @@ export class PromoService {
         },
       });
 
-      const promoUnit = (lockedPromo.benefitUnit || 'MONTH').toUpperCase();
+      const isDiscount = lockedPromo.benefitType === 'PERCENT_DISCOUNT';
+      const promoUnit = (lockedPromo.benefitUnit || (isDiscount ? 'PERCENT' : 'MONTH')).toUpperCase();
       const promoValue = lockedPromo.benefitValue ?? (promoUnit === 'DAY' ? (lockedPromo.extensionDays ?? 15) : 2);
-      const bonusMonths = promoUnit === 'MONTH' ? promoValue : 0;
-      const bonusDays = promoUnit === 'DAY' ? promoValue : 0;
+      const bonusMonths = (!isDiscount && promoUnit === 'MONTH') ? promoValue : 0;
+      const bonusDays = (!isDiscount && promoUnit === 'DAY') ? promoValue : 0;
 
-      let newExpiresAt = applyPromoDuration(now, lockedPromo);
+      let newExpiresAt = isDiscount ? now : applyPromoDuration(now, lockedPromo);
       let previousExpiresAt: Date = now;
       let subscriptionId: string = '';
 
@@ -373,48 +385,57 @@ export class PromoService {
 
           const isSyntheticFreeExpiry = sub.plan?.code === 'FREE' || (sub.expiresAt && (sub.expiresAt.getTime() - now.getTime() > 365 * 10 * 86400 * 1000));
 
-          if (!isSyntheticFreeExpiry && sub.expiresAt && sub.expiresAt > now) {
+          if (isDiscount) {
+            newExpiresAt = sub.expiresAt;
+          } else if (!isSyntheticFreeExpiry && sub.expiresAt && sub.expiresAt > now) {
             newExpiresAt = applyPromoDuration(sub.expiresAt, lockedPromo);
           } else {
             newExpiresAt = applyPromoDuration(now, lockedPromo);
           }
 
           const currentStatus = (sub.status === 'ACTIVE' || sub.status === 'TRIAL') ? sub.status : 'TRIAL';
-          await tx.dormitorySubscription.update({
-            where: { id: sub.id },
-            data: {
-              planId: proPlan?.id || sub.planId,
-              status: currentStatus,
-              expiresAt: newExpiresAt,
-              trialExpiresAt: currentStatus === 'TRIAL' ? newExpiresAt : sub.trialExpiresAt,
-              promoExtendedAt: now,
-              updatedAt: now,
-            },
-          });
+          if (!isDiscount) {
+            await tx.dormitorySubscription.update({
+              where: { id: sub.id },
+              data: {
+                planId: proPlan?.id || sub.planId,
+                status: currentStatus,
+                expiresAt: newExpiresAt,
+                trialExpiresAt: currentStatus === 'TRIAL' ? newExpiresAt : sub.trialExpiresAt,
+                promoExtendedAt: now,
+                updatedAt: now,
+              },
+            });
 
-          await tx.subscriptionStatusHistory.create({
-            data: {
-              subscriptionId: sub.id,
-              dormitoryId,
-              previousPlanId: sub.planId,
-              newPlanId: proPlan?.id || sub.planId,
-              previousStatus: sub.status,
-              newStatus: currentStatus,
-              reason: promoUnit === 'DAY' ? 'PROMO_EXTENSION_DAYS' : 'PROMO_EXTENSION_CALENDAR_MONTHS',
-              actorId: userId,
-            },
-          });
+            await tx.subscriptionStatusHistory.create({
+              data: {
+                subscriptionId: sub.id,
+                dormitoryId,
+                previousPlanId: sub.planId,
+                newPlanId: proPlan?.id || sub.planId,
+                previousStatus: sub.status,
+                newStatus: currentStatus,
+                reason: promoUnit === 'DAY' ? 'PROMO_EXTENSION_DAYS' : 'PROMO_EXTENSION_CALENDAR_MONTHS',
+                actorId: userId,
+              },
+            });
+          }
         } else {
+          const freePlan = await tx.subscriptionPlan.findUnique({ where: { code: 'FREE' } });
+          const planToUse = (isDiscount && freePlan) ? freePlan : proPlan!;
+          const effectiveStatus = isDiscount ? 'ACTIVE' : 'TRIAL';
+          const effectiveExpiry = isDiscount ? new Date(now.getTime() + 365 * 10 * 86400 * 1000) : newExpiresAt;
+
           sub = await tx.dormitorySubscription.create({
             data: {
               dormitoryId,
-              planId: proPlan!.id,
-              status: 'TRIAL',
+              planId: planToUse.id,
+              status: effectiveStatus,
               startedAt: now,
-              expiresAt: newExpiresAt,
-              trialStartedAt: now,
-              trialExpiresAt: newExpiresAt,
-              promoExtendedAt: now,
+              expiresAt: effectiveExpiry,
+              trialStartedAt: isDiscount ? null : now,
+              trialExpiresAt: isDiscount ? null : newExpiresAt,
+              promoExtendedAt: isDiscount ? null : now,
             },
           });
           previousExpiresAt = now;
@@ -434,16 +455,19 @@ export class PromoService {
         });
       }
 
-      const unitText = promoUnit === 'DAY' ? `${promoValue} วัน` : `${promoValue} เดือน`;
+      const unitText = isDiscount ? `ส่วนลด ${promoValue}%` : (promoUnit === 'DAY' ? `${promoValue} วัน` : `${promoValue} เดือน`);
 
       return {
         status: 200,
         body: {
           success: true,
-          message: `ใช้รหัสโปรโมชัน ${lockedPromo.code} สำเร็จ (รับสิทธิ์เพิ่ม ${unitText})`,
+          message: isDiscount
+            ? `ใช้รหัสโปรโมชัน ${lockedPromo.code} สำเร็จ (รับ${unitText})`
+            : `ใช้รหัสโปรโมชัน ${lockedPromo.code} สำเร็จ (รับสิทธิ์เพิ่ม ${unitText})`,
           data: {
             promoCode: lockedPromo.code,
-            benefitUnit: lockedPromo.benefitUnit,
+            benefitType: lockedPromo.benefitType,
+            benefitUnit: promoUnit,
             benefitValue: lockedPromo.benefitValue,
             benefitLabel: unitText,
             bonusMonths,

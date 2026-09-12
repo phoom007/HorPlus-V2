@@ -26,6 +26,7 @@ import { healthRouter } from './health.routes.js';
 import { createNotificationRouter, createTenantNotificationRouter } from './notification.routes.js';
 import { createTenantPortalRouter } from './tenant-portal.routes.js';
 import { createSubscriptionRouter } from './subscription.routes.js';
+import { createBillboardRouter } from './billboard.routes.js';
 import { createStaffRoutes } from './staff.routes.js';
 import { createLineOaRoutes } from './line-oa.routes.js';
 import { createLinePlatformAdapter } from '../services/line-adapter-factory.js';
@@ -98,6 +99,7 @@ export function createApiRouter(deps: AppApiDependencies | AuthenticationService
   router.use('/subscription', createSubscriptionRouter(authService));
   router.use('/subscription', createSubscriptionQuoteRouter(authService));
   router.use('/referral', createReferralRouter(authService));
+  router.use('/billboard', createBillboardRouter());
   router.use('/', createUserRouter(authService));
 
   const prisma = getPrismaClient();

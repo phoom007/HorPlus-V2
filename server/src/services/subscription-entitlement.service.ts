@@ -309,7 +309,17 @@ export class SubscriptionEntitlementService {
       );
 
       const entitlements = await this.getEffectiveEntitlements(params.dormitoryId, now, tx);
-      const currentSub = await this.getCurrentSubscription(params.dormitoryId, tx);
+      let currentSub: any = null;
+      try {
+        currentSub = await this.getCurrentSubscription(params.dormitoryId, tx);
+      } catch {
+        currentSub = {
+          dormitoryId: params.dormitoryId,
+          plan: { code: 'FREE', name: 'HorPlus Free', type: 'FREE', roomLimit: 10 },
+          status: 'ACTIVE',
+          expiresAt: null,
+        };
+      }
 
       return {
         status: 200,
@@ -317,6 +327,7 @@ export class SubscriptionEntitlementService {
           message: 'Promo code redeemed successfully',
           data: currentSub,
           entitlements,
+          promoResult: promoResult.body?.data || promoResult.body,
         },
       };
     };
