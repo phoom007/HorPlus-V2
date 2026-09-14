@@ -222,6 +222,7 @@ export interface PaymentsOwnerViewProps {
   billingCycles?: BillingCycle[];
   onAddLog?: (action: string, details: string, type: string, id: string) => void;
   onUpdateBills?: () => void;
+  onNavigateToLineConfig?: () => void;
 }
 
 /* =========================================================================
@@ -659,6 +660,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
   billingCycles = [],
   onAddLog = (_a?: string, _b?: string, _c?: string, _d?: string) => {},
   onUpdateBills = () => {},
+  onNavigateToLineConfig,
 }) => {
   const queryClient = useQueryClient();
 
@@ -3574,6 +3576,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
         onAddLog={onAddLog}
         targetScrollTenantId={targetScrollTenantId}
         onShowToast={(msg) => triggerToast(msg)}
+        onNavigateToLineConfig={onNavigateToLineConfig}
       />
 
       {/* Slip Viewer Overlay */}

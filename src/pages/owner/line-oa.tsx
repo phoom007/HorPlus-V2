@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   MessageSquare,
   Copy,
+  Check,
   CheckCircle2,
   AlertCircle,
   X,
@@ -12,6 +13,8 @@ import {
   ChevronLeft,
   Settings,
   ShieldCheck,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import { Task009ApiAdapter } from '../../data/adapters/task009';
 import { LineLogo } from '../../components/LineLogo';
@@ -19,26 +22,45 @@ import { LineLogo } from '../../components/LineLogo';
 interface OwnerLineOaPageProps {
   dormitoryId?: string;
   onNavigateBack?: () => void;
+  isModal?: boolean;
+  onClose?: () => void;
   onAddLog?: (action: string, details: string, type: string, id: string) => void;
 }
 
 export const OwnerLineOaPage: React.FC<OwnerLineOaPageProps> = ({
   dormitoryId,
   onNavigateBack,
+  isModal,
+  onClose,
   onAddLog,
 }) => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [testingLine, setTestingLine] = useState(false);
   const [testingWebhook, setTestingWebhook] = useState(false);
   const [rotatingKey, setRotatingKey] = useState(false);
   const [showHelpModal, setShowHelpModal] = useState(false);
   const [copiedWebhook, setCopiedWebhook] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [lineStatusMsg, setLineStatusMsg] = useState<{ type: 'success' | 'error'; msg: string } | null>(null);
+  const [isEditingCredentials, setIsEditingCredentials] = useState(false);
 
   // Form inputs
   const [channelId, setChannelId] = useState('');
   const [channelSecret, setChannelSecret] = useState('');
+  const [showSecret, setShowSecret] = useState(true);
+  const [maskedDisplay, setMaskedDisplay] = useState('');
+  const [hasOpenedConsoleTab, setHasOpenedConsoleTab] = useState(false);
+  const maskTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (maskTimerRef.current) {
+        clearTimeout(maskTimerRef.current);
+      }
+    };
+  }, []);
 
   // Status & Preferences
   const [config, setConfig] = useState<{
@@ -91,7 +113,7 @@ export const OwnerLineOaPage: React.FC<OwnerLineOaPageProps> = ({
     remainingQuota: 30,
   });
 
-  const dormId = dormitoryId || localStorage.getItem('horplus_current_dormitory_id') || 'dorm-fresh-01';
+  const dormId = dormitoryId || (typeof window !== 'undefined' ? (localStorage.getItem('horplus_current_dormitory_id') || localStorage.getItem('selected_dormitory_id')) : '') || 'dorm-fresh-01';
 
   const loadConfig = async () => {
     try {
@@ -114,36 +136,74 @@ export const OwnerLineOaPage: React.FC<OwnerLineOaPageProps> = ({
     loadConfig();
   }, [dormId]);
 
-  const handleSaveCredentials = async () => {
+  const handleTestLineConnection = async () => {
     if (!channelId.trim() || (!channelSecret.trim() && !config.hasChannelSecret)) {
-      setErrorMessage('กรุณาระบุ LINE Channel ID และ Channel Secret');
+      setLineStatusMsg({ type: 'error', msg: 'กรุณากรอก Channel ID และ Channel Secret ให้ครบถ้วน' });
       return;
     }
 
-    try {
-      setSaving(true);
-      setErrorMessage(null);
-      setSuccessMessage(null);
+    setTestingLine(true);
+    setLineStatusMsg(null);
+    setErrorMessage(null);
+    setSuccessMessage(null);
 
-      const res = await Task009ApiAdapter.updateLineOaConfig(dormId, {
+    try {
+      // 1. Update & verify credentials
+      const updateRes = await Task009ApiAdapter.updateLineOaConfig(dormId, {
         channelId: channelId.trim(),
         channelSecret: channelSecret.trim() || undefined,
       });
 
-      if (res.error) {
-        setErrorMessage(res.error.message || 'เกิดข้อผิดพลาดในการตรวจสอบและบันทึก LINE OA');
-      } else if (res.data) {
-        setConfig(res.data);
-        setChannelSecret('');
-        setSuccessMessage('ตรวจสอบและบันทึกข้อมูล LINE OA สำเร็จ!');
+      if (updateRes.error) {
+        setLineStatusMsg({
+          type: 'error',
+          msg: updateRes.error.message || 'ไม่สามารถเชื่อมต่อ LINE OA ได้ กรุณาตรวจสอบ Channel ID และ Channel Secret',
+        });
+        return;
+      }
+
+      if (updateRes.data) {
+        let currentConf = updateRes.data;
+        const effectiveWebhook = currentConf.webhookUrl || `${typeof window !== 'undefined' ? window.location.origin : ''}/api/v1/line/webhook/${dormId}`;
+        if (!currentConf.webhookUrl) {
+          currentConf = { ...currentConf, webhookUrl: effectiveWebhook };
+        }
+        setConfig(currentConf);
         if (onAddLog) {
           onAddLog('ตั้งค่า LINE Official Account', 'อัปเดตข้อมูลเชื่อมต่อ LINE OA สำเร็จ', 'LineOA', dormId);
         }
+
+        // 2. Also test webhook endpoint readiness if webhook is set
+        try {
+          const webhookTestRes = await Task009ApiAdapter.testWebhookEndpoint(dormId);
+          if (webhookTestRes.data) {
+            currentConf = {
+              ...webhookTestRes.data,
+              webhookUrl: webhookTestRes.data.webhookUrl || effectiveWebhook,
+            };
+            setConfig(currentConf);
+          }
+        } catch {
+          // Webhook test may fail if owner hasn't pasted it in LINE Developers Console yet
+        }
+
+        if (currentConf.isReady) {
+          setLineStatusMsg({ type: 'success', msg: 'เชื่อมต่อ LINE OA และ Webhook สมบูรณ์แล้ว!' });
+          setIsEditingCredentials(false);
+        } else {
+          setLineStatusMsg({
+            type: 'success',
+            msg: '',
+          });
+        }
       }
     } catch (err: any) {
-      setErrorMessage(err.message || 'เกิดข้อผิดพลาดในการเชื่อมต่อ LINE OA');
+      setLineStatusMsg({
+        type: 'error',
+        msg: err.message || 'เกิดข้อผิดพลาดในการตรวจสอบสถานะ LINE OA',
+      });
     } finally {
-      setSaving(false);
+      setTestingLine(false);
     }
   };
 
@@ -201,6 +261,12 @@ export const OwnerLineOaPage: React.FC<OwnerLineOaPageProps> = ({
         setConfig(res.data);
         setChannelId('');
         setChannelSecret('');
+        setMaskedDisplay('');
+        if (maskTimerRef.current) {
+          clearTimeout(maskTimerRef.current);
+          maskTimerRef.current = null;
+        }
+        setIsEditingCredentials(false);
         setSuccessMessage('ยกเลิกการเชื่อมต่อ LINE OA เรียบร้อยแล้ว');
         if (onAddLog) {
           onAddLog('ยกเลิกเชื่อมต่อ LINE OA', 'ยกเลิกการเชื่อมต่อ LINE Official Account', 'LineOA', dormId);
@@ -231,69 +297,58 @@ export const OwnerLineOaPage: React.FC<OwnerLineOaPageProps> = ({
     }
   };
 
-  // Status Calculation
-  let statusBadge = {
-    label: 'ยังไม่ได้ตั้งค่า (NOT CONFIGURED)',
-    color: 'bg-slate-100 text-slate-700 border-slate-200',
-    description: 'ยังไม่ได้เชื่อมต่อ Messaging API',
-  };
-
-  if (config.isReady) {
-    statusBadge = {
-      label: 'พร้อมใช้งาน (READY)',
-      color: 'bg-emerald-100 text-emerald-800 border-emerald-300',
-      description: 'เชื่อมต่อและทดสอบ Webhook สมบูรณ์แล้ว',
-    };
-  } else if (config.credentialsVerified && !config.webhookActive) {
-    statusBadge = {
-      label: 'Webhook ยังไม่พร้อม (WEBHOOK NOT READY)',
-      color: 'bg-amber-100 text-amber-800 border-amber-300',
-      description: 'ยืนยัน Token แล้ว แต่ Webhook ยังไม่เปิดใช้งาน',
-    };
-  } else if (config.credentialsVerified) {
-    statusBadge = {
-      label: 'ยืนยันสำเร็จ (VERIFIED)',
-      color: 'bg-blue-100 text-blue-800 border-blue-300',
-      description: 'Channel ID และ Secret ถูกต้อง',
-    };
-  } else if (config.channelId && !config.credentialsVerified) {
-    statusBadge = {
-      label: 'ข้อมูลไม่ถูกต้อง (INVALID)',
-      color: 'bg-rose-100 text-rose-800 border-rose-300',
-      description: 'Channel ID หรือ Secret ไม่ถูกต้อง',
-    };
-  }
+  const isConfiguredAndReady = Boolean(config.connected && config.isReady);
+  const showStep6View = !isConfiguredAndReady || isEditingCredentials;
+  const isWebhookReady = Boolean(config.connected || config.credentialsVerified);
+  const effectiveWebhookUrl = config.webhookUrl || (isWebhookReady ? `${typeof window !== 'undefined' ? window.location.origin : ''}/api/v1/line/webhook/${dormId}` : '');
+  const effectiveChannelId = (channelId || config.channelId || '').trim();
 
   return (
     <div className="p-4 sm:p-6 max-w-4xl mx-auto space-y-6 pb-24">
-      {/* Header Bar */}
-      <div className="flex items-center justify-between pb-4 border-b border-slate-200">
-        <div className="flex items-center gap-3">
-          <button
-            onClick={onNavigateBack || (() => window.history.back())}
-            className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors cursor-pointer"
-            title="ย้อนกลับ"
-          >
-            <ChevronLeft className="w-5 h-5" />
-          </button>
-          <div>
-            <h1 className="text-xl font-extrabold text-slate-900 flex items-center gap-2">
-              <LineLogo className="w-6 h-6 shrink-0" />
-              จัดการ LINE Official Account (LINE OA)
+      {/* Header Bar (LOA-04 Responsive Layout across 3 devices) */}
+      <div className="flex items-center justify-between gap-3 pb-4 border-b border-slate-200">
+        <div className="flex items-center gap-2.5 min-w-0 flex-1">
+          {!isModal && (
+            <button
+              onClick={onNavigateBack || (() => window.history.back())}
+              className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors cursor-pointer shrink-0"
+              title="ย้อนกลับ"
+            >
+              <ChevronLeft className="w-5 h-5" />
+            </button>
+          )}
+          <div className="min-w-0">
+            <h1 className="text-base sm:text-lg font-extrabold text-slate-900 flex items-center gap-2 truncate">
+              <LineLogo className="w-5 h-5 sm:w-6 sm:h-6 shrink-0" />
+              <span className="truncate">ตั้งค่า LINE Official Account (LINE OA)</span>
             </h1>
-            <p className="text-xs text-slate-500 mt-0.5">
+            <p className="text-[11px] sm:text-xs text-slate-500 mt-0.5 truncate hidden xs:block">
               ตั้งค่าการเชื่อมต่อ LINE Messaging API และการแจ้งเตือนอัตโนมัติ
             </p>
           </div>
         </div>
 
-        <button
-          onClick={() => setShowHelpModal(true)}
-          className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
-        >
-          <HelpCircle className="w-4 h-4 text-indigo-600" />
-          ดูวิธีตั้งค่า LINE OA
-        </button>
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            onClick={() => setShowHelpModal(true)}
+            className="px-2.5 sm:px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+            title="ดูวิธีตั้งค่า LINE OA"
+          >
+            <HelpCircle className="w-4 h-4 text-indigo-600 shrink-0" />
+            <span className="hidden sm:inline">ดูวิธีตั้งค่า LINE OA</span>
+            <span className="sm:hidden font-extrabold">วิธีตั้งค่า</span>
+          </button>
+
+          {isModal && (
+            <button
+              onClick={onClose || onNavigateBack}
+              className="p-1.5 sm:p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-500 hover:text-slate-800 transition-colors cursor-pointer"
+              title="ปิดหน้าต่าง"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Notifications / Alerts */}
@@ -317,188 +372,483 @@ export const OwnerLineOaPage: React.FC<OwnerLineOaPageProps> = ({
         </div>
       )}
 
-      {/* 1. Status Card */}
-      <div className="p-5 bg-white rounded-3xl border border-slate-200/80 shadow-xs space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div>
-            <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 block mb-1">
-              สถานะการเชื่อมต่อ
-            </span>
-            <div className="flex items-center gap-2">
-              <span className={`px-3 py-1 rounded-full text-xs font-black border ${statusBadge.color}`}>
-                {statusBadge.label}
+      {/* VIEW A: Step 6 Credentials Form (LOA-05 De-cluttered without heavy outer green box) */}
+      {showStep6View && (
+        <div className="bg-white p-4 sm:p-6 rounded-3xl border border-slate-200/80 shadow-xs space-y-5">
+
+          {/* Bot Profile Header Card */}
+          <div className="p-3 sm:p-4 rounded-2xl bg-slate-50 border border-slate-200/70 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-10 h-10 rounded-xl bg-white border border-slate-200 flex items-center justify-center shrink-0 shadow-2xs overflow-hidden">
+                {config.connected && config.botPictureUrl ? (
+                  <img
+                    src={config.botPictureUrl}
+                    alt={config.botDisplayName || 'LINE OA'}
+                    className="w-full h-full object-cover"
+                    referrerPolicy="no-referrer"
+                  />
+                ) : (
+                  <LineLogo className={`w-6 h-6 shrink-0 rounded-xs ${!config.connected ? 'opacity-60 grayscale' : ''}`} />
+                )}
+              </div>
+              <div className="min-w-0">
+                <h4 className="text-xs sm:text-sm font-black text-slate-800 truncate">
+                  {config.connected
+                    ? (config.botDisplayName || 'LINE Official Account')
+                    : 'ยังไม่ได้เชื่อมต่อ LINE Official Account'}
+                </h4>
+                <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
+                  <span className="text-[11px] text-slate-500 font-bold">LINE ID:</span>
+                  <span className={`text-[11px] font-black px-2 py-0.5 rounded-md ${config.connected
+                    ? 'text-emerald-800 bg-emerald-100/90'
+                    : 'text-slate-500 bg-slate-100'
+                    }`}>
+                    {config.connected
+                      ? (config.lineOaId || 'เชื่อมต่อแล้ว')
+                      : 'ยังไม่ได้ตรวจสอบ'}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div className="shrink-0">
+              <span className={`px-2.5 py-1 rounded-full text-xs font-black flex items-center gap-1.5 whitespace-nowrap shrink-0 ${config.connected
+                ? 'bg-emerald-100 text-emerald-700 border border-emerald-200'
+                : 'bg-slate-100 text-slate-600 border border-slate-200'
+                }`}>
+                <span className={`w-2 h-2 rounded-full shrink-0 ${config.connected ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`} />
+                {config.connected ? 'เชื่อมต่อสำเร็จ' : 'ยังไม่ได้ตรวจสอบ'}
               </span>
-              <span className="text-xs text-slate-500 font-medium">{statusBadge.description}</span>
             </div>
           </div>
 
-          {config.connected && (
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-bold text-slate-600 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200">
-                โควตาเดือนนี้: <strong className="text-emerald-600">{config.remainingQuota}/{config.monthlyQuota}</strong>
+          {/* Form Fields (LOA-07 Concise labels) */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">
+                LINE Channel ID
+              </label>
+              <input
+                type="text"
+                value={channelId}
+                onChange={(e) => {
+                  setChannelId(e.target.value);
+                  setHasOpenedConsoleTab(false);
+                  setLineStatusMsg(null);
+                  setConfig((prev) => ({
+                    ...prev,
+                    connected: false,
+                    isReady: false,
+                    credentialsVerified: false,
+                    botDisplayName: null,
+                    botPictureUrl: null,
+                    lineOaId: null,
+                    webhookUrl: null,
+                  }));
+                }}
+                placeholder="เช่น 1657889900"
+                className="w-full px-3.5 py-2 text-xs bg-slate-50/60 border border-slate-200 rounded-xl focus:bg-white focus:border-emerald-500 outline-none font-bold"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">
+                LINE Channel Secret
+              </label>
+              <div className="relative">
+                <input
+                  type="text"
+                  value={showSecret ? channelSecret : maskedDisplay}
+                  onChange={(e) => {
+                    setLineStatusMsg(null);
+                    setConfig((prev) => ({
+                      ...prev,
+                      connected: false,
+                      isReady: false,
+                      credentialsVerified: false,
+                      botDisplayName: null,
+                      botPictureUrl: null,
+                      lineOaId: null,
+                      webhookUrl: null,
+                    }));
+                    const inputVal = e.target.value;
+
+                    if (showSecret) {
+                      setChannelSecret(inputVal);
+                      setMaskedDisplay('•'.repeat(inputVal.length));
+                      return;
+                    }
+
+                    // Masked mode with last-character preview
+                    if (maskTimerRef.current) {
+                      clearTimeout(maskTimerRef.current);
+                      maskTimerRef.current = null;
+                    }
+
+                    if (!inputVal) {
+                      setChannelSecret('');
+                      setMaskedDisplay('');
+                      return;
+                    }
+
+                    const prevLen = maskedDisplay.length;
+                    const newLen = inputVal.length;
+                    let newSecret = channelSecret;
+
+                    if (newLen > prevLen) {
+                      // Characters added (typing or pasting)
+                      const addedCount = newLen - prevLen;
+                      const addedText = inputVal.slice(-addedCount);
+
+                      if (!inputVal.includes('•')) {
+                        // Pasted full string or replaced selection without bullets
+                        newSecret = inputVal;
+                      } else {
+                        newSecret = channelSecret + addedText;
+                      }
+
+                      setChannelSecret(newSecret);
+
+                      // Show last character before turning into •
+                      const lastChar = newSecret.slice(-1);
+                      const masked = '•'.repeat(newSecret.length - 1) + lastChar;
+                      setMaskedDisplay(masked);
+
+                      maskTimerRef.current = setTimeout(() => {
+                        setMaskedDisplay('•'.repeat(newSecret.length));
+                      }, 800);
+                    } else if (newLen < prevLen) {
+                      // Characters deleted (backspace or cut)
+                      const deletedCount = prevLen - newLen;
+                      newSecret = channelSecret.slice(0, Math.max(0, channelSecret.length - deletedCount));
+                      setChannelSecret(newSecret);
+                      setMaskedDisplay('•'.repeat(newSecret.length));
+                    } else {
+                      setMaskedDisplay('•'.repeat(newSecret.length));
+                    }
+                  }}
+                  onCopy={(e) => {
+                    if (!showSecret) {
+                      e.preventDefault();
+                    }
+                  }}
+                  onCut={(e) => {
+                    if (!showSecret) {
+                      e.preventDefault();
+                    }
+                  }}
+                  placeholder={config.hasChannelSecret ? '(บันทึกไว้แล้ว - กรอกใหม่เฉพาะเมื่อต้องการเปลี่ยน)' : 'e4d8f9c2a1b3c4d5e6f7...'}
+                  className="w-full pl-3.5 pr-10 py-2 text-xs bg-slate-50/60 border border-slate-200 rounded-xl focus:bg-white focus:border-emerald-500 outline-none font-mono text-xs"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (maskTimerRef.current) {
+                      clearTimeout(maskTimerRef.current);
+                      maskTimerRef.current = null;
+                    }
+                    if (showSecret) {
+                      setShowSecret(false);
+                      setMaskedDisplay('•'.repeat(channelSecret.length));
+                    } else {
+                      setShowSecret(true);
+                    }
+                  }}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
+                  title={showSecret ? 'กำลังแสดงรหัส (คลิกเพื่อซ่อน)' : 'กำลังซ่อนรหัส (คลิกเพื่อแสดง)'}
+                  aria-label={showSecret ? 'กำลังแสดงรหัส (คลิกเพื่อซ่อน)' : 'กำลังซ่อนรหัส (คลิกเพื่อแสดง)'}
+                >
+                  {showSecret ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Webhook URL Section (LOA-06 Immediate display, LOA-07 Concise copywriting & LOA-23 Label Parity) */}
+          <div className="pt-1">
+            <label className="block text-xs font-bold text-slate-700 mb-1">
+              <span>LINE Webhook URL </span>
+              <span className="text-[11px] font-normal text-slate-400">
+                (นำ Webhook URL ไปใส่และเปิด Use Webhook ใน{' '}
+                <a
+                  href={
+                    config.connected && effectiveChannelId
+                      ? `https://developers.line.biz/console/channel/${effectiveChannelId}/messaging-api`
+                      : 'https://developers.line.biz/console/'
+                  }
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-emerald-700 hover:text-emerald-800 font-bold underline decoration-emerald-400 inline-flex items-center gap-0.5 transition-colors"
+                  title={
+                    config.connected && effectiveChannelId
+                      ? 'เปิด LINE Developers Console > Messaging API ในแท็บใหม่'
+                      : 'เปิด LINE Developers Console ในแท็บใหม่'
+                  }
+                >
+                  <span>LINE Developers Console &gt; Messaging API</span>
+                  <ExternalLink className="w-3 h-3 text-emerald-600 shrink-0" />
+                </a>
+                )
               </span>
+            </label>
+
+            <div className="flex items-center gap-2">
+              <div className="flex-1 relative">
+                <input
+                  type="text"
+                  readOnly
+                  value={isWebhookReady ? effectiveWebhookUrl : ''}
+                  placeholder="จะแสดงขึ้นหลังกดทดสอบสถานะผ่าน"
+                  className={`w-full px-3.5 py-2 text-xs rounded-xl outline-none font-mono transition-all border ${isWebhookReady
+                    ? 'bg-emerald-50/80 text-emerald-800 border-emerald-300 font-bold select-all'
+                    : 'bg-slate-50 text-slate-400 border-slate-200 cursor-not-allowed placeholder:font-sans placeholder:text-slate-400 placeholder:text-xs'
+                    }`}
+                />
+              </div>
+
               <button
-                onClick={handleDisconnect}
-                disabled={saving}
-                className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-bold rounded-xl border border-rose-200 transition-colors cursor-pointer flex items-center gap-1.5"
+                type="button"
+                disabled={!isWebhookReady}
+                onClick={() => {
+                  if (effectiveWebhookUrl) {
+                    navigator.clipboard.writeText(effectiveWebhookUrl);
+                    setCopiedWebhook(true);
+                    setTimeout(() => setCopiedWebhook(false), 2000);
+
+                    // LOA-13: Open LINE Developers Console Messaging API in new tab after 2 seconds on first click if Channel ID is present
+                    if (!hasOpenedConsoleTab && effectiveChannelId) {
+                      setHasOpenedConsoleTab(true);
+                      setTimeout(() => {
+                        window.open(
+                          `https://developers.line.biz/console/channel/${effectiveChannelId}/messaging-api`,
+                          '_blank',
+                          'noopener,noreferrer'
+                        );
+                      }, 2000);
+                    }
+                  }
+                }}
+                className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shrink-0 shadow-2xs ${isWebhookReady
+                  ? copiedWebhook
+                    ? 'bg-emerald-100 text-emerald-700 border border-emerald-300'
+                    : 'bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer active:scale-95'
+                  : 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed opacity-60'
+                  }`}
+                title={isWebhookReady ? 'คัดลอก Webhook URL' : 'กรุณากรอกข้อมูลและกดทดสอบสถานะก่อน'}
               >
-                <Trash2 className="w-3.5 h-3.5" />
-                ยกเลิกเชื่อมต่อ
+                {copiedWebhook ? (
+                  <>
+                    <Check className="w-3.5 h-3.5 text-emerald-600" />
+                    <span className="text-emerald-700 font-extrabold">คัดลอกแล้ว!</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-3.5 h-3.5 text-slate-200" />
+                    <span>คัดลอก</span>
+                  </>
+                )}
               </button>
             </div>
-          )}
-        </div>
 
-        {config.lineOaId && (
-          <div className="p-3 bg-emerald-50/60 border border-emerald-200/80 rounded-2xl flex items-center justify-between text-xs">
-            <div className="flex items-center gap-2">
-              <ShieldCheck className="w-4 h-4 text-emerald-600" />
-              <span className="font-bold text-slate-700">LINE OA Basic ID:</span>
-              <span className="font-mono font-black text-emerald-800">{config.lineOaId}</span>
-            </div>
-            {config.botDisplayName && (
-              <span className="text-slate-500 font-medium">ชื่อบอท: {config.botDisplayName}</span>
+            {!isWebhookReady ? (
+              <p className="text-[11px] text-amber-600 mt-1.5 flex items-center gap-1 font-medium">
+                <span>* กรุณากรอก Channel ID และ Channel Secret แล้วกดทดสอบตรวจสถานะ</span>
+              </p>
+            ) : (
+              <p className="text-[11px] text-emerald-700 mt-1.5 flex items-center gap-1 font-medium">
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                <span>คัดลอก Webhook URL เพื่อนำไปเชื่อมต่อให้พร้อมใช้งาน</span>
+              </p>
             )}
           </div>
-        )}
-      </div>
 
-      {/* 2. Credentials Configuration */}
-      <div className="p-5 bg-white rounded-3xl border border-slate-200/80 shadow-xs space-y-4">
-        <h2 className="text-sm font-black text-slate-900 flex items-center gap-2">
-          <LineLogo className="w-4 h-4 shrink-0 rounded-xs" />
-          ข้อมูล Messaging API จาก LINE Developers Console
-        </h2>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <div className="space-y-1.5">
-            <label className="block text-xs font-bold text-slate-700">
-              Channel ID <span className="text-rose-500">*</span>
-            </label>
-            <input
-              type="text"
-              value={channelId}
-              onChange={(e) => setChannelId(e.target.value)}
-              placeholder="1657XXXXXX (ตัวเลข 10 หลัก)"
-              className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-800 focus:bg-white focus:border-indigo-500 outline-none transition-all"
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <label className="block text-xs font-bold text-slate-700">
-              Channel Secret <span className="text-rose-500">*</span>{' '}
-              {config.hasChannelSecret && <span className="text-emerald-600 font-semibold">(บันทึกแล้ว)</span>}
-            </label>
-            <input
-              type="password"
-              value={channelSecret}
-              onChange={(e) => setChannelSecret(e.target.value)}
-              placeholder={config.hasChannelSecret ? '••••••••••••••••••••••••••••••••' : 'ป้อน Channel Secret 32 หลัก'}
-              className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-800 focus:bg-white focus:border-indigo-500 outline-none transition-all"
-            />
-          </div>
-        </div>
-
-        <div className="flex justify-end pt-2">
-          <button
-            onClick={handleSaveCredentials}
-            disabled={saving}
-            className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-extrabold rounded-xl transition-all shadow-md shadow-indigo-500/20 cursor-pointer disabled:opacity-50"
-          >
-            {saving ? 'กำลังตรวจสอบและบันทึก...' : 'ตรวจสอบและบันทึกการเชื่อมต่อ'}
-          </button>
-        </div>
-      </div>
-
-      {/* 3. Webhook URL Configuration */}
-      <div className="p-5 bg-white rounded-3xl border border-slate-200/80 shadow-xs space-y-4">
-        <div className="flex items-center justify-between">
-          <h2 className="text-sm font-black text-slate-900 flex items-center gap-2">
-            <LineLogo className="w-4 h-4 shrink-0 rounded-xs" />
-            Webhook URL สำหรับนำไปใส่ใน LINE Developers Console
-          </h2>
-          <button
-            onClick={handleRotateWebhook}
-            disabled={rotatingKey}
-            className="text-xs font-bold text-amber-600 hover:text-amber-700 flex items-center gap-1 cursor-pointer"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${rotatingKey ? 'animate-spin' : ''}`} />
-            หมุนเวียนคีย์ (Rotate Key)
-          </button>
-        </div>
-
-        {config.webhookUrl ? (
-          <div className="space-y-3">
-            <div className="p-3 bg-slate-900 text-emerald-400 font-mono text-xs rounded-2xl break-all border border-slate-800 select-all">
-              {config.webhookUrl}
-            </div>
-
-            <div className="flex flex-col sm:flex-row gap-2">
+          {/* Actions: Test Button & Cancel Edit (F-02) */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2">
+            <div className="flex items-center gap-2">
               <button
-                onClick={() => {
-                  navigator.clipboard.writeText(config.webhookUrl || '');
-                  setCopiedWebhook(true);
-                  setTimeout(() => setCopiedWebhook(false), 2000);
-                }}
-                className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                type="button"
+                onClick={handleTestLineConnection}
+                disabled={testingLine}
+                className="w-full sm:w-auto px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl text-xs font-black transition-all flex items-center justify-center gap-2 cursor-pointer shadow-xs disabled:opacity-50 whitespace-nowrap shrink-0"
               >
-                <Copy className="w-4 h-4" />
-                {copiedWebhook ? 'คัดลอกเรียบร้อย!' : 'คัดลอก Webhook URL'}
+                <RefreshCw className={`w-3.5 h-3.5 shrink-0 ${testingLine ? 'animate-spin' : ''}`} />
+                <span>{testingLine ? 'กำลังทดสอบสัญญาณ...' : 'ทดสอบตรวจสถานะ LINE OA'}</span>
               </button>
 
-              <button
-                onClick={handleTestWebhook}
-                disabled={testingWebhook}
-                className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 transition-all shadow-md shadow-emerald-500/20 cursor-pointer disabled:opacity-50"
-              >
-                <RefreshCw className={`w-4 h-4 ${testingWebhook ? 'animate-spin' : ''}`} />
-                {testingWebhook ? 'กำลังทดสอบ Webhook...' : 'ทดสอบ Webhook ทันที'}
-              </button>
+              {isEditingCredentials && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsEditingCredentials(false);
+                    setLineStatusMsg(null);
+                    setChannelSecret('');
+                    setMaskedDisplay('');
+                    if (maskTimerRef.current) {
+                      clearTimeout(maskTimerRef.current);
+                      maskTimerRef.current = null;
+                    }
+                  }}
+                  className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-2xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap"
+                >
+                  ยกเลิกการแก้ไข
+                </button>
+              )}
             </div>
-          </div>
-        ) : (
-          <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl text-xs text-slate-500 text-center">
-            Webhook URL จะแสดงขึ้นเมื่อระบบเตรียมความพร้อมของหอพักเรียบร้อย
-          </div>
-        )}
-      </div>
 
-      {/* 4. Event Notification Preferences */}
-      <div className="p-5 bg-white rounded-3xl border border-slate-200/80 shadow-xs space-y-4">
-        <h2 className="text-sm font-black text-slate-900 flex items-center gap-2">
-          <LineLogo className="w-4 h-4 shrink-0 rounded-xs" />
-          กำหนดการแจ้งเตือนอัตโนมัติผ่าน LINE (Event Preferences)
-        </h2>
-        <p className="text-xs text-slate-500 -mt-2">
-          เลือกประเภทเหตุการณ์ที่ต้องการให้ระบบส่งข้อความแจ้งเตือนอัตโนมัติไปยัง LINE
-        </p>
+            {lineStatusMsg && (
+              <span className={`text-xs font-bold ${lineStatusMsg.type === 'success' ? 'text-emerald-700' : 'text-rose-600'}`}>
+                {lineStatusMsg.msg}
+              </span>
+            )}
+          </div>
+        </div>
+      )}
 
-        <div className="space-y-2.5 pt-1">
-          {[
-            { key: 'notifyRepairRequest' as const, title: 'คำขอแจ้งซ่อมใหม่', desc: 'แจ้งเตือนเมื่อผู้เช่าส่งคำขอแจ้งซ่อมเข้ามาในระบบ' },
-            { key: 'notifyRepairCompleted' as const, title: 'งานแจ้งซ่อมเสร็จสิ้น', desc: 'แจ้งเตือนผู้เช่าเมื่อช่างดำเนินการซ่อมเสร็จเรียบร้อย' },
-            { key: 'notifyPaymentReceived' as const, title: 'ได้รับยอดชำระเงิน', desc: 'แจ้งเตือนเมื่อระบบบันทึกหรือยืนยันการรับชำระเงินบิล' },
-            { key: 'notifyTenantRegister' as const, title: 'ผู้เช่าใหม่ลงทะเบียน', desc: 'แจ้งเตือนเจ้าของ/ผู้จัดการเมื่อมีผู้เช่ากรอกฟอร์มลงทะเบียน' },
-            { key: 'notifyTenantApproved' as const, title: 'อนุมัติผู้เช่าเข้าห้องพัก', desc: 'แจ้งเตือนผู้เช่าเมื่อได้รับการอนุมัติและสร้างสัญญา' },
-          ].map((item) => (
-            <label
-              key={item.key}
-              className="p-3.5 bg-slate-50 hover:bg-slate-100/80 border border-slate-200/80 rounded-2xl flex items-start gap-3 cursor-pointer select-none transition-colors"
-            >
-              <input
-                type="checkbox"
-                checked={config[item.key]}
-                onChange={() => handleTogglePreference(item.key)}
-                className="mt-0.5 rounded text-[#06C755] focus:ring-[#06C755] w-4 h-4"
-              />
+      {/* VIEW B: Full Management View (Only Shown when Connected & Webhook is Ready) */}
+      {isConfiguredAndReady && !isEditingCredentials && (
+        <>
+          {/* 1. Status Card with Quota, Edit Button & Disconnect */}
+          <div className="p-5 bg-white rounded-3xl border border-slate-200/80 shadow-xs space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
-                <span className="text-xs font-bold text-slate-800 block">{item.title}</span>
-                <span className="text-[11px] text-slate-500">{item.desc}</span>
+                <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 block mb-1">
+                  สถานะการเชื่อมต่อ
+                </span>
+                <div className="flex items-center gap-2">
+                  <span className="px-3 py-1 rounded-full text-xs font-black border bg-emerald-100 text-emerald-800 border-emerald-300">
+                    พร้อมใช้งาน (READY)
+                  </span>
+                  <span className="text-xs text-slate-500 font-medium">เชื่อมต่อและทดสอบ Webhook สมบูรณ์แล้ว</span>
+                </div>
               </div>
-            </label>
-          ))}
-        </div>
-      </div>
+
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold text-slate-600 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200">
+                  โควตาเดือนนี้: <strong className="text-emerald-600">{config.remainingQuota}/{config.monthlyQuota}</strong>
+                </span>
+                <button
+                  onClick={() => setIsEditingCredentials(true)}
+                  className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl border border-slate-200 transition-colors cursor-pointer flex items-center gap-1.5"
+                >
+                  <Settings className="w-3.5 h-3.5" />
+                  แก้ไขข้อมูลเชื่อมต่อ
+                </button>
+                <button
+                  onClick={handleDisconnect}
+                  disabled={saving}
+                  className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-bold rounded-xl border border-rose-200 transition-colors cursor-pointer flex items-center gap-1.5"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  ยกเลิกเชื่อมต่อ
+                </button>
+              </div>
+            </div>
+
+            {config.lineOaId && (
+              <div className="p-3 bg-emerald-50/60 border border-emerald-200/80 rounded-2xl flex items-center justify-between text-xs">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck className="w-4 h-4 text-emerald-600" />
+                  <span className="font-bold text-slate-700">LINE OA Basic ID:</span>
+                  <span className="font-mono font-black text-emerald-800">{config.lineOaId}</span>
+                </div>
+                {config.botDisplayName && (
+                  <span className="text-slate-500 font-medium">ชื่อบอท: {config.botDisplayName}</span>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* 2. Webhook URL Configuration */}
+          <div className="p-5 bg-white rounded-3xl border border-slate-200/80 shadow-xs space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-black text-slate-900 flex items-center gap-2">
+                <LineLogo className="w-4 h-4 shrink-0 rounded-xs" />
+                Webhook URL สำหรับนำไปใส่ใน LINE Developers Console
+              </h2>
+              <button
+                onClick={handleRotateWebhook}
+                disabled={rotatingKey}
+                className="text-xs font-bold text-amber-600 hover:text-amber-700 flex items-center gap-1 cursor-pointer"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${rotatingKey ? 'animate-spin' : ''}`} />
+                หมุนเวียนคีย์ (Rotate Key)
+              </button>
+            </div>
+
+            {config.webhookUrl ? (
+              <div className="space-y-3">
+                <div className="p-3 bg-slate-900 text-emerald-400 font-mono text-xs rounded-2xl break-all border border-slate-800 select-all">
+                  {config.webhookUrl}
+                </div>
+
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(config.webhookUrl || '');
+                      setCopiedWebhook(true);
+                      setTimeout(() => setCopiedWebhook(false), 2000);
+                    }}
+                    className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    <Copy className="w-4 h-4" />
+                    {copiedWebhook ? 'คัดลอกเรียบร้อย!' : 'คัดลอก Webhook URL'}
+                  </button>
+
+                  <button
+                    onClick={handleTestWebhook}
+                    disabled={testingWebhook}
+                    className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 transition-all shadow-md shadow-emerald-500/20 cursor-pointer disabled:opacity-50"
+                  >
+                    <RefreshCw className={`w-4 h-4 ${testingWebhook ? 'animate-spin' : ''}`} />
+                    {testingWebhook ? 'กำลังทดสอบ Webhook...' : 'ทดสอบ Webhook ทันที'}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl text-xs text-slate-500 text-center">
+                Webhook URL จะแสดงขึ้นเมื่อระบบเตรียมความพร้อมของหอพักเรียบร้อย
+              </div>
+            )}
+          </div>
+
+          {/* 3. Event Notification Preferences */}
+          <div className="p-5 bg-white rounded-3xl border border-slate-200/80 shadow-xs space-y-4">
+            <h2 className="text-sm font-black text-slate-900 flex items-center gap-2">
+              <LineLogo className="w-4 h-4 shrink-0 rounded-xs" />
+              กำหนดการแจ้งเตือนอัตโนมัติผ่าน LINE (Event Preferences)
+            </h2>
+            <p className="text-xs text-slate-500 -mt-2">
+              เลือกประเภทเหตุการณ์ที่ต้องการให้ระบบส่งข้อความแจ้งเตือนอัตโนมัติไปยัง LINE
+            </p>
+
+            <div className="space-y-2.5 pt-1">
+              {[
+                { key: 'notifyRepairRequest' as const, title: 'คำขอแจ้งซ่อมใหม่', desc: 'แจ้งเตือนเมื่อผู้เช่าส่งคำขอแจ้งซ่อมเข้ามาในระบบ' },
+                { key: 'notifyRepairCompleted' as const, title: 'งานแจ้งซ่อมเสร็จสิ้น', desc: 'แจ้งเตือนผู้เช่าเมื่อช่างดำเนินการซ่อมเสร็จเรียบร้อย' },
+                { key: 'notifyPaymentReceived' as const, title: 'ได้รับยอดชำระเงิน', desc: 'แจ้งเตือนเมื่อระบบบันทึกหรือยืนยันการรับชำระเงินบิล' },
+                { key: 'notifyTenantRegister' as const, title: 'ผู้เช่าใหม่ลงทะเบียน', desc: 'แจ้งเตือนเจ้าของ/ผู้จัดการเมื่อมีผู้เช่ากรอกฟอร์มลงทะเบียน' },
+                { key: 'notifyTenantApproved' as const, title: 'อนุมัติผู้เช่าเข้าห้องพัก', desc: 'แจ้งเตือนผู้เช่าเมื่อได้รับการอนุมัติและสร้างสัญญา' },
+              ].map((item) => (
+                <label
+                  key={item.key}
+                  className="p-3.5 bg-slate-50 hover:bg-slate-100/80 border border-slate-200/80 rounded-2xl flex items-start gap-3 cursor-pointer select-none transition-colors"
+                >
+                  <input
+                    type="checkbox"
+                    checked={config[item.key]}
+                    onChange={() => handleTogglePreference(item.key)}
+                    className="mt-0.5 rounded text-[#06C755] focus:ring-[#06C755] w-4 h-4"
+                  />
+                  <div>
+                    <span className="text-xs font-bold text-slate-800 block">{item.title}</span>
+                    <span className="text-[11px] text-slate-500">{item.desc}</span>
+                  </div>
+                </label>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
 
       {/* Help Modal */}
       {showHelpModal && (

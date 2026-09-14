@@ -30,6 +30,7 @@ scripts/*
 !scripts/local07/*
 !scripts/verify-local06-acceptance-matrix.mjs
 !scripts/generate-route-menu-evidence.mjs
+!scripts/generate-direct-grant.mjs
 !server/src/scripts/
 .local07-sessions/
 docs/execution-reports/
@@ -64,3 +65,5 @@ untracked.list
 server/uploads/
 server/storage/
 storage/
+uploads/
+.vscode/

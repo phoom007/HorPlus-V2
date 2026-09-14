@@ -1223,9 +1223,10 @@ export async function seedLocal07Data() {
   });
 
   const checkIn106Sep = new Date('2026-09-05T14:00:00.000+07:00');
-  const checkOut106Sep = new Date('2026-09-10T12:00:00.000+07:00');
+  const futureCheckOut = new Date(Math.max(Date.now() + 5 * 24 * 60 * 60 * 1000, new Date('2026-09-20T12:00:00.000+07:00').getTime()));
+  const checkOut106Sep = futureCheckOut;
   const start106Sep = new Date('2026-09-05T00:00:00.000Z');
-  const end106Sep = new Date('2026-09-10T00:00:00.000Z');
+  const end106Sep = new Date(Date.UTC(checkOut106Sep.getUTCFullYear(), checkOut106Sep.getUTCMonth(), checkOut106Sep.getUTCDate()));
 
   const occupancy106 = await prisma.occupancy.create({
     data: {

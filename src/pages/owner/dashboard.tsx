@@ -58,6 +58,7 @@ interface OwnerDashboardProps {
   contracts: Contract[];
   tenants?: Tenant[];
   activeUser: UserType;
+  userRole?: string | null;
   onNavigate: (tab: string, param?: string) => void;
   onActionClick?: (action: string) => void;
   selectedCycle?: string;
@@ -74,6 +75,7 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({
   contracts = [],
   tenants = [],
   activeUser,
+  userRole,
   onNavigate,
   onActionClick,
   selectedCycle: propSelectedCycle,
@@ -82,6 +84,8 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({
   setSelectedCycle: propSetSelectedCycle,
   onAddLog
 }) => {
+  const effectiveUserRole = userRole || (activeUser?.roleCode?.toLowerCase() === 'staff' ? 'staff' : (activeUser?.roleCode?.toLowerCase() === 'manager' ? 'manager' : 'owner'));
+  const isStaff = effectiveUserRole === 'staff';
   const selectedCycle = propSelectedCycle || '';
 
   const [visibleRoomsCount, setVisibleRoomsCount] = useState(8);
@@ -375,6 +379,7 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({
 
   // Handler for clicking 'ดูรายละเอียด' button
   const handleDetailClick = () => {
+    if (isStaff) return;
     const checkingCount = currentMonthBills.filter(b => b.status === 'checking').length;
     const unpaidCount = currentMonthBills.filter(b => b.status === 'pending' || b.status === 'overdue' || b.status === 'unpaid').length;
 
@@ -391,6 +396,9 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({
 
   // Handler for clicking menu buttons
   const handleMenuClick = (target: string) => {
+    if (isStaff && !['meters', 'maintenance'].includes(target)) {
+      return;
+    }
     if (target === 'payments') {
       handleDetailClick();
       return;
@@ -564,13 +572,15 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({
 
             {/* Right Action Button -> Navigates to payments tab */}
             <div className="shrink-0 w-full md:w-auto">
-              <button
-                onClick={handleDetailClick}
-                className="w-full md:w-auto px-6 py-3.5 bg-[#2b64f6] hover:bg-blue-700 active:scale-[0.98] text-white font-extrabold text-xs sm:text-sm rounded-2xl flex items-center justify-center gap-2 shadow-md shadow-blue-500/20 transition-all cursor-pointer"
-              >
-                <Eye className="w-4 h-4 stroke-[2.5]" />
-                <span>ดูรายละเอียด</span>
-              </button>
+              {!isStaff && (
+                <button
+                  onClick={handleDetailClick}
+                  className="w-full md:w-auto px-6 py-3.5 bg-[#2b64f6] hover:bg-blue-700 active:scale-[0.98] text-white font-extrabold text-xs sm:text-sm rounded-2xl flex items-center justify-center gap-2 shadow-md shadow-blue-500/20 transition-all cursor-pointer"
+                >
+                  <Eye className="w-4 h-4 stroke-[2.5]" />
+                  <span>ดูรายละเอียด</span>
+                </button>
+              )}
             </div>
 
           </div>
@@ -586,7 +596,10 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({
         {/* Responsive Grid: 3 columns on mobile, 5 columns on tablet/PC */}
         <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-5 gap-3 sm:gap-4">
           {mainMenus.map((menu) => {
-            const hasBadge = (
+            const isPermitted = isStaff
+              ? ['meters', 'maintenance'].includes(menu.target)
+              : true;
+            const hasBadge = isPermitted && (
               (menu.id === 'meters' && hasUnissuedMeters) ||
               (menu.id === 'maintenance' && hasPendingMaintenance) ||
               (menu.id === 'payments' && hasPendingSlips) ||
@@ -598,16 +611,23 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({
             return (
               <button
                 key={menu.id}
-                onClick={() => handleMenuClick(menu.target)}
-                className="bg-white p-3.5 sm:p-4 rounded-2xl sm:rounded-3xl border border-slate-100/90 shadow-3xs hover:shadow-md transition-all active:scale-95 flex flex-col items-center justify-center text-center group cursor-pointer relative"
+                data-testid={`dashboard-menu-${menu.id}`}
+                onClick={() => { if (isPermitted) handleMenuClick(menu.target); }}
+                disabled={!isPermitted}
+                title={!isPermitted ? 'ไม่มีสิทธิ์เข้าถึงเมนูนี้' : ''}
+                className={`p-3.5 sm:p-4 rounded-2xl sm:rounded-3xl border border-slate-100/90 shadow-3xs transition-all flex flex-col items-center justify-center text-center group relative ${
+                  isPermitted
+                    ? 'bg-white hover:shadow-md active:scale-95 cursor-pointer'
+                    : 'bg-slate-50/70 opacity-40 cursor-not-allowed pointer-events-none'
+                }`}
               >
-                <div className={`w-11 h-11 sm:w-12 sm:h-12 rounded-2xl flex items-center justify-center mb-2 sm:mb-2.5 transition-transform group-hover:scale-110 relative ${menu.bgClass}`}>
+                <div className={`w-11 h-11 sm:w-12 sm:h-12 rounded-2xl flex items-center justify-center mb-2 sm:mb-2.5 transition-transform ${isPermitted ? 'group-hover:scale-110' : ''} relative ${menu.bgClass}`}>
                   <menu.icon className="w-5 h-5 sm:w-6 sm:h-6 stroke-[2.2]" />
                   {hasBadge && (
                     <span className="w-3 h-3 bg-rose-500 rounded-full border-2 border-white absolute -top-0.5 -right-0.5 animate-pulse shadow-xs" />
                   )}
                 </div>
-                <span className="text-xs sm:text-xs font-bold text-slate-700 group-hover:text-indigo-600 leading-snug">
+                <span className={`text-xs sm:text-xs font-bold leading-snug ${isPermitted ? 'text-slate-700 group-hover:text-indigo-600' : 'text-slate-400'}`}>
                   {menu.title}
                 </span>
               </button>
@@ -641,6 +661,7 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({
                 icon: Gauge,
                 isDone: step0Done,
                 isCurrent: currentStepIdx === 0,
+                isPermitted: true,
                 onClick: () => {
                   window.scrollTo({ top: 0, behavior: 'smooth' });
                   const mainEl = document.getElementById('owner-main-content') || document.querySelector('main');
@@ -655,7 +676,9 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({
                 icon: FileText,
                 isDone: step1Done,
                 isCurrent: currentStepIdx === 1,
+                isPermitted: !isStaff,
                 onClick: () => {
+                  if (isStaff) return;
                   try {
                     localStorage.setItem('scroll_to_meter_status', 'true');
                   } catch (e) {
@@ -674,7 +697,11 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({
                 icon: LineLogo,
                 isDone: step2Done,
                 isCurrent: currentStepIdx === 2,
-                onClick: () => setIsLineModalOpen(true)
+                isPermitted: !isStaff,
+                onClick: () => {
+                  if (isStaff) return;
+                  setIsLineModalOpen(true);
+                }
               },
               {
                 id: 'pending',
@@ -683,7 +710,11 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({
                 icon: CreditCard,
                 isDone: step3Done || isFullyPaid,
                 isCurrent: currentStepIdx === 3,
-                onClick: () => handleDetailClick()
+                isPermitted: !isStaff,
+                onClick: () => {
+                  if (isStaff) return;
+                  handleDetailClick();
+                }
               },
               {
                 id: 'paid',
@@ -692,7 +723,9 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({
                 icon: ShieldCheck,
                 isDone: step4Done,
                 isCurrent: currentStepIdx === 4,
+                isPermitted: !isStaff,
                 onClick: () => {
+                  if (isStaff) return;
                   localStorage.setItem('payments_active_tab', 'paid');
                   onNavigate('payments', 'paid');
                 }
@@ -705,8 +738,12 @@ export const OwnerDashboard: React.FC<OwnerDashboardProps> = ({
               return (
                 <button
                   key={step.id}
-                  onClick={step.onClick}
-                  className="flex flex-col items-center group cursor-pointer text-center"
+                  onClick={step.isPermitted ? step.onClick : undefined}
+                  disabled={!step.isPermitted}
+                  title={!step.isPermitted ? 'ไม่มีสิทธิ์เข้าถึงขั้นตอนนี้' : ''}
+                  className={`flex flex-col items-center group text-center ${
+                    step.isPermitted ? 'cursor-pointer' : 'cursor-not-allowed opacity-50'
+                  }`}
                 >
                   {/* Circle Node */}
                   <div

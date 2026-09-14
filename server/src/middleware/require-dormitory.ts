@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import { IMembershipRepository } from '../db/repositories/membership.repository.js';
+import { IMembershipRepository, DormitoryMemberEntity } from '../db/repositories/membership.repository.js';
 import { IRoleRepository, RolePermissions } from '../db/repositories/role.repository.js';
 
 export interface DormitoryContext {
@@ -49,7 +49,19 @@ export function createRequireDormitoryContextMiddleware(
       });
     }
 
-    let member = await membershipRepo.findByUserAndDormitory(req.auth.userId, dormitoryId);
+    // 1. Check if auth session context already contains an active membership for this dormitory (e.g. synthetic membership from access grant)
+    let member: DormitoryMemberEntity | null | undefined = req.auth.memberships?.find(
+      (m) => m.dormitoryId === dormitoryId && m.status === 'active'
+    );
+
+    // 2. If not found in session context, query repository defensively
+    if (!member) {
+      try {
+        member = await membershipRepo.findByUserAndDormitory(req.auth.userId, dormitoryId);
+      } catch {
+        member = null;
+      }
+    }
 
     if (!member) {
       try {
@@ -107,12 +119,27 @@ export function createRequireDormitoryContextMiddleware(
       });
     }
 
-    const role = member.roleId
-      ? await roleRepo.findById(member.roleId)
-      : await roleRepo.findByCode(member.roleCode || 'OWNER');
+    let role = null;
+    if (member.roleId) {
+      try {
+        role = await roleRepo.findById(member.roleId);
+      } catch {
+        role = null;
+      }
+    }
+    if (!role && member.roleCode) {
+      try {
+        role = await roleRepo.findByCode(member.roleCode, member.dormitoryId);
+      } catch {
+        role = null;
+      }
+    }
 
     const roleCode = role?.code || member.roleCode || 'STAFF';
-    const permissions: RolePermissions = (role?.permissions as RolePermissions) || { rooms: ['view'] };
+    const permissions: RolePermissions =
+      (role?.permissions as RolePermissions) ||
+      (member.rolePermissions as any) ||
+      { rooms: ['view'] };
 
     req.dormitoryContext = {
       dormitoryId: member.dormitoryId,

@@ -516,6 +516,8 @@ function mapPrismaToEntity(row: any): MaintenanceRequestEntity {
   };
 }
 
+const isUuid = (str?: string | null) => !!str && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
+
 export class PrismaMaintenanceRepository implements IMaintenanceRepository {
   private fallbackMemory = new InMemoryMaintenanceRepository();
 
@@ -534,9 +536,9 @@ export class PrismaMaintenanceRepository implements IMaintenanceRepository {
       data: {
         dormitoryId: data.dormitoryId,
         requestNumber,
-        tenantId: data.tenantId || null,
-        contractId: data.contractId || null,
-        roomId: data.roomId || null,
+        tenantId: isUuid(data.tenantId) ? data.tenantId : null,
+        contractId: isUuid(data.contractId) ? data.contractId : null,
+        roomId: isUuid(data.roomId) ? data.roomId : null,
         category: data.category || 'other',
         title: data.title,
         description: data.description,
@@ -549,7 +551,7 @@ export class PrismaMaintenanceRepository implements IMaintenanceRepository {
         imageAfter: data.imageAfter || null,
         preferredDate: data.preferredDate ? new Date(data.preferredDate) : null,
         preferredTimeRange: data.preferredTimeRange || null,
-        createdByUserId: data.createdByUserId || null,
+        createdByUserId: isUuid(data.createdByUserId) ? data.createdByUserId : null,
       }
     });
 
@@ -641,6 +643,19 @@ export class PrismaMaintenanceRepository implements IMaintenanceRepository {
       if (key in updates) {
         dataToUpdate[key] = (updates as any)[key];
       }
+    }
+
+    if ('createdByUserId' in updates) {
+      dataToUpdate.createdByUserId = isUuid(updates.createdByUserId) ? updates.createdByUserId : null;
+    }
+    if ('tenantId' in updates) {
+      dataToUpdate.tenantId = isUuid(updates.tenantId) ? updates.tenantId : null;
+    }
+    if ('contractId' in updates) {
+      dataToUpdate.contractId = isUuid(updates.contractId) ? updates.contractId : null;
+    }
+    if ('roomId' in updates) {
+      dataToUpdate.roomId = isUuid(updates.roomId) ? updates.roomId : null;
     }
 
     if (updates.preferredDate) {

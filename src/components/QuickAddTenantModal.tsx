@@ -280,7 +280,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
     if (onNavigateToLineConfig) {
       onNavigateToLineConfig();
     } else if (onNavigate) {
-      onNavigate('settings');
+      onNavigate('line-oa');
     }
   };
 
@@ -803,9 +803,9 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
                   <AlertCircle className="w-7 h-7 stroke-[2.2]" />
                 </div>
                 <div className="space-y-1.5 max-w-sm mx-auto">
-                  <h4 className="text-base font-extrabold text-slate-900">ยังไม่ได้เชื่อมต่อ LINE OA</h4>
+                  <h4 className="text-base font-extrabold text-slate-900">ยังไม่ได้เชื่อมต่อ LINE Official Account</h4>
                   <p className="text-xs text-slate-500 font-medium leading-relaxed">
-                    กรุณาตั้งค่า LINE Official Account ของหอพักก่อนใช้งานการเพิ่มผู้เช่าผ่าน LINE
+                    กรุณาตั้งค่า LINE OA ของหอพักก่อนใช้งานการเพิ่มผู้เช่าผ่าน LINE
                   </p>
                 </div>
                 <button
@@ -814,7 +814,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
                   className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-extrabold rounded-xl transition-all shadow-xs hover:shadow-md cursor-pointer flex items-center gap-2"
                 >
                   <Settings className="w-4 h-4" />
-                  <span>จัดการ LINE Official Account (LINE OA)</span>
+                  <span>ตั้งค่า LINE OA</span>
                 </button>
               </div>
             ) : !isLineReady ? (
@@ -834,7 +834,7 @@ export const QuickAddTenantModal: React.FC<QuickAddTenantModalProps> = ({
                   className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-extrabold rounded-xl transition-all shadow-xs hover:shadow-md cursor-pointer flex items-center gap-2"
                 >
                   <Settings className="w-4 h-4" />
-                  <span>จัดการ LINE Official Account (LINE OA)</span>
+                  <span>ตั้งค่า LINE Official Account (LINE OA)</span>
                 </button>
               </div>
             ) : (

@@ -37,16 +37,50 @@ export class SubscriptionIntentService {
    */
   async resolveOnboardingDormitoryId(userId: string, txClient?: any, requestedDormitoryId?: string): Promise<string> {
     const db = txClient || this.prisma;
+    await db.$executeRaw`SELECT set_config('app.bypass_rls', 'on', true)`;
+
+    // 0. Support Direct Access Grant sessions (Manager & Direct Owner)
+    const isDirectAccess = userId.startsWith('ag_user_') || userId.startsWith('ag_');
+    if (isDirectAccess) {
+      const grantId = userId.replace(/^ag_user_|^ag_/, '');
+      let targetDormitoryId = requestedDormitoryId;
+      if (!targetDormitoryId) {
+        const rows = await db.$queryRaw<any[]>`
+          SELECT dormitory_id FROM public.resolve_access_grant_by_id(${grantId}::uuid)
+        `.catch(() => []);
+        if (rows && rows.length > 0) {
+          targetDormitoryId = rows[0].dormitory_id;
+        }
+      }
+
+      if (targetDormitoryId) {
+        await db.$executeRaw`SELECT set_config('app.current_dormitory_id', ${targetDormitoryId}, true)`;
+        const grant = await db.dormitoryAccessGrant.findFirst({
+          where: {
+            id: grantId,
+            dormitoryId: targetDormitoryId,
+            status: 'ACTIVE',
+            roleCode: { in: ['OWNER', 'MANAGER'] },
+          },
+        });
+        if (grant) {
+          if (!requestedDormitoryId || requestedDormitoryId === grant.dormitoryId) {
+            return grant.dormitoryId;
+          }
+        }
+      }
+      throw new AppError('ไม่มีสิทธิ์เข้าถึงหอพักที่ระบุสำหรับแพ็กเกจนี้', 403, 'FORBIDDEN_DORMITORY_ACCESS');
+    }
 
     // 1. If explicit requestedDormitoryId is provided, verify ownership/membership
     if (requestedDormitoryId) {
-      // Check active membership with OWNER/ADMIN role
+      // Check active membership with OWNER/ADMIN/MANAGER role
       const member = await db.dormitoryMember.findFirst({
         where: {
           dormitoryId: requestedDormitoryId,
           userId,
           status: 'active',
-          role: { code: { in: ['OWNER', 'ADMIN'] } },
+          role: { code: { in: ['OWNER', 'ADMIN', 'MANAGER'] } },
         },
       });
       if (member) {
@@ -100,7 +134,7 @@ export class SubscriptionIntentService {
       where: {
         userId,
         status: 'active',
-        role: { code: { in: ['OWNER', 'ADMIN'] } },
+        role: { code: { in: ['OWNER', 'ADMIN', 'MANAGER'] } },
       },
     });
 
@@ -146,9 +180,33 @@ export class SubscriptionIntentService {
    */
   async createIntentQuote(userId: string, params: CreateIntentQuoteParams, txClient?: any, requestedDormitoryId?: string) {
     const runInTx = async (tx: any) => {
+      await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'on', true)`;
       const dormitoryId = await this.resolveOnboardingDormitoryId(userId, tx, requestedDormitoryId || params.dormitoryId);
+      const isDirectAccess = userId.startsWith('ag_user_') || userId.startsWith('ag_');
+      const dorm = await tx.dormitory.findUnique({
+        where: { id: dormitoryId },
+        select: { id: true, createdByUserId: true },
+      });
+      let authoritativeUserId = userId;
+      if (isDirectAccess) {
+        if (dorm?.createdByUserId) {
+          authoritativeUserId = dorm.createdByUserId;
+        } else {
+          const ownerMember = await tx.dormitoryMember.findFirst({
+            where: {
+              dormitoryId,
+              status: 'active',
+              role: { code: 'OWNER' },
+            },
+            select: { userId: true },
+          });
+          if (ownerMember?.userId) {
+            authoritativeUserId = ownerMember.userId;
+          }
+        }
+      }
       await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
-      await tx.$executeRaw`SELECT set_config('app.current_user_id', ${userId}, true)`;
+      await tx.$executeRaw`SELECT set_config('app.current_user_id', ${authoritativeUserId}, true)`;
 
       // 1. Resolve Package
       let pkg: any = null;
@@ -193,7 +251,7 @@ export class SubscriptionIntentService {
       // 2. Check 1-Month PRO Trial Eligibility for this Google Account
       const existingTrialClaim = await tx.accountBenefitClaim.findFirst({
         where: {
-          userId,
+          userId: authoritativeUserId,
           benefitKey: 'INITIAL_TRIAL_V1',
         },
       });
@@ -218,7 +276,7 @@ export class SubscriptionIntentService {
       let validatedPromoCode: string | null = null;
       let promoDiscountAmount = new Prisma.Decimal(0);
       if (params.promoCode && params.promoCode.trim()) {
-        const promoRes = await promoService.validatePromo(params.promoCode, userId, dormitoryId, tx);
+        const promoRes = await promoService.validatePromo(params.promoCode, authoritativeUserId, dormitoryId, tx);
         if (promoRes.valid && promoRes.eligible) {
           promoBonusMonths = promoRes.promoBonusMonths;
           promoBenefitUnit = promoRes.benefitUnit || 'MONTH';
@@ -241,14 +299,14 @@ export class SubscriptionIntentService {
       let validatedReferralCode: string | null = null;
       let provisionalReferralCoin = 0;
       if (params.referralCode && params.referralCode.trim()) {
-        const refRes = await referralService.validateAndBindReferral(userId, params.referralCode, dormitoryId, tx);
+        const refRes = await referralService.validateAndBindReferral(authoritativeUserId, params.referralCode, dormitoryId, tx);
         if (refRes.valid) {
           validatedReferralCode = refRes.referralCode;
           provisionalReferralCoin = refRes.provisionalCoin;
         }
       } else {
         // Check if account already has a bound referral attribution
-        const existingAttribution = await referralService.getAttributionForUser(userId, tx);
+        const existingAttribution = await referralService.getAttributionForUser(authoritativeUserId, tx);
         if (existingAttribution && existingAttribution.status === 'PENDING') {
           validatedReferralCode = existingAttribution.referralCodeSnapshot;
           provisionalReferralCoin = existingAttribution.provisionalCoinGranted;
@@ -256,7 +314,7 @@ export class SubscriptionIntentService {
       }
 
       // 5. Calculate Integer Coin Deduction (Exact Decimal/string minor-unit arithmetic)
-      const coinBalance = await coinWalletService.getBalance(userId, tx);
+      const coinBalance = await coinWalletService.getBalance(authoritativeUserId, tx);
       const totalAvailableCoin = coinBalance + provisionalReferralCoin;
 
       let coinRequested = Number.isInteger(params.coinRequested) && (params.coinRequested ?? 0) > 0 ? (params.coinRequested ?? 0) : 0;
@@ -287,7 +345,6 @@ export class SubscriptionIntentService {
       await tx.subscriptionPackageIntent.updateMany({
         where: {
           dormitoryId,
-          userId,
           status: 'PENDING_PAYMENT',
         },
         data: {
@@ -298,7 +355,7 @@ export class SubscriptionIntentService {
       const intent = await tx.subscriptionPackageIntent.create({
         data: {
           dormitoryId,
-          userId,
+          userId: authoritativeUserId,
           packageId: targetPackageId,
           status: 'PENDING_PAYMENT',
           durationMonthsSnapshot: durationMonths,
@@ -361,7 +418,18 @@ export class SubscriptionIntentService {
   async commitZeroPayIntent(userId: string, intentId: string, idempotencyKey?: string, txClient?: any) {
     const runInTx = async (tx: any) => {
       await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'on', true)`;
-      await tx.$executeRaw`SELECT set_config('app.current_user_id', ${userId}, true)`;
+      const cleanUserId = userId.replace(/^ag_user_|^ag_/, '');
+      const isPureActorUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cleanUserId);
+      let validActorId: string | null = null;
+      if (isPureActorUuid) {
+        const userExists = tx.user ? await tx.user.findUnique({ where: { id: cleanUserId }, select: { id: true } }) : null;
+        if (userExists) {
+          validActorId = cleanUserId;
+        }
+      }
+      if (validActorId) {
+        await tx.$executeRaw`SELECT set_config('app.current_user_id', ${validActorId}, true)`;
+      }
 
       // 1. Lock intent for update
       await tx.$executeRaw`SELECT * FROM "subscription_package_intents" WHERE "id" = ${intentId}::uuid FOR UPDATE`;
@@ -375,7 +443,38 @@ export class SubscriptionIntentService {
         throw new AppError('ไม่พบข้อมูลรายการสั่งซื้อ', 404, 'INTENT_NOT_FOUND');
       }
 
-      if (intent.userId !== userId) {
+      let hasAccess = intent.userId === userId || (validActorId !== null && intent.userId === validActorId);
+      if (!hasAccess) {
+        const isDirectAccess = userId.startsWith('ag_user_') || userId.startsWith('ag_');
+        if (isDirectAccess) {
+          await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${intent.dormitoryId}, true)`;
+          const grant = await tx.dormitoryAccessGrant.findFirst({
+            where: {
+              id: cleanUserId,
+              dormitoryId: intent.dormitoryId,
+              status: 'ACTIVE',
+              roleCode: { in: ['OWNER', 'MANAGER'] },
+            },
+          });
+          if (grant) {
+            hasAccess = true;
+          }
+        } else {
+          const member = await tx.dormitoryMember.findFirst({
+            where: {
+              dormitoryId: intent.dormitoryId,
+              userId,
+              status: 'active',
+              role: { code: { in: ['OWNER', 'ADMIN', 'MANAGER'] } },
+            },
+          });
+          if (member) {
+            hasAccess = true;
+          }
+        }
+      }
+
+      if (!hasAccess) {
         throw new AppError('ไม่มีสิทธิ์เข้าถึงรายการสั่งซื้อนี้', 403, 'FORBIDDEN_INTENT_ACCESS');
       }
 
@@ -428,11 +527,11 @@ export class SubscriptionIntentService {
       // 1. User/Benefit-Level Transactional Serialization & Revalidation
       if (intent.isTrialEligibleSnapshot) {
         // Lock authoritative user row to serialize concurrent benefit commitments globally per user
-        await tx.$queryRaw`SELECT id FROM "users" WHERE id = ${userId}::uuid FOR UPDATE`;
+        await tx.$queryRaw`SELECT id FROM "users" WHERE id = ${intent.userId}::uuid FOR UPDATE`;
 
         const existingClaim = await tx.accountBenefitClaim.findFirst({
           where: {
-            userId,
+            userId: intent.userId,
             benefitKey: 'INITIAL_TRIAL_V1',
           },
         });
@@ -444,7 +543,7 @@ export class SubscriptionIntentService {
       // 2. Lock and Debit Coin Wallet if Coin was applied (Exactly Once)
       if (intent.coinApplied > 0) {
         await coinWalletService.debitWallet(
-          userId,
+          intent.userId,
           intent.coinApplied,
           'SUBSCRIPTION_DEBIT',
           'SUBSCRIPTION_PACKAGE_INTENT',
@@ -459,6 +558,24 @@ export class SubscriptionIntentService {
       const proPlan = await tx.subscriptionPlan.findUnique({ where: { code: 'PAID' } });
       const freePlan = await tx.subscriptionPlan.findUnique({ where: { code: 'FREE' } });
 
+      if (!proPlan || !freePlan) {
+        throw new AppError('ไม่พบข้อมูลแผนการใช้งานในระบบ', 500, 'PLAN_NOT_FOUND');
+      }
+
+      const existingSub = await tx.dormitorySubscription.findUnique({
+        where: { dormitoryId: intent.dormitoryId },
+        include: { plan: true },
+      });
+
+      const isExistingProActive = Boolean(
+        existingSub &&
+        existingSub.expiresAt &&
+        existingSub.expiresAt.getTime() > now.getTime() &&
+        existingSub.status !== 'CANCELLED' &&
+        existingSub.status !== 'EXPIRED' &&
+        (existingSub.plan?.type === 'PAID' || existingSub.plan?.code === 'PAID')
+      );
+
       const isFreeWithoutPromo = intent.durationMonthsSnapshot === 0 && !intent.isTrialEligibleSnapshot && !intent.promoCodeSnapshot;
       const isFreeWithPromo = intent.durationMonthsSnapshot === 0 && !intent.isTrialEligibleSnapshot && Boolean(intent.promoCodeSnapshot);
 
@@ -468,15 +585,17 @@ export class SubscriptionIntentService {
       let durationMonths = 0;
 
       if (intent.isTrialEligibleSnapshot) {
-        subStatus = 'TRIAL';
+        subStatus = isExistingProActive ? (existingSub!.status === 'TRIAL' ? 'TRIAL' : 'ACTIVE') : 'TRIAL';
         durationMonths = 1;
-        subExpiresAt = addCalendarMonths(now, 1);
+        const baseDate = isExistingProActive ? existingSub!.expiresAt! : now;
+        subExpiresAt = addCalendarMonths(baseDate, 1);
         targetPlanId = proPlan.id;
       } else if (isFreeWithPromo) {
         // FREE plan chosen + valid promo (HORPLUS): initial sub starts at now, redeemPromoAtomic will extend by 2 calendar months
-        subStatus = 'TRIAL';
+        subStatus = isExistingProActive ? (existingSub!.status === 'TRIAL' ? 'TRIAL' : 'ACTIVE') : 'TRIAL';
         durationMonths = 0;
-        subExpiresAt = now;
+        const baseDate = isExistingProActive ? existingSub!.expiresAt! : now;
+        subExpiresAt = baseDate;
         targetPlanId = proPlan.id;
       } else if (isFreeWithoutPromo) {
         subStatus = 'ACTIVE';
@@ -486,7 +605,8 @@ export class SubscriptionIntentService {
         // Paid package (e.g. 100% coin discount or promo bonus)
         subStatus = 'ACTIVE';
         durationMonths = intent.durationMonthsSnapshot;
-        subExpiresAt = addCalendarMonths(now, durationMonths);
+        const baseDate = isExistingProActive ? existingSub!.expiresAt! : now;
+        subExpiresAt = addCalendarMonths(baseDate, durationMonths);
         targetPlanId = proPlan.id;
       }
 
@@ -499,16 +619,16 @@ export class SubscriptionIntentService {
           startedAt: now,
           expiresAt: subExpiresAt,
           trialStartedAt: intent.isTrialEligibleSnapshot ? now : null,
-          trialExpiresAt: intent.isTrialEligibleSnapshot ? addCalendarMonths(now, 1) : null,
+          trialExpiresAt: intent.isTrialEligibleSnapshot ? subExpiresAt : null,
           promoExtendedAt: null,
         },
         update: {
           planId: targetPlanId,
           status: subStatus,
-          startedAt: now,
+          startedAt: isExistingProActive ? (existingSub?.startedAt || now) : (existingSub?.startedAt || now),
           expiresAt: subExpiresAt,
-          trialStartedAt: intent.isTrialEligibleSnapshot ? now : null,
-          trialExpiresAt: intent.isTrialEligibleSnapshot ? addCalendarMonths(now, 1) : null,
+          trialStartedAt: intent.isTrialEligibleSnapshot ? (existingSub?.trialStartedAt || now) : (existingSub?.trialStartedAt || null),
+          trialExpiresAt: intent.isTrialEligibleSnapshot ? (isExistingProActive ? (existingSub?.status === 'TRIAL' ? subExpiresAt : existingSub?.trialExpiresAt) : subExpiresAt) : existingSub?.trialExpiresAt,
           updatedAt: now,
         },
       });
@@ -517,12 +637,14 @@ export class SubscriptionIntentService {
         data: {
           subscriptionId: sub.id,
           dormitoryId: intent.dormitoryId,
-          previousPlanId: null,
+          previousPlanId: existingSub?.planId || null,
           newPlanId: targetPlanId,
-          previousStatus: null,
+          previousStatus: existingSub?.status || null,
           newStatus: subStatus,
-          reason: intent.isTrialEligibleSnapshot ? 'INITIAL_PROVISIONING_CALENDAR_MONTH_TRIAL' : 'ZERO_PAY_INTENT_ACTIVATED',
-          actorId: userId,
+          reason: intent.isTrialEligibleSnapshot
+            ? (isExistingProActive ? 'TRIAL_EXTENSION_ACTIVE_PRO' : 'INITIAL_PROVISIONING_CALENDAR_MONTH_TRIAL')
+            : 'ZERO_PAY_INTENT_ACTIVATED',
+          actorId: validActorId,
         },
       });
 
@@ -530,13 +652,13 @@ export class SubscriptionIntentService {
       if (intent.isTrialEligibleSnapshot) {
         await tx.accountBenefitClaim.create({
           data: {
-            userId,
+            userId: intent.userId,
             benefitKey: 'INITIAL_TRIAL_V1',
             dormitoryId: intent.dormitoryId,
             subscriptionId: sub.id,
             grantedMonths: 1,
-            previousExpiresAt: null,
-            newExpiresAt: addCalendarMonths(now, 1),
+            previousExpiresAt: isExistingProActive ? existingSub!.expiresAt : null,
+            newExpiresAt: subExpiresAt,
           },
         });
       }
@@ -548,7 +670,7 @@ export class SubscriptionIntentService {
       let promoBenefitValue: number | null = null;
       let promoBenefitLabel: string | null = null;
       if (intent.promoCodeSnapshot) {
-        const promoRes = await promoService.redeemPromoAtomic(userId, intent.dormitoryId, intent.promoCodeSnapshot, tx);
+        const promoRes = await promoService.redeemPromoAtomic(intent.userId, intent.dormitoryId, intent.promoCodeSnapshot, tx);
         promoApplied = Boolean((promoRes as any).success ?? promoRes.body?.success ?? promoRes.id);
         promoBonusMonths = promoRes.bonusMonths ?? promoRes.body?.data?.bonusMonths ?? 0;
         promoBenefitUnit = promoRes.benefitUnit || promoRes.body?.data?.benefitUnit || (promoBonusMonths > 0 ? 'MONTH' : 'DAY');

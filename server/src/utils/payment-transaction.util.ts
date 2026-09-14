@@ -82,8 +82,9 @@ export async function recordCashPaymentInTx(
 
   // 3. Cash Authority: Server timestamp ONLY
   const now = new Date();
-  const safeUserId = input.userId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(input.userId)
-    ? input.userId
+  const rawUserId = input.userId ? input.userId.replace(/^ag_user_|^ag_/, '') : null;
+  const safeUserId = rawUserId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(rawUserId)
+    ? rawUserId
     : null;
 
   // 4. Create CombinedPaymentGroup for real monetary transaction
@@ -338,8 +339,9 @@ export async function recordCombinedCashPaymentInTx(
 
   const now = new Date();
   const effectivePaymentDate = input.paymentDate !== undefined ? input.paymentDate : now;
-  const safeUserId = input.userId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(input.userId)
-    ? input.userId
+  const rawUserId = input.userId ? input.userId.replace(/^ag_user_|^ag_/, '') : null;
+  const safeUserId = rawUserId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(rawUserId)
+    ? rawUserId
     : null;
 
   // 4. Create CombinedPaymentGroup

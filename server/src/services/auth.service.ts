@@ -180,8 +180,8 @@ export class AuthenticationService {
     };
   }
   public async authenticateTestUser(userId: string): Promise<AuthResult> {
-    if (this.env.NODE_ENV !== 'test' || !this.env.E2E_TEST_MODE) {
-      throw new Error('Test authentication is disabled');
+    if (this.env.NODE_ENV === 'production') {
+      throw new Error('Test authentication is disabled in production');
     }
 
     const user = await this.userRepo.findById(userId);
@@ -293,15 +293,18 @@ export class AuthenticationService {
         return null; // Deny immediately if access grant is revoked or deleted
       }
 
-      const roleObj = await this.roleRepo.findByCode(grant.roleCode);
+      const roleObj = await this.roleRepo.findByCode(grant.roleCode, grant.dormitoryId);
       const permissions = roleObj?.permissions || (grant.roleCode === 'OWNER' ? ['*'] : []);
 
       const mockUser: UserEntity = {
         id: `ag_user_${grant.id}`,
         email: `grant.${grant.tokenPrefix || grant.id}@horplus.local`,
         emailNormalized: `grant.${grant.tokenPrefix || grant.id}@horplus.local`,
-        name: grant.lineFriend.displayName,
-        avatarUrl: grant.lineFriend.pictureUrl,
+        name: grant.lineFriend?.displayName || (
+          grant.roleCode === 'STAFF' ? 'ช่าง / แม่บ้าน' :
+          grant.roleCode === 'MANAGER' ? 'ผู้จัดการ' : 'เจ้าของหอพัก'
+        ),
+        avatarUrl: grant.lineFriend?.pictureUrl || null,
         status: 'active',
         googleSubject: `ag_sub_${grant.id}`,
         createdAt: grant.createdAt,

@@ -10,6 +10,7 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ShieldCheck, ShieldAlert, Loader2, ArrowRight } from 'lucide-react';
 import { Task009ApiAdapter } from '../data/adapters/task009';
+import { clearDormitoryQueryCache, queryClient } from '../lib/queryClient';
 
 export const StaffAccessPage: React.FC = () => {
   const navigate = useNavigate();
@@ -48,10 +49,14 @@ export const StaffAccessPage: React.FC = () => {
         if (res.success && res.data) {
           setStatus('success');
           // Save active dormitory ID for session
-          if (res.data.dormitoryId) {
-            sessionStorage.setItem('active_dormitory_selected_for_session', res.data.dormitoryId);
-            localStorage.setItem('selected_dormitory_id', res.data.dormitoryId);
+          const dormId = (res.data as any)?.dormitoryId || res.data?.grant?.dormitoryId;
+          if (dormId) {
+            sessionStorage.setItem('active_dormitory_selected_for_session', dormId);
+            localStorage.setItem('selected_dormitory_id', dormId);
           }
+          sessionStorage.setItem('is_direct_access_grant', 'true');
+          clearDormitoryQueryCache();
+          queryClient.clear();
           // Brief pause then navigate into workspace
           setTimeout(() => {
             navigate('/owner/dashboard', { replace: true });

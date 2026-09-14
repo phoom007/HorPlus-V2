@@ -93,6 +93,7 @@ export interface OwnerMeterListCardProps {
   onToggleBreakdown: (roomId: string) => void;
   onSelectTenant: (tenantId: string, roomId?: string) => void;
   onOpenQuickAdd: (targetRoomId: string) => void;
+  userRole?: string | null;
 }
 
 export function getComponentItemIcon(label: string, type?: string) {
@@ -157,6 +158,7 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
   onToggleBreakdown,
   onSelectTenant,
   onOpenQuickAdd,
+  userRole,
 }) => {
   // Usage calculations matching Table
   const waterUsageRes = (row.waterPrev !== '' && row.waterCurr !== '') ? calculateMeterUsageUnits(row.waterPrev, row.waterCurr) : { isValid: true, usageUnits: 0 };
@@ -386,30 +388,9 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
     return items;
   }, [chargeComponents, backendLineItems, isRowPaid, isDailyContext, roomCtx]);
 
-  // Dynamic Card Border Color based on Status:
-  // - ยังไม่ออกบิล / ว่าง: สีเทา (border-slate-200)
-  // - รอชำระ: สีส้ม (border-amber-400)
-  // - จองล่วงหน้า: สีเหลือง (border-yellow-400)
-  // - เกินกำหนด / รายวันค้างชำระ: สีแดง (border-rose-400)
-  // - ชำระแล้ว: สีเขียว (border-emerald-400)
-  const cardBorderClass = (() => {
-    if (isDailyOverdue) {
-      return 'border-rose-400 hover:border-rose-500';
-    }
-    if (isFuture) {
-      return 'border-yellow-400 hover:border-yellow-500';
-    }
-    if (displayStatus.tone === 'danger') {
-      return 'border-rose-400 hover:border-rose-500';
-    }
-    if (displayStatus.tone === 'success') {
-      return 'border-emerald-400 hover:border-emerald-500';
-    }
-    if (displayStatus.tone === 'warning') {
-      return 'border-amber-400 hover:border-amber-500';
-    }
-    return 'border-slate-200 hover:border-slate-300';
-  })();
+  // Standard Card Border Color:
+  // PO decision Q5=ก: standard border-slate-200 hover:border-slate-300 across all statuses
+  const cardBorderClass = 'border-slate-200 hover:border-slate-300';
 
   return (
     <div
@@ -474,8 +455,11 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
             type="button"
             role="switch"
             aria-checked={displayStatus.isDaily ? true : isMonthlyUtilityIssued}
-            disabled={isSaving || displayStatus.isDaily || isMonthlyUtilityPaid || !selectedBillingCycleId}
-            onClick={() => onToggleStatusSwitch(row)}
+            disabled={isSaving || displayStatus.isDaily || isMonthlyUtilityPaid || !selectedBillingCycleId || userRole === 'staff'}
+            onClick={() => {
+              if (userRole === 'staff') return;
+              onToggleStatusSwitch(row);
+            }}
             className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none disabled:cursor-not-allowed disabled:opacity-60 ${displayStatus.isDaily
                 ? isDailyOverdue
                   ? 'bg-rose-500'
@@ -489,7 +473,9 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
                     : 'bg-slate-300'
               }`}
             title={
-              displayStatus.isDaily
+              userRole === 'staff'
+                ? 'เฉพาะเจ้าของหรือผู้จัดการ'
+                : displayStatus.isDaily
                 ? isDailyOverdue
                   ? 'เกินกำหนดชำระ (รายวัน)'
                   : isDailyRentPaid

@@ -130,6 +130,9 @@ import {
   Bot,
   Loader2,
   Upload,
+  ExternalLink,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 
 import { onboardingClient } from '../../data/onboardingClient';
@@ -765,6 +768,13 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
   const [formData, setFormData] = useState(getInitialForm());
   const [testingLine, setTestingLine] = useState(false);
   const [copiedWebhook, setCopiedWebhook] = useState(false);
+  const [hasOpenedConsoleTab, setHasOpenedConsoleTab] = useState(false);
+  const [showSecret, setShowSecret] = useState(true);
+  const [maskedDisplay, setMaskedDisplay] = useState('');
+  const [showLineOaHelpModal, setShowLineOaHelpModal] = useState(false);
+  const maskTimerRef = React.useRef<NodeJS.Timeout | null>(null);
+
+
   const [lineStatusMsg, setLineStatusMsg] = useState<{ type: 'success' | 'error'; msg: string } | null>(
     formData.lineOA.isConnected ? { type: 'success', msg: 'เชื่อมต่อกับ LINE Official Account สำเร็จ (พร้อมใช้งาน)' } : null
   );
@@ -3336,17 +3346,30 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
               </div>
             </div>
 
-            <button
-              type="button"
-              onClick={() => {
-                setValidationError(null);
-                setCurrentStep(7);
-              }}
-              className="text-xs font-black text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 border border-slate-200 px-3.5 py-1.5 rounded-xl transition-all cursor-pointer flex items-center gap-1.5 shrink-0"
-            >
-              <span>ตั้งค่าภายหลัง</span>
-              <ArrowRight className="w-3.5 h-3.5" />
-            </button>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => setShowLineOaHelpModal(true)}
+                className="px-2.5 sm:px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+                title="ดูวิธีตั้งค่า LINE OA"
+              >
+                <HelpCircle className="w-4 h-4 text-indigo-600 shrink-0" />
+                <span className="hidden sm:inline">ดูวิธีตั้งค่า LINE OA</span>
+                <span className="sm:hidden font-extrabold">วิธีตั้งค่า</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setValidationError(null);
+                  setCurrentStep(7);
+                }}
+                className="text-xs font-black text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 border border-slate-200 px-3.5 py-1.5 rounded-xl transition-all cursor-pointer flex items-center gap-1.5 shrink-0"
+              >
+                <span>ตั้งค่าภายหลัง</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
           </div>
 
           <div className="bg-emerald-50/60 p-4 sm:p-5 rounded-3xl border border-emerald-100 space-y-4">
@@ -3368,7 +3391,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                   <h4 className="text-xs sm:text-sm font-black text-slate-800">
                     {formData.lineOA.isConnected
                       ? (formData.lineOA.botDisplayName || 'LINE Official Account')
-                      : 'ยังไม่ได้เชื่อมต่อ LINE OA'}
+                      : 'ยังไม่ได้เชื่อมต่อ LINE Official Account'}
                   </h4>
                   <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
                     <span className="text-[11px] sm:text-xs text-slate-500 font-bold">LINE ID:</span>
@@ -3405,6 +3428,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                   type="text"
                   value={formData.lineOA.channelId}
                   onChange={(e) => {
+                    setHasOpenedConsoleTab(false);
                     setFormData(prev => ({
                       ...prev,
                       lineOA: {
@@ -3429,35 +3453,175 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                 <label className="block text-xs font-bold text-slate-700 mb-1">
                   LINE Channel Secret <span className="text-[11px] font-normal text-slate-400">(ไม่บังคับ - สามารถตั้งค่าภายหลังได้)</span>
                 </label>
-                <input
-                  type="password"
-                  value={formData.lineOA.channelSecret}
-                  onChange={(e) => {
-                    setFormData(prev => ({
-                      ...prev,
-                      lineOA: {
-                        ...prev.lineOA,
-                        channelSecret: e.target.value,
-                        isConnected: false,
-                        botDisplayName: '',
-                        botPictureUrl: '',
-                        webhookUrl: '',
-                        lineOaId: '',
-                        oaName: ''
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={showSecret ? (formData.lineOA.channelSecret || '') : maskedDisplay}
+                    onChange={(e) => {
+                      setLineStatusMsg(null);
+                      const inputVal = e.target.value;
+                      const prevSecret = formData.lineOA.channelSecret || '';
+
+                      if (showSecret) {
+                        setFormData(prev => ({
+                          ...prev,
+                          lineOA: {
+                            ...prev.lineOA,
+                            channelSecret: inputVal,
+                            isConnected: false,
+                            botDisplayName: '',
+                            botPictureUrl: '',
+                            webhookUrl: '',
+                            lineOaId: '',
+                            oaName: '',
+                          }
+                        }));
+                        setMaskedDisplay('•'.repeat(inputVal.length));
+                        return;
                       }
-                    }));
-                    setLineStatusMsg(null);
-                  }}
-                  placeholder="e4d8f9c2a1b3c4d5e6f7..."
-                  className="w-full px-3.5 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:border-emerald-500 outline-none font-mono text-xs"
-                />
+
+                      // Masked mode with last-character preview
+                      if (maskTimerRef.current) {
+                        clearTimeout(maskTimerRef.current);
+                        maskTimerRef.current = null;
+                      }
+
+                      if (!inputVal) {
+                        setFormData(prev => ({
+                          ...prev,
+                          lineOA: {
+                            ...prev.lineOA,
+                            channelSecret: '',
+                            isConnected: false,
+                            botDisplayName: '',
+                            botPictureUrl: '',
+                            webhookUrl: '',
+                            lineOaId: '',
+                            oaName: '',
+                          }
+                        }));
+                        setMaskedDisplay('');
+                        return;
+                      }
+
+                      const prevLen = maskedDisplay.length;
+                      const newLen = inputVal.length;
+                      let newSecret = prevSecret;
+
+                      if (newLen > prevLen) {
+                        const addedCount = newLen - prevLen;
+                        const addedText = inputVal.slice(-addedCount);
+                        if (!inputVal.includes('•')) {
+                          newSecret = inputVal;
+                        } else {
+                          newSecret = prevSecret + addedText;
+                        }
+
+                        setFormData(prev => ({
+                          ...prev,
+                          lineOA: {
+                            ...prev.lineOA,
+                            channelSecret: newSecret,
+                            isConnected: false,
+                            botDisplayName: '',
+                            botPictureUrl: '',
+                            webhookUrl: '',
+                            lineOaId: '',
+                            oaName: '',
+                          }
+                        }));
+
+                        const lastChar = newSecret.slice(-1);
+                        const masked = '•'.repeat(newSecret.length - 1) + lastChar;
+                        setMaskedDisplay(masked);
+
+                        maskTimerRef.current = setTimeout(() => {
+                          setMaskedDisplay('•'.repeat(newSecret.length));
+                        }, 800);
+                      } else if (newLen < prevLen) {
+                        const deletedCount = prevLen - newLen;
+                        newSecret = prevSecret.slice(0, Math.max(0, prevSecret.length - deletedCount));
+                        setFormData(prev => ({
+                          ...prev,
+                          lineOA: {
+                            ...prev.lineOA,
+                            channelSecret: newSecret,
+                            isConnected: false,
+                            botDisplayName: '',
+                            botPictureUrl: '',
+                            webhookUrl: '',
+                            lineOaId: '',
+                            oaName: '',
+                          }
+                        }));
+                        setMaskedDisplay('•'.repeat(newSecret.length));
+                      } else {
+                        setMaskedDisplay('•'.repeat(newSecret.length));
+                      }
+                    }}
+                    onCopy={(e) => {
+                      if (!showSecret) {
+                        e.preventDefault();
+                      }
+                    }}
+                    onCut={(e) => {
+                      if (!showSecret) {
+                        e.preventDefault();
+                      }
+                    }}
+                    placeholder="e4d8f9c2a1b3c4d5e6f7..."
+                    className="w-full pl-3.5 pr-10 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:border-emerald-500 outline-none font-mono text-xs"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (maskTimerRef.current) {
+                        clearTimeout(maskTimerRef.current);
+                        maskTimerRef.current = null;
+                      }
+                      if (showSecret) {
+                        setShowSecret(false);
+                        setMaskedDisplay('•'.repeat((formData.lineOA.channelSecret || '').length));
+                      } else {
+                        setShowSecret(true);
+                      }
+                    }}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
+                    title={showSecret ? 'กำลังแสดงรหัส (คลิกเพื่อซ่อน)' : 'กำลังซ่อนรหัส (คลิกเพื่อแสดง)'}
+                    aria-label={showSecret ? 'กำลังแสดงรหัส (คลิกเพื่อซ่อน)' : 'กำลังซ่อนรหัส (คลิกเพื่อแสดง)'}
+                  >
+                    {showSecret ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+                  </button>
+                </div>
               </div>
             </div>
 
             {/* LINE Webhook URL (Above test status button) */}
             <div className="pt-2">
               <label className="block text-xs font-bold text-slate-700 mb-1">
-                LINE Webhook URL <span className="text-[11px] font-normal text-slate-400">(นำไปวางใน LINE Developers Console &gt; Messaging API)</span>
+                <span>LINE Webhook URL </span>
+                <span className="text-[11px] font-normal text-slate-400">
+                  (นำ Webhook URL ไปใส่และเปิด Use Webhook ใน{' '}
+                  <a
+                    href={
+                      formData.lineOA.isConnected && formData.lineOA.channelId?.trim()
+                        ? `https://developers.line.biz/console/channel/${formData.lineOA.channelId.trim()}/messaging-api`
+                        : 'https://developers.line.biz/console/'
+                    }
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-emerald-700 hover:text-emerald-800 font-bold underline decoration-emerald-400 inline-flex items-center gap-0.5 transition-colors"
+                    title={
+                      formData.lineOA.isConnected && formData.lineOA.channelId?.trim()
+                        ? 'เปิด LINE Developers Console > Messaging API ในแท็บใหม่'
+                        : 'เปิด LINE Developers Console ในแท็บใหม่'
+                    }
+                  >
+                    <span>LINE Developers Console &gt; Messaging API</span>
+                    <ExternalLink className="w-3 h-3 text-emerald-600 shrink-0" />
+                  </a>
+                  )
+                </span>
               </label>
 
               <div className="flex items-center gap-2">
@@ -3482,6 +3646,18 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                       navigator.clipboard.writeText(formData.lineOA.webhookUrl);
                       setCopiedWebhook(true);
                       setTimeout(() => setCopiedWebhook(false), 2000);
+
+                      const chId = formData.lineOA.channelId?.trim();
+                      if (!hasOpenedConsoleTab && chId) {
+                        setHasOpenedConsoleTab(true);
+                        setTimeout(() => {
+                          window.open(
+                            `https://developers.line.biz/console/channel/${chId}/messaging-api`,
+                            '_blank',
+                            'noopener,noreferrer'
+                          );
+                        }, 2000);
+                      }
                     }
                   }}
                   className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shrink-0 shadow-2xs ${formData.lineOA.isConnected && formData.lineOA.webhookUrl
@@ -3558,6 +3734,50 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
               </div>
             </div>
           </div>
+
+          {/* Help Modal (LOA-21) */}
+          {showLineOaHelpModal && (
+            <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-950/50 backdrop-blur-xs animate-in fade-in duration-200">
+              <div className="fixed inset-0 cursor-default" onClick={() => setShowLineOaHelpModal(false)} />
+              <div className="relative w-full max-w-lg bg-white rounded-3xl p-6 shadow-2xl z-10 space-y-4 max-h-[85vh] overflow-y-auto">
+                <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+                  <h3 className="text-base font-extrabold text-slate-900 flex items-center gap-2">
+                    <HelpCircle className="w-5 h-5 text-indigo-600" />
+                    วิธีตั้งค่า LINE Official Account
+                  </h3>
+                  <button onClick={() => setShowLineOaHelpModal(false)} className="p-1 text-slate-400 hover:text-slate-600 cursor-pointer">
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                <div className="space-y-3 text-xs text-slate-700 leading-relaxed">
+                  <div className="p-3 bg-indigo-50 rounded-2xl border border-indigo-100 font-medium">
+                    1. เข้าสู่ <a href="https://developers.line.biz/console/" target="_blank" rel="noreferrer" className="text-indigo-600 font-bold underline inline-flex items-center gap-1">LINE Developers Console <ExternalLink className="w-3 h-3" /></a> แล้วเลือกหรือสร้าง Provider
+                  </div>
+                  <div className="p-3 bg-slate-50 rounded-2xl border border-slate-100">
+                    2. สร้าง Channel ประเภท <strong>Messaging API</strong>
+                  </div>
+                  <div className="p-3 bg-slate-50 rounded-2xl border border-slate-100">
+                    3. ในแท็บ <strong>Basic settings</strong> ให้คัดลอก <strong>Channel ID</strong> และ <strong>Channel Secret</strong> มาวางในช่องด้านบน
+                  </div>
+                  <div className="p-3 bg-slate-50 rounded-2xl border border-slate-100">
+                    4. ในแท็บ <strong>Messaging API</strong> นำ <strong>Webhook URL</strong> จากระบบ HorPlus ไปวาง และเปิดใช้งาน <strong>Use Webhook</strong>
+                  </div>
+                  <div className="p-3 bg-slate-50 rounded-2xl border border-slate-100">
+                    5. ใน LINE Official Account Manager ให้ปิดฟังก์ชัน <strong>Auto-reply messages</strong> (ข้อความตอบกลับอัตโนมัติ) เพื่อให้บอท HorPlus ตอบกลับได้อย่างถูกต้อง
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setShowLineOaHelpModal(false)}
+                  className="w-full py-2.5 bg-indigo-600 text-white font-extrabold text-xs rounded-xl hover:bg-indigo-700 transition-colors cursor-pointer"
+                >
+                  เข้าใจแล้ว ปิดหน้าต่าง
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -3805,7 +4025,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                   )}
                 </div>
                 <p className="text-[11px] text-slate-500 font-medium mt-1">
-                  กรอกรหัสแนะนำ 6 หลักของเพื่อน เพื่อรับ 10 HorPlus Coins (฿10) ทันที (เว้นว่างได้)
+                  กรอกรหัสแนะนำ 6 หลักของเพื่อน เพื่อรับ 10 Coins (฿10) ทันที
                 </p>
               </div>
 
@@ -3858,7 +4078,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                   <Tag className="w-4 h-4 text-indigo-600" /> กรอกรหัสโปรโมชั่น (ไม่บังคับ)
                 </p>
                 <p className="text-[11px] text-slate-500 font-medium mt-1">
-                  กรอก "HORPLUS" เพื่อรับสิทธิ์ทดลองใช้งานฟรีเพิ่ม 2 เดือน (จำกัด 100 สิทธิ์แรก, เว้นว่างได้)
+                  กรอก "HORPLUS" เพื่อรับสิทธิ์ทดลองใช้งานฟรีเพิ่ม 2 เดือน (จำกัด 100 สิทธิ์แรก)
                 </p>
               </div>
 

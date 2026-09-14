@@ -109,6 +109,7 @@ interface OwnerRoomsProps {
   selectedBillingCycleId?: string;
   selectedCycleCode?: string;
   billingCycles?: any[];
+  onNavigateToLineConfig?: () => void;
 }
 
 const ROOM_STATUS_CONFIG: Record<string, {
@@ -277,6 +278,7 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
   billingCycles = [],
   onOpenBuildingPricingModal,
   onOpenTieredRatesModal,
+  onNavigateToLineConfig,
 }) => {
   const [activeTab, setActiveTab] = useState<'rooms' | 'buildings'>('rooms');
 
@@ -2522,6 +2524,8 @@ export const OwnerRooms: React.FC<OwnerRoomsProps> = ({
           setToastMessage(msg);
           invalidateQuickAddTenantCaches(queryClient, dormitoryId, { rentalType: result?.rentalType });
         }}
+        onNavigateToLineConfig={onNavigateToLineConfig}
+        onNavigate={onNavigate}
       />
 
       {versionConflictState && (

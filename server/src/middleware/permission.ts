@@ -57,6 +57,36 @@ export function requireDormitoryPermission(requiredPermission: string) {
         }
       }
 
+      // Check meter write <-> record aliases
+      if (['meter:write', 'meters:write'].includes(requiredPermission)) {
+        if (
+          normalizedPerms.includes('meter:record') ||
+          normalizedPerms.includes('meters:record') ||
+          normalizedPerms.includes('meter:write') ||
+          normalizedPerms.includes('meters:write')
+        ) {
+          return next();
+        }
+      }
+
+      // Check maintenance write, update, create aliases
+      if (['maintenance:write', 'maintenance:create', 'maintenance:update'].includes(requiredPermission)) {
+        if (
+          normalizedPerms.includes('maintenance:write') ||
+          normalizedPerms.includes('maintenance:create') ||
+          normalizedPerms.includes('maintenance:update')
+        ) {
+          return next();
+        }
+      }
+
+      // Check maintenance view <-> read aliases
+      if (['maintenance:view', 'maintenance:read'].includes(requiredPermission)) {
+        if (normalizedPerms.includes('maintenance:view') || normalizedPerms.includes('maintenance:read')) {
+          return next();
+        }
+      }
+
       // Check legacy write alias for create, update, archive, and document:write
       if (
         ['tenants:create', 'tenants:update', 'tenants:archive', 'tenant:create', 'tenant:update', 'tenant:archive', 'tenants:document:write', 'tenant:document:write'].includes(requiredPermission)
@@ -66,11 +96,15 @@ export function requireDormitoryPermission(requiredPermission: string) {
         }
       }
 
-      // Check singular/plural aliases (e.g. tenant:document:read vs tenants:document:read)
+      // Check singular/plural aliases (e.g. tenant:document:read vs tenants:document:read, meter:write vs meters:write)
       const altPermission = requiredPermission.startsWith('tenant:')
         ? requiredPermission.replace('tenant:', 'tenants:')
         : requiredPermission.startsWith('tenants:')
         ? requiredPermission.replace('tenants:', 'tenant:')
+        : requiredPermission.startsWith('meter:')
+        ? requiredPermission.replace('meter:', 'meters:')
+        : requiredPermission.startsWith('meters:')
+        ? requiredPermission.replace('meters:', 'meter:')
         : null;
 
       if (altPermission && normalizedPerms.includes(altPermission)) {

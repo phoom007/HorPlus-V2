@@ -53,25 +53,30 @@ function mapSlipOkError(code: number | string | undefined, defaultMsg?: string):
   const codeNum = typeof code === 'number' ? code : code ? parseInt(code, 10) : 0;
   switch (codeNum) {
     case 1001:
-      return 'ข้อมูลคำขอไม่ครบถ้วนหรือไม่ถูกต้อง (INVALID_REQUEST)';
+      return 'ข้อมูลคำขอไม่ครบถ้วนหรือไม่ถูกต้อง';
     case 1002:
-      return 'การยืนยันตัวตนกับ SlipOK ไม่ถูกต้อง กรุณาตรวจสอบ API Key (SLIPOK_UNAUTHORIZED)';
+      return 'ระบบตรวจสอบสลิปขัดข้อง กรุณาลองอีกครั้งในภายหลัง';
     case 1003:
-      return 'ไม่พบสาขาในระบบ SlipOK กรุณาตรวจสอบ Branch ID (INVALID_BRANCH_ID)';
+      return 'การตั้งค่าระบบตรวจสอบสลิปไม่ถูกต้อง กรุณาลองอีกครั้งในภายหลัง';
     case 1004:
-      return 'ไม่พบ QR Code ในภาพสลิป หรือรูปภาพสลิปไม่ชัดเจน กรุณาแนบภาพสลิปใหม่ (QR_NOT_FOUND)';
+      return 'ไม่พบ QR Code ในภาพสลิป หรือรูปภาพสลิปไม่ชัดเจน กรุณาแนบภาพสลิปใหม่';
     case 1005:
-      return 'โควตาการตรวจสอบสลิปของระบบหมด กรุณาติดต่อผู้ดูแลระบบ (SLIPOK_QUOTA_EXCEEDED)';
+      return 'โควตาการตรวจสอบสลิปของระบบหมดชั่วคราว กรุณาลองอีกครั้งในภายหลัง';
     case 1006:
-      return 'สลิปนี้เคยถูกใช้งานไปแล้วในระบบ (DUPLICATE_SLIP)';
+      return 'สลิปนี้หมดอายุการตรวจสอบแล้ว กรุณาใช้สลิปที่ทำรายการไม่เกินระยะเวลาที่กำหนด';
     case 1007:
-      return 'ไม่สามารถถอดรหัส QR Code ในสลิปได้ กรุณาใช้ภาพที่มีแสงชัดเจน (UNREADABLE_QR)';
+      return 'ไม่สามารถถอดรหัส QR Code ในสลิปได้ กรุณาใช้ภาพที่มีแสงและรายละเอียดชัดเจน';
     case 1008:
-      return 'ยอดเงินในสลิปไม่ตรงกับยอดแพ็กเกจที่ต้องชำระ (AMOUNT_MISMATCH)';
+      return 'สลิปนี้เคยถูกใช้งานไปแล้วในระบบ';
+    case 1011:
+      return 'QR Code ในสลิปหมดอายุ หรือไม่พบรายการโอนเงินจริงในระบบธนาคาร';
     case 1012:
-      return 'ระบบธนาคารปลายทางขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้ง (BANK_TIMEOUT)';
+      if (defaultMsg && (defaultMsg.includes('สลิปซ้ำ') || defaultMsg.includes('เคยส่งเข้ามา') || defaultMsg.includes('ซ้ำ'))) {
+        return 'สลิปนี้เคยถูกใช้งานไปแล้วในระบบ';
+      }
+      return 'ระบบตรวจสอบของธนาคารปลายทางขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้งในภายหลัง';
     default:
-      return defaultMsg || `การตรวจสอบสลิปผ่าน SlipOK ไม่สำเร็จ (รหัสข้อผิดพลาด: ${code || 'UNKNOWN'})`;
+      return defaultMsg || `การตรวจสอบสลิปไม่สำเร็จ (รหัสสถานะ: ${code || 'UNKNOWN'})`;
   }
 }
 
@@ -119,14 +124,27 @@ export class SubscriptionSlipVerifier implements ISubscriptionSlipVerifier {
       );
     }
 
-    // 4. Validate image integrity via Sharp
+    // 4. Validate image integrity via Sharp with Decompression Bomb Protection
     try {
-      const metadata = await sharp(slipBuffer).metadata();
+      const metadata = await sharp(slipBuffer, {
+        failOnError: true,
+        limitInputPixels: 16_777_216,
+        sequentialRead: true,
+      }).metadata();
       if (!metadata.width || !metadata.height || metadata.width < 100 || metadata.height < 100) {
-        throw new AppError('รูปภาพสลิปมีขนาดเล็กเกินไปหรือไม่สมบูรณ์', 400, 'INVALID_SLIP_IMAGE_DIMENSIONS');
+        throw new AppError('รูปภาพสลิปมีขนาดเล็กเกินไปหรือไม่สมบูรณ์ (ต้องมีขนาดอย่างน้อย 100x100 พิกเซล)', 400, 'INVALID_SLIP_IMAGE_DIMENSIONS');
+      }
+      if (metadata.width > 4096 || metadata.height > 4096) {
+        throw new AppError(`ขนาดรูปภาพ (${metadata.width}x${metadata.height}) เกินขนาดสูงสุดที่อนุญาต 4096x4096 พิกเซล`, 400, 'DIMENSIONS_EXCEEDED');
+      }
+      if (metadata.width * metadata.height > 16_777_216) {
+        throw new AppError('จำนวนพิกเซลของรูปภาพเกินขีดจำกัดความปลอดภัยของระบบ', 400, 'PIXEL_LIMIT_EXCEEDED');
       }
     } catch (err: any) {
       if (err instanceof AppError) throw err;
+      if (err?.message?.includes('Input image exceeds pixel limit') || err?.message?.includes('pixel limit')) {
+        throw new AppError('ขนาดพิกเซลของรูปภาพเกินขีดจำกัดความปลอดภัยของระบบ (Decompression Bomb Protection)', 400, 'PIXEL_LIMIT_EXCEEDED');
+      }
       throw new AppError('ไฟล์รูปภาพสลิปไม่ถูกต้องหรือเสียหาย', 400, 'CORRUPTED_SLIP_IMAGE');
     }
 
@@ -136,13 +154,13 @@ export class SubscriptionSlipVerifier implements ISubscriptionSlipVerifier {
 
     if (!branchId || !apiKey) {
       throw new AppError(
-        'ระบบยังไม่ได้กำหนดค่า SlipOK Branch ID หรือ API Key สำหรับตรวจสอบสลิป (SLIPOK_NOT_CONFIGURED)',
+        'ระบบยังไม่ได้เปิดใช้งานการตรวจสอบสลิปอัตโนมัติ กรุณาลองอีกครั้งในภายหลัง (VERIFICATION_NOT_CONFIGURED)',
         500,
-        'SLIPOK_NOT_CONFIGURED'
+        'VERIFICATION_NOT_CONFIGURED'
       );
     }
 
-    // Build Multipart FormData payload for SlipOK
+    // Build Multipart FormData payload for external verification provider
     const formData = new FormData();
     const fileBlob = new Blob([slipBuffer], { type: mimeType || 'image/jpeg' });
     formData.append('files', fileBlob, originalFilename || 'slip.jpg');
@@ -166,15 +184,15 @@ export class SubscriptionSlipVerifier implements ISubscriptionSlipVerifier {
       clearTimeout(timeoutId);
       if (fetchErr.name === 'AbortError') {
         throw new AppError(
-          'การเชื่อมต่อไปยังระบบ SlipOK หมดเวลา กรุณาลองใหม่อีกครั้ง (SLIPOK_TIMEOUT)',
+          'การเชื่อมต่อไปยังระบบตรวจสอบสลิปหมดเวลา กรุณาลองใหม่อีกครั้ง (VERIFICATION_TIMEOUT)',
           504,
-          'SLIPOK_TIMEOUT'
+          'VERIFICATION_TIMEOUT'
         );
       }
       throw new AppError(
-        `ไม่สามารถเชื่อมต่อไปยังระบบตรวจสอบสลิป SlipOK ได้: ${fetchErr.message || 'Network Error'}`,
+        `ไม่สามารถเชื่อมต่อไปยังระบบตรวจสอบสลิปได้ กรุณาลองใหม่อีกครั้ง (${fetchErr.message || 'Network Error'})`,
         502,
-        'SLIPOK_NETWORK_ERROR'
+        'VERIFICATION_NETWORK_ERROR'
       );
     } finally {
       clearTimeout(timeoutId);
@@ -184,15 +202,21 @@ export class SubscriptionSlipVerifier implements ISubscriptionSlipVerifier {
     try {
       json = await response.json();
     } catch {
-      throw new AppError('การตอบกลับจาก SlipOK ไม่ถูกต้อง', 502, 'SLIPOK_INVALID_RESPONSE');
+      throw new AppError('การตอบกลับจากระบบตรวจสอบสลิปไม่ถูกต้อง', 502, 'VERIFICATION_INVALID_RESPONSE');
     }
 
-    if (!response.ok || json.success === false) {
+    // Check SlipOK response status
+    // Note on Code 1014: SlipOK returns code 1014 (merchant account mismatch on their web dashboard)
+    // even when the bank slip is genuine and decoded (with valid transRef and amount).
+    // In this case, HorPlus authoritatively evaluates Dimension 1 (Amount) and Dimension 2 (PromptPay/Account).
+    const isSlipOkCode1014WithData = (json.code === 1014 || json.code === '1014') && json.data && json.data.transRef;
+
+    if ((!response.ok || json.success === false) && !isSlipOkCode1014WithData) {
       const errorText = mapSlipOkError(json.code, json.message);
       throw new AppError(
         errorText,
         400,
-        json.code ? `SLIPOK_ERR_${json.code}` : 'SLIPOK_VERIFICATION_FAILED'
+        json.code ? `SLIP_ERR_${json.code}` : 'SLIP_VERIFICATION_FAILED'
       );
     }
 
@@ -215,20 +239,42 @@ export class SubscriptionSlipVerifier implements ISubscriptionSlipVerifier {
     const cleanPromptPay = cleanDigits(promptPayId);
 
     const receiverObj = slipData.receiver || {};
-    const receiverProxy = cleanDigits(receiverObj.account?.proxy?.value || receiverObj.account?.proxy?.number || '');
-    const receiverNameTh = (receiverObj.account?.name?.th || '').replace(/\s+/g, '');
-    const receiverNameEn = (receiverObj.account?.name?.en || '').toUpperCase().replace(/\s+/g, '');
-    const receiverAccNo = cleanDigits(receiverObj.account?.number || '');
+    const receiverProxy = cleanDigits(
+      receiverObj.proxy?.value ||
+      receiverObj.proxy?.number ||
+      receiverObj.account?.proxy?.value ||
+      receiverObj.account?.proxy?.number ||
+      ''
+    );
+    const receiverNameTh = (
+      receiverObj.displayName ||
+      receiverObj.name ||
+      receiverObj.account?.name?.th ||
+      ''
+    ).replace(/\s+/g, '');
+    const receiverNameEn = (
+      receiverObj.name ||
+      receiverObj.displayName ||
+      receiverObj.account?.name?.en ||
+      ''
+    ).toUpperCase().replace(/\s+/g, '');
+    const receiverAccNo = cleanDigits(
+      receiverObj.account?.value ||
+      receiverObj.account?.number ||
+      ''
+    );
 
-    const isProxyMatched = cleanPromptPay.length >= 9 && (
-      receiverProxy.endsWith(cleanPromptPay.slice(-9)) ||
-      receiverProxy.includes(cleanPromptPay)
+    const isProxyMatched = receiverProxy.length >= 4 && (
+      cleanPromptPay.endsWith(receiverProxy) ||
+      cleanPromptPay.slice(-9).endsWith(receiverProxy) ||
+      receiverProxy.endsWith(cleanPromptPay.slice(-4))
     );
     const isNameMatched = receiverNameTh.includes('ภูวนาท') ||
-                          receiverNameTh.includes('ทานาลาด') ||
-                          receiverNameEn.includes('PHUWANAT') ||
-                          receiverNameEn.includes('TANALAD');
-    const isAccMatched = cleanPromptPay.length >= 9 && receiverAccNo.includes(cleanPromptPay.slice(-9));
+      receiverNameTh.includes('ทานาลาด') ||
+      receiverNameEn.includes('PHUWANAT') ||
+      receiverNameEn.includes('PHUWANART') ||
+      receiverNameEn.includes('TANALAD');
+    const isAccMatched = receiverAccNo.length >= 4 && cleanPromptPay.endsWith(receiverAccNo);
 
     if (!isProxyMatched && !isNameMatched && !isAccMatched) {
       throw new AppError(

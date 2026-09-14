@@ -117,6 +117,8 @@ export class InMemoryMembershipRepository implements IMembershipRepository {
   }
 }
 
+const isUuid = (str?: string | null) => !!str && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
+
 export class PrismaMembershipRepository implements IMembershipRepository {
   private prisma: PrismaClient;
 
@@ -146,6 +148,9 @@ export class PrismaMembershipRepository implements IMembershipRepository {
   }
 
   public async findById(id: string): Promise<DormitoryMemberEntity | null> {
+    if (!isUuid(id)) {
+      return null;
+    }
     const membership = await this.prisma.dormitoryMember.findUnique({
       where: { id },
       include: {
@@ -157,6 +162,9 @@ export class PrismaMembershipRepository implements IMembershipRepository {
   }
 
   public async findByUserId(userId: string): Promise<DormitoryMemberEntity[]> {
+    if (!isUuid(userId)) {
+      return [];
+    }
     const memberships = await this.prisma.dormitoryMember.findMany({
       where: { userId, status: { not: 'revoked' } },
       include: {
@@ -168,6 +176,9 @@ export class PrismaMembershipRepository implements IMembershipRepository {
   }
 
   public async findByUserAndDormitory(userId: string, dormitoryId: string): Promise<DormitoryMemberEntity | null> {
+    if (!isUuid(userId) || !isUuid(dormitoryId)) {
+      return null;
+    }
     const membership = await this.prisma.dormitoryMember.findFirst({
       where: { userId, dormitoryId, status: { not: 'revoked' } },
       include: {

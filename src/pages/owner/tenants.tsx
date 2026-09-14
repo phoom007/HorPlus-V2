@@ -391,6 +391,7 @@ interface OwnerTenantsProps {
   dormitory?: Dormitory | null;
   dormitoryId?: string;
   buildings?: Array<{ id: string; name: string }>;
+  onNavigateToLineConfig?: () => void;
 }
 
 const CAR_BRANDS = ["Toyota", "Honda", "Isuzu", "Mazda", "Nissan", "Mitsubishi", "Ford", "Benz", "BMW", "Audi", "MG", "BYD", "Suzuki", "อื่นๆ"];
@@ -800,7 +801,8 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
   onDismissReturnContext,
   cameFromMeters: cameFromMetersProp,
   dormitory,
-  buildings: propBuildings = []
+  buildings: propBuildings = [],
+  onNavigateToLineConfig,
 }) => {
   const queryClient = React.useContext(QueryClientContext) || null;
   const effectiveDormId = dormitoryId || dormitory?.id || (typeof window !== 'undefined' ? (localStorage.getItem('selected_dormitory_id') || sessionStorage.getItem('active_dormitory_selected_for_session')) : '') || '';
@@ -962,7 +964,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
 
           const hasIdDoc = Boolean(serverTenant.hasIdentityDocument);
           const docUrl = hasIdDoc
-            ? (serverTenant.idCardPhotoMock || (effectiveDormId ? getDataProvider().tenants.getIdentityDocumentUrl(serverTenant.id) : undefined))
+            ? (serverTenant.idCardPhotoMock || (effectiveDormId ? getDataProvider().tenants.getIdentityDocumentUrl(serverTenant.id, effectiveDormId) : undefined))
             : undefined;
 
           return {
@@ -1756,12 +1758,12 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
       const updatedRooms = rooms.map(r =>
         (r.currentTenantId === tenantId || (selectedTenant.roomId && r.id === selectedTenant.roomId) || (room && r.id === room.id))
           ? {
-              ...r,
-              status: 'vacant' as const,
-              currentTenantId: undefined,
-              currentContractId: undefined,
-              updatedAt: new Date().toISOString()
-            }
+            ...r,
+            status: 'vacant' as const,
+            currentTenantId: undefined,
+            currentContractId: undefined,
+            updatedAt: new Date().toISOString()
+          }
           : r
       );
 
@@ -4838,7 +4840,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                                         testId="pending-tenant-signature"
                                       />
                                     </div>
-                                    <p className="font-extrabold text-slate-800 text-xs">(คุณ{selectedTenant.name})</p>
+                                    <p className="font-extrabold text-slate-800 text-xs">({selectedTenant.name})</p>
                                   </div>
                                 </div>
                               </div>
@@ -5356,6 +5358,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
           hideLineTab={false}
           defaultTab="LINE"
           onSuccess={handleQuickAddSuccess}
+          onNavigateToLineConfig={onNavigateToLineConfig}
         />
       )}
 
@@ -6672,7 +6675,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                   <CheckCircle2 className="w-5 h-5 text-emerald-600" />
                 </div>
                 <div>
-                  <h4 className="text-xs font-bold text-emerald-950">อนุมัติคุณ {selectedTenant.name}</h4>
+                  <h4 className="text-xs font-bold text-emerald-950">{selectedTenant.name}</h4>
                   <p className="text-[11px] text-emerald-700 mt-0.5">
                     เบอร์โทร: {formatPhone(selectedTenant.phone)} • บัตรประชาชน: {formatCitizenId(selectedTenant.citizenId)}
                   </p>
@@ -7231,7 +7234,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                   }`}
               >
                 <CheckCircle2 className="w-4 h-4" />
-                <span>ยืนยันอนุมัติและรับผู้เช่าเข้าพัก</span>
+                <span>ยืนยันรับเข้าพัก</span>
               </button>
             </div>
           </div>

@@ -158,6 +158,8 @@ export function createStaffRoutes(
         success: true,
         data: {
           grant: result.grant,
+          dormitoryId: result.grant.dormitoryId,
+          roleCode: result.grant.roleCode,
           csrfToken: result.csrfToken,
         },
       });
@@ -236,14 +238,14 @@ export function createStaffRoutes(
         const dormitoryId = await getDormitoryId(req);
         const { lineFriendId, roleCode } = req.body;
 
-        if (!lineFriendId || !roleCode) {
-          throw new AppError('lineFriendId and roleCode are required', 400, 'MISSING_FIELDS');
+        if (!roleCode) {
+          throw new AppError('roleCode is required', 400, 'MISSING_FIELDS');
         }
 
         const createdByPrincipal = req.auth ? `usr_${req.auth.userId}` : 'usr_owner';
 
         const result = await grantService.createAccessGrant(
-          dormitoryId, lineFriendId, roleCode, createdByPrincipal
+          dormitoryId, lineFriendId || null, roleCode, createdByPrincipal
         );
 
         res.setHeader('Cache-Control', 'no-store');

@@ -327,6 +327,10 @@ export class PrismaAnnouncementRepository implements IAnnouncementRepository {
       });
     }
 
+    const cleanActorId = data.createdByUserId ? data.createdByUserId.replace(/^ag_user_|^ag_/, '') : null;
+    const isPureUuid = cleanActorId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cleanActorId);
+    const validCreatedByUserId = isPureUuid ? cleanActorId : null;
+
     const created = await this.prisma.announcement.create({
       data: {
         id: data.id || undefined,
@@ -347,7 +351,7 @@ export class PrismaAnnouncementRepository implements IAnnouncementRepository {
         isPinned: data.isPinned || false,
         publishDate: data.publishDate ? new Date(data.publishDate) : now,
         publishedAt: (data.status === 'published' || !data.status) ? now : null,
-        createdByUserId: data.createdByUserId || null,
+        createdByUserId: validCreatedByUserId,
       }
     });
 

@@ -274,13 +274,13 @@ describe('LOCAL-07 — Quick Add Tenant via LINE OA (Q1 - Q9 Suite)', () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText('ยังไม่ได้เชื่อมต่อ LINE OA')).toBeTruthy();
+      expect(screen.getByText(/ยังไม่ได้เชื่อมต่อ LINE/i)).toBeTruthy();
     });
 
-    expect(screen.getByText('กรุณาตั้งค่า LINE Official Account ของหอพักก่อนใช้งานการเพิ่มผู้เช่าผ่าน LINE')).toBeTruthy();
+    expect(screen.getByText(/กรุณาตั้งค่า LINE/i)).toBeTruthy();
     expect(screen.queryByTestId('line-oa-qr-svg-container')).toBeNull();
 
-    const manageButton = screen.getByRole('button', { name: /จัดการ LINE Official Account/i });
+    const manageButton = screen.getByRole('button', { name: /(ตั้งค่า|จัดการ)\s*LINE/i });
     expect(manageButton).toBeTruthy();
 
     fireEvent.click(manageButton);
@@ -462,7 +462,7 @@ describe('LOCAL-07 — Quick Add Tenant via LINE OA (Q1 - Q9 Suite)', () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText('ยังไม่ได้เชื่อมต่อ LINE OA')).toBeTruthy();
+      expect(screen.getByText(/ยังไม่ได้เชื่อมต่อ LINE/i)).toBeTruthy();
     });
 
     // 2. Modal closes

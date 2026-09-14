@@ -166,9 +166,10 @@ export async function resolveAuthoritativeDormitoryContext(req: Request): Promis
     permissions = permissions.filter((p) => p !== '*');
   }
 
-  // Centralized Tenant-domain role normalization policy
+  // Centralized Manager-domain role normalization policy (MGR-01, MGR-02)
   if (roleCode === 'MANAGER') {
-    const managerTenantPermissions = [
+    const managerOperationalPermissions = [
+      // 1. Tenants, Contracts, Occupancy, Move-Out, Settlements
       'tenants:view',
       'tenants:create',
       'tenants:update',
@@ -181,10 +182,176 @@ export async function resolveAuthoritativeDormitoryContext(req: Request): Promis
       'tenant:archive',
       'tenant:document:read',
       'tenant:document:write',
+      'tenant:read',
+      'tenant:write',
+      'tenants:read',
+      'tenants:write',
+      'contracts:view',
+      'contracts:create',
+      'contracts:update',
+      'contracts:delete',
+      'contracts:manage',
+      'contracts:write',
+      'contract:read',
+      'contract:write',
+      'contract:create',
+      'contract:update',
+      'contract:delete',
+      'occupancy:view',
+      'occupancy:read',
+      'occupancy:write',
+      'moveout:write',
+      'moveout:read',
+      'moveout:view',
+      'move_out:create',
+      'settlement:read',
+      'settlement:write',
+      'daily_stays:view',
+      'daily_stays:create',
+      'daily_stays:update',
+      'daily_stay:read',
+      'daily_stay:write',
+
+      // 2. Meters Domain
+      'meters:view',
+      'meters:read',
+      'meter:read',
+      'meters:record',
+      'meters:write',
+      'meter:write',
+
+      // 3. Billing & Bills Domain (including F-01 billing_settings:view/read)
+      'bills:view',
+      'bills:read',
+      'bill:read',
+      'bills:generate',
+      'bills:create',
+      'bills:write',
+      'bills:cancel',
+      'bill:create',
+      'bill:write',
+      'billing:view',
+      'billing:read',
+      'billing:write',
+      'billing:manage',
+      'billing_cycles:view',
+      'billing_cycles:create',
+      'billing_cycles:update',
+      'billing_cycle:read',
+      'billing_cycle:write',
+      'billing_cycle:create',
+      'billing_settings:view',
+      'billing_settings:read',
+
+      // 4. Payments & Receipts Domain
+      'payments:view',
+      'payments:read',
+      'payment:read',
+      'payments:create',
+      'payments:write',
+      'payments:manage',
+      'payment:write',
+      'payment:create',
+      'receipts:view',
+      'receipts:read',
+      'receipt:read',
+      'receipts:manage',
+      'receipt:write',
+
+      // 5. Property (Rooms & Buildings) Domain
+      'rooms:view',
+      'rooms:read',
+      'room:read',
+      'rooms:create',
+      'rooms:update',
+      'rooms:delete',
+      'rooms:manage',
+      'rooms:write',
+      'room:write',
+      'room:create',
+      'room:update',
+      'room:delete',
+      'buildings:view',
+      'buildings:read',
+      'building:read',
+      'buildings:create',
+      'buildings:update',
+      'buildings:delete',
+      'buildings:manage',
+      'buildings:write',
+      'building:write',
+      'building:create',
+      'building:update',
+      'building:delete',
+      'property:read',
+      'property:write',
+      'property:manage',
+
+      // 6. Maintenance Domain
+      'maintenance:view',
+      'maintenance:read',
+      'maintenance:create',
+      'maintenance:update',
+      'maintenance:close',
+      'maintenance:write',
+      'maintenance:delete',
+
+      // 7. Announcements Domain
+      'announcements:view',
+      'announcements:read',
+      'announcement:read',
+      'announcements:create',
+      'announcements:update',
+      'announcements:delete',
+      'announcements:manage',
+      'announcements:write',
+      'announcement:write',
+      'announcement:create',
+      'announcement:update',
+      'announcement:delete',
+
+      // 8. Reports & Billboard Domain
+      'reports:view',
+      'reports:read',
+      'report:view',
+      'report:read',
+      'billboard:view',
+      'billboard:read',
+      'analytics:view',
+
+      // 9. Dormitory Core View
+      'dormitory:view',
+      'dormitory:read',
+
+      // 10. LINE Official Account Configuration Domain (MLD-01)
+      'line_oa:view',
+      'line_oa:read',
+      'line_oa:write',
+      'line_oa:manage',
+
+      // 11. Subscription Domain (SPEC-SUB-MR-01)
+      'subscription:view',
+      'subscription:read',
+      'subscription:write',
+      'subscription:manage',
     ];
     const permSet = new Set(permissions);
-    for (const p of managerTenantPermissions) {
+    for (const p of managerOperationalPermissions) {
       permSet.add(p);
+    }
+    // Strictly preserve owner-only security exclusions (MGR-02)
+    for (const p of Array.from(permSet)) {
+      if (
+        p === '*' ||
+        p.startsWith('payment_settings:') ||
+        p.startsWith('staff:') ||
+        p.startsWith('users:') ||
+        p.startsWith('access_grants:') ||
+        p === 'dormitory:delete' ||
+        p === 'dormitory:transfer'
+      ) {
+        permSet.delete(p);
+      }
     }
     permissions = Array.from(permSet);
   } else if (roleCode === 'STAFF') {
@@ -199,6 +366,13 @@ export async function resolveAuthoritativeDormitoryContext(req: Request): Promis
     }
     permSet.add('tenants:view');
     permSet.add('tenant:view');
+    permSet.add('meters:view');
+    permSet.add('meters:record');
+    permSet.add('meter:write');
+    permSet.add('maintenance:view');
+    permSet.add('maintenance:update');
+    permSet.add('maintenance:write');
+    permSet.add('maintenance:create');
     permissions = Array.from(permSet);
   } else if (roleCode === 'TENANT') {
     // Remove ALL Owner Tenant-domain permissions

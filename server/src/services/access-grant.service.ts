@@ -13,6 +13,7 @@ import { AppError } from '../types/index.js';
 import { LinePlatformAdapter, MockLinePlatformAdapter, LinePushResult } from './line-platform-adapter.js';
 import { LineFriendService } from './line-friend.service.js';
 import { SessionTokenService } from './session-token.service.js';
+import { CsrfService } from './csrf.service.js';
 import { LinePushUsageService } from './line-push-usage.service.js';
 import { LineOaService } from './line-oa.service.js';
 import { createLinePlatformAdapter } from './line-adapter-factory.js';
@@ -30,6 +31,7 @@ export class AccessGrantService {
   private lineAdapter: LinePlatformAdapter;
   private friendService: LineFriendService;
   private sessionTokenService: SessionTokenService;
+  private csrfService: CsrfService;
   private pushUsageService: LinePushUsageService;
   private lineOaService: LineOaService;
 
@@ -46,6 +48,7 @@ export class AccessGrantService {
     this.friendService = new LineFriendService(prisma);
     const env = getEnv();
     this.sessionTokenService = new SessionTokenService(env.SESSION_ENCRYPTION_KEY);
+    this.csrfService = new CsrfService(env.CSRF_SIGNING_KEY);
     this.pushUsageService = new LinePushUsageService(prisma);
     this.lineOaService = new LineOaService(prisma, this.lineAdapter);
   }
@@ -83,13 +86,15 @@ export class AccessGrantService {
    */
   async createAccessGrant(
     dormitoryId: string,
-    lineFriendId: string,
+    lineFriendId: string | null | undefined,
     roleCode: 'OWNER' | 'MANAGER' | 'STAFF',
     createdByPrincipal: string
   ) {
     if (!['OWNER', 'MANAGER', 'STAFF'].includes(roleCode)) {
       throw new AppError('Role must be OWNER, MANAGER, or STAFF', 400, 'INVALID_ROLE_CODE');
     }
+
+    const hasFriend = Boolean(lineFriendId && lineFriendId.trim().length > 0);
 
     const grantResult = await this.prisma.$transaction(async (tx) => {
       // 0. Set RLS context for Dormitory
@@ -105,20 +110,23 @@ export class AccessGrantService {
         throw new AppError('Cannot create access grant. Account slot limit (10) reached.', 409, 'STAFF_LIMIT_EXCEEDED');
       }
 
-      // 3. Verify LINE friend exists
-      const friend = await tx.dormitoryLineFriend.findFirst({
-        where: { id: lineFriendId, dormitoryId }
-      });
-      if (!friend) {
-        throw new AppError('Target LINE friend not found in dormitory directory', 444, 'LINE_FRIEND_NOT_FOUND');
-      }
+      let friend: any = null;
+      if (hasFriend) {
+        // 3. Verify LINE friend exists
+        friend = await tx.dormitoryLineFriend.findFirst({
+          where: { id: lineFriendId!, dormitoryId }
+        });
+        if (!friend) {
+          throw new AppError('Target LINE friend not found in dormitory directory', 444, 'LINE_FRIEND_NOT_FOUND');
+        }
 
-      // 4. Enforce single ACTIVE grant per LINE friend in dormitory
-      const existingActive = await tx.dormitoryAccessGrant.findFirst({
-        where: { dormitoryId, lineFriendId, status: 'ACTIVE' }
-      });
-      if (existingActive) {
-        throw new AppError('Target LINE friend already has an active access grant in this dormitory', 409, 'ACTIVE_GRANT_EXISTS');
+        // 4. Enforce single ACTIVE grant per LINE friend in dormitory
+        const existingActive = await tx.dormitoryAccessGrant.findFirst({
+          where: { dormitoryId, lineFriendId: lineFriendId!, status: 'ACTIVE' }
+        });
+        if (existingActive) {
+          throw new AppError('Target LINE friend already has an active access grant in this dormitory', 409, 'ACTIVE_GRANT_EXISTS');
+        }
       }
 
       // 5. Generate bearer token, hash, and AES encrypted bearer secret
@@ -129,7 +137,7 @@ export class AccessGrantService {
       const grant = await tx.dormitoryAccessGrant.create({
         data: {
           dormitoryId,
-          lineFriendId,
+          lineFriendId: hasFriend ? lineFriendId! : null,
           roleCode,
           tokenHash,
           tokenEncrypted,
@@ -158,18 +166,27 @@ export class AccessGrantService {
             grantId: grant.id,
             roleCode,
             tokenPrefix,
-            friendDisplayName: friend.displayName
+            friendDisplayName: friend ? friend.displayName : 'Direct Link'
           }
         }
       });
 
-      const baseUrl = process.env.PUBLIC_APP_URL || 'https://app.horplus.com';
+      const baseUrl = process.env.PUBLIC_APP_URL || (process.env.NODE_ENV === 'production' ? 'https://app.horplus.com' : 'http://127.0.0.1:5173');
       const bearerUrl = `${baseUrl}/staff-access#${rawToken}`;
 
       return { grant, bearerUrl, _transientRawToken: rawToken };
     });
 
-    // PHASE B: Attempt delivery outside the grant transaction
+    if (!hasFriend) {
+      return {
+        grant: grantResult.grant,
+        bearerUrl: grantResult.bearerUrl,
+        pushed: false,
+        deliveryStatus: null
+      };
+    }
+
+    // PHASE B: Attempt delivery outside the grant transaction (only if friend specified)
     const delivery = await this.deliverAccessGrant(grantResult.grant.id, dormitoryId, grantResult._transientRawToken).catch((err) => {
       console.error('DELIVERY ERROR:', err);
       return {
@@ -202,7 +219,7 @@ export class AccessGrantService {
     }
 
     const rawToken = decryptText(grant.tokenEncrypted);
-    const baseUrl = process.env.PUBLIC_APP_URL || 'https://app.horplus.com';
+    const baseUrl = process.env.PUBLIC_APP_URL || (process.env.NODE_ENV === 'production' ? 'https://app.horplus.com' : 'http://127.0.0.1:5173');
     return {
       url: `${baseUrl}/staff-access#${rawToken}`,
       grantId
@@ -227,7 +244,7 @@ export class AccessGrantService {
       });
     });
 
-    if (!grant) {
+    if (!grant || !grant.lineFriendId) {
       return { pushed: false, deliveryStatus: 'failed' };
     }
 
@@ -355,7 +372,7 @@ export class AccessGrantService {
       });
     });
 
-    if (!grant) return { pushed: false, deliveryStatus: 'failed' };
+    if (!grant || !grant.lineFriendId) return { pushed: false, deliveryStatus: 'failed' };
 
     const rawToken = grant.tokenEncrypted ? decryptText(grant.tokenEncrypted) : null;
     if (!rawToken) return { pushed: false, deliveryStatus: 'failed' };
@@ -484,7 +501,7 @@ export class AccessGrantService {
     );
 
     // 4. Generate CSRF token for the session
-    const csrfToken = SessionTokenService.hashSessionId(`csrf_${sessionId}`);
+    const csrfToken = this.csrfService.generateCsrfToken(sessionId);
 
     return {
       sessionToken,
@@ -494,8 +511,8 @@ export class AccessGrantService {
         dormitoryId: grant.dormitoryId,
         dormitoryName: grant.dormitory.name,
         roleCode: grant.roleCode,
-        friendDisplayName: grant.lineFriend.displayName,
-        pictureUrl: grant.lineFriend.pictureUrl
+        friendDisplayName: grant.lineFriend?.displayName ?? null,
+        pictureUrl: grant.lineFriend?.pictureUrl ?? null
       }
     };
   }
@@ -652,8 +669,8 @@ export class AccessGrantService {
         id: g.id,
         type: 'ACCESS_GRANT',
         lineFriendId: g.lineFriendId,
-        displayName: g.lineFriend.displayName,
-        pictureUrl: g.lineFriend.pictureUrl,
+        displayName: g.lineFriend?.displayName || 'ลิงก์เข้าใช้งานตรง (Direct Link)',
+        pictureUrl: g.lineFriend?.pictureUrl ?? null,
         roleCode: g.roleCode,
         status: g.status,
         version: g.version,

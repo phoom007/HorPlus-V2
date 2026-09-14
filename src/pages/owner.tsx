@@ -69,6 +69,7 @@ import { SubscriptionPage } from './owner/subscription';
 import { fetchAllPaginated, fetchAllPaginatedWithMeta } from '../utils/fetch-paginated';
 import { BillingCycleCalendarPicker } from '../components/common/BillingCycleCalendarPicker';
 import { LineQuotaBadge } from '../components/LineQuotaBadge';
+import { CelebrationFireworksOverlay } from '../components/common/CelebrationFireworksOverlay';
 
 export function isQueryReady(queryClient: QueryClient, queryKey: readonly unknown[], staleTime?: number): boolean {
   const state = queryClient.getQueryState(queryKey);
@@ -198,8 +199,74 @@ const fetchAuthoritativeRooms = async (dormHeader?: Record<string, string>): Pro
   return normalizeAuthoritativeRooms(raw);
 };
 
-export function getTargetQueriesForTab(targetTab: string, dormId: string, cycleId?: string) {
+export function getTargetQueriesForTab(targetTab: string, dormId: string, cycleId?: string, userRole?: string | null) {
   const dormHeader = dormId ? { 'x-dormitory-id': dormId } : undefined;
+
+  // Role-Aware Scoping for Staff (Tech / Maid)
+  if (userRole === 'staff') {
+    switch (targetTab) {
+      case 'dashboard': {
+        const queries: any[] = [
+          { queryKey: queryKeys.rooms(dormId), queryFn: () => fetchAuthoritativeRooms(dormHeader), staleTime: STALE_TIMES.ROOMS },
+          { queryKey: queryKeys.buildings(dormId), queryFn: () => fetchAllPaginated<Building>('/api/v1/properties/buildings', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.BUILDINGS },
+          { queryKey: queryKeys.maintenance(dormId), queryFn: () => fetchAllPaginated('/api/v1/maintenance', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.MAINTENANCE },
+        ];
+        if (cycleId) {
+          queries.push({
+            queryKey: queryKeys.meterReadings(dormId, cycleId),
+            queryFn: async () => {
+              const res = await fetch(`/api/v1/meters/readings?billingCycleId=${cycleId}&pageSize=200`, {
+                headers: dormHeader,
+                credentials: 'include',
+              });
+              if (!res.ok) {
+                throw new Error(`Failed to load meter readings: HTTP ${res.status}`);
+              }
+              const data = await res.json();
+              return data?.data || [];
+            },
+            staleTime: STALE_TIMES.METER_WORKSPACE,
+          });
+        }
+        return queries;
+      }
+      case 'meters': {
+        const queries: any[] = [
+          { queryKey: queryKeys.rooms(dormId), queryFn: () => fetchAuthoritativeRooms(dormHeader), staleTime: STALE_TIMES.ROOMS },
+          { queryKey: queryKeys.buildings(dormId), queryFn: () => fetchAllPaginated<Building>('/api/v1/properties/buildings', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.BUILDINGS },
+          { queryKey: queryKeys.billingCycles(dormId), queryFn: () => fetchAllPaginatedWithMeta('/api/v1/billing-cycles', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.BILLING_CYCLES },
+        ];
+        if (cycleId) {
+          queries.push({
+            queryKey: queryKeys.meterWorkspace(dormId, cycleId),
+            queryFn: async () => {
+              const [serverReadings, cyclePeopleRes] = await Promise.all([
+                getDataProvider().meters.getByCycle(cycleId),
+                getDataProvider().meters.getCyclePeopleCount(cycleId),
+              ]);
+              if (cyclePeopleRes && cyclePeopleRes.success === false) {
+                const err = cyclePeopleRes.error;
+                const errMsg = typeof err === 'object' && err !== null ? (err as any).message : (typeof err === 'string' ? err : 'ไม่สามารถโหลดข้อมูลจำนวนผู้พักอาศัยได้');
+                throw new Error(errMsg);
+              }
+              return { serverReadings, cyclePeopleRes };
+            },
+            staleTime: STALE_TIMES.METER_WORKSPACE,
+          });
+        }
+        return queries;
+      }
+      case 'maintenance':
+        return [
+          { queryKey: queryKeys.maintenance(dormId), queryFn: () => fetchAllPaginated('/api/v1/maintenance', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.MAINTENANCE },
+          { queryKey: queryKeys.rooms(dormId), queryFn: () => fetchAuthoritativeRooms(dormHeader), staleTime: STALE_TIMES.ROOMS },
+          { queryKey: queryKeys.buildings(dormId), queryFn: () => fetchAllPaginated<Building>('/api/v1/properties/buildings', { headers: dormHeader, credentials: 'include' }), staleTime: STALE_TIMES.BUILDINGS },
+        ];
+      default:
+        return [];
+    }
+  }
+
   switch (targetTab) {
     case 'dashboard': {
       const queries: any[] = [
@@ -356,6 +423,35 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
   const navigate = useNavigate();
   const location = useLocation();
 
+  // Dynamic Active Dormitory & Role Context Resolution
+  const memberships: any[] = authCtx.memberships || authCtx.user?.memberships || [];
+  const savedDormId = sessionStorage.getItem('active_dormitory_selected_for_session') || localStorage.getItem('selected_dormitory_id');
+  const activeMemberships = memberships.filter((m: any) => !m.status || String(m.status).toLowerCase() === 'active');
+
+  const validDormId = activeMemberships.find((m: any) => m.dormitoryId === savedDormId)?.dormitoryId
+    || activeMemberships[0]?.dormitoryId
+    || authCtx.dormitoryId;
+
+  const activeDormitoryId = (validDormId && validDormId !== 'dorm-1' && validDormId !== 'dorm-001')
+    ? validDormId
+    : (activeMemberships[0]?.dormitoryId || validDormId);
+
+  const activeMembership = activeMemberships.find((m: any) => m.dormitoryId === activeDormitoryId) || activeMemberships[0];
+
+  // Authoritative Role Normalization (Fail-Closed: returns null if unmapped)
+  const rawRole = activeMembership?.roleCode || (typeof activeMembership?.role === 'object' ? activeMembership?.role?.code : activeMembership?.role) || authCtx.user?.roleCode || (typeof authCtx.user?.role === 'object' ? authCtx.user?.role?.code : authCtx.user?.role) || user?.roleId || user?.role || (authCtx.userType === 'owner' ? 'OWNER' : undefined) || 'OWNER';
+  const userRole = normalizeRole(rawRole);
+
+  const isDirectAccess = Boolean(
+    (user as any)?.isDirectAccess ||
+    (authCtx.user as any)?.isDirectAccess ||
+    user?.id?.startsWith('ag_user_') ||
+    user?.email?.endsWith('@horplus.local') ||
+    sessionStorage.getItem('is_direct_access_grant') === 'true'
+  );
+
+  const displayRoleName = user.roleName || (userRole === 'staff' ? 'ช่าง / แม่บ้าน' : userRole === 'manager' ? 'ผู้จัดการ' : 'เจ้าของหอพัก');
+
   const isAddDormRegistrationMode = location.pathname.startsWith('/owner/dormitories/new');
   const isRegistrationMode = Boolean(onboardingRequired) || isAddDormRegistrationMode;
 
@@ -395,26 +491,62 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
     }
   }, [pathSegment, onboardingRequired, isAddDormRegistrationMode, isRegistrationMode, navigate]);
 
-  const changeTab = (tabId: string) => {
+  const [showTrialCelebrationOverlay, setShowTrialCelebrationOverlay] = useState(false);
+
+  useEffect(() => {
+    try {
+      const pendingFromSession = sessionStorage.getItem('horplus_pending_trial_celebration');
+      const pendingFromRouter = (location.state as any)?.showTrialCelebration;
+      if (pendingFromSession === 'true' || pendingFromRouter) {
+        sessionStorage.removeItem('horplus_pending_trial_celebration');
+        setShowTrialCelebrationOverlay(true);
+      }
+    } catch { }
+  }, [location]);
+
+  const changeTab = (tabId: string, state?: Record<string, any>) => {
     setIsDetailViewOpen(false);
+    if (userRole === 'staff' && !['dashboard', 'meters', 'maintenance'].includes(tabId)) {
+      return;
+    }
+    if (userRole === 'manager' && ['users', 'settings'].includes(tabId)) {
+      return;
+    }
+    if (state?.showTrialCelebration) {
+      setShowTrialCelebrationOverlay(true);
+    }
     if (isRegistrationMode) {
       if (isAddDormRegistrationMode) {
         if (tabId === 'register' || tabId === 'dormitories/new') {
-          navigate('/owner/dormitories/new');
+          navigate('/owner/dormitories/new', { state });
         }
         return;
       }
       if (onboardingRequired) {
         if (tabId === 'register') {
-          navigate('/owner/register');
+          navigate('/owner/register', { state });
         }
         return;
       }
       return;
     }
-    navigate(`/owner/${tabId}`);
+    navigate(`/owner/${tabId}`, { state });
     applyPostNavigationSideEffects(tabId);
   };
+
+  useEffect(() => {
+    if (userRole === 'staff' && !isRegistrationMode) {
+      const allowedTabs = ['dashboard', 'meters', 'maintenance'];
+      if (!allowedTabs.includes(activeTab)) {
+        navigate('/owner/dashboard', { replace: true });
+      }
+    } else if (userRole === 'manager' && !isRegistrationMode) {
+      const allowedTabs = ['dashboard', 'meters', 'payments', 'rooms', 'tenants', 'maintenance', 'announcements', 'reports', 'line-oa', 'subscription'];
+      if (!allowedTabs.includes(activeTab)) {
+        navigate('/owner/dashboard', { replace: true });
+      }
+    }
+  }, [userRole, activeTab, isRegistrationMode, navigate]);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [initialRoomId, setInitialRoomId] = useState<string | undefined>(undefined);
   const [initialTenantId, setInitialTenantId] = useState<string | undefined>(undefined);
@@ -443,18 +575,6 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
   const selectedCycle = selectedCycleCode;
 
   // Dynamic Active Dormitory Context Resolution
-  const memberships: any[] = authCtx.memberships || authCtx.user?.memberships || [];
-  const savedDormId = sessionStorage.getItem('active_dormitory_selected_for_session') || localStorage.getItem('selected_dormitory_id');
-  const activeMemberships = memberships.filter((m: any) => !m.status || String(m.status).toLowerCase() === 'active');
-
-  const validDormId = activeMemberships.find((m: any) => m.dormitoryId === savedDormId)?.dormitoryId
-    || activeMemberships[0]?.dormitoryId
-    || authCtx.dormitoryId;
-
-  const activeDormitoryId = (validDormId && validDormId !== 'dorm-1' && validDormId !== 'dorm-001')
-    ? validDormId
-    : (activeMemberships[0]?.dormitoryId || validDormId);
-
   const prevDormitoryIdRef = React.useRef<string | null>(null);
 
   useEffect(() => {
@@ -477,21 +597,20 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
   const billingCyclesQuery = useQuery({
     queryKey: queryKeys.billingCycles(activeDormitoryId),
     queryFn: () => fetchAllPaginatedWithMeta('/api/v1/billing-cycles', { headers: dormHeader, credentials: 'include' }),
-    enabled: isQueryEnabled,
+    enabled: isQueryEnabled && userRole !== 'staff',
     staleTime: STALE_TIMES.BILLING_CYCLES,
   });
 
-  const activeMembership = activeMemberships.find((m: any) => m.dormitoryId === activeDormitoryId) || activeMemberships[0];
   const dormitoryQuery = useQuery({
     queryKey: queryKeys.dormitory(activeDormitoryId),
     queryFn: async () => {
       const dataProvider = getDataProvider();
       return await dataProvider.dormitories.getById(activeDormitoryId);
     },
-    enabled: isQueryEnabled,
+    enabled: isQueryEnabled && userRole !== 'staff',
     staleTime: STALE_TIMES.dormitory,
   });
-  const currentDormitory = dormitoryQuery.data || activeMembership?.dormitory || null;
+  const currentDormitory = dormitoryQuery.data || activeMembership?.dormitory || (activeMembership ? { id: activeMembership.dormitoryId, name: activeMembership.dormitoryName } : null);
 
   const billingCycles: any[] = billingCyclesQuery.data?.data || [];
 
@@ -499,8 +618,8 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
   const targetCycleIdForActiveTab = selectedBillingCycleId || billingCyclesQuery.data?.operationalBillingCycleId || null;
   const activeTabQueriesSpec = React.useMemo(() => {
     if (!activeDormitoryId || isRegistrationMode) return [];
-    return getTargetQueriesForTab(activeTab, activeDormitoryId, targetCycleIdForActiveTab);
-  }, [activeTab, activeDormitoryId, isRegistrationMode, targetCycleIdForActiveTab]);
+    return getTargetQueriesForTab(activeTab, activeDormitoryId, targetCycleIdForActiveTab, userRole);
+  }, [activeTab, activeDormitoryId, isRegistrationMode, targetCycleIdForActiveTab, userRole]);
 
   const activeTabQueryResults = useQueries({
     queries: activeTabQueriesSpec.map(q => ({
@@ -959,15 +1078,12 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
     { id: 'announcements', label: 'ประชาสัมพันธ์', icon: Megaphone, roles: ['owner', 'manager'] },
     { id: 'reports', label: 'รายงานสถิติ', icon: BarChart4, roles: ['owner', 'manager'] },
     { id: 'users', label: 'จัดการผู้ใช้งาน', icon: ShieldCheck, roles: ['owner'] },
-    { id: 'subscription', label: 'ต่อแพ็กเกจ', icon: Crown, roles: ['owner'] },
+    { id: 'subscription', label: 'ต่อแพ็กเกจ', icon: Crown, roles: ['owner', 'manager'] },
     { id: 'settings', label: 'ตั้งค่าระบบ', icon: Settings, roles: ['owner'] }
   ];
 
 
 
-  // Authoritative Role Normalization (Fail-Closed: returns null if unmapped)
-  const rawRole = activeMembership?.roleCode || (typeof activeMembership?.role === 'object' ? activeMembership?.role?.code : activeMembership?.role) || authCtx.user?.roleCode || (typeof authCtx.user?.role === 'object' ? authCtx.user?.role?.code : authCtx.user?.role) || user?.roleId || user?.role || (authCtx.userType === 'owner' ? 'OWNER' : undefined) || 'OWNER';
-  const userRole = normalizeRole(rawRole);
 
   // Fail-closed menu filtering: during registration mode, show ALL normal owner menus so owner can see what HorPlus contains, but disable them
   let allowedMenuItems = isRegistrationMode
@@ -1034,6 +1150,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
             contracts={contracts}
             tenants={tenants}
             activeUser={user}
+            userRole={userRole}
             selectedCycle={selectedCycleCode}
             selectedBillingCycle={billingCycles.find(c => c.id === selectedBillingCycleId || c.cycleCode === selectedCycleCode)}
             meterReadings={meterReadings}
@@ -1085,6 +1202,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
             selectedBillingCycleId={selectedBillingCycleId || billingCycles.find(c => c.cycleCode === selectedCycleCode)?.id}
             selectedCycleCode={selectedCycleCode}
             billingCycles={billingCycles}
+            onNavigateToLineConfig={() => setShowDirectLineOaModal(true)}
           />
         );
       case 'tenants':
@@ -1103,6 +1221,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
             onSaveContracts={handleSaveContracts}
             onSaveBills={handleSaveBills}
             onAddLog={handleAddLog}
+            onNavigateToLineConfig={() => setShowDirectLineOaModal(true)}
             initialTenantId={initialTenantId}
             onClearInitialTenantId={() => setInitialTenantId(undefined)}
             returnContext={tenantReturnContext}
@@ -1209,6 +1328,10 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
             contracts={contracts}
             onSaveBills={handleSaveBills}
             onSelectTenant={(tId, rId) => {
+              if (userRole === 'staff') {
+                showNavToast('คุณไม่มีสิทธิ์ดำเนินการสิ่งนี้');
+                return;
+              }
               setInitialTenantId(tId);
               setCameFromMetersContext({
                 roomId: rId,
@@ -1225,6 +1348,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
             selectedBillingCycleId={selectedBillingCycleId || billingCycles.find(c => c.cycleCode === selectedCycleCode)?.id}
             selectedCycleCode={selectedCycleCode}
             billingCycles={billingCycles}
+            userRole={userRole}
           />
         );
       case 'payments':
@@ -1240,6 +1364,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
             billingCycles={billingCycles}
             onAddLog={handleAddLog}
             onUpdateBills={() => queryClient.invalidateQueries({ queryKey: queryKeys.bills(activeDormitoryId) })}
+            onNavigateToLineConfig={() => setShowDirectLineOaModal(true)}
           />
         );
 
@@ -1258,6 +1383,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
       case 'announcements':
         return (
           <OwnerAnnouncements
+            dormitoryId={activeDormitoryId}
             announcements={announcements}
             onSaveAnnouncements={handleSaveAnnouncements}
             onAddLog={handleAddLog}
@@ -1288,9 +1414,16 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
           />
         );
       case 'users':
-        return <OwnerUsers onAddLog={handleAddLog} />;
+        return <OwnerUsers onAddLog={handleAddLog} dormitoryId={activeDormitoryId} />;
       case 'subscription':
-        return <SubscriptionPage dormitoryId={validDormId} rooms={rooms} onDetailViewChange={setIsDetailViewOpen} />;
+        return (
+          <SubscriptionPage
+            dormitoryId={validDormId}
+            rooms={rooms}
+            onDetailViewChange={setIsDetailViewOpen}
+            onNavigate={(tab, state) => changeTab(tab, state)}
+          />
+        );
       case 'settings':
         return (
           <OwnerSettings
@@ -1300,6 +1433,14 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
             onCycleChange={(c: string) => setSelectedCycleCode(c)}
             availableCycles={selectableBillingCycles}
             billingCycles={billingCycles}
+          />
+        );
+      case 'line-oa':
+        return (
+          <OwnerLineOaPage
+            dormitoryId={activeDormitoryId}
+            onNavigateBack={() => changeTab('dashboard')}
+            onAddLog={handleAddLog}
           />
         );
       default:
@@ -1394,7 +1535,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
                 <UserAvatar user={user} className="w-10 h-10 rounded-full border-2 border-blue-100" />
                 <div className="min-w-0">
                   <p className="text-xs font-extrabold text-slate-900 truncate leading-tight">{user.name}</p>
-                  <span className="text-[10px] text-slate-500 font-bold block mt-1 leading-none">{user.roleName}</span>
+                  <span className="text-[10px] text-slate-500 font-bold block mt-1 leading-none">{displayRoleName}</span>
                 </div>
               </div>
 
@@ -1477,7 +1618,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
             <UserAvatar user={user} className="w-10 h-10 rounded-full border-2 border-blue-100" />
             <div className="min-w-0">
               <p className="text-xs font-extrabold text-slate-900 truncate leading-tight">{user.name}</p>
-              <span className="text-[10px] text-slate-500 font-bold block mt-1 leading-none">{user.roleName}</span>
+              <span className="text-[10px] text-slate-500 font-bold block mt-1 leading-none">{displayRoleName}</span>
             </div>
           </div>
 
@@ -1790,11 +1931,6 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
                           ปิด
                         </button>
                       </div>
-
-                      <div className="text-[10px] font-medium text-amber-800 bg-amber-50 p-2 rounded-xl border border-amber-200 flex items-center justify-between mb-2">
-                        <span>💡 <strong>คำแนะนำ:</strong> ปัดซ้ายที่รายการแจ้งเตือนเพื่อลบข้อความ</span>
-                      </div>
-
                       <div className="space-y-2 max-h-[320px] overflow-y-auto pr-1">
                         {staffNotices.map((notif) => (
                           <div key={notif.id} data-testid={`staff-notice-item-${notif.id}`}>
@@ -1851,7 +1987,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
               <UserAvatar user={user} className="w-7.5 h-7.5 rounded-full border border-slate-100" />
               <div className="hidden xl:block leading-none text-left">
                 <p className="text-xs font-bold text-slate-800">{user.name}</p>
-                <span className="text-[9px] text-slate-400 font-bold">{user.roleName}</span>
+                <span className="text-[9px] text-slate-400 font-bold">{displayRoleName}</span>
               </div>
             </button>
           </div>
@@ -1860,7 +1996,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
         {/* Dynamic page container */}
         <main
           id="owner-main-content"
-          className={`flex-1 ${isDetailViewOpen
+          className={`flex-1 [scrollbar-gutter:stable] ${isDetailViewOpen
             ? 'p-0 overflow-hidden bg-slate-50 flex flex-col'
             : 'overflow-y-auto bg-slate-50/70 p-4 md:p-6 pb-24 md:pb-6'
             }`}
@@ -1927,15 +2063,10 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
           className="fixed inset-0 z-[120] bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 overflow-y-auto"
         >
           <div className="relative w-full max-w-4xl bg-slate-50 rounded-3xl shadow-2xl overflow-hidden my-4 sm:my-8 max-h-[95vh] overflow-y-auto">
-            <button
-              onClick={() => setShowDirectLineOaModal(false)}
-              className="absolute top-4 right-4 z-10 p-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-700 transition-colors cursor-pointer"
-              title="ปิดหน้าต่าง"
-            >
-              <X className="w-5 h-5" />
-            </button>
             <OwnerLineOaPage
               dormitoryId={activeDormitoryId}
+              isModal={true}
+              onClose={() => setShowDirectLineOaModal(false)}
               onNavigateBack={() => setShowDirectLineOaModal(false)}
               onAddLog={handleAddLog}
             />
@@ -1950,6 +2081,12 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
           <span>{navToast}</span>
         </div>
       )}
+
+      {/* Trial Claim Celebration Fireworks Overlay (PERF-08) */}
+      <CelebrationFireworksOverlay
+        isOpen={showTrialCelebrationOverlay}
+        onClose={() => setShowTrialCelebrationOverlay(false)}
+      />
 
     </div>
   );

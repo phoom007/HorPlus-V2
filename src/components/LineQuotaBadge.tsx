@@ -63,7 +63,7 @@ export const LineQuotaBadge: React.FC<LineQuotaBadgeProps> = ({
         if (data) {
           setLineConfig({
             connected: Boolean(data.connected),
-            isReady: Boolean(data.isReady || (data.connected && data.credentialsVerified)),
+            isReady: Boolean(data.isReady),
             credentialsVerified: Boolean(data.credentialsVerified),
             monthlyQuota: data.monthlyQuota ?? 30,
             usedQuota: data.usedQuota ?? 0,
@@ -113,6 +113,7 @@ export const LineQuotaBadge: React.FC<LineQuotaBadgeProps> = ({
   };
 
   const isConfigured = !isRegistrationMode && lineConfig.connected && lineConfig.isReady;
+  const isPendingWebhook = !isRegistrationMode && lineConfig.connected && !lineConfig.isReady;
   const isExhausted = isConfigured && lineConfig.remainingQuota <= 0;
   const isWarning = isConfigured && lineConfig.remainingQuota <= 5 && !isExhausted;
   const usagePercent = Math.min(100, Math.round((lineConfig.usedQuota / lineConfig.monthlyQuota) * 100));
@@ -150,7 +151,7 @@ export const LineQuotaBadge: React.FC<LineQuotaBadgeProps> = ({
     );
   }
 
-  // 2. REGISTRATION COMPLETED: Clickable pill (shows quota if ready, or "ยังไม่พร้อมใช้งาน" taking owner to settings)
+  // 2. REGISTRATION COMPLETED: Clickable pill (shows quota if ready, or "รอเชื่อมต่อ Webhook" / "ยังไม่พร้อมใช้งาน")
   return (
     <>
       {/* LINE Quota Counter Button */}
@@ -164,32 +165,36 @@ export const LineQuotaBadge: React.FC<LineQuotaBadgeProps> = ({
         }}
         type="button"
         data-testid="header-line-status-pill"
-        data-line-status={isConfigured ? 'ready' : 'unconfigured'}
-        className={`group relative inline-flex items-center gap-1 sm:gap-1.5 shrink-0 whitespace-nowrap px-2 sm:px-2.5 py-0.5 sm:py-1 rounded-full border transition-all cursor-pointer select-none active:scale-95 ${
-          !isConfigured
+        data-line-status={isConfigured ? 'ready' : isPendingWebhook ? 'webhook_pending' : 'unconfigured'}
+        className={`group relative inline-flex items-center gap-1 sm:gap-1.5 shrink-0 whitespace-nowrap px-2 sm:px-2.5 py-0.5 sm:py-1 rounded-full border transition-all cursor-pointer select-none active:scale-95 ${!isConfigured
             ? 'bg-amber-50/90 border-amber-200/80 hover:bg-amber-100/90 text-amber-800'
             : isExhausted
-            ? 'bg-rose-50 border-rose-200 hover:bg-rose-100 text-rose-700'
-            : isWarning
-            ? 'bg-amber-50 border-amber-200 hover:bg-amber-100 text-amber-800'
-            : 'bg-emerald-50/90 border-emerald-200/80 hover:bg-emerald-100/90 text-emerald-800'
-        } ${className}`}
-        title={isConfigured ? 'คลิกเพื่อดูรายละเอียดโควตา LINE' : 'คลิกเพื่อตั้งค่า LINE OA'}
+              ? 'bg-rose-50 border-rose-200 hover:bg-rose-100 text-rose-700'
+              : isWarning
+                ? 'bg-amber-50 border-amber-200 hover:bg-amber-100 text-amber-800'
+                : 'bg-emerald-50/90 border-emerald-200/80 hover:bg-emerald-100/90 text-emerald-800'
+          } ${className}`}
+        title={
+          isConfigured
+            ? 'คลิกเพื่อดูรายละเอียดโควตา LINE'
+            : isPendingWebhook
+              ? 'คลิกเพื่อดูสถานะ Webhook LINE OA'
+              : 'คลิกเพื่อตั้งค่า LINE OA'
+        }
       >
         {/* LINE Icon / Attention indicator */}
         {!hideIcon && (
           <div className="relative flex items-center justify-center shrink-0">
             <LineLogo className={`w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0 rounded-sm ${!isConfigured ? 'opacity-85' : ''}`} />
             <span
-              className={`absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full border border-white ${
-                !isConfigured
+              className={`absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full border border-white ${!isConfigured
                   ? 'bg-amber-500 animate-pulse'
                   : isExhausted
-                  ? 'bg-rose-500 animate-ping'
-                  : isWarning
-                  ? 'bg-amber-500 animate-pulse'
-                  : 'bg-emerald-500'
-              }`}
+                    ? 'bg-rose-500 animate-ping'
+                    : isWarning
+                      ? 'bg-amber-500 animate-pulse'
+                      : 'bg-emerald-500'
+                }`}
             />
           </div>
         )}
@@ -203,19 +208,18 @@ export const LineQuotaBadge: React.FC<LineQuotaBadgeProps> = ({
           )}
           {isConfigured ? (
             <span
-              className={`font-black px-1.5 py-0.5 rounded-md leading-none whitespace-nowrap text-[9px] sm:text-[10.5px] ${
-                isExhausted
+              className={`font-black px-1.5 py-0.5 rounded-md leading-none whitespace-nowrap text-[9px] sm:text-[10.5px] ${isExhausted
                   ? 'bg-rose-600 text-white'
                   : isWarning
-                  ? 'bg-amber-600 text-white'
-                  : 'bg-[#06C755] text-white'
-              }`}
+                    ? 'bg-amber-600 text-white'
+                    : 'bg-[#06C755] text-white'
+                }`}
             >
               {lineConfig.remainingQuota}/{lineConfig.monthlyQuota}
             </span>
           ) : (
             <span className="font-bold px-1.5 py-0.5 rounded-md leading-none whitespace-nowrap text-[9px] sm:text-[10.5px] bg-amber-200 text-amber-900 animate-pulse">
-              ยังไม่พร้อมใช้งาน
+              {isPendingWebhook ? 'รอเชื่อมต่อ Webhook' : 'ยังไม่พร้อมใช้งาน'}
             </span>
           )}
         </div>
@@ -229,19 +233,33 @@ export const LineQuotaBadge: React.FC<LineQuotaBadgeProps> = ({
           <div className="relative w-full max-w-md bg-white rounded-3xl border border-slate-100 shadow-2xl overflow-hidden z-10 animate-in zoom-in-95 duration-200">
             {/* Header banner */}
             <div
-              className={`p-5 text-white relative ${
-                isConfigured
+              className={`p-5 text-white relative ${isConfigured
                   ? 'bg-gradient-to-r from-[#06C755] to-emerald-600'
                   : 'bg-gradient-to-r from-amber-500 to-orange-600'
-              }`}
+                }`}
             >
-              <button
-                onClick={() => setIsOpen(false)}
-                className="absolute top-4 right-4 p-1.5 rounded-xl bg-white/20 hover:bg-white/30 text-white transition-colors cursor-pointer"
-                aria-label="ปิด"
-              >
-                <X className="w-4 h-4" />
-              </button>
+              <div className="absolute top-4 right-4 flex items-center gap-1.5">
+                {onNavigateToLineConfig && (
+                  <button
+                    onClick={() => {
+                      setIsOpen(false);
+                      onNavigateToLineConfig();
+                    }}
+                    className="p-1.5 px-2.5 rounded-xl bg-white/20 hover:bg-white/30 text-white transition-colors cursor-pointer flex items-center gap-1.5 text-xs font-bold"
+                    title="แก้ไข LINE OA"
+                  >
+                    <Settings className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">แก้ไข LINE OA</span>
+                  </button>
+                )}
+                <button
+                  onClick={() => setIsOpen(false)}
+                  className="p-1.5 rounded-xl bg-white/20 hover:bg-white/30 text-white transition-colors cursor-pointer"
+                  aria-label="ปิด"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
 
               <div className="flex items-center gap-3 mb-2">
                 <div className="w-10 h-10 rounded-2xl bg-white/20 backdrop-blur-md flex items-center justify-center shrink-0 border border-white/30 overflow-hidden shadow-xs">
@@ -249,12 +267,14 @@ export const LineQuotaBadge: React.FC<LineQuotaBadgeProps> = ({
                 </div>
                 <div>
                   <h3 className="text-base font-black tracking-tight text-white leading-tight">
-                    {isConfigured ? 'โควตาการส่งข้อความ LINE' : 'LINE ยังไม่พร้อมใช้งาน'}
+                    {isConfigured ? 'โควตาการส่งข้อความ LINE' : isPendingWebhook ? 'รอเชื่อมต่อ Webhook' : 'LINE ยังไม่พร้อมใช้งาน'}
                   </h3>
                   <span className="text-[11px] font-bold text-white/90 block mt-0.5">
                     {isConfigured
                       ? `รีเซ็ตอัตโนมัติ ${lineConfig.monthlyQuota}/${lineConfig.monthlyQuota} ทุกวันที่ 1`
-                      : 'กรุณาเชื่อมต่อ Channel ID & Secret เพื่อเปิดใช้งาน'}
+                      : isPendingWebhook
+                        ? 'บันทึกข้อมูลแล้ว นำ Webhook URL ไปใส่ใน LINE Developers Console เพื่อเปิดใช้งาน'
+                        : 'กรุณาเชื่อมต่อ Channel ID & Secret เพื่อเปิดใช้งาน'}
                   </span>
                 </div>
               </div>
@@ -269,13 +289,12 @@ export const LineQuotaBadge: React.FC<LineQuotaBadgeProps> = ({
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-bold text-slate-500">โควตาคงเหลือเดือนนี้</span>
                       <span
-                        className={`text-xs font-black px-2 py-0.5 rounded-full ${
-                          isExhausted
+                        className={`text-xs font-black px-2 py-0.5 rounded-full ${isExhausted
                             ? 'bg-rose-100 text-rose-700'
                             : isWarning
-                            ? 'bg-amber-100 text-amber-800'
-                            : 'bg-emerald-100 text-emerald-800'
-                        }`}
+                              ? 'bg-amber-100 text-amber-800'
+                              : 'bg-emerald-100 text-emerald-800'
+                          }`}
                       >
                         {lineConfig.remainingQuota} / {lineConfig.monthlyQuota} ข้อความ
                       </span>
@@ -283,13 +302,12 @@ export const LineQuotaBadge: React.FC<LineQuotaBadgeProps> = ({
 
                     <div className="w-full h-2.5 bg-slate-200/80 rounded-full overflow-hidden p-0.5">
                       <div
-                        className={`h-full rounded-full transition-all duration-500 ${
-                          isExhausted
+                        className={`h-full rounded-full transition-all duration-500 ${isExhausted
                             ? 'bg-rose-500'
                             : isWarning
-                            ? 'bg-amber-500'
-                            : 'bg-[#06C755]'
-                        }`}
+                              ? 'bg-amber-500'
+                              : 'bg-[#06C755]'
+                          }`}
                         style={{ width: `${Math.max(5, 100 - usagePercent)}%` }}
                       />
                     </div>
@@ -335,21 +353,14 @@ export const LineQuotaBadge: React.FC<LineQuotaBadgeProps> = ({
                 <div className="space-y-4 text-center py-2">
                   <div className="p-4 bg-amber-50 rounded-2xl border border-amber-100 text-left space-y-2">
                     <p className="text-xs font-bold text-amber-900">
-                      ยังไม่ได้เชื่อมต่อ LINE Official Account
+                      {isPendingWebhook ? 'รอการเชื่อมต่อ Webhook จาก LINE Developers' : 'ยังไม่ได้เชื่อมต่อ LINE Official Account'}
                     </p>
                     <p className="text-[11px] text-amber-800 leading-relaxed">
-                      ระบบจำเป็นต้องเชื่อมต่อ LINE Messaging API เพื่อเปิดใช้งานฟีเจอร์แจ้งเตือนอัตโนมัติไปยังผู้เช่าและเจ้าของหอพัก
+                      {isPendingWebhook
+                        ? 'บันทึก Channel ID & Secret แล้ว แต่ระบบยังตรวจไม่พบการเปิดใช้งาน Webhook กรุณานำ Webhook URL ไปเชื่อมต่อใน LINE Developers Console เพื่อเริ่มรับส่งข้อมูล'
+                        : 'ระบบจำเป็นต้องเชื่อมต่อ LINE Messaging API เพื่อเปิดใช้งานฟีเจอร์แจ้งเตือนอัตโนมัติไปยังผู้เช่าและเจ้าของหอพัก'}
                     </p>
                   </div>
-
-                  {/* Disabled Preferences Preview */}
-                  <div className="p-3 bg-slate-50 rounded-2xl border border-slate-100 opacity-60 text-left space-y-1.5 text-xs text-slate-400">
-                    <span className="font-bold text-slate-500 block text-[11px]">ตัวเลือกการแจ้งเตือน (ปิดใช้งานอยู่)</span>
-                    <p>• แจ้งเตือนคำขอแจ้งซ่อม</p>
-                    <p>• แจ้งเตือนยอดชำระเงิน</p>
-                    <p>• แจ้งเตือนผู้เช่าลงทะเบียน / อนุมัติ</p>
-                  </div>
-
                   <button
                     onClick={() => {
                       setIsOpen(false);
@@ -362,7 +373,7 @@ export const LineQuotaBadge: React.FC<LineQuotaBadgeProps> = ({
                     className="w-full py-2.5 bg-gradient-to-r from-[#06C755] to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 text-white font-extrabold text-xs rounded-xl transition-all shadow-md shadow-emerald-500/20 cursor-pointer flex items-center justify-center gap-2"
                   >
                     <LineLogo className="w-4 h-4 shrink-0 rounded-xs" />
-                    ตั้งค่า LINE OA ทันที
+                    {isPendingWebhook ? 'ไปหน้าเชื่อมต่อ Webhook' : 'ตั้งค่า LINE OA ทันที'}
                   </button>
                 </div>
               )}

@@ -1539,7 +1539,7 @@ model TenantRegistrationInvite {
 model DormitoryAccessGrant {
   id                    String    @id @default(uuid()) @db.Uuid
   dormitoryId           String    @map("dormitory_id") @db.Uuid
-  lineFriendId          String    @map("line_friend_id") @db.Uuid
+  lineFriendId          String?   @map("line_friend_id") @db.Uuid
   tokenHash             String    @unique @map("token_hash") @db.VarChar(255)
   tokenEncrypted        String?   @map("token_encrypted") @db.Text
   tokenPrefix           String?   @map("token_prefix") @db.VarChar(20)
@@ -1558,7 +1558,7 @@ model DormitoryAccessGrant {
   updatedAt             DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
 
   dormitory        Dormitory                 @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
-  lineFriend       DormitoryLineFriend       @relation(fields: [lineFriendId], references: [id], onDelete: Cascade)
+  lineFriend       DormitoryLineFriend?      @relation(fields: [lineFriendId], references: [id], onDelete: Cascade)
   sessions         Session[]
   deliveryAttempts LinePushDeliveryAttempt[]
 

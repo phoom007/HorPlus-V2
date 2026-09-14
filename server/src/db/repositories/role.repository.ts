@@ -48,12 +48,24 @@ export class InMemoryRoleRepository implements IRoleRepository {
         code: 'MANAGER',
         name: 'ผู้จัดการ',
         permissions: {
-          rooms: ['view', 'create', 'update'],
+          rooms: ['view', 'create', 'update', 'delete', 'manage'],
+          buildings: ['view', 'create', 'update', 'delete', 'manage'],
           tenants: ['view', 'create', 'update', 'archive', 'document:read', 'document:write'],
-          contracts: ['view', 'create', 'update'],
-          bills: ['view', 'generate'],
-          maintenance: ['view', 'update', 'close'],
-          meters: ['view', 'record'],
+          contracts: ['view', 'create', 'update', 'delete', 'manage'],
+          bills: ['view', 'generate', 'create', 'update', 'cancel', 'manage'],
+          billing: ['view', 'manage', 'write', 'read'],
+          billing_cycles: ['view', 'create', 'update'],
+          billing_settings: ['view', 'read'],
+          maintenance: ['view', 'create', 'update', 'close', 'delete', 'manage'],
+          meters: ['view', 'record', 'write', 'manage'],
+          payments: ['view', 'create', 'update', 'manage', 'write'],
+          receipts: ['view', 'create', 'manage', 'write'],
+          announcements: ['view', 'create', 'update', 'delete', 'manage'],
+          reports: ['view'],
+          billboard: ['view'],
+          dormitory: ['view'],
+          line_oa: ['view', 'read', 'write', 'manage'],
+          subscription: ['view', 'read', 'write', 'manage'],
         },
         isSystem: true,
         createdAt: new Date(),
@@ -124,6 +136,8 @@ export class InMemoryRoleRepository implements IRoleRepository {
   }
 }
 
+const isUuid = (str?: string | null) => !!str && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
+
 export class PrismaRoleRepository implements IRoleRepository {
   private prisma: PrismaClient;
 
@@ -145,6 +159,9 @@ export class PrismaRoleRepository implements IRoleRepository {
   }
 
   public async findById(id: string): Promise<RoleEntity | null> {
+    if (!isUuid(id)) {
+      return null;
+    }
     const role = await this.prisma.role.findUnique({
       where: { id },
     });
@@ -152,12 +169,18 @@ export class PrismaRoleRepository implements IRoleRepository {
   }
 
   public async findByCode(code: string, dormitoryId?: string): Promise<RoleEntity | null> {
+    if (dormitoryId) {
+      const dormRole = await this.prisma.role.findFirst({
+        where: { code, dormitoryId },
+      });
+      if (dormRole) return this.mapToEntity(dormRole);
+    }
     const role = await this.prisma.role.findFirst({
       where: {
         code,
         OR: [
           { isSystem: true },
-          { dormitoryId: dormitoryId || null },
+          { dormitoryId: null },
         ],
       },
     });

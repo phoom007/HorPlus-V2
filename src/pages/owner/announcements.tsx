@@ -56,6 +56,7 @@ interface OwnerAnnouncementsProps {
   rooms?: Room[];
   buildings?: Building[];
   onDetailViewChange?: (isOpen: boolean) => void;
+  dormitoryId?: string;
 }
 
 const ANNOUNCEMENTS_PER_PAGE = 2;
@@ -100,6 +101,13 @@ const compressImage = (dataUrl: string, maxWidth = 800, maxHeight = 800, quality
   });
 };
 
+const formatUserRealTime = (): string => {
+  const d = new Date();
+  const h = String(d.getHours()).padStart(2, '0');
+  const m = String(d.getMinutes()).padStart(2, '0');
+  return `${h}:${m} น.`;
+};
+
 export const OwnerAnnouncements: React.FC<OwnerAnnouncementsProps> = ({
   announcements,
   onSaveAnnouncements,
@@ -107,9 +115,18 @@ export const OwnerAnnouncements: React.FC<OwnerAnnouncementsProps> = ({
   currentUser,
   rooms = [],
   buildings = [],
-  onDetailViewChange
+  onDetailViewChange,
+  dormitoryId
 }) => {
   const [isAddOpen, setIsAddOpen] = useState(false);
+  const [currentClockTime, setCurrentClockTime] = useState<string>(formatUserRealTime);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrentClockTime(formatUserRealTime());
+    }, 10000);
+    return () => clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     onDetailViewChange?.(isAddOpen);
@@ -504,7 +521,7 @@ export const OwnerAnnouncements: React.FC<OwnerAnnouncementsProps> = ({
 
       try {
         const dataProvider = getDataProvider();
-        await dataProvider.announcements.updateAnnouncement?.(editingAnnouncement.id, updatedAnn);
+        await dataProvider.announcements.updateAnnouncement?.(editingAnnouncement.id, updatedAnn, dormitoryId);
       } catch (err) {
         console.error('Failed to update announcement on server:', err);
       }
@@ -543,12 +560,18 @@ export const OwnerAnnouncements: React.FC<OwnerAnnouncementsProps> = ({
           customTarget: finalTarget,
           attachmentUrl: attachmentUrl.trim() || undefined,
           linkUrl: linkUrl.trim() || undefined,
-        });
+        }, undefined, dormitoryId);
         if (res.success && res.data) {
           createdAnn = res.data;
+        } else {
+          const errMsg = (res?.error as any)?.message || 'เกิดข้อผิดพลาดในการเผยแพร่ประกาศ กรุณาลองใหม่อีกครั้ง';
+          showToast(errMsg, 'error');
+          return;
         }
-      } catch (err) {
+      } catch (err: any) {
         console.error('Failed to create announcement on server:', err);
+        showToast(err.message || 'เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์', 'error');
+        return;
       }
 
       const newId = createdAnn?.id || `ann-${Date.now()}`;
@@ -601,7 +624,7 @@ export const OwnerAnnouncements: React.FC<OwnerAnnouncementsProps> = ({
   const handleDeleteAnnouncement = async (id: string, heading: string) => {
     try {
       const dataProvider = getDataProvider();
-      await dataProvider.announcements.deleteAnnouncement?.(id);
+      await dataProvider.announcements.deleteAnnouncement?.(id, dormitoryId);
     } catch (err) {
       console.error('Failed to delete announcement on server:', err);
     }
@@ -1381,7 +1404,7 @@ export const OwnerAnnouncements: React.FC<OwnerAnnouncementsProps> = ({
                     {/* Status Bar line with HorPlus and Time */}
                     <div className="flex justify-between items-center text-[9px] font-black text-slate-400 px-1 pt-0.5">
                       <span className="font-extrabold text-slate-600">HorPlus</span>
-                      <span className="font-bold text-slate-500">10:45 AM</span>
+                      <span className="font-bold text-slate-500">{currentClockTime}</span>
                     </div>
                   </div>
 

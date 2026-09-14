@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import multer from 'multer';
 import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
@@ -12,11 +13,42 @@ import { createCsrfMiddleware } from '../middleware/csrf.js';
 import { resolveAuthoritativeDormitoryContext } from '../middleware/dormitory-context.js';
 import { AuthenticationService } from '../services/auth.service.js';
 import { AppError } from '../types/index.js';
+import { createSlipUploadRateLimiter, distributedRateLimiterStore } from '../middleware/rate-limiter.js';
+import { processAndSecureSlipImage } from '../services/image-security.service.js';
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024 },
+  limits: { fileSize: 4 * 1024 * 1024 }, // 4MB maximum
 });
+
+const handleUploadSingle = (req: Request, res: Response, next: NextFunction) => {
+  upload.single('file')(req, res, (err: any) => {
+    if (!err) return next();
+    if (err instanceof multer.MulterError) {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(400).json({
+          error: {
+            code: 'FILE_TOO_LARGE',
+            message: 'ขนาดไฟล์รูปภาพสลิปเกินขีดจำกัดสูงสุด 4MB',
+            fieldErrors: null,
+            requestId: (req.headers['x-request-id'] as string) || (req as any).id || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+      return res.status(400).json({
+        error: {
+          code: 'INVALID_FILE_FIELD',
+          message: 'เกิดข้อผิดพลาดในการอัปโหลดไฟล์สลิป',
+          fieldErrors: null,
+          requestId: (req.headers['x-request-id'] as string) || (req as any).id || 'req-unknown',
+          timestamp: new Date().toISOString(),
+        },
+      });
+    }
+    next(err);
+  });
+};
 
 function formatThaiDate(d: Date): string {
   const thaiMonths = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'];
@@ -32,6 +64,7 @@ export function createSubscriptionRouter(authService?: AuthenticationService): R
   const csrfMiddleware = authService
     ? createCsrfMiddleware(authService)
     : (_req: Request, _res: Response, next: NextFunction) => next();
+  const slipUploadRateLimiter = createSlipUploadRateLimiter();
 
   if (authService) {
     router.use(authService.requireAuth());
@@ -48,8 +81,8 @@ export function createSubscriptionRouter(authService?: AuthenticationService): R
     });
   });
 
-  // GET /api/v1/subscription/current
-  router.get('/current', async (req: Request, res: Response, next: NextFunction) => {
+  // GET /api/v1/subscription/current and /api/v1/subscription/my-plan
+  const handleCurrentSubscription = async (req: Request, res: Response, next: NextFunction) => {
     try {
       const context = (req as any).dormitoryContext || (await resolveAuthoritativeDormitoryContext(req));
       const prisma = getPrismaClient();
@@ -96,17 +129,52 @@ export function createSubscriptionRouter(authService?: AuthenticationService): R
         };
       }
 
+      let isTrialEligible = false;
+      const rawUserId = (req as any).auth?.userId || (req as any).user?.id || context.userId;
+      if (rawUserId) {
+        try {
+          const cleanUserId = rawUserId.replace(/^ag_user_|^ag_/, '');
+          let claimUserId: string | null = null;
+          if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cleanUserId)) {
+            claimUserId = cleanUserId;
+          } else {
+            const dorm = await prisma.dormitory.findUnique({
+              where: { id: context.dormitoryId },
+              select: { createdByUserId: true },
+            });
+            claimUserId = dorm?.createdByUserId || null;
+          }
+
+          if (claimUserId) {
+            const existingClaim = await prisma.accountBenefitClaim.findFirst({
+              where: {
+                userId: claimUserId,
+                benefitKey: 'INITIAL_TRIAL_V1',
+              },
+            });
+            const hasDormUsedTrial = Boolean(subscription?.trialStartedAt);
+            isTrialEligible = !existingClaim && !hasDormUsedTrial;
+          }
+        } catch {
+          isTrialEligible = false;
+        }
+      }
+
       return res.json({
         data: {
           ...subscription,
           slipsChecked,
-          roomCount
+          roomCount,
+          isTrialEligible
         }
       });
     } catch (err) {
       next(err);
     }
-  });
+  };
+
+  router.get('/current', handleCurrentSubscription);
+  router.get('/my-plan', handleCurrentSubscription);
 
   // GET /api/v1/subscription/entitlements
   router.get('/entitlements', async (req: Request, res: Response, next: NextFunction) => {
@@ -190,92 +258,171 @@ export function createSubscriptionRouter(authService?: AuthenticationService): R
     }
   });
 
-  // POST /api/v1/subscription/payment/slip
-  router.post('/payment/slip', upload.single('file'), async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const file = req.file;
-      if (!file) {
-        throw new AppError('กรุณาแนบไฟล์รูปภาพสลิปชำระเงิน', 400, 'SLIP_FILE_REQUIRED');
-      }
+  router.post(
+    '/payment/slip',
+    slipUploadRateLimiter,
+    handleUploadSingle,
+    async (req: Request, res: Response, next: NextFunction) => {
+      const requestId = (req.headers['x-request-id'] as string) || (req as any).id || `req-slip-${Date.now()}`;
+      let lockKey: string | null = null;
 
-      const context = (req as any).dormitoryContext || (await resolveAuthoritativeDormitoryContext(req));
-      const dormitoryId = context.dormitoryId;
-      const userId = context.userId;
-      const prisma = getPrismaClient();
-
-      const intentId = req.body.intentId || req.body.packageIntentId;
-      const durationMonthsParam = parseInt(req.body.durationMonths || '1', 10);
-
-      let expectedAmount: Prisma.Decimal;
-      let durationMonths = durationMonthsParam;
-      let targetPackageId: string;
-      let intent: any = null;
-
-      if (intentId) {
-        intent = await prisma.subscriptionPackageIntent.findUnique({
-          where: { id: intentId },
-          include: { package: { include: { plan: true } } },
-        });
-        if (!intent || intent.status !== 'PENDING_PAYMENT') {
-          throw new AppError('รายการสั่งซื้อไม่ถูกต้องหรือหมดอายุแล้ว กรุณาทำรายการใหม่อีกครั้ง', 400, 'INVALID_OR_EXPIRED_INTENT');
+      try {
+        const context = (req as any).dormitoryContext || (await resolveAuthoritativeDormitoryContext(req));
+        const isStaff = context.roleCode === 'STAFF';
+        if (isStaff || (context.roleCode && !['OWNER', 'MANAGER'].includes(context.roleCode))) {
+          throw new AppError('Only dormitory Owners or Managers can upload subscription payment slips.', 403, 'FORBIDDEN');
         }
-        expectedAmount = intent.finalPayableAmount;
-        durationMonths = intent.durationMonthsSnapshot;
-        targetPackageId = intent.packageId;
-      } else {
-        const pkg = await prisma.subscriptionPackage.findFirst({
-          where: { durationMonths: durationMonthsParam, enabled: true },
-        });
-        if (!pkg || !pkg.price) {
-          throw new AppError('ไม่พบข้อมูลแพ็กเกจสำหรับระยะเวลานี้', 400, 'PACKAGE_NOT_FOUND');
-        }
-        targetPackageId = pkg.id;
 
-        const promoCodeParam = req.body.promoCode ? String(req.body.promoCode).trim().toUpperCase() : null;
-        if (promoCodeParam) {
-          const promo = await prisma.promoCode.findFirst({
-            where: { normalizedCode: promoCodeParam, enabled: true },
+        const file = req.file;
+        if (!file) {
+          throw new AppError('กรุณาแนบไฟล์รูปภาพสลิปชำระเงิน', 400, 'SLIP_FILE_REQUIRED');
+        }
+
+        // Step A: Immediate Raw SHA-256 Hash & Concurrency Pre-Lock (Anti-Race Condition before Sharp)
+        const rawHash = crypto.createHash('sha256').update(file.buffer).digest('hex');
+        lockKey = `lock:slip:${rawHash}`;
+        const lockAcquired = await distributedRateLimiterStore.acquireLock(lockKey, requestId, 30);
+        if (!lockAcquired) {
+          return res.status(409).json({
+            error: {
+              code: 'CONCURRENT_REQUEST_IN_PROGRESS',
+              message: 'มีคำขอตรวจสอบสลิปนี้กำลังประมวลผลอยู่ กรุณารอสักครู่ (CONCURRENT_REQUEST_IN_PROGRESS)',
+              fieldErrors: null,
+              requestId,
+              timestamp: new Date().toISOString(),
+            },
           });
-          if (promo && promo.benefitType === 'PERCENT_DISCOUNT') {
-            const discountPercent = Number(promo.benefitValue || 10);
-            const rawPrice = Number(pkg.price);
-            const discountAmount = (rawPrice * discountPercent) / 100;
-            expectedAmount = new Prisma.Decimal(Math.max(0, rawPrice - discountAmount).toFixed(2));
+        }
+
+        // Step B: Sanitize Image (Magic bytes validation, Decompression bomb protection, EXIF/comment stripping)
+        const secured = await processAndSecureSlipImage(file.buffer);
+
+        const dormitoryId = context.dormitoryId;
+        const userId = context.userId;
+        const prisma = getPrismaClient();
+
+        // Step C: Zero-Trust Server Amount Computation
+        // Ignore any client body overrides (expectedAmount, price, amount)
+        const intentId = req.body.intentId || req.body.packageIntentId;
+        const durationMonthsParam = parseInt(req.body.durationMonths || '1', 10);
+
+        let expectedAmount: Prisma.Decimal = new Prisma.Decimal(0);
+        let durationMonths = durationMonthsParam;
+        let targetPackageId: string = '';
+        let intent: any = null;
+
+        if (intentId) {
+          intent = await prisma.subscriptionPackageIntent.findUnique({
+            where: { id: intentId },
+            include: { package: { include: { plan: true } } },
+          });
+
+          if (intent && intent.dormitoryId === dormitoryId && intent.status === 'PENDING_PAYMENT') {
+            expectedAmount = intent.finalPayableAmount;
+            durationMonths = intent.durationMonthsSnapshot;
+            targetPackageId = intent.packageId;
+          } else {
+            // Provided intent is expired, succeeded, or from another dorm; look for an active pending intent
+            const activeIntent = await prisma.subscriptionPackageIntent.findFirst({
+              where: {
+                dormitoryId,
+                durationMonthsSnapshot: durationMonthsParam,
+                status: 'PENDING_PAYMENT',
+              },
+              orderBy: { createdAt: 'desc' },
+              include: { package: { include: { plan: true } } },
+            });
+
+            if (activeIntent) {
+              intent = activeIntent;
+              expectedAmount = intent.finalPayableAmount;
+              durationMonths = intent.durationMonthsSnapshot;
+              targetPackageId = intent.packageId;
+            } else {
+              // Intent is stale/expired and no active pending intent found; fall back to server package computation
+              intent = null;
+            }
+          }
+        }
+
+        if (!intent) {
+          const pkg = await prisma.subscriptionPackage.findFirst({
+            where: { durationMonths: durationMonthsParam, enabled: true },
+          });
+          if (!pkg || !pkg.price) {
+            throw new AppError('ไม่พบข้อมูลแพ็กเกจสำหรับระยะเวลานี้', 400, 'PACKAGE_NOT_FOUND');
+          }
+          targetPackageId = pkg.id;
+
+          const promoCodeParam = req.body.promoCode ? String(req.body.promoCode).trim().toUpperCase() : null;
+          if (promoCodeParam) {
+            const promo = await prisma.promoCode.findFirst({
+              where: { normalizedCode: promoCodeParam, enabled: true },
+            });
+            if (promo && promo.benefitType === 'PERCENT_DISCOUNT') {
+              const discountPercent = Number(promo.benefitValue || 10);
+              const rawPrice = Number(pkg.price);
+              const discountAmount = (rawPrice * discountPercent) / 100;
+              expectedAmount = new Prisma.Decimal(Math.max(0, rawPrice - discountAmount).toFixed(2));
+            } else {
+              expectedAmount = pkg.price;
+            }
           } else {
             expectedAmount = pkg.price;
           }
-        } else {
-          expectedAmount = pkg.price;
         }
-      }
 
-      // Verify slip through SlipOK-ready verifier
-      const verification = await subscriptionSlipVerifier.verify({
-        slipBuffer: file.buffer,
-        originalFilename: file.originalname,
-        mimeType: file.mimetype,
-        expectedAmount,
-        dormitoryId,
-        userId,
-        packageIntentId: intent?.id,
-      });
+        // Step D: Verify slip through SlipOK-ready verifier using sanitized buffer
+        const verification = await subscriptionSlipVerifier.verify({
+          slipBuffer: secured.buffer,
+          originalFilename: file.originalname,
+          mimeType: secured.mimeType,
+          expectedAmount,
+          dormitoryId,
+          userId,
+          packageIntentId: intent?.id,
+        });
 
-      // Persist slip image to storage
-      const storageDir = path.join(process.cwd(), 'uploads', 'private', 'slips', 'subscription');
-      if (!fs.existsSync(storageDir)) {
-        fs.mkdirSync(storageDir, { recursive: true });
-      }
-      const ext = file.mimetype === 'image/jpeg' ? '.jpg' : file.mimetype === 'image/webp' ? '.webp' : '.png';
-      const filename = `sub-slip-${dormitoryId}-${Date.now()}-${verification.payloadHash.slice(0, 8)}${ext}`;
-      const fullPath = path.join(storageDir, filename);
-      fs.writeFileSync(fullPath, file.buffer);
-      const relativePath = path.join('uploads', 'private', 'slips', 'subscription', filename).replace(/\\/g, '/');
+        // Step E: Persist sanitized slip image to storage
+        const storageDir = path.join(process.cwd(), 'uploads', 'private', 'slips', 'subscription');
+        if (!fs.existsSync(storageDir)) {
+          fs.mkdirSync(storageDir, { recursive: true });
+        }
+        const filename = `sub-slip-${dormitoryId}-${Date.now()}-${verification.payloadHash.slice(0, 8)}${secured.extension}`;
+        const fullPath = path.join(storageDir, filename);
+        fs.writeFileSync(fullPath, secured.buffer);
+        const relativePath = path.join('uploads', 'private', 'slips', 'subscription', filename).replace(/\\/g, '/');
 
       const now = new Date();
       const orderId = `HP-SUB-${Date.now().toString().slice(-6)}`;
       const receiptNumber = `RCP-SUB-${Date.now().toString().slice(-6)}`;
 
       const result = await prisma.$transaction(async (tx) => {
+        const dorm = await tx.dormitory.findUnique({
+          where: { id: dormitoryId },
+          select: { id: true, createdByUserId: true },
+        });
+
+        const isDirectAccess = userId.startsWith('ag_user_') || userId.startsWith('ag_');
+        const cleanUserId = userId.replace(/^ag_user_|^ag_/, '');
+        const isPureActorUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cleanUserId);
+
+        let validActorId: string | null = null;
+        if (isPureActorUuid) {
+          const userExists = await tx.user.findUnique({ where: { id: cleanUserId }, select: { id: true } });
+          if (userExists) {
+            validActorId = cleanUserId;
+          }
+        }
+
+        const authoritativeRedeemedBy = (isDirectAccess && dorm?.createdByUserId)
+          ? dorm.createdByUserId
+          : (validActorId || dorm?.createdByUserId || (intent?.userId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(intent.userId) ? intent.userId : '00000000-0000-4000-8000-000000000001'));
+
+        const validPaymentEvidenceUserId = isPureActorUuid
+          ? cleanUserId
+          : (dorm?.createdByUserId || (intent?.userId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(intent.userId) ? intent.userId : '00000000-0000-4000-8000-000000000001'));
+
         const proPlan = await tx.subscriptionPlan.findUniqueOrThrow({ where: { code: 'PAID' } });
 
         const currentSub = await tx.dormitorySubscription.findUnique({
@@ -321,7 +468,7 @@ export function createSubscriptionRouter(authService?: AuthenticationService): R
             previousStatus: currentSub?.status || null,
             newStatus: 'ACTIVE',
             reason: 'SUBSCRIPTION_PAYMENT_VERIFIED',
-            actorId: userId,
+            actorId: validActorId,
           },
         });
 
@@ -333,8 +480,11 @@ export function createSubscriptionRouter(authService?: AuthenticationService): R
           });
 
           if (intent.coinApplied > 0) {
+            const coinDebitUserId = intent.userId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(intent.userId)
+              ? intent.userId
+              : (dorm?.createdByUserId || userId);
             await coinWalletService.debitWallet(
-              userId,
+              coinDebitUserId,
               intent.coinApplied,
               'SUBSCRIPTION_DEBIT',
               'SUBSCRIPTION_PACKAGE_INTENT',
@@ -366,7 +516,7 @@ export function createSubscriptionRouter(authService?: AuthenticationService): R
                     promoCodeId: promo.id,
                     dormitoryId,
                     subscriptionId: updatedSub.id,
-                    redeemedBy: userId,
+                    redeemedBy: authoritativeRedeemedBy,
                     previousExpiresAt,
                     newExpiresAt,
                   },
@@ -405,7 +555,7 @@ export function createSubscriptionRouter(authService?: AuthenticationService): R
                   promoCodeId: promo.id,
                   dormitoryId,
                   subscriptionId: updatedSub.id,
-                  redeemedBy: userId,
+                  redeemedBy: authoritativeRedeemedBy,
                   previousExpiresAt,
                   newExpiresAt,
                 },
@@ -427,7 +577,7 @@ export function createSubscriptionRouter(authService?: AuthenticationService): R
         await tx.subscriptionPaymentEvidence.create({
           data: {
             dormitoryId,
-            userId,
+            userId: validPaymentEvidenceUserId,
             packageIntentId: intent?.id || null,
             packageId: targetPackageId,
             amount: expectedAmount,
@@ -438,21 +588,6 @@ export function createSubscriptionRouter(authService?: AuthenticationService): R
             verificationStatus: 'VERIFIED',
             verifierProvider: verification.provider,
             receiptNumber,
-          },
-        });
-
-        // Record in PaymentEvidenceVerification for system-wide transRef deduplication (F-1)
-        await tx.paymentEvidenceVerification.create({
-          data: {
-            dormitoryId,
-            provider: verification.provider,
-            status: 'VERIFIED',
-            claimedTransferAt: verification.transferredAt,
-            verifiedTransferAt: verification.transferredAt,
-            verifiedAmount: expectedAmount,
-            providerReference: verification.providerReference,
-            payloadHash: verification.payloadHash,
-            verifiedAt: now,
           },
         });
 
@@ -478,6 +613,10 @@ export function createSubscriptionRouter(authService?: AuthenticationService): R
       });
     } catch (err) {
       next(err);
+    } finally {
+      if (lockKey) {
+        await distributedRateLimiterStore.releaseLock(lockKey, requestId);
+      }
     }
   });
 

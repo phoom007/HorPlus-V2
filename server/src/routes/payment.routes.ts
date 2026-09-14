@@ -480,7 +480,10 @@ export function createPaymentRouter(authService: AuthenticationService) {
           status: { in: ['PENDING', 'UNDER_REVIEW', 'APPROVED'] }
         }
       });
-      if (existingVerification || existingDuplicate) {
+      const existingSubEvidence = await prisma.subscriptionPaymentEvidence.findUnique({
+        where: { payloadHash: hash }
+      });
+      if (existingVerification || existingDuplicate || existingSubEvidence) {
         const reqId = (req.headers['x-request-id'] as string) || (req as any).id || 'req-unknown';
         return res.status(409).json({
           error: {
@@ -590,11 +593,12 @@ export function createPaymentRouter(authService: AuthenticationService) {
       }
 
       const idempotencyKey = (req.headers['x-idempotency-key'] || req.headers['idempotency-key']) as string | undefined;
+      const safeUserId = auth.userId?.replace(/^ag_user_|^ag_/, '') || auth.userId;
 
       const payment = await paymentService.recordCash({
         dormitoryId,
         ...data,
-        userId: auth.userId,
+        userId: safeUserId,
         idempotencyKey,
       });
 
@@ -629,12 +633,13 @@ export function createPaymentRouter(authService: AuthenticationService) {
       const data = schema.parse(req.body);
 
       const idempotencyKey = (req.headers['x-idempotency-key'] || req.headers['idempotency-key']) as string | undefined;
+      const safeUserId = auth.userId?.replace(/^ag_user_|^ag_/, '') || auth.userId;
 
       const result = await paymentService.recordCombinedCash({
         dormitoryId,
         billIds: data.billIds,
         amount: data.amount,
-        userId: auth.userId,
+        userId: safeUserId,
         idempotencyKey,
       });
 

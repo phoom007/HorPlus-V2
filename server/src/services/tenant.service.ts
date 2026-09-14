@@ -739,6 +739,11 @@ export class TenantService {
 
     const uploadedAt = new Date();
     let updatedTenant: TenantEntity | null = null;
+    const rawActorId = actorUserId ? actorUserId.replace(/^ag_user_|^ag_/, '') : null;
+    const safeUploadedByUserId = rawActorId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(rawActorId)
+      ? rawActorId
+      : null;
+
     try {
       updatedTenant = await this.tenantRepo.update(tenantId, dormitoryId, {
         idCardObjectKey: objectKey,
@@ -746,7 +751,7 @@ export class TenantService {
         idCardMimeType: secured.mimeType,
         idCardByteSize: secured.byteSize,
         idCardUploadedAt: uploadedAt,
-        idCardUploadedByUserId: actorUserId || null,
+        idCardUploadedByUserId: safeUploadedByUserId,
       });
     } catch (repoErr) {
       // Compensation: delete newly written file so no orphan file remains

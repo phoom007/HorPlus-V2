@@ -25,6 +25,7 @@ import {
   Calendar,
   Zap,
   AlertCircle,
+  AlertTriangle,
   ExternalLink,
   Crown,
   Flame,
@@ -46,12 +47,13 @@ import { generatePromptPayQrDataUrl } from '../../utils/promptpay';
 import { CelebrationOverlay } from '../../components/CelebrationOverlay';
 import { downloadPromptPayCardImage } from '../../utils/promptpayCard';
 import { httpRequest } from '../../data/httpClient';
+import { ThaiQrLogo } from '../../components/common/ThaiQrLogo';
 
 interface OwnerSubscriptionProps {
   dormitoryId?: string;
   rooms?: Room[];
   onAddLog?: (action: string, details: string, type: string, id: string) => void;
-  onNavigate?: (tab: string) => void;
+  onNavigate?: (tab: string, state?: Record<string, any>) => void;
   onDetailViewChange?: (isOpen: boolean) => void;
 }
 
@@ -247,33 +249,401 @@ export interface BillboardItem {
 export const DEFAULT_BILLBOARD_ADS: BillboardItem[] = [
   {
     id: 'billboard-1',
-    imageUrl: 'https://images.unsplash.com/photo-1545324418-cc1a3fa10c00?w=1600&auto=format&fit=crop&q=80',
-    title: 'ระบบบริหารจัดการหอพัก HORPLUS ครบวงจร',
-    description: 'จัดการห้องพัก ออกบิลค่าน้ำค่าไฟ และส่งแจ้งเตือนผู้เช่าผ่าน LINE อัตโนมัติ สะดวกรวดเร็ว',
-    tag: 'ป้ายประชาสัมพันธ์'
+    imageUrl: '/billboards/1.jpg',
+    title: 'หอพลัส+ เปิดทดลองฟรี 3 เดือน',
+    description: 'ตรวจสลิปอัตโนมัติ แจ้งเตือน LINE ทำสัญญา ออกบิล แจ้งซ่อม ครอบคลุมครบวงจร',
+    tag: 'ทดลองฟรี 3 เดือน'
   },
   {
     id: 'billboard-2',
-    imageUrl: 'https://images.unsplash.com/photo-1512917774080-9991f1c4c750?w=1600&auto=format&fit=crop&q=80',
-    title: 'แพ็กเกจ HORPLUS PRO 12 เดือน เพียง ฿1,799',
-    description: 'เฉลี่ยเพียง ฿150 ต่อเดือน รองรับได้ถึง 150 ห้องพัก พร้อมโควตา LINE 300 ข้อความต่อเดือน',
-    tag: 'โปรโมชั่นสุดคุ้ม'
+    imageUrl: '/billboards/2.jpg',
+    title: 'ราคาแพ็กเกจ HORPLUS โปรโมชั่นประจำปี 2569',
+    description: 'โปรโมชั่นพิเศษ PRO 1 เดือน 0 บาท และแพ็กเกจรายปีสุดคุ้มสำหรับเจ้าของหอพัก',
+    tag: 'โปรโมชั่นปี 2569'
   },
   {
     id: 'billboard-3',
-    imageUrl: 'https://images.unsplash.com/photo-1555854877-bab0e564b8d5?w=1600&auto=format&fit=crop&q=80',
-    title: 'ระบบตรวจสอบสลิปและบันทึกบัญชีอัตโนมัติ',
-    description: 'ตรวจจับสลิปโอนเงินทันที ป้องกันสลิปซ้ำหรือสลิปปลอม สรุปรายรับรายจ่ายแบบเรียลไทม์',
-    tag: 'นวัตกรรมอัจฉริยะ'
+    imageUrl: '/billboards/3.jpg',
+    title: 'ระบบบริหารจัดการหอพักอัจฉริยะครบวงจร',
+    description: 'ดูภาพรวมยอดค้างชำระ สถิติรายรับรอบปี และบริหารจัดการผู้เช่าได้ทุกอุปกรณ์',
+    tag: 'ฟังก์ชันครบวงจร'
   },
   {
     id: 'billboard-4',
-    imageUrl: 'https://images.unsplash.com/photo-1568605117036-5fe5e7bab0b7?w=1600&auto=format&fit=crop&q=80',
-    title: 'โปรแกรมแนะนำเพื่อน รับวันใช้งานฟรีทันที +30 วัน',
-    description: 'แชร์รหัสแนะนำให้เพื่อนเจ้าของหอพัก รับโบนัสวันใช้งานและเหรียญสะสมสิทธิประโยชน์มากมาย',
-    tag: 'สิทธิพิเศษหอพัก'
+    imageUrl: '/billboards/4.jpg',
+    title: 'กรอกโค้ด "HORPLUS" ทดลอง PRO ฟรี 2 เดือน',
+    description: 'รับสิทธิ์ใช้งานฟังก์ชัน PRO ฟรี 2 เดือนทันที จำกัด 100 สิทธิ์แรกเท่านั้น',
+    tag: 'โค้ดพิเศษจำกัดสิทธิ์'
   }
 ];
+
+interface SubscriptionBillboardProps {
+  billboardAds: BillboardItem[];
+  isPaused: boolean;
+  onManageClick?: () => void;
+}
+
+export const SubscriptionBillboard: React.FC<SubscriptionBillboardProps> = React.memo(({
+  billboardAds,
+  isPaused,
+  onManageClick
+}) => {
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(true);
+  const [isHovered, setIsHovered] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
+
+  const touchStartXRef = useRef<number | null>(null);
+  const touchEndXRef = useRef<number | null>(null);
+  const isMouseDownRef = useRef<boolean>(false);
+  const mouseStartXRef = useRef<number | null>(null);
+
+  // Preload and cache billboard images once to prevent revalidation stalls
+  useEffect(() => {
+    billboardAds.forEach(ad => {
+      if (ad.imageUrl && typeof Image !== 'undefined') {
+        const img = new Image();
+        img.src = ad.imageUrl;
+      }
+    });
+  }, [billboardAds]);
+
+  // 16:9 Billboard auto-rotation effect (paused when subview active or document hidden)
+  useEffect(() => {
+    if (isPaused || !isPlaying || isHovered || billboardAds.length <= 1) return;
+
+    const timer = setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) return;
+      setCurrentIndex(prev => (prev + 1) % billboardAds.length);
+    }, 3500);
+
+    return () => clearInterval(timer);
+  }, [isPaused, isPlaying, isHovered, billboardAds.length]);
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    touchStartXRef.current = e.targetTouches[0].clientX;
+    touchEndXRef.current = e.targetTouches[0].clientX;
+    setIsHovered(true);
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    touchEndXRef.current = e.targetTouches[0].clientX;
+  };
+
+  const handleTouchEnd = () => {
+    setIsHovered(false);
+    if (touchStartXRef.current === null || touchEndXRef.current === null) return;
+    const diff = touchStartXRef.current - touchEndXRef.current;
+    const minSwipeDistance = 40;
+    if (diff > minSwipeDistance) {
+      setCurrentIndex(prev => (prev + 1) % billboardAds.length);
+    } else if (diff < -minSwipeDistance) {
+      setCurrentIndex(prev => (prev === 0 ? billboardAds.length - 1 : prev - 1));
+    }
+    touchStartXRef.current = null;
+    touchEndXRef.current = null;
+  };
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    isMouseDownRef.current = true;
+    mouseStartXRef.current = e.clientX;
+    setIsDragging(true);
+    setIsHovered(true);
+  };
+
+  const handleMouseUp = (e: React.MouseEvent) => {
+    if (isMouseDownRef.current && mouseStartXRef.current !== null) {
+      const diff = mouseStartXRef.current - e.clientX;
+      const minSwipeDistance = 40;
+      if (diff > minSwipeDistance) {
+        setCurrentIndex(prev => (prev + 1) % billboardAds.length);
+      } else if (diff < -minSwipeDistance) {
+        setCurrentIndex(prev => (prev === 0 ? billboardAds.length - 1 : prev - 1));
+      }
+    }
+    isMouseDownRef.current = false;
+    mouseStartXRef.current = null;
+    setIsDragging(false);
+    setIsHovered(false);
+  };
+
+  const handleMouseLeave = () => {
+    isMouseDownRef.current = false;
+    mouseStartXRef.current = null;
+    setIsDragging(false);
+    setIsHovered(false);
+  };
+
+  return (
+    <div className="space-y-3 pt-2">
+      <div
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
+        onMouseDown={handleMouseDown}
+        onMouseUp={handleMouseUp}
+        onMouseLeave={handleMouseLeave}
+        onMouseEnter={() => setIsHovered(true)}
+        className={`relative w-full aspect-[16/9] rounded-2xl sm:rounded-3xl overflow-hidden shadow-md sm:shadow-lg border border-slate-200 bg-slate-950 select-none transition-shadow ${isDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+        title="ปัดซ้าย-ขวา ด้วยนิ้ว หรือลากด้วยเมาส์เพื่อเปลี่ยนรูปภาพ"
+      >
+        {billboardAds.map((ad, idx) => {
+          const isActive = idx === currentIndex;
+          return (
+            <div
+              key={ad.id}
+              className={`absolute inset-0 w-full h-full transition-opacity duration-500 ease-in-out ${isActive ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}`}
+            >
+              <img
+                src={ad.imageUrl}
+                alt={ad.title}
+                draggable={false}
+                className="w-full h-full object-cover pointer-events-none"
+              />
+              <div className="hidden sm:flex absolute inset-0 bg-gradient-to-t from-slate-950/90 via-slate-950/20 to-transparent flex-col justify-end p-5 sm:p-8 md:p-10 text-white pointer-events-none">
+                <div className="max-w-3xl space-y-1.5 sm:space-y-2">
+                  <span className="inline-block text-[10px] sm:text-xs font-black px-2.5 py-0.5 rounded-full bg-blue-600 text-white uppercase tracking-wider shadow-sm">
+                    {ad.tag}
+                  </span>
+                  <h4 className="text-lg sm:text-2xl md:text-3xl font-black text-white leading-tight drop-shadow-md">
+                    {ad.title}
+                  </h4>
+                  <p className="text-xs sm:text-sm md:text-base text-slate-200 font-medium line-clamp-2 leading-relaxed drop-shadow-sm max-w-2xl">
+                    {ad.description}
+                  </p>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="flex items-center justify-center mt-3 sm:mt-3.5">
+        <div className="inline-flex items-center gap-2.5 bg-white text-slate-800 px-4 py-2 rounded-full border border-slate-200/90 shadow-sm transition-all hover:shadow-md">
+          <div className="flex items-center gap-1.5">
+            {billboardAds.map((_, idx) => (
+              <button
+                key={idx}
+                type="button"
+                onClick={() => setCurrentIndex(idx)}
+                className={`h-2 rounded-full transition-all cursor-pointer ${idx === currentIndex
+                  ? 'w-6 bg-blue-600 shadow-xs'
+                  : 'w-2 bg-slate-200 hover:bg-slate-300'
+                  }`}
+                title={`ไปที่รูปที่ ${idx + 1}`}
+              />
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+});
+
+export interface SlipVerificationResult {
+  status: 'error' | 'success';
+  category: 'duplicate' | 'quota' | 'system_down' | 'amount_mismatch' | 'qr_invalid' | 'cooldown' | 'format' | 'receiver' | 'general';
+  badge: string;
+  badgeColor: 'red' | 'amber' | 'orange';
+  title: string;
+  message: string;
+  code?: string;
+  canRetry?: boolean;
+}
+
+function classifySlipError(err: any): SlipVerificationResult {
+  const code = (
+    err?.domainError?.code ||
+    err?.code ||
+    err?.details?.error?.code ||
+    ''
+  ).toString().toUpperCase();
+
+  const rawMsg = (
+    err?.domainError?.message ||
+    err?.message ||
+    ''
+  ).toString();
+
+  // Neutralize third-party provider names: replace SlipOK with generic "ระบบตรวจสอบสลิป"
+  const msg = rawMsg.replace(/slipok/gi, 'ระบบตรวจสอบสลิป');
+
+  // 1. Duplicate Slip
+  if (
+    code.includes('DUPLICATE') ||
+    code === 'SLIP_ERR_1008' ||
+    msg.includes('สลิปซ้ำ') ||
+    msg.includes('เคยถูกใช้งานไปแล้ว') ||
+    msg.includes('เคยส่งเข้ามา') ||
+    msg.includes('ซ้ำ')
+  ) {
+    return {
+      status: 'error',
+      category: 'duplicate',
+      badge: 'สลิปซ้ำในระบบ',
+      badgeColor: 'red',
+      title: 'สลิปนี้เคยถูกใช้งานไปแล้ว',
+      message: 'สลิปนี้เคยถูกใช้งานในระบบแล้ว ไม่สามารถใช้ซ้ำได้ กรุณาใช้สลิปโอนเงินรายการใหม่',
+      code: 'DUPLICATE_SLIP',
+      canRetry: false
+    };
+  }
+
+  // 2. Quota Exceeded
+  if (
+    code.includes('QUOTA') ||
+    code === 'SLIP_ERR_1005' ||
+    msg.includes('โควตา')
+  ) {
+    return {
+      status: 'error',
+      category: 'quota',
+      badge: 'โควตาระบบตรวจสอบหมดชั่วคราว',
+      badgeColor: 'amber',
+      title: 'โควตาการตรวจสอบสลิปของระบบเต็ม',
+      message: msg || 'โควตาการตรวจสอบสลิปอัตโนมัติของระบบหมดชั่วคราว กรุณาลองอีกครั้งในภายหลังเพื่อดำเนินการตรวจสอบหรือเติมโควตา',
+      code: code || 'QUOTA_EXCEEDED',
+      canRetry: false
+    };
+  }
+
+  // 3. System Down / Bank Timeout / External Service Unavailable / Network Error
+  if (
+    code.includes('BANK_TIMEOUT') ||
+    code.includes('TIMEOUT') ||
+    code.includes('NETWORK') ||
+    code.includes('UNAVAILABLE') ||
+    code.includes('DEPENDENCY') ||
+    code === 'SLIP_ERR_1012' ||
+    msg.includes('ขัดข้อง') ||
+    msg.includes('หมดเวลา') ||
+    msg.includes('ไม่สามารถเชื่อมต่อ') ||
+    msg.includes('ธนาคารปลายทาง')
+  ) {
+    return {
+      status: 'error',
+      category: 'system_down',
+      badge: 'ระบบตรวจสอบสลิปขัดข้องชั่วคราว',
+      badgeColor: 'orange',
+      title: 'ระบบตรวจสอบสลิปขัดข้องชั่วคราว',
+      message: msg || 'ระบบตรวจสอบสลิปหรือระบบของธนาคารปลายทางขัดข้องชั่วคราว กรุณารอสักครู่แล้วกดลองใหม่อีกครั้ง',
+      code: code || 'SYSTEM_DOWN',
+      canRetry: true
+    };
+  }
+
+  // 4. Amount Mismatch
+  if (
+    code.includes('AMOUNT') ||
+    msg.includes('ยอดเงินในสลิป') ||
+    msg.includes('ไม่ตรงกับยอด')
+  ) {
+    return {
+      status: 'error',
+      category: 'amount_mismatch',
+      badge: 'ยอดเงินไม่ตรงกับแพ็กเกจ',
+      badgeColor: 'red',
+      title: 'ยอดเงินในสลิปไม่ตรงกับยอดที่ต้องชำระ',
+      message: msg || 'ยอดเงินในสลิปไม่ตรงกับยอดของแพ็กเกจที่เลือก กรุณาตรวจสอบยอดเงินและโอนให้ตรงกับจำนวนเงินที่ระบุ',
+      code: code || 'AMOUNT_MISMATCH',
+      canRetry: false
+    };
+  }
+
+  // 5. QR Code invalid / not found / unreadable
+  if (
+    code.includes('QR') ||
+    code === 'SLIP_ERR_1004' ||
+    code === 'SLIP_ERR_1007' ||
+    code === 'SLIP_ERR_1011' ||
+    code.includes('TRANSACTION_NOT_FOUND') ||
+    msg.includes('QR Code') ||
+    msg.includes('ไม่พบ QR') ||
+    msg.includes('ถอดรหัส')
+  ) {
+    return {
+      status: 'error',
+      category: 'qr_invalid',
+      badge: 'ไม่พบ QR Code ในภาพ',
+      badgeColor: 'amber',
+      title: 'ไม่พบ QR Code ในภาพสลิป',
+      message: msg || 'ไม่พบ QR Code ในภาพสลิป หรือภาพสลิปไม่ชัดเจน กรุณาแนบภาพสลิปใหม่อีกครั้งให้เห็น QR Code ชัดเจน',
+      code: code || 'QR_NOT_FOUND',
+      canRetry: false
+    };
+  }
+
+  // 6. Cooldown / Rate Limiting / Concurrent Lock
+  if (
+    code.includes('COOLDOWN') ||
+    code.includes('RATE_LIMIT') ||
+    code.includes('CONCURRENT') ||
+    msg.includes('คูลดาวน์') ||
+    msg.includes('5 วินาที') ||
+    msg.includes('กำลังประมวลผล')
+  ) {
+    return {
+      status: 'error',
+      category: 'cooldown',
+      badge: 'ส่งคำขอถี่เกินไป',
+      badgeColor: 'amber',
+      title: 'กรุณารอสักครู่ก่อนส่งตรวจใหม่อีกครั้ง',
+      message: msg || 'กรุณารออย่างน้อย 5 วินาทีก่อนส่งคำขอตรวจสอบสลิปอีกครั้ง เพื่อความปลอดภัยของระบบ',
+      code: code || 'COOLDOWN_ACTIVE',
+      canRetry: true
+    };
+  }
+
+  // 7. Receiver mismatch
+  if (
+    code.includes('RECEIVER') ||
+    code.includes('1014') ||
+    msg.includes('บัญชีผู้รับ')
+  ) {
+    return {
+      status: 'error',
+      category: 'receiver',
+      badge: 'บัญชีผู้รับไม่ตรง',
+      badgeColor: 'red',
+      title: 'บัญชีผู้รับเงินไม่ถูกต้อง',
+      message: msg || 'บัญชีผู้รับเงินในสลิปไม่ตรงกับบัญชีของระบบ HorPlus กรุณาโอนเข้าบัญชีพร้อมเพย์ที่กำหนด',
+      code: code || 'RECEIVER_MISMATCH',
+      canRetry: false
+    };
+  }
+
+  // 8. File size / format
+  if (
+    code.includes('FILE_TOO_LARGE') ||
+    code.includes('INVALID_IMAGE') ||
+    code.includes('DIMENSIONS') ||
+    msg.includes('4MB') ||
+    msg.includes('ไฟล์')
+  ) {
+    return {
+      status: 'error',
+      category: 'format',
+      badge: 'ไฟล์รูปภาพไม่ถูกต้อง',
+      badgeColor: 'red',
+      title: 'รูปแบบหรือขนาดไฟล์ไม่ถูกต้อง',
+      message: msg || 'ไฟล์รูปภาพต้องเป็นไฟล์ JPG หรือ PNG และมีขนาดไม่เกิน 4MB',
+      code: code || 'INVALID_FILE',
+      canRetry: false
+    };
+  }
+
+  // 9. General fallback
+  return {
+    status: 'error',
+    category: 'general',
+    badge: 'ตรวจสลิปไม่สำเร็จ',
+    badgeColor: 'red',
+    title: 'การตรวจสอบสลิปล้มเหลว',
+    message: msg || 'เกิดข้อผิดพลาดในการตรวจสอบสลิป กรุณาตรวจสอบสลิปและลองใหม่อีกครั้ง',
+    code: code || 'VERIFICATION_FAILED',
+    canRetry: true
+  };
+}
 
 export const OwnerSubscription: React.FC<OwnerSubscriptionProps> = ({
   dormitoryId,
@@ -293,7 +663,9 @@ export const OwnerSubscription: React.FC<OwnerSubscriptionProps> = ({
     slipsChecked: 0,
     freeSlipsUsed: 0,
     autoRenew: false,
-    lastPaymentDate: '-'
+    lastPaymentDate: '-',
+    isTrialEligible: false,
+    trialStartedAt: null as string | null
   }));
 
   // Referral info state (defaults to empty; populated authoritatively from API)
@@ -338,6 +710,7 @@ export const OwnerSubscription: React.FC<OwnerSubscriptionProps> = ({
   }, [appliedPromo]);
   const [promoError, setPromoError] = useState<string | null>(null);
   const [promoSuccessMsg, setPromoSuccessMsg] = useState<string | null>(null);
+  const [isPromoBannerDismissed, setIsPromoBannerDismissed] = useState(false);
 
   // Refresh status loading state
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -358,6 +731,7 @@ export const OwnerSubscription: React.FC<OwnerSubscriptionProps> = ({
   const [selectedSlipFile, setSelectedSlipFile] = useState<File | null>(null);
   const [uploadedSlip, setUploadedSlip] = useState<string | null>(null);
   const [isVerifyingSlip, setIsVerifyingSlip] = useState(false);
+  const [slipVerificationResult, setSlipVerificationResult] = useState<SlipVerificationResult | null>(null);
   const [verifyStep, setVerifyStep] = useState(0); // 1: scanning, 2: checking bank, 3: success
   const [isVerifiedSuccess, setIsVerifiedSuccess] = useState(false);
   const [isCelebrationOpen, setIsCelebrationOpen] = useState(false);
@@ -419,7 +793,9 @@ export const OwnerSubscription: React.FC<OwnerSubscriptionProps> = ({
           slipsChecked: typeof d.slipsChecked === 'number' ? d.slipsChecked : 0,
           freeSlipsUsed: typeof d.slipsChecked === 'number' ? d.slipsChecked : 0,
           autoRenew: Boolean(d.autoRenew),
-          lastPaymentDate: d.lastPaymentDate || '-'
+          lastPaymentDate: d.lastPaymentDate || '-',
+          isTrialEligible: Boolean(d.isTrialEligible ?? !d.trialStartedAt),
+          trialStartedAt: d.trialStartedAt || null
         });
       }
     } catch (err) {
@@ -480,7 +856,12 @@ export const OwnerSubscription: React.FC<OwnerSubscriptionProps> = ({
     httpRequest<any>('GET', '/billboard')
       .then(res => {
         if (res && res.data && Array.isArray(res.data) && res.data.length > 0) {
-          setBillboardAds(res.data);
+          const hasLegacy = res.data.some((item: any) => typeof item.imageUrl === 'string' && item.imageUrl.includes('unsplash'));
+          if (!hasLegacy) {
+            setBillboardAds(res.data);
+          } else {
+            setBillboardAds(DEFAULT_BILLBOARD_ADS);
+          }
         }
       })
       .catch(() => { });
@@ -548,14 +929,19 @@ export const OwnerSubscription: React.FC<OwnerSubscriptionProps> = ({
   const [billboardAds, setBillboardAds] = useState<BillboardItem[]>(() => {
     try {
       const saved = localStorage.getItem('HorPlus_billboard_ads');
-      if (saved) return JSON.parse(saved);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const hasLegacy = parsed.some((item: any) => typeof item.imageUrl === 'string' && item.imageUrl.includes('unsplash'));
+          if (!hasLegacy) {
+            return parsed;
+          }
+          localStorage.removeItem('HorPlus_billboard_ads');
+        }
+      }
     } catch { }
     return DEFAULT_BILLBOARD_ADS;
   });
-  const [currentBillboardIndex, setCurrentBillboardIndex] = useState(0);
-  const [isBillboardPlaying, setIsBillboardPlaying] = useState(true);
-  const [isBillboardHovered, setIsBillboardHovered] = useState(false);
-
   // Billboard custom image modal states
   const [isBillboardModalOpen, setIsBillboardModalOpen] = useState(false);
   const [newImageFile, setNewImageFile] = useState<string | null>(null);
@@ -563,85 +949,6 @@ export const OwnerSubscription: React.FC<OwnerSubscriptionProps> = ({
   const [newImageTitle, setNewImageTitle] = useState('');
   const [newImageDesc, setNewImageDesc] = useState('');
   const [newImageTag, setNewImageTag] = useState('');
-
-  // 16:9 Billboard auto-rotation effect:
-  // Visible hold: 3 seconds (3,000ms)
-  // Fade transition: 0.5 seconds (500ms)
-  // Total interval = 3,500ms
-  useEffect(() => {
-    if (!isBillboardPlaying || isBillboardHovered || billboardAds.length <= 1) return;
-
-    const timer = setInterval(() => {
-      setCurrentBillboardIndex(prev => (prev + 1) % billboardAds.length);
-    }, 3500);
-
-    return () => clearInterval(timer);
-  }, [isBillboardPlaying, isBillboardHovered, billboardAds.length]);
-
-  // Swipe & Drag Gesture for Billboard Slider (รองรับการปัดด้วยนิ้วบน Touchscreen และลากผ่านเมาส์)
-  const touchStartXRef = useRef<number | null>(null);
-  const touchEndXRef = useRef<number | null>(null);
-  const isMouseDownRef = useRef<boolean>(false);
-  const mouseStartXRef = useRef<number | null>(null);
-  const [isDraggingBillboard, setIsDraggingBillboard] = useState(false);
-
-  const handleBillboardTouchStart = (e: React.TouchEvent) => {
-    touchStartXRef.current = e.targetTouches[0].clientX;
-    touchEndXRef.current = e.targetTouches[0].clientX;
-    setIsBillboardHovered(true);
-  };
-
-  const handleBillboardTouchMove = (e: React.TouchEvent) => {
-    touchEndXRef.current = e.targetTouches[0].clientX;
-  };
-
-  const handleBillboardTouchEnd = () => {
-    setIsBillboardHovered(false);
-    if (touchStartXRef.current === null || touchEndXRef.current === null) return;
-    const diff = touchStartXRef.current - touchEndXRef.current;
-    const minSwipeDistance = 40; // threshold px
-    if (diff > minSwipeDistance) {
-      // Swiped Left -> Next image
-      setCurrentBillboardIndex(prev => (prev + 1) % billboardAds.length);
-    } else if (diff < -minSwipeDistance) {
-      // Swiped Right -> Prev image
-      setCurrentBillboardIndex(prev => (prev === 0 ? billboardAds.length - 1 : prev - 1));
-    }
-    touchStartXRef.current = null;
-    touchEndXRef.current = null;
-  };
-
-  const handleBillboardMouseDown = (e: React.MouseEvent) => {
-    isMouseDownRef.current = true;
-    mouseStartXRef.current = e.clientX;
-    setIsDraggingBillboard(true);
-    setIsBillboardHovered(true);
-  };
-
-  const handleBillboardMouseUp = (e: React.MouseEvent) => {
-    if (isMouseDownRef.current && mouseStartXRef.current !== null) {
-      const diff = mouseStartXRef.current - e.clientX;
-      const minSwipeDistance = 40;
-      if (diff > minSwipeDistance) {
-        // Dragged Left -> Next image
-        setCurrentBillboardIndex(prev => (prev + 1) % billboardAds.length);
-      } else if (diff < -minSwipeDistance) {
-        // Dragged Right -> Prev image
-        setCurrentBillboardIndex(prev => (prev === 0 ? billboardAds.length - 1 : prev - 1));
-      }
-    }
-    isMouseDownRef.current = false;
-    mouseStartXRef.current = null;
-    setIsDraggingBillboard(false);
-    setIsBillboardHovered(false);
-  };
-
-  const handleBillboardMouseLeave = () => {
-    isMouseDownRef.current = false;
-    mouseStartXRef.current = null;
-    setIsDraggingBillboard(false);
-    setIsBillboardHovered(false);
-  };
 
   const handleAddBillboardAd = async () => {
     const finalImage = newImageFile || newImageUrl;
@@ -666,7 +973,6 @@ export const OwnerSubscription: React.FC<OwnerSubscriptionProps> = ({
       setBillboardAds(prev => [newAd, ...prev]);
     }
 
-    setCurrentBillboardIndex(0);
     setNewImageFile(null);
     setNewImageUrl('');
     setNewImageTitle('');
@@ -692,9 +998,6 @@ export const OwnerSubscription: React.FC<OwnerSubscriptionProps> = ({
 
     const filtered = billboardAds.filter(ad => ad.id !== id);
     setBillboardAds(filtered);
-    if (currentBillboardIndex >= filtered.length) {
-      setCurrentBillboardIndex(0);
-    }
   };
 
   const handleResetBillboardAds = async () => {
@@ -708,7 +1011,6 @@ export const OwnerSubscription: React.FC<OwnerSubscriptionProps> = ({
     } catch {
       setBillboardAds(DEFAULT_BILLBOARD_ADS);
     }
-    setCurrentBillboardIndex(0);
     setShowSuccessToast('รีเซ็ตเป็นป้ายโฆษณามาตรฐานเริ่มต้นแล้ว');
     setTimeout(() => setShowSuccessToast(null), 3000);
   };
@@ -741,18 +1043,32 @@ export const OwnerSubscription: React.FC<OwnerSubscriptionProps> = ({
         ? Math.round((basePrice * appliedPromo.discountPercent) / 100)
         : appliedPromo.discountAmount || 0
       : 0;
+  const isTrialApplicable = Boolean(subInfo.isTrialEligible && durationMonths === 1);
   const currentPrice = serverQuote?.finalPayableAmount !== undefined
     ? serverQuote.finalPayableAmount
-    : Math.max(0, basePrice - promoDiscountAmount);
+    : isTrialApplicable
+      ? 0
+      : Math.max(0, basePrice - promoDiscountAmount);
+
+  const lastQuoteKeyRef = useRef<string>('');
 
   // Synchronize server-authoritative quote whenever duration or promo changes in payment view
   useEffect(() => {
     if (isPaymentViewOpen) {
       const activeDormId = dormitoryId || sessionStorage.getItem('active_dormitory_selected_for_session') || localStorage.getItem('selected_dormitory_id') || '';
       const pkg = packagesList.find(p => p.durationMonths === durationMonths);
+      const promoCode = appliedPromo?.discountPercent ? appliedPromo.code : '';
+      const currentQuoteKey = `${pkg?.id || ''}:${durationMonths}:${promoCode}:${activeDormId}`;
+
+      // PERF-05 Deduplication guard: block redundant network calls for identical params
+      if (lastQuoteKeyRef.current === currentQuoteKey) {
+        return;
+      }
+      lastQuoteKeyRef.current = currentQuoteKey;
+
       httpRequest<any>('POST', '/subscription/quote', {
         packageId: pkg?.id,
-        promoCode: appliedPromo?.discountPercent ? appliedPromo.code : undefined,
+        promoCode: promoCode || undefined,
         dormitoryId: activeDormId || undefined
       }).then(res => {
         if (res && res.data) {
@@ -822,6 +1138,7 @@ export const OwnerSubscription: React.FC<OwnerSubscriptionProps> = ({
         };
         setAppliedPromo(promoData);
         setPromoCodeInput('');
+        setIsPromoBannerDismissed(false);
 
         // Refresh quote for payment view
         const pkg = packagesList.find(p => p.durationMonths === durationMonths);
@@ -840,7 +1157,7 @@ export const OwnerSubscription: React.FC<OwnerSubscriptionProps> = ({
               promoCode: cleanCode
             });
           }
-        }).catch(() => {});
+        }).catch(() => { });
 
         const successText = currentDiscountPercent > 0
           ? `ใช้โค้ด ${cleanCode} สำเร็จ: ได้รับส่วนลด ${candidateDiscountPercent}% (-฿${discountAmount.toLocaleString()}) สูงกว่าโค้ดเดิม (โค้ดเดิมถูกยกเลิก)`
@@ -866,6 +1183,7 @@ export const OwnerSubscription: React.FC<OwnerSubscriptionProps> = ({
         };
         setAppliedPromo(promoData);
         setPromoCodeInput('');
+        setIsPromoBannerDismissed(false);
         setPromoSuccessMsg(`ใช้โค้ด ${cleanCode} สำเร็จ: เพิ่มวันใช้งาน +${promoData.daysBonus} วัน เรียบร้อยแล้ว`);
         showToast(`ใช้โค้ด ${cleanCode} สำเร็จ! เพิ่มวันใช้งาน +${promoData.daysBonus} วัน`, 'success');
 
@@ -933,19 +1251,26 @@ export const OwnerSubscription: React.FC<OwnerSubscriptionProps> = ({
     setSelectedPlanToRenew(AVAILABLE_PLANS[1]);
     setUploadedSlip(null);
     setSelectedSlipFile(null);
+    setSlipVerificationResult(null);
     setIsVerifyingSlip(false);
     setIsVerifiedSuccess(false);
     setSuccessReceipt(null);
+    setServerQuote(null);
+    onDetailViewChange?.(true);
     setIsPaymentViewOpen(true);
   };
 
   const handleClosePaymentView = () => {
+    onDetailViewChange?.(false);
     setIsPaymentViewOpen(false);
     setUploadedSlip(null);
     setSelectedSlipFile(null);
+    setSlipVerificationResult(null);
     setIsVerifyingSlip(false);
     setIsVerifiedSuccess(false);
     setSuccessReceipt(null);
+    setServerQuote(null);
+    lastQuoteKeyRef.current = '';
   };
 
   const handleCelebrationComplete = () => {
@@ -954,6 +1279,68 @@ export const OwnerSubscription: React.FC<OwnerSubscriptionProps> = ({
     fetchCurrentSubscription();
     setShowSuccessToast('🎉 ต่ออายุแพ็กเกจ HORPLUS PRO สำเร็จเรียบร้อยแล้ว!');
     setTimeout(() => setShowSuccessToast(null), 3500);
+  };
+
+  const handleReturnToHome = () => {
+    onDetailViewChange?.(false);
+    setIsPaymentViewOpen(false);
+    setIsVerifiedSuccess(false);
+    setUploadedSlip(null);
+    setSelectedSlipFile(null);
+    setSlipVerificationResult(null);
+    setSuccessReceipt(null);
+    fetchCurrentSubscription();
+    if (onNavigate) {
+      onNavigate('dashboard');
+    }
+  };
+
+  const [isClaimingTrial, setIsClaimingTrial] = useState(false);
+
+  const handleClaimFreeTrial = async (_card?: PricingCardData) => {
+    if (isClaimingTrial) return;
+    setIsClaimingTrial(true);
+    try {
+      const activeDormId = dormitoryId || sessionStorage.getItem('active_dormitory_selected_for_session') || localStorage.getItem('selected_dormitory_id') || '';
+      const pkg = packagesList.find(p => p.durationMonths === 1);
+
+      // 1. Authoritative zero-pay quote & intent
+      const quoteRes = await httpRequest<any>('POST', '/subscription/quote', {
+        packageId: pkg?.id,
+        dormitoryId: activeDormId || undefined
+      });
+
+      if (!quoteRes || !quoteRes.data || !quoteRes.data.intentId) {
+        throw new Error('ไม่สามารถสร้างคำขอรับสิทธิ์ได้ กรุณาลองใหม่อีกครั้ง');
+      }
+
+      const intentId = quoteRes.data.intentId;
+
+      // 2. Commit the zero-pay intent immediately
+      const commitRes = await httpRequest<any>('POST', '/subscription/commit', {
+        intentId,
+        idempotencyKey: `trial-${activeDormId}-${Date.now()}`
+      });
+
+      if (commitRes && (commitRes.data?.success || commitRes.data?.status === 'SUCCEEDED')) {
+        await fetchCurrentSubscription();
+        setIsPaymentViewOpen(false);
+        try {
+          sessionStorage.setItem('horplus_pending_trial_celebration', 'true');
+        } catch { }
+        if (onNavigate) {
+          onNavigate('dashboard', { showTrialCelebration: true });
+        }
+      } else {
+        throw new Error(commitRes?.data?.message || 'เปิดใช้งานสิทธิ์ไม่สำเร็จ');
+      }
+    } catch (err: any) {
+      console.error('Failed to claim free trial:', err);
+      const errMsg = err?.message || err?.domainError?.message || 'เกิดข้อผิดพลาดในการรับสิทธิ์ทดลองใช้งาน';
+      showToast(errMsg, 'error');
+    } finally {
+      setIsClaimingTrial(false);
+    }
   };
 
   const handleCopyPromptPay = () => {
@@ -1011,6 +1398,7 @@ export const OwnerSubscription: React.FC<OwnerSubscriptionProps> = ({
   };
 
   const processSlipFile = (file: File) => {
+    setSlipVerificationResult(null);
     setSelectedSlipFile(file);
     const reader = new FileReader();
     reader.onloadend = () => {
@@ -1025,6 +1413,7 @@ export const OwnerSubscription: React.FC<OwnerSubscriptionProps> = ({
     const targetFile = fileToUpload || selectedSlipFile;
     if (!targetFile) return;
 
+    setSlipVerificationResult(null);
     setIsVerifyingSlip(true);
     setVerifyStep(1);
 
@@ -1090,17 +1479,18 @@ export const OwnerSubscription: React.FC<OwnerSubscriptionProps> = ({
 
       setIsVerifyingSlip(false);
       setIsVerifiedSuccess(true);
+      setSlipVerificationResult(null);
       // แสดงเอฟเฟกต์เฉลิมฉลองการอัปเกรดเป็นกล่องการ์ดป๊อปอัป พร้อมเปรียบเทียบวันเดิมสู่วันใหม่ชัดเจน
       setIsCelebrationOpen(true);
     } catch (err: any) {
       setIsVerifyingSlip(false);
       setVerifyStep(0);
-      setSelectedSlipFile(null);
-      setUploadedSlip(null);
+      setServerQuote(null);
+      const classified = classifySlipError(err);
+      setSlipVerificationResult(classified);
       if (fileInputRef.current) {
         fileInputRef.current.value = '';
       }
-      alert(`การตรวจสอบสลิปล้มเหลว: ${err.message || 'กรุณาลองใหม่อีกครั้ง'}`);
     }
   };
 
@@ -1115,9 +1505,12 @@ export const OwnerSubscription: React.FC<OwnerSubscriptionProps> = ({
     if (plan.id === 'free') return;
     setSelectedPlanToRenew(plan);
     setUploadedSlip(null);
+    setSelectedSlipFile(null);
+    setSlipVerificationResult(null);
     setIsVerifyingSlip(false);
     setIsVerifiedSuccess(false);
     setSuccessReceipt(null);
+    setServerQuote(null);
     setIsPaymentViewOpen(true);
   };
 
@@ -1158,7 +1551,7 @@ export const OwnerSubscription: React.FC<OwnerSubscriptionProps> = ({
         )}
 
         {/* Top Header: Sticky with back button on top-leftmost */}
-        <header className="shrink-0 bg-white border-b border-slate-200/80 px-4 sm:px-6 py-2.5 sm:py-3 flex items-center justify-between shadow-xs z-20 -mt-[1px]">
+        <header className="shrink-0 bg-white border-b border-slate-200/80 px-4 sm:px-6 py-2.5 sm:py-3 flex items-center justify-between shadow-xs z-20">
           <div className="flex items-center gap-1.5 sm:gap-2.5 min-w-0 font-sans">
             <button
               type="button"
@@ -1240,7 +1633,7 @@ export const OwnerSubscription: React.FC<OwnerSubscriptionProps> = ({
               <div className="order-1 bg-white rounded-3xl p-5 border border-slate-200 shadow-xs space-y-4">
                 <div className="flex items-center justify-between pb-3 border-b border-slate-100">
                   <div className="flex items-center gap-2">
-                    <Sparkles className="w-4 h-4 text-blue-600" />
+                    <Crown className="w-4 h-4 text-blue-600" />
                     <span className="text-sm font-black text-slate-900">HORPLUS PRO</span>
                   </div>
                   <span className="text-[11px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-100">
@@ -1258,15 +1651,20 @@ export const OwnerSubscription: React.FC<OwnerSubscriptionProps> = ({
                   </div>
                   <div className="grid grid-cols-5 gap-1.5">
                     {PRO_DURATIONS.map(d => {
+                      const isTrial1m = Boolean(subInfo.isTrialEligible && d.months === 1);
                       const discountPercent = appliedPromo?.discountPercent || 0;
                       const buttonDiscount = discountPercent > 0 ? Math.round((d.price * discountPercent) / 100) : 0;
-                      const buttonPrice = discountPercent > 0 ? d.price - buttonDiscount : d.price;
+                      const buttonPrice = isTrial1m ? 0 : (discountPercent > 0 ? d.price - buttonDiscount : d.price);
 
                       return (
                         <button
                           key={d.months}
                           type="button"
-                          onClick={() => setDurationMonths(d.months)}
+                          onClick={() => {
+                            setDurationMonths(d.months);
+                            setServerQuote(null);
+                            setSlipVerificationResult(null);
+                          }}
                           className={`py-2 px-1 text-center rounded-xl border text-xs transition-all cursor-pointer ${durationMonths === d.months
                             ? 'bg-blue-600 text-white border-blue-600 shadow-xs font-black ring-2 ring-blue-500/20'
                             : 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-700 font-bold'
@@ -1296,152 +1694,281 @@ export const OwnerSubscription: React.FC<OwnerSubscriptionProps> = ({
                 </div>
               </div>
 
-              {/* Card 2: พร้อมเพย์ QR Code (Right column spanning on desktop, 2nd on mobile) */}
-              <div className="order-2 lg:row-span-2 bg-white rounded-3xl p-5 border border-slate-200 shadow-xs space-y-3.5">
-                <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-                  <div className="flex items-center gap-2">
-                    <QrCode className="w-4 h-4 text-blue-600" />
-                    <span className="text-sm font-black text-slate-900">พร้อมเพย์ (PromptPay)</span>
-                  </div>
-                  <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
-                    ใช้งานได้ทันที
-                  </span>
-                </div>
-
-                {/* QR Code Container */}
-                <div className="bg-slate-50/80 rounded-2xl p-4 border border-slate-200/80 text-center space-y-3">
-                  <div className="flex items-center justify-center py-0.5">
-                    <img
-                      src="https://upload.wikimedia.org/wikipedia/commons/2/28/Thai_QR_Logo.svg?utm_source=commons.wikimedia.org&utm_campaign=index&utm_content=original"
-                      alt="Thai QR Payment"
-                      className="h-8 sm:h-9 w-auto max-w-[150px] object-contain mx-auto drop-shadow-2xs"
-                      referrerPolicy="no-referrer"
-                    />
-                  </div>
-
-                  <div className="relative w-44 h-44 sm:w-48 sm:h-48 mx-auto bg-white p-2.5 rounded-2xl border border-slate-200 shadow-2xs flex items-center justify-center">
-                    {isGeneratingQr ? (
-                      <div className="flex flex-col items-center gap-1.5 text-slate-400 text-xs">
-                        <RefreshCw className="w-5 h-5 animate-spin text-blue-600" />
-                        <span>กำลังสร้าง QR...</span>
-                      </div>
-                    ) : qrCodeDataUrl ? (
-                      <img
-                        src={qrCodeDataUrl}
-                        alt={`PromptPay ฿${currentPrice}`}
-                        className="w-full h-full object-contain rounded-lg"
-                      />
-                    ) : (
-                      <span className="text-xs text-slate-400">ไม่สามารถโหลด QR Code ได้</span>
-                    )}
-                  </div>
-
-                  {/* Recipient info & amount */}
-                  <div className="space-y-1 text-xs">
-                    <div className="flex items-center justify-center gap-2">
-                      <span className="font-mono font-black text-slate-800 text-sm">
-                        {promptPayConfig.promptPayId.length === 10
-                          ? `${promptPayConfig.promptPayId.slice(0, 3)}-${promptPayConfig.promptPayId.slice(3, 6)}-${promptPayConfig.promptPayId.slice(6)}`
-                          : promptPayConfig.promptPayId}
+              {/* Card 2 & 3: If currentPrice === 0, show direct 0-Baht Free Activation (ไม่ต้องชำระเงินและไม่ต้องแนบสลิป) */}
+              {currentPrice === 0 ? (
+                <div className="order-2 lg:col-span-1 lg:row-span-2 bg-white rounded-3xl p-6 border border-emerald-200 shadow-xs flex flex-col justify-between text-center space-y-5 min-h-[480px]">
+                  <div className="space-y-4 pt-4">
+                    <div className="w-16 h-16 bg-emerald-50 rounded-2xl flex items-center justify-center mx-auto text-emerald-600 border border-emerald-100 shadow-xs">
+                      <Crown className="w-8 h-8 text-emerald-600" />
+                    </div>
+                    <div className="space-y-1.5">
+                      <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
+                        สิทธิ์ฟรี 100%
                       </span>
-                      <button
-                        type="button"
-                        onClick={handleCopyPromptPay}
-                        className="p-1 text-slate-500 hover:text-blue-600 hover:bg-white rounded-md transition-colors cursor-pointer"
-                        title="คัดลอกหมายเลขพร้อมเพย์"
-                      >
-                        <Copy className="w-3.5 h-3.5" />
-                      </button>
+                      <h4 className="text-lg font-black text-slate-900">
+                        รับสิทธิ์ใช้งานฟรี 0 บาท
+                      </h4>
+                      <p className="text-xs text-slate-500 font-medium max-w-xs mx-auto">
+                        รายการนี้ได้รับสิทธิ์ฟรี ไม่ต้องชำระเงิน และไม่ต้องแนบสลิปโอนเงินใดๆ
+                      </p>
                     </div>
-                    <div className="text-slate-600 font-medium text-[11px]">{promptPayConfig.accountName}</div>
-                    <div className="text-blue-600 font-extrabold text-sm pt-0.5">
-                      ฿{currentPrice.toLocaleString()} บาท
+
+                    <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200/80 text-left space-y-2 text-xs">
+                      <div className="flex justify-between items-center text-slate-600">
+                        <span>ระยะเวลาที่ได้รับ:</span>
+                        <span className="font-bold text-slate-900">{currentDurationOpt.label} (+{currentDurationOpt.days} วัน)</span>
+                      </div>
+                      <div className="flex justify-between items-center text-slate-600">
+                        <span>ยอดชำระสุทธิ:</span>
+                        <span className="font-black text-emerald-600 text-sm">฿0 บาท</span>
+                      </div>
                     </div>
                   </div>
 
-                  {/* Download QR button */}
-                  <div className="pt-1">
+                  <div className="pt-2 pb-2">
                     <button
                       type="button"
-                      onClick={handleDownloadQr}
-                      disabled={isDownloadingCard}
-                      className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 font-bold text-xs transition-colors cursor-pointer shadow-2xs disabled:opacity-60"
+                      disabled={isClaimingTrial}
+                      onClick={() => handleClaimFreeTrial()}
+                      className="w-full py-3.5 px-4 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-extrabold text-sm rounded-xl shadow-md shadow-emerald-600/20 transition-all cursor-pointer flex items-center justify-center gap-2 disabled:opacity-70"
                     >
-                      {isDownloadingCard ? (
-                        <RefreshCw className="w-3.5 h-3.5 animate-spin text-blue-600" />
+                      {isClaimingTrial ? (
+                        <>
+                          <RefreshCw className="w-4 h-4 animate-spin" />
+                          <span>กำลังเปิดใช้งานสิทธิ์...</span>
+                        </>
                       ) : (
-                        <Download className="w-3.5 h-3.5" />
+                        <>
+                          <CheckCircle2 className="w-5 h-5" />
+                          <span>ยืนยันรับสิทธิ์เปิดใช้งานทันที</span>
+                        </>
                       )}
-                      <span>{isDownloadingCard ? 'กำลังบันทึกรูป...' : 'บันทึกรูป QR Code'}</span>
                     </button>
                   </div>
                 </div>
-              </div>
-
-              {/* Card 3: แนบสลิปโอนเงิน (Bottom Left on desktop, 3rd on mobile) */}
-              <div className="order-3 bg-white rounded-3xl p-5 border border-slate-200 shadow-xs space-y-3">
-                <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-                  <div className="flex items-center gap-2">
-                    <Upload className="w-4 h-4 text-blue-600" />
-                    <span className="text-sm font-black text-slate-900">แนบสลิปโอนเงิน</span>
-                  </div>
-                  <span className="text-[11px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-100">
-                    ตรวจสลิปอัตโนมัติ
-                  </span>
-                </div>
-
-                {/* Hidden native file input */}
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="image/*"
-                  onChange={handleSlipFileSelect}
-                  className="hidden"
-                />
-
-                {/* Verification Progress or Upload Area */}
-                {isVerifyingSlip ? (
-                  <div className="bg-slate-50 rounded-2xl p-4 border border-blue-300 text-center space-y-2.5">
-                    <div className="relative w-14 h-14 mx-auto rounded-xl overflow-hidden border border-slate-200 bg-slate-100">
-                      {uploadedSlip && <img src={uploadedSlip} alt="Slip" className="w-full h-full object-cover" />}
-                      <div className="absolute inset-0 bg-blue-500/20 flex items-center justify-center">
-                        <RefreshCw className="w-5 h-5 text-white animate-spin" />
+              ) : (
+                <>
+                  {/* Card 2: พร้อมเพย์ QR Code (Right column spanning on desktop, 2nd on mobile) */}
+                  <div className="order-2 lg:row-span-2 bg-white rounded-3xl p-5 border border-slate-200 shadow-xs space-y-3.5 min-h-[480px] flex flex-col justify-between">
+                    <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+                      <div className="flex items-center gap-2">
+                        <QrCode className="w-4 h-4 text-blue-600" />
+                        <span className="text-sm font-black text-slate-900">พร้อมเพย์ (PromptPay)</span>
                       </div>
-                    </div>
-                    <div>
-                      <span className="text-xs font-bold text-slate-800 block">กำลังตรวจสอบสลิป...</span>
-                      <span className="text-[11px] text-blue-600 font-medium">
-                        {verifyStep === 1 && 'อ่านข้อมูลสลิป'}
-                        {verifyStep === 2 && `ตรวจยอด ฿${currentPrice.toLocaleString()}`}
-                        {verifyStep === 3 && 'ความถูกต้องสมบูรณ์'}
+                      <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
+                        ใช้งานได้ทันที
                       </span>
                     </div>
-                    <div className="w-full bg-slate-200 h-1.5 rounded-full overflow-hidden">
+
+                    {/* QR Code Container */}
+                    <div className="bg-slate-50/80 rounded-2xl p-4 border border-slate-200/80 text-center space-y-3 mt-3.5">
+                      <div className="flex items-center justify-center py-0.5">
+                        <ThaiQrLogo className="h-8 sm:h-9 w-auto max-w-[150px] object-contain mx-auto drop-shadow-2xs" />
+                      </div>
+
+                      <div className="relative w-44 h-44 sm:w-48 sm:h-48 mx-auto bg-white p-2.5 rounded-2xl border border-slate-200 shadow-2xs flex items-center justify-center">
+                        {isGeneratingQr ? (
+                          <div className="flex flex-col items-center gap-1.5 text-slate-400 text-xs">
+                            <RefreshCw className="w-5 h-5 animate-spin text-blue-600" />
+                            <span>กำลังสร้าง QR...</span>
+                          </div>
+                        ) : qrCodeDataUrl ? (
+                          <img
+                            src={qrCodeDataUrl}
+                            alt={`PromptPay ฿${currentPrice}`}
+                            className="w-full h-full object-contain rounded-lg"
+                          />
+                        ) : (
+                          <span className="text-xs text-slate-400">ไม่สามารถโหลด QR Code ได้</span>
+                        )}
+                      </div>
+
+                      {/* Recipient info & amount */}
+                      <div className="space-y-1 text-xs">
+                        <div className="flex items-center justify-center gap-2">
+                          <span className="font-mono font-black text-slate-800 text-sm">
+                            {promptPayConfig.promptPayId.length === 10
+                              ? `${promptPayConfig.promptPayId.slice(0, 3)}-${promptPayConfig.promptPayId.slice(3, 6)}-${promptPayConfig.promptPayId.slice(6)}`
+                              : promptPayConfig.promptPayId}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={handleCopyPromptPay}
+                            className="p-1 text-slate-500 hover:text-blue-600 hover:bg-white rounded-md transition-colors cursor-pointer"
+                            title="คัดลอกหมายเลขพร้อมเพย์"
+                          >
+                            <Copy className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                        <div className="text-slate-600 font-medium text-[11px]">{promptPayConfig.accountName}</div>
+                        <div className="text-blue-600 font-extrabold text-sm pt-0.5">
+                          ฿{currentPrice.toLocaleString()} บาท
+                        </div>
+                      </div>
+
+                      {/* Download QR button */}
+                      <div className="pt-1">
+                        <button
+                          type="button"
+                          onClick={handleDownloadQr}
+                          disabled={isDownloadingCard}
+                          className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 font-bold text-xs transition-colors cursor-pointer shadow-2xs disabled:opacity-60"
+                        >
+                          {isDownloadingCard ? (
+                            <RefreshCw className="w-3.5 h-3.5 animate-spin text-blue-600" />
+                          ) : (
+                            <Download className="w-3.5 h-3.5" />
+                          )}
+                          <span>{isDownloadingCard ? 'กำลังบันทึกรูป...' : 'บันทึกรูป QR Code'}</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Card 3: แนบสลิปโอนเงิน (Bottom Left on desktop, 3rd on mobile) */}
+                  <div className="order-3 bg-white rounded-3xl p-5 border border-slate-200 shadow-xs space-y-3">
+                    <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+                      <div className="flex items-center gap-2">
+                        <Upload className="w-4 h-4 text-blue-600" />
+                        <span className="text-sm font-black text-slate-900">แนบสลิปโอนเงิน</span>
+                      </div>
+                      <span className="text-[11px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-100">
+                        ตรวจสลิปอัตโนมัติ
+                      </span>
+                    </div>
+
+                    {/* Hidden native file input */}
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="image/*"
+                      onChange={handleSlipFileSelect}
+                      className="hidden"
+                    />
+
+                    {/* Verification Error, Progress, or Upload Area */}
+                    {slipVerificationResult && slipVerificationResult.status === 'error' ? (
+                      <div className={`rounded-2xl p-4 border text-left space-y-3 animate-in fade-in zoom-in-95 duration-200 ${slipVerificationResult.badgeColor === 'red'
+                        ? 'bg-rose-50/70 border-rose-200'
+                        : slipVerificationResult.badgeColor === 'amber'
+                          ? 'bg-amber-50/70 border-amber-200'
+                          : 'bg-orange-50/70 border-orange-200'
+                        }`}>
+                        {/* Badge & Dismiss */}
+                        <div className="flex items-center justify-between">
+                          <span className={`inline-flex items-center gap-1.5 text-[11px] font-bold px-2.5 py-1 rounded-lg border ${slipVerificationResult.badgeColor === 'red'
+                            ? 'bg-rose-100 text-rose-800 border-rose-300/80'
+                            : slipVerificationResult.badgeColor === 'amber'
+                              ? 'bg-amber-100 text-amber-900 border-amber-300/80'
+                              : 'bg-orange-100 text-orange-900 border-orange-300/80'
+                            }`}>
+                            <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                            {slipVerificationResult.badge}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSlipVerificationResult(null);
+                              setSelectedSlipFile(null);
+                              setUploadedSlip(null);
+                              if (fileInputRef.current) fileInputRef.current.value = '';
+                            }}
+                            className="p-1 text-slate-400 hover:text-slate-600 hover:bg-white/60 rounded-lg transition-colors cursor-pointer"
+                            title="ปิดข้อความแจ้งเตือน"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+
+                        {/* Thumbnail & Message Details */}
+                        <div className="flex items-start gap-3">
+                          {uploadedSlip && (
+                            <div className="relative w-14 h-14 shrink-0 rounded-xl overflow-hidden border border-slate-200 bg-white shadow-2xs">
+                              <img src={uploadedSlip} alt="สลิปที่แนบ" className="w-full h-full object-cover" />
+                              <div className="absolute inset-0 bg-black/25 flex items-center justify-center">
+                                <X className="w-5 h-5 text-white drop-shadow-sm stroke-[3]" />
+                              </div>
+                            </div>
+                          )}
+                          <div className="flex-1 min-w-0">
+                            <h4 className="text-xs font-black text-slate-900 leading-tight">
+                              {slipVerificationResult.title}
+                            </h4>
+                            <p className="text-[11px] text-slate-600 font-medium leading-relaxed mt-1">
+                              {slipVerificationResult.message}
+                            </p>
+                          </div>
+                        </div>
+
+                        {/* Actions: Attach new slip / Try again */}
+                        <div className="flex items-center gap-2 pt-1 border-t border-slate-200/60">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSlipVerificationResult(null);
+                              fileInputRef.current?.click();
+                            }}
+                            className="flex-1 inline-flex items-center justify-center gap-1.5 py-2 px-3 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 active:bg-blue-800 rounded-xl shadow-xs transition-colors cursor-pointer"
+                          >
+                            <Upload className="w-3.5 h-3.5" />
+                            แนบสลิปใหม่
+                          </button>
+                          {slipVerificationResult.canRetry && selectedSlipFile && (
+                            <button
+                              type="button"
+                              onClick={() => startSlipVerification(selectedSlipFile)}
+                              className="inline-flex items-center justify-center gap-1 py-2 px-3 text-xs font-bold text-slate-700 bg-white hover:bg-slate-100 active:bg-slate-200 border border-slate-300 rounded-xl shadow-2xs transition-colors cursor-pointer"
+                            >
+                              <RefreshCw className="w-3.5 h-3.5" />
+                              ลองใหม่อีกครั้ง
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ) : isVerifyingSlip ? (
+                      <div className="bg-slate-50 rounded-2xl p-4 border border-blue-300 text-center space-y-2.5">
+                        <div className="relative w-14 h-14 mx-auto rounded-xl overflow-hidden border border-slate-200 bg-slate-100">
+                          {uploadedSlip && <img src={uploadedSlip} alt="Slip" className="w-full h-full object-cover" />}
+                          <div className="absolute inset-0 bg-blue-500/20 flex items-center justify-center">
+                            <RefreshCw className="w-5 h-5 text-white animate-spin" />
+                          </div>
+                        </div>
+                        <div>
+                          <span className="text-xs font-bold text-slate-800 block">กำลังตรวจสอบสลิป...</span>
+                          <span className="text-[11px] text-blue-600 font-medium">
+                            {verifyStep === 1 && 'อ่านข้อมูลสลิป'}
+                            {verifyStep === 2 && `ตรวจยอด ฿${currentPrice.toLocaleString()}`}
+                            {verifyStep === 3 && 'ความถูกต้องสมบูรณ์'}
+                          </span>
+                        </div>
+                        <div className="w-full bg-slate-200 h-1.5 rounded-full overflow-hidden">
+                          <div
+                            className="bg-blue-600 h-full transition-all duration-300"
+                            style={{ width: verifyStep === 1 ? '35%' : verifyStep === 2 ? '75%' : '100%' }}
+                          />
+                        </div>
+                      </div>
+                    ) : (
                       <div
-                        className="bg-blue-600 h-full transition-all duration-300"
-                        style={{ width: verifyStep === 1 ? '35%' : verifyStep === 2 ? '75%' : '100%' }}
-                      />
-                    </div>
+                        onClick={() => fileInputRef.current?.click()}
+                        onDragOver={(e) => e.preventDefault()}
+                        onDrop={handleSlipDrop}
+                        className="group p-5 rounded-2xl border-2 border-dashed border-slate-200 hover:border-blue-400 bg-slate-50/60 hover:bg-blue-50/20 text-center cursor-pointer transition-all"
+                      >
+                        <div className="w-9 h-9 rounded-xl bg-white border border-slate-200 shadow-2xs flex items-center justify-center mx-auto mb-2 text-slate-400 group-hover:text-blue-600 transition-colors">
+                          <ImageIcon className="w-4 h-4" />
+                        </div>
+                        <span className="text-xs font-bold text-slate-800 block group-hover:text-blue-600 transition-colors">
+                          คลิกแนบสลิป หรือลากไฟล์มาวาง
+                        </span>
+                        <span className="text-[10px] text-slate-400 font-medium block mt-0.5">
+                          JPG, PNG (ขนาดไม่เกิน 4MB)
+                        </span>
+                      </div>
+                    )}
                   </div>
-                ) : (
-                  <div
-                    onClick={() => fileInputRef.current?.click()}
-                    onDragOver={(e) => e.preventDefault()}
-                    onDrop={handleSlipDrop}
-                    className="group p-5 rounded-2xl border-2 border-dashed border-slate-200 hover:border-blue-400 bg-slate-50/60 hover:bg-blue-50/20 text-center cursor-pointer transition-all"
-                  >
-                    <div className="w-9 h-9 rounded-xl bg-white border border-slate-200 shadow-2xs flex items-center justify-center mx-auto mb-2 text-slate-400 group-hover:text-blue-600 transition-colors">
-                      <ImageIcon className="w-4 h-4" />
-                    </div>
-                    <span className="text-xs font-bold text-slate-800 block group-hover:text-blue-600 transition-colors">
-                      คลิกแนบสลิป หรือลากไฟล์มาวาง
-                    </span>
-                    <span className="text-[10px] text-slate-400 font-medium block mt-0.5">
-                      JPG, PNG
-                    </span>
-                  </div>
-                )}
-              </div>
+                </>
+              )}
             </div>
           )}
         </div>
@@ -1481,7 +2008,7 @@ export const OwnerSubscription: React.FC<OwnerSubscriptionProps> = ({
             <span>ต่อแพ็กเกจ</span>
           </h1>
           <p className="text-xs sm:text-sm text-slate-500 font-medium mt-1">
-            จัดการสถานะแพ็กเกจ โควตาห้องพัก และการต่ออายุสมาชิก
+            จัดการสถานะแพ็กเกจ และการต่ออายุสมาชิก
           </p>
         </div>
 
@@ -1498,17 +2025,17 @@ export const OwnerSubscription: React.FC<OwnerSubscriptionProps> = ({
       </div>
 
       {/* SECTION 1: สรุปสถานะแพ็กเกจ 3 ช่อง */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5 sm:gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5 sm:gap-4 items-stretch">
         {/* Card 1: แพ็กเกจปัจจุบัน */}
-        <div className={`rounded-2xl p-4 sm:p-5 lg:p-6 flex flex-col justify-between transition-all duration-300 ${subInfo.planId !== 'free'
-          ? 'border-0 bg-gradient-to-br from-[#FFF8EB] via-[#FFFDF7] to-[#FEF3D6] shadow-sm shadow-amber-900/5'
-          : 'bg-white rounded-2xl border border-slate-200/80 shadow-xs'
+        <div className={`rounded-2xl p-4 sm:p-5 lg:p-6 flex flex-col justify-between min-h-[190px] sm:min-h-[205px] h-full ${subInfo.planId !== 'free'
+          ? 'border border-transparent bg-gradient-to-br from-[#FFF8EB] via-[#FFFDF7] to-[#FEF3D6] shadow-sm shadow-amber-900/5'
+          : 'bg-white border border-slate-200/80 shadow-xs'
           }`}>
           <div>
             <div className="flex items-center justify-between mb-3 sm:mb-4">
               <span className={`text-[11px] font-bold tracking-wider flex items-center gap-1.5 ${subInfo.planId !== 'free' ? 'text-amber-800/80' : 'text-slate-500'
                 }`}>
-                {subInfo.planId !== 'free' && <Crown className="w-3.5 h-3.5 text-amber-500 fill-amber-400 animate-pulse" />}
+                {subInfo.planId !== 'free' && <Crown className="w-3.5 h-3.5 text-amber-500 fill-amber-400" />}
                 <span>แพ็กเกจปัจจุบัน</span>
               </span>
               {subInfo.planId !== 'free' ? (
@@ -1526,7 +2053,9 @@ export const OwnerSubscription: React.FC<OwnerSubscriptionProps> = ({
               <h3 className="text-xl sm:text-2xl lg:text-[26px] font-black text-slate-900 tracking-tight flex items-center gap-2">
                 <span>{subInfo.planId === 'free' ? 'HORPLUS FREE' : (subInfo.planName || 'HORPLUS PRO')}</span>
                 {subInfo.planId !== 'free' && (
-                  <Crown className="w-6 h-6 text-amber-500 fill-amber-400 shrink-0 drop-shadow-[0_2px_8px_rgba(245,158,11,0.5)] animate-bounce" />
+                  <span className="inline-flex items-center justify-center w-6 h-6 shrink-0">
+                    <Crown className="w-6 h-6 text-amber-500 fill-amber-400 drop-shadow-[0_2px_8px_rgba(245,158,11,0.5)] animate-bounce" />
+                  </span>
                 )}
               </h3>
             </div>
@@ -1567,7 +2096,7 @@ export const OwnerSubscription: React.FC<OwnerSubscriptionProps> = ({
           const freePercent = Math.round(freeRatio * 100);
 
           return (
-            <div className="bg-white rounded-2xl border border-slate-200/80 p-4 sm:p-5 lg:p-6 shadow-xs flex flex-col justify-between relative overflow-hidden group">
+            <div className="bg-white rounded-2xl border border-slate-200/80 p-4 sm:p-5 lg:p-6 shadow-xs flex flex-col justify-between min-h-[190px] sm:min-h-[205px] h-full relative overflow-hidden group">
               <div>
                 <div className="flex items-center justify-between mb-3 sm:mb-4">
                   <span className="text-[11px] font-bold text-slate-500 tracking-wider flex items-center gap-1.5">
@@ -1682,7 +2211,7 @@ export const OwnerSubscription: React.FC<OwnerSubscriptionProps> = ({
           }
 
           return (
-            <div className="bg-white rounded-2xl border border-slate-200/80 p-4 sm:p-5 lg:p-6 shadow-xs flex flex-col justify-between relative overflow-hidden group">
+            <div className="bg-white rounded-2xl border border-slate-200/80 p-4 sm:p-5 lg:p-6 shadow-xs flex flex-col justify-between min-h-[190px] sm:min-h-[205px] h-full relative overflow-hidden group">
               <div>
                 <div className="flex items-center justify-between mb-3 sm:mb-4">
                   <span className="text-[11px] font-bold text-slate-500 tracking-wider flex items-center gap-1.5">
@@ -1746,6 +2275,7 @@ export const OwnerSubscription: React.FC<OwnerSubscriptionProps> = ({
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-5 sm:gap-6 pt-3">
           {ALL_PRICING_CARDS.map((card, cardIndex) => {
             const isFree = card.planId === 'free';
+            const isOneMonthTrialCard = card.durationMonths === 1 && Boolean(subInfo.isTrialEligible);
             const discountPercent = appliedPromo?.discountPercent || 0;
             const discountAmount = !isFree && discountPercent > 0
               ? Math.round((card.price * discountPercent) / 100)
@@ -1760,7 +2290,14 @@ export const OwnerSubscription: React.FC<OwnerSubscriptionProps> = ({
             return (
               <div
                 key={card.id}
-                onClick={() => !isFree && handleSelectPricingCard(card)}
+                onClick={() => {
+                  if (isFree) return;
+                  if (isOneMonthTrialCard) {
+                    handleClaimFreeTrial(card);
+                    return;
+                  }
+                  handleSelectPricingCard(card);
+                }}
                 className={`group relative rounded-3xl p-6 sm:p-7 flex flex-col justify-between transition-all duration-300 ${isFree
                   ? 'bg-slate-50/70 border border-slate-200/90 shadow-2xs cursor-default opacity-90'
                   : 'bg-white border border-slate-200/90 hover:border-blue-400 shadow-xs hover:-translate-y-2 hover:shadow-xl cursor-pointer'
@@ -1783,7 +2320,12 @@ export const OwnerSubscription: React.FC<OwnerSubscriptionProps> = ({
                 )}
 
                 {/* Top Badge (แสดงนอกกรอบ ไม่ถูกตัดขอบ) */}
-                {card.discountBadge && (
+                {isOneMonthTrialCard ? (
+                  <div className="absolute -top-3.5 left-1/2 -translate-x-1/2 text-xs font-black px-4 py-1 rounded-full shadow-md flex items-center gap-1.5 whitespace-nowrap z-20 bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 text-white shadow-emerald-500/30 ring-2 ring-white">
+                    <Crown className="w-3.5 h-3.5 text-amber-300 animate-bounce" />
+                    <span>สิทธิ์ฟรี 1 เดือน</span>
+                  </div>
+                ) : card.discountBadge && (
                   <div className={`absolute -top-3.5 left-1/2 -translate-x-1/2 text-xs font-black px-4 py-1 rounded-full shadow-md flex items-center gap-1.5 whitespace-nowrap z-20 transition-transform duration-300 ${!isFree ? 'group-hover:scale-105' : ''} ${card.popular
                     ? 'bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-700 text-white shadow-blue-500/30 ring-2 ring-white'
                     : card.bestValue
@@ -1812,7 +2354,9 @@ export const OwnerSubscription: React.FC<OwnerSubscriptionProps> = ({
                   {/* Price Box with Animated Strikethrough and Pop */}
                   <div className={`py-4 px-4 rounded-2xl mb-4 border transition-all ${isFree
                     ? 'bg-white/80 border-slate-200/70'
-                    : 'bg-slate-50/90 group-hover:bg-blue-50/50 border-slate-100 group-hover:border-blue-200/70'
+                    : isOneMonthTrialCard
+                      ? 'bg-emerald-50/70 border-emerald-200/80 shadow-2xs'
+                      : 'bg-slate-50/90 group-hover:bg-blue-50/50 border-slate-100 group-hover:border-blue-200/70'
                     }`}>
                     {isFree ? (
                       <div>
@@ -1823,6 +2367,35 @@ export const OwnerSubscription: React.FC<OwnerSubscriptionProps> = ({
                         <div className="text-[11px] font-bold text-slate-500 mt-1 flex items-center gap-1">
                           <Clock className="w-3.5 h-3.5 text-slate-400" />
                           <span>ปรับเป็นแพ็กเกจนี้อัตโนมัติเมื่อหมดอายุ</span>
+                        </div>
+                      </div>
+                    ) : isOneMonthTrialCard ? (
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-slate-400 font-bold">ราคาปกติ</span>
+                          <span className="relative inline-block text-xs font-black text-slate-400 font-mono tracking-tight">
+                            ฿990
+                            <span className="absolute left-0 top-1/2 w-full h-[2px] bg-rose-500 -rotate-6 transition-all duration-300 group-hover:scale-x-110" />
+                          </span>
+                          <span className="text-[10px] font-black px-1.5 py-0.2 rounded-md bg-emerald-100 text-emerald-800 animate-pulse">
+                            ฟรี 100%
+                          </span>
+                        </div>
+
+                        <div className="flex items-baseline justify-between gap-1 flex-wrap pt-0.5">
+                          <div className="flex items-baseline gap-1">
+                            <span className="text-sm font-bold text-emerald-600">฿</span>
+                            <span className="text-3xl sm:text-4xl font-black text-emerald-600 tracking-tight">
+                              0
+                            </span>
+                            <span className="text-xs font-bold text-slate-500">
+                              / 1 เดือน
+                            </span>
+                          </div>
+
+                          <span className="text-xs font-black text-emerald-800 bg-emerald-100/90 px-2.5 py-1 rounded-xl shadow-2xs">
+                            สิทธิ์ทดลองใช้งานฟรี
+                          </span>
                         </div>
                       </div>
                     ) : (
@@ -1898,6 +2471,28 @@ export const OwnerSubscription: React.FC<OwnerSubscriptionProps> = ({
                           ? 'ใช้งานแพ็กเกจนี้อยู่ (ปัจจุบัน)'
                           : 'ปรับเป็นแพ็กเกจนี้อัตโนมัติเมื่อหมดอายุ'}
                       </span>
+                    </button>
+                  ) : isOneMonthTrialCard ? (
+                    <button
+                      type="button"
+                      disabled={isClaimingTrial}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleClaimFreeTrial(card);
+                      }}
+                      className="w-full py-3 px-4 rounded-2xl text-xs font-extrabold flex items-center justify-center gap-2 transition-all cursor-pointer active:scale-95 shadow-md shadow-blue-500/25 bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-700 hover:from-blue-700 hover:to-indigo-800 text-white disabled:opacity-75"
+                    >
+                      {isClaimingTrial ? (
+                        <>
+                          <RefreshCw className="w-4 h-4 animate-spin" />
+                          <span>กำลังเปิดใช้งานสิทธิ์...</span>
+                        </>
+                      ) : (
+                        <>
+                          <span>รับสิทธิ์ฟรี 1 เดือน</span>
+                          <ArrowRight className="w-4 h-4 transition-transform duration-300 group-hover:translate-x-1.5" />
+                        </>
+                      )}
                     </button>
                   ) : (
                     <button
@@ -2039,8 +2634,8 @@ export const OwnerSubscription: React.FC<OwnerSubscriptionProps> = ({
               </button>
             </form>
 
-            {/* แสดงผลลัพธ์ 1 บรรทัด เมื่อใช้โค้ดแล้ว */}
-            {appliedPromo && (
+            {/* แสดงผลลัพธ์ 1 บรรทัด เมื่อใช้โค้ดแล้ว (ปุ่ม X ทำหน้าที่ปิดแถบข้อความทิ้งเฉยๆ โดยโค้ดยังทำงานอยู่) */}
+            {appliedPromo && !isPromoBannerDismissed && (
               <div className="flex items-center justify-between gap-2 px-1 text-xs text-emerald-600 font-medium animate-in fade-in duration-200">
                 <div className="flex items-center gap-1.5 min-w-0 truncate">
                   <CheckCircle className="w-3.5 h-3.5 shrink-0 text-emerald-600" />
@@ -2054,9 +2649,9 @@ export const OwnerSubscription: React.FC<OwnerSubscriptionProps> = ({
                 </div>
                 <button
                   type="button"
-                  onClick={handleRemovePromo}
-                  className="text-slate-400 hover:text-rose-600 p-0.5 cursor-pointer shrink-0 transition-colors"
-                  title="ยกเลิกโค้ดนี้"
+                  onClick={() => setIsPromoBannerDismissed(true)}
+                  className="text-slate-400 hover:text-slate-600 p-0.5 cursor-pointer shrink-0 transition-colors"
+                  title="ปิดข้อความแจ้งเตือน"
                 >
                   <X className="w-3.5 h-3.5" />
                 </button>
@@ -2073,76 +2668,12 @@ export const OwnerSubscription: React.FC<OwnerSubscriptionProps> = ({
         </div>
       </div>
 
-      {/* SECTION 5: ป้ายโฆษณา แนวนอน 16:9 (ค้าง 3 วิ + fade 0.5 วิ) */}
-      <div className="space-y-3 pt-2">
-        {/* 16:9 Billboard Display Frame - เลื่อนสลับรูปด้วยการปัดนิ้วหรือลากเมาส์ (Touch & Mouse Drag) */}
-        <div
-          onTouchStart={handleBillboardTouchStart}
-          onTouchMove={handleBillboardTouchMove}
-          onTouchEnd={handleBillboardTouchEnd}
-          onMouseDown={handleBillboardMouseDown}
-          onMouseUp={handleBillboardMouseUp}
-          onMouseLeave={handleBillboardMouseLeave}
-          onMouseEnter={() => setIsBillboardHovered(true)}
-          className={`relative w-full aspect-[16/9] rounded-2xl sm:rounded-3xl overflow-hidden shadow-md sm:shadow-lg border border-slate-200 bg-slate-950 select-none transition-shadow ${isDraggingBillboard ? 'cursor-grabbing' : 'cursor-grab'
-            }`}
-          title="ปัดซ้าย-ขวา ด้วยนิ้ว หรือลากด้วยเมาส์เพื่อเปลี่ยนรูปภาพ"
-        >
-          {/* Slides with 3s hold & 0.5s fade crossfade transition */}
-          {billboardAds.map((ad, idx) => {
-            const isActive = idx === currentBillboardIndex;
-            return (
-              <div
-                key={ad.id}
-                className={`absolute inset-0 w-full h-full transition-opacity duration-500 ease-in-out ${isActive ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'
-                  }`}
-              >
-                <img
-                  src={ad.imageUrl}
-                  alt={ad.title}
-                  draggable={false}
-                  className="w-full h-full object-cover pointer-events-none"
-                />
-
-                {/* Subtle gradient overlay & banner text: ในมุมมองมือถือ (sm:hidden) ไม่ต้องแสดงข้อความตามที่ระบุ */}
-                <div className="hidden sm:flex absolute inset-0 bg-gradient-to-t from-slate-950/90 via-slate-950/20 to-transparent flex-col justify-end p-5 sm:p-8 md:p-10 text-white pointer-events-none">
-                  <div className="max-w-3xl space-y-1.5 sm:space-y-2">
-                    <span className="inline-block text-[10px] sm:text-xs font-black px-2.5 py-0.5 rounded-full bg-blue-600 text-white uppercase tracking-wider shadow-sm">
-                      {ad.tag}
-                    </span>
-                    <h4 className="text-lg sm:text-2xl md:text-3xl font-black text-white leading-tight drop-shadow-md">
-                      {ad.title}
-                    </h4>
-                    <p className="text-xs sm:text-sm md:text-base text-slate-200 font-medium line-clamp-2 leading-relaxed drop-shadow-sm max-w-2xl">
-                      {ad.description}
-                    </p>
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-
-        {/* แทบ "x/4" ให้อยู่ตรงกลางรูป พื้นหลังสีขาว (Centered Indicators & Slide Counter with White Background) */}
-        <div className="flex items-center justify-center mt-3 sm:mt-3.5">
-          <div className="inline-flex items-center gap-2.5 bg-white text-slate-800 px-4 py-2 rounded-full border border-slate-200/90 shadow-sm transition-all hover:shadow-md">
-            <div className="flex items-center gap-1.5">
-              {billboardAds.map((_, idx) => (
-                <button
-                  key={idx}
-                  type="button"
-                  onClick={() => setCurrentBillboardIndex(idx)}
-                  className={`h-2 rounded-full transition-all cursor-pointer ${idx === currentBillboardIndex
-                    ? 'w-6 bg-blue-600 shadow-xs'
-                    : 'w-2 bg-slate-200 hover:bg-slate-300'
-                    }`}
-                  title={`ไปที่รูปที่ ${idx + 1}`}
-                />
-              ))}
-            </div>
-          </div>
-        </div>
-      </div>
+      {/* SECTION 5: ป้ายโฆษณา แนวนอน 16:9 (ค้าง 3 วิ + fade 0.5 วิ) - แยก Re-render ด้วย SubscriptionBillboard */}
+      <SubscriptionBillboard
+        billboardAds={billboardAds}
+        isPaused={isPaymentViewOpen}
+        onManageClick={() => setIsBillboardModalOpen(true)}
+      />
 
       {/* MODAL: ใส่รูปภาพป้ายโฆษณา 16:9 */}
       {isBillboardModalOpen && (

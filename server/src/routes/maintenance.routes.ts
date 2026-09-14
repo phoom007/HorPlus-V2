@@ -77,6 +77,16 @@ export function createMaintenanceRouter(maintenanceService: MaintenanceService =
         return res.status(400).json({ error: { code: 'INVALID_INPUT', message: 'Title and description are required' } });
       }
 
+      const staffProvenanceTag = '[แจ้งโดย: ช่าง / แม่บ้าน]';
+      let finalNote = note ? String(note).trim() : null;
+      if (actor?.userId?.startsWith('ag_user_')) {
+        if (!finalNote) {
+          finalNote = staffProvenanceTag;
+        } else if (!finalNote.includes(staffProvenanceTag)) {
+          finalNote = `${finalNote}\n${staffProvenanceTag}`;
+        }
+      }
+
       const request = await maintenanceService.getRepository().createRequest({
         dormitoryId,
         tenantId: tenantId || null,
@@ -87,7 +97,7 @@ export function createMaintenanceRouter(maintenanceService: MaintenanceService =
         priority: priority || 'normal',
         assignedStaff: assignedStaff || null,
         cost: cost !== undefined ? Number(cost) : 0,
-        note: note || null,
+        note: finalNote,
         imageBefore: imageBefore || null,
         imageAfter: imageAfter || null,
         preferredDate,

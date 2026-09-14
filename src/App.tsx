@@ -51,6 +51,7 @@ const OwnerWorkspaceContainer: React.FC = () => {
     localStorage.removeItem('selected_dormitory_id');
     localStorage.removeItem('registered_dorm_profile');
     sessionStorage.removeItem('active_dormitory_selected_for_session');
+    sessionStorage.removeItem('is_direct_access_grant');
     clearDormitoryQueryCache();
     meterDraftStore.clearAllDrafts();
     try {

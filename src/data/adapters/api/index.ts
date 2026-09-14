@@ -1493,22 +1493,22 @@ export class ApiMaintenanceAdapter implements MaintenanceDataSource {
 }
 
 export class ApiAnnouncementAdapter implements AnnouncementDataSource {
-  async getAll(): Promise<Announcement[]> {
-    return httpRequest<Announcement[]>('GET', '/announcements');
+  async getAll(dormitoryId?: string): Promise<Announcement[]> {
+    return httpRequest<Announcement[]>('GET', '/announcements', undefined, { dormitoryId });
   }
 
-  async getById(id: string): Promise<Announcement | null> {
+  async getById(id: string, dormitoryId?: string): Promise<Announcement | null> {
     try {
-      return await httpRequest<Announcement>('GET', `/announcements/${id}`);
+      return await httpRequest<Announcement>('GET', `/announcements/${id}`, undefined, { dormitoryId });
     } catch (err: any) {
       if (err instanceof HttpClientError && err.domainError.code === 'RESOURCE_NOT_FOUND') return null;
       throw err;
     }
   }
 
-  async createAnnouncement(data: Omit<Announcement, 'id' | 'createdAt'>): Promise<DataResult<Announcement>> {
+  async createAnnouncement(data: Omit<Announcement, 'id' | 'createdAt'>, _actorUserId?: string, dormitoryId?: string): Promise<DataResult<Announcement>> {
     try {
-      const res = await httpRequest<Announcement>('POST', '/announcements', data);
+      const res = await httpRequest<Announcement>('POST', '/announcements', data, { dormitoryId });
       return { success: true, data: res };
     } catch (err: any) {
       return {
@@ -1518,9 +1518,9 @@ export class ApiAnnouncementAdapter implements AnnouncementDataSource {
     }
   }
 
-  async updateAnnouncement(id: string, data: Partial<Announcement>): Promise<DataResult<Announcement>> {
+  async updateAnnouncement(id: string, data: Partial<Announcement>, dormitoryId?: string): Promise<DataResult<Announcement>> {
     try {
-      const res = await httpRequest<Announcement>('PATCH', `/announcements/${id}`, data);
+      const res = await httpRequest<Announcement>('PATCH', `/announcements/${id}`, data, { dormitoryId });
       return { success: true, data: res };
     } catch (err: any) {
       return {
@@ -1530,9 +1530,9 @@ export class ApiAnnouncementAdapter implements AnnouncementDataSource {
     }
   }
 
-  async deleteAnnouncement(id: string): Promise<DataResult<boolean>> {
+  async deleteAnnouncement(id: string, dormitoryId?: string): Promise<DataResult<boolean>> {
     try {
-      await httpRequest<any>('DELETE', `/announcements/${id}`);
+      await httpRequest<any>('DELETE', `/announcements/${id}`, undefined, { dormitoryId });
       return { success: true, data: true };
     } catch (err: any) {
       return {

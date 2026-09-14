@@ -224,7 +224,7 @@ describe('Subscription Slip Verifier & Promo Code Tests', () => {
         dormitoryId: '00000000-0000-0000-0000-000000000001',
         userId: '00000000-0000-0000-0000-000000000002',
       })
-    ).rejects.toThrow('ไม่พบ QR Code ในภาพสลิป หรือรูปภาพสลิปไม่ชัดเจน กรุณาแนบภาพสลิปใหม่ (QR_NOT_FOUND)');
+    ).rejects.toThrow('ไม่พบ QR Code ในภาพสลิป หรือรูปภาพสลิปไม่ชัดเจน กรุณาแนบภาพสลิปใหม่');
 
     // Reset fetch fn
     subscriptionSlipVerifier.setFetchFnForTesting(null);
@@ -312,6 +312,51 @@ describe('Subscription Slip Verifier & Promo Code Tests', () => {
 
     subscriptionSlipVerifier.setFetchFnForTesting(null);
   });
+
+  it('should reject when slip dimensions exceed 4096px (SEC-04)', async () => {
+    const oversizedBuffer = await sharp({
+      create: {
+        width: 4097,
+        height: 500,
+        channels: 4,
+        background: { r: 255, g: 255, b: 255, alpha: 1 },
+      },
+    })
+      .png()
+      .toBuffer();
+
+    await expect(
+      subscriptionSlipVerifier.verify({
+        slipBuffer: oversizedBuffer,
+        expectedAmount: new Prisma.Decimal(1799),
+        dormitoryId: '00000000-0000-0000-0000-000000000001',
+        userId: '00000000-0000-0000-0000-000000000002',
+      })
+    ).rejects.toThrow('ขนาดรูปภาพ (4097x500) เกินขนาดสูงสุดที่อนุญาต 4096x4096 พิกเซล');
+  });
+
+  it('should reject when slip dimensions are under 100px', async () => {
+    const tinyBuffer = await sharp({
+      create: {
+        width: 50,
+        height: 50,
+        channels: 4,
+        background: { r: 255, g: 255, b: 255, alpha: 1 },
+      },
+    })
+      .png()
+      .toBuffer();
+
+    await expect(
+      subscriptionSlipVerifier.verify({
+        slipBuffer: tinyBuffer,
+        expectedAmount: new Prisma.Decimal(1799),
+        dormitoryId: '00000000-0000-0000-0000-000000000001',
+        userId: '00000000-0000-0000-0000-000000000002',
+      })
+    ).rejects.toThrow('รูปภาพสลิปมีขนาดเล็กเกินไปหรือไม่สมบูรณ์');
+  });
 });
+
 
 

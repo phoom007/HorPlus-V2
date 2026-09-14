@@ -74,9 +74,41 @@ export class PromoService {
     let isInitialTrialClaimed = false;
 
     if (userId) {
+      let checkUserId = userId;
+      const cleanUserId = userId.replace(/^ag_user_|^ag_/, '');
+      const isPureUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cleanUserId);
+      if (isPureUuid) {
+        const userExists = await db.user.findUnique({ where: { id: cleanUserId }, select: { id: true } });
+        if (userExists) {
+          checkUserId = cleanUserId;
+        } else if (dormitoryId) {
+          const dorm = await db.dormitory.findUnique({ where: { id: dormitoryId }, select: { createdByUserId: true } });
+          if (dorm?.createdByUserId) {
+            checkUserId = dorm.createdByUserId;
+          } else {
+            const ownerMember = await db.dormitoryMember.findFirst({
+              where: { dormitoryId, status: 'active', role: { code: 'OWNER' } },
+              select: { userId: true },
+            });
+            if (ownerMember?.userId) checkUserId = ownerMember.userId;
+          }
+        }
+      } else if (dormitoryId) {
+        const dorm = await db.dormitory.findUnique({ where: { id: dormitoryId }, select: { createdByUserId: true } });
+        if (dorm?.createdByUserId) {
+          checkUserId = dorm.createdByUserId;
+        } else {
+          const ownerMember = await db.dormitoryMember.findFirst({
+            where: { dormitoryId, status: 'active', role: { code: 'OWNER' } },
+            select: { userId: true },
+          });
+          if (ownerMember?.userId) checkUserId = ownerMember.userId;
+        }
+      }
+
       const existingClaim = await db.accountBenefitClaim.findFirst({
         where: {
-          userId: userId,
+          userId: checkUserId,
           benefitKey: 'INITIAL_TRIAL_V1',
         },
       });
@@ -327,11 +359,40 @@ export class PromoService {
         );
       }
 
+      const cleanUserId = userId ? userId.replace(/^ag_user_|^ag_/, '') : '';
+      const isPureUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cleanUserId);
+      let authoritativeRedeemedBy = userId;
+      let validActorId: string | null = null;
+      if (isPureUuid) {
+        const userExists = await tx.user.findUnique({ where: { id: cleanUserId }, select: { id: true } });
+        if (userExists) {
+          authoritativeRedeemedBy = cleanUserId;
+          validActorId = cleanUserId;
+        }
+      }
+      if (!validActorId && dormitoryId) {
+        const dorm = await tx.dormitory.findUnique({
+          where: { id: dormitoryId },
+          select: { createdByUserId: true },
+        });
+        if (dorm?.createdByUserId) {
+          authoritativeRedeemedBy = dorm.createdByUserId;
+        } else {
+          const ownerMember = await tx.dormitoryMember.findFirst({
+            where: { dormitoryId, status: 'active', role: { code: 'OWNER' } },
+            select: { userId: true },
+          });
+          if (ownerMember?.userId) {
+            authoritativeRedeemedBy = ownerMember.userId;
+          }
+        }
+      }
+
       // 2. Check duplicate account redemption across all dormitories (one redemption per Google Account)
       const existingAccountRedemption = await tx.promoRedemption.findFirst({
         where: {
           promoCodeId: lockedPromo.id,
-          redeemedBy: userId,
+          redeemedBy: authoritativeRedeemedBy,
         },
       });
 
@@ -416,7 +477,7 @@ export class PromoService {
                 previousStatus: sub.status,
                 newStatus: currentStatus,
                 reason: promoUnit === 'DAY' ? 'PROMO_EXTENSION_DAYS' : 'PROMO_EXTENSION_CALENDAR_MONTHS',
-                actorId: userId,
+                actorId: validActorId,
               },
             });
           }
@@ -448,7 +509,7 @@ export class PromoService {
             promoCodeId: lockedPromo.id,
             dormitoryId,
             subscriptionId: sub.id,
-            redeemedBy: userId,
+            redeemedBy: authoritativeRedeemedBy,
             previousExpiresAt,
             newExpiresAt,
           },

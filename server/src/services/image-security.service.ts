@@ -14,6 +14,16 @@ export interface SecuredDocumentResult {
   pageCount?: number;
 }
 
+export interface SecuredSlipResult {
+  buffer: Buffer;
+  mimeType: 'image/jpeg' | 'image/png' | 'image/webp';
+  extension: '.jpg' | '.png' | '.webp';
+  sha256: string;
+  byteSize: number;
+  width: number;
+  height: number;
+}
+
 export type SecuredImageResult = SecuredDocumentResult;
 
 export const MAX_DOCUMENT_FILE_SIZE = 5 * 1024 * 1024; // 5 MB
@@ -201,3 +211,133 @@ export async function processAndSecureTenantDocument(rawBuffer: Buffer): Promise
 export async function processAndSecureTenantIdCardImage(rawBuffer: Buffer): Promise<SecuredDocumentResult> {
   return processAndSecureTenantDocument(rawBuffer);
 }
+
+export const MAX_SLIP_FILE_SIZE = 4 * 1024 * 1024; // 4 MB
+
+/**
+ * Bank Slip Image Security Boundary & High-Fidelity Sanitization:
+ * 1. Strictly limits raw input size to 4MB.
+ * 2. Pre-checks magic bytes against non-image vectors (HTML, PHP, SVG, XML, EXE, ZIP).
+ * 3. Enforces valid JPEG, PNG, or WebP magic bytes.
+ * 4. Protects against Decompression Bombs (limitInputPixels: 16MP, max dimensions 4096x4096px).
+ * 5. Re-encodes with auto-rotation, stripping all EXIF, GPS, comments, and polyglots.
+ * 6. Preserves high quality (quality 95) and dimensions so SlipOK QR decoding is not degraded.
+ */
+export async function processAndSecureSlipImage(rawBuffer: Buffer): Promise<SecuredSlipResult> {
+  if (!rawBuffer || rawBuffer.length === 0) {
+    throw new AppError('กรุณาแนบไฟล์รูปภาพสลิปชำระเงิน', 400, 'SLIP_FILE_REQUIRED');
+  }
+
+  if (rawBuffer.length > MAX_SLIP_FILE_SIZE) {
+    throw new AppError(`ขนาดไฟล์รูปภาพสลิปเกินขีดจำกัดสูงสุด 4MB (${rawBuffer.length} bytes)`, 400, 'FILE_TOO_LARGE');
+  }
+
+  // Pre-check magic bytes against non-image vectors (HTML, XML, SVG, PHP, EXE, ELF, ZIP)
+  const header = rawBuffer.subarray(0, 64).toString('ascii');
+  if (
+    header.toLowerCase().includes('<svg') ||
+    header.toLowerCase().includes('<?xml') ||
+    header.toLowerCase().includes('<html') ||
+    header.toLowerCase().includes('<?php') ||
+    header.toLowerCase().includes('eval(') ||
+    header.startsWith('MZ') ||
+    header.startsWith('\x7fELF') ||
+    header.startsWith('PK\x03\x04')
+  ) {
+    throw new AppError('รูปแบบไฟล์ไม่ถูกต้อง รองรับเฉพาะไฟล์รูปภาพ JPEG, PNG, WebP เท่านั้น (INVALID_IMAGE_FORMAT)', 400, 'INVALID_IMAGE_FORMAT');
+  }
+
+  // Verify raster image magic bytes
+  const isJpeg = rawBuffer.length >= 3 && rawBuffer[0] === 0xFF && rawBuffer[1] === 0xD8 && rawBuffer[2] === 0xFF;
+  const isPng = rawBuffer.length >= 4 && rawBuffer[0] === 0x89 && rawBuffer[1] === 0x50 && rawBuffer[2] === 0x4E && rawBuffer[3] === 0x47;
+  const isWebp = rawBuffer.length >= 12 &&
+    rawBuffer.subarray(0, 4).toString('ascii') === 'RIFF' &&
+    rawBuffer.subarray(8, 12).toString('ascii') === 'WEBP';
+
+  if (!isJpeg && !isPng && !isWebp) {
+    throw new AppError('รูปแบบไฟล์รูปภาพไม่ถูกต้อง รองรับเฉพาะ JPEG, PNG หรือ WebP เท่านั้น', 400, 'INVALID_IMAGE_FORMAT');
+  }
+
+  let metadata: sharp.Metadata;
+  try {
+    const image = sharp(rawBuffer, {
+      failOnError: true,
+      limitInputPixels: MAX_INPUT_PIXELS,
+      sequentialRead: true,
+    });
+    metadata = await image.metadata();
+  } catch (err: any) {
+    if (err?.message?.includes('Input image exceeds pixel limit') || err?.message?.includes('pixel limit')) {
+      throw new AppError('ขนาดพิกเซลของรูปภาพเกินขีดจำกัดความปลอดภัยของระบบ (Decompression Bomb Protection)', 400, 'PIXEL_LIMIT_EXCEEDED');
+    }
+    throw new AppError('ไฟล์รูปภาพสลิปไม่ถูกต้องหรือเสียหาย', 400, 'CORRUPTED_SLIP_IMAGE');
+  }
+
+  const { width, height, format } = metadata;
+  if (!width || !height || width < 100 || height < 100) {
+    throw new AppError('รูปภาพสลิปมีขนาดเล็กเกินไปหรือไม่สมบูรณ์ (ต้องมีขนาดอย่างน้อย 100x100 พิกเซล)', 400, 'INVALID_SLIP_IMAGE_DIMENSIONS');
+  }
+
+  if (width > MAX_SOURCE_DIMENSION || height > MAX_SOURCE_DIMENSION) {
+    throw new AppError(`ขนาดรูปภาพ (${width}x${height}) เกินขนาดสูงสุดที่อนุญาต ${MAX_SOURCE_DIMENSION}x${MAX_SOURCE_DIMENSION} พิกเซล`, 400, 'DIMENSIONS_EXCEEDED');
+  }
+
+  if (width * height > MAX_INPUT_PIXELS) {
+    throw new AppError(`จำนวนพิกเซลทั้งหมดของรูปภาพ (${width * height}) เกินขีดจำกัดความปลอดภัย`, 400, 'PIXEL_LIMIT_EXCEEDED');
+  }
+
+  // Re-encode & Strip all EXIF / GPS / comments / metadata
+  // Preserve high fidelity quality (95-100) without downscaling for 100% QR readability
+  let processedBuffer: Buffer;
+  let outputMime: 'image/jpeg' | 'image/png' | 'image/webp' = 'image/jpeg';
+  let outputExt: '.jpg' | '.png' | '.webp' = '.jpg';
+
+  try {
+    if (format === 'png') {
+      processedBuffer = await sharp(rawBuffer, {
+        limitInputPixels: MAX_INPUT_PIXELS,
+        failOnError: true,
+      })
+        .rotate()
+        .png({ quality: 100, compressionLevel: 6 })
+        .toBuffer();
+      outputMime = 'image/png';
+      outputExt = '.png';
+    } else if (format === 'webp') {
+      processedBuffer = await sharp(rawBuffer, {
+        limitInputPixels: MAX_INPUT_PIXELS,
+        failOnError: true,
+      })
+        .rotate()
+        .webp({ quality: 95, effort: 4 })
+        .toBuffer();
+      outputMime = 'image/webp';
+      outputExt = '.webp';
+    } else {
+      processedBuffer = await sharp(rawBuffer, {
+        limitInputPixels: MAX_INPUT_PIXELS,
+        failOnError: true,
+      })
+        .rotate()
+        .jpeg({ quality: 95 })
+        .toBuffer();
+      outputMime = 'image/jpeg';
+      outputExt = '.jpg';
+    }
+  } catch (err: any) {
+    throw new AppError(`การปรับปรุงความปลอดภัยของรูปภาพล้มเหลว: ${err.message}`, 500, 'IMAGE_PROCESSING_FAILED');
+  }
+
+  const sha256 = crypto.createHash('sha256').update(processedBuffer).digest('hex');
+
+  return {
+    buffer: processedBuffer,
+    mimeType: outputMime,
+    extension: outputExt,
+    sha256,
+    byteSize: processedBuffer.length,
+    width,
+    height,
+  };
+}
+

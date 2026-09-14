@@ -559,6 +559,10 @@ export class PrismaBillingCycleRepository implements IBillingCycleRepository {
   }
 
   public async create(dormitoryId: string, data: CreateBillingCycleData): Promise<BillingCycleEntity> {
+    const cleanActorId = data.createdByUserId ? data.createdByUserId.replace(/^ag_user_|^ag_/, '') : null;
+    const isPureUuid = cleanActorId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cleanActorId);
+    const validCreatedByUserId = isPureUuid ? cleanActorId : null;
+
     const c = await this.prisma.billingCycle.create({
       data: {
         id: data.id,
@@ -570,7 +574,7 @@ export class PrismaBillingCycleRepository implements IBillingCycleRepository {
         billingDate: data.billingDate,
         dueDate: data.dueDate,
         status: data.status || 'draft',
-        createdByUserId: data.createdByUserId,
+        createdByUserId: validCreatedByUserId,
       },
     });
     return this.mapCycleToEntity(c);

@@ -263,11 +263,11 @@ export interface MaintenanceDataSource {
 }
 
 export interface AnnouncementDataSource {
-  getAll(): Promise<Announcement[]>;
-  getById(id: string): Promise<Announcement | null>;
-  createAnnouncement(data: Omit<Announcement, 'id' | 'createdAt'>, actorUserId?: string): Promise<DataResult<Announcement>>;
-  updateAnnouncement?(id: string, data: Partial<Announcement>): Promise<DataResult<Announcement>>;
-  deleteAnnouncement?(id: string): Promise<DataResult<boolean>>;
+  getAll(dormitoryId?: string): Promise<Announcement[]>;
+  getById(id: string, dormitoryId?: string): Promise<Announcement | null>;
+  createAnnouncement(data: Omit<Announcement, 'id' | 'createdAt'>, actorUserId?: string, dormitoryId?: string): Promise<DataResult<Announcement>>;
+  updateAnnouncement?(id: string, data: Partial<Announcement>, dormitoryId?: string): Promise<DataResult<Announcement>>;
+  deleteAnnouncement?(id: string, dormitoryId?: string): Promise<DataResult<boolean>>;
 }
 
 export interface NotificationDataSource {

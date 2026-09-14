@@ -2038,14 +2038,9 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
           <div>
             <div className="flex items-center gap-2 flex-wrap">
               <h3 className="text-lg font-black text-slate-800 leading-tight">วิเคราะห์การเงินและสถิติหอพัก</h3>
-              {dormitory?.name && (
-                <span className="text-xs font-black px-2.5 py-0.5 bg-blue-50 text-[#2b64f6] rounded-full border border-blue-100">
-                  {dormitory.name}
-                </span>
-              )}
             </div>
             <p className="text-xs text-slate-400 font-medium mt-1 leading-none">
-              สรุปรายงานผลการจัดเก็บของรอบบิล สถานะการจัดเก็บตามรอบบิล และอัตราครองห้องพักแบบ Sync ข้อมูลจริง
+              สรุปรายงานผลการจัดเก็บของรอบบิล สถานะการจัดเก็บตามรอบบิล
             </p>
           </div>
         </div>
@@ -2146,7 +2141,7 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
                       <div className="flex items-center justify-between">
                         <p className="font-extrabold text-slate-800 group-hover:text-blue-700 flex items-center gap-1.5">
                           <FileText className="w-3.5 h-3.5 text-blue-600" />
-                          <span>1. รายงานประจำเดือนแบบสมบูรณ์</span>
+                          <span>รายงานประจำเดือนแบบสมบูรณ์</span>
                         </p>
                         <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-md ${exportFormat === 'xlsx' ? 'bg-emerald-100 text-emerald-700' : 'bg-blue-100 text-blue-700'
                           }`}>
@@ -2168,7 +2163,7 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
                       <div className="flex items-center justify-between">
                         <p className="font-extrabold text-slate-800 group-hover:text-emerald-700 flex items-center gap-1.5">
                           <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
-                          <span>2. ตารางข้อมูลดิบรายห้อง (Clean Grid)</span>
+                          <span>ตารางข้อมูลดิบรายห้อง (Clean Grid)</span>
                         </p>
                         <span className="text-[9px] font-black px-1.5 py-0.5 bg-emerald-100 text-emerald-700 rounded-md">
                           {exportFormat === 'xlsx' ? 'XLSX' : 'CSV'}
@@ -2189,7 +2184,7 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
                       <div className="flex items-center justify-between">
                         <p className="font-extrabold text-slate-800 group-hover:text-indigo-700 flex items-center gap-1.5">
                           <Calendar className="w-3.5 h-3.5 text-indigo-600" />
-                          <span>3. รายงานสรุปประจำปี {displayYearTh}</span>
+                          <span>รายงานสรุปประจำปี {displayYearTh}</span>
                         </p>
                         <span className="text-[9px] font-black px-1.5 py-0.5 bg-indigo-100 text-indigo-700 rounded-md">
                           {exportFormat === 'xlsx' ? '12 เดือน' : '12 เดือน'}
@@ -2296,14 +2291,14 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
           {/* 6 Stat Cards in 2x3 grid */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-6">
             {[
-              { label: `มูลค่าจัดเก็บรวมปี ${selectedYear}`, val: formatBaht(yearBilledTotal), pct: `ประจำปี ${selectedYear}`, sub: `อัปเดตอ้างอิงงวด ${displayMonthTh} ${displayYearTh}` },
+              { label: `มูลค่าจัดเก็บรวมปี ${displayYearTh}`, val: formatBaht(yearBilledTotal), pct: `ประจำปี ${displayYearTh}`, sub: `อัปเดตอ้างอิงงวด ${displayMonthTh} ${displayYearTh}` },
               { label: 'อัตราการครองห้องพัก', val: `${occupiedPercent}%`, pct: `เข้าพัก ${occupiedCount}/${totalRooms} ห้อง`, sub: `อัปเดตอ้างอิงงวด ${displayMonthTh} ${displayYearTh}` },
               { label: 'ยอดค้างชำระสะสม', val: formatBaht(totalOverdueAmount), pct: 'ติดตามทวงถาม', sub: `อัปเดตอ้างอิงงวด ${displayMonthTh} ${displayYearTh}` },
               { label: 'อัตราจัดเก็บชำระจริง', val: `${paidPercent}%`, pct: `รับแล้ว ${paidBills.length} บิล`, sub: `อัปเดตอ้างอิงงวด ${displayMonthTh} ${displayYearTh}` },
               { label: 'รายได้เฉลี่ยต่อห้อง (ARPU)', val: formatBaht(arpu), pct: 'เฉลี่ยรายห้อง', sub: `คำนวณจาก ${occupiedCount} ห้องที่มีผู้เช่า` },
               { label: 'ยอดประกันถือครองรวม', val: formatBaht(depositTotal), pct: 'หลักประกันสัญญา', sub: 'อ้างอิงสัญญาเช่าที่มีผลบังคับใช้' },
               { label: 'ค่าใช้จ่ายแจ้งซ่อม (รอบนี้)', val: formatBaht(totalRepairCostThisMonth), pct: `${repairsCountThisMonth} งาน`, sub: `อ้างอิงรอบ ${displayMonthTh} ${displayYearTh}` },
-              { label: `ค่าใช้จ่ายแจ้งซ่อมรวมปี ${selectedYear}`, val: formatBaht(totalRepairCostYear), pct: `${repairsCountYear} งาน`, sub: `สรุปงานซ่อมสะสมปี ${selectedYear}` }
+              { label: `ค่าใช้จ่ายแจ้งซ่อมรวมปี ${displayYearTh}`, val: formatBaht(totalRepairCostYear), pct: `${repairsCountYear} งาน`, sub: `สรุปงานซ่อมสะสมปี ${displayYearTh}` }
             ].map((stat, i) => (
               <div key={i} className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-100 shadow-xs flex flex-col justify-between hover:border-slate-200 transition-all">
                 <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">{stat.label}</span>
@@ -2511,10 +2506,10 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
             <div>
               <h4 className="text-xs sm:text-sm font-black text-slate-800 flex items-center gap-1.5">
                 <TrendingUp className="w-4 h-4 text-[#2b64f6] shrink-0" />
-                <span>สถิติมูลค่ารายรับรอบปี {selectedYear} แยกตามรายเดือน</span>
+                <span>สถิติมูลค่ารายรับรอบปี {displayYearTh} แยกตามรายเดือน</span>
               </h4>
               <p className="text-[10px] text-slate-400 font-medium mt-0.5">
-                กราฟเปรียบเทียบแนวโน้มรายรับรวมทุกประเภทเทียบกับค่าเช่าห้องพัก (อ้างอิงปี {selectedYear})
+                กราฟเปรียบเทียบแนวโน้มรายรับรวมทุกประเภทเทียบกับค่าเช่าห้องพัก (อ้างอิงปี {displayYearTh})
               </p>
             </div>
             <span className="text-[9px] font-bold bg-slate-50 border border-slate-100 text-slate-500 px-2.5 py-1 rounded-md uppercase tracking-wider self-start sm:self-auto">

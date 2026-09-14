@@ -55,7 +55,10 @@ export function normalizeRole(roleInput?: any): WorkspaceRole | null {
     rUpper === 'ROLE-TECH' ||
     r === 'staff' ||
     r === 'ช่างซ่อม' ||
-    r === 'พนักงานทั่วไป'
+    r === 'พนักงานทั่วไป' ||
+    r === 'ช่าง / แม่บ้าน' ||
+    r === 'ช่าง' ||
+    r === 'แม่บ้าน'
   ) {
     return 'staff';
   }

@@ -177,8 +177,8 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
   const authoritativeCycles = (propAvailableCycles && propAvailableCycles.length > 0)
     ? propAvailableCycles
     : (propBillingCycles && propBillingCycles.length > 0)
-    ? propBillingCycles
-    : fetchedCycles;
+      ? propBillingCycles
+      : fetchedCycles;
 
   useEffect(() => {
     const dormId = selectedDormId || dorm?.id;
@@ -197,7 +197,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
             }
           }
         })
-        .catch(() => {});
+        .catch(() => { });
     }
   }, [selectedDormId, dorm?.id, propAvailableCycles]);
 
@@ -653,7 +653,7 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
     }
   };
 
-    const [initialValues, setInitialValues] = useState<{
+  const [initialValues, setInitialValues] = useState<{
     propertyMonthlyRent?: number;
     propertyDeposit?: number;
     waterRate?: number;
@@ -1637,8 +1637,8 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                     <label
                       onClick={() => setPropertyPetPolicy(prev => ({ ...prev, allowed: 'none' }))}
                       className={`p-2.5 rounded-xl border-2 cursor-pointer flex items-center gap-2 transition-all ${propertyPetPolicy.allowed === 'none'
-                          ? 'border-indigo-600 bg-indigo-50/50 font-bold text-indigo-950'
-                          : 'border-slate-200 text-slate-600 hover:border-slate-300'
+                        ? 'border-indigo-600 bg-indigo-50/50 font-bold text-indigo-950'
+                        : 'border-slate-200 text-slate-600 hover:border-slate-300'
                         }`}
                     >
                       <input
@@ -1654,8 +1654,8 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                     <label
                       onClick={() => setPropertyPetPolicy(prev => ({ ...prev, allowed: 'conditional' }))}
                       className={`p-2.5 rounded-xl border-2 cursor-pointer flex items-center gap-2 transition-all ${propertyPetPolicy.allowed === 'conditional'
-                          ? 'border-indigo-600 bg-indigo-50/50 font-bold text-indigo-950'
-                          : 'border-slate-200 text-slate-600 hover:border-slate-300'
+                        ? 'border-indigo-600 bg-indigo-50/50 font-bold text-indigo-950'
+                        : 'border-slate-200 text-slate-600 hover:border-slate-300'
                         }`}
                     >
                       <input
@@ -1761,83 +1761,6 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                   </div>
                 </div>
               </div>
-
-              {/* LINE Official Account Connection Card (Clean Summary & CTA) */}
-              <div className="pt-6 border-t border-slate-100 space-y-3">
-                <div className="flex items-center justify-between">
-                  <h5 className="text-xs font-extrabold text-slate-900 flex items-center gap-2">
-                    <LineLogo className="w-4 h-4 shrink-0 rounded-xs" />
-                    LINE Official Account (LINE OA)
-                  </h5>
-                  <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black ${lineOaConfig.connected ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'
-                    }`}>
-                    {lineOaConfig.connected ? '● เชื่อมต่อแล้ว' : 'ยังไม่เชื่อมต่อ'}
-                  </span>
-                </div>
-
-                <div className="p-4 bg-slate-50 border border-slate-200/80 rounded-2xl space-y-3">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                    <div>
-                      <span className="text-xs font-bold text-slate-800 block">
-                        {lineOaConfig.connected
-                          ? (lineOaConfig.lineOaId ? `LINE Basic ID: ${lineOaConfig.lineOaId}` : 'เชื่อมต่อ Messaging API เรียบร้อย')
-                          : 'ยังไม่ได้เชื่อมต่อ LINE OA'}
-                      </span>
-                      <span className="text-[11px] text-slate-500">
-                        {lineOaConfig.connected
-                          ? 'ระบบเปิดใช้งานการส่งการแจ้งเตือนอัตโนมัติแล้ว'
-                          : 'ตั้งค่า Channel ID & Secret เพื่อเปิดใช้งานการแจ้งเตือน'}
-                      </span>
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={() => setShowLineOaModal(true)}
-                      className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl transition-colors cursor-pointer shrink-0 shadow-sm flex items-center gap-1.5"
-                    >
-                      <LineLogo className="w-3.5 h-3.5 shrink-0 rounded-xs" />
-                      จัดการ LINE OA
-                    </button>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-slate-200">
-                    <div>
-                      <label className="block text-[11px] font-bold text-slate-600 mb-1">LINE Channel ID</label>
-                      <input
-                        type="text"
-                        data-testid="line-channel-id-input"
-                        value={inputChannelId}
-                        onChange={(e) => setInputChannelId(e.target.value)}
-                        placeholder="1657XXXXXX"
-                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-semibold text-slate-800 focus:border-indigo-500 outline-none"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[11px] font-bold text-slate-600 mb-1">LINE Channel Secret</label>
-                      <input
-                        type="password"
-                        data-testid="line-channel-secret-input"
-                        value={inputChannelSecret}
-                        onChange={(e) => setInputChannelSecret(e.target.value)}
-                        placeholder={lineOaConfig.hasChannelSecret ? '••••••••••••••••' : 'Channel Secret'}
-                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-semibold text-slate-800 focus:border-indigo-500 outline-none"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="flex justify-end pt-1">
-                    <button
-                      type="button"
-                      data-testid="save-line-oa-button"
-                      onClick={handleSaveLineOaConfig}
-                      disabled={isSavingLineOa}
-                      className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl transition-all shadow-xs cursor-pointer disabled:opacity-50"
-                    >
-                      {isSavingLineOa ? 'กำลังบันทึก...' : 'บันทึกการตั้งค่า LINE OA'}
-                    </button>
-                  </div>
-                </div>
-              </div>
             </div>
 
             {/* Column 2: การตั้งค่าอัตราส่วนต่างและการคำนวณ */}
@@ -1853,19 +1776,18 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                     <span className="text-[10px] text-slate-500 font-bold">ที่มาของอัตรา:</span>
                     <span
                       data-testid="snapshot-provenance-badge"
-                      className={`text-[10px] font-black px-2 py-0.5 rounded-full ${
-                        snapshotProvenance === 'MANUAL_OVERRIDE'
+                      className={`text-[10px] font-black px-2 py-0.5 rounded-full ${snapshotProvenance === 'MANUAL_OVERRIDE'
                           ? 'bg-amber-100 text-amber-800 border border-amber-200'
                           : snapshotProvenance === 'INHERITED'
-                          ? 'bg-blue-100 text-blue-800 border border-blue-200'
-                          : 'bg-emerald-100 text-emerald-800 border border-emerald-200'
-                      }`}
+                            ? 'bg-blue-100 text-blue-800 border border-blue-200'
+                            : 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                        }`}
                     >
                       {snapshotProvenance === 'MANUAL_OVERRIDE'
                         ? 'กำหนดเองในงวดนี้ (Manual Override)'
                         : snapshotProvenance === 'INHERITED'
-                        ? 'สืบทอดจากงวดก่อนหน้า (Inherited)'
-                        : 'แม่แบบเริ่มต้นหอพัก (Template Default)'}
+                          ? 'สืบทอดจากงวดก่อนหน้า (Inherited)'
+                          : 'แม่แบบเริ่มต้นหอพัก (Template Default)'}
                     </span>
                   </div>
                 </div>
@@ -1953,11 +1875,10 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                         handleSaveCycleRateSettings({ waterRate: (e.target as HTMLInputElement).value });
                       }
                     }}
-                    className={`w-full px-3 py-2 border border-gray-200 rounded-xl font-bold outline-none transition-all text-xs ${
-                      waterBillingMode === 'tiered'
+                    className={`w-full px-3 py-2 border border-gray-200 rounded-xl font-bold outline-none transition-all text-xs ${waterBillingMode === 'tiered'
                         ? 'bg-slate-100 dark:bg-slate-800/60 text-slate-500 dark:text-slate-400 cursor-not-allowed border-dashed'
                         : 'bg-white text-slate-800 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 disabled:opacity-50 disabled:bg-slate-100'
-                    }`}
+                      }`}
                     data-testid="input-water-unit-rate"
                   />
                 </div>
@@ -2019,11 +1940,10 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                         handleSaveCycleRateSettings({ electricityRate: (e.target as HTMLInputElement).value });
                       }
                     }}
-                    className={`w-full px-3 py-2 border border-gray-200 rounded-xl font-bold outline-none transition-all text-xs ${
-                      electricBillingMode === 'tiered'
+                    className={`w-full px-3 py-2 border border-gray-200 rounded-xl font-bold outline-none transition-all text-xs ${electricBillingMode === 'tiered'
                         ? 'bg-slate-100 dark:bg-slate-800/60 text-slate-500 dark:text-slate-400 cursor-not-allowed border-dashed'
                         : 'bg-white text-slate-800 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 disabled:opacity-50 disabled:bg-slate-100'
-                    }`}
+                      }`}
                     data-testid="input-electric-unit-rate"
                   />
                 </div>
@@ -2439,17 +2359,13 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
       {showLineOaModal && (
         <div className="fixed inset-0 z-[120] bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
           <div className="relative w-full max-w-4xl bg-slate-50 rounded-3xl shadow-2xl overflow-hidden my-8 max-h-[90vh] overflow-y-auto">
-            <button
-              onClick={() => {
+            <OwnerLineOaPage
+              dormitoryId={dorm?.id}
+              isModal={true}
+              onClose={() => {
                 setShowLineOaModal(false);
                 fetchLineOaConfig();
               }}
-              className="absolute top-4 right-4 z-10 p-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-700 transition-colors cursor-pointer"
-            >
-              <X className="w-5 h-5" />
-            </button>
-            <OwnerLineOaPage
-              dormitoryId={dorm?.id}
               onNavigateBack={() => {
                 setShowLineOaModal(false);
                 fetchLineOaConfig();

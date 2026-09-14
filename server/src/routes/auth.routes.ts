@@ -105,14 +105,26 @@ export function createAuthRouter(authService: AuthenticationService): Router {
     const auth = req.auth!;
     const activeMemberships = auth.memberships.filter((m) => m.status === 'active' && (!m.dormitoryStatus || m.dormitoryStatus === 'active'));
 
+    // Auto-issue / refresh canonical signed CSRF cookie for active session
+    const csrfToken = authService.getCsrfService().generateCsrfToken(auth.sessionId);
+    res.cookie(env.CSRF_COOKIE_NAME, csrfToken, {
+      httpOnly: false,
+      secure: isProd,
+      sameSite: sameSite,
+      path: '/',
+      maxAge: env.SESSION_TTL_SECONDS * 1000,
+    });
+
     return res.status(200).json({
       data: {
         authenticated: true,
+        csrfToken,
         user: {
           id: auth.user.id,
           email: auth.user.email,
           name: auth.user.name,
           avatarUrl: auth.user.avatarUrl,
+          isDirectAccess: auth.user.id.startsWith('ag_user_'),
         },
         memberships: activeMemberships.map((m) => ({
           id: m.id,
@@ -149,10 +161,44 @@ export function createAuthRouter(authService: AuthenticationService): Router {
     }
   });
 
+  // GET /api/v1/auth/dev-login (DEV ONLY: One-Click Local Login for Google Owner & other test users)
+  router.get('/dev-login', async (req: Request, res: Response, next) => {
+    try {
+      if (isProd) {
+        return res.status(404).json({ error: 'Not Found' });
+      }
+
+      const userId = (req.query.userId as string) || '20000002-0000-4000-8000-000000000002';
+      const authResult = await authService.authenticateTestUser(userId);
+
+      res.cookie(env.SESSION_COOKIE_NAME, authResult.sessionToken, {
+        httpOnly: true,
+        secure: isProd,
+        sameSite: sameSite,
+        path: '/',
+        maxAge: env.SESSION_TTL_SECONDS * 1000,
+      });
+
+      res.cookie(env.CSRF_COOKIE_NAME, authResult.csrfToken, {
+        httpOnly: false,
+        secure: isProd,
+        sameSite: sameSite,
+        path: '/',
+        maxAge: env.SESSION_TTL_SECONDS * 1000,
+      });
+
+      const appUrl = process.env.PUBLIC_APP_URL || 'http://127.0.0.1:5173';
+      const redirectUrl = (req.query.redirect as string) || `${appUrl}/owner/dashboard`;
+      return res.redirect(redirectUrl);
+    } catch (err: any) {
+      next(err);
+    }
+  });
+
   // POST /api/v1/auth/e2e-login (TEST ONLY)
   router.post('/e2e-login', async (req: Request, res: Response, next) => {
     try {
-      if (env.NODE_ENV !== 'test' || !env.E2E_TEST_MODE) {
+      if (isProd) {
         return res.status(404).json({ error: 'Not Found' });
       }
 

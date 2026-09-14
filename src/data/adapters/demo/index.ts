@@ -562,15 +562,15 @@ export class DemoMaintenanceAdapter implements MaintenanceDataSource {
 }
 
 export class DemoAnnouncementAdapter implements AnnouncementDataSource {
-  async getAll(): Promise<Announcement[]> {
+  async getAll(_dormitoryId?: string): Promise<Announcement[]> {
     return announcementRepository.getAll();
   }
 
-  async getById(id: string): Promise<Announcement | null> {
+  async getById(id: string, _dormitoryId?: string): Promise<Announcement | null> {
     return announcementRepository.getById(id) || null;
   }
 
-  async createAnnouncement(data: Omit<Announcement, 'id' | 'createdAt'>, actorUserId?: string): Promise<DataResult<Announcement>> {
+  async createAnnouncement(data: Omit<Announcement, 'id' | 'createdAt'>, actorUserId?: string, _dormitoryId?: string): Promise<DataResult<Announcement>> {
     const res = announcementRepository.createAnnouncement(data, actorUserId);
     if (res.success && res.announcement) {
       return { success: true, data: res.announcement };
@@ -578,7 +578,7 @@ export class DemoAnnouncementAdapter implements AnnouncementDataSource {
     return { success: false, message: res.message, error: { code: 'VALIDATION_ERROR', message: res.message || 'สร้างประกาศไม่สำเร็จ' } };
   }
 
-  async updateAnnouncement(id: string, data: Partial<Announcement>): Promise<DataResult<Announcement>> {
+  async updateAnnouncement(id: string, data: Partial<Announcement>, _dormitoryId?: string): Promise<DataResult<Announcement>> {
     const existing = announcementRepository.getById(id);
     if (existing) {
       Object.assign(existing, data);
@@ -587,7 +587,7 @@ export class DemoAnnouncementAdapter implements AnnouncementDataSource {
     return { success: false, error: { code: 'RESOURCE_NOT_FOUND', message: 'ไม่พบประกาศ' } };
   }
 
-  async deleteAnnouncement(_id: string): Promise<DataResult<boolean>> {
+  async deleteAnnouncement(_id: string, _dormitoryId?: string): Promise<DataResult<boolean>> {
     return { success: true, data: true };
   }
 }

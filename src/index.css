@@ -10,6 +10,15 @@
   font-family: 'Sarabun', 'Prompt', sans-serif;
 }
 
+/* Global brand typography: Ensure Prompt is applied to root, body, and all form controls */
+html, body, #root {
+  font-family: var(--font-sans);
+}
+
+input, textarea, select, button {
+  font-family: inherit;
+}
+
 /* Custom scrollbars and styling */
 ::-webkit-scrollbar {
   width: 6px;

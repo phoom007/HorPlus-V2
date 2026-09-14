@@ -10,6 +10,8 @@ import { getPrismaClient } from '../db/prisma.js';
 import { AuthenticationService } from '../services/auth.service.js';
 import { createRequireSessionMiddleware } from '../middleware/require-session.js';
 import { createCsrfMiddleware } from '../middleware/csrf.js';
+import { resolveAuthoritativeDormitoryContext } from '../middleware/dormitory-context.js';
+import { AppError } from '../types/index.js';
 
 const createQuoteSchema = z.object({
   packageId: z.string().uuid().optional(),
@@ -73,12 +75,18 @@ export function createSubscriptionQuoteRouter(authService: AuthenticationService
    */
   router.post('/quote', requireSession, csrfMiddleware, async (req: Request, res: Response, next: NextFunction) => {
     try {
+      const context = (req as any).dormitoryContext || (await resolveAuthoritativeDormitoryContext(req));
+      if (context.roleCode === 'STAFF') {
+        throw new AppError('ช่าง / แม่บ้านไม่มีสิทธิ์ขอใบเสนอราคาแพ็กเกจ', 403, 'FORBIDDEN_SUBSCRIPTION_ROLE');
+      }
+
       const userId = req.auth!.userId;
       const body = createQuoteSchema.parse(req.body);
       const requestedDormId =
         body.dormitoryId ||
         (req.query?.dormitoryId as string) ||
-        (req.headers['x-dormitory-id'] as string);
+        (req.headers['x-dormitory-id'] as string) ||
+        context.dormitoryId;
       const quote = await subscriptionIntentService.createIntentQuote(userId, body, undefined, requestedDormId);
 
       res.json({
@@ -96,6 +104,11 @@ export function createSubscriptionQuoteRouter(authService: AuthenticationService
    */
   router.post('/commit', requireSession, csrfMiddleware, async (req: Request, res: Response, next: NextFunction) => {
     try {
+      const context = (req as any).dormitoryContext || (await resolveAuthoritativeDormitoryContext(req));
+      if (context.roleCode === 'STAFF') {
+        throw new AppError('ช่าง / แม่บ้านไม่มีสิทธิ์ยืนยันการเปิดใช้งานแพ็กเกจ', 403, 'FORBIDDEN_SUBSCRIPTION_ROLE');
+      }
+
       const userId = req.auth!.userId;
       const { intentId, idempotencyKey } = commitIntentSchema.parse(req.body);
       const result = await subscriptionIntentService.commitZeroPayIntent(userId, intentId, idempotencyKey);

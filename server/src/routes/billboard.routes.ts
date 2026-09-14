@@ -18,31 +18,31 @@ const createBillboardSchema = z.object({
 
 const DEFAULT_BILLBOARD_ITEMS = [
   {
-    imageUrl: 'https://images.unsplash.com/photo-1545324418-cc1a3fa10c00?w=1600&auto=format&fit=crop&q=80',
-    title: 'ระบบบริหารจัดการหอพัก HORPLUS ครบวงจร',
-    description: 'จัดการห้องพัก ออกบิลค่าน้ำค่าไฟ และส่งแจ้งเตือนผู้เช่าผ่าน LINE อัตโนมัติ สะดวกรวดเร็ว',
-    tag: 'ป้ายประชาสัมพันธ์',
+    imageUrl: '/billboards/1.jpg',
+    title: 'หอพลัส+ เปิดทดลองฟรี 3 เดือน',
+    description: 'ตรวจสลิปอัตโนมัติ แจ้งเตือน LINE ทำสัญญา ออกบิล แจ้งซ่อม ครอบคลุมครบวงจร',
+    tag: 'ทดลองฟรี 3 เดือน',
     sortOrder: 1,
   },
   {
-    imageUrl: 'https://images.unsplash.com/photo-1512917774080-9991f1c4c750?w=1600&auto=format&fit=crop&q=80',
-    title: 'แพ็กเกจ HORPLUS PRO 12 เดือน เพียง ฿1,799',
-    description: 'เฉลี่ยเพียง ฿150 ต่อเดือน รองรับได้ถึง 150 ห้องพัก พร้อมโควตา LINE 300 ข้อความต่อเดือน',
-    tag: 'โปรโมชั่นสุดคุ้ม',
+    imageUrl: '/billboards/2.jpg',
+    title: 'ราคาแพ็กเกจ HORPLUS โปรโมชั่นประจำปี 2569',
+    description: 'โปรโมชั่นพิเศษ PRO 1 เดือน 0 บาท และแพ็กเกจรายปีสุดคุ้มสำหรับเจ้าของหอพัก',
+    tag: 'โปรโมชั่นปี 2569',
     sortOrder: 2,
   },
   {
-    imageUrl: 'https://images.unsplash.com/photo-1560518883-ce09059eeffa?w=1600&auto=format&fit=crop&q=80',
-    title: 'ตรวจสลิปโอนเงินอัตโนมัติ แม่นยำ รวดเร็ว',
-    description: 'ลดภาระงานตรวจสอบสลิป หมดปัญหาสลิปปลอมหรือสลิปใช้ซ้ำ ด้วยเทคโนโลยีตรวจสอบระดับสากล',
-    tag: 'ฟีเจอร์เด่น',
+    imageUrl: '/billboards/3.jpg',
+    title: 'ระบบบริหารจัดการหอพักอัจฉริยะครบวงจร',
+    description: 'ดูภาพรวมยอดค้างชำระ สถิติรายรับรอบปี และบริหารจัดการผู้เช่าได้ทุกอุปกรณ์',
+    tag: 'ฟังก์ชันครบวงจร',
     sortOrder: 3,
   },
   {
-    imageUrl: 'https://images.unsplash.com/photo-1582407947304-fd86f028f716?w=1600&auto=format&fit=crop&q=80',
-    title: 'ชวนเพื่อนเจ้าของหอพัก รับเหรียญส่วนลดทันที',
-    description: 'แชร์รหัสแนะนำเพื่อน เมื่อเพื่อนสมัครใช้งาน รับเหรียญสะสมใช้เป็นส่วนลดค่าบริการได้เลย',
-    tag: 'สิทธิพิเศษ',
+    imageUrl: '/billboards/4.jpg',
+    title: 'กรอกโค้ด "HORPLUS" ทดลอง PRO ฟรี 2 เดือน',
+    description: 'รับสิทธิ์ใช้งานฟังก์ชัน PRO ฟรี 2 เดือนทันที จำกัด 100 สิทธิ์แรกเท่านั้น',
+    tag: 'โค้ดพิเศษจำกัดสิทธิ์',
     sortOrder: 4,
   },
 ];
@@ -64,6 +64,24 @@ export function createBillboardRouter(): Router {
             isActive: true,
           },
         });
+      }
+    } else {
+      // Auto-migrate legacy Unsplash billboards to local assets if present
+      const legacy = await prisma.platformBillboard.findMany({
+        where: { imageUrl: { contains: 'unsplash' } },
+      });
+      if (legacy.length > 0) {
+        await prisma.platformBillboard.deleteMany({
+          where: { imageUrl: { contains: 'unsplash' } },
+        });
+        for (const item of DEFAULT_BILLBOARD_ITEMS) {
+          await prisma.platformBillboard.create({
+            data: {
+              ...item,
+              isActive: true,
+            },
+          });
+        }
       }
     }
   }

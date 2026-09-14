@@ -12,6 +12,27 @@ export interface RunWithIdempotencyOptions<T> {
   fn: () => Promise<T>;
 }
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function sanitizeActorUserIdToUuid(actorUserId: string): string {
+  if (!actorUserId || typeof actorUserId !== 'string') {
+    return '00000000-0000-0000-0000-000000000000';
+  }
+  const stripped = actorUserId.replace(/^ag_user_|^ag_/, '').trim();
+  if (UUID_REGEX.test(stripped)) {
+    return stripped;
+  }
+  // Deterministic UUID fallback for arbitrary non-UUID string
+  const hash = crypto.createHash('sha256').update(actorUserId).digest('hex');
+  return [
+    hash.substring(0, 8),
+    hash.substring(8, 12),
+    '4' + hash.substring(13, 16),
+    '8' + hash.substring(17, 20),
+    hash.substring(20, 32)
+  ].join('-');
+}
+
 export class IdempotencyService {
   constructor(private client: PrismaClient = prisma) {}
 
@@ -34,6 +55,7 @@ export class IdempotencyService {
       return await fn();
     }
 
+    const safeActorUserId = sanitizeActorUserIdToUuid(actorUserId);
     const requestHash = this.hashPayload(payload);
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours retention
 
@@ -41,7 +63,7 @@ export class IdempotencyService {
     const existing = await this.client.idempotencyKey.findUnique({
       where: {
         user_operation_idempotency_unique: {
-          userId: actorUserId,
+          userId: safeActorUserId,
           operation,
           idempotencyKey
         }
@@ -77,7 +99,7 @@ export class IdempotencyService {
       // Create new processing claim
       await this.client.idempotencyKey.create({
         data: {
-          userId: actorUserId,
+          userId: safeActorUserId,
           operation,
           idempotencyKey,
           requestHash,
@@ -97,7 +119,7 @@ export class IdempotencyService {
       await this.client.idempotencyKey.update({
         where: {
           user_operation_idempotency_unique: {
-            userId: actorUserId,
+            userId: safeActorUserId,
             operation,
             idempotencyKey
           }
@@ -114,7 +136,7 @@ export class IdempotencyService {
       await this.client.idempotencyKey.update({
         where: {
           user_operation_idempotency_unique: {
-            userId: actorUserId,
+            userId: safeActorUserId,
             operation,
             idempotencyKey
           }

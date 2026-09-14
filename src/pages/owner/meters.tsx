@@ -114,6 +114,7 @@ export interface OwnerMetersProps {
   selectedCycle?: string;
   billingCycles?: any[];
   onRefetchData?: () => void;
+  userRole?: string | null;
 }
 
 export interface MeterRowState {
@@ -922,9 +923,11 @@ export function computeHasPersistedBaseline(params: {
   });
 }
 
+const EMPTY_BUILDINGS: Building[] = [];
+
 export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   rooms,
-  buildings = [],
+  buildings = EMPTY_BUILDINGS,
   dormitoryId = '',
   bills,
   tenants,
@@ -940,10 +943,19 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   selectedCycleCode,
   selectedCycle = selectedCycleCode,
   billingCycles: propBillingCycles,
-  onRefetchData
+  onRefetchData,
+  userRole,
 }) => {
   const queryClient = useQueryClient();
   const currentDormId = dormitoryId || '';
+
+  const handleTenantClick = (tenantId: string, roomId?: string) => {
+    if (userRole === 'staff') {
+      showToast('คุณไม่มีสิทธิ์ดำเนินการสิ่งนี้', 'warning');
+      return;
+    }
+    onSelectTenant(tenantId, roomId);
+  };
 
   const initialCachedData = currentDormId && selectedBillingCycleId
     ? queryClient.getQueryData<any>(queryKeys.meterWorkspace(currentDormId, selectedBillingCycleId))
@@ -2838,6 +2850,10 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   };
 
   const handleToggleStatusSwitch = async (row: MeterRowState) => {
+    if (userRole === 'staff') {
+      showToast('คุณไม่มีสิทธิ์ดำเนินการสิ่งนี้', 'warning');
+      return;
+    }
     if (!isMutationReady) {
       showToast('ข้อมูลหรือสิทธิ์การคิดรอบบิลยังไม่พร้อมใช้งาน');
       return;
@@ -2915,6 +2931,10 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   };
 
   const handleIssueAllBills = async () => {
+    if (userRole === 'staff') {
+      showToast('คุณไม่มีสิทธิ์ดำเนินการสิ่งนี้', 'warning');
+      return;
+    }
     if (!isMutationReady) {
       showToast('ข้อมูลหรือสิทธิ์การคิดรอบบิลยังไม่พร้อมใช้งาน', 'error');
       return;
@@ -3401,13 +3421,13 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
             <div className="grid grid-cols-2 sm:flex sm:items-center gap-2 w-full sm:w-auto">
               <button
                 type="button"
-                disabled={!isMutationReady || isSaving || !hasEligibleUnissuedBills}
+                disabled={!isMutationReady || isSaving || !hasEligibleUnissuedBills || userRole === 'staff'}
                 onClick={handleIssueAllBills}
-                className={`w-full sm:w-auto px-3 sm:px-4 py-2 text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition-all shadow-md whitespace-nowrap shrink-0 ${!hasEligibleUnissuedBills
+                className={`w-full sm:w-auto px-3 sm:px-4 py-2 text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition-all shadow-md whitespace-nowrap shrink-0 ${(!hasEligibleUnissuedBills || userRole === 'staff')
                   ? 'bg-gray-100 text-gray-400 border border-gray-200 cursor-not-allowed shadow-none'
                   : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-600/10 cursor-pointer'
                   }`}
-                title={!hasEligibleUnissuedBills ? 'ออกบิลครบทุกห้องแล้ว' : 'ออกบิลทุกห้อง'}
+                title={userRole === 'staff' ? 'เฉพาะเจ้าของหรือผู้จัดการ' : (!hasEligibleUnissuedBills ? 'ออกบิลครบทุกห้องแล้ว' : 'ออกบิลทุกห้อง')}
               >
                 <FileText className="w-3.5 h-3.5" />
                 <span>ออกบิลทุกห้อง</span>
@@ -3957,7 +3977,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                                 type="button"
                                 role="switch"
                                 aria-checked={isMuIssued}
-                                disabled={isSaving || isMuPaid || !selectedBillingCycleId}
+                                disabled={isSaving || isMuPaid || !selectedBillingCycleId || userRole === 'staff'}
                                 onClick={() => handleToggleStatusSwitch(row)}
                                 className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none disabled:cursor-not-allowed disabled:opacity-60 ${isMuPaid
                                   ? 'bg-emerald-600'
@@ -3966,11 +3986,13 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                                     : 'bg-slate-300'
                                   }`}
                                 title={
-                                  isMuPaid
-                                    ? 'ชำระแล้ว (ล็อค)'
-                                    : isMuIssued
-                                      ? 'คลิกเพื่อยกเลิกบิล'
-                                      : 'คลิกเพื่อออกบิล'
+                                  userRole === 'staff'
+                                    ? 'เฉพาะเจ้าของหรือผู้จัดการ'
+                                    : isMuPaid
+                                      ? 'ชำระแล้ว (ล็อค)'
+                                      : isMuIssued
+                                        ? 'คลิกเพื่อยกเลิกบิล'
+                                        : 'คลิกเพื่อออกบิล'
                                 }
                               >
                                 <span
@@ -4022,7 +4044,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                                   {effectiveTenantId && effectiveTenantName ? (
                                     <button
                                       type="button"
-                                      onClick={() => onSelectTenant(effectiveTenantId, row.roomId)}
+                                      onClick={() => handleTenantClick(effectiveTenantId, row.roomId)}
                                       className="inline-flex items-center gap-1.5 text-indigo-600 hover:text-indigo-800 hover:underline transition-all cursor-pointer font-bold whitespace-nowrap"
                                     >
                                       <User className="w-3.5 h-3.5 shrink-0" />
@@ -4050,7 +4072,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                                     <div className="flex items-center gap-1.5">
                                       <button
                                         type="button"
-                                        onClick={() => onSelectTenant(effectiveTenantId, row.roomId)}
+                                        onClick={() => handleTenantClick(effectiveTenantId, row.roomId)}
                                         className="inline-flex items-center gap-1.5 text-indigo-600 hover:text-indigo-800 hover:underline transition-all cursor-pointer font-bold whitespace-nowrap"
                                       >
                                         {peopleCountVal > 1 ? (
@@ -4121,7 +4143,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                                 <div className="flex items-center gap-1.5">
                                   <button
                                     type="button"
-                                    onClick={() => onSelectTenant(effectiveTenantId, row.roomId)}
+                                    onClick={() => handleTenantClick(effectiveTenantId, row.roomId)}
                                     className="inline-flex items-center gap-1.5 text-indigo-600 hover:text-indigo-800 hover:underline transition-all cursor-pointer font-bold whitespace-nowrap"
                                   >
                                     <User className="w-3.5 h-3.5 shrink-0" />
@@ -4148,7 +4170,7 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                               <div className="flex items-center gap-1.5">
                                 <button
                                   type="button"
-                                  onClick={() => onSelectTenant(effectiveTenantId, row.roomId)}
+                                  onClick={() => handleTenantClick(effectiveTenantId, row.roomId)}
                                   className="inline-flex items-center gap-1.5 text-indigo-600 hover:text-indigo-800 hover:underline transition-all cursor-pointer font-bold whitespace-nowrap"
                                 >
                                   {peopleCountVal > 1 ? (
@@ -4247,8 +4269,9 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
                   onPeopleCountChange={handlePeopleCountChange}
                   onToggleStatusSwitch={handleToggleStatusSwitch}
                   onToggleBreakdown={(roomId) => setExpandedBreakdowns(prev => ({ ...prev, [roomId]: !prev[roomId] }))}
-                  onSelectTenant={onSelectTenant}
+                  onSelectTenant={handleTenantClick}
                   onOpenQuickAdd={handleOpenQuickAddTenant}
+                  userRole={userRole}
                 />
               ))}
             </div>

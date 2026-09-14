@@ -6,7 +6,9 @@ import {
   X,
   Check,
   RotateCw,
-  Send
+  Send,
+  Settings,
+  AlertCircle
 } from 'lucide-react';
 import { Modal, formatBaht, formatThaiDate } from './GlobalComponents';
 import { Bill, Tenant, Room, Contract } from '../types';
@@ -77,6 +79,7 @@ interface LineNotificationModalProps {
   onAddLog?: (action: string, details: string, module: string, targetId?: string) => void;
   targetScrollTenantId?: string | null;
   onShowToast?: (msg: string) => void;
+  onNavigateToLineConfig?: () => void;
 }
 
 export const LineNotificationModal: React.FC<LineNotificationModalProps> = ({
@@ -90,7 +93,8 @@ export const LineNotificationModal: React.FC<LineNotificationModalProps> = ({
   selectedCycle,
   onAddLog,
   targetScrollTenantId,
-  onShowToast
+  onShowToast,
+  onNavigateToLineConfig
 }) => {
   const [lineFilterTab, setLineFilterTab] = useState<'all' | 'unsent' | 'sent' | 'unpaid'>('unsent');
   const [selectedTenantIdsForLine, setSelectedTenantIdsForLine] = useState<string[]>([]);
@@ -112,7 +116,7 @@ export const LineNotificationModal: React.FC<LineNotificationModalProps> = ({
           const data = json.data || json.config;
           setLineStatus({
             connected: Boolean(data.connected),
-            isReady: Boolean(data.isReady || (data.connected && data.credentialsVerified))
+            isReady: Boolean(data.isReady)
           });
         } else {
           setLineStatus({ connected: false, isReady: false });
@@ -260,6 +264,19 @@ export const LineNotificationModal: React.FC<LineNotificationModalProps> = ({
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
                 พร้อมใช้งาน
               </span>
+            ) : onNavigateToLineConfig ? (
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  onNavigateToLineConfig();
+                }}
+                className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100/80 text-amber-800 border border-amber-200/80 font-bold text-xs rounded-full flex items-center gap-1 shadow-2xs cursor-pointer transition-colors"
+                title="คลิกเพื่อไปตั้งค่า LINE OA"
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse shrink-0" />
+                ยังไม่พร้อมใช้งาน
+              </button>
             ) : (
               <span className="px-2.5 py-1 bg-amber-50 text-amber-800 border border-amber-200/80 font-bold text-xs rounded-full flex items-center gap-1 shadow-2xs">
                 <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse shrink-0" />
@@ -293,27 +310,24 @@ export const LineNotificationModal: React.FC<LineNotificationModalProps> = ({
               <button
                 type="button"
                 onClick={() => setLineFilterTab('all')}
-                className={`px-2.5 py-1.5 sm:px-3.5 sm:py-2 rounded-xl text-[12px] sm:text-xs font-black transition-all cursor-pointer whitespace-nowrap ${
-                  lineFilterTab === 'all' ? 'bg-white text-[#06C755] shadow-2xs' : 'text-slate-600 hover:text-slate-900 font-extrabold'
-                }`}
+                className={`px-2.5 py-1.5 sm:px-3.5 sm:py-2 rounded-xl text-[12px] sm:text-xs font-black transition-all cursor-pointer whitespace-nowrap ${lineFilterTab === 'all' ? 'bg-white text-[#06C755] shadow-2xs' : 'text-slate-600 hover:text-slate-900 font-extrabold'
+                  }`}
               >
                 ทั้งหมด ({sortedCycleBills.length})
               </button>
               <button
                 type="button"
                 onClick={() => setLineFilterTab('unsent')}
-                className={`px-2.5 py-1.5 sm:px-3.5 sm:py-2 rounded-xl text-[12px] sm:text-xs font-black transition-all cursor-pointer whitespace-nowrap ${
-                  lineFilterTab === 'unsent' ? 'bg-white text-[#06C755] shadow-2xs' : 'text-slate-600 hover:text-slate-900 font-extrabold'
-                }`}
+                className={`px-2.5 py-1.5 sm:px-3.5 sm:py-2 rounded-xl text-[12px] sm:text-xs font-black transition-all cursor-pointer whitespace-nowrap ${lineFilterTab === 'unsent' ? 'bg-white text-[#06C755] shadow-2xs' : 'text-slate-600 hover:text-slate-900 font-extrabold'
+                  }`}
               >
                 ยังไม่ได้ส่ง ({sortedCycleBills.filter(b => b.status !== 'paid' && !lineNotifyMap[`${selectedCycle}_${b.tenantId}`]).length})
               </button>
               <button
                 type="button"
                 onClick={() => setLineFilterTab('sent')}
-                className={`px-2.5 py-1.5 sm:px-3.5 sm:py-2 rounded-xl text-[12px] sm:text-xs font-black transition-all cursor-pointer whitespace-nowrap ${
-                  lineFilterTab === 'sent' ? 'bg-white text-[#06C755] shadow-2xs' : 'text-slate-600 hover:text-slate-900 font-extrabold'
-                }`}
+                className={`px-2.5 py-1.5 sm:px-3.5 sm:py-2 rounded-xl text-[12px] sm:text-xs font-black transition-all cursor-pointer whitespace-nowrap ${lineFilterTab === 'sent' ? 'bg-white text-[#06C755] shadow-2xs' : 'text-slate-600 hover:text-slate-900 font-extrabold'
+                  }`}
               >
                 ส่งแล้ว ({sortedCycleBills.filter(b => lineNotifyMap[`${selectedCycle}_${b.tenantId}`]).length})
               </button>
@@ -367,6 +381,37 @@ export const LineNotificationModal: React.FC<LineNotificationModalProps> = ({
               return true;
             });
 
+            if (!lineStatus?.isReady) {
+              return (
+                <div className="py-10 px-4 text-center bg-amber-50/70 rounded-2xl border border-dashed border-amber-300/80 space-y-3 my-2 animate-in fade-in duration-300">
+                  <div className="w-12 h-12 rounded-2xl bg-amber-100 text-amber-700 flex items-center justify-center mx-auto shadow-2xs">
+                    <AlertCircle className="w-6 h-6 shrink-0" />
+                  </div>
+                  <div className="space-y-1">
+                    <p className="font-extrabold text-amber-900 text-sm">ยังไม่ได้เชื่อมต่อ LINE Official Account</p>
+                    <p className="text-[11px] text-amber-700/90 max-w-sm mx-auto">
+                      กรุณาเชื่อมต่อ LINE OA เพื่อเปิดใช้งานระบบส่งแจ้งเตือนอัตโนมัติถึงผู้เช่า
+                    </p>
+                  </div>
+                  {onNavigateToLineConfig && (
+                    <div className="pt-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onClose();
+                          onNavigateToLineConfig();
+                        }}
+                        className="inline-flex items-center gap-2 px-4 py-2 bg-[#06C755] hover:bg-[#05b34c] text-white font-extrabold text-xs rounded-xl shadow-xs hover:shadow-sm transition-all cursor-pointer active:scale-95"
+                      >
+                        <Settings className="w-4 h-4 shrink-0" />
+                        <span>ไปตั้งค่า LINE OA</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            }
+
             if (modalFilteredBills.length === 0) {
               return (
                 <div className="py-12 px-4 text-center bg-white rounded-2xl border border-dashed border-slate-200 space-y-2 my-2 animate-in fade-in duration-300">
@@ -395,19 +440,16 @@ export const LineNotificationModal: React.FC<LineNotificationModalProps> = ({
                       setSelectedTenantIdsForLine([...selectedTenantIdsForLine, bill.tenantId]);
                     }
                   }}
-                  className={`p-2.5 sm:p-3 rounded-2xl border transition-all duration-200 cursor-pointer flex items-center justify-between gap-2 sm:gap-3 animate-in fade-in ${
-                    isTargetScrolled ? 'ring-2 ring-emerald-500 border-emerald-400' : ''
-                  } ${
-                    isChecked
+                  className={`p-2.5 sm:p-3 rounded-2xl border transition-all duration-200 cursor-pointer flex items-center justify-between gap-2 sm:gap-3 animate-in fade-in ${isTargetScrolled ? 'ring-2 ring-emerald-500 border-emerald-400' : ''
+                    } ${isChecked
                       ? 'bg-emerald-50/80 border-emerald-300 shadow-2xs'
                       : 'bg-white border-slate-200 hover:border-slate-300'
-                  }`}
+                    }`}
                 >
                   <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
                     {/* Checkbox */}
-                    <div className={`w-5 h-5 rounded-lg border flex items-center justify-center transition-all shrink-0 ${
-                      isChecked ? 'bg-[#06C755] border-[#06C755] text-white' : 'border-slate-300 bg-white'
-                    }`}>
+                    <div className={`w-5 h-5 rounded-lg border flex items-center justify-center transition-all shrink-0 ${isChecked ? 'bg-[#06C755] border-[#06C755] text-white' : 'border-slate-300 bg-white'
+                      }`}>
                       {isChecked && <Check className="w-3.5 h-3.5 stroke-[3]" />}
                     </div>
 

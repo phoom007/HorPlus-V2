@@ -61,6 +61,42 @@ const getElapsedDays = (isoString?: string): number => {
   return Math.max(0, diffDays);
 };
 
+export const sanitizeCostInput = (val: string): { displayVal: string; numericVal: number } => {
+  if (!val) return { displayVal: '', numericVal: 0 };
+
+  // 1. Strip any characters that aren't digits or decimal point
+  let cleaned = val.replace(/[^\d.]/g, '');
+
+  // 2. Allow at most one decimal point
+  const parts = cleaned.split('.');
+  if (parts.length > 2) {
+    cleaned = parts[0] + '.' + parts.slice(1).join('');
+  }
+
+  // 3. Limit decimal part to at most 2 digits
+  const hasDot = cleaned.includes('.');
+  let [integerPart, decimalPart] = cleaned.split('.');
+
+  // 4. Normalize leading zeros on integer part:
+  // e.g. "0123" -> "123", "00" -> "0"
+  if (integerPart && integerPart.length > 1 && integerPart.startsWith('0')) {
+    integerPart = integerPart.replace(/^0+/, '') || '0';
+  }
+
+  let displayVal = integerPart;
+  if (hasDot) {
+    if (decimalPart !== undefined) {
+      decimalPart = decimalPart.slice(0, 2);
+      displayVal = `${integerPart}.${decimalPart}`;
+    } else {
+      displayVal = `${integerPart}.`;
+    }
+  }
+
+  const numericVal = parseFloat(displayVal) || 0;
+  return { displayVal, numericVal };
+};
+
 const getCardStyle = (createdAt?: string) => {
   const days = getElapsedDays(createdAt);
   const baseClasses = "p-4 rounded-2xl border shadow-3xs cursor-grab active:cursor-grabbing hover:shadow-sm active:opacity-95 transition-all space-y-3";
@@ -149,12 +185,14 @@ export const OwnerMaintenance: React.FC<OwnerMaintenanceProps> = ({
     setSelectedRepair(rep);
     setAssignedStaff(rep.assignedStaff || '');
     setCost(rep.cost || 0);
+    setCostInput(rep.cost ? String(rep.cost) : '');
     setNote(rep.note || '');
   };
 
   // Update State inside Detail View
   const [assignedStaff, setAssignedStaff] = useState('');
   const [cost, setCost] = useState(0);
+  const [costInput, setCostInput] = useState('');
   const [note, setNote] = useState('');
   const [ownerImage, setOwnerImage] = useState('');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -164,6 +202,7 @@ export const OwnerMaintenance: React.FC<OwnerMaintenanceProps> = ({
     if (selectedRepair) {
       setAssignedStaff(selectedRepair.assignedStaff || '');
       setCost(selectedRepair.cost || 0);
+      setCostInput(selectedRepair.cost ? String(selectedRepair.cost) : '');
       setNote(selectedRepair.note || '');
       setOwnerImage(selectedRepair.imageAfter || '');
     }
@@ -229,28 +268,24 @@ export const OwnerMaintenance: React.FC<OwnerMaintenanceProps> = ({
       });
       if (res.success && res.data) {
         createdItem = res.data;
+      } else {
+        setToastMessage(res?.error?.message || 'เกิดข้อผิดพลาดในการสร้างเรื่องแจ้งซ่อม');
+        return;
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to create maintenance request on server:', err);
+      setToastMessage(err?.message || 'เกิดข้อผิดพลาดในการสร้างเรื่องแจ้งซ่อม');
+      return;
     }
 
-    const newId = createdItem?.id || `rep-${Date.now()}`;
-    const newRepair: RepairRequest = createdItem || {
-      id: newId,
-      roomId: roomId || undefined,
-      tenantId: roomId ? rooms.find(r => r.id === roomId)?.currentTenantId : undefined,
-      title: title.trim(),
-      description: description.trim(),
-      imageBefore: imageBefore || undefined,
-      urgency: priority as any,
-      status: 'submitted',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
+    if (!createdItem) {
+      setToastMessage('เกิดข้อผิดพลาดในการสร้างเรื่องแจ้งซ่อม');
+      return;
+    }
 
-    onSaveRepairs([newRepair, ...repairs]);
+    onSaveRepairs([createdItem, ...repairs]);
     handleCloseCreate();
-    onAddLog?.('สร้างบันทึกแจ้งซ่อมใหม่', `สร้างแจ้งเรื่อง "${title}" สำหรับห้อง ${roomId ? getRoomNum(roomId) : 'ส่วนกลาง'}`, 'RepairRequest', newId);
+    onAddLog?.('สร้างบันทึกแจ้งซ่อมใหม่', `สร้างแจ้งเรื่อง "${title}" สำหรับห้อง ${roomId ? getRoomNum(roomId) : 'ส่วนกลาง'}`, 'RepairRequest', createdItem.id);
 
     // Reset Form
     setTitle('');
@@ -318,7 +353,7 @@ export const OwnerMaintenance: React.FC<OwnerMaintenanceProps> = ({
 
   const handleUpdateStatus = async (repairId: string, nextStatus: 'submitted' | 'inprogress' | 'completed') => {
     const nextStaff = nextStatus === 'submitted' ? '' : (assignedStaff || selectedRepair?.assignedStaff || '');
-    const nextCost = nextStatus === 'submitted' ? 0 : (cost || selectedRepair?.cost || 0);
+    const nextCost = nextStatus === 'submitted' ? 0 : (typeof cost === 'number' && !isNaN(cost) ? cost : (selectedRepair?.cost ?? 0));
     const nextNote = nextStatus === 'submitted' ? '' : (note || selectedRepair?.note || '');
     const nextImage = ownerImage || selectedRepair?.imageAfter || '';
 
@@ -387,7 +422,7 @@ export const OwnerMaintenance: React.FC<OwnerMaintenanceProps> = ({
   return (
     <>
       {isCreateOpen ? (
-        <div className="h-full w-full flex flex-col bg-slate-50 animate-in fade-in duration-200">
+        <div className="h-full w-full flex flex-col bg-slate-50 animate-in fade-in duration-200 font-sans">
           {/* Top Header: Seamlessly flush with top bar */}
           <header className="shrink-0 bg-white border-b border-slate-200/80 px-4 sm:px-6 py-2.5 sm:py-3 flex items-center justify-between shadow-xs z-20 -mt-[1px]">
             <div className="flex items-center gap-1.5 sm:gap-2.5 min-w-0 font-sans">
@@ -422,7 +457,7 @@ export const OwnerMaintenance: React.FC<OwnerMaintenanceProps> = ({
           </header>
 
           {/* Body content: Scrollable with centered max-w-3xl container */}
-          <div className="flex-1 overflow-y-auto min-h-0 px-4 sm:px-6 py-6 pb-28">
+          <div className="flex-1 overflow-y-auto min-h-0 px-4 sm:px-6 py-6 pb-36 font-sans">
             <div className="max-w-3xl mx-auto space-y-5 text-xs text-slate-800 pb-12">
               <form id="create-repair-form" onSubmit={handleCreateRepair} className="bg-white p-5 sm:p-6 rounded-2xl border border-slate-200/80 shadow-2xs space-y-5">
                 <div className="border-b border-slate-100 pb-4">
@@ -572,7 +607,7 @@ export const OwnerMaintenance: React.FC<OwnerMaintenanceProps> = ({
                         <button
                           type="button"
                           onClick={() => setImageBefore('')}
-                          className="absolute top-2 right-2 bg-rose-600 hover:bg-rose-700 text-white px-3 py-1 rounded-full text-xs font-bold transition-all cursor-pointer shadow-md active:scale-95 z-40"
+                          className="absolute top-2 right-2 bg-rose-600 hover:bg-rose-700 text-white px-3 py-1 rounded-full text-xs font-bold transition-all cursor-pointer shadow-md active:scale-95 z-10 font-sans"
                         >
                           ล้างรูปภาพ
                         </button>
@@ -607,7 +642,7 @@ export const OwnerMaintenance: React.FC<OwnerMaintenanceProps> = ({
           </div>
 
           {/* Bottom Action Bar: Flush and locked to bottom of viewport */}
-          <footer className="fixed bottom-0 left-0 right-0 lg:left-64 z-30 bg-white border-t border-slate-200 px-4 sm:px-6 py-3.5 shadow-md">
+          <footer className="fixed bottom-0 left-0 right-0 lg:left-64 z-50 bg-white border-t border-slate-200 px-4 sm:px-6 py-3.5 shadow-md">
             <div className="max-w-3xl mx-auto flex items-center justify-between gap-3 font-sans w-full">
               <button
                 type="button"
@@ -630,7 +665,7 @@ export const OwnerMaintenance: React.FC<OwnerMaintenanceProps> = ({
           </footer>
         </div>
       ) : !selectedRepair ? (
-        <div className="space-y-6">
+        <div className="space-y-6 font-sans">
 
           {/* Filter Tabs & Quick Action Row */}
           <div className="bg-white p-4 rounded-3xl border border-slate-100 shadow-xs flex flex-col md:flex-row justify-between items-stretch md:items-center gap-3 shrink-0">
@@ -853,7 +888,7 @@ export const OwnerMaintenance: React.FC<OwnerMaintenanceProps> = ({
 
         </div>
       ) : (
-        <div className="h-full w-full flex flex-col bg-slate-50 animate-in fade-in duration-200">
+        <div className="h-full w-full flex flex-col bg-slate-50 animate-in fade-in duration-200 font-sans">
           {/* Top Header: Seamlessly flush with top bar */}
           <header className="shrink-0 bg-white border-b border-slate-200/80 px-4 sm:px-6 py-2.5 sm:py-3 flex items-center justify-between shadow-xs z-20 -mt-[1px]">
             <div className="flex items-center gap-1.5 sm:gap-2.5 min-w-0 font-sans">
@@ -888,7 +923,7 @@ export const OwnerMaintenance: React.FC<OwnerMaintenanceProps> = ({
           </header>
 
           {/* Body content: Scrollable with centered max-w-3xl container */}
-          <div className="flex-1 overflow-y-auto min-h-0 px-4 sm:px-6 py-6 pb-28">
+          <div className="flex-1 overflow-y-auto min-h-0 px-4 sm:px-6 py-6 pb-36 font-sans">
             <div className="max-w-3xl mx-auto space-y-5 text-xs text-slate-800 pb-12">
               {/* Overview Card */}
               <div className="bg-white p-5 sm:p-6 rounded-2xl border border-slate-200/80 shadow-2xs space-y-4">
@@ -959,37 +994,49 @@ export const OwnerMaintenance: React.FC<OwnerMaintenanceProps> = ({
                     </div>
 
                     <div className="space-y-1.5">
-                      <label className="block text-xs font-bold text-slate-600">ค่าอะไหล่วัสดุรวม (บาท)</label>
+                      <label className="block text-xs font-bold text-slate-600 font-sans">ค่าอะไหล่วัสดุรวม (บาท)</label>
                       <input
-                        type="number"
-                        value={cost || ''}
-                        onChange={(e) => setCost(Number(e.target.value))}
+                        type="text"
+                        inputMode="decimal"
+                        value={costInput}
+                        onChange={(e) => {
+                          const { displayVal, numericVal } = sanitizeCostInput(e.target.value);
+                          setCostInput(displayVal);
+                          setCost(numericVal);
+                        }}
+                        onBlur={() => {
+                          if (costInput.endsWith('.')) {
+                            const trimmed = costInput.slice(0, -1);
+                            setCostInput(trimmed);
+                            setCost(parseFloat(trimmed) || 0);
+                          }
+                        }}
                         placeholder="0.00"
-                        className="w-full px-3 py-2 border border-slate-200 rounded-xl bg-white text-xs sm:text-sm font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+                        className="w-full px-3 py-2 border border-slate-200 rounded-xl bg-white text-xs sm:text-sm font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 font-sans"
                       />
                     </div>
                   </div>
 
                   <div className="space-y-1.5">
-                    <label className="block text-xs font-bold text-slate-600">บันทึกช่วยจำช่างเสริม</label>
+                    <label className="block text-xs font-bold text-slate-600 font-sans">บันทึกช่วยจำช่างเสริม</label>
                     <input
                       type="text"
                       value={note}
                       onChange={(e) => setNote(e.target.value)}
                       placeholder="รายละเอียดอะไหล่ที่เปลี่ยน หรือสาเหตุปัญหา..."
-                      className="w-full px-3 py-2 border border-slate-200 rounded-xl bg-white text-xs sm:text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+                      className="w-full px-3 py-2 border border-slate-200 rounded-xl bg-white text-xs sm:text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 font-sans"
                     />
                   </div>
 
-                  <div className="space-y-2">
-                    <label className="block text-xs font-bold text-slate-600">แนบรูปภาพผลการซ่อม / ใบเสร็จ / อะไหล่</label>
+                  <div className="space-y-2 font-sans">
+                    <label className="block text-xs font-bold text-slate-600 font-sans">แนบรูปภาพผลการซ่อม / ใบเสร็จ / อะไหล่</label>
                     {ownerImage ? (
                       <div className="relative overflow-hidden w-full max-h-72 flex items-center justify-center p-2 rounded-2xl bg-slate-50 border border-slate-200 group">
                         <img src={ownerImage} alt="รูปผลงานซ่อม" className="max-h-64 object-contain rounded-xl" />
                         <button
                           type="button"
                           onClick={() => setOwnerImage('')}
-                          className="absolute top-4 right-4 bg-rose-600 hover:bg-rose-700 text-white px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer shadow-md active:scale-95 z-40"
+                          className="absolute top-4 right-4 bg-rose-600 hover:bg-rose-700 text-white px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer shadow-md active:scale-95 z-10 font-sans"
                         >
                           ล้างรูปภาพ
                         </button>
@@ -1061,7 +1108,7 @@ export const OwnerMaintenance: React.FC<OwnerMaintenanceProps> = ({
           </div>
 
           {/* Bottom Action Bar: Flush and locked to bottom of viewport */}
-          <footer className="fixed bottom-0 left-0 right-0 lg:left-64 z-30 bg-white border-t border-slate-200 px-4 sm:px-6 py-3.5 shadow-md">
+          <footer className="fixed bottom-0 left-0 right-0 lg:left-64 z-50 bg-white border-t border-slate-200 px-4 sm:px-6 py-3.5 shadow-md">
             <div className="max-w-3xl mx-auto flex items-center justify-between gap-3 font-sans w-full">
               {selectedRepair.status === 'completed' ? (
                 <button
