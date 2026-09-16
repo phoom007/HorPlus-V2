@@ -176,6 +176,8 @@ model DormitoryBillingSettings {
   bankAccountName            String?  @map("bank_account_name") @db.VarChar(255)
   bankAccountNumber          String?  @map("bank_account_number") @db.VarChar(100)
   bankAccountNumberEncrypted String?  @map("bank_account_number_encrypted") @db.Text
+  bankQrCode                 String?  @map("bank_qr_code") @db.Text
+  vatSettings                Json?    @map("vat_settings")
   version                    Int      @default(1)
   createdAt                  DateTime @default(now()) @map("created_at") @db.Timestamptz()
   updatedAt                  DateTime @updatedAt @map("updated_at") @db.Timestamptz()

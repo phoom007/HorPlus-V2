@@ -39,6 +39,7 @@ import {
 } from 'recharts';
 import { Room, Bill, Building, Tenant, Contract, MaintenanceRequest as RepairRequest } from '../../types';
 import { calculateOwnerReports, toSatangs, satangsToString } from '../../utils/report-calculations';
+import { calculateCategoryStrictVat } from '../../utils/vat-calculator';
 import ExcelJS from 'exceljs';
 import JSZip from 'jszip';
 
@@ -143,6 +144,811 @@ const CountUp: React.FC<{ value: number; prefix?: string }> = ({
   );
 };
 
+
+// Helper for CSV cell escaping per RFC 4180
+export const escapeCsv = (val: any): string => {
+  if (val === null || val === undefined) return '""';
+  const str = String(val);
+  return `"${str.replace(/"/g, '""')}"`;
+};
+
+export const fmtNum = (val: number | string | bigint | null | undefined): string => {
+  const num = typeof val === 'bigint' ? Number(val) / 100 : Number(val || 0);
+  return Number.isFinite(num) ? num.toFixed(2) : '0.00';
+};
+
+export const formatDateOnly = (d: any): string => {
+  if (!d) return '-';
+  try {
+    const dt = typeof d === 'string' ? new Date(d) : d;
+    if (isNaN(dt.getTime())) return String(d);
+    return dt.toISOString().slice(0, 10);
+  } catch {
+    return String(d);
+  }
+};
+
+export const extractBillDetails = (
+  b: any,
+  context?: { rooms?: Room[]; buildings?: Building[]; tenants?: Tenant[]; vatSettings?: any }
+) => {
+  const rooms = context?.rooms || [];
+  const buildings = context?.buildings || [];
+  const tenants = context?.tenants || [];
+
+  const rm = rooms.find(r => r.id === b.roomId || (b.roomNumber && r.roomNumber === b.roomNumber) || r.roomNumber === b.roomId);
+  const bld = buildings.find(bldg => bldg.id === rm?.buildingId);
+  const buildingName = bld ? bld.name : (rm?.buildingId ? rm.buildingId : 'ไม่ระบุอาคาร');
+  const floorStr = rm?.floor !== undefined && rm?.floor !== null ? `${rm.floor}` : '-';
+  const roomNumber = rm?.roomNumber || b.roomNumber || 'ไม่ระบุ';
+
+  const tenant = tenants.find(t => t.id === b.tenantId || t.id === rm?.currentTenantId);
+  const tenantName = tenant?.name || tenant?.displayName || b.tenant?.name || b.tenant?.displayName || '-';
+  const rawPhone = tenant?.phone || b.tenant?.phone || '-';
+  const tenantPhone = formatThaiPhoneNumber(rawPhone);
+
+  // Occupants count (Primary tenant + Co-occupants)
+  const peopleCount = 1 + (Array.isArray(tenant?.coOccupants) ? tenant.coOccupants.length : 0);
+
+  // Vehicles count
+  let vehicleCount = 0;
+  if (Array.isArray(tenant?.vehicles) && tenant.vehicles.length > 0) {
+    vehicleCount = tenant.vehicles.length;
+  } else if (tenant?.vehicle?.plate || (tenant as any)?.vehiclePlate) {
+    vehicleCount = 1;
+  }
+
+  const billNumber = b.billNumber || b.id || '-';
+
+  const statusMap: Record<string, string> = {
+    paid: 'ชำระแล้ว',
+    unpaid: 'ยังไม่ชำระ',
+    pending: 'รอชำระ',
+    overdue: 'เกินกำหนดชำระ',
+    partially_paid: 'ชำระบางส่วน',
+    partial: 'ชำระบางส่วน',
+    cancelled: 'ยกเลิก'
+  };
+  const statusLower = (b.status || '').toLowerCase();
+  const statusStr = statusMap[statusLower] || b.status || 'ยังไม่ชำระ';
+
+  // Payment method mapping
+  const rawMethod = b.Payment?.[0]?.paymentMethod || b.payments?.[0]?.paymentMethod || b.paymentMethod || b.Payment?.[0]?.method || b.payments?.[0]?.method;
+  const methodMap: Record<string, string> = {
+    promptpay: 'พร้อมเพย์ / สแกน QR',
+    prompt_pay: 'พร้อมเพย์ / สแกน QR',
+    qr: 'พร้อมเพย์ / สแกน QR',
+    bank_transfer: 'โอนผ่านธนาคาร',
+    transfer: 'โอนผ่านธนาคาร',
+    cash: 'เงินสด',
+    credit_card: 'บัตรเครดิต',
+    credit: 'บัตรเครดิต',
+  };
+  const paymentMethodStr = rawMethod
+    ? (methodMap[String(rawMethod).toLowerCase()] || String(rawMethod))
+    : (statusLower === 'paid' ? 'โอนเงิน / พร้อมเพย์' : '-');
+
+  const dueDateStr = formatDateOnly(b.dueDate);
+  const paidDateStr = formatDateOnly(b.paidAt || b.paymentDate);
+
+  // Parse items
+  const items = Array.isArray(b.items) ? b.items : [];
+
+  // Rent
+  let rentAmt = 0;
+  const rentItem = items.find((i: any) => (i.category || i.type) === 'rent');
+  if (rentItem) {
+    rentAmt = Number(rentItem.amount || 0);
+  } else if (b.rentAmount !== undefined && b.rentAmount !== null) {
+    rentAmt = Number(b.rentAmount || 0);
+  }
+
+  // Water
+  let waterAmt = 0;
+  let waterUnits = 0;
+  const waterItem = items.find((i: any) => (i.category || i.type) === 'water');
+  if (waterItem) {
+    waterAmt = Number(waterItem.amount || 0);
+    waterUnits = Number(waterItem.quantity || waterItem.unitCount || waterItem.metadata?.usageUnits || 0);
+  } else if (b.waterAmount !== undefined && b.waterAmount !== null) {
+    waterAmt = Number(b.waterAmount || 0);
+  }
+
+  // Electricity
+  let elecAmt = 0;
+  let elecUnits = 0;
+  const elecItem = items.find((i: any) => (i.category || i.type) === 'electricity' || (i.category || i.type) === 'electric');
+  if (elecItem) {
+    elecAmt = Number(elecItem.amount || 0);
+    elecUnits = Number(elecItem.quantity || elecItem.unitCount || elecItem.metadata?.usageUnits || 0);
+  } else if (b.electricAmount !== undefined && b.electricAmount !== null) {
+    elecAmt = Number(b.electricAmount || 0);
+  }
+
+  // Common
+  let commonAmt = 0;
+  const commonItem = items.find((i: any) => ['common', 'common_fee', 'central'].includes(i.category || i.type));
+  if (commonItem) {
+    commonAmt = Number(commonItem.amount || 0);
+  } else if (b.commonFee !== undefined && b.commonFee !== null) {
+    commonAmt = Number(b.commonFee || 0);
+  }
+
+  // Internet
+  let internetAmt = 0;
+  const internetItem = items.find((i: any) => ['internet', 'wifi', 'net'].includes(i.category || i.type));
+  if (internetItem) {
+    internetAmt = Number(internetItem.amount || 0);
+  } else if (b.internetFee !== undefined && b.internetFee !== null) {
+    internetAmt = Number(b.internetFee || 0);
+  }
+
+  // Parking
+  let parkingAmt = 0;
+  const parkingItem = items.find((i: any) => ['parking', 'car_park', 'vehicle'].includes(i.category || i.type));
+  if (parkingItem) {
+    parkingAmt = Number(parkingItem.amount || 0);
+  } else if (b.parkingFee !== undefined && b.parkingFee !== null) {
+    parkingAmt = Number(b.parkingFee || 0);
+  }
+
+  // Other services
+  let otherAmt = 0;
+  const otherDescs: string[] = [];
+  const otherItems = items.filter((i: any) => {
+    const cat = (i.category || '').toLowerCase();
+    const typ = (i.type || '').toLowerCase();
+    const desc = (i.description || '').toLowerCase();
+    if (desc.includes('ประกัน') || desc.includes('มัดจำ')) return false;
+    const isOtherCat = ['other', 'other_fee', 'other_fees', 'repair', 'addon', 'cleaning'].includes(cat) ||
+      ['other', 'other_fee', 'other_fees', 'repair', 'addon', 'cleaning'].includes(typ);
+    const isOtherDesc = desc.includes('ค่าใช้จ่ายอื่น') || desc.includes('ก่อนย้ายออก') || desc.includes('ค่าบริการ') || desc.includes('ทำความสะอาด');
+    return isOtherCat || isOtherDesc;
+  });
+  if (otherItems.length > 0) {
+    otherItems.forEach((i: any) => {
+      otherAmt += Number(i.amount || 0);
+      if (i.description) otherDescs.push(i.description);
+    });
+  } else if (b.otherServicesAmount) {
+    otherAmt = Number(b.otherServicesAmount || 0);
+  }
+  const otherDesc = otherDescs.length > 0 ? otherDescs.join('; ') : '-';
+
+  // Fines
+  let fineAmt = 0;
+  const fineItems = items.filter((i: any) => {
+    const cat = (i.category || '').toLowerCase();
+    const typ = (i.type || '').toLowerCase();
+    const desc = (i.description || '').toLowerCase();
+    return ['fine', 'late_fee', 'late_fine'].includes(cat) ||
+      ['fine', 'late_fee', 'late_fine'].includes(typ) ||
+      desc.includes('ค่าปรับ') || desc.includes('ล่าช้า');
+  });
+  if (fineItems.length > 0) {
+    fineAmt = fineItems.reduce((s: number, i: any) => s + Number(i.amount || 0), 0);
+  } else if (b.fineAmount) {
+    fineAmt = Number(b.fineAmount || 0);
+  }
+
+  // Discounts
+  let discountAmt = 0;
+  const discItems = items.filter((i: any) => {
+    const cat = (i.category || i.type || '').toLowerCase();
+    const desc = (i.description || '').toLowerCase();
+    return cat === 'discount' || desc.includes('ส่วนลด') || desc.includes('โปรโมชั่น');
+  });
+  if (discItems.length > 0) {
+    discountAmt = discItems.reduce((s: number, i: any) => s + Math.abs(Number(i.amount || 0)), 0);
+  } else if (b.discountAmount !== undefined && b.discountAmount !== null) {
+    discountAmt = Math.abs(Number(b.discountAmount || 0));
+  }
+
+  // Deposit
+  let depositAmt = 0;
+  const depItem = items.find((i: any) => {
+    const cat = (i.category || i.type || '').toLowerCase();
+    const desc = (i.description || '').toLowerCase();
+    return cat === 'deposit' || cat === 'security_deposit' || desc.includes('เงินประกัน') || desc.includes('มัดจำ');
+  });
+  if (depItem) {
+    depositAmt = Number(depItem.amount || 0);
+  } else if (b.depositAmount !== undefined && b.depositAmount !== null) {
+    depositAmt = Number(b.depositAmount || 0);
+  }
+
+  // VAT and Net amounts
+  let vatAmt = 0;
+  if (b.vatAmount !== undefined && b.vatAmount !== null) {
+    vatAmt = Number(b.vatAmount || 0);
+  } else if (Array.isArray(items)) {
+    items.forEach((it: any) => {
+      if (it.metadata?.vatAmount) vatAmt += Number(it.metadata.vatAmount || 0);
+    });
+  }
+
+  // Fallback calculation if vatAmt is 0 and cycle/dorm has VAT active
+  if (vatAmt === 0 && (b.isVatActive || context?.vatSettings?.enabled) && Array.isArray(items) && items.length > 0) {
+    const vatCalc = calculateCategoryStrictVat(items, context?.vatSettings || { enabled: true, rate: 7, appliedCategories: ['rent'] });
+    if (vatCalc.isVatActive) {
+      vatAmt = Number(vatCalc.vatAmount);
+    }
+  }
+
+  const netTotalAmt = Number(b.totalAmount || 0);
+  const subtotalAmt = b.subtotal !== undefined && b.subtotal !== null
+    ? Number(b.subtotal)
+    : Math.max(0, netTotalAmt - vatAmt);
+
+  const totalBilled = netTotalAmt;
+  const paidAmt = statusLower === 'paid'
+    ? (Number(b.paidAmount) > 0 ? Number(b.paidAmount) : totalBilled)
+    : Number(b.paidAmount || 0);
+  const outstandingAmt = statusLower === 'paid'
+    ? 0
+    : (b.outstandingAmount !== undefined ? Number(b.outstandingAmount) : Math.max(0, totalBilled - paidAmt));
+
+  const rawNotes = b.notes || b.cancellationReason || '-';
+  const notes = translateNotesToThai(rawNotes);
+
+  return {
+    billId: b.id,
+    roomNumber,
+    buildingName,
+    floorStr,
+    tenantName,
+    tenantPhone,
+    peopleCount,
+    vehicleCount,
+    billNumber,
+    statusStr,
+    paymentMethodStr,
+    dueDateStr,
+    paidDateStr,
+    rentAmt,
+    waterUnits,
+    waterAmt,
+    elecUnits,
+    elecAmt,
+    commonAmt,
+    internetAmt,
+    parkingAmt,
+    otherAmt,
+    otherDesc,
+    fineAmt,
+    discountAmt,
+    depositAmt,
+    subtotalAmt,
+    vatAmt,
+    netTotalAmt,
+    totalBilled,
+    paidAmt,
+    outstandingAmt,
+    notes
+  };
+};
+
+export const generateRawGridLines = (billDetailsList: ReturnType<typeof extractBillDetails>[]) => {
+  const headers = [
+    'ลำดับ',
+    'อาคาร',
+    'ชั้น',
+    'เลขห้อง',
+    'ชื่อผู้เช่า',
+    'เบอร์โทรศัพท์',
+    'จำนวนผู้พักอาศัย (คน)',
+    'จำนวนยานพาหนะ (คัน)',
+    'เลขที่บิล',
+    'สถานะบิล',
+    'ช่องทางการชำระเงิน',
+    'วันครบกำหนดชำระ',
+    'วันที่ชำระเงิน',
+    'ค่าเช่าห้อง (บาท)',
+    'หน่วยน้ำที่ใช้',
+    'ค่าน้ำประปา (บาท)',
+    'หน่วยไฟที่ใช้',
+    'ค่าไฟฟ้า (บาท)',
+    'ค่าส่วนกลาง (บาท)',
+    'ค่าอินเทอร์เน็ต (บาท)',
+    'ค่าที่จอดรถ (บาท)',
+    'ค่าบริการอื่นๆ (บาท)',
+    'รายละเอียดค่าบริการอื่นๆ',
+    'ค่าปรับชำระเกินกำหนด (บาท)',
+    'ส่วนลด (บาท)',
+    'เงินประกันสัญญา (บาท)',
+    'ยอดรวมก่อน VAT (บาท)',
+    'ภาษีมูลค่าเพิ่ม 7% (บาท)',
+    'ยอดรวมสุทธิ (บาท)',
+    'ยอดชำระแล้ว (บาท)',
+    'ยอดค้างชำระ (บาท)',
+    'หมายเหตุ'
+  ];
+
+  let sumPeople = 0;
+  let sumVehicles = 0;
+  let sumRent = 0;
+  let sumWaterUnits = 0;
+  let sumWaterAmt = 0;
+  let sumElecUnits = 0;
+  let sumElecAmt = 0;
+  let sumCommon = 0;
+  let sumInternet = 0;
+  let sumParking = 0;
+  let sumOther = 0;
+  let sumFine = 0;
+  let sumDiscount = 0;
+  let sumDeposit = 0;
+  let sumSubtotal = 0;
+  let sumVat = 0;
+  let sumNetTotal = 0;
+  let sumPaid = 0;
+  let sumOutstanding = 0;
+
+  const dataRows = billDetailsList.map((d, idx) => {
+    sumPeople += d.peopleCount;
+    sumVehicles += d.vehicleCount;
+    sumRent += d.rentAmt;
+    sumWaterUnits += d.waterUnits;
+    sumWaterAmt += d.waterAmt;
+    sumElecUnits += d.elecUnits;
+    sumElecAmt += d.elecAmt;
+    sumCommon += d.commonAmt;
+    sumInternet += d.internetAmt;
+    sumParking += d.parkingAmt;
+    sumOther += d.otherAmt;
+    sumFine += d.fineAmt;
+    sumDiscount += d.discountAmt;
+    sumDeposit += d.depositAmt;
+    sumSubtotal += d.subtotalAmt;
+    sumVat += d.vatAmt;
+    sumNetTotal += d.netTotalAmt;
+    sumPaid += d.paidAmt;
+    sumOutstanding += d.outstandingAmt;
+
+    return [
+      escapeCsv(idx + 1),
+      escapeCsv(d.buildingName),
+      escapeCsv(d.floorStr),
+      escapeCsv(d.roomNumber),
+      escapeCsv(d.tenantName),
+      d.tenantPhone !== '-' ? `="${d.tenantPhone}"` : `"-"`,
+      escapeCsv(d.peopleCount),
+      escapeCsv(d.vehicleCount),
+      escapeCsv(d.billNumber),
+      escapeCsv(d.statusStr),
+      escapeCsv(d.paymentMethodStr),
+      escapeCsv(d.dueDateStr),
+      escapeCsv(d.paidDateStr),
+      fmtNum(d.rentAmt),
+      fmtNum(d.waterUnits),
+      fmtNum(d.waterAmt),
+      fmtNum(d.elecUnits),
+      fmtNum(d.elecAmt),
+      fmtNum(d.commonAmt),
+      fmtNum(d.internetAmt),
+      fmtNum(d.parkingAmt),
+      fmtNum(d.otherAmt),
+      escapeCsv(d.otherDesc),
+      fmtNum(d.fineAmt),
+      fmtNum(d.discountAmt > 0 ? -d.discountAmt : 0),
+      fmtNum(d.depositAmt),
+      fmtNum(d.subtotalAmt),
+      fmtNum(d.vatAmt),
+      fmtNum(d.netTotalAmt),
+      fmtNum(d.paidAmt),
+      fmtNum(d.outstandingAmt),
+      escapeCsv(d.notes)
+    ].join(',');
+  });
+
+  const totalRow = [
+    escapeCsv('รวมทั้งหมด'),
+    escapeCsv(''),
+    escapeCsv(''),
+    escapeCsv(`${billDetailsList.length} ห้อง`),
+    escapeCsv(''),
+    escapeCsv(''),
+    escapeCsv(`${sumPeople} คน`),
+    escapeCsv(`${sumVehicles} คัน`),
+    escapeCsv(''),
+    escapeCsv(''),
+    escapeCsv(''),
+    escapeCsv(''),
+    escapeCsv(''),
+    fmtNum(sumRent),
+    fmtNum(sumWaterUnits),
+    fmtNum(sumWaterAmt),
+    fmtNum(sumElecUnits),
+    fmtNum(sumElecAmt),
+    fmtNum(sumCommon),
+    fmtNum(sumInternet),
+    fmtNum(sumParking),
+    fmtNum(sumOther),
+    escapeCsv(''),
+    fmtNum(sumFine),
+    fmtNum(sumDiscount > 0 ? -sumDiscount : 0),
+    fmtNum(sumDeposit),
+    fmtNum(sumSubtotal),
+    fmtNum(sumVat),
+    fmtNum(sumNetTotal),
+    fmtNum(sumPaid),
+    fmtNum(sumOutstanding),
+    escapeCsv('')
+  ].join(',');
+
+  return {
+    headerLine: headers.map(escapeCsv).join(','),
+    dataRows,
+    totalRow
+  };
+};
+
+// Helper to calculate generous, auto-fitted column widths for any worksheet
+export const autoFitColumns = (ws: ExcelJS.Worksheet, minWidths: number[] = []) => {
+  ws.columns.forEach((column, colIdx) => {
+    let maxVisualLen = 0;
+    column.eachCell?.({ includeEmpty: false }, (cell) => {
+      let str = '';
+      const val = cell.value;
+      if (typeof val === 'string') {
+        str = val;
+      } else if (typeof val === 'number') {
+        str = val.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      } else if (val && typeof val === 'object') {
+        if ('result' in val && val.result != null) {
+          str = typeof val.result === 'number'
+            ? val.result.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+            : String(val.result);
+        } else if ('formula' in val) {
+          str = '999,999.00';
+        }
+      } else if (val != null) {
+        str = String(val);
+      }
+      // Remove Thai combining vowel/tone marks for accurate character width
+      const visual = str.replace(/[\u0E31\u0E34-\u0E3A\u0E47-\u0E4E]/g, '');
+      const len = Math.max(str.length * 0.85, visual.length);
+      if (len > maxVisualLen) {
+        maxVisualLen = len;
+      }
+    });
+
+    const baseMin = minWidths[colIdx] || 14;
+    // +6 padding for filter dropdown icon and comfortable margin
+    const contentWidth = Math.ceil(maxVisualLen + 6);
+    column.width = Math.max(baseMin, contentWidth);
+  });
+};
+
+export const build30ColWorksheet = (ws: ExcelJS.Worksheet, details: ReturnType<typeof extractBillDetails>[]) => {
+  ws.views = [{ state: 'frozen', xSplit: 4, ySplit: 1, topLeftCell: 'E2' }];
+
+  const headers = [
+    'ลำดับ', 'อาคาร', 'ชั้น', 'เลขห้อง', 'ชื่อผู้เช่า', 'เบอร์โทรศัพท์', 'จำนวนผู้พักอาศัย (คน)', 'จำนวนยานพาหนะ (คัน)',
+    'เลขที่บิล', 'สถานะบิล', 'ช่องทางการชำระเงิน', 'วันครบกำหนดชำระ', 'วันที่ชำระเงิน',
+    'ค่าเช่าห้อง (บาท)', 'หน่วยน้ำที่ใช้', 'ค่าน้ำประปา (บาท)', 'หน่วยไฟที่ใช้', 'ค่าไฟฟ้า (บาท)',
+    'ค่าส่วนกลาง (บาท)', 'ค่าอินเทอร์เน็ต (บาท)', 'ค่าที่จอดรถ (บาท)', 'ค่าบริการอื่นๆ (บาท)', 'รายละเอียดค่าบริการอื่นๆ',
+    'ค่าปรับชำระเกินกำหนด (บาท)', 'ส่วนลด (บาท)', 'เงินประกันสัญญา (บาท)',
+    'ยอดรวมก่อน VAT (บาท)', 'ภาษีมูลค่าเพิ่ม 7% (บาท)', 'ยอดรวมสุทธิ (บาท)', 'ยอดชำระแล้ว (บาท)', 'ยอดค้างชำระ (บาท)', 'หมายเหตุ'
+  ];
+
+  const headerRow = ws.addRow(headers);
+  headerRow.height = 36;
+
+  const groupColors = [
+    { start: 1, end: 8, fill: '1E293B' },  // Slate 800 (Room & Tenant info)
+    { start: 9, end: 13, fill: '4338CA' }, // Indigo 700 (Bill status & payment)
+    { start: 14, end: 18, fill: '0E7490' },// Cyan 700 (Rent & utilities)
+    { start: 19, end: 23, fill: '047857' },// Emerald 700 (Common & add-on services)
+    { start: 24, end: 26, fill: '7C3AED' },// Purple 700 (Fine, discount, deposit)
+    { start: 27, end: 29, fill: '1D4ED8' }, // Royal Blue 700 (Summary totals with VAT)
+    { start: 30, end: 32, fill: '0F172A' }  // Slate 900 (Settlement & Notes)
+  ];
+
+  groupColors.forEach(g => {
+    for (let c = g.start; c <= g.end; c++) {
+      const cell = headerRow.getCell(c);
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FF' + g.fill }
+      };
+      cell.font = {
+        name: 'Sarabun',
+        family: 2,
+        size: 10,
+        bold: true,
+        color: { argb: 'FFFFFFFF' }
+      };
+      cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: false };
+      cell.border = {
+        top: { style: 'thin', color: { argb: 'FF94A3B8' } },
+        bottom: { style: 'medium', color: { argb: 'FF0F172A' } },
+        left: { style: 'thin', color: { argb: 'FF94A3B8' } },
+        right: { style: 'thin', color: { argb: 'FF94A3B8' } }
+      };
+    }
+  });
+
+  let sumPeople = 0;
+  let sumVehicles = 0;
+  let sumRent = 0;
+  let sumWaterUnits = 0;
+  let sumWaterAmt = 0;
+  let sumElecUnits = 0;
+  let sumElecAmt = 0;
+  let sumCommon = 0;
+  let sumInternet = 0;
+  let sumParking = 0;
+  let sumOther = 0;
+  let sumFine = 0;
+  let sumDiscount = 0;
+  let sumDeposit = 0;
+  let sumSubtotal = 0;
+  let sumVat = 0;
+  let sumNetTotal = 0;
+  let sumPaid = 0;
+  let sumOutstanding = 0;
+
+  details.forEach((d, idx) => {
+    const rIdx = idx + 2;
+    sumPeople += d.peopleCount;
+    sumVehicles += d.vehicleCount;
+    sumRent += d.rentAmt;
+    sumWaterUnits += d.waterUnits;
+    sumWaterAmt += d.waterAmt;
+    sumElecUnits += d.elecUnits;
+    sumElecAmt += d.elecAmt;
+    sumCommon += d.commonAmt;
+    sumInternet += d.internetAmt;
+    sumParking += d.parkingAmt;
+    sumOther += d.otherAmt;
+    sumFine += d.fineAmt;
+    sumDiscount += d.discountAmt;
+    sumDeposit += d.depositAmt;
+    sumSubtotal += d.subtotalAmt;
+    sumVat += d.vatAmt;
+    sumNetTotal += d.netTotalAmt;
+    sumPaid += d.paidAmt;
+    sumOutstanding += d.outstandingAmt;
+
+    const isEven = idx % 2 === 0;
+    const rowBg = isEven ? 'FFFFFFFF' : 'FFF8FAFC';
+
+    const row = ws.addRow([
+      idx + 1,
+      d.buildingName,
+      d.floorStr,
+      d.roomNumber,
+      d.tenantName,
+      d.tenantPhone,
+      d.peopleCount,
+      d.vehicleCount,
+      d.billNumber,
+      d.statusStr,
+      d.paymentMethodStr,
+      d.dueDateStr,
+      d.paidDateStr,
+      d.rentAmt,
+      d.waterUnits,
+      d.waterAmt,
+      d.elecUnits,
+      d.elecAmt,
+      d.commonAmt,
+      d.internetAmt,
+      d.parkingAmt,
+      d.otherAmt,
+      d.otherDesc,
+      d.fineAmt,
+      d.discountAmt > 0 ? -d.discountAmt : 0,
+      d.depositAmt,
+      { formula: `N${rIdx}+P${rIdx}+R${rIdx}+S${rIdx}+T${rIdx}+U${rIdx}+V${rIdx}+X${rIdx}+Y${rIdx}+Z${rIdx}`, result: d.subtotalAmt },
+      d.vatAmt,
+      { formula: `AA${rIdx}+AB${rIdx}`, result: d.netTotalAmt },
+      d.paidAmt,
+      { formula: `MAX(0, AC${rIdx}-AD${rIdx})`, result: d.outstandingAmt },
+      d.notes
+    ]);
+
+    row.height = 24;
+
+    // Automatically hide rows with 'ยกเลิก' by default per PO request
+    if (d.statusStr === 'ยกเลิก' || d.statusStr.includes('ยกเลิก')) {
+      row.hidden = true;
+    }
+
+    row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: rowBg }
+      };
+      cell.font = {
+        name: 'Sarabun',
+        family: 2,
+        size: 10,
+        color: { argb: 'FF1E293B' }
+      };
+      cell.border = {
+        top: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+        bottom: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+        left: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+        right: { style: 'thin', color: { argb: 'FFE2E8F0' } }
+      };
+
+      if ([1, 2, 3, 4, 9, 12, 13].includes(colNumber)) {
+        cell.alignment = { vertical: 'middle', horizontal: 'center' };
+        if (colNumber === 4) {
+          cell.font = { name: 'Sarabun', size: 10, bold: true, color: { argb: 'FF0F172A' } };
+        }
+      } else if (colNumber === 6) {
+        // Explicit text format for phone numbers ensures Excel keeps leading 0
+        cell.alignment = { vertical: 'middle', horizontal: 'center' };
+        cell.numFmt = '@';
+      } else if (colNumber === 10) {
+        cell.alignment = { vertical: 'middle', horizontal: 'center' };
+        if (d.statusStr.includes('ชำระแล้ว')) {
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD1FAE5' } };
+          cell.font = { name: 'Sarabun', size: 10, bold: true, color: { argb: 'FF065F46' } };
+        } else if (d.statusStr.includes('เกินกำหนด')) {
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF3C7' } };
+          cell.font = { name: 'Sarabun', size: 10, bold: true, color: { argb: 'FF92400E' } };
+        } else if (d.statusStr.includes('ยังไม่ชำระ') || d.statusStr.includes('รอชำระ')) {
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEE2E2' } };
+          cell.font = { name: 'Sarabun', size: 10, bold: true, color: { argb: 'FF991B1B' } };
+        } else if (d.statusStr.includes('ยกเลิก')) {
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF1F5F9' } };
+          cell.font = { name: 'Sarabun', size: 10, bold: true, color: { argb: 'FF64748B' } };
+        }
+      } else if ([7, 8, 15, 17].includes(colNumber)) {
+        cell.alignment = { vertical: 'middle', horizontal: 'right' };
+        cell.numFmt = '#,##0';
+      } else if ([14, 16, 18, 19, 20, 21, 22, 24, 25, 26, 27, 28, 29, 30, 31].includes(colNumber)) {
+        cell.alignment = { vertical: 'middle', horizontal: 'right' };
+        cell.numFmt = '#,##0.00';
+        if (colNumber === 27) {
+          cell.font = { name: 'Sarabun', size: 10, bold: true, color: { argb: 'FF1E293B' } };
+        } else if (colNumber === 28) {
+          cell.font = { name: 'Sarabun', size: 10, bold: true, color: { argb: 'FFD97706' } };
+        } else if (colNumber === 29) {
+          cell.font = { name: 'Sarabun', size: 10, bold: true, color: { argb: 'FF1D4ED8' } };
+        } else if (colNumber === 30) {
+          cell.font = { name: 'Sarabun', size: 10, bold: true, color: { argb: 'FF047857' } };
+        } else if (colNumber === 31 && d.outstandingAmt > 0) {
+          cell.font = { name: 'Sarabun', size: 10, bold: true, color: { argb: 'FFB91C1C' } };
+        }
+      } else {
+        cell.alignment = { vertical: 'middle', horizontal: 'left' };
+      }
+    });
+  });
+
+  const startRow = 2;
+  const endRow = Math.max(2, details.length + 1);
+
+  // The Total row uses SUBTOTAL(9, ...) Excel formulas so editing numbers or filtering recalculates dynamically
+  const totalRow = ws.addRow([
+    'รวมทั้งหมด',
+    '',
+    '',
+    `${details.length} ห้อง`,
+    '',
+    '',
+    { formula: `SUBTOTAL(9, G${startRow}:G${endRow})`, result: sumPeople },
+    { formula: `SUBTOTAL(9, H${startRow}:H${endRow})`, result: sumVehicles },
+    '',
+    '',
+    '',
+    '',
+    '',
+    { formula: `SUBTOTAL(9, N${startRow}:N${endRow})`, result: sumRent },
+    { formula: `SUBTOTAL(9, O${startRow}:O${endRow})`, result: sumWaterUnits },
+    { formula: `SUBTOTAL(9, P${startRow}:P${endRow})`, result: sumWaterAmt },
+    { formula: `SUBTOTAL(9, Q${startRow}:Q${endRow})`, result: sumElecUnits },
+    { formula: `SUBTOTAL(9, R${startRow}:R${endRow})`, result: sumElecAmt },
+    { formula: `SUBTOTAL(9, S${startRow}:S${endRow})`, result: sumCommon },
+    { formula: `SUBTOTAL(9, T${startRow}:T${endRow})`, result: sumInternet },
+    { formula: `SUBTOTAL(9, U${startRow}:U${endRow})`, result: sumParking },
+    { formula: `SUBTOTAL(9, V${startRow}:V${endRow})`, result: sumOther },
+    '',
+    { formula: `SUBTOTAL(9, X${startRow}:X${endRow})`, result: sumFine },
+    { formula: `SUBTOTAL(9, Y${startRow}:Y${endRow})`, result: sumDiscount > 0 ? -sumDiscount : 0 },
+    { formula: `SUBTOTAL(9, Z${startRow}:Z${endRow})`, result: sumDeposit },
+    { formula: `SUBTOTAL(9, AA${startRow}:AA${endRow})`, result: sumSubtotal },
+    { formula: `SUBTOTAL(9, AB${startRow}:AB${endRow})`, result: sumVat },
+    { formula: `SUBTOTAL(9, AC${startRow}:AC${endRow})`, result: sumNetTotal },
+    { formula: `SUBTOTAL(9, AD${startRow}:AD${endRow})`, result: sumPaid },
+    { formula: `SUBTOTAL(9, AE${startRow}:AE${endRow})`, result: sumOutstanding },
+    ''
+  ]);
+
+  totalRow.height = 28;
+  totalRow.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+    cell.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFF1F5F9' }
+    };
+    cell.font = {
+      name: 'Sarabun',
+      family: 2,
+      size: 10,
+      bold: true,
+      color: { argb: 'FF0F172A' }
+    };
+    cell.border = {
+      top: { style: 'thin', color: { argb: 'FF64748B' } },
+      bottom: { style: 'double', color: { argb: 'FF0F172A' } },
+      left: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+      right: { style: 'thin', color: { argb: 'FFE2E8F0' } }
+    };
+
+    if ([1, 2, 3, 4].includes(colNumber)) {
+      cell.alignment = { vertical: 'middle', horizontal: 'center' };
+    } else if ([7, 8, 15, 17].includes(colNumber)) {
+      cell.alignment = { vertical: 'middle', horizontal: 'right' };
+      cell.numFmt = '#,##0';
+    } else if ([14, 16, 18, 19, 20, 21, 22, 24, 25, 26, 27, 28, 29, 30, 31].includes(colNumber)) {
+      cell.alignment = { vertical: 'middle', horizontal: 'right' };
+      cell.numFmt = '#,##0.00';
+      if (colNumber === 27) {
+        cell.font = { name: 'Sarabun', size: 10, bold: true, color: { argb: 'FF1E293B' } };
+      } else if (colNumber === 28) {
+        cell.font = { name: 'Sarabun', size: 10, bold: true, color: { argb: 'FFD97706' } };
+      } else if (colNumber === 29) {
+        cell.font = { name: 'Sarabun', size: 10, bold: true, color: { argb: 'FF1D4ED8' } };
+      } else if (colNumber === 30) {
+        cell.font = { name: 'Sarabun', size: 10, bold: true, color: { argb: 'FF047857' } };
+      } else if (colNumber === 31) {
+        cell.font = { name: 'Sarabun', size: 10, bold: true, color: { argb: 'FFB91C1C' } };
+      }
+    }
+  });
+
+  // AutoFilter covers header row down to the last data row (excludes summary Total row)
+  ws.autoFilter = {
+    from: { row: 1, column: 1 },
+    to: { row: endRow, column: 32 }
+  };
+
+  const baseMinWidths = [
+    8,  // 1: ลำดับ
+    14, // 2: อาคาร
+    8,  // 3: ชั้น
+    14, // 4: เลขห้อง
+    26, // 5: ชื่อผู้เช่า
+    18, // 6: เบอร์โทรศัพท์
+    26, // 7: จำนวนผู้พักอาศัย (คน)
+    25, // 8: จำนวนยานพาหนะ (คัน)
+    22, // 9: เลขที่บิล
+    18, // 10: สถานะบิล
+    25, // 11: ช่องทางการชำระเงิน
+    22, // 12: วันครบกำหนดชำระ
+    20, // 13: วันที่ชำระเงิน
+    22, // 14: ค่าเช่าห้อง (บาท)
+    18, // 15: หน่วยน้ำที่ใช้
+    22, // 16: ค่าน้ำประปา (บาท)
+    18, // 17: หน่วยไฟที่ใช้
+    22, // 18: ค่าไฟฟ้า (บาท)
+    22, // 19: ค่าส่วนกลาง (บาท)
+    24, // 20: ค่าอินเทอร์เน็ต (บาท)
+    22, // 21: ค่าที่จอดรถ (บาท)
+    24, // 22: ค่าบริการอื่นๆ (บาท)
+    28, // 23: รายละเอียดค่าบริการอื่นๆ
+    32, // 24: ค่าปรับชำระเกินกำหนด (บาท)
+    18, // 25: ส่วนลด (บาท)
+    26, // 26: เงินประกันสัญญา (บาท)
+    26, // 27: ยอดรวมก่อน VAT (บาท)
+    24, // 28: ภาษีมูลค่าเพิ่ม 7% (บาท)
+    26, // 29: ยอดรวมสุทธิ (บาท)
+    24, // 30: ยอดชำระแล้ว (บาท)
+    24, // 31: ยอดค้างชำระ (บาท)
+    36  // 32: หมายเหตุ
+  ];
+
+  autoFitColumns(ws, baseMinWidths);
+};
+
 export const OwnerReports: React.FC<OwnerReportsProps> = ({
   rooms = [],
   bills = [],
@@ -167,6 +973,7 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
   const [showExportPopover, setShowExportPopover] = useState(false);
   const [exportFormat, setExportFormat] = useState<'xlsx' | 'csv'>('xlsx');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+
 
   // Month Names Mapping
   const monthNames: Record<string, string> = {
@@ -557,6 +1364,31 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
     breakdownPercentages,
   } = reportData;
 
+  const currentVatSettings = useMemo(() => {
+    return activeSnapshot?.vatSettings || dormitory?.billingSettings?.vatSettings || (dormitory as any)?.vatSettings || null;
+  }, [activeSnapshot, dormitory]);
+
+  const monthVatTotal = useMemo(() => {
+    return (currentMonthBills || []).reduce((sum, b) => {
+      if (b.vatAmount !== undefined && b.vatAmount !== null) {
+        return sum + Number(b.vatAmount);
+      }
+      let itemVat = 0;
+      (b.items || []).forEach((it: any) => {
+        if (it.metadata?.vatAmount) itemVat += Number(it.metadata.vatAmount);
+      });
+      if (itemVat > 0) return sum + itemVat;
+
+      if ((b.isVatActive || currentVatSettings?.enabled) && Array.isArray(b.items) && b.items.length > 0) {
+        const vatCalc = calculateCategoryStrictVat(b.items, currentVatSettings || { enabled: true, rate: 7, appliedCategories: ['rent'] });
+        if (vatCalc.isVatActive) {
+          return sum + Number(vatCalc.vatAmount);
+        }
+      }
+      return sum;
+    }, 0);
+  }, [currentMonthBills, currentVatSettings]);
+
   const {
     rentPct,
     elecPct,
@@ -574,400 +1406,7 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
 
   const revenueHistory = monthlyRevenueHistory;
 
-  // Helper for CSV cell escaping per RFC 4180
-  const escapeCsv = (val: any): string => {
-    if (val === null || val === undefined) return '""';
-    const str = String(val);
-    return `"${str.replace(/"/g, '""')}"`;
-  };
-
-  const fmtNum = (val: number | string | bigint | null | undefined): string => {
-    const num = typeof val === 'bigint' ? Number(val) / 100 : Number(val || 0);
-    return Number.isFinite(num) ? num.toFixed(2) : '0.00';
-  };
-
-  const formatDateOnly = (d: any): string => {
-    if (!d) return '-';
-    try {
-      const dt = typeof d === 'string' ? new Date(d) : d;
-      if (isNaN(dt.getTime())) return String(d);
-      return dt.toISOString().slice(0, 10);
-    } catch {
-      return String(d);
-    }
-  };
-
-  const extractBillDetails = (b: any) => {
-    const rm = rooms.find(r => r.id === b.roomId || (b.roomNumber && r.roomNumber === b.roomNumber) || r.roomNumber === b.roomId);
-    const bld = buildings.find(bldg => bldg.id === rm?.buildingId);
-    const buildingName = bld ? bld.name : (rm?.buildingId ? rm.buildingId : 'ไม่ระบุอาคาร');
-    const floorStr = rm?.floor !== undefined && rm?.floor !== null ? `${rm.floor}` : '-';
-    const roomNumber = rm?.roomNumber || b.roomNumber || 'ไม่ระบุ';
-
-    const tenant = tenants.find(t => t.id === b.tenantId || t.id === rm?.currentTenantId);
-    const tenantName = tenant?.name || tenant?.displayName || b.tenant?.name || b.tenant?.displayName || '-';
-    const rawPhone = tenant?.phone || b.tenant?.phone || '-';
-    const tenantPhone = formatThaiPhoneNumber(rawPhone);
-
-    // Occupants count (Primary tenant + Co-occupants)
-    const peopleCount = 1 + (Array.isArray(tenant?.coOccupants) ? tenant.coOccupants.length : 0);
-
-    // Vehicles count
-    let vehicleCount = 0;
-    if (Array.isArray(tenant?.vehicles) && tenant.vehicles.length > 0) {
-      vehicleCount = tenant.vehicles.length;
-    } else if (tenant?.vehicle?.plate || (tenant as any)?.vehiclePlate) {
-      vehicleCount = 1;
-    }
-
-    const billNumber = b.billNumber || b.id || '-';
-
-    const statusMap: Record<string, string> = {
-      paid: 'ชำระแล้ว',
-      unpaid: 'ยังไม่ชำระ',
-      pending: 'รอชำระ',
-      overdue: 'เกินกำหนดชำระ',
-      partially_paid: 'ชำระบางส่วน',
-      partial: 'ชำระบางส่วน',
-      cancelled: 'ยกเลิก'
-    };
-    const statusLower = (b.status || '').toLowerCase();
-    const statusStr = statusMap[statusLower] || b.status || 'ยังไม่ชำระ';
-
-    // Payment method mapping
-    const rawMethod = b.Payment?.[0]?.paymentMethod || b.payments?.[0]?.paymentMethod || b.paymentMethod || b.Payment?.[0]?.method || b.payments?.[0]?.method;
-    const methodMap: Record<string, string> = {
-      promptpay: 'พร้อมเพย์ / สแกน QR',
-      prompt_pay: 'พร้อมเพย์ / สแกน QR',
-      qr: 'พร้อมเพย์ / สแกน QR',
-      bank_transfer: 'โอนผ่านธนาคาร',
-      transfer: 'โอนผ่านธนาคาร',
-      cash: 'เงินสด',
-      credit_card: 'บัตรเครดิต',
-      credit: 'บัตรเครดิต',
-    };
-    const paymentMethodStr = rawMethod
-      ? (methodMap[String(rawMethod).toLowerCase()] || String(rawMethod))
-      : (statusLower === 'paid' ? 'โอนเงิน / พร้อมเพย์' : '-');
-
-    const dueDateStr = formatDateOnly(b.dueDate);
-    const paidDateStr = formatDateOnly(b.paidAt || b.paymentDate);
-
-    // Parse items
-    const items = Array.isArray(b.items) ? b.items : [];
-
-    // Rent
-    let rentAmt = 0;
-    const rentItem = items.find((i: any) => (i.category || i.type) === 'rent');
-    if (rentItem) {
-      rentAmt = Number(rentItem.amount || 0);
-    } else if (b.rentAmount !== undefined && b.rentAmount !== null) {
-      rentAmt = Number(b.rentAmount || 0);
-    }
-
-    // Water
-    let waterAmt = 0;
-    let waterUnits = 0;
-    const waterItem = items.find((i: any) => (i.category || i.type) === 'water');
-    if (waterItem) {
-      waterAmt = Number(waterItem.amount || 0);
-      waterUnits = Number(waterItem.quantity || waterItem.unitCount || waterItem.metadata?.usageUnits || 0);
-    } else if (b.waterAmount !== undefined && b.waterAmount !== null) {
-      waterAmt = Number(b.waterAmount || 0);
-    }
-
-    // Electricity
-    let elecAmt = 0;
-    let elecUnits = 0;
-    const elecItem = items.find((i: any) => (i.category || i.type) === 'electricity' || (i.category || i.type) === 'electric');
-    if (elecItem) {
-      elecAmt = Number(elecItem.amount || 0);
-      elecUnits = Number(elecItem.quantity || elecItem.unitCount || elecItem.metadata?.usageUnits || 0);
-    } else if (b.electricAmount !== undefined && b.electricAmount !== null) {
-      elecAmt = Number(b.electricAmount || 0);
-    }
-
-    // Common
-    let commonAmt = 0;
-    const commonItem = items.find((i: any) => ['common', 'common_fee', 'central'].includes(i.category || i.type));
-    if (commonItem) {
-      commonAmt = Number(commonItem.amount || 0);
-    } else if (b.commonFee !== undefined && b.commonFee !== null) {
-      commonAmt = Number(b.commonFee || 0);
-    }
-
-    // Internet
-    let internetAmt = 0;
-    const internetItem = items.find((i: any) => ['internet', 'wifi', 'net'].includes(i.category || i.type));
-    if (internetItem) {
-      internetAmt = Number(internetItem.amount || 0);
-    } else if (b.internetFee !== undefined && b.internetFee !== null) {
-      internetAmt = Number(b.internetFee || 0);
-    }
-
-    // Parking
-    let parkingAmt = 0;
-    const parkingItem = items.find((i: any) => ['parking', 'car_park', 'vehicle'].includes(i.category || i.type));
-    if (parkingItem) {
-      parkingAmt = Number(parkingItem.amount || 0);
-    } else if (b.parkingFee !== undefined && b.parkingFee !== null) {
-      parkingAmt = Number(b.parkingFee || 0);
-    }
-
-    // Other services
-    let otherAmt = 0;
-    const otherDescs: string[] = [];
-    const otherItems = items.filter((i: any) => {
-      const cat = (i.category || '').toLowerCase();
-      const typ = (i.type || '').toLowerCase();
-      const desc = (i.description || '').toLowerCase();
-      if (desc.includes('ประกัน') || desc.includes('มัดจำ')) return false;
-      const isOtherCat = ['other', 'other_fee', 'other_fees', 'repair', 'addon', 'cleaning'].includes(cat) ||
-        ['other', 'other_fee', 'other_fees', 'repair', 'addon', 'cleaning'].includes(typ);
-      const isOtherDesc = desc.includes('ค่าใช้จ่ายอื่น') || desc.includes('ก่อนย้ายออก') || desc.includes('ค่าบริการ') || desc.includes('ทำความสะอาด');
-      return isOtherCat || isOtherDesc;
-    });
-    if (otherItems.length > 0) {
-      otherItems.forEach((i: any) => {
-        otherAmt += Number(i.amount || 0);
-        if (i.description) otherDescs.push(i.description);
-      });
-    } else if (b.otherServicesAmount) {
-      otherAmt = Number(b.otherServicesAmount || 0);
-    }
-    const otherDesc = otherDescs.length > 0 ? otherDescs.join('; ') : '-';
-
-    // Fines
-    let fineAmt = 0;
-    const fineItems = items.filter((i: any) => {
-      const cat = (i.category || '').toLowerCase();
-      const typ = (i.type || '').toLowerCase();
-      const desc = (i.description || '').toLowerCase();
-      return ['fine', 'late_fee', 'late_fine'].includes(cat) ||
-        ['fine', 'late_fee', 'late_fine'].includes(typ) ||
-        desc.includes('ค่าปรับ') || desc.includes('ล่าช้า');
-    });
-    if (fineItems.length > 0) {
-      fineAmt = fineItems.reduce((s: number, i: any) => s + Number(i.amount || 0), 0);
-    } else if (b.fineAmount) {
-      fineAmt = Number(b.fineAmount || 0);
-    }
-
-    // Discounts
-    let discountAmt = 0;
-    const discItems = items.filter((i: any) => {
-      const cat = (i.category || i.type || '').toLowerCase();
-      const desc = (i.description || '').toLowerCase();
-      return cat === 'discount' || desc.includes('ส่วนลด') || desc.includes('โปรโมชั่น');
-    });
-    if (discItems.length > 0) {
-      discountAmt = discItems.reduce((s: number, i: any) => s + Math.abs(Number(i.amount || 0)), 0);
-    } else if (b.discountAmount !== undefined && b.discountAmount !== null) {
-      discountAmt = Math.abs(Number(b.discountAmount || 0));
-    }
-
-    // Deposit
-    let depositAmt = 0;
-    const depItem = items.find((i: any) => {
-      const cat = (i.category || i.type || '').toLowerCase();
-      const desc = (i.description || '').toLowerCase();
-      return cat === 'deposit' || cat === 'security_deposit' || desc.includes('เงินประกัน') || desc.includes('มัดจำ');
-    });
-    if (depItem) {
-      depositAmt = Number(depItem.amount || 0);
-    } else if (b.depositAmount !== undefined && b.depositAmount !== null) {
-      depositAmt = Number(b.depositAmount || 0);
-    }
-
-    const totalBilled = Number(b.totalAmount || 0);
-    const paidAmt = statusLower === 'paid'
-      ? (Number(b.paidAmount) > 0 ? Number(b.paidAmount) : totalBilled)
-      : Number(b.paidAmount || 0);
-    const outstandingAmt = statusLower === 'paid'
-      ? 0
-      : (b.outstandingAmount !== undefined ? Number(b.outstandingAmount) : Math.max(0, totalBilled - paidAmt));
-
-    const rawNotes = b.notes || b.cancellationReason || '-';
-    const notes = translateNotesToThai(rawNotes);
-
-    return {
-      billId: b.id,
-      roomNumber,
-      buildingName,
-      floorStr,
-      tenantName,
-      tenantPhone,
-      peopleCount,
-      vehicleCount,
-      billNumber,
-      statusStr,
-      paymentMethodStr,
-      dueDateStr,
-      paidDateStr,
-      rentAmt,
-      waterUnits,
-      waterAmt,
-      elecUnits,
-      elecAmt,
-      commonAmt,
-      internetAmt,
-      parkingAmt,
-      otherAmt,
-      otherDesc,
-      fineAmt,
-      discountAmt,
-      depositAmt,
-      totalBilled,
-      paidAmt,
-      outstandingAmt,
-      notes
-    };
-  };
-
-  const generateRawGridLines = (billDetailsList: ReturnType<typeof extractBillDetails>[]) => {
-    const headers = [
-      'ลำดับ',
-      'อาคาร',
-      'ชั้น',
-      'เลขห้อง',
-      'ชื่อผู้เช่า',
-      'เบอร์โทรศัพท์',
-      'จำนวนผู้พักอาศัย (คน)',
-      'จำนวนยานพาหนะ (คัน)',
-      'เลขที่บิล',
-      'สถานะบิล',
-      'ช่องทางการชำระเงิน',
-      'วันครบกำหนดชำระ',
-      'วันที่ชำระเงิน',
-      'ค่าเช่าห้อง (บาท)',
-      'หน่วยน้ำที่ใช้',
-      'ค่าน้ำประปา (บาท)',
-      'หน่วยไฟที่ใช้',
-      'ค่าไฟฟ้า (บาท)',
-      'ค่าส่วนกลาง (บาท)',
-      'ค่าอินเทอร์เน็ต (บาท)',
-      'ค่าที่จอดรถ (บาท)',
-      'ค่าบริการอื่นๆ (บาท)',
-      'รายละเอียดค่าบริการอื่นๆ',
-      'ค่าปรับชำระเกินกำหนด (บาท)',
-      'ส่วนลด (บาท)',
-      'เงินประกันสัญญา (บาท)',
-      'รวมยอดเรียกเก็บ (บาท)',
-      'ยอดชำระแล้ว (บาท)',
-      'ยอดค้างชำระ (บาท)',
-      'หมายเหตุ'
-    ];
-
-    let sumPeople = 0;
-    let sumVehicles = 0;
-    let sumRent = 0;
-    let sumWaterUnits = 0;
-    let sumWaterAmt = 0;
-    let sumElecUnits = 0;
-    let sumElecAmt = 0;
-    let sumCommon = 0;
-    let sumInternet = 0;
-    let sumParking = 0;
-    let sumOther = 0;
-    let sumFine = 0;
-    let sumDiscount = 0;
-    let sumDeposit = 0;
-    let sumTotalBilled = 0;
-    let sumPaid = 0;
-    let sumOutstanding = 0;
-
-    const dataRows = billDetailsList.map((d, idx) => {
-      sumPeople += d.peopleCount;
-      sumVehicles += d.vehicleCount;
-      sumRent += d.rentAmt;
-      sumWaterUnits += d.waterUnits;
-      sumWaterAmt += d.waterAmt;
-      sumElecUnits += d.elecUnits;
-      sumElecAmt += d.elecAmt;
-      sumCommon += d.commonAmt;
-      sumInternet += d.internetAmt;
-      sumParking += d.parkingAmt;
-      sumOther += d.otherAmt;
-      sumFine += d.fineAmt;
-      sumDiscount += d.discountAmt;
-      sumDeposit += d.depositAmt;
-      sumTotalBilled += d.totalBilled;
-      sumPaid += d.paidAmt;
-      sumOutstanding += d.outstandingAmt;
-
-      return [
-        escapeCsv(idx + 1),
-        escapeCsv(d.buildingName),
-        escapeCsv(d.floorStr),
-        escapeCsv(d.roomNumber),
-        escapeCsv(d.tenantName),
-        d.tenantPhone !== '-' ? `="${d.tenantPhone}"` : `"-"`,
-        escapeCsv(d.peopleCount),
-        escapeCsv(d.vehicleCount),
-        escapeCsv(d.billNumber),
-        escapeCsv(d.statusStr),
-        escapeCsv(d.paymentMethodStr),
-        escapeCsv(d.dueDateStr),
-        escapeCsv(d.paidDateStr),
-        fmtNum(d.rentAmt),
-        fmtNum(d.waterUnits),
-        fmtNum(d.waterAmt),
-        fmtNum(d.elecUnits),
-        fmtNum(d.elecAmt),
-        fmtNum(d.commonAmt),
-        fmtNum(d.internetAmt),
-        fmtNum(d.parkingAmt),
-        fmtNum(d.otherAmt),
-        escapeCsv(d.otherDesc),
-        fmtNum(d.fineAmt),
-        fmtNum(d.discountAmt > 0 ? -d.discountAmt : 0),
-        fmtNum(d.depositAmt),
-        fmtNum(d.totalBilled),
-        fmtNum(d.paidAmt),
-        fmtNum(d.outstandingAmt),
-        escapeCsv(d.notes)
-      ].join(',');
-    });
-
-    const totalRow = [
-      escapeCsv('รวมทั้งหมด'),
-      escapeCsv(''),
-      escapeCsv(''),
-      escapeCsv(`${billDetailsList.length} ห้อง`),
-      escapeCsv(''),
-      escapeCsv(''),
-      escapeCsv(`${sumPeople} คน`),
-      escapeCsv(`${sumVehicles} คัน`),
-      escapeCsv(''),
-      escapeCsv(''),
-      escapeCsv(''),
-      escapeCsv(''),
-      escapeCsv(''),
-      fmtNum(sumRent),
-      fmtNum(sumWaterUnits),
-      fmtNum(sumWaterAmt),
-      fmtNum(sumElecUnits),
-      fmtNum(sumElecAmt),
-      fmtNum(sumCommon),
-      fmtNum(sumInternet),
-      fmtNum(sumParking),
-      fmtNum(sumOther),
-      escapeCsv(''),
-      fmtNum(sumFine),
-      fmtNum(sumDiscount > 0 ? -sumDiscount : 0),
-      fmtNum(sumDeposit),
-      fmtNum(sumTotalBilled),
-      fmtNum(sumPaid),
-      fmtNum(sumOutstanding),
-      escapeCsv('')
-    ].join(',');
-
-    return {
-      headerLine: headers.map(escapeCsv).join(','),
-      dataRows,
-      totalRow
-    };
-  };
+  const extractBillDetailsLocal = (b: any) => extractBillDetails(b, { rooms, buildings, tenants, vatSettings: currentVatSettings });
 
   // Export CSV Function (Mode: 'monthly-full' | 'monthly-raw' | 'monthly' | 'yearly')
   const handleExportCSVMode = (mode: 'monthly-full' | 'monthly-raw' | 'monthly' | 'yearly') => {
@@ -995,7 +1434,7 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
     let csv = '';
     let fileName = '';
 
-    const billDetailsList = currentMonthBills.map(extractBillDetails).sort((a, b) => {
+    const billDetailsList = currentMonthBills.map(extractBillDetailsLocal).sort((a, b) => {
       if (a.buildingName !== b.buildingName) return a.buildingName.localeCompare(b.buildingName, 'th');
       return a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true, sensitivity: 'base' });
     });
@@ -1057,12 +1496,12 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
       });
 
       if (yearBills.length > 0) {
-        const yearDetailsList = yearBills.map(extractBillDetails).sort((a, b) => {
+        const yearDetailsList = yearBills.map(extractBillDetailsLocal).sort((a, b) => {
           if (a.buildingName !== b.buildingName) return a.buildingName.localeCompare(b.buildingName, 'th');
           return a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true, sensitivity: 'base' });
         });
         const yGrid = generateRawGridLines(yearDetailsList);
-        csv += `--- ส่วนที่ 3: ข้อมูลดิบรายการบิลตลอดทั้งปี (30 คอลัมน์) (${yearDetailsList.length} รายการ) ---\n`;
+        csv += `--- ส่วนที่ 3: ข้อมูลดิบรายการบิลตลอดทั้งปี (32 คอลัมน์) (${yearDetailsList.length} รายการ) ---\n`;
         csv += `${yGrid.headerLine}\n`;
         csv += `${yGrid.dataRows.join('\n')}\n`;
         csv += `${yGrid.totalRow}\n`;
@@ -1109,6 +1548,9 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
       if (depositRefundTotal > 0) {
         csv += `"11. คืนเงินประกันสัญญาผู้เช่า",-${exactDepositRefundTotal},-\n`;
       }
+      if (monthVatTotal > 0) {
+        csv += `"ภาษีมูลค่าเพิ่ม 7% (ภ.พ.30)",${monthVatTotal.toFixed(2)},-\n`;
+      }
       csv += `"รวมยอดเรียกเก็บตามบิล (Total Billed)",${exactTotalBilledThisMonth},100.0%\n`;
       csv += `"รวมรายรับจัดเก็บสะสมทั้งหมด",${exactTotalBilledPlusDeposit},-\n`;
       csv += `"รายรับที่ชำระจริงในรอบเดือน",${exactTotalRevenueThisMonth},-\n`;
@@ -1116,7 +1558,7 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
       csv += `"ค่าใช้จ่ายงานแจ้งซ่อมบำรุง",${exactTotalRepairCostThisMonth},-\n`;
       csv += `"กำไรสุทธิประจำรอบเดือน (Net Cashflow)",${exactNetIncomeThisMonth},-\n\n`;
 
-      csv += `--- ส่วนที่ 3: ตารางข้อมูลดิบรายห้องพักและรายการบิลโดยละเอียด (30 คอลัมน์) (${billDetailsList.length} ห้อง) ---\n`;
+      csv += `--- ส่วนที่ 3: ตารางข้อมูลดิบรายห้องพักและรายการบิลโดยละเอียด (32 คอลัมน์) (${billDetailsList.length} ห้อง) ---\n`;
       csv += `${grid.headerLine}\n`;
       csv += `${grid.dataRows.join('\n')}\n`;
       csv += `${grid.totalRow}\n`;
@@ -1174,7 +1616,7 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
     const internetRateStr = rateMetadata.internet.rateStr;
     const parkingRateStr = rateMetadata.parking.rateStr;
 
-    const billDetailsList = currentMonthBills.map(extractBillDetails).sort((a, b) => {
+    const billDetailsList = currentMonthBills.map(extractBillDetailsLocal).sort((a, b) => {
       if (a.buildingName !== b.buildingName) return a.buildingName.localeCompare(b.buildingName, 'th');
       return a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true, sensitivity: 'base' });
     });
@@ -1183,359 +1625,14 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
     wb.creator = 'HorPlus Dormitory Management';
     wb.created = new Date();
 
-    // Helper to calculate generous, auto-fitted column widths for any worksheet
-    const autoFitColumns = (ws: ExcelJS.Worksheet, minWidths: number[] = []) => {
-      ws.columns.forEach((column, colIdx) => {
-        let maxVisualLen = 0;
-        column.eachCell?.({ includeEmpty: false }, (cell) => {
-          let str = '';
-          const val = cell.value;
-          if (typeof val === 'string') {
-            str = val;
-          } else if (typeof val === 'number') {
-            str = val.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-          } else if (val && typeof val === 'object') {
-            if ('result' in val && val.result != null) {
-              str = typeof val.result === 'number'
-                ? val.result.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-                : String(val.result);
-            } else if ('formula' in val) {
-              str = '999,999.00';
-            }
-          } else if (val != null) {
-            str = String(val);
-          }
-          // Remove Thai combining vowel/tone marks for accurate character width
-          const visual = str.replace(/[\u0E31\u0E34-\u0E3A\u0E47-\u0E4E]/g, '');
-          const len = Math.max(str.length * 0.85, visual.length);
-          if (len > maxVisualLen) {
-            maxVisualLen = len;
-          }
-        });
 
-        const baseMin = minWidths[colIdx] || 14;
-        // +6 padding for filter dropdown icon and comfortable margin
-        const contentWidth = Math.ceil(maxVisualLen + 6);
-        column.width = Math.max(baseMin, contentWidth);
-      });
-    };
-
-    const build30ColWorksheet = (ws: ExcelJS.Worksheet, details: typeof billDetailsList) => {
-      ws.views = [{ state: 'frozen', xSplit: 4, ySplit: 1, topLeftCell: 'E2' }];
-
-      const headers = [
-        'ลำดับ', 'อาคาร', 'ชั้น', 'เลขห้อง', 'ชื่อผู้เช่า', 'เบอร์โทรศัพท์', 'จำนวนผู้พักอาศัย (คน)', 'จำนวนยานพาหนะ (คัน)',
-        'เลขที่บิล', 'สถานะบิล', 'ช่องทางการชำระเงิน', 'วันครบกำหนดชำระ', 'วันที่ชำระเงิน',
-        'ค่าเช่าห้อง (บาท)', 'หน่วยน้ำที่ใช้', 'ค่าน้ำประปา (บาท)', 'หน่วยไฟที่ใช้', 'ค่าไฟฟ้า (บาท)',
-        'ค่าส่วนกลาง (บาท)', 'ค่าอินเทอร์เน็ต (บาท)', 'ค่าที่จอดรถ (บาท)', 'ค่าบริการอื่นๆ (บาท)', 'รายละเอียดค่าบริการอื่นๆ',
-        'ค่าปรับชำระเกินกำหนด (บาท)', 'ส่วนลด (บาท)', 'เงินประกันสัญญา (บาท)',
-        'รวมยอดเรียกเก็บ (บาท)', 'ยอดชำระแล้ว (บาท)', 'ยอดค้างชำระ (บาท)', 'หมายเหตุ'
-      ];
-
-      const headerRow = ws.addRow(headers);
-      headerRow.height = 36;
-
-      const groupColors = [
-        { start: 1, end: 8, fill: '1E293B' },  // Slate 800 (Room & Tenant info)
-        { start: 9, end: 13, fill: '4338CA' }, // Indigo 700 (Bill status & payment)
-        { start: 14, end: 18, fill: '0E7490' },// Cyan 700 (Rent & utilities)
-        { start: 19, end: 23, fill: '047857' },// Emerald 700 (Common & add-on services)
-        { start: 24, end: 26, fill: '7C3AED' },// Purple 700 (Fine, discount, deposit)
-        { start: 27, end: 30, fill: '1D4ED8' } // Royal Blue 700 (Summary totals)
-      ];
-
-      groupColors.forEach(g => {
-        for (let c = g.start; c <= g.end; c++) {
-          const cell = headerRow.getCell(c);
-          cell.fill = {
-            type: 'pattern',
-            pattern: 'solid',
-            fgColor: { argb: 'FF' + g.fill }
-          };
-          cell.font = {
-            name: 'Sarabun',
-            family: 2,
-            size: 10,
-            bold: true,
-            color: { argb: 'FFFFFFFF' }
-          };
-          cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: false };
-          cell.border = {
-            top: { style: 'thin', color: { argb: 'FF94A3B8' } },
-            bottom: { style: 'medium', color: { argb: 'FF0F172A' } },
-            left: { style: 'thin', color: { argb: 'FF94A3B8' } },
-            right: { style: 'thin', color: { argb: 'FF94A3B8' } }
-          };
-        }
-      });
-
-      let sumPeople = 0;
-      let sumVehicles = 0;
-      let sumRent = 0;
-      let sumWaterUnits = 0;
-      let sumWaterAmt = 0;
-      let sumElecUnits = 0;
-      let sumElecAmt = 0;
-      let sumCommon = 0;
-      let sumInternet = 0;
-      let sumParking = 0;
-      let sumOther = 0;
-      let sumFine = 0;
-      let sumDiscount = 0;
-      let sumDeposit = 0;
-      let sumTotalBilled = 0;
-      let sumPaid = 0;
-      let sumOutstanding = 0;
-
-      details.forEach((d, idx) => {
-        const rIdx = idx + 2;
-        sumPeople += d.peopleCount;
-        sumVehicles += d.vehicleCount;
-        sumRent += d.rentAmt;
-        sumWaterUnits += d.waterUnits;
-        sumWaterAmt += d.waterAmt;
-        sumElecUnits += d.elecUnits;
-        sumElecAmt += d.elecAmt;
-        sumCommon += d.commonAmt;
-        sumInternet += d.internetAmt;
-        sumParking += d.parkingAmt;
-        sumOther += d.otherAmt;
-        sumFine += d.fineAmt;
-        sumDiscount += d.discountAmt;
-        sumDeposit += d.depositAmt;
-        sumTotalBilled += d.totalBilled;
-        sumPaid += d.paidAmt;
-        sumOutstanding += d.outstandingAmt;
-
-        const isEven = idx % 2 === 0;
-        const rowBg = isEven ? 'FFFFFFFF' : 'FFF8FAFC';
-
-        const row = ws.addRow([
-          idx + 1,
-          d.buildingName,
-          d.floorStr,
-          d.roomNumber,
-          d.tenantName,
-          d.tenantPhone,
-          d.peopleCount,
-          d.vehicleCount,
-          d.billNumber,
-          d.statusStr,
-          d.paymentMethodStr,
-          d.dueDateStr,
-          d.paidDateStr,
-          d.rentAmt,
-          d.waterUnits,
-          d.waterAmt,
-          d.elecUnits,
-          d.elecAmt,
-          d.commonAmt,
-          d.internetAmt,
-          d.parkingAmt,
-          d.otherAmt,
-          d.otherDesc,
-          d.fineAmt,
-          d.discountAmt > 0 ? -d.discountAmt : 0,
-          d.depositAmt,
-          { formula: `N${rIdx}+P${rIdx}+R${rIdx}+S${rIdx}+T${rIdx}+U${rIdx}+V${rIdx}+X${rIdx}+Y${rIdx}+Z${rIdx}`, result: d.totalBilled },
-          d.paidAmt,
-          { formula: `MAX(0, AA${rIdx}-AB${rIdx})`, result: d.outstandingAmt },
-          d.notes
-        ]);
-
-        row.height = 24;
-
-        // Automatically hide rows with 'ยกเลิก' by default per PO request
-        if (d.statusStr === 'ยกเลิก' || d.statusStr.includes('ยกเลิก')) {
-          row.hidden = true;
-        }
-
-        row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
-          cell.fill = {
-            type: 'pattern',
-            pattern: 'solid',
-            fgColor: { argb: rowBg }
-          };
-          cell.font = {
-            name: 'Sarabun',
-            family: 2,
-            size: 10,
-            color: { argb: 'FF1E293B' }
-          };
-          cell.border = {
-            top: { style: 'thin', color: { argb: 'FFE2E8F0' } },
-            bottom: { style: 'thin', color: { argb: 'FFE2E8F0' } },
-            left: { style: 'thin', color: { argb: 'FFE2E8F0' } },
-            right: { style: 'thin', color: { argb: 'FFE2E8F0' } }
-          };
-
-          if ([1, 2, 3, 4, 9, 12, 13].includes(colNumber)) {
-            cell.alignment = { vertical: 'middle', horizontal: 'center' };
-            if (colNumber === 4) {
-              cell.font = { name: 'Sarabun', size: 10, bold: true, color: { argb: 'FF0F172A' } };
-            }
-          } else if (colNumber === 6) {
-            // Explicit text format for phone numbers ensures Excel keeps leading 0
-            cell.alignment = { vertical: 'middle', horizontal: 'center' };
-            cell.numFmt = '@';
-          } else if (colNumber === 10) {
-            cell.alignment = { vertical: 'middle', horizontal: 'center' };
-            if (d.statusStr.includes('ชำระแล้ว')) {
-              cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD1FAE5' } };
-              cell.font = { name: 'Sarabun', size: 10, bold: true, color: { argb: 'FF065F46' } };
-            } else if (d.statusStr.includes('เกินกำหนด')) {
-              cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF3C7' } };
-              cell.font = { name: 'Sarabun', size: 10, bold: true, color: { argb: 'FF92400E' } };
-            } else if (d.statusStr.includes('ยังไม่ชำระ') || d.statusStr.includes('รอชำระ')) {
-              cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEE2E2' } };
-              cell.font = { name: 'Sarabun', size: 10, bold: true, color: { argb: 'FF991B1B' } };
-            } else if (d.statusStr.includes('ยกเลิก')) {
-              cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF1F5F9' } };
-              cell.font = { name: 'Sarabun', size: 10, bold: true, color: { argb: 'FF64748B' } };
-            }
-          } else if ([7, 8, 15, 17].includes(colNumber)) {
-            cell.alignment = { vertical: 'middle', horizontal: 'right' };
-            cell.numFmt = '#,##0';
-          } else if ([14, 16, 18, 19, 20, 21, 22, 24, 25, 26, 27, 28, 29].includes(colNumber)) {
-            cell.alignment = { vertical: 'middle', horizontal: 'right' };
-            cell.numFmt = '#,##0.00';
-            if (colNumber === 27) {
-              cell.font = { name: 'Sarabun', size: 10, bold: true, color: { argb: 'FF1D4ED8' } };
-            } else if (colNumber === 28) {
-              cell.font = { name: 'Sarabun', size: 10, bold: true, color: { argb: 'FF047857' } };
-            } else if (colNumber === 29 && d.outstandingAmt > 0) {
-              cell.font = { name: 'Sarabun', size: 10, bold: true, color: { argb: 'FFB91C1C' } };
-            }
-          } else {
-            cell.alignment = { vertical: 'middle', horizontal: 'left' };
-          }
-        });
-      });
-
-      const startRow = 2;
-      const endRow = Math.max(2, details.length + 1);
-
-      // The Total row uses SUBTOTAL(9, ...) Excel formulas so editing numbers or filtering recalculates dynamically
-      const totalRow = ws.addRow([
-        'รวมทั้งหมด',
-        '',
-        '',
-        `${details.length} ห้อง`,
-        '',
-        '',
-        { formula: `SUBTOTAL(9, G${startRow}:G${endRow})`, result: sumPeople },
-        { formula: `SUBTOTAL(9, H${startRow}:H${endRow})`, result: sumVehicles },
-        '',
-        '',
-        '',
-        '',
-        '',
-        { formula: `SUBTOTAL(9, N${startRow}:N${endRow})`, result: sumRent },
-        { formula: `SUBTOTAL(9, O${startRow}:O${endRow})`, result: sumWaterUnits },
-        { formula: `SUBTOTAL(9, P${startRow}:P${endRow})`, result: sumWaterAmt },
-        { formula: `SUBTOTAL(9, Q${startRow}:Q${endRow})`, result: sumElecUnits },
-        { formula: `SUBTOTAL(9, R${startRow}:R${endRow})`, result: sumElecAmt },
-        { formula: `SUBTOTAL(9, S${startRow}:S${endRow})`, result: sumCommon },
-        { formula: `SUBTOTAL(9, T${startRow}:T${endRow})`, result: sumInternet },
-        { formula: `SUBTOTAL(9, U${startRow}:U${endRow})`, result: sumParking },
-        { formula: `SUBTOTAL(9, V${startRow}:V${endRow})`, result: sumOther },
-        '',
-        { formula: `SUBTOTAL(9, X${startRow}:X${endRow})`, result: sumFine },
-        { formula: `SUBTOTAL(9, Y${startRow}:Y${endRow})`, result: sumDiscount > 0 ? -sumDiscount : 0 },
-        { formula: `SUBTOTAL(9, Z${startRow}:Z${endRow})`, result: sumDeposit },
-        { formula: `SUBTOTAL(9, AA${startRow}:AA${endRow})`, result: sumTotalBilled },
-        { formula: `SUBTOTAL(9, AB${startRow}:AB${endRow})`, result: sumPaid },
-        { formula: `SUBTOTAL(9, AC${startRow}:AC${endRow})`, result: sumOutstanding },
-        ''
-      ]);
-
-      totalRow.height = 28;
-      totalRow.eachCell({ includeEmpty: true }, (cell, colNumber) => {
-        cell.fill = {
-          type: 'pattern',
-          pattern: 'solid',
-          fgColor: { argb: 'FFF1F5F9' }
-        };
-        cell.font = {
-          name: 'Sarabun',
-          family: 2,
-          size: 10,
-          bold: true,
-          color: { argb: 'FF0F172A' }
-        };
-        cell.border = {
-          top: { style: 'thin', color: { argb: 'FF64748B' } },
-          bottom: { style: 'double', color: { argb: 'FF0F172A' } },
-          left: { style: 'thin', color: { argb: 'FFE2E8F0' } },
-          right: { style: 'thin', color: { argb: 'FFE2E8F0' } }
-        };
-
-        if ([1, 2, 3, 4].includes(colNumber)) {
-          cell.alignment = { vertical: 'middle', horizontal: 'center' };
-        } else if ([7, 8, 15, 17].includes(colNumber)) {
-          cell.alignment = { vertical: 'middle', horizontal: 'right' };
-          cell.numFmt = '#,##0';
-        } else if ([14, 16, 18, 19, 20, 21, 22, 24, 25, 26, 27, 28, 29].includes(colNumber)) {
-          cell.alignment = { vertical: 'middle', horizontal: 'right' };
-          cell.numFmt = '#,##0.00';
-          if (colNumber === 27) {
-            cell.font = { name: 'Sarabun', size: 10, bold: true, color: { argb: 'FF1D4ED8' } };
-          } else if (colNumber === 28) {
-            cell.font = { name: 'Sarabun', size: 10, bold: true, color: { argb: 'FF047857' } };
-          } else if (colNumber === 29) {
-            cell.font = { name: 'Sarabun', size: 10, bold: true, color: { argb: 'FFB91C1C' } };
-          }
-        }
-      });
-
-      // AutoFilter covers header row down to the last data row (excludes summary Total row)
-      ws.autoFilter = {
-        from: { row: 1, column: 1 },
-        to: { row: endRow, column: 30 }
-      };
-
-      const baseMinWidths = [
-        8,  // 1: ลำดับ
-        14, // 2: อาคาร
-        8,  // 3: ชั้น
-        14, // 4: เลขห้อง
-        26, // 5: ชื่อผู้เช่า
-        18, // 6: เบอร์โทรศัพท์
-        26, // 7: จำนวนผู้พักอาศัย (คน)
-        25, // 8: จำนวนยานพาหนะ (คัน)
-        22, // 9: เลขที่บิล
-        18, // 10: สถานะบิล
-        25, // 11: ช่องทางการชำระเงิน
-        22, // 12: วันครบกำหนดชำระ
-        20, // 13: วันที่ชำระเงิน
-        22, // 14: ค่าเช่าห้อง (บาท)
-        18, // 15: หน่วยน้ำที่ใช้
-        22, // 16: ค่าน้ำประปา (บาท)
-        18, // 17: หน่วยไฟที่ใช้
-        22, // 18: ค่าไฟฟ้า (บาท)
-        22, // 19: ค่าส่วนกลาง (บาท)
-        24, // 20: ค่าอินเทอร์เน็ต (บาท)
-        22, // 21: ค่าที่จอดรถ (บาท)
-        24, // 22: ค่าบริการอื่นๆ (บาท)
-        28, // 23: รายละเอียดค่าบริการอื่นๆ
-        32, // 24: ค่าปรับชำระเกินกำหนด (บาท)
-        18, // 25: ส่วนลด (บาท)
-        26, // 26: เงินประกันสัญญา (บาท)
-        26, // 27: รวมยอดเรียกเก็บ (บาท)
-        24, // 28: ยอดชำระแล้ว (บาท)
-        24, // 29: ยอดค้างชำระ (บาท)
-        36  // 30: หมายเหตุ
-      ];
-
-      autoFitColumns(ws, baseMinWidths);
-    };
 
 
     let fileName = '';
     let exportBills = currentMonthBills;
 
     if (mode === 'monthly-raw') {
-      const ws = wb.addWorksheet('ตารางบิลรายห้อง 30 คอลัมน์');
+      const ws = wb.addWorksheet('ตารางบิลรายห้อง 32 คอลัมน์');
       build30ColWorksheet(ws, billDetailsList);
       fileName = `HorPlus_Billing_Raw_${effectiveCycleCode}_${selectedBuilding}.xlsx`;
     } else if (mode === 'yearly') {
@@ -1754,11 +1851,11 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
       exportBills = yearBills;
 
       if (yearBills.length > 0) {
-        const yearDetailsList = yearBills.map(extractBillDetails).sort((a, b) => {
+        const yearDetailsList = yearBills.map(extractBillDetailsLocal).sort((a, b) => {
           if (a.buildingName !== b.buildingName) return a.buildingName.localeCompare(b.buildingName, 'th');
           return a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true, sensitivity: 'base' });
         });
-        const wsBills = wb.addWorksheet('ข้อมูลบิลทั้งปี 30 คอลัมน์');
+        const wsBills = wb.addWorksheet('ข้อมูลบิลทั้งปี 32 คอลัมน์');
         build30ColWorksheet(wsBills, yearDetailsList);
       }
 
@@ -1890,6 +1987,9 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
         ledgerRows.push(['11. คืนเงินประกันสัญญาผู้เช่า', -Number(exactDepositRefundTotal), '-', 'จ่ายคืนเงินประกันเมื่อเลิกเช่า', false]);
       }
 
+      if (monthVatTotal > 0) {
+        ledgerRows.push(['ภาษีมูลค่าเพิ่ม 7% (ภ.พ.30)', monthVatTotal, '-', 'ภาษีขายตามหมวดที่เปิดใช้งาน VAT', false, 'FFD97706']);
+      }
       ledgerRows.push(['รวมยอดเรียกเก็บตามบิล (Total Billed)', Number(exactTotalBilledThisMonth), '100.0%', 'ยอดรวมบิลประจำรอบเดือน', true, 'FF1D4ED8']);
       ledgerRows.push(['รวมรายรับจัดเก็บสะสมทั้งหมด', Number(exactTotalBilledPlusDeposit), '-', 'รวมบิล + เงินประกัน', true, 'FF1E40AF']);
       ledgerRows.push(['รายรับที่ชำระจริงในรอบเดือน', Number(exactTotalRevenueThisMonth), '-', 'ยอดรับชำระแล้ว', true, 'FF047857']);
@@ -1932,7 +2032,7 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
         });
       });
 
-      const wsGrid = wb.addWorksheet('ตารางบิลรายห้อง 30 คอลัมน์');
+      const wsGrid = wb.addWorksheet('ตารางบิลรายห้อง 32 คอลัมน์');
       build30ColWorksheet(wsGrid, billDetailsList);
 
       fileName = `HorPlus_Report_Full_${effectiveCycleCode}_${selectedBuilding}.xlsx`;
@@ -1973,7 +2073,7 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
       let modified = false;
       for (const sheetPath of sheetFiles) {
         let sheetXml = await zip.file(sheetPath)!.async('text');
-        if (sheetXml.includes('<autoFilter ref="A1:AD')) {
+        if (sheetXml.includes('<autoFilter ref="A1:')) {
           sheetXml = sheetXml.replace(/(<autoFilter ref="[^"]*")\/>/, `$1>${filterColXml}</autoFilter>`);
           zip.file(sheetPath, sheetXml);
           modified = true;
@@ -2171,8 +2271,8 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
                       </div>
                       <p className="text-[10px] text-slate-500 font-medium mt-1">
                         {exportFormat === 'xlsx'
-                          ? 'ตารางข้อมูลบิลรายห้อง 30 คอลัมน์'
-                          : 'ตารางข้อมูลบิลรายห้อง 30 คอลัมน์'}
+                          ? 'ตารางข้อมูลบิลรายห้อง 32 คอลัมน์'
+                          : 'ตารางข้อมูลบิลรายห้อง 32 คอลัมน์'}
                       </p>
                     </button>
 
@@ -2711,6 +2811,25 @@ export const OwnerReports: React.FC<OwnerReportsProps> = ({
                     <td className="py-3 text-right font-black text-rose-600">-{formatBaht(depositRefundTotal)}</td>
                     <td className="py-3 text-right">
                       <span className="px-2.5 py-1 bg-rose-50 text-rose-600 rounded-full text-[9px] font-black border border-rose-100 whitespace-nowrap inline-flex items-center">จ่ายคืนผู้เช่า</span>
+                    </td>
+                  </tr>
+                )}
+
+                {/* VAT 7% Row (ภ.พ.30) */}
+                {monthVatTotal > 0 && (
+                  <tr className="bg-amber-50/30 border-t border-amber-100/60">
+                    <td className="py-3 text-slate-700">
+                      <div className="font-extrabold text-amber-900 flex items-center gap-1.5">
+                        <span>ภาษีมูลค่าเพิ่ม 7% (ภ.พ.30)</span>
+                        <span className="px-1.5 py-0.5 bg-amber-100 text-amber-800 rounded text-[9px] font-black">+VAT 7%</span>
+                      </div>
+                      <div className="text-[10px] text-slate-500 font-medium">ภาษีขายเรียกเก็บตามหมวดที่เปิดใช้งาน VAT ในรอบบิลนี้</div>
+                    </td>
+                    <td className="py-3 text-right font-black text-amber-700">{formatBaht(monthVatTotal)}</td>
+                    <td className="py-3 text-right">
+                      <span className="px-2.5 py-1 bg-amber-50 text-amber-700 rounded-full text-[9px] font-black border border-amber-200 whitespace-nowrap inline-flex items-center">
+                        ภาษีขายนำส่ง
+                      </span>
                     </td>
                   </tr>
                 )}

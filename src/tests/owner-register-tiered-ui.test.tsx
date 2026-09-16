@@ -17,8 +17,23 @@ describe('OWNER R3.9-D.2.1: Register Tier Canonicalization, Draft Round-Trip & I
   beforeEach(() => {
     cleanup();
     vi.clearAllMocks();
-    sessionStorage.clear();
-    localStorage.clear();
+    const createStorage = () => {
+      let store: Record<string, string> = {};
+      return {
+        getItem: (k: string) => store[k] || null,
+        setItem: (k: string, v: string) => { store[k] = String(v); },
+        removeItem: (k: string) => { delete store[k]; },
+        clear: () => { store = {}; },
+        get length() { return Object.keys(store).length; },
+        key: (i: number) => Object.keys(store)[i] || null,
+      };
+    };
+    if (typeof window !== 'undefined') {
+      try { Object.defineProperty(window, 'localStorage', { value: createStorage(), configurable: true, writable: true }); } catch {}
+      try { Object.defineProperty(window, 'sessionStorage', { value: createStorage(), configurable: true, writable: true }); } catch {}
+    }
+    try { sessionStorage.clear(); } catch {}
+    try { localStorage.clear(); } catch {}
     HTMLCanvasElement.prototype.toDataURL = vi.fn().mockReturnValue('data:image/png;base64,mocksignature');
     HTMLCanvasElement.prototype.getContext = vi.fn().mockReturnValue({
       clearRect: vi.fn(),
@@ -77,6 +92,15 @@ describe('OWNER R3.9-D.2.1: Register Tier Canonicalization, Draft Round-Trip & I
   const advanceThroughSteps = async () => {
     // Step 4: Deposits & Bank
     await waitFor(() => expect(screen.getByText('ขั้นตอนที่ 4: มัดจำ & บัญชี')).toBeDefined());
+    if (screen.queryByTestId('input-term-deposit-0')) {
+      fireEvent.change(screen.getByTestId('input-term-deposit-0'), { target: { value: '0' } });
+    }
+    if (screen.queryByTestId('input-monthly-deposit-0')) {
+      fireEvent.change(screen.getByTestId('input-monthly-deposit-0'), { target: { value: '0' } });
+    }
+    if (screen.queryByTestId('input-daily-deposit-0')) {
+      fireEvent.change(screen.getByTestId('input-daily-deposit-0'), { target: { value: '0' } });
+    }
     fireEvent.change(screen.getByTestId('select-payment-bank-name'), { target: { value: 'กสิกรไทย (KBank)' } });
     await waitFor(() => {
       const accInput = screen.getByTestId('input-payment-account-number') as HTMLInputElement;

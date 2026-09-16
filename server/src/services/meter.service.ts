@@ -22,7 +22,7 @@ import { toDecimal, formatDecimal, compareDecimals, divDecimals, mulDecimals, su
 import { calculateInstallmentSchedule } from '../utils/installment-calculator.util.js';
 import { currentBusinessDateInBangkok, toBangkokDateString, normalizeBangkokDate, getBangkokStartOfDayUtc, isAgreementEligibleForBillingCycle } from '../utils/calendar-date.util.js';
 import { calculateMeterUsageUnits, parseMeterIntegerReading, calculateMeterRowPreview, TransientRowDraft, RoomPreviewContext } from '../utils/meter-billing-calculator.util.js';
-import { calculateCanonicalMonthlyUtility } from '../utils/monthly-utility-calculator.util.js';
+import { calculateCanonicalMonthlyUtility, calculateCategoryStrictVat, isCategoryTaxable, parseToSatangs, formatSatangs } from '../utils/monthly-utility-calculator.util.js';
 import { normalizeUtilityBillingMode } from '../utils/billing-mode-normalizer.util.js';
 import { resolveDailyTimestampsAndPricing } from './daily-stay.service.js';
 import { syncDailyStayOtherFeesInTx } from '../utils/daily-other-fee-sync.util.js';
@@ -1596,6 +1596,7 @@ export class MeterService {
   public static decomposeBillToChargeComponents(params: {
     bill: any;
     billingSource?: string;
+    vatSettings?: any;
   }): Array<{
     type: string;
     label: string;
@@ -1605,6 +1606,7 @@ export class MeterService {
     occurredInDisplayedPeriod: boolean;
     includedInAmountDue: boolean;
     lineItems: Array<any>;
+    metadata?: any;
   }> {
     const { bill, billingSource } = params;
     const isPaid = bill.status === 'paid' || bill.status === 'PAID';
@@ -1642,6 +1644,7 @@ export class MeterService {
       occurredInDisplayedPeriod: boolean;
       includedInAmountDue: boolean;
       lineItems: Array<any>;
+      metadata?: any;
     }> = [];
 
     const mapItem = (it: any) => ({
@@ -1743,7 +1746,20 @@ export class MeterService {
         label = 'บิลรายเดือน';
       }
 
-      const compAmount = isPaid ? billTotal : billOutstandingDec;
+      let compAmount = isPaid ? billTotal : billOutstandingDec;
+      let compMetadata: any = null;
+      if (billType === 'rent' && params.vatSettings?.enabled && isCategoryTaxable('rent', params.vatSettings)) {
+        const hasExistingVat = Boolean((bill as any).vatAmount && Number((bill as any).vatAmount) > 0) || (bill.subtotal && bill.totalAmount && Number(bill.totalAmount) > Number(bill.subtotal));
+        if (!hasExistingVat && !isZeroDecimal(compAmount)) {
+          const baseSatang = parseToSatangs(compAmount.toString());
+          const rateNum = typeof params.vatSettings.rate === 'number' ? params.vatSettings.rate : (Number(params.vatSettings.rate) || 7);
+          const vatSatang = (baseSatang * BigInt(Math.round(rateNum * 100)) + 5000n) / 10000n;
+          compAmount = toDecimal(formatSatangs(baseSatang + vatSatang));
+          compMetadata = { isTaxable: true, isVatInclusive: true, vatAmount: formatSatangs(vatSatang) };
+        } else if (hasExistingVat) {
+          compMetadata = { isTaxable: true, isVatInclusive: true };
+        }
+      }
 
       components.push({
         type: billType,
@@ -1754,6 +1770,7 @@ export class MeterService {
         occurredInDisplayedPeriod: true,
         includedInAmountDue: isUnpaid,
         lineItems: (bill.items || []).map(mapItem),
+        metadata: compMetadata,
       });
     }
 
@@ -1821,15 +1838,26 @@ export class MeterService {
       throw err;
     }
 
+    const prisma = getPrismaClient();
+    let billingSettings: any = null;
+    try {
+      billingSettings = await prisma.dormitoryBillingSettings.findUnique({
+        where: { dormitoryId },
+      });
+    } catch {
+      // Fallback gracefully
+    }
+    const vatSettings = (billingSettings?.vatSettings as any) || (rateSnapshot as any).vatSettings || null;
+
     const canonicalRateSnapshot = rateSnapshot
       ? {
           ...rateSnapshot,
           waterBillingType: normalizeUtilityBillingMode(rateSnapshot.waterBillingType),
           electricityBillingType: normalizeUtilityBillingMode(rateSnapshot.electricityBillingType),
+          vatSettings,
         }
       : null;
 
-    const prisma = getPrismaClient();
     const roomsResult = await this.roomRepo.findAll(dormitoryId, {
       pageSize: ENTITLEMENT_ROOM_LIMITS.PAID,
     });
@@ -2502,7 +2530,7 @@ export class MeterService {
         for (const bill of roomBills) {
           const isPaid = bill.status === 'paid' || bill.status === 'PAID';
           const isUnpaid = !isPaid;
-          const billOutstanding = (() => {
+          let billOutstanding = (() => {
             if (isPaid) return toDecimal('0.00');
             if (bill.outstandingAmount !== undefined && bill.outstandingAmount !== null) {
               return toDecimal(bill.outstandingAmount.toString());
@@ -2513,11 +2541,27 @@ export class MeterService {
             return compareDecimals(diffDec, toDecimal('0.00')) > 0 ? diffDec : toDecimal('0.00');
           })();
 
+          const rawKind = (bill.billKind || '').toString().trim().toUpperCase();
+          const isRentBill = rawKind === 'RENT' || rawKind === 'MONTHLY_RENT' || rawKind === 'TERM_RENT' || rawKind === 'RENTAL';
+          if (isRentBill && canonicalRateSnapshot?.vatSettings?.enabled && isCategoryTaxable('rent', canonicalRateSnapshot.vatSettings)) {
+            const hasExistingVat = Boolean((bill as any).vatAmount && Number((bill as any).vatAmount) > 0) || (bill.subtotal && bill.totalAmount && Number(bill.totalAmount) > Number(bill.subtotal));
+            if (!hasExistingVat && !isZeroDecimal(billOutstanding)) {
+              const baseSatang = parseToSatangs(billOutstanding.toString());
+              const rateNum = typeof canonicalRateSnapshot.vatSettings.rate === 'number' ? canonicalRateSnapshot.vatSettings.rate : (Number(canonicalRateSnapshot.vatSettings.rate) || 7);
+              const vatSatang = (baseSatang * BigInt(Math.round(rateNum * 100)) + 5000n) / 10000n;
+              billOutstanding = toDecimal(formatSatangs(baseSatang + vatSatang));
+            }
+          }
+
           if (isUnpaid) {
             amountDueDec = addDecimals(amountDueDec, billOutstanding);
           }
 
-          const decomposed = MeterService.decomposeBillToChargeComponents({ bill, billingSource });
+          const decomposed = MeterService.decomposeBillToChargeComponents({
+            bill,
+            billingSource,
+            vatSettings: canonicalRateSnapshot?.vatSettings,
+          });
           for (const comp of decomposed) {
             if (comp.type === 'rent') {
               hasRentBill = true;
@@ -2528,13 +2572,15 @@ export class MeterService {
           }
         }
 
-        // Derive unissued Monthly Utility PREVIEW if no persisted bill exists and room is eligible
+        const roomHasSettledBill = roomBills.some(b => b.status === 'paid' || b.status === 'PAID');
+
+        // Derive unissued Monthly Utility PREVIEW if no persisted bill exists, no settled bill exists, and room is eligible
         const roomReadings = readingsByRoomMap.get(room.id) || [];
         const waterReading = roomReadings.find((r) => r.meterType === 'water');
         const elecReading = roomReadings.find((r) => r.meterType === 'electricity');
         const isMonthlyEligible = billingSource === 'CONTRACT' || billingSource === 'PROVISIONAL_MONTHLY' || billingSource === 'PROVISIONAL_TERM';
 
-        if (!hasMonthlyUtilityBill && !isFutureReservation && isMonthlyEligible) {
+        if (!hasMonthlyUtilityBill && !roomHasSettledBill && !isFutureReservation && isMonthlyEligible) {
           try {
             const utilityResult = calculateCanonicalMonthlyUtility({
               dormitoryId,
@@ -2559,7 +2605,11 @@ export class MeterService {
               asOfDate: new Date(),
             });
 
-            const previewTotalDec = toDecimal(utilityResult.monthlyUtilityTotal);
+            let previewTotalDec = toDecimal(utilityResult.monthlyUtilityTotal);
+            if (canonicalRateSnapshot?.vatSettings?.enabled) {
+              const vatCalc = calculateCategoryStrictVat(utilityResult.items, canonicalRateSnapshot.vatSettings);
+              previewTotalDec = toDecimal(vatCalc.netTotal);
+            }
             const isZero = isZeroDecimal(previewTotalDec);
             if (!isZero) {
               amountDueDec = addDecimals(amountDueDec, previewTotalDec);
@@ -2676,6 +2726,7 @@ export class MeterService {
       // Resolve Monthly Utility Bill Status (controls issue/cancel toggle and meter reading edit lock)
       const monthlyUtilityBill =
         roomBills.find(b => (b.billKind || '').toString().trim().toUpperCase() === 'MONTHLY_UTILITY') ||
+        roomBills.find(b => (b.billKind || '').toString().trim().toUpperCase() === 'COMBINED') ||
         roomBills.find(b => (b.billKind || '').toString().trim().toUpperCase() === 'LEGACY_COMBINED');
       const monthlyUtilityBillStatus = monthlyUtilityBill
         ? (monthlyUtilityBill.status.toLowerCase() as 'draft' | 'unpaid' | 'paid' | 'cancelled')
@@ -2686,7 +2737,9 @@ export class MeterService {
       let overallFinancialStatus: 'paid' | 'unpaid' | 'draft' | 'invalid' = 'draft';
       const isDailyCtx = billingSource === 'DAILY_STAY' || (billingSource === 'NONE' && unpaidDailyStay);
 
-      if (chargeComponents.some(c => c.status === 'INVALID')) {
+      if (isMonthlyUtilityPaid) {
+        overallFinancialStatus = 'paid';
+      } else if (chargeComponents.some(c => c.status === 'INVALID')) {
         overallFinancialStatus = 'invalid';
       } else if (isDailyCtx) {
         if (isDailyOverdue || isDailyUnpaid) {

@@ -25,10 +25,16 @@ export class HttpClientError extends Error {
   }
 }
 
-function getCsrfTokenFromCookie(): string | null {
-  if (typeof document === 'undefined') return null;
-  const match = document.cookie.match(/(?:^|;\s*)horplus_csrf=([^;]*)/);
-  return match ? decodeURIComponent(match[1]) : null;
+export function getCsrfTokenFromCookie(): string | null {
+  if (typeof document !== 'undefined') {
+    const match = document.cookie.match(/(?:^|;\s*)(?:horplus_csrf|csrf-token)=([^;]*)/);
+    if (match && match[1]) return decodeURIComponent(match[1]);
+  }
+  if (typeof sessionStorage !== 'undefined') {
+    const fromSession = sessionStorage.getItem('horplus_csrf');
+    if (fromSession) return fromSession;
+  }
+  return null;
 }
 
 function mapStatusToDomainCode(status: number): DomainErrorCode {

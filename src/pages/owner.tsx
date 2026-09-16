@@ -1427,6 +1427,8 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
       case 'settings':
         return (
           <OwnerSettings
+            dormitoryId={activeDormitoryId}
+            dormitory={currentDormitory}
             onAddLog={handleAddLog}
             onRefreshData={() => queryClient.invalidateQueries({ queryKey: queryKeys.owner(activeDormitoryId) })}
             selectedCycle={selectedCycle}

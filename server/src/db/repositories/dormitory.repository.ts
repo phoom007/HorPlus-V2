@@ -20,6 +20,8 @@ export interface DormitoryEntity {
   currency: string;
   status: string;
   createdByUserId?: string | null;
+  logoUrl?: string | null;
+  hasLogo?: boolean;
   createdAt: Date;
   updatedAt: Date;
   deletedAt?: Date | null;
@@ -162,6 +164,8 @@ export class PrismaDormitoryRepository implements IDormitoryRepository {
       currency: model.currency,
       status: model.status,
       createdByUserId: model.createdByUserId,
+      logoUrl: model.logoObjectKey ? `/api/v1/dormitories/${model.id}/logo` : null,
+      hasLogo: Boolean(model.logoObjectKey),
       createdAt: model.createdAt,
       updatedAt: model.updatedAt,
       deletedAt: model.deletedAt,
@@ -204,9 +208,10 @@ export class PrismaDormitoryRepository implements IDormitoryRepository {
 
   public async update(id: string, data: Partial<DormitoryEntity>): Promise<DormitoryEntity | null> {
     try {
+      const { taxId, logoUrl, hasLogo, ...validData } = data as any;
       const dorm = await this.prisma.dormitory.update({
         where: { id },
-        data: data as any,
+        data: validData,
       });
       return this.mapToEntity(dorm);
     } catch {

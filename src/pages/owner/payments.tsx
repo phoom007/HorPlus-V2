@@ -38,6 +38,14 @@ import {
   isFinancialObligationInvalidated,
   resolveAuthoritativeOutstandingAmount,
 } from '../../utils/dailyPaymentPredicate';
+import { getBillingSettings } from '../../services/billing-settings.service';
+import {
+  isCategoryTaxable,
+  parseToSatangs,
+  formatSatangs,
+  calculateCategoryStrictVat,
+  formatThaiBahtText,
+} from '../../utils/vat-calculator';
 
 export interface BillingCycle {
   id: string;
@@ -285,14 +293,109 @@ export function resolveRecordBillingCycleId(
   return null;
 }
 
+export function renderItemAmountWithVat(it: any, vatSettings: any) {
+  const isTaxable = Boolean(
+    it.metadata?.isTaxable ||
+    isCategoryTaxable(it.type || it.category || it.description || '', vatSettings)
+  );
+  let itemDisplayAmount = it.amount;
+  let hasVat = false;
+  if (it.metadata?.netAmount !== undefined && it.metadata?.netAmount !== null) {
+    itemDisplayAmount = it.metadata.netAmount;
+    hasVat = Boolean(it.metadata.isTaxable);
+  } else if (isTaxable && vatSettings?.enabled) {
+    const baseSatang = parseToSatangs(it.amount);
+    if (baseSatang > 0n) {
+      const rateNum = typeof vatSettings?.rate === 'number' ? vatSettings.rate : (Number(vatSettings?.rate) || 7);
+      const vatSatangs = (baseSatang * BigInt(Math.round(rateNum * 100)) + 5000n) / 10000n;
+      itemDisplayAmount = formatSatangs(baseSatang + vatSatangs);
+      hasVat = true;
+    }
+  }
+  return (
+    <span className="font-semibold text-slate-700 shrink-0">
+      {hasVat ? `(+VAT) ${formatBaht(itemDisplayAmount)}` : formatBaht(itemDisplayAmount)}
+    </span>
+  );
+}
+
+export function getEffectiveBillAmount(b: any, vatSettings: any): number {
+  if (!b) return 0;
+  if (b.isVatActive || (b.vatAmount !== undefined && Number(b.vatAmount) > 0)) {
+    return Number(b.outstandingAmount ?? b.totalAmount ?? 0);
+  }
+  if (vatSettings?.enabled && Array.isArray(b.items) && b.items.length > 0) {
+    let totalSatangs = 0n;
+    for (const it of b.items) {
+      if (!isNonZeroAmount(it.amount)) continue;
+      const isTaxable = Boolean(
+        it.metadata?.isTaxable ||
+        isCategoryTaxable(it.type || it.category || it.description || '', vatSettings)
+      );
+      const baseSatangs = parseToSatangs(it.amount);
+      if (isTaxable && baseSatangs > 0n) {
+        const rateNum = typeof vatSettings?.rate === 'number' ? vatSettings.rate : (Number(vatSettings?.rate) || 7);
+        const vatSatangs = (baseSatangs * BigInt(Math.round(rateNum * 100)) + 5000n) / 10000n;
+        totalSatangs += baseSatangs + vatSatangs;
+      } else {
+        totalSatangs += baseSatangs;
+      }
+    }
+    const paidSatangs = parseToSatangs(b.paidAmount || 0);
+    const outstandingSatangs = totalSatangs > paidSatangs ? totalSatangs - paidSatangs : 0n;
+    return Number(formatSatangs(b.paidAmount ? outstandingSatangs : totalSatangs));
+  }
+  return Number(b.outstandingAmount ?? b.totalAmount ?? 0);
+}
+
+export function getEffectiveBillTotal(b: any, vatSettings: any): number {
+  if (!b) return 0;
+  if (b.isVatActive || (b.vatAmount !== undefined && Number(b.vatAmount) > 0)) {
+    return Number(b.totalAmount ?? 0);
+  }
+  if (vatSettings?.enabled && Array.isArray(b.items) && b.items.length > 0) {
+    let totalSatangs = 0n;
+    for (const it of b.items) {
+      if (!isNonZeroAmount(it.amount)) continue;
+      const isTaxable = Boolean(
+        it.metadata?.isTaxable ||
+        isCategoryTaxable(it.type || it.category || it.description || '', vatSettings)
+      );
+      const baseSatangs = parseToSatangs(it.amount);
+      if (isTaxable && baseSatangs > 0n) {
+        const rateNum = typeof vatSettings?.rate === 'number' ? vatSettings.rate : (Number(vatSettings?.rate) || 7);
+        const vatSatangs = (baseSatangs * BigInt(Math.round(rateNum * 100)) + 5000n) / 10000n;
+        totalSatangs += baseSatangs + vatSatangs;
+      } else {
+        totalSatangs += baseSatangs;
+      }
+    }
+    return Number(formatSatangs(totalSatangs));
+  }
+  return Number(b.totalAmount ?? 0);
+}
+
 /**
  * Resolves the authoritative canonical receipt from a payment record.
  */
-export function resolveCanonicalReceipt(payment: PaymentRecord): any {
+export function resolveCanonicalReceipt(payment: PaymentRecord | any): any {
+  if (!payment) return null;
   if (payment.paymentGroupId && payment.paymentGroup?.receipts && payment.paymentGroup.receipts.length > 0) {
     return payment.paymentGroup.receipts[0];
   }
-  return payment.receipt;
+  if (payment.receipts && payment.receipts.length > 0) {
+    return payment.receipts[0];
+  }
+  if (payment.receipt?.receiptNumber) {
+    return payment.receipt;
+  }
+  if (Array.isArray(payment.payments)) {
+    for (const p of payment.payments) {
+      const r = resolveCanonicalReceipt(p);
+      if (r) return r;
+    }
+  }
+  return payment.receipt || null;
 }
 
 /**
@@ -300,27 +403,31 @@ export function resolveCanonicalReceipt(payment: PaymentRecord): any {
  * Consumes immutable snapshot data first for both single and multi-bill receipts.
  */
 export function buildViewingReceipt(
-  payment: PaymentRecord,
+  payment: any,
   bills: Bill[] = [],
   getCycleCodeForCycleId: (id?: string | null) => string = () => '',
   getRoomNum: (id?: string | null) => string = (id) => id || '',
   getTenantName: (id?: string | null) => string = (id) => id || ''
 ): any {
-  const rcpt = resolveCanonicalReceipt(payment);
+  const rcpt = resolveCanonicalReceipt(payment) ||
+    payment?.payments?.find((p: any) => p.receipt?.receiptNumber)?.receipt ||
+    payment?.payments?.[0]?.receipt;
   if (!rcpt || !rcpt.receiptNumber) {
     return null;
   }
 
   const snap = (rcpt.snapshotData as any) || {};
-  const roomNumber = snap.roomNumber || payment.bill?.room?.roomNumber || getRoomNum(payment.bill?.roomId || payment.bill?.room?.id);
-  const tenantName = snap.tenantName || payment.bill?.tenant?.displayName || getTenantName(payment.tenantId || payment.bill?.tenantId);
-  const totalAmount = Number(snap.total || rcpt.totalAmount || payment.amount || payment.bill?.totalAmount || 0);
+  const roomNumber = snap.roomNumber || payment.roomNumber || payment.room?.roomNumber || payment.bill?.room?.roomNumber || getRoomNum(payment.bill?.roomId || payment.bill?.room?.id || payment.roomId);
+  const tenantName = snap.tenantName || payment.tenantName || payment.tenant?.displayName || payment.bill?.tenant?.displayName || getTenantName(payment.tenantId || payment.bill?.tenantId);
+  const totalAmount = Number(snap.total || rcpt.totalAmount || payment.totalAmount || payment.amount || payment.bill?.totalAmount || 0);
 
   const targets = payment.paymentGroup?.billTargets || [];
   const groupPayments = (payment.paymentGroup as any)?.payments || [];
+  const directPayments = payment.payments || [];
   const isMultiBill =
     targets.length > 1 ||
     groupPayments.length > 1 ||
+    directPayments.length > 1 ||
     snap.isCombinedReceipt === true ||
     (Array.isArray(snap.billGroups) && snap.billGroups.length > 0);
 
@@ -373,6 +480,7 @@ export function buildViewingReceipt(
       const targetBillIds = [...new Set([
         ...targets.map((t: any) => t.billId),
         ...groupPayments.map((p: any) => p.billId),
+        ...directPayments.map((p: any) => p.billId || p.bill?.id),
       ])].filter(Boolean);
 
       billGroups = targetBillIds.map((bId: string) => {
@@ -462,6 +570,14 @@ export function buildViewingReceipt(
       receiverName: rcpt.snapshotData?.receiverName || rcpt.receiverName || snap.receiverName || '....................',
       isMultiBill: true,
       billGroups,
+      nonTaxableAmount: snap.nonTaxableAmount !== undefined ? Number(snap.nonTaxableAmount) : undefined,
+      subtotal: snap.subtotal !== undefined ? Number(snap.subtotal) : (rcpt.subtotal !== undefined ? Number(rcpt.subtotal) : undefined),
+      vatAmount: snap.vatAmount !== undefined ? Number(snap.vatAmount) : (rcpt.vatAmount !== undefined ? Number(rcpt.vatAmount) : undefined),
+      isVatActive: Boolean(snap.isVatActive || rcpt.isVatActive || (snap.vatAmount && Number(snap.vatAmount) > 0) || (rcpt.vatAmount && Number(rcpt.vatAmount) > 0)),
+      taxId: snap.taxId || rcpt.taxId,
+      dormitoryId: snap.dormitoryId || rcpt.dormitoryId || payment.dormitoryId,
+      dormitoryName: snap.dormitoryName || rcpt.dormitoryName,
+      dormitoryPhone: snap.dormitoryPhone || rcpt.dormitoryPhone,
     };
   }
 
@@ -484,7 +600,7 @@ export function buildViewingReceipt(
     type?: string;
   }> = [];
 
-  if (Array.isArray(snap.items) && snap.items.length > 0) {
+  if (Array.isArray(snap.items)) {
     const nonZeroSnap = filterNonZeroBillItems(snap.items);
     if (nonZeroSnap.length > 0) {
       items = nonZeroSnap.map((it: any) => ({
@@ -555,6 +671,14 @@ export function buildViewingReceipt(
     billTotal,
     allocatedAmount,
     items,
+    nonTaxableAmount: snap.nonTaxableAmount !== undefined ? Number(snap.nonTaxableAmount) : undefined,
+    subtotal: snap.subtotal !== undefined ? Number(snap.subtotal) : (targetBill?.subtotal !== undefined ? Number(targetBill.subtotal) : undefined),
+    vatAmount: snap.vatAmount !== undefined ? Number(snap.vatAmount) : (rcpt.vatAmount !== undefined ? Number(rcpt.vatAmount) : (targetBill?.vatAmount !== undefined ? Number(targetBill.vatAmount) : undefined)),
+    isVatActive: Boolean(snap.isVatActive || rcpt.isVatActive || targetBill?.isVatActive || (snap.vatAmount && Number(snap.vatAmount) > 0) || (rcpt.vatAmount && Number(rcpt.vatAmount) > 0) || (targetBill?.vatAmount && Number(targetBill.vatAmount) > 0)),
+    taxId: snap.taxId || rcpt.taxId,
+    dormitoryId: snap.dormitoryId || rcpt.dormitoryId || payment.dormitoryId,
+    dormitoryName: snap.dormitoryName || rcpt.dormitoryName,
+    dormitoryPhone: snap.dormitoryPhone || rcpt.dormitoryPhone,
   };
 }
 
@@ -679,6 +803,15 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
   });
   const currentAuthUserName = sessionData?.user?.name || sessionData?.user?.displayName || 'ผู้ดูแลระบบ';
 
+  // Query billing settings for VAT configuration
+  const { data: billingSettings } = useQuery({
+    queryKey: ['billingSettings', dormitoryId],
+    queryFn: () => (dormitoryId ? getBillingSettings(dormitoryId) : null),
+    enabled: Boolean(dormitoryId),
+    staleTime: 5 * 60 * 1000,
+  });
+  const vatSettings = billingSettings?.vatSettings || null;
+
   // Active Tab: 'paid' | 'checking' | 'cash' | 'rejected'
   const [activeTab, setActiveTab] = useState<'paid' | 'checking' | 'cash' | 'rejected'>('checking');
   const [searchQuery, setSearchQuery] = useState('');
@@ -786,6 +919,14 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
       metadata?: any;
       type?: string;
     }>;
+    subtotal?: number;
+    baseSubtotal?: number;
+    vatAmount?: number;
+    isVatActive?: boolean;
+    taxId?: string;
+    dormitoryId?: string;
+    dormitoryName?: string;
+    dormitoryPhone?: string;
   } | null>(null);
 
   const [viewingDailyGroupDetail, setViewingDailyGroupDetail] = useState<{
@@ -1608,7 +1749,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
     queryClient.invalidateQueries({ queryKey: queryKeys.payments(dormitoryId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.bills(dormitoryId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.dailyInvoices(dormitoryId) });
-    queryClient.invalidateQueries({ queryKey: ['meterPreviewContext'] });
+    queryClient.invalidateQueries({ queryKey: ['meter', dormitoryId] });
     queryClient.invalidateQueries({ queryKey: queryKeys.rooms(dormitoryId) });
     onUpdateBills();
   };
@@ -1714,7 +1855,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
   const handleConfirmCashPayment = async (bill: Bill) => {
     if (!dormitoryId) return;
     const roomNum = getRoomNum(bill.roomId);
-    const amount = Number(bill.outstandingAmount ?? bill.totalAmount ?? 0);
+    const amount = getEffectiveBillAmount(bill, vatSettings);
     const amountStr = formatBaht(amount);
     const opId = `cash:${bill.id}:${amount}`;
 
@@ -1813,7 +1954,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
     const targetBill = bills.find(b => b.id === cashTargetBillId);
     if (!targetBill) return;
 
-    const amount = customCashAmount ? Number(customCashAmount) : Number(targetBill.outstandingAmount ?? targetBill.totalAmount ?? 0);
+    const amount = customCashAmount ? Number(customCashAmount) : getEffectiveBillAmount(targetBill, vatSettings);
     const opId = `cash:${targetBill.id}:${amount}`;
     setIsSubmittingCash(true);
     try {
@@ -1854,11 +1995,19 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
   // 5. Open Authoritative Final Receipt Directly (/api/v1/receipts/{id}/print)
   const handleOpenReceipt = async (paymentOrGroup: any) => {
     try {
-      const billId = paymentOrGroup?.billId || paymentOrGroup?.bill?.id || (paymentOrGroup?.payments && paymentOrGroup.payments[0]?.billId);
+      const payments = paymentOrGroup?.payments || (paymentOrGroup?.billId ? [paymentOrGroup] : []);
+      const taxPayment = payments.find((p: any) => p.bill?.isVatActive || (p.bill?.vatAmount && Number(p.bill.vatAmount) > 0));
+      const targetPayment = taxPayment || payments[payments.length - 1] || payments[0] || paymentOrGroup;
+      const billId = targetPayment?.billId || targetPayment?.bill?.id || paymentOrGroup?.billId;
       let receiptId: string | null = null;
       
       if (billId) {
-        const token = localStorage.getItem('horplus_auth_token') || '';
+        let token = '';
+        try {
+          token = typeof window !== 'undefined' && window.localStorage ? window.localStorage.getItem('horplus_auth_token') || '' : '';
+        } catch {
+          // safe fallback
+        }
         const res = await fetch(`/api/v1/receipts/final/bill/${billId}`, {
           headers: token ? { Authorization: `Bearer ${token}` } : {},
         });
@@ -1873,9 +2022,45 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
         return;
       }
 
-      triggerToast('ไม่พบใบเสร็จรับเงินฉบับสมบูรณ์สำหรับรอบบิลนี้ กรุณาตรวจสอบว่าบิลได้รับการชำระครบถ้วนแล้ว');
+      // Fallback: build viewing receipt for on-screen modal
+      const receiptData = buildViewingReceipt(
+        paymentOrGroup,
+        bills,
+        getCycleCodeForCycleId,
+        getRoomNum,
+        getTenantName
+      );
+      if (receiptData) {
+        setViewingReceipt(receiptData);
+        setIsReceiptOpen(true);
+        return;
+      }
+
+      const isVat = Boolean(
+        vatSettings?.enabled ||
+        paymentOrGroup?.isVatActive ||
+        paymentOrGroup?.bill?.isVatActive ||
+        paymentOrGroup?.payments?.some((p: any) => p.bill?.isVatActive)
+      );
+      const docName = isVat ? 'ใบกำกับภาษี' : 'ใบเสร็จรับเงิน';
+      triggerToast(`ไม่พบ${docName}ฉบับสมบูรณ์สำหรับรอบบิลนี้ กรุณาตรวจสอบว่าบิลได้รับการชำระครบถ้วนแล้ว`);
     } catch (err) {
-      triggerToast('ไม่สามารถเปิดใบเสร็จรับเงินได้ กรุณาลองใหม่อีกครั้ง');
+      // Fallback in catch as well
+      const receiptData = buildViewingReceipt(
+        paymentOrGroup,
+        bills,
+        getCycleCodeForCycleId,
+        getRoomNum,
+        getTenantName
+      );
+      if (receiptData) {
+        setViewingReceipt(receiptData);
+        setIsReceiptOpen(true);
+        return;
+      }
+      const isVat = Boolean(vatSettings?.enabled);
+      const docName = isVat ? 'ใบกำกับภาษี' : 'ใบเสร็จรับเงิน';
+      triggerToast(`ไม่สามารถเปิด${docName}ได้ กรุณาลองใหม่อีกครั้ง`);
     }
   };
 
@@ -1884,7 +2069,12 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
       let receiptId: string | null = null;
       
       if (inv?.id) {
-        const token = localStorage.getItem('horplus_auth_token') || '';
+        let token = '';
+        try {
+          token = typeof window !== 'undefined' && window.localStorage ? window.localStorage.getItem('horplus_auth_token') || '' : '';
+        } catch {
+          // safe fallback
+        }
         const res = await fetch(`/api/v1/receipts/final/daily-invoice/${inv.id}`, {
           headers: token ? { Authorization: `Bearer ${token}` } : {},
         });
@@ -1899,9 +2089,11 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
         return;
       }
 
-      triggerToast('ไม่พบใบเสร็จรับเงินฉบับสมบูรณ์สำหรับการเข้าพักรายวันนี้ กรุณาตรวจสอบว่ายอดเงินได้รับการชำระครบถ้วนแล้ว');
+      const docName = vatSettings?.enabled ? 'ใบกำกับภาษี' : 'ใบเสร็จรับเงิน';
+      triggerToast(`ไม่พบ${docName}ฉบับสมบูรณ์สำหรับการเข้าพักรายวันนี้ กรุณาตรวจสอบว่ายอดเงินได้รับการชำระครบถ้วนแล้ว`);
     } catch (err) {
-      triggerToast('ไม่สามารถเปิดใบเสร็จรับเงินได้ กรุณาลองใหม่อีกครั้ง');
+      const docName = vatSettings?.enabled ? 'ใบกำกับภาษี' : 'ใบเสร็จรับเงิน';
+      triggerToast(`ไม่สามารถเปิด${docName}ได้ กรุณาลองใหม่อีกครั้ง`);
     }
   };
 
@@ -2175,7 +2367,8 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
               const roomNum = resolveAuthoritativeRoomNum(b);
               const isOverdue = b.status === 'overdue' || (b.dueDate && new Date(b.dueDate) < new Date());
               const overdueDays = getBillOverdueDays(b.dueDate);
-              const amount = Number(b.outstandingAmount ?? b.totalAmount ?? 0);
+              const amount = getEffectiveBillAmount(b, vatSettings);
+              const totalAmountNum = getEffectiveBillTotal(b, vatSettings);
               const isDepositBill = b.billKind === 'DEPOSIT';
               const isRentBill = b.billKind === 'RENT' || b.items?.some((it: any) => it.type === 'RENT' || (it.description || '').includes('ค่าเช่า'));
               const isDeposit = isDepositBill || b.items?.some((it: any) => it.type === 'DEPOSIT' || it.itemType === 'DEPOSIT' || (it.description || '').includes('ประกัน') || (it.description || '').includes('มัดจำ'));
@@ -2247,7 +2440,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                             >
                               <div className="flex justify-between items-center text-slate-600">
                                 <span>ยอดรวมเดิม:</span>
-                                <span className="font-semibold text-slate-800">{formatBaht(Number(b.totalAmount))}</span>
+                                <span className="font-semibold text-slate-800">{formatBaht(totalAmountNum)}</span>
                               </div>
                               <div className="flex justify-between items-center text-emerald-700">
                                 <span className="font-medium">ชำระแล้ว:</span>
@@ -2267,7 +2460,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                                     <span className="truncate pr-1 text-slate-500 font-medium">
                                       {formatCanonicalLineItemDescription(it)}:
                                     </span>
-                                    <span className="font-semibold text-slate-700 shrink-0">{formatBaht(it.amount)}</span>
+                                    {renderItemAmountWithVat(it, vatSettings)}
                                   </div>
                                 ))}
                               </div>
@@ -2305,7 +2498,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                                 <span className="truncate pr-1 text-slate-500 font-medium">
                                   {formatCanonicalLineItemDescription(it)}:
                                 </span>
-                                <span className="font-semibold text-slate-700 shrink-0">{formatBaht(it.amount)}</span>
+                                {renderItemAmountWithVat(it, vatSettings)}
                               </div>
                             ))}
                           </div>
@@ -2325,7 +2518,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                                 <span className="truncate pr-1 text-slate-500 font-medium">
                                   {formatCanonicalLineItemDescription(it)}:
                                 </span>
-                                <span className="font-semibold text-slate-700 shrink-0">{formatBaht(it.amount)}</span>
+                                {renderItemAmountWithVat(it, vatSettings)}
                               </div>
                             ))}
                           </div>
@@ -2595,11 +2788,14 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                     {group.payments.length >= 1 ? (
                       <button
                         type="button"
-                        onClick={() => handleOpenReceipt(group.payments[0])}
+                        onClick={() => handleOpenReceipt(group)}
                         className="py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-xs"
                       >
                         <Printer className="w-4 h-4" />
-                        ใบเสร็จรับเงิน
+                        {Boolean(
+                          vatSettings?.enabled ||
+                          group.payments.some(p => p.bill?.isVatActive || (p.bill?.vatAmount && Number(p.bill.vatAmount) > 0))
+                        ) ? 'ใบกำกับภาษี' : 'ใบเสร็จรับเงิน'}
                       </button>
                     ) : (
                       <div className="py-2.5 bg-slate-50 text-slate-400 font-bold text-xs rounded-xl flex items-center justify-center border border-slate-100">
@@ -2654,7 +2850,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                       className="py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-xs"
                     >
                       <Printer className="w-4 h-4" />
-                      ใบเสร็จรับเงิน
+                      {Boolean(vatSettings?.enabled || firstInv?.isVatActive) ? 'ใบกำกับภาษี' : 'ใบเสร็จรับเงิน'}
                     </button>
                   </div>
                 </div>
@@ -2893,7 +3089,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                 setCashTargetBillId(e.target.value);
                 const tb = bills.find(b => b.id === e.target.value);
                 if (tb) {
-                  setCustomCashAmount(String(tb.outstandingAmount ?? tb.totalAmount ?? ''));
+                  setCustomCashAmount(String(getEffectiveBillAmount(tb, vatSettings) || ''));
                 }
               }}
               className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white font-semibold text-slate-700"
@@ -2901,7 +3097,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
               <option value="">-- เลือกห้องพักที่มีบิลค้างชำระ --</option>
               {cashPendingBills.map(b => (
                 <option key={b.id} value={b.id}>
-                  ห้อง {getRoomNum(b.roomId)} &bull; ยอดคงเหลือ: {formatBaht(Number(b.outstandingAmount ?? b.totalAmount ?? 0))}
+                  ห้อง {getRoomNum(b.roomId)} &bull; ยอดคงเหลือ: {formatBaht(getEffectiveBillAmount(b, vatSettings))}
                 </option>
               ))}
             </select>
@@ -2914,7 +3110,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
               <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-1.5 text-slate-700">
                 <div className="flex justify-between">
                   <span>ยอดรวมบิล:</span>
-                  <span className="font-bold">{formatBaht(Number(tb.totalAmount || 0))}</span>
+                  <span className="font-bold">{formatBaht(getEffectiveBillTotal(tb, vatSettings))}</span>
                 </div>
                 <div className="flex justify-between">
                   <span>ชำระแล้ว:</span>
@@ -2922,7 +3118,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                 </div>
                 <div className="flex justify-between border-t border-slate-200 pt-1">
                   <span>ยอดคงเหลือปัจจุบัน:</span>
-                  <span className="font-extrabold text-indigo-600">{formatBaht(Number(tb.outstandingAmount ?? tb.totalAmount ?? 0))}</span>
+                  <span className="font-extrabold text-indigo-600">{formatBaht(getEffectiveBillAmount(tb, vatSettings))}</span>
                 </div>
               </div>
             );
@@ -2936,7 +3132,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
               min="0.01"
               max={(() => {
                 const tb = bills.find(b => b.id === cashTargetBillId);
-                return tb ? Number(tb.outstandingAmount ?? tb.totalAmount ?? 0) : undefined;
+                return tb ? getEffectiveBillAmount(tb, vatSettings) : undefined;
               })()}
               required
               value={customCashAmount}
@@ -2982,9 +3178,9 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
       </Modal>
 
       {/* Printable Receipt Modal */}
-      <Modal isOpen={isReceiptOpen} onClose={() => setIsReceiptOpen(false)} title="ใบเสร็จรับเงิน" size="lg">
+      <Modal isOpen={isReceiptOpen} onClose={() => setIsReceiptOpen(false)} title={Boolean(viewingReceipt?.isVatActive || (viewingReceipt?.vatAmount && Number(viewingReceipt?.vatAmount) > 0) || vatSettings?.enabled) ? 'ใบกำกับภาษี (TAX INVOICE)' : 'ใบเสร็จรับเงิน (RECEIPT)'} size="lg">
         {viewingReceipt && (
-          <PrintView title="พิมพ์ใบเสร็จ">
+          <PrintView title={Boolean(viewingReceipt.isVatActive || (viewingReceipt.vatAmount && Number(viewingReceipt.vatAmount) > 0) || vatSettings?.enabled) ? 'ใบกำกับภาษี (TAX INVOICE)' : 'พิมพ์ใบเสร็จ'}>
             <div className="space-y-5 text-xs text-slate-900 font-sans max-w-xl mx-auto leading-relaxed">
               <div className="flex justify-between items-start border-b border-slate-300 pb-4">
                 <div className="flex items-center gap-2.5">
@@ -3005,10 +3201,15 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                     <p className="text-[11px] text-slate-500 font-medium mt-0.5">
                       {viewingReceipt.dormitoryPhone ? `โทร. ${viewingReceipt.dormitoryPhone}` : 'โทร. 081-234-5678'}
                     </p>
+                    {viewingReceipt.taxId && (
+                      <p className="text-[10px] text-slate-500 font-medium mt-0.5">
+                        เลขประจำตัวผู้เสียภาษี: {viewingReceipt.taxId}
+                      </p>
+                    )}
                   </div>
                 </div>
                 <div className="text-right">
-                  <h4 className="font-extrabold text-slate-950 text-sm uppercase leading-tight">ใบเสร็จรับเงิน</h4>
+                  <h4 className="font-extrabold text-slate-950 text-sm uppercase leading-tight">{Boolean(viewingReceipt.isVatActive || (viewingReceipt.vatAmount && Number(viewingReceipt.vatAmount) > 0) || vatSettings?.enabled) ? 'ใบกำกับภาษี (TAX INVOICE)' : 'ใบเสร็จรับเงิน (RECEIPT)'}</h4>
                   <p className="text-[11px] text-slate-600 font-semibold mt-1">เลขที่: {viewingReceipt.receiptNumber}</p>
                   {viewingReceipt.isHistorical && !viewingReceipt.originalPaymentDateKnown ? (
                     <>
@@ -3057,7 +3258,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                           {group.items.map((it, idx) => (
                             <tr key={idx}>
                               <td className="p-2 text-slate-800 font-medium align-top">
-                                <div>{formatCanonicalLineItemDescription(it)}</div>
+                                <div>{formatItemDescription(it.description) || it.type || '-'}</div>
                                 <TierBreakdownView metadata={it.metadata} unit={it.unit} isPrint />
                               </td>
                               <td className="p-2 text-center text-slate-600 font-medium align-top">{formatBillingQuantity(it.quantity, it.unit)}</td>
@@ -3078,10 +3279,43 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                     </div>
                   ))}
 
-                  <div className="bg-slate-100 p-3 rounded-xl border border-slate-300 flex justify-between items-center text-xs font-black">
-                    <span className="text-slate-900 text-sm font-black">รวมรับสุทธิ:</span>
-                    <span className="text-indigo-900 text-base font-black">{formatBaht(viewingReceipt.totalAmount)}</span>
-                  </div>
+                  {viewingReceipt.isVatActive || (viewingReceipt.vatAmount && Number(viewingReceipt.vatAmount) > 0) ? (
+                    <div className="bg-slate-100 p-3 rounded-xl border border-slate-300 space-y-1.5 text-xs">
+                      {Boolean(viewingReceipt.nonTaxableAmount && Number(viewingReceipt.nonTaxableAmount) > 0) && (
+                        <div className="flex justify-between items-center text-slate-700">
+                          <span className="font-semibold">ยอดที่ไม่คิดภาษี (Non-taxable Amount):</span>
+                          <span className="font-bold text-slate-800">{formatBaht(viewingReceipt.nonTaxableAmount)}</span>
+                        </div>
+                      )}
+                      <div className="flex justify-between items-center text-slate-700">
+                        <span className="font-semibold">{Boolean(viewingReceipt.nonTaxableAmount && Number(viewingReceipt.nonTaxableAmount) > 0) ? 'รวมเงินก่อนภาษี (Taxable Subtotal):' : 'รวมเงินก่อนภาษี (Subtotal):'}</span>
+                        <span className="font-bold text-slate-800">
+                          {formatBaht(viewingReceipt.subtotal || viewingReceipt.baseSubtotal || (Number(viewingReceipt.totalAmount) - Number(viewingReceipt.vatAmount)))}
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center text-slate-700">
+                        <span className="font-semibold">ภาษีมูลค่าเพิ่ม 7% (VAT 7%):</span>
+                        <span className="font-bold text-amber-700">{formatBaht(viewingReceipt.vatAmount)}</span>
+                      </div>
+                      <div className="flex justify-between items-center text-slate-950 font-black border-t border-slate-300 pt-1.5">
+                        <span className="text-sm">จำนวนเงินรวมทั้งสิ้น (Total Net Amount):</span>
+                        <span className="text-indigo-900 text-base font-black">{formatBaht(viewingReceipt.totalAmount)}</span>
+                      </div>
+                      <div className="text-right font-bold text-indigo-800 text-xs pt-1">
+                        ({formatThaiBahtText(parseToSatangs(viewingReceipt.totalAmount))})
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="bg-slate-100 p-3 rounded-xl border border-slate-300 flex flex-col space-y-1 text-xs font-black">
+                      <div className="flex justify-between items-center">
+                        <span className="text-slate-900 text-sm font-black">รวมรับสุทธิ:</span>
+                        <span className="text-indigo-900 text-base font-black">{formatBaht(viewingReceipt.totalAmount)}</span>
+                      </div>
+                      <div className="text-right font-bold text-indigo-800 text-xs">
+                        ({formatThaiBahtText(parseToSatangs(viewingReceipt.totalAmount))})
+                      </div>
+                    </div>
+                  )}
                 </div>
               ) : (
                 /* Single-Bill Receipt Section */
@@ -3109,7 +3343,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                         {viewingReceipt.items?.map((it, idx) => (
                           <tr key={idx}>
                             <td className="p-3 text-slate-800 font-medium align-top">
-                              <div>{formatCanonicalLineItemDescription(it)}</div>
+                              <div>{formatItemDescription(it.description) || it.type || '-'}</div>
                               <TierBreakdownView metadata={it.metadata} unit={it.unit} isPrint />
                             </td>
                             <td className="p-3 text-center text-slate-600 font-medium align-top">{formatBillingQuantity(it.quantity, it.unit)}</td>
@@ -3117,22 +3351,63 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                             <td className="p-3 text-right font-bold text-slate-900 align-top">{formatBaht(it.amount)}</td>
                           </tr>
                         ))}
-                        {viewingReceipt.billTotal !== undefined && (
-                          <tr className="bg-slate-50/50 text-slate-600">
-                            <td colSpan={3} className="p-2.5 text-right font-semibold">ยอดบิล:</td>
-                            <td className="p-2.5 text-right font-bold text-slate-700">{formatBaht(viewingReceipt.billTotal)}</td>
-                          </tr>
+                        {viewingReceipt.isVatActive || (viewingReceipt.vatAmount && Number(viewingReceipt.vatAmount) > 0) ? (
+                          <>
+                            {Boolean(viewingReceipt.nonTaxableAmount && Number(viewingReceipt.nonTaxableAmount) > 0) && (
+                              <tr className="bg-slate-50/70 text-slate-700">
+                                <td colSpan={3} className="p-2.5 text-right font-semibold">ยอดที่ไม่คิดภาษี (Non-taxable Amount):</td>
+                                <td className="p-2.5 text-right font-bold text-slate-800">
+                                  {formatBaht(viewingReceipt.nonTaxableAmount)}
+                                </td>
+                              </tr>
+                            )}
+                            <tr className="bg-slate-50/70 text-slate-700">
+                              <td colSpan={3} className="p-2.5 text-right font-semibold">{Boolean(viewingReceipt.nonTaxableAmount && Number(viewingReceipt.nonTaxableAmount) > 0) ? 'รวมเงินก่อนภาษี (Taxable Subtotal):' : 'รวมเงินก่อนภาษี (Subtotal):'}</td>
+                              <td className="p-2.5 text-right font-bold text-slate-800">
+                                {formatBaht(viewingReceipt.subtotal || viewingReceipt.baseSubtotal || (Number(viewingReceipt.totalAmount) - Number(viewingReceipt.vatAmount)))}
+                              </td>
+                            </tr>
+                            <tr className="bg-slate-50/70 text-slate-700">
+                              <td colSpan={3} className="p-2.5 text-right font-semibold">ภาษีมูลค่าเพิ่ม 7% (VAT 7%):</td>
+                              <td className="p-2.5 text-right font-bold text-amber-700">
+                                {formatBaht(viewingReceipt.vatAmount)}
+                              </td>
+                            </tr>
+                            <tr className="bg-slate-100 font-black border-t border-slate-300">
+                              <td colSpan={3} className="p-3 text-right text-slate-950 font-black">จำนวนเงินรวมทั้งสิ้น (Total Net Amount):</td>
+                              <td className="p-3 text-right text-indigo-900 font-black text-sm">{formatBaht(viewingReceipt.totalAmount)}</td>
+                            </tr>
+                            <tr className="bg-slate-50/90 text-right">
+                              <td colSpan={4} className="p-2 text-right font-bold text-indigo-800 text-xs">
+                                ({formatThaiBahtText(parseToSatangs(viewingReceipt.totalAmount))})
+                              </td>
+                            </tr>
+                          </>
+                        ) : (
+                          <>
+                            {viewingReceipt.billTotal !== undefined && (
+                              <tr className="bg-slate-50/50 text-slate-600">
+                                <td colSpan={3} className="p-2.5 text-right font-semibold">ยอดบิล:</td>
+                                <td className="p-2.5 text-right font-bold text-slate-700">{formatBaht(viewingReceipt.billTotal)}</td>
+                              </tr>
+                            )}
+                            {viewingReceipt.billTotal !== undefined && viewingReceipt.allocatedAmount !== undefined && viewingReceipt.billTotal !== viewingReceipt.allocatedAmount && (
+                              <tr className="bg-slate-50/50 text-slate-600">
+                                <td colSpan={3} className="p-2.5 text-right font-semibold">ยอดรับชำระในใบเสร็จนี้:</td>
+                                <td className="p-2.5 text-right font-bold text-slate-900">{formatBaht(viewingReceipt.allocatedAmount)}</td>
+                              </tr>
+                            )}
+                            <tr className="bg-slate-100 font-black border-t border-slate-300">
+                              <td colSpan={3} className="p-3 text-right text-slate-950 font-black">รวมรับสุทธิ:</td>
+                              <td className="p-3 text-right text-indigo-900 font-black text-sm">{formatBaht(viewingReceipt.totalAmount)}</td>
+                            </tr>
+                            <tr className="bg-slate-50/90 text-right">
+                              <td colSpan={4} className="p-2 text-right font-bold text-indigo-800 text-xs">
+                                ({formatThaiBahtText(parseToSatangs(viewingReceipt.totalAmount))})
+                              </td>
+                            </tr>
+                          </>
                         )}
-                        {viewingReceipt.billTotal !== undefined && viewingReceipt.allocatedAmount !== undefined && viewingReceipt.billTotal !== viewingReceipt.allocatedAmount && (
-                          <tr className="bg-slate-50/50 text-slate-600">
-                            <td colSpan={3} className="p-2.5 text-right font-semibold">ยอดรับชำระในใบเสร็จนี้:</td>
-                            <td className="p-2.5 text-right font-bold text-slate-900">{formatBaht(viewingReceipt.allocatedAmount)}</td>
-                          </tr>
-                        )}
-                        <tr className="bg-slate-100 font-black border-t border-slate-300">
-                          <td colSpan={3} className="p-3 text-right text-slate-950 font-black">รวมรับสุทธิ:</td>
-                          <td className="p-3 text-right text-indigo-900 font-black text-sm">{formatBaht(viewingReceipt.totalAmount)}</td>
-                        </tr>
                       </tbody>
                     </table>
                   </div>
@@ -3147,13 +3422,21 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
               {/* Print-ready Two-Column Signature Area */}
               <div className="grid grid-cols-2 gap-8 pt-6 border-t border-slate-300 text-center text-xs text-slate-700 leading-relaxed">
                 <div>
-                  <p className="font-bold mb-8 text-slate-800">ผู้ชำระเงิน / ผู้เช่า</p>
+                  <p className="font-bold mb-8 text-slate-800">
+                    {Boolean(viewingReceipt?.isVatActive || (viewingReceipt?.vatAmount && Number(viewingReceipt?.vatAmount) > 0) || vatSettings?.enabled)
+                      ? 'ผู้รับใบกำกับภาษี'
+                      : 'ผู้ชำระเงิน / ผู้เช่า'}
+                  </p>
                   <p className="text-slate-600">ลงชื่อ ______________________________</p>
                   <p className="mt-1 text-slate-600">(__________________________________)</p>
                   <p className="mt-3 text-slate-600">วันที่ ______ / ______ / ______</p>
                 </div>
                 <div>
-                  <p className="font-bold mb-8 text-slate-800">ผู้รับเงิน / เจ้าของหอพัก</p>
+                  <p className="font-bold mb-8 text-slate-800">
+                    {Boolean(viewingReceipt?.isVatActive || (viewingReceipt?.vatAmount && Number(viewingReceipt?.vatAmount) > 0) || vatSettings?.enabled)
+                      ? 'ผู้มีอำนาจลงนาม / ผู้รับเงิน'
+                      : 'ผู้รับเงิน / เจ้าของหอพัก'}
+                  </p>
                   <p className="text-slate-600">ลงชื่อ ______________________________</p>
                   <p className="mt-1 text-slate-600">(__________________________________)</p>
                   <p className="mt-3 text-slate-600">วันที่ ______ / ______ / ______</p>

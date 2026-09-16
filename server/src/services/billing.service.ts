@@ -20,7 +20,7 @@ import { subscriptionEntitlementService } from './subscription-entitlement.servi
 import { toDecimal, addDecimals, mulDecimals, divDecimals, formatDecimal, subDecimals, compareDecimals, isZeroDecimal } from '../utils/decimal-math.util.js';
 import { calculateInstallmentSchedule } from '../utils/installment-calculator.util.js';
 import { normalizeUtilityBillingMode } from '../utils/billing-mode-normalizer.util.js';
-import { calculateCanonicalMonthlyUtility } from '../utils/monthly-utility-calculator.util.js';
+import { calculateCanonicalMonthlyUtility, calculateCategoryStrictVat } from '../utils/monthly-utility-calculator.util.js';
 import { isAgreementEligibleForBillingCycle } from '../utils/calendar-date.util.js';
 import { resolveCycleAwareVehicleCount, resolveCurrentActiveVehicleCount } from '../utils/vehicle-billing.util.js';
 import { getPrismaClient } from '../db/prisma.js';
@@ -145,8 +145,12 @@ export interface BillPreviewResult {
   otherFees?: Array<{ description: string; amount: string }>;
   peopleCount: number;
   subtotal: string;
+  vatableSubtotal?: string;
+  vatAmount?: string;
   discountAmount: string;
   totalAmount: string;
+  netTotal?: string;
+  isVatActive?: boolean;
   items: Array<{
     type: string;
     description: string;
@@ -545,10 +549,30 @@ export class BillingService {
       otherFeesList = utilityResult.otherFees;
     }
 
-    let subtotalDec = toDecimal('0.00');
-    for (const item of items) {
-      subtotalDec = addDecimals(subtotalDec, item.amount);
+    let billingSettings: any = null;
+    try {
+      billingSettings = await client.dormitoryBillingSettings.findUnique({
+        where: { dormitoryId },
+      });
+    } catch {
+      // Fallback gracefully if database or mock
     }
+    const vatSettings = (billingSettings?.vatSettings as any) || null;
+    const vatCalc = calculateCategoryStrictVat(items, vatSettings);
+
+    const enrichedItems = vatCalc.items.map((vi) => {
+      const item = { ...vi.item };
+      if (vi.isTaxable) {
+        item.metadata = {
+          ...(item.metadata || {}),
+          isTaxable: true,
+          vatRate: vi.vatRate,
+          vatAmount: vi.vatAmount,
+          netAmount: vi.netAmount,
+        };
+      }
+      return item;
+    });
 
     const rentItemAmount = items.find((i) => i.type === 'rent')?.amount || '0.00';
 
@@ -571,10 +595,14 @@ export class BillingService {
       lateFeeAmount: items.find((i) => i.type === 'late_fee')?.amount || '0.00',
       otherFees: otherFeesList,
       peopleCount,
-      subtotal: formatDecimal(subtotalDec),
+      subtotal: vatCalc.baseSubtotal,
+      vatableSubtotal: vatCalc.vatableSubtotal,
+      vatAmount: vatCalc.vatAmount,
       discountAmount: '0.00',
-      totalAmount: formatDecimal(subtotalDec),
-      items,
+      totalAmount: vatCalc.netTotal,
+      netTotal: vatCalc.netTotal,
+      isVatActive: vatCalc.isVatActive,
+      items: enrichedItems,
     };
   }
 
@@ -724,14 +752,24 @@ export class BillingService {
         throw err;
       }
 
-      let subtotalDec = toDecimal('0.00');
-      for (const item of billItems) {
-        subtotalDec = addDecimals(subtotalDec, item.amount);
-      }
-
       const discountDec = toDecimal(data.discountAmount || '0.00');
-      const rawTotal = subDecimals(subtotalDec, discountDec);
-      const totalDec = compareDecimals(rawTotal, '0.00') < 0 ? toDecimal('0.00') : rawTotal;
+      const vatSettings = (settings?.vatSettings as any) || null;
+      const vatCalc = calculateCategoryStrictVat(billItems, vatSettings, formatDecimal(discountDec));
+
+      // Enrich bill items with VAT metadata
+      vatCalc.items.forEach((vi, idx) => {
+        if (vi.isTaxable) {
+          billItems[idx].metadata = {
+            ...(billItems[idx].metadata || {}),
+            isTaxable: true,
+            vatRate: vi.vatRate,
+            vatAmount: vi.vatAmount,
+            netAmount: vi.netAmount,
+          };
+        }
+      });
+
+      const totalDec = toDecimal(vatCalc.netTotal);
       const isZeroTotal = isZeroDecimal(totalDec);
       const effectiveStatus = isZeroTotal ? 'paid' : 'unpaid';
       const effectiveOutstanding = isZeroTotal ? '0.00' : formatDecimal(totalDec);
@@ -754,7 +792,7 @@ export class BillingService {
             status: effectiveStatus,
             billingDate,
             dueDate,
-            subtotal: formatDecimal(subtotalDec),
+            subtotal: vatCalc.baseSubtotal,
             discountAmount: formatDecimal(discountDec),
             totalAmount: formatDecimal(totalDec),
             paidAmount: effectivePaidAmount,

@@ -142,8 +142,8 @@ describe('OWNER R3.8e Frontend Receipt Resolution & Immutability', () => {
     });
 
     // Find and click the 'ใบเสร็จรับเงิน' button
-    const receiptBtns = screen.getAllByRole('button', { name: /ใบเสร็จรับเงิน/ });
-    fireEvent.click(receiptBtns[0]);
+    const receiptBtn = await screen.findByRole('button', { name: /ใบเสร็จรับเงิน/ });
+    fireEvent.click(receiptBtn);
 
     // Verify modal is open and displays Canonical Group Receipt data
     await waitFor(() => {
@@ -242,8 +242,8 @@ describe('OWNER R3.8e Frontend Receipt Resolution & Immutability', () => {
       expect(screen.getByText('ห้อง 302')).toBeInTheDocument();
     });
 
-    const receiptBtns = screen.getAllByRole('button', { name: /ใบเสร็จรับเงิน/ });
-    fireEvent.click(receiptBtns[0]);
+    const receiptBtn = await screen.findByRole('button', { name: /ใบเสร็จรับเงิน/ });
+    fireEvent.click(receiptBtn);
 
     await waitFor(() => {
       expect(screen.getByText('เลขที่: RCP-LEGACY-001')).toBeInTheDocument();

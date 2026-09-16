@@ -9,6 +9,7 @@ import {
   OnboardingDraftInputSchema,
   ValidatePromoInputSchema,
 } from '../types/onboarding-validation.js';
+import { sanitizeActorUserIdToUuid } from '../services/idempotency.service.js';
 
 export function createOnboardingRouter(
   authService: AuthenticationService,
@@ -46,14 +47,14 @@ export function createOnboardingRouter(
 
   // GET /api/v1/onboarding/status
   router.get('/status', requireSession, async (req: Request, res: Response) => {
-    const userId = req.auth!.userId;
+    const userId = sanitizeActorUserIdToUuid(req.auth!.userId);
     const status = await onboardingService.getStatus(userId);
     res.json({ data: status });
   });
 
   // GET /api/v1/onboarding/draft
   router.get('/draft', requireSession, async (req: Request, res: Response) => {
-    const userId = req.auth!.userId;
+    const userId = sanitizeActorUserIdToUuid(req.auth!.userId);
     const draft = await onboardingService.getDraft(userId);
     res.json({
       data: draft
@@ -86,7 +87,7 @@ export function createOnboardingRouter(
       });
     }
 
-    const userId = req.auth!.userId;
+    const userId = sanitizeActorUserIdToUuid(req.auth!.userId);
     await onboardingService.saveDraft(userId, parsed.data.currentStep, parsed.data.payload, req.body.provisionalDormitoryId);
     const draft = await onboardingService.getDraft(userId);
 
@@ -109,7 +110,7 @@ export function createOnboardingRouter(
     if (!verifyCsrfToken(req, res)) return;
 
     try {
-      const userId = req.auth!.userId;
+      const userId = sanitizeActorUserIdToUuid(req.auth!.userId);
       const result = await provisioningService.prepareProvisionalDormitory(userId, req.body || {});
       res.json({ data: result });
     } catch (err: any) {
@@ -130,7 +131,7 @@ export function createOnboardingRouter(
   router.delete('/draft', requireSession, async (req: Request, res: Response) => {
     if (!verifyCsrfToken(req, res)) return;
 
-    const userId = req.auth!.userId;
+    const userId = sanitizeActorUserIdToUuid(req.auth!.userId);
     await onboardingService.deleteDraft(userId);
 
     res.json({ data: { success: true, message: 'ลบข้อมูลร่างสำเร็จ' } });
@@ -153,7 +154,7 @@ export function createOnboardingRouter(
       });
     }
 
-    const userId = req.auth?.userId;
+    const userId = req.auth?.userId ? sanitizeActorUserIdToUuid(req.auth.userId) : undefined;
     const result = await promoService.validatePromo(parsed.data.code, userId);
     res.json({
       data: {
@@ -193,7 +194,7 @@ export function createOnboardingRouter(
     }
 
     try {
-      const userId = req.auth!.userId;
+      const userId = sanitizeActorUserIdToUuid(req.auth!.userId);
       const result = await provisioningService.completeOwnerOnboarding({
         userId,
         idempotencyKey,

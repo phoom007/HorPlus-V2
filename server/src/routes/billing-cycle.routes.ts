@@ -27,6 +27,35 @@ const decimalMoneyStringSchema = z
     'Monetary amount must be a valid non-negative decimal string (up to 10 integer digits and 2 decimal places)'
   );
 
+const normalizeParkingMode = (val: unknown) => {
+  if (typeof val === 'string') {
+    const v = val.trim().toLowerCase();
+    if (v === 'fixed' || v === 'room') return 'per_room';
+    if (v === 'person') return 'per_person';
+    if (v === 'vehicle') return 'per_vehicle';
+    if (v === 'none') return 'free';
+  }
+  return val;
+};
+
+const normalizeFeeMode = (val: unknown) => {
+  if (typeof val === 'string') {
+    const v = val.trim().toLowerCase();
+    if (v === 'fixed' || v === 'room') return 'per_room';
+    if (v === 'person') return 'per_person';
+    if (v === 'none') return 'free';
+  }
+  return val;
+};
+
+const normalizeLateFeeType = (val: unknown) => {
+  if (typeof val === 'string') {
+    const v = val.trim().toLowerCase();
+    if (v === '' || v === 'off' || v === 'none' || v === 'free') return 'none';
+  }
+  return val;
+};
+
 export const UpdateCycleRateSnapshotSchema = z
   .object({
     expectedVersion: z
@@ -39,13 +68,13 @@ export const UpdateCycleRateSnapshotSchema = z
     electricityBillingType: z.enum(['per_unit', 'per_person', 'fixed', 'tiered']).optional(),
     electricityRate: decimalMoneyStringSchema.optional(),
     electricityTierRates: z.array(z.object({ upTo: z.string().nullable().optional(), rate: z.string() })).nullable().optional(),
-    commonFeeMode: z.enum(['per_room', 'per_person', 'free']).optional(),
+    commonFeeMode: z.preprocess(normalizeFeeMode, z.enum(['per_room', 'per_person', 'free'])).optional(),
     commonFee: decimalMoneyStringSchema.optional(),
-    internetFeeMode: z.enum(['per_room', 'per_person', 'free']).optional(),
+    internetFeeMode: z.preprocess(normalizeFeeMode, z.enum(['per_room', 'per_person', 'free'])).optional(),
     internetFee: decimalMoneyStringSchema.optional(),
-    parkingFeeMode: z.enum(['per_room', 'per_person', 'per_vehicle', 'free']).optional(),
+    parkingFeeMode: z.preprocess(normalizeParkingMode, z.enum(['per_room', 'per_person', 'per_vehicle', 'free'])).optional(),
     parkingFee: decimalMoneyStringSchema.optional(),
-    lateFeeType: z.enum(['none', 'daily', 'fixed', 'percentage']).optional(),
+    lateFeeType: z.preprocess(normalizeLateFeeType, z.enum(['none', 'daily', 'fixed', 'percentage'])).optional(),
     lateFeeValue: decimalMoneyStringSchema.optional(),
   })
   .strict();

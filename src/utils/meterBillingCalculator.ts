@@ -9,6 +9,8 @@
  * 4. Meter reading and usage domain is whole integer units (0..99999). Rates and financial products preserve exact 2-decimal satang precision.
  */
 
+import { VatSettings, calculateCategoryStrictVat } from './vat-calculator';
+
 export function isMeterBasedUtilityMode(mode?: string | null): boolean {
   if (!mode) return false;
   const m = String(mode).trim().toLowerCase();
@@ -50,6 +52,7 @@ export interface RateSnapshotContext {
   internetFee?: string | number;
   parkingFeeMode?: 'per_room' | 'per_person' | 'per_vehicle' | 'free' | 'room' | 'person' | 'vehicle' | 'none' | string;
   parkingFee?: string | number;
+  vatSettings?: VatSettings | null;
 }
 
 export interface RoomPreviewContext {
@@ -106,6 +109,9 @@ export interface CalculatedMeterPreview {
   parkingAmount: string;
   otherFeesAmount: string;
   overdueAmount: string;
+  subtotalAmount?: string;
+  vatAmount?: string;
+  isVatActive?: boolean;
   totalAmount: string;
   formattedTotal: string;
 }
@@ -716,7 +722,16 @@ export function calculateMeterRowPreview(
     const depositDueSatang = (roomCtx.showDailyDepositLine && !roomCtx.isDailyDepositPaidInDisplayedPeriod)
       ? parseSatang(roomCtx.dailyDepositAmount)
       : 0n;
-    const totalDailySatang = rentSatang + depositDueSatang;
+    const subtotalDailySatang = rentSatang + depositDueSatang;
+
+    const dailyItemsForVat: Array<{ type: string; amount: string }> = [];
+    if (rentSatang > 0n) {
+      dailyItemsForVat.push({ type: 'rent', amount: formatSatang(rentSatang) });
+    }
+    const dailyVatCalc = calculateCategoryStrictVat(dailyItemsForVat, rates?.vatSettings);
+    const dailyVatSatang = parseSatang(dailyVatCalc.vatAmount);
+
+    const totalDailySatang = subtotalDailySatang + dailyVatSatang;
     const totalStr = formatSatang(totalDailySatang);
 
     return {
@@ -738,21 +753,52 @@ export function calculateMeterRowPreview(
       parkingAmount: '0.00',
       otherFeesAmount: '0.00',
       overdueAmount: '0.00',
+      subtotalAmount: formatSatang(subtotalDailySatang),
+      vatAmount: dailyVatCalc.vatAmount,
+      isVatActive: dailyVatCalc.isVatActive,
       totalAmount: totalStr,
       formattedTotal: formatMoneyDisplay(totalStr),
     };
   }
 
   // 9. Standard Monthly Utility Total Amount (Monthly Utility never absorbs rent; rent is independent)
-  const totalSatang =
+  // Base subtotal of utilities and other fees
+  const subtotalSatang =
     waterAmountSatang +
     elecAmountSatang +
     commonAmountSatang +
     internetAmountSatang +
     parkingAmountSatang +
-    otherFeesSatang +
-    overdueSatang;
+    otherFeesSatang;
 
+  // Category-Strict VAT 7% Calculation
+  const itemsForVat: Array<{ type: string; amount: string; description?: string }> = [];
+  if (waterStatus === 'VALID' && waterAmountSatang > 0n) {
+    itemsForVat.push({ type: 'water', amount: formatSatang(waterAmountSatang), description: 'ค่าน้ำประปา' });
+  }
+  if (elecStatus === 'VALID' && elecAmountSatang > 0n) {
+    itemsForVat.push({ type: 'electricity', amount: formatSatang(elecAmountSatang), description: 'ค่าไฟฟ้า' });
+  }
+  if (commonAmountSatang > 0n) {
+    itemsForVat.push({ type: 'commonFee', amount: formatSatang(commonAmountSatang), description: 'ค่าส่วนกลาง' });
+  }
+  if (internetAmountSatang > 0n) {
+    itemsForVat.push({ type: 'internetFee', amount: formatSatang(internetAmountSatang), description: 'ค่าอินเทอร์เน็ต' });
+  }
+  if (parkingAmountSatang > 0n) {
+    itemsForVat.push({ type: 'parking', amount: formatSatang(parkingAmountSatang), description: 'ค่าที่จอดรถ' });
+  }
+  for (const f of draft.otherFees || []) {
+    const amtSatang = parseSatang(f.amount);
+    if (amtSatang > 0n) {
+      itemsForVat.push({ type: 'other', amount: formatSatang(amtSatang), description: f.description });
+    }
+  }
+
+  const vatCalc = calculateCategoryStrictVat(itemsForVat, rates?.vatSettings);
+  const vatSatang = parseSatang(vatCalc.vatAmount);
+
+  const totalSatang = subtotalSatang + overdueSatang + vatSatang;
   const totalStr = formatSatang(totalSatang);
 
   return {
@@ -774,6 +820,9 @@ export function calculateMeterRowPreview(
     parkingAmount: formatSatang(parkingAmountSatang),
     otherFeesAmount: formatSatang(otherFeesSatang),
     overdueAmount: formatSatang(overdueSatang),
+    subtotalAmount: formatSatang(subtotalSatang),
+    vatAmount: vatCalc.vatAmount,
+    isVatActive: vatCalc.isVatActive,
     totalAmount: overallStatus === 'INVALID' ? 'INVALID' : totalStr,
     formattedTotal: overallStatus === 'INVALID' ? 'รูปแบบคิดเงินไม่ถูกต้อง' : formatMoneyDisplay(totalStr),
   };

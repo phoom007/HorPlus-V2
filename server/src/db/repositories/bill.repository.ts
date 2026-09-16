@@ -202,7 +202,7 @@ export class InMemoryBillRepository implements IBillRepository {
           b.dormitoryId === dormitoryId &&
           b.billingCycleId === billingCycleId &&
           b.roomId === roomId &&
-          b.billKind === 'MONTHLY_UTILITY' &&
+          Boolean(b.billKind && ['MONTHLY_UTILITY', 'COMBINED', 'LEGACY_COMBINED'].includes(b.billKind)) &&
           b.status !== 'cancelled' &&
           b.status !== 'void'
       ) || null
@@ -708,7 +708,7 @@ export class PrismaBillRepository implements IBillRepository {
         dormitoryId,
         billingCycleId,
         roomId,
-        billKind: 'MONTHLY_UTILITY',
+        billKind: { in: ['MONTHLY_UTILITY', 'COMBINED', 'LEGACY_COMBINED'] },
         status: { notIn: ['cancelled', 'void'] },
       },
       orderBy: { createdAt: 'desc' },

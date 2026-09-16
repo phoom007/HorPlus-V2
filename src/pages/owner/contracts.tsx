@@ -129,7 +129,7 @@ export const OwnerContracts: React.FC<OwnerContractsProps> = ({
   onClearInitialContractId,
   onBackToTenants
 }) => {
-  const getDormId = () => dormitoryId || (typeof window !== 'undefined' ? (localStorage.getItem('selected_dormitory_id') || sessionStorage.getItem('active_dormitory_selected_for_session')) : '') || '';
+  const getDormId = () => dormitoryId || (typeof window !== 'undefined' ? ((typeof localStorage !== 'undefined' ? localStorage.getItem('selected_dormitory_id') : null) || (typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('active_dormitory_selected_for_session') : null)) : '') || '';
   const effectiveDormId = getDormId();
 
   const [paymentSettings, setPaymentSettings] = useState<PaymentSettingsDTO | null>(null);

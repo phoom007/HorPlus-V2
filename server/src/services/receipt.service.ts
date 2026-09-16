@@ -61,6 +61,7 @@ export class ReceiptService {
         receiptKind: 'FINAL_SETTLEMENT',
         isVoided: false,
       },
+      orderBy: { createdAt: 'desc' },
       include: {
         bill: {
           include: {
@@ -82,6 +83,7 @@ export class ReceiptService {
         settlementScopeKey,
         receiptKind: 'FINAL_SETTLEMENT',
       },
+      orderBy: { createdAt: 'desc' },
     });
     if (anyExisting) {
       return null;
@@ -107,6 +109,7 @@ export class ReceiptService {
         receiptKind: 'FINAL_SETTLEMENT',
         isVoided: false,
       },
+      orderBy: { createdAt: 'desc' },
       include: {
         bill: {
           include: {

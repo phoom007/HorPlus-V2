@@ -654,3 +654,150 @@ export function calculateCanonicalMonthlyUtility(
     isValid: true,
   };
 }
+
+/**
+ * Exact satang / integer conversion helpers to eliminate floating-point drift.
+ */
+export function parseToSatangs(amountStr: string | number): bigint {
+  const str = typeof amountStr === 'number' ? amountStr.toFixed(2) : String(amountStr).trim();
+  if (!str) return 0n;
+  const isNegative = str.startsWith('-');
+  const cleanStr = isNegative ? str.slice(1) : str;
+  const [intPart, fracPart = ''] = cleanStr.split('.');
+  const paddedFrac = (fracPart + '00').slice(0, 2);
+  const val = BigInt(intPart || '0') * 100n + BigInt(paddedFrac);
+  return isNegative ? -val : val;
+}
+
+export function formatSatangs(satangs: bigint): string {
+  const isNegative = satangs < 0n;
+  const absVal = isNegative ? -satangs : satangs;
+  const intPart = (absVal / 100n).toString();
+  const fracPart = (absVal % 100n).toString().padStart(2, '0');
+  return `${isNegative ? '-' : ''}${intPart}.${fracPart}`;
+}
+
+export interface CanonicalVatSettingsInput {
+  enabled?: boolean | null;
+  rate?: number | string | null;
+  appliedCategories?: string[] | null;
+}
+
+export interface CanonicalVatItemInput {
+  type: string;
+  amount: string | number;
+  description?: string;
+  metadata?: any;
+  [key: string]: any;
+}
+
+export interface CanonicalVatItemResult<T extends CanonicalVatItemInput = CanonicalVatItemInput> {
+  item: T;
+  type: string;
+  baseAmount: string;
+  isTaxable: boolean;
+  vatRate: string;
+  vatAmount: string;
+  netAmount: string;
+}
+
+export interface CanonicalVatCalculationResult<T extends CanonicalVatItemInput = CanonicalVatItemInput> {
+  baseSubtotal: string;
+  vatableSubtotal: string;
+  nonVatableSubtotal: string;
+  vatRate: string;
+  vatAmount: string;
+  netTotal: string;
+  isVatActive: boolean;
+  items: CanonicalVatItemResult<T>[];
+}
+
+/**
+ * Checks if a bill item type is subject to VAT according to appliedCategories.
+ */
+export function isCategoryTaxable(
+  itemType: string,
+  vatSettings?: CanonicalVatSettingsInput | null
+): boolean {
+  if (!vatSettings || !vatSettings.enabled) return false;
+  const applied = vatSettings.appliedCategories || (vatSettings as any).categories;
+  if (!Array.isArray(applied) || applied.length === 0) return false;
+
+  const normalizedType = itemType.toLowerCase().replace(/[-\s_]/g, '');
+  return applied.some((cat) => {
+    const normalizedCat = String(cat).toLowerCase().replace(/[-\s_]/g, '');
+    if (normalizedCat === normalizedType) return true;
+    if ((normalizedCat === 'rent' || normalizedCat === 'room') && (normalizedType === 'rent' || normalizedType === 'room' || normalizedType === 'roomrent')) return true;
+    if (normalizedCat === 'commonfee' && (normalizedType === 'common' || normalizedType === 'commonfee')) return true;
+    if (normalizedCat === 'internetfee' && (normalizedType === 'internet' || normalizedType === 'internetfee')) return true;
+    if (normalizedCat === 'parking' && (normalizedType === 'parking' || normalizedType === 'parkingfee')) return true;
+    if (normalizedCat === 'fine' && (normalizedType === 'fine' || normalizedType === 'latefee')) return true;
+    if (normalizedCat === 'other' && (normalizedType === 'other' || normalizedType === 'custom' || normalizedType === 'otherfee')) return true;
+    return false;
+  });
+}
+
+/**
+ * Centralized Category-Strict VAT 7% Calculation Engine.
+ * Follows Exclusive VAT model: Base Price + VAT 7% = Net Total.
+ * Uses exact satangs arithmetic to eliminate floating-point rounding errors.
+ */
+export function calculateCategoryStrictVat<T extends CanonicalVatItemInput = CanonicalVatItemInput>(
+  items: T[],
+  vatSettings?: CanonicalVatSettingsInput | null,
+  discountAmount?: string | number | null
+): CanonicalVatCalculationResult<T> {
+  const isVatEnabled = Boolean(vatSettings?.enabled);
+  const vatRateNum = typeof vatSettings?.rate === 'number' ? vatSettings.rate : (Number(vatSettings?.rate) || 7);
+  const vatRateStr = vatRateNum.toFixed(2);
+  const vatRateBigInt = BigInt(Math.round(vatRateNum * 100)); // 7.00% = 700n (basis points)
+
+  let baseSubtotalSatangs = 0n;
+  let vatableSubtotalSatangs = 0n;
+  let nonVatableSubtotalSatangs = 0n;
+  let totalVatSatangs = 0n;
+
+  const itemResults: CanonicalVatItemResult<T>[] = items.map((item) => {
+    const baseSatangs = parseToSatangs(item.amount);
+    baseSubtotalSatangs += baseSatangs;
+
+    const taxable = isVatEnabled && isCategoryTaxable(item.type, vatSettings);
+    let itemVatSatangs = 0n;
+
+    if (taxable && baseSatangs > 0n) {
+      vatableSubtotalSatangs += baseSatangs;
+      itemVatSatangs = (baseSatangs * vatRateBigInt + 5000n) / 10000n;
+      totalVatSatangs += itemVatSatangs;
+    } else {
+      nonVatableSubtotalSatangs += baseSatangs;
+    }
+
+    const netSatangs = baseSatangs + itemVatSatangs;
+
+    return {
+      item,
+      type: item.type,
+      baseAmount: formatSatangs(baseSatangs),
+      isTaxable: taxable,
+      vatRate: taxable ? vatRateStr : '0.00',
+      vatAmount: formatSatangs(itemVatSatangs),
+      netAmount: formatSatangs(netSatangs),
+    };
+  });
+
+  const discountSatangs = discountAmount ? parseToSatangs(discountAmount) : 0n;
+  const netTotalSatangs = baseSubtotalSatangs + totalVatSatangs - discountSatangs;
+  const finalNetTotal = netTotalSatangs < 0n ? 0n : netTotalSatangs;
+
+  return {
+    baseSubtotal: formatSatangs(baseSubtotalSatangs),
+    vatableSubtotal: formatSatangs(vatableSubtotalSatangs),
+    nonVatableSubtotal: formatSatangs(nonVatableSubtotalSatangs),
+    vatRate: isVatEnabled ? vatRateStr : '0.00',
+    vatAmount: formatSatangs(totalVatSatangs),
+    netTotal: formatSatangs(finalNetTotal),
+    isVatActive: isVatEnabled && totalVatSatangs > 0n,
+    items: itemResults,
+  };
+}
+

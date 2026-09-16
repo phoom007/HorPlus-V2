@@ -314,6 +314,18 @@ export class SignatureStorageService {
     });
   }
 
+  async deactivateDormitorySignature(dormitoryId: string): Promise<boolean> {
+    return await this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${dormitoryId}))`;
+      const updated = await tx.ownerSignature.updateMany({
+        where: { dormitoryId, isCurrent: true },
+        data: { isCurrent: false },
+      });
+      return updated.count > 0;
+    });
+  }
+
   async getSignatureStream(objectKey: string): Promise<Readable> {
     return await this.provider.getStream(objectKey);
   }

@@ -390,7 +390,7 @@ describe('HORPLUS LOCAL-07 — PO UAT Targeted Correction Suite', () => {
         />
       );
 
-      expect(screen.getByText('รอชำระ')).toBeDefined();
+      expect(screen.getByText('ชำระแล้ว')).toBeDefined();
       const switchBtn = screen.getByRole('switch');
       expect(switchBtn.getAttribute('aria-checked')).toBe('true');
       expect(switchBtn.hasAttribute('disabled')).toBe(true);
@@ -969,7 +969,7 @@ describe('HORPLUS LOCAL-07 — PO UAT Targeted Correction Suite', () => {
       });
     });
 
-    it('RES5: MU paid + Rent unpaid -> statusKey UNPAID, รอชำระ, warning tone, isMonthlyUtilityPaid true', () => {
+    it('RES5: MU paid + Rent unpaid -> statusKey PAID, ชำระแล้ว, success tone, isMonthlyUtilityPaid true', () => {
       const res = resolveOwnerMeterDisplayStatus({
         billingSource: 'CONTRACT',
         monthlyUtilityBillStatus: 'paid',
@@ -978,13 +978,13 @@ describe('HORPLUS LOCAL-07 — PO UAT Targeted Correction Suite', () => {
         isMonthlyUtilityPaid: true,
       });
       expect(res).toEqual({
-        statusKey: 'UNPAID',
-        label: 'รอชำระ',
-        tone: 'warning',
+        statusKey: 'PAID',
+        label: 'ชำระแล้ว',
+        tone: 'success',
         isDaily: false,
         isMonthlyUtilityIssued: true,
         isMonthlyUtilityPaid: true,
-        isOverallPaid: false,
+        isOverallPaid: true,
         hasValidationError: false,
       });
     });

@@ -7,6 +7,7 @@ import { Prisma } from '@prisma/client';
 import { Decimal } from 'decimal.js';
 import { AppError } from '../types/index.js';
 import { computeCanonicalAllocationPlan } from './allocation.util.js';
+import { calculateCategoryStrictVat } from './monthly-utility-calculator.util.js';
 
 export interface RecordCashPaymentInTxInput {
   dormitoryId: string;
@@ -51,7 +52,7 @@ export async function recordCashPaymentInTx(
   if (bill.dormitoryId !== input.dormitoryId) throw new AppError('ไม่มีสิทธิ์ดำเนินการกับบิลนี้', 403, 'FORBIDDEN');
 
   Decimal.set({ rounding: Decimal.ROUND_HALF_UP });
-  const totalAmount = bill.totalAmount !== undefined && bill.totalAmount !== null
+  let totalAmount = bill.totalAmount !== undefined && bill.totalAmount !== null
     ? new Decimal(bill.totalAmount.toString())
     : bill.items.reduce((sum: Decimal, item: any) => sum.plus(new Decimal(item.amount.toString())), new Decimal(0));
 
@@ -59,9 +60,40 @@ export async function recordCashPaymentInTx(
     ? new Decimal(bill.paidAmount.toString())
     : new Decimal('0.00');
 
-  const currentOutstanding = bill.outstandingAmount !== undefined && bill.outstandingAmount !== null
+  let currentOutstanding = bill.outstandingAmount !== undefined && bill.outstandingAmount !== null
     ? new Decimal(bill.outstandingAmount.toString())
     : Decimal.max(totalAmount.minus(existingPaidAmount), new Decimal(0));
+
+  // Check dormitory billing VAT settings
+  const billingSettings = await tx.dormitoryBillingSettings.findFirst({
+    where: { dormitoryId: input.dormitoryId },
+    select: { vatSettings: true },
+  });
+  const vatSettings = (billingSettings?.vatSettings as any) || null;
+  const isVatEnabled = Boolean(vatSettings?.enabled || vatSettings?.isActive);
+
+  if (isVatEnabled && bill.items && bill.items.length > 0) {
+    const vatCalc = calculateCategoryStrictVat(bill.items, vatSettings);
+    if (vatCalc.isVatActive && new Decimal(vatCalc.vatAmount).greaterThan(0)) {
+      const netTotalDec = new Decimal(vatCalc.netTotal);
+      const baseSubtotalDec = new Decimal(vatCalc.baseSubtotal);
+
+      // If bill does not reflect VAT (e.g. totalAmount 4500 vs netTotal 4815):
+      if (totalAmount.lessThan(netTotalDec) || (bill.subtotal !== undefined && new Decimal(bill.subtotal.toString()).equals(0))) {
+        const nextOutstanding = Decimal.max(netTotalDec.minus(existingPaidAmount), new Decimal(0));
+        await tx.bill.update({
+          where: { id: bill.id },
+          data: {
+            subtotal: new Prisma.Decimal(baseSubtotalDec.toFixed(2)),
+            totalAmount: new Prisma.Decimal(netTotalDec.toFixed(2)),
+            outstandingAmount: new Prisma.Decimal(nextOutstanding.toFixed(2)),
+          },
+        });
+        totalAmount = netTotalDec;
+        currentOutstanding = nextOutstanding;
+      }
+    }
+  }
 
   if (bill.status === 'PAID' || bill.status === 'paid' || currentOutstanding.lessThanOrEqualTo(0)) {
     throw new AppError('บิลนี้ได้รับการชำระเงินครบแล้ว', 400, 'ALREADY_PAID');
@@ -721,6 +753,38 @@ export async function generateReceiptInTx(
     ? (payment?.metadata?.importedAt || (payment?.metadata as any)?.importedAt || today.toISOString())
     : undefined;
 
+  // Check if dormitory or bill has VAT
+  const billingSettings = await tx.dormitoryBillingSettings.findFirst({
+    where: { dormitoryId },
+    select: { vatSettings: true },
+  });
+  const vatSettings = (billingSettings?.vatSettings as any) || null;
+  const isVatEnabled = Boolean(vatSettings?.enabled || vatSettings?.isActive);
+
+  let vatData: any = {};
+  if (isVatEnabled && bill?.items && bill.items.length > 0) {
+    const vatCalc = calculateCategoryStrictVat(bill.items, vatSettings);
+    if (vatCalc.isVatActive && new Decimal(vatCalc.vatAmount).greaterThan(0)) {
+      vatData = {
+        subtotal: vatCalc.baseSubtotal,
+        vatAmount: vatCalc.vatAmount,
+        vatRate: vatCalc.vatRate,
+        isVatActive: true,
+      };
+    }
+  } else if (bill?.subtotal && new Decimal(bill.subtotal.toString()).greaterThan(0) && bill.totalAmount) {
+    const bSub = new Decimal(bill.subtotal.toString());
+    const bTot = new Decimal(bill.totalAmount.toString());
+    if (bTot.greaterThan(bSub)) {
+      vatData = {
+        subtotal: bSub.toFixed(2),
+        vatAmount: bTot.minus(bSub).toFixed(2),
+        vatRate: '7.00',
+        isVatActive: true,
+      };
+    }
+  }
+
   const snapshotData = {
     receiptNumber,
     billNumber: bill?.billNumber || null,
@@ -742,6 +806,7 @@ export async function generateReceiptInTx(
     importedAt,
     receiverName: receiverDisplayName,
     isCombinedReceipt: false,
+    ...vatData,
   };
 
   const receipt = await tx.receipt.create({
@@ -1220,6 +1285,42 @@ export async function generateFinalSettlementReceiptForBillInTx(
   );
   const derivedPaymentMethod = canonicalMethods.length > 0 ? canonicalMethods.join(', ') : null;
 
+  // Populate VAT fields if applicable
+  const billingSettings = await tx.dormitoryBillingSettings.findFirst({
+    where: { dormitoryId },
+    select: { vatSettings: true },
+  });
+  const vatSettings = (billingSettings?.vatSettings as any) || null;
+  const isVatEnabled = Boolean(vatSettings?.enabled || vatSettings?.isActive);
+
+  let vatData: any = {};
+  if (isVatEnabled && flatItems && flatItems.length > 0) {
+    const vatCalc = calculateCategoryStrictVat(flatItems, vatSettings);
+    if (vatCalc.isVatActive && new Decimal(vatCalc.vatAmount).greaterThan(0)) {
+      vatData = {
+        subtotal: vatCalc.baseSubtotal,
+        vatAmount: vatCalc.vatAmount,
+        vatRate: vatCalc.vatRate,
+        isVatActive: true,
+      };
+    }
+  } else if (firstBill.subtotal && new Decimal(firstBill.subtotal.toString()).greaterThan(0) && firstBill.totalAmount) {
+    const bSub = new Decimal(firstBill.subtotal.toString());
+    const bTot = new Decimal(firstBill.totalAmount.toString());
+    if (bTot.greaterThan(bSub)) {
+      vatData = {
+        subtotal: bSub.toFixed(2),
+        vatAmount: bTot.minus(bSub).toFixed(2),
+        vatRate: '7.00',
+        isVatActive: true,
+      };
+    }
+  }
+
+  const effectiveScopeTotal = (vatData.isVatActive && vatData.vatAmount && new Decimal(vatData.vatAmount).greaterThan(0) && scopeTotal.equals(new Decimal(vatData.subtotal || 0)))
+    ? scopeTotal.plus(new Decimal(vatData.vatAmount))
+    : scopeTotal;
+
   const snapshotData = {
     receiptNumber,
     billNumber: contributingBills.map((b: any) => b.billNumber).filter(Boolean).join(', ') || firstBill.billNumber || null,
@@ -1229,9 +1330,9 @@ export async function generateFinalSettlementReceiptForBillInTx(
     provisionalRentalTermId: canonicalTermId,
     cycleCode: firstBill.billingCycle?.cycleCode || null,
     cycleLabel: firstBill.billingCycle?.name || firstBill.billingCycle?.cycleCode || null,
-    total: scopeTotal.toFixed(2),
-    receivedAmount: scopePaid.toFixed(2),
-    billTotal: scopeTotal.toFixed(2),
+    total: effectiveScopeTotal.toFixed(2),
+    receivedAmount: (scopePaid.equals(scopeTotal) && effectiveScopeTotal.greaterThan(scopeTotal)) ? effectiveScopeTotal.toFixed(2) : scopePaid.toFixed(2),
+    billTotal: effectiveScopeTotal.toFixed(2),
     items: flatItems,
     billGroups,
     paymentEvents,
@@ -1247,6 +1348,7 @@ export async function generateFinalSettlementReceiptForBillInTx(
     receiverName: receiverDisplayName,
     isFinalSettlement: true,
     isMultiBill: contributingBills.length > 1,
+    ...vatData,
   };
 
   try {

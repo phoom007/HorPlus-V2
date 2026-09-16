@@ -4,6 +4,95 @@
  */
 
 import { AppError } from '../types/index.js';
+import { isCategoryTaxable, parseToSatangs, formatSatangs } from './monthly-utility-calculator.util.js';
+
+/**
+ * Formats a money amount with comma thousand separators and exact 2 decimal places.
+ * Examples:
+ *   10000 -> "10,000.00"
+ *   1340.5 -> "1,340.50"
+ *   "32.70" -> "32.70"
+ *   0 -> "0.00"
+ */
+export function formatMoneyWithCommas(amount: any): string {
+  if (amount === undefined || amount === null || amount === '') return '0.00';
+  const num = typeof amount === 'number' ? amount : Number(String(amount).replace(/,/g, ''));
+  if (isNaN(num)) return String(amount);
+  return num.toLocaleString('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
+/**
+ * Pure Satang Math Thai Baht Text Formatter.
+ * Handles integer and satang components according to Royal Institute of Thailand conventions.
+ * Examples:
+ *   3270n -> "สามสิบสองบาทเจ็ดสิบสตางค์"
+ *   2200n -> "ยี่สิบสองบาทถ้วน"
+ *   100000000n -> "หนึ่งล้านบาทถ้วน"
+ */
+export function formatThaiBahtText(satangs: bigint): string {
+  if (satangs === 0n) return 'ศูนย์บาทถ้วน';
+  const isNeg = satangs < 0n;
+  const absSatangs = isNeg ? -satangs : satangs;
+  const baht = absSatangs / 100n;
+  const sat = absSatangs % 100n;
+
+  const DIGITS = ['', 'หนึ่ง', 'สอง', 'สาม', 'สี่', 'ห้า', 'หก', 'เจ็ด', 'แปด', 'เก้า'];
+  const POSITIONS = ['', 'สิบ', 'ร้อย', 'พัน', 'หมื่น', 'แสน'];
+
+  function convertGroup(num: number): string {
+    let result = '';
+    const digits = String(num).split('').map(Number);
+    const len = digits.length;
+    for (let i = 0; i < len; i++) {
+      const d = digits[i];
+      const pos = len - i - 1;
+      if (d === 0) continue;
+      if (pos === 0 && d === 1 && len > 1) {
+        result += 'เอ็ด';
+      } else if (pos === 1 && d === 1) {
+        result += 'สิบ';
+      } else if (pos === 1 && d === 2) {
+        result += 'ยี่สิบ';
+      } else {
+        result += DIGITS[d] + POSITIONS[pos];
+      }
+    }
+    return result;
+  }
+
+  function convertInteger(b: bigint): string {
+    if (b === 0n) return '';
+    let result = '';
+    let remaining = b;
+    let groupIndex = 0;
+    while (remaining > 0n) {
+      const groupVal = Number(remaining % 1000000n);
+      remaining = remaining / 1000000n;
+      if (groupVal > 0) {
+        const groupText = convertGroup(groupVal);
+        result = groupText + (groupIndex > 0 ? 'ล้าน' : '') + result;
+      } else if (groupIndex > 0 && remaining > 0n) {
+        result = 'ล้าน' + result;
+      }
+      groupIndex++;
+    }
+    return result;
+  }
+
+  let text = '';
+  if (baht > 0n) {
+    text += convertInteger(baht) + 'บาท';
+  }
+  if (sat > 0n) {
+    text += convertGroup(Number(sat)) + 'สตางค์';
+  } else {
+    text += 'ถ้วน';
+  }
+  return (isNeg ? 'ลบ' : '') + text;
+}
 
 /**
  * Strict HTML Escaping Helper.
@@ -262,8 +351,8 @@ export function formatQuantityHtml(quantity: any, unit?: any): string {
     return String(quantity);
   }
   const formattedNum = Number.isInteger(num) || num === Math.floor(num)
-    ? String(Math.floor(num))
-    : num.toFixed(2);
+    ? Math.floor(num).toLocaleString('en-US')
+    : num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   return thaiUnit ? `${formattedNum} ${thaiUnit}` : formattedNum;
 }
 
@@ -284,7 +373,7 @@ export function formatRateHtml(unitPrice: any, unit: any, metadata: any): string
   if (isNaN(priceNum)) return '-';
   const thaiUnit = resolveThaiUnit(unit);
   const unitStr = thaiUnit ? ` บาท/${escapeHTML(thaiUnit)}` : ' บาท';
-  return `${priceNum.toFixed(2)}${unitStr}`;
+  return `${formatMoneyWithCommas(priceNum)}${unitStr}`;
 }
 
 /**
@@ -296,9 +385,9 @@ export function renderTierBreakdownHtml(metadata: any, unit?: any): string {
   const unitLabel = resolveThaiUnit(unit) || 'หน่วย';
   const rows = metadata.tierBreakdown.map((t: any) => {
     const rangeText = formatTierRange(t.lowerExclusive, t.upperInclusive, unitLabel);
-    const billedUnits = Math.round(Number(t.billedUnits));
-    const rateStr = Number(t.rate).toFixed(2);
-    const amountStr = Number(t.amount).toFixed(2);
+    const billedUnits = Math.round(Number(t.billedUnits)).toLocaleString('en-US');
+    const rateStr = formatMoneyWithCommas(t.rate);
+    const amountStr = formatMoneyWithCommas(t.amount);
     return `<div>• ${escapeHTML(rangeText)}: ${billedUnits} × ${escapeHTML(rateStr)} = ${escapeHTML(amountStr)} บาท</div>`;
   }).join('');
 
@@ -391,71 +480,59 @@ export function renderReceiptHtml(receiptRecord: any, options?: { hasCurrentLogo
     throw new AppError(`Receipt grand total malformed: ${data.total}`, 500, 'CANONICAL_FINANCIAL_VALUE_MALFORMED');
   }
 
-  return `
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <title>Receipt ${escapeHTML(receiptRecord.receiptNumber)}</title>
-  <style>
-    @media print {
-      @page { size: A4; margin: 10mm 12mm; }
-      body { margin: 0 !important; padding: 0 !important; border: none !important; box-shadow: none !important; max-width: 100% !important; }
-      .no-print { display: none !important; }
-    }
-    body { font-family: 'Sarabun', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #1e293b; max-width: 800px; margin: 40px auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 12px; }
-    .header { text-align: center; margin-bottom: 24px; }
-    .header h1 { margin: 0; color: #4338ca; font-size: 24px; }
-    .header p { margin: 4px 0 0; color: #64748b; font-size: 14px; font-weight: bold; }
-    .void-banner { color: #dc2626; background: #fee2e2; border: 1px solid #f87171; text-align: center; font-weight: bold; padding: 12px; margin-bottom: 20px; border-radius: 8px; }
-    .meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 24px; font-size: 13px; }
-    .meta-card { background: #f8fafc; padding: 16px; border-radius: 8px; border: 1px solid #e2e8f0; }
-    .meta-card p { margin: 4px 0; }
-    table { width: 100%; border-collapse: collapse; margin-bottom: 16px; font-size: 13px; }
-    th, td { border: 1px solid #e2e8f0; padding: 10px 12px; text-align: left; }
-    th { background: #f1f5f9; color: #334155; }
-    .num { text-align: right; }
-    .group-box { margin-bottom: 20px; border: 1px solid #cbd5e1; border-radius: 8px; padding: 12px; background: #fff; }
-    .group-header { font-weight: bold; font-size: 14px; margin-bottom: 8px; color: #1e293b; display: flex; justify-content: space-between; }
-    .totals-area { margin-top: 16px; display: flex; flex-direction: column; align-items: flex-end; font-size: 14px; }
-    .total-row { display: flex; justify-content: space-between; width: 320px; padding: 4px 0; }
-    .grand-total { font-weight: 900; font-size: 16px; color: #4338ca; border-top: 2px solid #cbd5e1; padding-top: 8px; margin-top: 4px; }
-  </style>
-</head>
-<body>
-  <div class="no-print" style="text-align: right; margin-bottom: 20px;">
-    <button id="printReceiptBtn" type="button" style="padding: 8px 16px; background: #4f46e5; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold;">พิมพ์ใบเสร็จ</button>
-  </div>
-  ${receiptRecord.isVoided ? `<div class="void-banner">ยกเลิกแล้ว (VOIDED): ${escapeHTML(receiptRecord.voidReason || 'ไม่มีระบุเหตุผล')}</div>` : ''}
-  <div class="header" style="display: flex; align-items: center; justify-content: center; gap: 16px; margin-bottom: 24px;">
-    ${hasCurrentLogo && receiptRecord.dormitoryId ? `<img id="dormLogo" src="/api/v1/dormitories/${escapeHTML(receiptRecord.dormitoryId)}/logo" alt="" style="max-height: 56px; max-width: 140px; object-fit: contain;" />` : ''}
-    <div>
-      <h1 style="margin: 0; color: #4338ca; font-size: 24px;">ใบเสร็จรับเงิน (RECEIPT)</h1>
-      <p style="margin: 4px 0 0; color: #64748b; font-size: 14px; font-weight: bold;">เลขที่ใบเสร็จ: ${escapeHTML(receiptRecord.receiptNumber)}</p>
-    </div>
-  </div>
-  <div class="meta-grid">
-    <div class="meta-card">
-      <p><strong>ผู้รับเงิน:</strong> ${formatMetadataPlaceholder(data.receiverName)}</p>
-      <p><strong>เลขประจำตัวผู้เสียภาษี:</strong> ${formatMetadataPlaceholder(data.dormitoryTaxId)}</p>
-      <p><strong>ที่อยู่:</strong> ${formatMetadataPlaceholder(data.dormitoryAddress)}</p>
-      <p><strong>โทรศัพท์:</strong> ${formatMetadataPlaceholder(data.dormitoryPhone)}</p>
-    </div>
-    <div class="meta-card">
-      <p><strong>ผู้เช่า:</strong> ${formatMetadataPlaceholder(data.tenantName)}</p>
-      <p><strong>ห้องพัก:</strong> ${formatMetadataPlaceholder(data.roomNumber)}</p>
-      ${!isCombined && data.billNumber ? `<p><strong>อ้างอิงบิล:</strong> ${escapeHTML(data.billNumber)}</p>` : ''}
-      <p><strong>ช่องทางชำระเงิน:</strong> ${formatPaymentMethodThai(data.paymentMethod, data.paymentEvents)}</p>
-      <p><strong>วันที่ออกใบเสร็จ:</strong> ${issuedDateStr}</p>
-    </div>
-  </div>
+  const isVatActive = Boolean(data.isVatActive || (data.vatAmount && Number(data.vatAmount) > 0));
+  const subtotalNum = Number(data.subtotal || data.baseSubtotal || (grandTotalNum - Number(data.vatAmount || 0)));
+  const vatAmountNum = Number(data.vatAmount || 0);
+  const effectiveGrandTotalNum = (isVatActive && grandTotalNum === subtotalNum && vatAmountNum > 0)
+    ? (subtotalNum + vatAmountNum)
+    : grandTotalNum;
 
-  ${isCombined && Array.isArray(data.billGroups) && data.billGroups.length > 0 ? `
-    <!-- Combined Multi-Bill Groups Section -->
-    ${(() => {
+  const vatSettings = data.vatSettings || (isVatActive ? { enabled: true, rate: 7, appliedCategories: ['rent'] } : null);
+
+  const resolveReceiptItemTaxAndDisplay = (i: any) => {
+    const isTaxable = Boolean(i.metadata?.isTaxable) ||
+      (isVatActive && i.metadata?.isTaxable !== false && isCategoryTaxable(i.type || i.category || i.description || '', vatSettings));
+
+    const baseDesc = String(i.description || '').replace(/น้ำประปา/g, 'น้ำ');
+    const description = isTaxable
+      ? (baseDesc.includes('(+VAT)') ? baseDesc : `${baseDesc} (+VAT)`)
+      : baseDesc;
+
+    let displayAmountNum = Number(i.amount);
+    if (isTaxable) {
+      if (i.metadata?.netAmount !== undefined && i.metadata?.netAmount !== null) {
+        displayAmountNum = Number(i.metadata.netAmount);
+      } else if (i.metadata?.vatAmount !== undefined && i.metadata?.vatAmount !== null) {
+        displayAmountNum = Number(i.amount) + Number(i.metadata.vatAmount);
+      } else {
+        const baseSatangs = parseToSatangs(i.amount);
+        const vatSatangs = (baseSatangs * 700n + 5000n) / 10000n;
+        displayAmountNum = Number(baseSatangs + vatSatangs) / 100;
+      }
+    }
+
+    let unitPriceToFormat = i.unitPrice;
+    if (isTaxable && i.metadata?.mode !== 'tiered') {
+      const qty = Number(i.quantity);
+      if (qty > 0) {
+        unitPriceToFormat = displayAmountNum / qty;
+      } else {
+        unitPriceToFormat = displayAmountNum;
+      }
+    }
+
+    return {
+      isTaxable,
+      description,
+      displayAmountStr: displayAmountNum.toFixed(2),
+      unitPriceToFormat,
+    };
+  };
+
+  const renderItemsSectionHtml = () => {
+    if (isCombined && Array.isArray(data.billGroups) && data.billGroups.length > 0) {
       const isFinalSettlement = Boolean(receiptRecord.isFinalSettlement || data.isFinalSettlement || receiptRecord.receiptKind === 'FINAL_SETTLEMENT');
 
-      // Validate all billGroup financial values strictly first
       const validatedGroups = data.billGroups.map((group: any) => {
         const canonicalSettledRaw = isFinalSettlement
           ? group.paidAmount
@@ -489,7 +566,6 @@ export function renderReceiptHtml(receiptRecord: any, options?: { hasCurrentLogo
       });
 
       if (isFinalSettlement) {
-        // Visual cycle consolidation for FINAL_SETTLEMENT (Sections 7, 8, 9, 10 & Amendment 3)
         interface CycleContainer {
           cycleKey: string;
           cycleLabel: string;
@@ -547,25 +623,28 @@ export function renderReceiptHtml(receiptRecord: any, options?: { hasCurrentLogo
                 </tr>
               </thead>
               <tbody>
-                ${container.items.map((i: any, idx: number) => `
+                ${container.items.map((i: any, idx: number) => {
+                  const itemInfo = resolveReceiptItemTaxAndDisplay(i);
+                  return `
                   <tr>
                     <td>${idx + 1}</td>
                     <td>
-                      <div>${escapeHTML(String(i.description || '').replace(/น้ำประปา/g, 'น้ำ'))}</div>
+                      <div>${escapeHTML(itemInfo.description)}</div>
                       ${renderTierBreakdownHtml(i.metadata, i.unit)}
                     </td>
                     <td class="num">${escapeHTML(formatQuantityHtml(i.quantity, i.unit))}</td>
-                    <td class="num">${formatRateHtml(i.unitPrice, i.unit, i.metadata)}</td>
-                    <td class="num">${escapeHTML(Number(i.amount).toFixed(2))}</td>
+                    <td class="num">${formatRateHtml(itemInfo.unitPriceToFormat, i.unit, i.metadata)}</td>
+                    <td class="num">${escapeHTML(itemInfo.displayAmountStr)}</td>
                   </tr>
-                `).join('')}
+                `;
+                }).join('')}
                 <tr style="background: #f8fafc; font-size: 12px;">
                   <td colspan="4" class="num" style="font-weight: bold;">ยอดบิล:</td>
-                  <td class="num" style="font-weight: bold;">${escapeHTML(container.totalBill.toFixed(2))} ฿</td>
+                  <td class="num" style="font-weight: bold;">${escapeHTML(formatMoneyWithCommas(container.totalBill))} ฿</td>
                 </tr>
                 <tr style="background: #f1f5f9; font-size: 12px; font-weight: bold;">
                   <td colspan="4" class="num" style="color: #4338ca;">ยอดรับชำระสำหรับรอบบิลนี้:</td>
-                  <td class="num" style="color: #4338ca; font-weight: 900;">${escapeHTML(container.totalSettled.toFixed(2))} ฿</td>
+                  <td class="num" style="color: #4338ca; font-weight: 900;">${escapeHTML(formatMoneyWithCommas(container.totalSettled))} ฿</td>
                 </tr>
               </tbody>
             </table>
@@ -573,7 +652,6 @@ export function renderReceiptHtml(receiptRecord: any, options?: { hasCurrentLogo
         `).join('');
       }
 
-      // Legacy / Event multi-bill rendering preserved exactly
       return validatedGroups.map((group: any) => {
         const groupCycleLabel = group.cycleCode ? `รอบบิล ${escapeHTML(group.cycleCode)}` : (group.billKind === 'DEPOSIT' ? 'เงินประกันสัญญาเช่า' : 'บิลค่าใช้จ่าย');
         return `
@@ -593,93 +671,250 @@ export function renderReceiptHtml(receiptRecord: any, options?: { hasCurrentLogo
                 </tr>
               </thead>
               <tbody>
-                ${group.nonZeroItems.map((i: any, idx: number) => `
+                ${group.nonZeroItems.map((i: any, idx: number) => {
+                  const itemInfo = resolveReceiptItemTaxAndDisplay(i);
+                  return `
                   <tr>
                     <td>${idx + 1}</td>
                     <td>
-                      <div>${escapeHTML(String(i.description || '').replace(/น้ำประปา/g, 'น้ำ'))}</div>
+                      <div>${escapeHTML(itemInfo.description)}</div>
                       ${renderTierBreakdownHtml(i.metadata, i.unit)}
                     </td>
                     <td class="num">${escapeHTML(formatQuantityHtml(i.quantity, i.unit))}</td>
-                    <td class="num">${formatRateHtml(i.unitPrice, i.unit, i.metadata)}</td>
-                    <td class="num">${escapeHTML(Number(i.amount).toFixed(2))}</td>
+                    <td class="num">${formatRateHtml(itemInfo.unitPriceToFormat, i.unit, i.metadata)}</td>
+                    <td class="num">${escapeHTML(itemInfo.displayAmountStr)}</td>
                   </tr>
-                `).join('')}
+                `;
+                }).join('')}
               <tr style="background: #f8fafc; font-size: 12px;">
                 <td colspan="4" class="num" style="font-weight: bold;">ยอดบิล:</td>
-                <td class="num" style="font-weight: bold;">${escapeHTML(group.billTotalNum.toFixed(2))} ฿</td>
+                <td class="num" style="font-weight: bold;">${escapeHTML(formatMoneyWithCommas(group.billTotalNum))} ฿</td>
               </tr>
               <tr style="background: #f1f5f9; font-size: 12px; font-weight: bold;">
                 <td colspan="4" class="num" style="color: #4338ca;">ยอดรับชำระสำหรับรอบบิลนี้:</td>
-                <td class="num" style="color: #4338ca; font-weight: 900;">${escapeHTML(group.settledNum.toFixed(2))} ฿</td>
+                <td class="num" style="color: #4338ca; font-weight: 900;">${escapeHTML(formatMoneyWithCommas(group.settledNum))} ฿</td>
               </tr>
             </tbody>
           </table>
         </div>
       `;
       }).join('');
-    })()}
-  ` : `
-    <!-- Single Bill Items Section -->
-    <table>
-      <thead>
-        <tr>
-          <th style="width: 40px;">ลำดับ</th>
-          <th>รายการ</th>
-          <th class="num" style="width: 80px;">จำนวน</th>
-          <th class="num" style="width: 140px;">ราคา/หน่วย</th>
-          <th class="num" style="width: 120px;">จำนวนเงิน (บาท)</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${(() => {
-          const rawItems = (Array.isArray(data.items) && data.items.length > 0)
-            ? data.items.filter((i: any) => isNonZeroAmount(i.amount))
-            : [];
-          const singleItems = rawItems.length > 0
-            ? rawItems
-            : [{ description: 'ยอดชำระตามใบเสร็จเดิม', amount: data.total || '0.00', quantity: 1, unit: null, unitPrice: null }];
+    }
 
-          return singleItems.map((i: any, idx: number) => `
+    // Single bill items
+    const rawItems = (Array.isArray(data.items) && data.items.length > 0)
+      ? data.items.filter((i: any) => isNonZeroAmount(i.amount))
+      : [];
+    const singleItems = rawItems.length > 0
+      ? rawItems
+      : [{ description: 'ยอดชำระตามใบเสร็จเดิม', amount: data.total || '0.00', quantity: 1, unit: null, unitPrice: null }];
+
+    return `
+      <table>
+        <thead>
+          <tr>
+            <th style="width: 40px;">ลำดับ</th>
+            <th>รายการ</th>
+            <th class="num" style="width: 80px;">จำนวน</th>
+            <th class="num" style="width: 140px;">ราคา/หน่วย</th>
+            <th class="num" style="width: 120px;">จำนวนเงิน (บาท)</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${singleItems.map((i: any, idx: number) => {
+            const itemInfo = resolveReceiptItemTaxAndDisplay(i);
+            return `
             <tr>
               <td>${idx + 1}</td>
               <td>
-                <div>${escapeHTML(String(i.description || '').replace(/น้ำประปา/g, 'น้ำ'))}</div>
+                <div>${escapeHTML(itemInfo.description)}</div>
                 ${renderTierBreakdownHtml(i.metadata, i.unit)}
               </td>
               <td class="num">${escapeHTML(formatQuantityHtml(i.quantity, i.unit))}</td>
-              <td class="num">${formatRateHtml(i.unitPrice, i.unit, i.metadata)}</td>
-              <td class="num">${escapeHTML(Number(i.amount).toFixed(2))}</td>
+              <td class="num">${formatRateHtml(itemInfo.unitPriceToFormat, i.unit, i.metadata)}</td>
+              <td class="num">${escapeHTML(itemInfo.displayAmountStr)}</td>
             </tr>
-          `).join('');
-        })()}
-      </tbody>
-    </table>
-  `}
+          `;
+          }).join('')}
+        </tbody>
+      </table>
+    `;
+  };
 
-  <div class="totals-area">
-    ${!isCombined && data.billTotal && Number(data.billTotal) !== grandTotalNum ? `
-      <div class="total-row"><span>ยอดบิล:</span><span>${escapeHTML(Number(data.billTotal).toFixed(2))} ฿</span></div>
-      <div class="total-row"><span>ยอดรับชำระในใบเสร็จนี้:</span><span>${escapeHTML(grandTotalNum.toFixed(2))} ฿</span></div>
-    ` : ''}
-    <div class="total-row grand-total"><span>รวมรับสุทธิ:</span><span>${escapeHTML(grandTotalNum.toFixed(2))} ฿</span></div>
-  </div>
+  const itemsHtml = renderItemsSectionHtml();
 
-  <!-- Print-ready Two-Column Signature Area -->
-  <div class="signature-section" style="margin-top: 48px; display: grid; grid-template-columns: 1fr 1fr; gap: 40px; page-break-inside: avoid; break-inside: avoid;">
-    <div class="signature-box" style="text-align: center; font-size: 13px; line-height: 1.8;">
-      <p style="font-weight: bold; margin-bottom: 36px; color: #334155;">ผู้ชำระเงิน / ผู้เช่า</p>
-      <p style="margin: 0; color: #475569;">ลงชื่อ ______________________________</p>
-      <p style="margin: 4px 0 0; color: #475569;">(__________________________________)</p>
-      <p style="margin: 12px 0 0; color: #475569;">วันที่ ______ / ______ / ______</p>
-    </div>
-    <div class="signature-box" style="text-align: center; font-size: 13px; line-height: 1.8;">
-      <p style="font-weight: bold; margin-bottom: 36px; color: #334155;">ผู้รับเงิน / เจ้าของหอพัก</p>
-      <p style="margin: 0; color: #475569;">ลงชื่อ ______________________________</p>
-      <p style="margin: 4px 0 0; color: #475569;">(__________________________________)</p>
-      <p style="margin: 12px 0 0; color: #475569;">วันที่ ______ / ______ / ______</p>
-    </div>
+  const renderSheetContent = (sheetType: 'RECEIPT' | 'TAX_INVOICE') => {
+    const isTaxInvoice = sheetType === 'TAX_INVOICE' || isVatActive;
+    const title = isTaxInvoice ? 'ใบกำกับภาษี (TAX INVOICE)' : 'ใบเสร็จรับเงิน (RECEIPT)';
+    const subtitle = isTaxInvoice
+      ? `เลขที่: ${escapeHTML(receiptRecord.receiptNumber)}`
+      : `เลขที่ใบเสร็จ: ${escapeHTML(receiptRecord.receiptNumber)}`;
+
+    // Satang Math Calculation for Summary
+    const allSnapshotItems = (Array.isArray(data.items) && data.items.length > 0)
+      ? data.items
+      : (Array.isArray(data.billGroups) && data.billGroups.length > 0
+          ? data.billGroups.flatMap((g: any) => g.items || [])
+          : []);
+
+    let computedNonTaxableSatangs = 0n;
+    let computedTaxableBaseSatangs = 0n;
+    let computedVatSatangs = 0n;
+
+    if (isVatActive && allSnapshotItems.length > 0) {
+      for (const item of allSnapshotItems) {
+        if (!isNonZeroAmount(item.amount)) continue;
+        const isTaxable = Boolean(item.metadata?.isTaxable) ||
+          (item.metadata?.isTaxable !== false && isCategoryTaxable(item.type || item.category || item.description || '', vatSettings));
+        
+        const itemBaseSatangs = parseToSatangs(item.amount);
+        if (isTaxable) {
+          computedTaxableBaseSatangs += itemBaseSatangs;
+          if (item.metadata?.vatAmount !== undefined && item.metadata?.vatAmount !== null) {
+            computedVatSatangs += parseToSatangs(item.metadata.vatAmount);
+          } else {
+            computedVatSatangs += (itemBaseSatangs * 700n + 5000n) / 10000n;
+          }
+        } else {
+          computedNonTaxableSatangs += itemBaseSatangs;
+        }
+      }
+    }
+
+    const totalSatangs = parseToSatangs(effectiveGrandTotalNum);
+
+    const nonTaxableSatangs = data.nonTaxableAmount !== undefined && data.nonTaxableAmount !== null
+      ? parseToSatangs(data.nonTaxableAmount)
+      : (data.subtotal !== undefined && data.vatAmount !== undefined
+          ? (totalSatangs > parseToSatangs(data.subtotal) + parseToSatangs(data.vatAmount)
+              ? totalSatangs - (parseToSatangs(data.subtotal) + parseToSatangs(data.vatAmount))
+              : 0n)
+          : computedNonTaxableSatangs);
+
+    const taxableBaseSatangs = data.subtotal !== undefined && data.subtotal !== null
+      ? parseToSatangs(data.subtotal)
+      : (computedTaxableBaseSatangs > 0n ? computedTaxableBaseSatangs : (isVatActive ? parseToSatangs(subtotalNum) : 0n));
+
+    const vatSatangs = data.vatAmount !== undefined && data.vatAmount !== null
+      ? parseToSatangs(data.vatAmount)
+      : (computedVatSatangs > 0n ? computedVatSatangs : (isVatActive ? parseToSatangs(vatAmountNum) : 0n));
+
+    const thaiBahtText = formatThaiBahtText(totalSatangs);
+
+    return `
+      <div class="sheet">
+        <div class="header" style="display: flex; align-items: center; justify-content: center; gap: 16px; margin-bottom: 24px;">
+          ${hasCurrentLogo && receiptRecord.dormitoryId ? `<img class="dormLogo" src="/api/v1/dormitories/${escapeHTML(receiptRecord.dormitoryId)}/logo" alt="" style="max-height: 56px; max-width: 140px; object-fit: contain;" />` : ''}
+          <div>
+            <h1 style="margin: 0; color: #4338ca; font-size: 22px;">${title}</h1>
+            <p style="margin: 4px 0 0; color: #64748b; font-size: 13px; font-weight: bold;">${subtitle}</p>
+          </div>
+        </div>
+
+        <div class="meta-grid">
+          <div class="meta-card">
+            <p><strong>${isTaxInvoice ? 'ผู้ออกเอกสาร / ผู้รับเงิน:' : 'ผู้รับเงิน:'}</strong> ${formatMetadataPlaceholder(data.receiverName)}</p>
+            <p><strong>เลขประจำตัวผู้เสียภาษี:</strong> ${formatMetadataPlaceholder(data.dormitoryTaxId)}</p>
+            <p><strong>ที่อยู่:</strong> ${formatMetadataPlaceholder(data.dormitoryAddress)}</p>
+            <p><strong>โทรศัพท์:</strong> ${formatMetadataPlaceholder(data.dormitoryPhone)}</p>
+          </div>
+          <div class="meta-card">
+            <p><strong>${isTaxInvoice ? 'ผู้ซื้อ / ผู้เช่า:' : 'ผู้เช่า:'}</strong> ${formatMetadataPlaceholder(data.tenantName)}</p>
+            <p><strong>ห้องพัก:</strong> ${formatMetadataPlaceholder(data.roomNumber)}</p>
+            ${!isCombined && data.billNumber && !data.hideBillReference ? `<p><strong>อ้างอิงบิล:</strong> ${escapeHTML(data.billNumber)}</p>` : ''}
+            <p><strong>ช่องทางชำระเงิน:</strong> ${formatPaymentMethodThai(data.paymentMethod, data.paymentEvents)}</p>
+            <p><strong>${isTaxInvoice ? 'วันที่ออกเอกสาร:' : 'วันที่ออกใบเสร็จ:'}</strong> ${issuedDateStr}</p>
+          </div>
+        </div>
+
+        ${itemsHtml}
+
+        <div class="totals-area">
+          ${!isCombined && data.billTotal && Number(data.billTotal) !== effectiveGrandTotalNum ? `
+            <div class="total-row"><span>ยอดบิล:</span><span>${escapeHTML(formatMoneyWithCommas(data.billTotal))} ฿</span></div>
+            <div class="total-row"><span>ยอดรับชำระในใบเสร็จนี้:</span><span>${escapeHTML(formatMoneyWithCommas(effectiveGrandTotalNum))} ฿</span></div>
+          ` : ''}
+          ${isVatActive ? (
+            nonTaxableSatangs > 0n ? `
+              <div class="total-row"><span>ยอดที่ไม่คิดภาษี (Non-taxable Amount):</span><span>${escapeHTML(formatMoneyWithCommas(formatSatangs(nonTaxableSatangs)))} ฿</span></div>
+              <div class="total-row"><span>รวมเงินก่อนภาษี (Taxable Subtotal):</span><span>${escapeHTML(formatMoneyWithCommas(formatSatangs(taxableBaseSatangs)))} ฿</span></div>
+              <div class="total-row"><span>ภาษีมูลค่าเพิ่ม 7% (VAT 7%):</span><span>${escapeHTML(formatMoneyWithCommas(formatSatangs(vatSatangs)))} ฿</span></div>
+              <div class="total-row grand-total"><span>จำนวนเงินรวมทั้งสิ้น (Total Net Amount):</span><span>${escapeHTML(formatMoneyWithCommas(formatSatangs(totalSatangs)))} ฿</span></div>
+              <div class="baht-text" style="width: 100%; text-align: right; font-weight: bold; color: #4338ca; margin-top: 6px; font-size: 13px;">(${escapeHTML(thaiBahtText)})</div>
+            ` : `
+              <div class="total-row"><span>รวมเงินก่อนภาษี (Subtotal):</span><span>${escapeHTML(formatMoneyWithCommas(formatSatangs(taxableBaseSatangs)))} ฿</span></div>
+              <div class="total-row"><span>ภาษีมูลค่าเพิ่ม 7% (VAT 7%):</span><span>${escapeHTML(formatMoneyWithCommas(formatSatangs(vatSatangs)))} ฿</span></div>
+              <div class="total-row grand-total"><span>จำนวนเงินรวมทั้งสิ้น (Total Net Amount):</span><span>${escapeHTML(formatMoneyWithCommas(formatSatangs(totalSatangs)))} ฿</span></div>
+              <div class="baht-text" style="width: 100%; text-align: right; font-weight: bold; color: #4338ca; margin-top: 6px; font-size: 13px;">(${escapeHTML(thaiBahtText)})</div>
+            `
+          ) : `
+            <div class="total-row grand-total"><span>รวมรับสุทธิ:</span><span>${escapeHTML(formatMoneyWithCommas(formatSatangs(totalSatangs)))} ฿</span></div>
+            <div class="baht-text" style="width: 100%; text-align: right; font-weight: bold; color: #4338ca; margin-top: 6px; font-size: 13px;">(${escapeHTML(thaiBahtText)})</div>
+          `}
+        </div>
+
+        <!-- Two-Column Signature Area -->
+        <div class="signature-section" style="margin-top: 48px; display: grid; grid-template-columns: 1fr 1fr; gap: 40px; page-break-inside: avoid; break-inside: avoid;">
+          <div class="signature-box" style="text-align: center; font-size: 13px; line-height: 1.8;">
+            <p style="font-weight: bold; margin-bottom: 36px; color: #334155;">${isTaxInvoice ? 'ผู้รับใบกำกับภาษี' : 'ผู้ชำระเงิน / ผู้เช่า'}</p>
+            <p style="margin: 0; color: #475569;">ลงชื่อ ______________________________</p>
+            <p style="margin: 4px 0 0; color: #475569;">(__________________________________)</p>
+            <p style="margin: 12px 0 0; color: #475569;">วันที่ ______ / ______ / ______</p>
+          </div>
+          <div class="signature-box" style="text-align: center; font-size: 13px; line-height: 1.8;">
+            <p style="font-weight: bold; margin-bottom: 36px; color: #334155;">${isTaxInvoice ? 'ผู้มีอำนาจลงนาม / ผู้รับเงิน' : 'ผู้รับเงิน / เจ้าของหอพัก'}</p>
+            <p style="margin: 0; color: #475569;">ลงชื่อ ______________________________</p>
+            <p style="margin: 4px 0 0; color: #475569;">(__________________________________)</p>
+            <p style="margin: 12px 0 0; color: #475569;">วันที่ ______ / ______ / ______</p>
+          </div>
+        </div>
+      </div>
+    `;
+  };
+
+  return `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>${isVatActive ? 'Tax Invoice' : 'Receipt'} ${escapeHTML(receiptRecord.receiptNumber)}</title>
+  <style>
+    @media print {
+      @page { size: A4; margin: 10mm 12mm; }
+      body { margin: 0 !important; padding: 0 !important; border: none !important; box-shadow: none !important; max-width: 100% !important; background: #fff !important; }
+      .no-print { display: none !important; }
+      .sheet { page-break-after: always; break-after: page; border: none !important; padding: 0 !important; margin: 0 0 0 0 !important; box-shadow: none !important; }
+      .sheet:last-child { page-break-after: avoid; break-after: avoid; }
+    }
+    body { font-family: 'Sarabun', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #1e293b; max-width: 820px; margin: 24px auto; padding: 0; background: #f8fafc; }
+    .sheet { background: #fff; padding: 28px; border: 1px solid #e2e8f0; border-radius: 12px; margin-bottom: 32px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+    .sheet:last-child { margin-bottom: 0; }
+    .header { text-align: center; margin-bottom: 24px; }
+    .header h1 { margin: 0; color: #4338ca; font-size: 22px; }
+    .header p { margin: 4px 0 0; color: #64748b; font-size: 13px; font-weight: bold; }
+    .void-banner { color: #dc2626; background: #fee2e2; border: 1px solid #f87171; text-align: center; font-weight: bold; padding: 12px; margin-bottom: 20px; border-radius: 8px; }
+    .meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px; font-size: 13px; }
+    .meta-card { background: #f8fafc; padding: 14px; border-radius: 8px; border: 1px solid #e2e8f0; }
+    .meta-card p { margin: 4px 0; }
+    table { width: 100%; border-collapse: collapse; margin-bottom: 16px; font-size: 13px; }
+    th, td { border: 1px solid #e2e8f0; padding: 8px 10px; text-align: left; }
+    th { background: #f1f5f9; color: #334155; }
+    .num { text-align: right; }
+    .group-box { margin-bottom: 16px; border: 1px solid #cbd5e1; border-radius: 8px; padding: 10px; background: #fff; }
+    .group-header { font-weight: bold; font-size: 13px; margin-bottom: 6px; color: #1e293b; display: flex; justify-content: space-between; }
+    .totals-area { margin-top: 16px; display: flex; flex-direction: column; align-items: flex-end; font-size: 14px; }
+    .total-row { display: flex; justify-content: space-between; align-items: baseline; min-width: 440px; width: 440px; max-width: 100%; padding: 4px 0; gap: 16px; }
+    .total-row span:first-child { white-space: nowrap; }
+    .total-row span:last-child { white-space: nowrap; text-align: right; font-variant-numeric: tabular-nums; }
+    .grand-total { font-weight: 900; font-size: 16px; color: #4338ca; border-top: 2px solid #cbd5e1; padding-top: 8px; margin-top: 4px; }
+  </style>
+</head>
+<body>
+  <div class="no-print" style="text-align: right; margin-bottom: 20px; padding: 0 4px;">
+    <button id="printReceiptBtn" type="button" style="padding: 8px 16px; background: #4f46e5; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold;">พิมพ์เอกสาร</button>
   </div>
+  ${receiptRecord.isVoided ? `<div class="void-banner">ยกเลิกแล้ว (VOIDED): ${escapeHTML(receiptRecord.voidReason || 'ไม่มีระบุเหตุผล')}</div>` : ''}
+  ${isVatActive ? renderSheetContent('TAX_INVOICE') : renderSheetContent('RECEIPT')}
 
   <script>
     (function() {
@@ -690,12 +925,12 @@ export function renderReceiptHtml(receiptRecord: any, options?: { hasCurrentLogo
           window.print();
         });
       }
-      var logo = document.getElementById('dormLogo');
-      if (logo) {
+      var logos = document.querySelectorAll('.dormLogo');
+      logos.forEach(function(logo) {
         logo.addEventListener('error', function() {
           this.style.display = 'none';
         });
-      }
+      });
     })();
   </script>
 </body>

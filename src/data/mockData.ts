@@ -890,6 +890,7 @@ export const initialAuditLogs: AuditLog[] = [
 const STORAGE_PREFIX = 'HorPlus_';
 
 export const getStored = <T>(key: string, fallback: T): T => {
+  if (typeof localStorage === 'undefined' || !localStorage) return fallback;
   const data = localStorage.getItem(STORAGE_PREFIX + key);
   if (!data) return fallback;
   try {
@@ -900,6 +901,7 @@ export const getStored = <T>(key: string, fallback: T): T => {
 };
 
 export const setStored = <T>(key: string, value: T): void => {
+  if (typeof localStorage === 'undefined' || !localStorage) return;
   try {
     localStorage.setItem(STORAGE_PREFIX + key, JSON.stringify(value));
   } catch (error) {
@@ -908,6 +910,7 @@ export const setStored = <T>(key: string, value: T): void => {
 };
 
 export const clearStored = (): void => {
+  if (typeof localStorage === 'undefined' || !localStorage) return;
   // Clear all keys with STORAGE_PREFIX
   const keysToRemove: string[] = [];
   for (let i = 0; i < localStorage.length; i++) {
@@ -936,7 +939,17 @@ export const initialDormitoriesList: Dormitory[] = [
 export const getDormitories = (): Dormitory[] => getStored<Dormitory[]>('dormitories_list', initialDormitoriesList);
 export const saveDormitories = (dorms: Dormitory[]) => setStored('dormitories_list', dorms);
 
-export const getDormitory = (): Dormitory => getStored<Dormitory>('dormitory', initialDormitory);
+export const getDormitory = (dormId?: string): Dormitory => {
+  const targetId = dormId || (typeof localStorage !== 'undefined' ? localStorage.getItem('selected_dormitory_id') : null);
+  if (targetId) {
+    const list = getDormitories();
+    const found = list.find(d => d.id === targetId);
+    if (found) return found;
+    const scoped = getStored<Dormitory>(`dormitory_${targetId}`, null as any);
+    if (scoped) return scoped;
+  }
+  return getStored<Dormitory>('dormitory', initialDormitory);
+};
 
 export const getDormitoryRatesForCycle = (dorm: Dormitory, cycleId: string): CycleRates => {
   const defaultRates: CycleRates = {
@@ -1037,6 +1050,9 @@ export const saveDormitory = (dorm: Dormitory) => {
   delete sanitized.bankAccountName;
   delete (sanitized as any).promptPayType;
 
+  if (sanitized.id) {
+    setStored(`dormitory_${sanitized.id}`, sanitized);
+  }
   setStored('dormitory', sanitized);
   const currentList = getDormitories();
   const idx = currentList.findIndex(d => d.id === sanitized.id);

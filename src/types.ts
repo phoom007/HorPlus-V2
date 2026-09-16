@@ -30,6 +30,7 @@ export interface Dormitory {
   bankName?: string; // DEPRECATED: payment is backend-authoritative
   bankAccountNumber?: string; // DEPRECATED: payment is backend-authoritative
   bankAccountName?: string; // DEPRECATED: payment is backend-authoritative
+  bankQrCode?: string; // Bank QR code data URL or storage URL
   billStyle: 'combined' | 'separated'; // E3: Combined bill or separate bills
   billingDay: number; // e.g., 25th of the month
   dueDay: number; // e.g., 5th of the next month

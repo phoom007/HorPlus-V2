@@ -12,11 +12,15 @@
 
 /* Global brand typography: Ensure Prompt is applied to root, body, and all form controls */
 html, body, #root {
-  font-family: var(--font-sans);
+  font-family: "Prompt", var(--font-sans), sans-serif;
 }
 
-input, textarea, select, button {
-  font-family: inherit;
+input, textarea, select, button, label {
+  font-family: "Prompt", var(--font-sans), sans-serif !important;
+}
+
+.font-prompt {
+  font-family: "Prompt", var(--font-sans), sans-serif !important;
 }
 
 /* Custom scrollbars and styling */

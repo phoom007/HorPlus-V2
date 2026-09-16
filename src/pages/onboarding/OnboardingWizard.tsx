@@ -268,7 +268,7 @@ export const OnboardingWizard: React.FC = () => {
                   value={draft.address}
                   onChange={(e) => updateDraft({ address: e.target.value })}
                   placeholder="เช่น 123/45 ถนนพหลโยธิน แขวงลาดยาว เขตจตุจักร"
-                  className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:border-indigo-500 focus:outline-hidden"
+                  className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:border-indigo-500 focus:outline-hidden font-sans font-prompt"
                 />
                 {errors.address && <p className="text-rose-500 font-bold text-[11px]">{errors.address}</p>}
               </div>

@@ -21,6 +21,9 @@ export const OwnerAuthGuard: React.FC<{ children?: React.ReactNode }> = ({ child
       })
       .then(json => {
         const payload = json.data;
+        if (payload?.csrfToken && typeof sessionStorage !== 'undefined') {
+          sessionStorage.setItem('horplus_csrf', payload.csrfToken);
+        }
         if (payload && payload.user) {
           const memberships = payload.memberships || [];
           setSession({ 

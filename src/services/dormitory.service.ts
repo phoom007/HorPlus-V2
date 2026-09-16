@@ -19,7 +19,9 @@ export interface DormitoryProfileDTO {
   postalCode?: string | null;
   phone?: string | null;
   email?: string | null;
-  status: string;
+  taxId?: string | null;
+  logoUrl?: string | null;
+  hasLogo?: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -35,6 +37,7 @@ export interface UpdateDormitoryProfilePayload {
   postalCode?: string | null;
   phone?: string | null;
   email?: string | null;
+  taxId?: string | null;
 }
 
 export async function getDormitoryProfile(dormitoryId: string): Promise<DormitoryProfileDTO> {
@@ -52,4 +55,46 @@ export async function updateDormitoryProfile(
     dormitoryId,
   });
   return res.data;
+}
+
+export async function getDormitorySignatureUrl(dormitoryId: string): Promise<string | null> {
+  try {
+    const res = await fetch(`/api/v1/dormitories/${dormitoryId}/signature`, {
+      method: 'GET',
+      credentials: 'include',
+      headers: {
+        'x-dormitory-id': dormitoryId,
+      },
+    });
+    if (res.status === 404) return null;
+    if (!res.ok) return null;
+    const blob = await res.blob();
+    if (blob.size === 0) return null;
+    return URL.createObjectURL(blob);
+  } catch {
+    return null;
+  }
+}
+
+export async function uploadDormitorySignature(
+  dormitoryId: string,
+  signatureBase64: string
+): Promise<{ success: boolean; data?: any }> {
+  const res = await httpRequest<{ data?: any }>(
+    'POST',
+    `/dormitories/${dormitoryId}/signature`,
+    { signatureBase64 },
+    { dormitoryId }
+  );
+  return { success: true, data: res.data };
+}
+
+export async function deleteDormitorySignature(dormitoryId: string): Promise<boolean> {
+  const res = await httpRequest<{ success: boolean; deactivated?: boolean }>(
+    'DELETE',
+    `/dormitories/${dormitoryId}/signature`,
+    undefined,
+    { dormitoryId }
+  );
+  return res?.success ?? false;
 }

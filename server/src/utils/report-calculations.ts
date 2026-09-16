@@ -153,6 +153,7 @@ export interface ReportCalculationResult {
   exactTotalRepairCostThisMonth: string;
   exactTotalRepairCostYear: string;
   exactNetIncomeThisMonth: string;
+  exactVatTotal?: string;
 
   // Presentation Monetary Values (Numbers for charts/UI, computed from exact satangs)
   fixedRentTotal: number;
@@ -163,6 +164,7 @@ export interface ReportCalculationResult {
   internetTotal: number;
   parkingTotal: number;
   otherServiceTotal: number;
+  vatTotal?: number;
   fineTotal: number;
   discountTotal: number;
   depositTotal: number;
@@ -488,9 +490,23 @@ export function calculateOwnerReports(params: ReportCalculationParams): ReportCa
     0n
   );
 
+  // Authoritative VAT Calculation across revenue active bills
+  const totalVatSatangs: bigint = revenueActiveBills.reduce((sum: bigint, b: any): bigint => {
+    if (b.vatAmount !== undefined && b.vatAmount !== null) {
+      return sum + toSatangs(b.vatAmount);
+    }
+    if (Array.isArray(b.items)) {
+      const itemVat = b.items.reduce((iSum: bigint, it: any) => {
+        return it.metadata?.vatAmount ? iSum + toSatangs(it.metadata.vatAmount) : iSum;
+      }, 0n);
+      if (itemVat > 0n) return sum + itemVat;
+    }
+    return sum;
+  }, 0n);
+
   // Authoritative Total Billed, Revenue, Unpaid
   const sumBillsTotalSatangs: bigint = revenueActiveBills.reduce((sum: bigint, b: any): bigint => sum + toSatangs(b.totalAmount), 0n);
-  const sumCategoriesTotalSatangs: bigint = fixedRentSatangs + waterSatangs + electricSatangs + commonParkingSatangs + otherServiceSatangs + fineSatangs - discountSatangs;
+  const sumCategoriesTotalSatangs: bigint = fixedRentSatangs + waterSatangs + electricSatangs + commonParkingSatangs + otherServiceSatangs + fineSatangs + totalVatSatangs - discountSatangs;
   const totalBilledSatangs: bigint = sumBillsTotalSatangs > 0n ? sumBillsTotalSatangs : sumCategoriesTotalSatangs;
 
   const totalRevenueSatangs: bigint = revenueActiveBills.reduce((sum: bigint, b: any): bigint => {
@@ -751,6 +767,7 @@ export function calculateOwnerReports(params: ReportCalculationParams): ReportCa
     exactTotalRepairCostThisMonth: satangsToString(repairCostThisMonthSatangs),
     exactTotalRepairCostYear: satangsToString(repairCostYearSatangs),
     exactNetIncomeThisMonth: satangsToString(netIncomeThisMonthSatangs),
+    exactVatTotal: satangsToString(totalVatSatangs),
 
     // Presentation Numbers (derived safely from exact satangs)
     fixedRentTotal: satangsToNumber(fixedRentSatangs),
@@ -761,6 +778,7 @@ export function calculateOwnerReports(params: ReportCalculationParams): ReportCa
     internetTotal: satangsToNumber(internetSatangs),
     parkingTotal: satangsToNumber(parkingSatangs),
     otherServiceTotal: satangsToNumber(otherServiceSatangs),
+    vatTotal: satangsToNumber(totalVatSatangs),
     fineTotal: satangsToNumber(fineSatangs),
     discountTotal: satangsToNumber(discountSatangs),
     depositTotal: satangsToNumber(depositSatangs),

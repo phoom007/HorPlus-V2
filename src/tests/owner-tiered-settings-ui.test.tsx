@@ -11,6 +11,25 @@ import {
 import { OwnerSettings, toCanonicalMode } from '../pages/owner/settings';
 import { ApiPropertyAdapter } from '../data/adapters/api';
 
+const createStorageMock = () => {
+  let store: Record<string, string> = {};
+  return {
+    getItem: (key: string) => store[key] ?? null,
+    setItem: (key: string, value: string) => { store[key] = String(value); },
+    removeItem: (key: string) => { delete store[key]; },
+    clear: () => { store = {}; },
+    key: (index: number) => Object.keys(store)[index] ?? null,
+    get length() { return Object.keys(store).length; },
+  };
+};
+
+if (typeof globalThis.localStorage === 'undefined' || !globalThis.localStorage) {
+  (globalThis as any).localStorage = createStorageMock();
+}
+if (typeof globalThis.sessionStorage === 'undefined' || !globalThis.sessionStorage) {
+  (globalThis as any).sessionStorage = createStorageMock();
+}
+
 describe('OWNER R3.9-D.1.7: Save-Status Context Isolation & Stale Lifecycle Closure Suite', () => {
   beforeEach(() => {
     cleanup();

@@ -110,7 +110,11 @@ export const ELECTRICITY_TIER_PRESET: CanonicalTierRecord[] = [
 ];
 
 export interface TieredRateEditorProps {
-  utilityType: 'water' | 'electricity';
+  utilityType?: 'water' | 'electricity';
+  type?: 'water' | 'electricity';
+  title?: string;
+  unitLabel?: string;
+  accentColor?: string;
   tiers: CanonicalTierRecord[];
   onChange: (tiers: CanonicalTierRecord[]) => void;
   onSave?: (tiers: CanonicalTierRecord[]) => void;
@@ -121,6 +125,10 @@ export interface TieredRateEditorProps {
 
 export const TieredRateEditor: React.FC<TieredRateEditorProps> = ({
   utilityType,
+  type,
+  title,
+  unitLabel,
+  accentColor,
   tiers,
   onChange,
   onSave,
@@ -128,7 +136,8 @@ export const TieredRateEditor: React.FC<TieredRateEditorProps> = ({
   isSaving = false,
   className = '',
 }) => {
-  const isWater = utilityType === 'water';
+  const effectiveUtilityType = utilityType || type || 'water';
+  const isWater = effectiveUtilityType === 'water';
   const [localError, setLocalError] = useState<string | null>(null);
 
   // Derive "from" value for each tier
@@ -289,8 +298,8 @@ export const TieredRateEditor: React.FC<TieredRateEditorProps> = ({
         cardBg: 'bg-white dark:bg-slate-900',
         badge: 'bg-sky-100 dark:bg-sky-900/50 text-sky-800 dark:text-sky-300 border border-sky-200 dark:border-sky-800',
         headerIcon: <Droplet className="w-4 h-4 text-sky-500 shrink-0" />,
-        title: 'อัตราค่าน้ำแบบขั้นบันได',
-        unitLabel: 'หน่วยน้ำ',
+        title: title || 'อัตราค่าน้ำประปาแบบขั้นบันได',
+        unitLabel: unitLabel || 'หน่วยน้ำ',
         accentBtn: 'bg-sky-600 hover:bg-sky-700 text-white focus:ring-sky-500',
         textAccent: 'text-sky-600 dark:text-sky-400',
       }
@@ -300,8 +309,8 @@ export const TieredRateEditor: React.FC<TieredRateEditorProps> = ({
         cardBg: 'bg-white dark:bg-slate-900',
         badge: 'bg-amber-100 dark:bg-amber-900/50 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800',
         headerIcon: <Zap className="w-4 h-4 text-amber-500 shrink-0" />,
-        title: 'อัตราค่าไฟฟ้าแบบขั้นบันได',
-        unitLabel: 'หน่วยไฟ',
+        title: title || 'อัตราค่าไฟฟ้าแบบขั้นบันได',
+        unitLabel: unitLabel || 'หน่วยไฟ',
         accentBtn: 'bg-amber-600 hover:bg-amber-700 text-white focus:ring-amber-500',
         textAccent: 'text-amber-600 dark:text-amber-400',
       };
@@ -309,7 +318,7 @@ export const TieredRateEditor: React.FC<TieredRateEditorProps> = ({
   return (
     <div
       className={`rounded-2xl border ${theme.border} ${theme.bg} p-4 shadow-sm transition-all ${className}`}
-      data-testid={`tiered-rate-editor-${utilityType}`}
+      data-testid={`tiered-rate-editor-${effectiveUtilityType}`}
     >
       {/* Header */}
       <div className="flex items-start justify-between mb-3 gap-2">
@@ -324,7 +333,7 @@ export const TieredRateEditor: React.FC<TieredRateEditorProps> = ({
           onClick={handleResetPreset}
           disabled={disabled}
           className="flex items-center gap-1 text-[11px] font-medium text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 transition-colors whitespace-nowrap shrink-0 disabled:opacity-40 cursor-pointer pt-0.5"
-          data-testid={`btn-reset-preset-${utilityType}`}
+          data-testid={`btn-reset-preset-${effectiveUtilityType}`}
           title="คืนค่าเป็นตัวอย่างเริ่มต้น (บันทึกเมื่อพร้อม)"
         >
           <RotateCcw className="w-3 h-3 shrink-0" />
@@ -334,7 +343,7 @@ export const TieredRateEditor: React.FC<TieredRateEditorProps> = ({
 
       {/* Error Alert */}
       {localError && (
-        <div className="mb-3 p-2 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 rounded-xl flex items-center gap-2 text-rose-700 dark:text-rose-300 text-xs" data-testid={`alert-tier-error-${utilityType}`}>
+        <div className="mb-3 p-2 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 rounded-xl flex items-center gap-2 text-rose-700 dark:text-rose-300 text-xs" data-testid={`alert-tier-error-${effectiveUtilityType}`}>
           <AlertCircle className="w-3.5 h-3.5 shrink-0" />
           <span>{localError}</span>
         </div>
@@ -358,7 +367,7 @@ export const TieredRateEditor: React.FC<TieredRateEditorProps> = ({
               const isFinal = idx === tiers.length - 1;
 
               return (
-                <tr key={idx} className="group" data-testid={`tier-row-${utilityType}-${idx}`}>
+                <tr key={idx} className="group" data-testid={`tier-row-${effectiveUtilityType}-${idx}`}>
                   {/* Step index */}
                   <td className="py-2 px-1 text-center font-bold text-slate-700 dark:text-slate-300 whitespace-nowrap">
                     {idx + 1}
@@ -368,7 +377,7 @@ export const TieredRateEditor: React.FC<TieredRateEditorProps> = ({
                   <td className="py-2 px-1 whitespace-nowrap">
                     <span
                       className="inline-block px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium"
-                      data-testid={`tier-from-${utilityType}-${idx}`}
+                      data-testid={`tier-from-${effectiveUtilityType}-${idx}`}
                     >
                       {fromVal}
                     </span>
@@ -379,7 +388,7 @@ export const TieredRateEditor: React.FC<TieredRateEditorProps> = ({
                     {isFinal ? (
                       <span
                         className={`inline-block px-2.5 py-1 rounded-lg ${theme.badge} font-semibold whitespace-nowrap`}
-                        data-testid={`tier-upto-${utilityType}-${idx}`}
+                        data-testid={`tier-upto-${effectiveUtilityType}-${idx}`}
                       >
                         ไม่จำกัด
                       </span>
@@ -393,7 +402,7 @@ export const TieredRateEditor: React.FC<TieredRateEditorProps> = ({
                           onChange={(e) => handleUpToChange(idx, e.target.value)}
                           onBlur={(e) => handleUpToBlur(idx, e.target.value)}
                           className="w-20 px-2 py-1 border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 font-medium focus:outline-none focus:ring-1 focus:ring-indigo-500 text-xs disabled:opacity-50"
-                          data-testid={`input-tier-upto-${utilityType}-${idx}`}
+                          data-testid={`input-tier-upto-${effectiveUtilityType}-${idx}`}
                         />
                         <span className="text-slate-400 dark:text-slate-500 text-[11px] whitespace-nowrap">หน่วย</span>
                       </div>
@@ -411,7 +420,7 @@ export const TieredRateEditor: React.FC<TieredRateEditorProps> = ({
                         onChange={(e) => handleRateChange(idx, e.target.value)}
                         onBlur={(e) => handleRateBlur(idx, e.target.value)}
                         className="w-24 px-2 py-1 border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 font-bold focus:outline-none focus:ring-1 focus:ring-indigo-500 text-xs disabled:opacity-50"
-                        data-testid={`input-tier-rate-${utilityType}-${idx}`}
+                        data-testid={`input-tier-rate-${effectiveUtilityType}-${idx}`}
                       />
                       <span className="text-slate-400 dark:text-slate-500 text-[11px] whitespace-nowrap">฿</span>
                     </div>
@@ -425,7 +434,7 @@ export const TieredRateEditor: React.FC<TieredRateEditorProps> = ({
                         onClick={() => handleRemoveTier(idx)}
                         disabled={disabled}
                         className="p-1 rounded-lg text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 transition-colors disabled:opacity-30 cursor-pointer"
-                        data-testid={`btn-remove-tier-${utilityType}-${idx}`}
+                        data-testid={`btn-remove-tier-${effectiveUtilityType}-${idx}`}
                         title="ลบขั้นนี้"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
@@ -447,7 +456,7 @@ export const TieredRateEditor: React.FC<TieredRateEditorProps> = ({
             onClick={handleAddTier}
             disabled={disabled}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-dashed border-slate-300 dark:border-slate-700 hover:border-slate-400 text-slate-600 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-800 transition-all text-xs font-medium whitespace-nowrap shrink-0 disabled:opacity-40 cursor-pointer"
-            data-testid={`btn-add-tier-${utilityType}`}
+            data-testid={`btn-add-tier-${effectiveUtilityType}`}
           >
             <Plus className="w-3.5 h-3.5 shrink-0" />
             <span className="whitespace-nowrap">เพิ่มขั้น</span>
@@ -462,7 +471,7 @@ export const TieredRateEditor: React.FC<TieredRateEditorProps> = ({
             onClick={handleSave}
             disabled={disabled || isSaving}
             className={`px-3.5 py-1.5 rounded-xl ${theme.accentBtn} text-xs font-semibold transition-all shadow-sm whitespace-nowrap shrink-0 disabled:opacity-50 cursor-pointer`}
-            data-testid={`btn-save-tiers-${utilityType}`}
+            data-testid={`btn-save-tiers-${effectiveUtilityType}`}
           >
             <span className="whitespace-nowrap">{isSaving ? 'กำลังบันทึก...' : 'บันทึกอัตรา'}</span>
           </button>

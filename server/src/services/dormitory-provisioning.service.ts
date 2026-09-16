@@ -12,6 +12,7 @@ import { addCalendarMonths } from '../utils/calendar-math.js';
 import { normalizeRoomIdentifier } from '../utils/normalization.js';
 import { decryptText, generateOpaqueWebhookKey } from '../utils/crypto-encryption.js';
 import { IIdempotencyRepository, InMemoryIdempotencyRepository } from '../db/repositories/idempotency.repository.js';
+import { sanitizeActorUserIdToUuid } from './idempotency.service.js';
 import { getPublicWebhookOrigin } from './line-oa.service.js';
 import { promoService } from './promo.service.js';
 import { referralService } from './referral.service.js';
@@ -60,6 +61,7 @@ export interface CompleteOwnerOnboardingParams {
     lateFeeType?: string;
     lateFeeValue?: string;
     rentBillingType?: string;
+    vatSettings?: any;
   };
   payment?: {
     cashAccepted?: boolean;
@@ -69,6 +71,7 @@ export interface CompleteOwnerOnboardingParams {
     bankCode?: string | null;
     bankAccountName?: string | null;
     bankAccountNumber?: string | null;
+    bankQrCode?: string | null;
   };
   buildings?: {
     id: string;
@@ -166,7 +169,8 @@ export class DormitoryProvisioningService {
    * Amendment A2: Prepare or retrieve provisional setup_pending dormitory before Step 4.
    * Creates ZERO OwnerSignature rows.
    */
-  async prepareProvisionalDormitory(userId: string, data: { name?: string; addressLine1?: string; province?: string }, txClient?: any) {
+  async prepareProvisionalDormitory(rawUserId: string, data: { name?: string; addressLine1?: string; province?: string }, txClient?: any) {
+    const userId = sanitizeActorUserIdToUuid(rawUserId);
     const runInTx = async (tx: any) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('user_provisional_prepare:' || ${userId}))`;
 
@@ -365,7 +369,9 @@ export class DormitoryProvisioningService {
    * Canonical endpoint: POST /api/v1/onboarding/finalize
    */
   public async completeOwnerOnboarding(params: CompleteOwnerOnboardingParams): Promise<any> {
-    const { userId, idempotencyKey, requestId, planCode, packageId, promoCode, dormitory, billing, payment, buildings, rooms } = params;
+    const rawUserId = params.userId;
+    const userId = sanitizeActorUserIdToUuid(rawUserId);
+    const { idempotencyKey, requestId, planCode, packageId, promoCode, dormitory, billing, payment, buildings, rooms } = params;
 
     let lockRecord: any = null;
     if (idempotencyKey && idempotencyKey.trim()) {
@@ -752,6 +758,7 @@ export class DormitoryProvisioningService {
             lateFeeType: billing.lateFeeType || 'none',
             lateFeeValue: lateFeeValueStr,
             rentBillingType: billing.rentBillingType || 'monthly',
+            vatSettings: billing.vatSettings ? (billing.vatSettings as any) : Prisma.DbNull,
           },
           update: {
             billingDay: legacyCompatBillingDay,
@@ -773,6 +780,7 @@ export class DormitoryProvisioningService {
             lateFeeType: billing.lateFeeType || 'none',
             lateFeeValue: lateFeeValueStr,
             rentBillingType: billing.rentBillingType || 'monthly',
+            vatSettings: billing.vatSettings ? (billing.vatSettings as any) : Prisma.DbNull,
             updatedAt: now,
           },
         });
@@ -802,6 +810,7 @@ export class DormitoryProvisioningService {
             bankAccountName: payment.bankAccountName || null,
             bankAccountNumber: payment.bankAccountNumber ? this.sensitiveFieldService.maskBankAccount(payment.bankAccountNumber) : null,
             bankAccountNumberEncrypted: encBankAccount,
+            bankQrCode: payment.bankQrCode || null,
           },
         });
       }

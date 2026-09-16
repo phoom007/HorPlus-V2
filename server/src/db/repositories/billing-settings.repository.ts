@@ -31,6 +31,8 @@ export interface BillingSettingsEntity {
   bankAccountName?: string | null;
   bankAccountNumber?: string | null;
   bankAccountNumberEncrypted?: string | null;
+  bankQrCode?: string | null;
+  vatSettings?: any;
   version?: number;
   createdAt: Date;
   updatedAt: Date;
@@ -67,6 +69,8 @@ export interface CreateBillingSettingsData {
   bankAccountName?: string | null;
   bankAccountNumber?: string | null;
   bankAccountNumberEncrypted?: string | null;
+  bankQrCode?: string | null;
+  vatSettings?: any;
   version?: number;
 }
 
@@ -156,6 +160,7 @@ export class InMemoryBillingSettingsRepository implements IBillingSettingsReposi
       bankAccountName: data.bankAccountName ?? null,
       bankAccountNumber: data.bankAccountNumber ?? null,
       bankAccountNumberEncrypted: data.bankAccountNumberEncrypted ?? null,
+      bankQrCode: data.bankQrCode ?? null,
       version: data.version ?? 1,
       createdAt: now,
       updatedAt: now,
@@ -221,6 +226,8 @@ export class PrismaBillingSettingsRepository implements IBillingSettingsReposito
       bankAccountName: s.bankAccountName ?? null,
       bankAccountNumber: s.bankAccountNumber ?? null,
       bankAccountNumberEncrypted: s.bankAccountNumberEncrypted ?? null,
+      bankQrCode: s.bankQrCode ?? null,
+      vatSettings: s.vatSettings === null || s.vatSettings === undefined || s.vatSettings === Prisma.DbNull || s.vatSettings === Prisma.JsonNull ? null : s.vatSettings,
       version: s.version ?? 1,
       createdAt: s.createdAt,
       updatedAt: s.updatedAt,
@@ -271,6 +278,8 @@ export class PrismaBillingSettingsRepository implements IBillingSettingsReposito
         bankAccountName: data.bankAccountName ?? null,
         bankAccountNumber: data.bankAccountNumber ?? null,
         bankAccountNumberEncrypted: data.bankAccountNumberEncrypted ?? null,
+        bankQrCode: data.bankQrCode ?? null,
+        vatSettings: data.vatSettings !== undefined ? (data.vatSettings === null ? Prisma.DbNull : data.vatSettings) : undefined,
       },
     });
     return this.mapToEntity(s);
@@ -326,6 +335,10 @@ export class PrismaBillingSettingsRepository implements IBillingSettingsReposito
     if (data.bankAccountName !== undefined) updateData.bankAccountName = data.bankAccountName;
     if (data.bankAccountNumber !== undefined) updateData.bankAccountNumber = data.bankAccountNumber;
     if (data.bankAccountNumberEncrypted !== undefined) updateData.bankAccountNumberEncrypted = data.bankAccountNumberEncrypted;
+    if (data.bankQrCode !== undefined) updateData.bankQrCode = data.bankQrCode;
+    if (data.vatSettings !== undefined) {
+      updateData.vatSettings = data.vatSettings === null ? Prisma.DbNull : data.vatSettings;
+    }
 
     try {
       const s = await this.prisma.dormitoryBillingSettings.update({

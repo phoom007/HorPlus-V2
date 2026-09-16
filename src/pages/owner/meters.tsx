@@ -300,7 +300,7 @@ export function buildRowsFromWorkspace(params: {
     const existingMonthlyUtilityBill = (bills || []).find(b =>
       (b.cycleId === selectedBillingCycleId || b.cycleId === selectedCycleCode || (b as any).billingCycleId === selectedBillingCycleId || (b as any).cycleMonth === selectedCycleCode) &&
       (b.roomId === r.id || b.roomId === r.roomNumber) &&
-      (!b.billKind || b.billKind === 'MONTHLY_UTILITY' || b.billKind === 'LEGACY_COMBINED' || (b.billKind as string).toUpperCase() === 'MONTHLY_UTILITY' || (b.billKind as string).toUpperCase() === 'LEGACY_COMBINED') &&
+      (!b.billKind || ['MONTHLY_UTILITY', 'COMBINED', 'LEGACY_COMBINED'].includes((b.billKind as string).toUpperCase())) &&
       (b.status as string) !== 'cancelled' && (b.status as string) !== 'void'
     );
     const previewRooms = workspaceData?.previewContext?.rooms || workspaceData?.rooms || [];
@@ -420,7 +420,7 @@ export function formatComponentDetailAmount(amt: number | string): string {
   if (Number.isInteger(num)) {
     return `${num.toLocaleString('th-TH')}.-`;
   }
-  return num.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return `${num.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}.-`;
 }
 
 export function calculateAutoScrollDelta(
@@ -613,9 +613,9 @@ export function resolveOwnerMeterDisplayStatus(roomCtx?: any, row?: any): OwnerM
 
   const overallStatus = (roomCtx?.overallFinancialStatus as string) || (roomCtx?.billStatus as string) || row?.billStatus || 'draft';
   const muStatus = (roomCtx?.monthlyUtilityBillStatus as string) || (row as any)?.monthlyUtilityBillStatus || row?.billStatus || 'draft';
-  const isMuPaid = Boolean(roomCtx?.isMonthlyUtilityPaid || (row as any)?.isMonthlyUtilityPaid || muStatus === 'paid');
-  const isMuIssued = muStatus !== 'draft' && muStatus !== 'cancelled';
-  const isOverallPaid = overallStatus === 'paid' || Boolean(roomCtx?.isPaid) || Boolean(row?.isPaid);
+  const isMuPaid = Boolean(roomCtx?.isMonthlyUtilityPaid || (row as any)?.isMonthlyUtilityPaid || muStatus === 'paid' || roomCtx?.isMuPaid || (row as any)?.isMuPaid);
+  const isMuIssued = Boolean(roomCtx?.isMuIssued || (row as any)?.isMuIssued || (muStatus !== 'draft' && muStatus !== 'cancelled') || isMuPaid);
+  const isOverallPaid = overallStatus === 'paid' || Boolean(roomCtx?.isPaid) || Boolean(row?.isPaid) || Boolean(roomCtx?.isOverallPaid);
 
   const hasValidationError = Boolean(
     row?.meterValidationError ||
@@ -674,15 +674,15 @@ export function resolveOwnerMeterDisplayStatus(roomCtx?: any, row?: any): OwnerM
     };
   }
 
-  // 3. Issued: S1 overall financial status
-  if (isOverallPaid) {
+  // 3. Issued: S1 overall financial status (or if monthly utility is already paid)
+  if (isOverallPaid || isMuPaid) {
     return {
       statusKey: 'PAID',
       label: 'ชำระแล้ว',
       tone: 'success',
       isDaily: false,
       isMonthlyUtilityIssued: true,
-      isMonthlyUtilityPaid: isMuPaid,
+      isMonthlyUtilityPaid: true,
       isOverallPaid: true,
       hasValidationError,
     };
@@ -2345,9 +2345,9 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   // Initialize meter rows based on rooms list, stored states, and bills
   useEffect(() => {
     try {
-      const shouldScroll = localStorage.getItem('scroll_to_meter_status');
+      const shouldScroll = typeof localStorage !== 'undefined' ? localStorage.getItem('scroll_to_meter_status') : null;
       if (shouldScroll === 'true') {
-        localStorage.removeItem('scroll_to_meter_status');
+        if (typeof localStorage !== 'undefined') localStorage.removeItem('scroll_to_meter_status');
         const doScroll = () => {
           // Keep page at very top
           window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -3272,6 +3272,33 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
   });
   const hasEligibleUnissuedBills = eligibleUnissuedRows.length > 0;
 
+  // Aggregate VAT calculations for Meter Workspace
+  const meterVatSettings = rateSnapshot?.vatSettings;
+  const isMeterVatEnabled = Boolean(meterVatSettings?.enabled);
+  const meterVatRate = typeof meterVatSettings?.rate === 'number' ? meterVatSettings.rate : (Number(meterVatSettings?.rate) || 7);
+
+  const aggregateFinancials = useMemo(() => {
+    let subtotalSatang = 0n;
+    let vatSatang = 0n;
+    let netTotalSatang = 0n;
+
+    for (const r of meterRows) {
+      const roomCtx = previewContext?.rooms?.find((ctx: any) => ctx.roomId === r.roomId);
+      const prev = calculateMeterRowPreview(roomCtx, rateSnapshot, r);
+      if (prev.isValid) {
+        subtotalSatang += parseSatang(prev.subtotalAmount || prev.totalAmount);
+        vatSatang += parseSatang(prev.vatAmount || '0.00');
+        netTotalSatang += parseSatang(prev.totalAmount);
+      }
+    }
+
+    return {
+      subtotalStr: formatSatang(subtotalSatang),
+      vatStr: formatSatang(vatSatang),
+      netTotalStr: formatSatang(netTotalSatang),
+    };
+  }, [meterRows, previewContext, rateSnapshot]);
+
   return (
     <div className="space-y-6">
       {!selectedBillingCycleId && (
@@ -3303,6 +3330,30 @@ export const OwnerMeters: React.FC<OwnerMetersProps> = ({
             <CheckCircle2 className="w-4.5 h-4.5 text-emerald-500 shrink-0" />
           )}
           <span className="whitespace-pre-line">{toastMessage || "บันทึกข้อมูลสำเร็จ"}</span>
+        </div>
+      )}
+
+      {/* VAT / Financial Summary Cards */}
+      {isMeterVatEnabled && (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4" data-testid="meter-vat-summary-cards">
+          <div className="bg-white border border-slate-200/80 rounded-2xl p-4 shadow-xs">
+            <div className="text-xs font-bold text-slate-500 mb-1">ยอดรวมก่อน VAT</div>
+            <div className="text-lg sm:text-xl font-black text-slate-900 tracking-tight">
+              ฿{formatMoneyDisplay(aggregateFinancials.subtotalStr)}
+            </div>
+          </div>
+          <div className="bg-white border border-amber-200/80 rounded-2xl p-4 shadow-xs bg-amber-50/20">
+            <div className="text-xs font-bold text-amber-700 mb-1">ภาษีมูลค่าเพิ่ม (VAT {meterVatRate}%)</div>
+            <div className="text-lg sm:text-xl font-black text-amber-600 tracking-tight">
+              ฿{formatMoneyDisplay(aggregateFinancials.vatStr)}
+            </div>
+          </div>
+          <div className="bg-white border border-indigo-200/80 rounded-2xl p-4 shadow-xs bg-indigo-50/20">
+            <div className="text-xs font-bold text-indigo-700 mb-1">ยอดรวมสุทธิทั้งสิ้น</div>
+            <div className="text-lg sm:text-xl font-black text-indigo-600 tracking-tight">
+              ฿{formatMoneyDisplay(aggregateFinancials.netTotalStr)}
+            </div>
+          </div>
         </div>
       )}
 

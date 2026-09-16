@@ -55,6 +55,11 @@ import {
   normalizeBangkokDate,
   isCycleInRollingThreeMonthWindow,
 } from '../../utils/calendarDate';
+import {
+  isCategoryTaxable,
+  parseToSatangs,
+  formatSatangs,
+} from '../../utils/vat-calculator';
 
 export interface OwnerMeterListCardProps {
   row: MeterRowState;
@@ -132,16 +137,16 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
   tenant,
   contracts = [],
   rateSnapshot,
-  isWaterUnit,
-  isElecUnit,
+  isWaterUnit = true,
+  isElecUnit = true,
   isFirstCycle,
   selectedCycleCode,
   selectedCycle,
   selectedBillingCycleId,
   billingCycles = [],
   isSaving,
-  unlockedElecPrev,
-  unlockedWaterPrev,
+  unlockedElecPrev = {},
+  unlockedWaterPrev = {},
   flashingCells = {},
   isExpandedBreakdown,
   quickAddLoadingRoomId,
@@ -282,6 +287,29 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
     waterCostText = formatComponentDetailAmount(waterItem.amount);
   }
 
+  const effectiveRates = rateSnapshot || roomCtx?.rateSnapshot;
+  const cardVatSettings = effectiveRates?.vatSettings;
+
+  if (isCategoryTaxable('electricity', cardVatSettings) && elecCostText !== '-') {
+    const rawVal = elecCostText.replace(/,/g, '');
+    const satangs = parseToSatangs(rawVal);
+    if (satangs > 0n) {
+      const rateNum = typeof cardVatSettings?.rate === 'number' ? cardVatSettings.rate : (Number(cardVatSettings?.rate) || 7);
+      const vatSatangs = (satangs * BigInt(Math.round(rateNum * 100)) + 5000n) / 10000n;
+      elecCostText = `${formatComponentDetailAmount(formatSatangs(satangs + vatSatangs))} (+VAT)`;
+    }
+  }
+
+  if (isCategoryTaxable('water', cardVatSettings) && waterCostText !== '-') {
+    const rawVal = waterCostText.replace(/,/g, '');
+    const satangs = parseToSatangs(rawVal);
+    if (satangs > 0n) {
+      const rateNum = typeof cardVatSettings?.rate === 'number' ? cardVatSettings.rate : (Number(cardVatSettings?.rate) || 7);
+      const vatSatangs = (satangs * BigInt(Math.round(rateNum * 100)) + 5000n) / 10000n;
+      waterCostText = `${formatComponentDetailAmount(formatSatangs(satangs + vatSatangs))} (+VAT)`;
+    }
+  }
+
   // Canonical Rent Component Selection (PO Strict Type Requirement)
   const isDaily = isDailyContext || roomCtx?.billingSource === 'DAILY_STAY';
   const isTerm = roomCtx?.billingSource === 'TERM_CONTRACT' || roomCtx?.billingSource === 'PROVISIONAL_TERM';
@@ -299,8 +327,25 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
     rentColorClass = 'text-rose-600 font-bold';
   }
 
+  const isRentTaxable = isCategoryTaxable('rent', cardVatSettings);
+  let rentDisplayAmount = rentComp ? Number(rentComp.amount) : 0;
+  if (isRentTaxable && rentComp) {
+    const isAlreadyVatInclusive = Boolean((rentComp as any).metadata?.isVatInclusive);
+    if (!isAlreadyVatInclusive) {
+      const baseSatangs = parseToSatangs(rentComp.amount);
+      const rateNum = typeof cardVatSettings?.rate === 'number' ? cardVatSettings.rate : (Number(cardVatSettings?.rate) || 7);
+      const vatSatangs = (baseSatangs * BigInt(Math.round(rateNum * 100)) + 5000n) / 10000n;
+      rentDisplayAmount = Number(formatSatangs(baseSatangs + vatSatangs));
+    }
+  }
+
+  const rentFormatted = rentDisplayAmount.toLocaleString('th-TH', {
+    minimumFractionDigits: Number.isInteger(rentDisplayAmount) ? 0 : 2,
+    maximumFractionDigits: 2,
+  });
+
   const rentDisplay = rentComp
-    ? `${Number(rentComp.amount).toLocaleString('th-TH')} .-`
+    ? `${isRentTaxable ? '(+VAT) ' : ''}${rentFormatted}.-`
     : '';
 
   const otherFeesCount = (row.otherFees || []).length;
@@ -311,6 +356,8 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
       id: string;
       label: string;
       amount: string | number;
+      displayAmount?: string | number;
+      isTaxable?: boolean;
       type: string;
       icon: React.ReactNode;
       errorMessage?: string;
@@ -318,6 +365,7 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
     }> = [];
 
     const utilityStatus = monthlyComp?.status || (isRowPaid || row.billStatus === 'paid' ? 'PAID' : (row.billStatus !== 'draft' && row.billStatus !== 'cancelled' ? 'UNPAID' : 'PREVIEW'));
+    const vatSettings = cardVatSettings;
 
     if (backendLineItems.length > 0) {
       for (const it of backendLineItems) {
@@ -353,11 +401,22 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
         }
 
         const isOutstanding = itemType === 'manual_outstanding' || itemType === 'late_fee';
+        const isTaxable = !isOutstanding && isCategoryTaxable(itemType, vatSettings);
+        let displayAmount = it.amount;
+        if (isTaxable) {
+          const baseSatang = parseToSatangs(it.amount);
+          const rateNum = typeof vatSettings?.rate === 'number' ? vatSettings.rate : (Number(vatSettings?.rate) || 7);
+          const vatBasisPoints = BigInt(Math.round(rateNum * 100));
+          const vatSatang = (baseSatang * vatBasisPoints + 5000n) / 10000n;
+          displayAmount = formatSatangs(baseSatang + vatSatang);
+        }
 
         items.push({
           id: it.id || `item-${itemType}-${it.description}`,
           label: it.description || (itemType === 'manual_outstanding' ? 'ค้างชำระ' : itemType),
           amount: it.amount,
+          displayAmount,
+          isTaxable,
           type: itemType,
           icon: itemIcon,
           status: isOutstanding ? 'OVERDUE' : utilityStatus,
@@ -373,11 +432,24 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
         c.type !== 'legacy_combined'
       ) {
         const compStatus = c.status || (isDailyContext && c.type === 'deposit' ? (roomCtx?.isDailyDepositPaidInDisplayedPeriod ? 'PAID' : (roomCtx?.showDailyDepositLine ? 'UNPAID' : (isRowPaid ? 'PAID' : 'PREVIEW'))) : (isRowPaid || row.billStatus === 'paid' ? 'PAID' : (row.billStatus !== 'draft' ? 'UNPAID' : 'PREVIEW')));
+        const compType = c.type || 'other';
+        const isTaxable = isCategoryTaxable(compType, vatSettings);
+        let compDisplayAmount = c.amount;
+        if (isTaxable) {
+          const baseSatang = parseToSatangs(c.amount);
+          const rateNum = typeof vatSettings?.rate === 'number' ? vatSettings.rate : (Number(vatSettings?.rate) || 7);
+          const vatBasisPoints = BigInt(Math.round(rateNum * 100));
+          const vatSatang = (baseSatang * vatBasisPoints + 5000n) / 10000n;
+          compDisplayAmount = formatSatangs(baseSatang + vatSatang);
+        }
+
         items.push({
           id: `item-comp-${c.label || c.type}`,
           label: c.label || c.type,
           amount: c.amount,
-          type: c.type || 'other',
+          displayAmount: compDisplayAmount,
+          isTaxable,
+          type: compType,
           icon: getComponentItemIcon(c.label, c.type),
           errorMessage: c.errorMessage,
           status: compStatus,
@@ -386,7 +458,62 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
     }
 
     return items;
-  }, [chargeComponents, backendLineItems, isRowPaid, isDailyContext, roomCtx]);
+  }, [chargeComponents, backendLineItems, isRowPaid, isDailyContext, roomCtx, cardVatSettings]);
+
+  const effectiveAmountDue = useMemo(() => {
+    if (!cardVatSettings?.enabled) {
+      return amountDue;
+    }
+
+    let totalSatangs = 0n;
+
+    // Zone A: Rent
+    if (rentComp && rentComp.status !== 'PAID') {
+      totalSatangs += parseToSatangs(rentDisplayAmount);
+    }
+
+    // Zone B: Water
+    if (waterCostText !== '-' && !isRowPaid) {
+      const clean = waterCostText.replace(/\(\+VAT\)/g, '').replace(/,/g, '').trim();
+      totalSatangs += parseToSatangs(clean);
+    }
+
+    // Zone C: Electricity
+    if (elecCostText !== '-' && !isRowPaid) {
+      const clean = elecCostText.replace(/\(\+VAT\)/g, '').replace(/,/g, '').trim();
+      totalSatangs += parseToSatangs(clean);
+    }
+
+    // Zone D: Other Fees
+    if (!isRowPaid && Array.isArray(row.otherFees)) {
+      for (const fee of row.otherFees) {
+        const isOtherTaxable = isCategoryTaxable('other', cardVatSettings);
+        let feeDisplayAmount = Number(fee.amount);
+        if (isOtherTaxable) {
+          const baseSatangs = parseToSatangs(fee.amount);
+          const rateNum = typeof cardVatSettings?.rate === 'number' ? cardVatSettings.rate : (Number(cardVatSettings?.rate) || 7);
+          const vatBasisPoints = BigInt(Math.round(rateNum * 100));
+          const vatSatangs = (baseSatangs * vatBasisPoints + 5000n) / 10000n;
+          feeDisplayAmount = Number(formatSatangs(baseSatangs + vatSatangs));
+        }
+        totalSatangs += parseToSatangs(feeDisplayAmount);
+      }
+    }
+
+    // Zone E: List Itemized Breakdown (Common, Internet, Parking, etc.)
+    for (const item of listItemizedBreakdown) {
+      if (item.status !== 'PAID') {
+        const amt = item.displayAmount !== undefined ? item.displayAmount : item.amount;
+        totalSatangs += parseToSatangs(amt);
+      }
+    }
+
+    if (totalSatangs === 0n && parseToSatangs(amountDue) === 0n) {
+      return amountDue;
+    }
+
+    return totalSatangs > 0n ? formatSatangs(totalSatangs) : amountDue;
+  }, [cardVatSettings, amountDue, rentComp, rentDisplayAmount, waterCostText, elecCostText, isRowPaid, row.otherFees, listItemizedBreakdown]);
 
   // Standard Card Border Color:
   // PO decision Q5=ก: standard border-slate-200 hover:border-slate-300 across all statuses
@@ -966,6 +1093,16 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
           <div className="flex flex-col gap-1 pt-1 border-t border-slate-100">
             {(row.otherFees || []).map((fee, feeIdx) => {
               const feeIcon = getComponentItemIcon(fee.description);
+              const isOtherTaxable = isCategoryTaxable('other', cardVatSettings);
+              let feeDisplayAmount = Number(fee.amount);
+              if (isOtherTaxable) {
+                const baseSatangs = parseToSatangs(fee.amount);
+                const rateNum = typeof cardVatSettings?.rate === 'number' ? cardVatSettings.rate : (Number(cardVatSettings?.rate) || 7);
+                const vatBasisPoints = BigInt(Math.round(rateNum * 100));
+                const vatSatangs = (baseSatangs * vatBasisPoints + 5000n) / 10000n;
+                feeDisplayAmount = Number(formatSatangs(baseSatangs + vatSatangs));
+              }
+
               return (
                 <div
                   key={feeIdx}
@@ -974,9 +1111,14 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
                   <div className="flex items-center gap-2 truncate">
                     {feeIcon}
                     <span className="truncate max-w-[160px]" title={fee.description}>{fee.description}</span>
+                    {isOtherTaxable && (
+                      <span className="text-[9px] font-bold text-amber-700 bg-amber-50 px-1 py-0.5 rounded border border-amber-200 shrink-0">
+                        (+VAT)
+                      </span>
+                    )}
                   </div>
                   <span className="text-indigo-600 shrink-0 font-extrabold">
-                    {Number(fee.amount).toLocaleString('th-TH', { minimumFractionDigits: Number.isInteger(Number(fee.amount)) ? 0 : 2 })} ฿
+                    {feeDisplayAmount.toLocaleString('th-TH', { minimumFractionDigits: Number.isInteger(feeDisplayAmount) ? 0 : 2 })} ฿
                   </span>
                 </div>
               );
@@ -1017,9 +1159,14 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
                     <span className={`truncate ${itemLabelColorClass}`}>
                       {item.label}
                     </span>
+                    {item.isTaxable && (
+                      <span className="text-[9px] font-bold text-amber-700 bg-amber-50 px-1 py-0.5 rounded border border-amber-200 shrink-0">
+                        (+VAT)
+                      </span>
+                    )}
                   </div>
                   <span className={`shrink-0 ml-2 ${itemAmountColorClass}`}>
-                    {formatComponentDetailAmount(item.amount)}
+                    {formatComponentDetailAmount(item.displayAmount !== undefined ? item.displayAmount : item.amount)}
                   </span>
                 </div>
               );
@@ -1032,7 +1179,7 @@ export const OwnerMeterListCard: React.FC<OwnerMeterListCardProps> = ({
       <div className="flex items-center justify-between pt-1 border-t border-gray-100">
         <span className="text-xs font-black text-slate-700">ยอดที่ต้องชำระ</span>
         <span className="text-xl font-black text-indigo-700 tracking-tight">
-          {formatMoneyDisplay(amountDue)} ฿
+          {formatMoneyDisplay(effectiveAmountDue)} ฿
         </span>
       </div>
     </div>

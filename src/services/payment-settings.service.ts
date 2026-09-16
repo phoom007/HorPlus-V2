@@ -18,6 +18,7 @@ export interface PaymentSettingsDTO {
   bankAccountName: string | null;
   maskedBankAccountNumber: string | null;
   hasBankAccount: boolean;
+  bankQrCode?: string | null;
   version?: number;
   createdAt: string;
   updatedAt: string;
@@ -31,6 +32,7 @@ export interface PaymentSettingsUpdatePayload {
   bankCode?: string | null;
   bankAccountName?: string | null;
   bankAccountNumber?: string | null;
+  bankQrCode?: string | null;
 }
 
 export async function getPaymentSettings(dormitoryId: string): Promise<PaymentSettingsDTO> {

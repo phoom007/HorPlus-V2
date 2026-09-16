@@ -214,6 +214,7 @@ export function createDormitoryRouter(
       lateFeeType: settings.lateFeeType,
       lateFeeValue: String(settings.lateFeeValue),
       rentBillingType: settings.rentBillingType,
+      vatSettings: settings.vatSettings ?? null,
       createdAt: settings.createdAt,
       updatedAt: settings.updatedAt,
     };
@@ -433,6 +434,7 @@ export function createDormitoryRouter(
       bankAccountName: settings.bankAccountName ?? null,
       maskedBankAccountNumber: decryptedBankAccount ? sensitiveFieldService.maskBankAccount(decryptedBankAccount) : (settings.bankAccountNumber ?? null),
       hasBankAccount: Boolean(settings.bankCode && (settings.bankAccountNumberEncrypted || decryptedBankAccount)),
+      bankQrCode: settings.bankQrCode ?? null,
       version: settings.version ?? 1,
       createdAt: settings.createdAt,
       updatedAt: settings.updatedAt,
@@ -592,6 +594,7 @@ export function createDormitoryRouter(
       bankAccountName: parsed.data.bankAccountName !== undefined ? (parsed.data.bankAccountName ?? null) : (currentSettings?.bankAccountName ?? null),
       bankAccountNumber: decryptedBankAcc ? sensitiveFieldService.maskBankAccount(decryptedBankAcc) : null,
       bankAccountNumberEncrypted: finalBankAccEnc,
+      bankQrCode: parsed.data.bankQrCode !== undefined ? (parsed.data.bankQrCode ?? null) : (currentSettings?.bankQrCode ?? null),
     };
 
     let updated: any;
@@ -667,6 +670,7 @@ export function createDormitoryRouter(
       bankAccountName: updated.bankAccountName ?? null,
       maskedBankAccountNumber: decryptedBankAcc ? sensitiveFieldService.maskBankAccount(decryptedBankAcc) : null,
       hasBankAccount: Boolean(updated.bankCode && (updated.bankAccountNumberEncrypted || decryptedBankAcc)),
+      bankQrCode: updated.bankQrCode ?? null,
       version: updated.version ?? 1,
       createdAt: updated.createdAt,
       updatedAt: updated.updatedAt,
@@ -813,6 +817,38 @@ export function createDormitoryRouter(
 
   router.get('/:dormitoryId/signature', requireSession, requireDormitory, requireDormitoryView, handleGetSignature);
   router.get('/:dormitoryId/signatures', requireSession, requireDormitory, requireDormitoryView, handleGetSignature);
+
+  // DELETE /api/v1/dormitories/:dormitoryId/signature (Task-009 Signature Deactivation)
+  const handleDeleteSignature = async (req: Request, res: Response) => {
+    if (!verifyCsrfToken(req, res)) return;
+
+    try {
+      const dormitoryId = req.params.dormitoryId;
+      const prisma = getPrismaClient();
+      const signatureService = new SignatureStorageService(prisma);
+      const deactivated = await signatureService.deactivateDormitorySignature(dormitoryId);
+
+      res.json({
+        success: true,
+        message: 'ลบลายเซ็นหอพักเรียบร้อยแล้ว',
+        deactivated,
+      });
+    } catch (err: any) {
+      const statusCode = err.statusCode || err.status || 500;
+      res.status(statusCode).json({
+        error: {
+          code: err.errorCode || err.code || 'SIGNATURE_DELETION_FAILED',
+          message: err.message || 'เกิดข้อผิดพลาดขณะลบลายเซ็นหอพัก',
+          fieldErrors: null,
+          requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+          timestamp: new Date().toISOString(),
+        },
+      });
+    }
+  };
+
+  router.delete('/:dormitoryId/signature', requireSession, requireDormitory, requireDormitoryUpdate, requireDormitoryWriteEntitlement, handleDeleteSignature);
+  router.delete('/:dormitoryId/signatures', requireSession, requireDormitory, requireDormitoryUpdate, requireDormitoryWriteEntitlement, handleDeleteSignature);
 
   // GET /api/v1/dormitories/:dormitoryId/contracts/:contractId/tenant-signature
   router.get('/:dormitoryId/contracts/:contractId/tenant-signature', requireSession, requireDormitory, requireDormitoryView, async (req: Request, res: Response) => {

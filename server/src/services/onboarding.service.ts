@@ -6,6 +6,7 @@
 import { PrismaClient } from '@prisma/client';
 import { getPrismaClient } from '../db/prisma.js';
 import { referralService } from './referral.service.js';
+import { sanitizeActorUserIdToUuid } from './idempotency.service.js';
 import {
   normalizeOnboardingDraftPayload,
   CURRENT_ONBOARDING_DRAFT_SCHEMA_VERSION,
@@ -25,7 +26,8 @@ export interface OnboardingStatusResult {
 export class OnboardingService {
   constructor(private prisma: PrismaClient) {}
 
-  public async getStatus(userId: string): Promise<OnboardingStatusResult> {
+  public async getStatus(rawUserId: string): Promise<OnboardingStatusResult> {
+    const userId = sanitizeActorUserIdToUuid(rawUserId);
     const memberships = await this.prisma.dormitoryMember.findMany({
       where: { userId, status: 'active' },
       include: { dormitory: true },
@@ -69,7 +71,8 @@ export class OnboardingService {
     };
   }
 
-  public async getDraft(userId: string) {
+  public async getDraft(rawUserId: string) {
+    const userId = sanitizeActorUserIdToUuid(rawUserId);
     const draft = await this.prisma.onboardingDraft.findUnique({
       where: { userId },
     });
@@ -103,7 +106,8 @@ export class OnboardingService {
     };
   }
 
-  public async saveDraft(userId: string, currentStep: string, payload: any, provisionalDormitoryId?: string) {
+  public async saveDraft(rawUserId: string, currentStep: string, payload: any, provisionalDormitoryId?: string) {
+    const userId = sanitizeActorUserIdToUuid(rawUserId);
     const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30 days expiry
     const normalizedPayload = normalizeOnboardingDraftPayload(payload);
 
@@ -126,7 +130,8 @@ export class OnboardingService {
     });
   }
 
-  public async deleteDraft(userId: string): Promise<void> {
+  public async deleteDraft(rawUserId: string): Promise<void> {
+    const userId = sanitizeActorUserIdToUuid(rawUserId);
     await this.prisma.onboardingDraft.deleteMany({
       where: { userId },
     });

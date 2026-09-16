@@ -66,6 +66,7 @@ export const OnboardingBillingInputSchema = z.object({
     .transform((val) => (val === 'fixed_once' ? 'fixed' : val)),
   lateFeeValue: normalizeMoneyField('0.00', 'ค่าปรับต้องเป็นตัวเลขจำนวนเงินที่ถูกต้อง').default('0.00'),
   rentBillingType: z.enum(['monthly']).default('monthly'),
+  vatSettings: z.any().optional().nullable(),
   billingCycle: z.string().trim().optional().nullable(),
 }).strict();
 
@@ -77,6 +78,7 @@ export const OnboardingPaymentInputSchema = z.object({
   bankCode: z.string().trim().optional().nullable(),
   bankAccountName: z.string().trim().optional().nullable(),
   bankAccountNumber: z.string().trim().optional().nullable(),
+  bankQrCode: z.string().trim().optional().nullable(),
 }).strict().superRefine((data, ctx) => {
   const type = data.promptPayType;
   const rawVal = data.promptPayValue ? data.promptPayValue.replace(/\D/g, '') : '';
@@ -137,6 +139,7 @@ export const PaymentSettingsPatchInputSchema = z.object({
   bankCode: z.string().trim().optional().nullable(),
   bankAccountName: z.string().trim().optional().nullable(),
   bankAccountNumber: z.string().trim().optional().nullable(),
+  bankQrCode: z.string().trim().optional().nullable(),
 }).strict().superRefine((data, ctx) => {
   // Reject any input containing masked 'X' characters
   if (data.promptPayValue && data.promptPayValue.includes('X')) {
@@ -268,6 +271,20 @@ export const OnboardingRoomInputSchema = z.object({
   status: z.enum(['vacant', 'occupied', 'reserved', 'maintenance']).default('vacant'),
 }).strict();
 
+export const PetAllowedTypeEnum = z.preprocess((val) => {
+  if (typeof val === 'string') {
+    const trimmed = val.trim().toLowerCase();
+    if (trimmed === 'small_pets' || trimmed === 'small-pet' || trimmed === 'สัตว์เล็ก') {
+      return 'small_pet';
+    }
+    if (trimmed === 'exotic' || trimmed === 'others' || trimmed === 'สัตว์แปลก') {
+      return 'other';
+    }
+    return trimmed;
+  }
+  return val;
+}, z.enum(['dog', 'cat', 'small_pet', 'other']));
+
 export const CompleteOnboardingInputSchema = z.object({
   dormitory: OnboardingDormitoryInputSchema,
   billing: OnboardingBillingInputSchema,
@@ -287,7 +304,7 @@ export const CompleteOnboardingInputSchema = z.object({
   defaultTerms: z.string().optional(),
   petPolicy: z.object({
     allowed: z.string(),
-    allowedTypes: z.array(z.enum(['dog', 'cat', 'small_pet', 'other'])).optional(),
+    allowedTypes: z.array(PetAllowedTypeEnum).optional(),
   }).optional(),
   signatureSaved: z.boolean().optional(),
   signatureObjectKey: z.string().optional(),
@@ -326,14 +343,15 @@ export const ValidatePromoInputSchema = z.object({
 export const UpdateDormitoryInputSchema = z.object({
   name: z.string().trim().min(1, 'กรุณาระบุชื่อหอพัก').max(255).optional(),
   type: z.string().trim().optional(),
-  addressLine1: z.string().trim().optional(),
-  addressLine2: z.string().trim().optional(),
-  subdistrict: z.string().trim().optional(),
-  district: z.string().trim().optional(),
-  province: z.string().trim().optional(),
-  postalCode: z.string().trim().optional(),
-  phone: z.string().trim().optional(),
-  email: z.string().trim().email().optional().or(z.literal('')),
+  addressLine1: z.string().trim().optional().nullable(),
+  addressLine2: z.string().trim().optional().nullable(),
+  subdistrict: z.string().trim().optional().nullable(),
+  district: z.string().trim().optional().nullable(),
+  province: z.string().trim().optional().nullable(),
+  postalCode: z.string().trim().optional().nullable(),
+  phone: z.string().trim().optional().nullable(),
+  email: z.string().trim().email().optional().or(z.literal('')).nullable(),
+  taxId: z.string().trim().optional().nullable(),
 }).strict();
 
 export type CompleteOnboardingInput = z.infer<typeof CompleteOnboardingInputSchema>;

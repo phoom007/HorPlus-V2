@@ -64,6 +64,8 @@ import {
   validateCanonicalTiers,
   normalizeCanonicalTiers,
 } from '../../components/settings/TieredRateEditor';
+import { DormitoryLogoUploader } from '../../components/settings/DormitoryLogoUploader';
+import { normalizeBankCode, SUPPORTED_BANKS } from '../../utils/bank-helper';
 
 export const mapRegisterUtilityMode = (mode: string): string => {
   switch (mode) {
@@ -133,6 +135,8 @@ import {
   ExternalLink,
   Eye,
   EyeOff,
+  Percent,
+  Receipt,
 } from 'lucide-react';
 
 import { onboardingClient } from '../../data/onboardingClient';
@@ -142,6 +146,13 @@ import { normalizeNumericInput } from '../../utils/numericInput';
 import { createPortal } from 'react-dom';
 import { saveRegistrationDraft, getRegistrationDraft, clearRegistrationDraft } from '../../utils/localDraftStorage';
 import { LineLogo } from '../../components/LineLogo';
+import { BankQrCodeUploader } from '../../components/settings/BankQrCodeUploader';
+import {
+  CANONICAL_PRESET_DORM_RULES,
+  formatNumberedRules,
+  toggleRuleInNumberedList,
+  isRuleActive,
+} from '../../constants/presetRules';
 
 interface RegisterProps {
   onAddLog?: (action: string, details: string, module: string, targetId?: string) => void;
@@ -340,6 +351,7 @@ export function getRegistrationInitialFormData() {
       accountNumber: '',
       accountName: '',
       bankAccountName: '',
+      bankQrCode: '',
       promptPayId: '',
       promptPayName: '',
     },
@@ -349,6 +361,11 @@ export function getRegistrationInitialFormData() {
     },
     ownerSignatureUrl: '',
     rulesTemplate: '',
+    vatSettings: {
+      enabled: false,
+      rate: 7,
+      appliedCategories: ['rent', 'water', 'electricity', 'commonFee', 'internetFee', 'parking', 'fine', 'other'] as string[],
+    },
     lineOA: {
       oaName: '',
       channelId: '',
@@ -500,6 +517,7 @@ export function mapRegistrationFormDataToFinalizePayload(params: {
       lateFeeType: formData.deposits?.lateFeeType === 'fixed_once' ? 'fixed' : (formData.deposits?.lateFeeType || 'none'),
       lateFeeValue: String(formData.deposits?.lateFeeAmount ?? '0.00').replace(/,/g, '').trim() || '0.00',
       rentBillingType: 'monthly',
+      vatSettings: formData.vatSettings || null,
     },
     payment: {
       cashAccepted: true,
@@ -509,6 +527,7 @@ export function mapRegistrationFormDataToFinalizePayload(params: {
       bankCode: formData.paymentAccount?.bankName || null,
       bankAccountName: formData.paymentAccount?.bankAccountName || null,
       bankAccountNumber: formData.paymentAccount?.accountNumber ? formData.paymentAccount.accountNumber.replace(/\D/g, '') : null,
+      bankQrCode: formData.paymentAccount?.bankQrCode || null,
     },
     buildings: mappedBuildings,
     rooms: mappedRooms,
@@ -521,226 +540,22 @@ export function mapRegistrationFormDataToFinalizePayload(params: {
     ownerSignatureUrl: uploadedSignatureRef,
     petPolicy: {
       allowed: formData.petPolicy?.allowed || 'none',
-      allowedTypes: formData.petPolicy?.allowedTypes || [],
+      allowedTypes: (formData.petPolicy?.allowedTypes || []).map((t: string) => {
+        if (t === 'small_pets') return 'small_pet';
+        if (t === 'exotic') return 'other';
+        return t;
+      }),
     },
     defaultTerms: formData.rulesTemplate || undefined,
     defaultDeposit: parseOptionalConfiguredNumber(formData.deposits?.securityDeposit),
   };
 }
 
-// 10 Preset Dormitory Rules for Quick Insertion
-const PRESET_DORM_RULES = [
-  { id: 'quiet_hours', label: '🤫 งดส่งเสียงดังหลัง 22:00', text: '• ห้ามส่งเสียงดังรบกวนผู้อื่นหลังเวลา 22:00 น.' },
-  { id: 'no_smoking', label: '🚭 ห้ามสูบบุหรี่ในห้องพัก', text: '• ห้ามสูบบุหรี่ บุหรี่ไฟฟ้า และสิ่งเสพติดภายในห้องพักและทางเดินโดยเด็ดขาด' },
-  { id: 'no_pets_strict', label: '🐾 ห้ามเลี้ยงสัตว์เลี้ยง', text: '• ห้ามนำสัตว์เลี้ยงทุกชนิดเข้ามาเลี้ยงภายในห้องพักและพื้นที่ส่วนกลาง' },
-  { id: 'trash_disposal', label: '🗑️ มัดถุงขยะทิ้งจุดกำหนด', text: '• กรุณามัดถุงขยะให้เรียบร้อยและนำไปทิ้ง ณ จุดทิ้งขยะของหอพักเท่านั้น' },
-  { id: 'parking_rule', label: '🚗 จอดรถในซองที่กำหนด', text: '• จอดรถยนต์และจักรยานยนต์ในซองจอดที่กำหนด พร้อมติดสติ๊กเกอร์หอพัก' },
-  { id: 'electric_appliance', label: '⚡ ห้ามดัดแปลงระบบไฟฟ้า', text: '• ห้ามดัดแปลงระบบไฟฟ้าหรือใช้เครื่องใช้ไฟฟ้าที่กินกำลังไฟสูงเกินมาตรฐาน' },
-  { id: 'keycard_return', label: '🗝️ คืนกุญแจเมื่อย้ายออก', text: '• เมื่อสิ้นสุดสัญญาต้องคืนคีย์การ์ดและกุญแจห้องครบตามจำนวน (หากสูญหายปรับ 500 บ.)' },
-  { id: 'visitor_policy', label: '👥 ห้ามคนนอกค้างคืนโดยไม่แจ้ง', text: '• ห้ามบุคคลภายนอกเข้าพักค้างคืนเกิน 2 คืนโดยไม่ได้รับอนุมัติจากเจ้าของหอพัก' },
-  { id: 'cleanliness', label: '🧹 รักษาความสะอาดห้องพัก', text: '• ผู้เช่าต้องดูแลรักษาความสะอาดภายในห้องพัก ไม่ปล่อยให้เกิดกลิ่นหรือคราบสกปรก' },
-  { id: 'safety_lock', label: '🔐 ล็อคประตูและดูแลทรัพย์สิน', text: '• กรุณาล็อคประตูห้องพักทุกครั้งเมื่อออกไปข้างนอก ทางหอพักไม่รับผิดชอบกรณีทรัพย์สินสูญหาย' }
-];
+// 10 Preset Dormitory Rules for Quick Insertion (Canonical Shared Source)
+const PRESET_DORM_RULES = CANONICAL_PRESET_DORM_RULES;
 
-interface DormitoryLogoUploaderProps {
-  provisionalDormitoryId: string | null;
-  ensureProvisionalDormitoryId: () => Promise<string>;
-  logoUrl: string | null;
-  onLogoChange: (newLogoUrl: string | null) => void;
-  onError: (msg: string) => void;
-}
-
-export const DormitoryLogoUploader: React.FC<DormitoryLogoUploaderProps> = ({
-  ensureProvisionalDormitoryId,
-  logoUrl,
-  onLogoChange,
-  onError,
-}) => {
-  const [isUploading, setIsUploading] = useState(false);
-  const [isDragOver, setIsDragOver] = useState(false);
-  const [editorFile, setEditorFile] = useState<File | null>(null);
-  const [isEditorOpen, setIsEditorOpen] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const handleFile = (file: File) => {
-    if (!file) return;
-
-    if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
-      onError('รองรับเฉพาะไฟล์รูปภาพประเภท PNG, JPG และ WebP เท่านั้น');
-      return;
-    }
-
-    if (file.size > 5 * 1024 * 1024) {
-      onError('ขนาดไฟล์ต้องไม่เกิน 5MB');
-      return;
-    }
-
-    // Open Logo Editor instead of immediate upload
-    setEditorFile(file);
-    setIsEditorOpen(true);
-    if (fileInputRef.current) fileInputRef.current.value = '';
-  };
-
-  const handleConfirmEdit = async (processedFile: File) => {
-    try {
-      setIsUploading(true);
-      const dormId = await ensureProvisionalDormitoryId();
-      const res = await onboardingClient.uploadLogo(dormId, processedFile);
-      if (!res?.logoUrl) {
-        throw new Error('เกิดข้อผิดพลาดในการอัปโหลดรูปภาพ');
-      }
-
-      onLogoChange(`${res.logoUrl}?t=${Date.now()}`);
-      setIsEditorOpen(false);
-      setEditorFile(null);
-
-      // Invalidate dormitories query cache for immediate Dormitory Picker refresh
-      queryClient.invalidateQueries({ queryKey: queryKeys.dormitories });
-      queryClient.invalidateQueries({ queryKey: ['auth', 'session'] });
-      queryClient.invalidateQueries({ queryKey: queryKeys.dormitory(dormId) });
-    } catch (err: any) {
-      console.error('[LOGO_UPLOAD_FAILED]', err);
-      onError(err.message || 'ไม่สามารถอัปโหลดโลโก้ได้ กรุณาลองใหม่อีกครั้ง');
-    } finally {
-      setIsUploading(false);
-    }
-  };
-
-  const handleRemove = async () => {
-    try {
-      setIsUploading(true);
-      const dormId = await ensureProvisionalDormitoryId();
-      await onboardingClient.deleteLogo(dormId);
-      onLogoChange(null);
-
-      // Invalidate dormitories query cache for immediate Dormitory Picker fallback refresh
-      queryClient.invalidateQueries({ queryKey: queryKeys.dormitories });
-      queryClient.invalidateQueries({ queryKey: ['auth', 'session'] });
-      queryClient.invalidateQueries({ queryKey: queryKeys.dormitory(dormId) });
-    } catch (err: any) {
-      console.error('[LOGO_DELETE_FAILED]', err);
-      onError(err.message || 'ไม่สามารถลบโลโก้ได้ กรุณาลองใหม่อีกครั้ง');
-    } finally {
-      setIsUploading(false);
-      if (fileInputRef.current) fileInputRef.current.value = '';
-    }
-  };
-
-  return (
-    <div className="space-y-1.5">
-      <div className="flex items-center justify-between">
-        <label className="block text-xs font-bold text-slate-700">
-          โลโก้หอพัก <span className="text-[10px] text-slate-400 font-normal">(ไม่บังคับ)</span>
-        </label>
-      </div>
-
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept="image/png,image/jpeg,image/webp"
-        className="hidden"
-        onChange={(e) => {
-          const file = e.target.files?.[0];
-          if (file) handleFile(file);
-        }}
-      />
-
-      {logoUrl ? (
-        <div
-          onClick={() => !isUploading && fileInputRef.current?.click()}
-          onDragOver={(e) => {
-            e.preventDefault();
-            setIsDragOver(true);
-          }}
-          onDragLeave={() => setIsDragOver(false)}
-          onDrop={(e) => {
-            e.preventDefault();
-            setIsDragOver(false);
-            const file = e.dataTransfer.files?.[0];
-            if (file) handleFile(file);
-          }}
-          className={`flex items-center gap-3 p-3 bg-white border-2 rounded-2xl cursor-pointer transition ${isDragOver ? 'border-blue-500 bg-blue-50/50' : 'border-slate-200 hover:border-blue-400'
-            } ${isUploading ? 'opacity-50 pointer-events-none' : ''}`}
-        >
-          <div className="w-16 h-16 rounded-xl border border-slate-100 bg-slate-50 flex items-center justify-center overflow-hidden shrink-0">
-            <img src={logoUrl} alt="Dormitory Logo" className="w-full h-full object-contain" />
-          </div>
-          <div className="flex-1 min-w-0">
-            <p className="text-xs font-bold text-slate-800">มีโลโก้หอพักแล้ว</p>
-            <p className="text-[10px] text-slate-400">คลิกหรือลากไฟล์ใหม่มาวางที่นี่เพื่อเปลี่ยนรูปภาพ</p>
-          </div>
-          <div className="flex items-center gap-1.5 shrink-0">
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                fileInputRef.current?.click();
-              }}
-              disabled={isUploading}
-              className="px-3 py-1.5 text-xs font-bold text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-xl transition cursor-pointer shrink-0"
-            >
-              เปลี่ยนรูป
-            </button>
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                handleRemove();
-              }}
-              disabled={isUploading}
-              className="p-1.5 text-rose-500 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition cursor-pointer shrink-0"
-              title="ลบโลโก้"
-              aria-label="ลบโลโก้"
-            >
-              <Trash2 className="w-4 h-4" />
-              <span className="sr-only">ลบโลโก้</span>
-            </button>
-          </div>
-        </div>
-      ) : (
-        <div
-          onClick={() => !isUploading && fileInputRef.current?.click()}
-          onDragOver={(e) => {
-            e.preventDefault();
-            setIsDragOver(true);
-          }}
-          onDragLeave={() => setIsDragOver(false)}
-          onDrop={(e) => {
-            e.preventDefault();
-            setIsDragOver(false);
-            const file = e.dataTransfer.files?.[0];
-            if (file) handleFile(file);
-          }}
-          className={`border-2 border-dashed rounded-2xl p-4 text-center cursor-pointer transition flex flex-col items-center justify-center gap-1.5 ${isDragOver
-            ? 'border-blue-500 bg-blue-50/50'
-            : 'border-slate-200 hover:border-blue-400 bg-white hover:bg-slate-50/50'
-            } ${isUploading ? 'opacity-50 pointer-events-none' : ''}`}
-        >
-          {isUploading ? (
-            <Loader2 className="w-6 h-6 text-blue-500 animate-spin" />
-          ) : (
-            <Upload className="w-6 h-6 text-slate-400" />
-          )}
-          <div className="text-xs font-bold text-slate-700">
-            {isUploading ? 'กำลังอัปโหลด...' : 'คลิกเพื่อเลือกไฟล์ หรือลากไฟล์มาวางที่นี่'}
-          </div>
-          <div className="text-[10px] text-slate-400">รองรับไฟล์ PNG, JPG หรือ WebP ขนาดไม่เกิน 5MB</div>
-        </div>
-      )}
-
-      <LogoEditorModal
-        isOpen={isEditorOpen}
-        imageFile={editorFile}
-        onClose={() => {
-          setIsEditorOpen(false);
-          setEditorFile(null);
-        }}
-        onConfirm={handleConfirmEdit}
-        isSubmitting={isUploading}
-      />
-    </div>
-  );
-};
+export { DormitoryLogoUploader } from '../../components/settings/DormitoryLogoUploader';
+export type { DormitoryLogoUploaderProps } from '../../components/settings/DormitoryLogoUploader';
 
 export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, mode = 'initial' }) => {
   const authContext = React.useContext(AuthContext);
@@ -1061,17 +876,28 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
 
   // Restore signature to canvas if returning to step 5
   React.useEffect(() => {
-    if (currentStep === 5 && formData.ownerSignatureUrl && canvasRef.current) {
-      const canvas = canvasRef.current;
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
+    if (currentStep === 5 && formData.ownerSignatureUrl) {
+      let isMounted = true;
+      const timer = setTimeout(() => {
+        if (!isMounted) return;
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
         const img = new Image();
+        img.crossOrigin = 'anonymous';
         img.onload = () => {
+          if (!isMounted) return;
           ctx.clearRect(0, 0, canvas.width, canvas.height);
           ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
         };
         img.src = formData.ownerSignatureUrl;
-      }
+      }, 50);
+
+      return () => {
+        isMounted = false;
+        clearTimeout(timer);
+      };
     }
   }, [currentStep, formData.ownerSignatureUrl]);
 
@@ -1236,6 +1062,43 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
     } finally {
       setTestingLine(false);
     }
+  };
+
+  const handleToggleVatEnabled = (nextEnabled: boolean) => {
+    setFormData(prev => ({
+      ...prev,
+      vatSettings: {
+        ...(prev.vatSettings || { rate: 7, appliedCategories: ['rent', 'water', 'electricity', 'commonFee', 'internetFee', 'parking', 'fine', 'other'] }),
+        enabled: nextEnabled,
+      }
+    }));
+  };
+
+  const handleToggleVatCategory = (catKey: string) => {
+    setFormData(prev => {
+      const currentCats = prev.vatSettings?.appliedCategories || ['rent', 'water', 'electricity', 'commonFee', 'internetFee', 'parking', 'fine', 'other'];
+      const nextCats = currentCats.includes(catKey)
+        ? currentCats.filter((c: string) => c !== catKey)
+        : [...currentCats, catKey];
+      return {
+        ...prev,
+        vatSettings: {
+          ...(prev.vatSettings || { enabled: true, rate: 7 }),
+          appliedCategories: nextCats,
+        }
+      };
+    });
+  };
+
+  const handleToggleAllVatCategories = (selectAll: boolean) => {
+    const allKeys = ['rent', 'water', 'electricity', 'commonFee', 'internetFee', 'parking', 'fine', 'other'];
+    setFormData(prev => ({
+      ...prev,
+      vatSettings: {
+        ...(prev.vatSettings || { enabled: true, rate: 7 }),
+        appliedCategories: selectAll ? allKeys : [],
+      }
+    }));
   };
 
   const handleAddBuilding = () => {
@@ -1839,7 +1702,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                 value={formData.dormAddress}
                 onChange={(e) => setFormData({ ...formData, dormAddress: e.target.value })}
                 placeholder="เช่น 88/9 ซอยสุขุมวิท 55 แขวงคลองตันเหนือ เขตวัฒนา กรุงเทพฯ 10110"
-                className="w-full p-3 text-xs sm:text-sm bg-white border border-slate-200 rounded-xl focus:border-blue-500 outline-none font-medium sm:font-bold text-slate-800 leading-relaxed min-h-[84px] resize-y"
+                className="w-full p-3 text-xs sm:text-sm bg-white border border-slate-200 rounded-xl focus:border-blue-500 outline-none font-medium sm:font-bold text-slate-800 leading-relaxed min-h-[84px] resize-y font-sans font-prompt"
               />
             </div>
 
@@ -1919,36 +1782,6 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
               เพิ่มอาคารใหม่
             </button>
           </div>
-
-          {/* Total Room Counter Indicator (Hard limit 150) */}
-          {(() => {
-            const totalRoomsCount = formData.buildings.reduce((sum, b) => sum + getGeneratedRooms(b).length, 0);
-            const isOverLimit = totalRoomsCount > 150;
-            return (
-              <div
-                data-testid="step2-total-rooms-indicator"
-                className={`p-3.5 rounded-2xl border flex items-center justify-between flex-wrap gap-2 ${isOverLimit ? 'bg-rose-50 border-rose-200 text-rose-800' : 'bg-blue-50/70 border-blue-100 text-blue-900'
-                  }`}
-              >
-                <div className="flex items-center gap-2">
-                  <Building2 className={`w-4 h-4 ${isOverLimit ? 'text-rose-600' : 'text-blue-600'}`} />
-                  <span className="text-xs font-black">
-                    รวมห้องพักทุกอาคาร: {totalRoomsCount} / 150 ห้อง
-                  </span>
-                </div>
-                {isOverLimit ? (
-                  <span className="text-xs font-black text-rose-600 animate-pulse">
-                    ⚠️ หนึ่งหอพักสามารถสร้างห้องได้สูงสุด 150 ห้อง (เกินขีดจำกัด)
-                  </span>
-                ) : (
-                  <span className="text-[11px] font-bold text-blue-600">
-                    (สร้างห้องได้สูงสุด 150 ห้องต่อหอพัก)
-                  </span>
-                )}
-              </div>
-            );
-          })()}
-
           <div className="space-y-6">
             {formData.buildings.map((b, idx) => {
               const currentRoomList = getGeneratedRooms(b);
@@ -2776,6 +2609,108 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                 })}
               </div>
             </div>
+
+            {/* VAT 7% Calculation Settings / การคิดภาษีมูลค่าเพิ่ม VAT 7% */}
+            <div className="bg-slate-50/70 p-4 sm:p-5 rounded-3xl border border-slate-200/80 space-y-3" data-testid="register-vat-card">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                <div className="flex items-center gap-2">
+                  <div className="w-7 h-7 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center font-bold text-xs shrink-0">
+                    <Percent className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-bold text-slate-800">คิด VAT {formData.vatSettings?.rate ?? 7}%</span>
+                      <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${formData.vatSettings?.enabled ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-slate-100 text-slate-500'}`}>
+                        {formData.vatSettings?.enabled ? 'เปิดใช้งาน' : 'ปิดอยู่'}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-400">คำนวณภาษีมูลค่าเพิ่ม 7% รวมในใบแจ้งหนี้อัตโนมัติ</p>
+                  </div>
+                </div>
+
+                {/* Toggle Button */}
+                <button
+                  type="button"
+                  data-testid="toggle-register-vat"
+                  onClick={() => handleToggleVatEnabled(!formData.vatSettings?.enabled)}
+                  className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${formData.vatSettings?.enabled ? 'bg-indigo-600' : 'bg-slate-200'}`}
+                >
+                  <span
+                    aria-hidden="true"
+                    className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${formData.vatSettings?.enabled ? 'translate-x-5' : 'translate-x-0'}`}
+                  />
+                </button>
+              </div>
+
+              {/* Checklist of categories when VAT 7% is enabled */}
+              {formData.vatSettings?.enabled && (
+                <div className="mt-2 p-3 bg-white border border-slate-200/80 rounded-xl space-y-2.5" data-testid="register-vat-categories">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="font-semibold text-slate-700 flex items-center gap-1.5">
+                      <Receipt className="w-3.5 h-3.5 text-indigo-600" />
+                      เลือกรายการค่าบริการที่ต้องการคิด VAT 7%
+                    </span>
+                    <div className="flex items-center gap-2 text-[11px]">
+                      <button
+                        type="button"
+                        data-testid="btn-select-all-vat"
+                        onClick={() => handleToggleAllVatCategories(true)}
+                        className="text-indigo-600 hover:text-indigo-800 font-semibold transition-colors"
+                      >
+                        เลือกทั้งหมด
+                      </button>
+                      <span className="text-slate-300">|</span>
+                      <button
+                        type="button"
+                        data-testid="btn-clear-all-vat"
+                        onClick={() => handleToggleAllVatCategories(false)}
+                        className="text-slate-500 hover:text-slate-700 font-medium transition-colors"
+                      >
+                        ล้างค่า
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                    {[
+                      { key: 'rent', label: 'ค่าเช่าห้องพัก', desc: 'ค่าเช่ารายเทอม / รายเดือน / รายวัน' },
+                      { key: 'water', label: 'ค่าน้ำ', desc: 'คิดตามหน่วยหรือเหมาจ่าย' },
+                      { key: 'electricity', label: 'ค่าไฟฟ้า', desc: 'คิดตามหน่วยหรือเหมาจ่าย' },
+                      { key: 'commonFee', label: 'ค่าส่วนกลาง', desc: 'ค่าบำรุงรักษาส่วนกลาง' },
+                      { key: 'internetFee', label: 'ค่าอินเทอร์เน็ต / Wi-Fi', desc: 'ค่าบริการอินเทอร์เน็ต' },
+                      { key: 'parking', label: 'ค่าที่จอดรถ', desc: 'ค่าจอดรถยนต์ / มอเตอร์ไซค์' },
+                      { key: 'fine', label: 'ค่าปรับชำระล่าช้า', desc: 'ค่าปรับเกินกำหนดชำระ' },
+                      { key: 'other', label: 'ค่าใช้จ่ายอื่นๆ', desc: 'ค่าทำความสะอาด, ค่าคีย์การ์ด ฯลฯ' }
+                    ].map((item) => {
+                      const isChecked = (formData.vatSettings?.appliedCategories || []).includes(item.key);
+                      return (
+                        <label
+                          key={item.key}
+                          data-testid={`label-vat-cat-${item.key}`}
+                          onClick={() => handleToggleVatCategory(item.key)}
+                          className={`flex items-start gap-2.5 p-2 rounded-lg border cursor-pointer transition-all ${isChecked
+                            ? 'bg-indigo-50/50 border-indigo-300 shadow-xs'
+                            : 'bg-white/60 border-slate-200 hover:bg-white text-slate-500'
+                            }`}
+                        >
+                          <div className={`w-4 h-4 rounded mt-0.5 flex items-center justify-center border transition-all ${isChecked ? 'bg-indigo-600 border-indigo-600 text-white' : 'border-slate-300 bg-white'}`}>
+                            {isChecked && <Check className="w-3 h-3 stroke-[3]" />}
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <span className={`block font-semibold leading-tight text-xs ${isChecked ? 'text-slate-800' : 'text-slate-600'}`}>
+                              {item.label}
+                            </span>
+                            <span className="block text-[10.5px] text-slate-400 truncate leading-tight mt-0.5">
+                              {item.desc}
+                            </span>
+                          </div>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -3025,7 +2960,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                       data-testid="select-payment-bank-name"
                       value={formData.paymentAccount.bankName}
                       onChange={(e) => setFormData(prev => ({ ...prev, paymentAccount: { ...prev.paymentAccount, bankName: e.target.value } }))}
-                      className="w-full px-3.5 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:border-blue-500 outline-none font-bold text-slate-800 cursor-pointer"
+                      className="w-full px-3.5 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:border-blue-500 outline-none font-bold text-slate-800 cursor-pointer font-sans font-prompt"
                     >
                       <option value="">-- เลือกธนาคาร --</option>
                       {BANK_OPTIONS.map((bank) => (
@@ -3049,27 +2984,46 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                         }`}
                     />
                   </div>
-                </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      ชื่อบัญชีธนาคาร <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      data-testid="input-payment-account-name"
+                      disabled={!formData.paymentAccount.bankName}
+                      value={formData.paymentAccount.bankAccountName || formData.paymentAccount.accountName || ''}
+                      onChange={(e) => setFormData(prev => ({
+                        ...prev,
+                        paymentAccount: {
+                          ...prev.paymentAccount,
+                          accountName: e.target.value,
+                          bankAccountName: e.target.value
+                        }
+                      }))}
+                      placeholder={formData.paymentAccount.bankName ? "เช่น นาย สมศักดิ์ วงศ์สว่าง (บัญชีธนาคาร)" : "กรุณาเลือกธนาคารก่อน"}
+                      className={`w-full px-3.5 py-2 text-xs border rounded-xl outline-none font-bold transition-all ${formData.paymentAccount.bankName
+                        ? 'bg-white border-slate-200 focus:border-blue-500 text-slate-800'
+                        : 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed opacity-75'
+                        }`}
+                    />
+                  </div>
 
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    ชื่อบัญชีธนาคาร <span className="text-rose-500">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    data-testid="input-payment-account-name"
-                    value={formData.paymentAccount.bankAccountName || formData.paymentAccount.accountName || ''}
-                    onChange={(e) => setFormData(prev => ({
-                      ...prev,
-                      paymentAccount: {
-                        ...prev.paymentAccount,
-                        accountName: e.target.value,
-                        bankAccountName: e.target.value
-                      }
-                    }))}
-                    placeholder="เช่น นาย สมศักดิ์ วงศ์สว่าง (บัญชีธนาคาร)"
-                    className="w-full px-3.5 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:border-blue-500 outline-none font-bold text-slate-800"
-                  />
+                  <div className="space-y-1">
+                    <BankQrCodeUploader
+                      disabled={!formData.paymentAccount.bankName}
+                      qrCodeUrl={formData.paymentAccount.bankQrCode}
+                      onQrCodeChange={(newQr) => {
+                        setFormData(prev => ({
+                          ...prev,
+                          paymentAccount: {
+                            ...prev.paymentAccount,
+                            bankQrCode: newQr,
+                          }
+                        }));
+                      }}
+                    />
+                  </div>
                 </div>
               </div>
 
@@ -3183,27 +3137,35 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                     <span className="text-xs font-bold text-slate-700 block">เลือกประเภทสัตว์ที่อนุญาต:</span>
                     <div className="grid grid-cols-2 gap-2">
                       {[
-                        { id: 'dog', label: 'สุนัข' },
-                        { id: 'cat', label: 'แมว' },
-                        { id: 'small_pet', label: 'สัตว์เลี้ยงขนาดเล็ก / นก' },
-                        { id: 'other', label: 'อื่นๆ' }
-                      ].map(pet => (
-                        <label key={pet.id} className="flex items-center gap-2 p-2 bg-white rounded-xl border border-slate-200 text-xs font-bold text-slate-700 cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={formData.petPolicy.allowedTypes.includes(pet.id)}
-                            onChange={(e) => {
-                              const exists = formData.petPolicy.allowedTypes.includes(pet.id);
-                              const updated = exists
-                                ? formData.petPolicy.allowedTypes.filter(t => t !== pet.id)
-                                : [...formData.petPolicy.allowedTypes, pet.id];
-                              setFormData({ ...formData, petPolicy: { ...formData.petPolicy, allowedTypes: updated } });
-                            }}
-                            className="rounded text-blue-600 focus:ring-blue-500"
-                          />
-                          <span>{pet.label}</span>
-                        </label>
-                      ))}
+                        { id: 'dog', label: 'สุนัข (Dog)' },
+                        { id: 'cat', label: 'แมว (Cat)' },
+                        { id: 'small_pet', label: 'สัตว์เล็ก (กระต่าย/หนู/นก)' },
+                        { id: 'other', label: 'สัตว์แปลก (Other)' }
+                      ].map(pet => {
+                        const isChecked = formData.petPolicy.allowedTypes.includes(pet.id) ||
+                          (pet.id === 'small_pet' && formData.petPolicy.allowedTypes.includes('small_pets')) ||
+                          (pet.id === 'other' && formData.petPolicy.allowedTypes.includes('exotic'));
+                        return (
+                          <label key={pet.id} className="flex items-center gap-2 p-2 bg-white rounded-xl border border-slate-200 text-xs font-bold text-slate-700 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={() => {
+                                const currentTypes = formData.petPolicy.allowedTypes;
+                                let updated: string[];
+                                if (isChecked) {
+                                  updated = currentTypes.filter(t => t !== pet.id && !(pet.id === 'small_pet' && t === 'small_pets') && !(pet.id === 'other' && t === 'exotic'));
+                                } else {
+                                  updated = [...currentTypes, pet.id];
+                                }
+                                setFormData({ ...formData, petPolicy: { ...formData.petPolicy, allowedTypes: updated } });
+                              }}
+                              className="rounded text-blue-600 focus:ring-blue-500"
+                            />
+                            <span>{pet.label}</span>
+                          </label>
+                        );
+                      })}
                     </div>
                   </div>
                 )}
@@ -3257,8 +3219,9 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
+                    data-testid="btn-select-all-rules"
                     onClick={() => {
-                      const allRules = PRESET_DORM_RULES.map(r => r.text).join('\n');
+                      const allRules = formatNumberedRules(CANONICAL_PRESET_DORM_RULES.map(r => r.cleanText));
                       setFormData({ ...formData, rulesTemplate: allRules });
                     }}
                     className="text-[11px] font-black text-blue-600 bg-blue-50 hover:bg-blue-100 border border-blue-100 px-2.5 py-1 rounded-xl transition-all cursor-pointer"
@@ -3267,6 +3230,7 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                   </button>
                   <button
                     type="button"
+                    data-testid="btn-clear-rules"
                     onClick={() => setFormData({ ...formData, rulesTemplate: '' })}
                     className="text-[11px] font-extrabold text-rose-500 hover:text-rose-700 hover:underline px-1.5 py-1 transition-all cursor-pointer"
                   >
@@ -3281,22 +3245,13 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                   คลิกปุ่มเพื่อเพิ่ม/ยกเลิก ข้อตกลงสำเร็จรูป:
                 </label>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 xl:grid-cols-5 gap-2">
-                  {PRESET_DORM_RULES.map((rule) => {
-                    const isSelected = (formData.rulesTemplate || '').includes(rule.text);
+                  {CANONICAL_PRESET_DORM_RULES.map((rule) => {
+                    const isSelected = isRuleActive(formData.rulesTemplate || '', rule.cleanText);
 
                     const toggleRule = () => {
                       const current = formData.rulesTemplate || '';
-                      if (isSelected) {
-                        const updated = current
-                          .split('\n')
-                          .filter(line => line.trim() !== rule.text.trim())
-                          .join('\n')
-                          .trim();
-                        setFormData({ ...formData, rulesTemplate: updated });
-                      } else {
-                        const newText = current.trim() ? `${current.trim()}\n${rule.text}` : rule.text;
-                        setFormData({ ...formData, rulesTemplate: newText });
-                      }
+                      const updated = toggleRuleInNumberedList(current, rule.cleanText);
+                      setFormData({ ...formData, rulesTemplate: updated });
                     };
 
                     return (

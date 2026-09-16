@@ -79,4 +79,70 @@ describe('UpdateCycleRateSnapshotSchema Canonical Mode Contract', () => {
     const resultRoom = UpdateCycleRateSnapshotSchema.safeParse(nonCanonicalRoom);
     expect(resultRoom.success).toBe(false);
   });
+
+  it('normalizes legacy parkingFeeMode aliases (fixed, room -> per_room, none -> free)', () => {
+    const fixedParking = UpdateCycleRateSnapshotSchema.safeParse({
+      expectedVersion: 1,
+      parkingFeeMode: 'fixed',
+      parkingFee: '100.00',
+    });
+    expect(fixedParking.success).toBe(true);
+    if (fixedParking.success) {
+      expect(fixedParking.data.parkingFeeMode).toBe('per_room');
+    }
+
+    const roomParking = UpdateCycleRateSnapshotSchema.safeParse({
+      expectedVersion: 1,
+      parkingFeeMode: 'room',
+      parkingFee: '100.00',
+    });
+    expect(roomParking.success).toBe(true);
+    if (roomParking.success) {
+      expect(roomParking.data.parkingFeeMode).toBe('per_room');
+    }
+
+    const noneParking = UpdateCycleRateSnapshotSchema.safeParse({
+      expectedVersion: 1,
+      parkingFeeMode: 'none',
+      parkingFee: '0.00',
+    });
+    expect(noneParking.success).toBe(true);
+    if (noneParking.success) {
+      expect(noneParking.data.parkingFeeMode).toBe('free');
+    }
+  });
+
+  it('normalizes legacy commonFeeMode and internetFeeMode (room -> per_room, none -> free)', () => {
+    const parsedCommon = UpdateCycleRateSnapshotSchema.safeParse({
+      expectedVersion: 1,
+      commonFeeMode: 'room',
+      commonFee: '200.00',
+    });
+    expect(parsedCommon.success).toBe(true);
+    if (parsedCommon.success) {
+      expect(parsedCommon.data.commonFeeMode).toBe('per_room');
+    }
+
+    const parsedInternet = UpdateCycleRateSnapshotSchema.safeParse({
+      expectedVersion: 1,
+      internetFeeMode: 'fixed',
+      internetFee: '150.00',
+    });
+    expect(parsedInternet.success).toBe(true);
+    if (parsedInternet.success) {
+      expect(parsedInternet.data.internetFeeMode).toBe('per_room');
+    }
+  });
+
+  it('normalizes legacy lateFeeType (free, off, empty -> none)', () => {
+    const parsedLate = UpdateCycleRateSnapshotSchema.safeParse({
+      expectedVersion: 1,
+      lateFeeType: 'free',
+      lateFeeValue: '0.00',
+    });
+    expect(parsedLate.success).toBe(true);
+    if (parsedLate.success) {
+      expect(parsedLate.data.lateFeeType).toBe('none');
+    }
+  });
 });

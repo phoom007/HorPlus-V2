@@ -249,18 +249,22 @@ export const LogoEditorModal: React.FC<LogoEditorModalProps> = ({
   };
 
   const handleConfirm = () => {
-    if (!imageElement) return;
+    if (!imageElement || isSubmitting) return;
 
     const exportCanvas = document.createElement('canvas');
     drawToCanvas(exportCanvas, EXPORT_SIZE);
 
-    exportCanvas.toBlob((blob) => {
+    exportCanvas.toBlob(async (blob) => {
       if (!blob) return;
       const file = new File([blob], 'dormitory-logo.png', {
         type: 'image/png',
         lastModified: Date.now(),
       });
-      onConfirm(file);
+      try {
+        await onConfirm(file);
+      } catch (err) {
+        console.error('[LOGO_CONFIRM_ERROR]', err);
+      }
     }, 'image/png');
   };
 
