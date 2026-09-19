@@ -919,6 +919,7 @@ describe('Tenant Phase 3 Step 3C.5B: Thai-Only Labels, Contract Tab Rules & Appr
 
   describe('8. Daily Stay Temporal Classification vs Selected Billing Cycle (Step 3C.5B.4)', () => {
     it('8.1 Daily stay ended earlier in September is inactive (เลิกเช่าแล้ว) and excluded from พักอาศัย even when September is selected', async () => {
+      vi.setSystemTime(new Date('2026-09-08T12:00:00Z'));
       const activeDailyTenant: Tenant = {
         id: 'tnt-daily-active',
         name: 'นายสมเกียรติ วันสบายกันยา',
@@ -989,6 +990,7 @@ describe('Tenant Phase 3 Step 3C.5B: Thai-Only Labels, Contract Tab Rules & Appr
       expect(screen.getByText('นายอดิศร กันยาย้ายออก')).toBeDefined();
       // Active daily tenant MUST NOT be displayed in เลิกเช่าแล้ว
       expect(screen.queryByText('นายสมเกียรติ วันสบายกันยา')).toBeNull();
+      vi.useRealTimers();
     });
   });
 

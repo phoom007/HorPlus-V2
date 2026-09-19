@@ -66,9 +66,10 @@ import { RoomMutationImpact } from '../../lib/roomMutationCache';
 import { Room, Building, RoomStatus, Tenant, Contract, Bill, BLOCKING_CONTRACT_STATUSES } from '../../types';
 
 export interface TenantReturnContext {
-  source: 'meters' | 'rooms';
+  source: 'meters' | 'rooms' | 'dashboard';
   tenantId: string;
   roomId?: string;
+  roomNumber?: string;
   cycleId?: string;
   cycleCode?: string;
   viewMode?: 'grid' | 'list' | 'floor';

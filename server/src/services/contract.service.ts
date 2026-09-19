@@ -6,6 +6,7 @@ import { DocumentPdfService } from './document-pdf.service.js';
 import { getPrismaClient } from '../db/prisma.js';
 import { acquireRoomAvailabilityLock } from '../utils/occupancy-interval.util.js';
 import { createDepositBillForAgreementInTx } from '../utils/deposit-billing.util.js';
+import { SignatureStorageService } from './signature-storage.service.js';
 
 export class ContractService {
   constructor(
@@ -975,6 +976,46 @@ export class ContractService {
     });
 
     const bs = dorm?.billingSettings;
+    const rawBankName = bs?.bankAccountName?.trim() || bs?.promptPayAccountName?.trim() || null;
+    const ownerDisplayName = rawBankName ? `${rawBankName} (${dorm?.name || 'หอพัก'})` : (dorm?.name || 'เจ้าของหอพัก');
+
+    const coTenantsList = await prisma.tenantCoOccupant.findMany({
+      where: { tenantId: contract.tenantId, dormitoryId, status: 'active' },
+      select: { name: true, phone: true },
+    });
+    const coTenants = coTenantsList.map((c) => ({ name: c.name, phone: c.phone || undefined }));
+
+    let ownerSignatureUrl: string | null = (dorm as any)?.ownerSignatureUrl || null;
+    let tenantSignatureUrl: string | null = null;
+    const sigStorage = new SignatureStorageService(prisma);
+
+    const rawOwnerSig = contract.ownerSignature;
+    if (rawOwnerSig) {
+      if (rawOwnerSig.startsWith('data:image/')) {
+        ownerSignatureUrl = rawOwnerSig;
+      } else {
+        try {
+          const stream = await sigStorage.getSignatureStream(rawOwnerSig);
+          const chunks: Buffer[] = [];
+          for await (const chunk of stream) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+          ownerSignatureUrl = `data:image/png;base64,${Buffer.concat(chunks).toString('base64')}`;
+        } catch {}
+      }
+    }
+
+    const rawTenantSig = contract.tenantSignature;
+    if (rawTenantSig) {
+      if (rawTenantSig.startsWith('data:image/')) {
+        tenantSignatureUrl = rawTenantSig;
+      } else {
+        try {
+          const stream = await sigStorage.getSignatureStream(rawTenantSig);
+          const chunks: Buffer[] = [];
+          for await (const chunk of stream) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+          tenantSignatureUrl = `data:image/png;base64,${Buffer.concat(chunks).toString('base64')}`;
+        } catch {}
+      }
+    }
 
     const pdfService = new DocumentPdfService();
     const pdfBuffer = await pdfService.generateContractPdf({
@@ -982,10 +1023,11 @@ export class ContractService {
       dormitoryName: dorm?.name || 'Dormitory',
       dormitoryAddress: dorm?.addressLine1,
       dormitoryPhone: dorm?.phone,
-      ownerName: dorm?.name || 'Dormitory Owner',
-      ownerSignatureUrl: (dorm as any)?.ownerSignatureUrl || null,
+      ownerName: ownerDisplayName,
+      ownerSignatureUrl,
       tenantName: (tenant as any)?.displayName || (tenant as any)?.name || 'Tenant',
       tenantPhone: (tenant as any)?.phone,
+      coTenants,
       buildingName: room?.buildingId || null,
       roomNumber: room?.roomNumber || '101',
       rentBillingType: contract.rentBillingType === 'term' ? 'term' : 'monthly',
@@ -1001,7 +1043,7 @@ export class ContractService {
       dueDay: bs?.dueDay ? Number(bs.dueDay) : '-',
       lateFeeMode: (bs as any)?.lateFeeMode || 'fixed',
       lateFeeAmount: (bs as any)?.lateFeeAmount ? (bs as any).lateFeeAmount.toString() : '0.00',
-      tenantSignature: contract.tenantSignature,
+      tenantSignature: tenantSignatureUrl,
       terms: contract.terms,
       createdAt: contract.createdAt ? contract.createdAt.toISOString().split('T')[0] : undefined,
     });

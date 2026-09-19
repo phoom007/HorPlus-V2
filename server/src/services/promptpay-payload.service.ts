@@ -120,6 +120,21 @@ export function maskPromptPayDisplay(target: string, type?: string | null): stri
   return '***';
 }
 
+export function formatPromptPayDisplay(target: string, type?: string | null): string {
+  const clean = (target || '').replace(/[^0-9]/g, '');
+  if (!clean) return target || '';
+
+  if (clean.length === 13) {
+    // National ID e.g. 1-2345-67890-12-3
+    return `${clean.slice(0, 1)}-${clean.slice(1, 5)}-${clean.slice(5, 10)}-${clean.slice(10, 12)}-${clean.slice(12)}`;
+  }
+  if (clean.length === 10) {
+    // Phone e.g. 081-234-5678
+    return `${clean.slice(0, 3)}-${clean.slice(3, 6)}-${clean.slice(6)}`;
+  }
+  return target;
+}
+
 export async function generatePromptPayQrSvg(target: string, amount?: number | string, size = 256): Promise<string> {
   const payload = generatePromptPayPayload(target, amount);
   return QRCode.toString(payload, {

@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect, useRef } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   Sparkles,
   Check,
@@ -652,6 +653,7 @@ export const OwnerSubscription: React.FC<OwnerSubscriptionProps> = ({
   onNavigate,
   onDetailViewChange
 }) => {
+  const queryClient = useQueryClient();
   // Subscription info state (defaults to neutral; populated authoritatively from API)
   const [subInfo, setSubInfo] = useState(() => ({
     planName: 'HORPLUS FREE',
@@ -1324,6 +1326,9 @@ export const OwnerSubscription: React.FC<OwnerSubscriptionProps> = ({
 
       if (commitRes && (commitRes.data?.success || commitRes.data?.status === 'SUCCEEDED')) {
         await fetchCurrentSubscription();
+        if (queryClient) {
+          queryClient.invalidateQueries({ queryKey: ['subscription'] });
+        }
         setIsPaymentViewOpen(false);
         try {
           sessionStorage.setItem('horplus_pending_trial_celebration', 'true');

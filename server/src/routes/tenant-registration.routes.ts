@@ -11,6 +11,8 @@ import { requireDormitoryPermission, resolveDormitoryContextMiddleware } from '.
 import { requireDormitoryWriteEntitlement } from '../middleware/entitlement.js';
 import { ApproveRegistrationSchema } from '../schemas/property-tenant-contract.schemas.js';
 import { SignatureStorageService } from '../services/signature-storage.service.js';
+import { SessionTokenService } from '../services/session-token.service.js';
+import { getEnv } from '../config/env.js';
 
 export function createTenantRegistrationRouter(
   authService: AuthenticationService,
@@ -202,6 +204,8 @@ export function createTenantRegistrationRouter(
     birthDate: z.string().optional(),
     address: z.string().optional(),
     idCardImageUrl: z.string().optional(),
+    depositSlipImageUrl: z.string().optional(),
+    depositDeclaredStatus: z.string().optional(),
     emergencyContact: z.object({
       name: z.string(),
       relationship: z.string(),
@@ -254,6 +258,18 @@ export function createTenantRegistrationRouter(
       if (!dormId) {
         dormId = getPublicDormitoryId(req);
       }
+      let actorUserId: string | undefined = req.auth?.userId || req.user?.id;
+      if (!actorUserId && req.cookies?.horplus_session) {
+        try {
+          const env = getEnv();
+          const tokenService = new SessionTokenService(env.SESSION_ENCRYPTION_KEY);
+          const payload = tokenService.decryptToken(req.cookies.horplus_session);
+          if (payload?.sub) {
+            actorUserId = payload.sub;
+          }
+        } catch {}
+      }
+
       const resolvedVehicle = parsed.data.vehicle || (parsed.data.vehicles && parsed.data.vehicles[0]) || undefined;
       const result = await registrationService.completeTenantClaim({
         dormitoryId: dormId,
@@ -268,11 +284,13 @@ export function createTenantRegistrationRouter(
         birthDate: parsed.data.birthDate,
         address: parsed.data.address,
         idCardImageUrl: parsed.data.idCardImageUrl,
+        depositSlipImageUrl: parsed.data.depositSlipImageUrl,
         emergencyContact: parsed.data.emergencyContact,
         vehicle: resolvedVehicle,
         coOccupants: parsed.data.coOccupants,
         pet: parsed.data.pet,
         inviteToken: parsed.data.inviteToken,
+        actorUserId,
       });
       res.status(200).json({ data: result });
     } catch (err) {
@@ -282,7 +300,7 @@ export function createTenantRegistrationRouter(
 
   // POST /api/v1/tenant-registrations
   const CreateTenantRegistrationSchema = z.object({
-    dormitoryId: z.string().uuid().optional(),
+    dormitoryId: z.string().optional(),
     inviteToken: z.string().optional(),
     requestedRoomId: z.string().min(1, 'กรุณาระบุห้องพักที่ต้องการสมัคร'),
     firstName: z.string().trim().min(1, 'กรุณาระบุชื่อจริง'),
@@ -299,10 +317,16 @@ export function createTenantRegistrationRouter(
     proposedDeposit: z.union([z.number(), z.string()]).optional(),
     durationMonths: z.number().optional(),
     startDate: z.string().optional(),
+    endDate: z.string().optional(),
+    dailyRateAmount: z.union([z.number(), z.string()]).optional(),
+    depositAmount: z.union([z.number(), z.string()]).optional(),
+    terms: z.string().optional().nullable(),
     citizenId: z.string().optional(),
     birthDate: z.string().optional(),
     address: z.string().optional(),
     idCardImageUrl: z.string().optional(),
+    depositSlipImageUrl: z.string().optional(),
+    depositDeclaredStatus: z.string().optional(),
     emergencyContact: z.object({
       name: z.string(),
       relationship: z.string(),
@@ -318,12 +342,14 @@ export function createTenantRegistrationRouter(
       licensePlate: z.string(),
       brand: z.string().optional(),
     }).optional(),
+    vehicles: z.array(z.any()).optional(),
     pet: z.object({
       hasPet: z.boolean(),
       type: z.string().optional(),
       name: z.string().optional(),
       count: z.number().optional(),
     }).optional(),
+    pets: z.array(z.any()).optional(),
   });
 
   router.post('/', async (req: Request, res: Response) => {
@@ -378,6 +404,8 @@ export function createTenantRegistrationRouter(
         birthDate: validData.birthDate,
         address: validData.address,
         idCardImageUrl: validData.idCardImageUrl,
+        depositSlipImageUrl: validData.depositSlipImageUrl,
+        depositDeclaredStatus: validData.depositDeclaredStatus,
         emergencyContact: validData.emergencyContact,
         coOccupants: validData.coOccupants,
         vehicle: validData.vehicle,

@@ -60,6 +60,7 @@ server/assets/
 query.sql
 start
 docs/uat/screenshots/
+tenant_screenshots/
 test-Checkslip.jpg
 untracked.list
 server/uploads/

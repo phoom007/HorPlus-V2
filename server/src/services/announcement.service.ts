@@ -347,19 +347,29 @@ export class AnnouncementService {
 
   // --- Tenant Operations ---
   public async getTenantAnnouncements(dormitoryId: string, tenantId: string) {
-    const audiences = await this.announcementRepo.getAudiences(dormitoryId, '');
-
     // Get all published announcements for dormitory
     const all = await this.announcementRepo.findAll(dormitoryId, { status: 'published' });
 
     // Filter announcements eligible for this tenant
-    const eligibleIds = [];
+    const eligibleIds: string[] = [];
     for (const ann of all.items) {
+      if (!ann.targetType || ann.targetType === 'all' || ann.targetType === 'all_tenants') {
+        eligibleIds.push(ann.id);
+        continue;
+      }
       const annAudiences = await this.announcementRepo.getAudiences(dormitoryId, ann.id);
+      if (annAudiences.length === 0 || annAudiences.some(a => a.targetType === 'all_tenants')) {
+        eligibleIds.push(ann.id);
+        continue;
+      }
       const resolved = await this.recipientResolver.resolveRecipients(dormitoryId, annAudiences);
       if (resolved.some(r => r.tenantId === tenantId)) {
         eligibleIds.push(ann.id);
       }
+    }
+
+    if (eligibleIds.length === 0) {
+      return [];
     }
 
     const announcements = await this.announcementRepo.findPublishedForTenant(dormitoryId, tenantId, eligibleIds);

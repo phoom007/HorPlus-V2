@@ -140,8 +140,8 @@ describe('Tenant Portal Phase 2: Smart Single-Tab Add Room & Multi-Room Workflow
         // Default fail to test transition to request approval
         return createJsonResponse({ error: { message: 'CLAIM_MATCH_FAILED' } }, false, 404) as any;
       }
-      if (urlStr.includes('/api/v1/tenant-registrations/request')) {
-        return createJsonResponse({ success: true }) as any;
+      if (urlStr.includes('/tenant-registrations')) {
+        return createJsonResponse({ success: true, data: { id: 'reg-new-001' } }) as any;
       }
       return createJsonResponse({}) as any;
     });
@@ -179,18 +179,12 @@ describe('Tenant Portal Phase 2: Smart Single-Tab Add Room & Multi-Room Workflow
     expect(screen.getByText('เช่าห้องพักเพิ่ม')).toBeDefined();
   });
 
-  it('clicking "เช่าห้องพักเพิ่ม" opens smart single-flow modal with room dropdown and unmasked profile snippet', async () => {
+  it('TenantAddRoomModal displays room dropdown and unmasked profile snippet when open', async () => {
     render(
       <MemoryRouter initialEntries={['/tenant']}>
-        <TenantWorkspace tenant={mockTenant} onLogout={() => {}} />
+        <TenantWorkspace tenant={mockTenant} onLogout={() => {}} initialAddRoomModalOpen={true} />
       </MemoryRouter>
     );
-
-    const roomBadge = await screen.findByText(/ห้อง 303 • ชาญวิทย์/);
-    fireEvent.click(roomBadge);
-
-    const addRoomBtn = await screen.findByText('เช่าห้องพักเพิ่ม');
-    fireEvent.click(addRoomBtn);
 
     // Modal should show smart single-flow title
     const modalTitle = await screen.findByText('เช่าห้องพักเพิ่ม');
@@ -206,15 +200,9 @@ describe('Tenant Portal Phase 2: Smart Single-Tab Add Room & Multi-Room Workflow
   it('Smart Case B: when room has no pre-added data, clicking proceed transitions to "ตรวจสอบ" screen for owner approval', async () => {
     render(
       <MemoryRouter initialEntries={['/tenant']}>
-        <TenantWorkspace tenant={mockTenant} onLogout={() => {}} />
+        <TenantWorkspace tenant={mockTenant} onLogout={() => {}} initialAddRoomModalOpen={true} />
       </MemoryRouter>
     );
-
-    const roomBadge = await screen.findByText(/ห้อง 303 • ชาญวิทย์/);
-    fireEvent.click(roomBadge);
-
-    const addRoomBtn = await screen.findByText('เช่าห้องพักเพิ่ม');
-    fireEvent.click(addRoomBtn);
 
     // Select room 305
     const select = await screen.findByRole('combobox');
@@ -265,4 +253,429 @@ describe('Tenant Portal Phase 2: Smart Single-Tab Add Room & Multi-Room Workflow
     expect(screen.getByText(/อัตราหน่วยละ 18 บาท/)).toBeDefined();
     expect(screen.getByText(/อัตราหน่วยละ 8 บาท/)).toBeDefined();
   });
+
+  it('Round 24 AC-R24-01 & AC-R24-03: submitting vacant room request posts to /api/v1/tenant-registrations with auto-filled profile and rent', async () => {
+    let capturedUrl = '';
+    let capturedBody: any = null;
+
+    const originalFetch = global.fetch;
+    global.fetch = vi.fn(async (url: any, options: any) => {
+      const urlStr = String(url);
+      if (urlStr.includes('/tenant-registrations')) {
+        capturedUrl = urlStr;
+        if (options?.body) {
+          try {
+            capturedBody = JSON.parse(options.body);
+          } catch (_e) {}
+        }
+        return createJsonResponse({ success: true, data: { id: 'reg-new-001' } }) as any;
+      }
+      return (originalFetch as any)(url, options);
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/tenant']}>
+        <TenantWorkspace tenant={mockTenant} onLogout={() => {}} initialAddRoomModalOpen={true} />
+      </MemoryRouter>
+    );
+
+    // Select room 305
+    const select = await screen.findByRole('combobox');
+    fireEvent.change(select, { target: { value: 'rm-305' } });
+
+    // Click proceed
+    const proceedBtn = screen.getByText('ตรวจสอบและดำเนินการต่อ');
+    await act(async () => {
+      fireEvent.click(proceedBtn);
+    });
+
+    // Check Step 2 appears
+    expect(await screen.findByText('ตรวจสอบ')).toBeDefined();
+
+    // Agree to terms checkbox
+    const termsCheckbox = screen.getByRole('checkbox');
+    fireEvent.click(termsCheckbox);
+
+    // Click submit request
+    const submitBtn = screen.getByText('ส่งคำขอเช่าห้องพัก');
+    await act(async () => {
+      fireEvent.click(submitBtn);
+    });
+
+    // Verify submission endpoint and payload
+    expect(capturedUrl).toContain('/tenant-registrations');
+    expect(capturedUrl).not.toContain('/tenant-registrations/request');
+    expect(capturedBody).toBeDefined();
+    expect(capturedBody.requestedRoomId).toBe('rm-305');
+    expect(capturedBody.firstName).toBe('ชาญวิทย์');
+    expect(capturedBody.lastName).toBe('สุขสบาย');
+    expect(capturedBody.phone).toBe('081-111-1111');
+    expect(capturedBody.citizenId).toBe('1234567890123');
+    expect(capturedBody.proposedRent).toBe(4500);
+    expect(capturedBody.rentalPlan).toBe('monthly');
+    expect(capturedBody.agreedTerms).toBe(true);
+    expect(capturedBody.signatureBase64).toBeDefined();
+  });
+
+  it('Round 24 AC-R24-02: when room has pre-linked candidate matching phone or name, instant claim succeeds immediately', async () => {
+    let claimAttempted = false;
+    let claimInputSent = '';
+
+    const originalFetch = global.fetch;
+    global.fetch = vi.fn(async (url: any, options: any) => {
+      const urlStr = String(url);
+      if (urlStr.includes('/api/v1/tenant-claims/claim')) {
+        claimAttempted = true;
+        if (options?.body) {
+          try {
+            const body = JSON.parse(options.body);
+            claimInputSent = body.claimInput;
+          } catch (_e) {}
+        }
+        return createJsonResponse({ success: true, data: { success: true, id: 'tenant-claim-123' } }) as any;
+      }
+      return (originalFetch as any)(url, options);
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/tenant']}>
+        <TenantWorkspace tenant={mockTenant} onLogout={() => {}} initialAddRoomModalOpen={true} />
+      </MemoryRouter>
+    );
+
+    // Select room 305
+    const select = await screen.findByRole('combobox');
+    fireEvent.change(select, { target: { value: 'rm-305' } });
+
+    // Click proceed
+    const proceedBtn = screen.getByText('ตรวจสอบและดำเนินการต่อ');
+    await act(async () => {
+      fireEvent.click(proceedBtn);
+    });
+
+    // Verify claim was attempted with tenant's phone
+    expect(claimAttempted).toBe(true);
+    expect(claimInputSent).toBe('081-111-1111');
+
+    // Since claim succeeded, it should NOT transition to Step 2 ("ตรวจสอบ")
+    expect(screen.queryByText('ตรวจสอบ')).toBeNull();
+  });
+
+  it('Round 25 AC-R25-01: submitting vacant room request uses room policyVersion (version: 8) from available-rooms API', async () => {
+    let capturedBody: any = null;
+
+    const originalFetch = global.fetch;
+    global.fetch = vi.fn(async (url: any, options: any) => {
+      const urlStr = String(url);
+      if (urlStr.includes('/api/v1/tenant-portal/available-rooms')) {
+        return createJsonResponse({
+          success: true,
+          policyVersion: 8,
+          data: [
+            {
+              id: 'rm-305',
+              roomNumber: '305',
+              floor: 3,
+              monthlyRent: 4500,
+              buildingName: 'ชาญวิทย์',
+              policyVersion: 8,
+            },
+          ],
+        }) as any;
+      }
+      if (urlStr.includes('/tenant-registrations')) {
+        if (options?.body) {
+          try {
+            capturedBody = JSON.parse(options.body);
+          } catch (_e) {}
+        }
+        return createJsonResponse({ success: true, data: { id: 'reg-v8-001' } }) as any;
+      }
+      return (originalFetch as any)(url, options);
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/tenant']}>
+        <TenantWorkspace tenant={mockTenant} onLogout={() => {}} initialAddRoomModalOpen={true} />
+      </MemoryRouter>
+    );
+
+    // Select room 305
+    const select = await screen.findByRole('combobox');
+    fireEvent.change(select, { target: { value: 'rm-305' } });
+
+    // Click proceed
+    const proceedBtn = screen.getByText('ตรวจสอบและดำเนินการต่อ');
+    await act(async () => {
+      fireEvent.click(proceedBtn);
+    });
+
+    // Check Step 2 appears
+    expect(await screen.findByText('ตรวจสอบ')).toBeDefined();
+
+    // Agree to terms checkbox
+    const termsCheckbox = screen.getByRole('checkbox');
+    fireEvent.click(termsCheckbox);
+
+    // Click submit request
+    const submitBtn = screen.getByText('ส่งคำขอเช่าห้องพัก');
+    await act(async () => {
+      fireEvent.click(submitBtn);
+    });
+
+    // Verify expectedPolicyVersion is dynamically set to 8
+    expect(capturedBody).toBeDefined();
+    expect(capturedBody.expectedPolicyVersion).toBe(8);
+  });
+
+  it('Round 25 AC-R25-02 & AC-R25-03: self-healing retry on 409 POLICY_VERSION_MISMATCH fetches fresh version and succeeds', async () => {
+    let callCount = 0;
+    let retriedPayload: any = null;
+
+    const originalFetch = global.fetch;
+    global.fetch = vi.fn(async (url: any, options: any) => {
+      const urlStr = String(url);
+      if (urlStr.includes('/tenant-registrations/public-policy')) {
+        return createJsonResponse({
+          data: {
+            version: 8,
+            dormitoryId: 'dorm-001',
+          },
+        }) as any;
+      }
+      if (urlStr.includes('/tenant-registrations')) {
+        callCount++;
+        if (callCount === 1) {
+          // Simulate 409 policy mismatch on first call
+          return createJsonResponse(
+            {
+              error: {
+                code: 'POLICY_VERSION_MISMATCH',
+                message: 'กฎระเบียบหรือเงื่อนไขของหอพักมีการเปลี่ยนแปลง กรุณาตรวจสอบและยอมรับเงื่อนไขใหม่อีกครั้ง',
+              },
+            },
+            false,
+            409
+          ) as any;
+        }
+        // Second call (retry) should succeed with fresh version 8
+        if (options?.body) {
+          try {
+            retriedPayload = JSON.parse(options.body);
+          } catch (_e) {}
+        }
+        return createJsonResponse({ success: true, data: { id: 'reg-retry-002' } }) as any;
+      }
+      return (originalFetch as any)(url, options);
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/tenant']}>
+        <TenantWorkspace tenant={mockTenant} onLogout={() => {}} initialAddRoomModalOpen={true} />
+      </MemoryRouter>
+    );
+
+    // Select room 305
+    const select = await screen.findByRole('combobox');
+    fireEvent.change(select, { target: { value: 'rm-305' } });
+
+    // Click proceed
+    const proceedBtn = screen.getByText('ตรวจสอบและดำเนินการต่อ');
+    await act(async () => {
+      fireEvent.click(proceedBtn);
+    });
+
+    // Check Step 2 appears
+    expect(await screen.findByText('ตรวจสอบ')).toBeDefined();
+
+    // Agree to terms checkbox
+    const termsCheckbox = screen.getByRole('checkbox');
+    fireEvent.click(termsCheckbox);
+
+    // Click submit request
+    const submitBtn = screen.getByText('ส่งคำขอเช่าห้องพัก');
+    await act(async () => {
+      fireEvent.click(submitBtn);
+    });
+
+    // Verify self-healing retried and succeeded with version 8
+    expect(callCount).toBe(2);
+    expect(retriedPayload).toBeDefined();
+    expect(retriedPayload.expectedPolicyVersion).toBe(8);
+  });
+
+  // =========================================================================
+  // Round 26: Full-Page Add Room View Navigation & Existing Profile Auto-fill
+  // =========================================================================
+  it('Round 26 AC-R26-01 & AC-R26-04: clicking "+ เช่าห้องพักเพิ่ม" navigates to TenantRegisterView room picker and back arrow returns to dashboard', async () => {
+    const originalFetch = global.fetch;
+    global.fetch = vi.fn(async (url: any, options: any) => {
+      const urlStr = String(url);
+      if (urlStr.includes('/tenant-portal/rooms')) {
+        return createJsonResponse(mockRoomsResponse) as any;
+      }
+      if (urlStr.includes('/tenant-portal/profile')) {
+        return createJsonResponse(mockProfileResponse) as any;
+      }
+      if (urlStr.includes('/tenant-portal/utilities')) {
+        return createJsonResponse(mockUtilitiesResponse) as any;
+      }
+      if (urlStr.includes('/tenant-registrations/public-rooms') || urlStr.includes('/tenant-portal/available-rooms')) {
+        return createJsonResponse(mockVacantRoomsResponse) as any;
+      }
+      if (urlStr.includes('/tenant-registrations/public-policy')) {
+        return createJsonResponse({
+          success: true,
+          data: {
+            version: 8,
+            dormitoryId: 'dorm-001',
+          },
+        }) as any;
+      }
+      return (originalFetch as any)(url, options);
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/tenant']}>
+        <TenantWorkspace tenant={mockTenant} onLogout={() => {}} />
+      </MemoryRouter>
+    );
+
+    // 1. Open room switcher modal
+    const roomBadge = await screen.findByText(/ห้อง 303 • ชาญวิทย์/);
+    fireEvent.click(roomBadge);
+
+    // 2. Click "+ เช่าห้องพักเพิ่ม" in room switcher
+    const addRoomBtn = await screen.findByText('เช่าห้องพักเพิ่ม');
+    await act(async () => {
+      fireEvent.click(addRoomBtn);
+    });
+
+    // 3. Verify it navigated to full-page TenantRegisterView in room_picker mode
+    expect(await screen.findByText('เลือกห้องพัก')).toBeDefined();
+    expect(screen.getByTestId('room-search-input')).toBeDefined();
+
+    // 4. Verify back button '<' returns to tenant dashboard
+    const backBtn = screen.getByTestId('btn-room-picker-back');
+    await act(async () => {
+      fireEvent.click(backBtn);
+    });
+
+    // 5. Dashboard is restored
+    expect(await screen.findByText(/ห้อง 303 • ชาญวิทย์/)).toBeDefined();
+  });
+
+  it('Round 26 AC-R26-02: selecting vacant room auto-fills existing tenant profile data 100%', async () => {
+    const richTenant: any = {
+      ...mockTenant,
+      name: 'นาย ชาญวิทย์ สุขสบาย',
+      phone: '081-111-1111',
+      citizenId: '1234567890123',
+      birthDate: '1995-05-20',
+      address: '99/123 หมู่ 5 ถ.สุขุมวิท พระโขนง กทม.',
+      email: 'chanwit.rich@example.com',
+      emergencyContact: {
+        name: 'สมศรี สุขสบาย',
+        phone: '089-999-9999',
+        relationship: 'ผู้ปกครอง',
+      },
+      vehicles: [
+        { id: 'v-1', type: 'car', brand: 'Toyota', licensePlate: 'กข 1234' },
+      ],
+      pets: [
+        { id: 'p-1', type: 'cat', name: 'มังคุด', count: 1 },
+      ],
+      idCardPhotoUrl: 'data:image/png;base64,mock-id-card-data',
+    };
+
+    const originalFetch = global.fetch;
+    global.fetch = vi.fn(async (url: any, options: any) => {
+      const urlStr = String(url);
+      if (urlStr.includes('/tenant-portal/rooms')) {
+        return createJsonResponse(mockRoomsResponse) as any;
+      }
+      if (urlStr.includes('/tenant-portal/profile')) {
+        return createJsonResponse(mockProfileResponse) as any;
+      }
+      if (urlStr.includes('/tenant-portal/utilities')) {
+        return createJsonResponse(mockUtilitiesResponse) as any;
+      }
+      if (urlStr.includes('/tenant-registrations/public-rooms') || urlStr.includes('/tenant-portal/available-rooms')) {
+        return createJsonResponse({
+          success: true,
+          data: [
+            {
+              id: 'rm-305',
+              roomNumber: '305',
+              floor: 3,
+              monthlyRent: 4500,
+              buildingName: 'ชาญวิทย์',
+              selectable: true,
+              isVacant: true,
+              status: 'vacant',
+            },
+          ],
+        }) as any;
+      }
+      if (urlStr.includes('/tenant-registrations/public-policy')) {
+        return createJsonResponse({
+          success: true,
+          data: {
+            version: 8,
+            dormitoryId: 'dorm-001',
+          },
+        }) as any;
+      }
+      return (originalFetch as any)(url, options);
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/tenant']}>
+        <TenantWorkspace tenant={richTenant} onLogout={() => {}} />
+      </MemoryRouter>
+    );
+
+    // 1. Open room switcher modal
+    const roomBadge = await screen.findByText(/ห้อง 303 • ชาญวิทย์/);
+    fireEvent.click(roomBadge);
+
+    // 2. Click "+ เช่าห้องพักเพิ่ม"
+    const addRoomBtn = await screen.findByText('เช่าห้องพักเพิ่ม');
+    await act(async () => {
+      fireEvent.click(addRoomBtn);
+    });
+
+    // 3. Room 305 is displayed as vacant room card
+    const roomCard = await screen.findByTestId('room-card-305');
+    await act(async () => {
+      fireEvent.click(roomCard);
+    });
+
+    // 4. Plan bottom sheet appears -> click monthly plan
+    const monthlyPlanBtn = await screen.findByTestId('plan-select-monthly');
+    await act(async () => {
+      fireEvent.click(monthlyPlanBtn);
+    });
+
+    // 5. Navigate to Step 2 (ข้อมูลผู้เช่า) to verify auto-filled profile fields
+    const step2Btn = screen.getByTestId('step-indicator-2');
+    await act(async () => {
+      fireEvent.click(step2Btn);
+    });
+
+    // 6. Verify name, prefix, phone, citizenId, birthDate, address, email are 100% auto-filled
+    const fullNameInput = (await screen.findByTestId('tenant-fullname-input')) as HTMLInputElement;
+    const phoneInput = screen.getByTestId('tenant-phone-input') as HTMLInputElement;
+    const citizenIdInput = screen.getByTestId('tenant-citizen-id-input') as HTMLInputElement;
+    const birthDateInput = screen.getByTestId('tenant-birthdate-input') as HTMLInputElement;
+    const addressInput = screen.getByTestId('tenant-address-input') as HTMLTextAreaElement;
+
+    expect(fullNameInput.value).toBe('ชาญวิทย์ สุขสบาย');
+    expect(phoneInput.value).toBe('081-111-1111');
+    expect(citizenIdInput.value).toBe('1-2345-67890-12-3');
+    expect(birthDateInput.value).toBe('20/05/2538');
+    expect(addressInput.value).toBe('99/123 หมู่ 5 ถ.สุขุมวิท พระโขนง กทม.');
+  });
 });
+
+

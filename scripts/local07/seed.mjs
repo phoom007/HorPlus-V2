@@ -953,23 +953,30 @@ export async function seedLocal07Data() {
     },
   });
 
-  await prisma.contract.create({
+  const contract105 = await prisma.contract.create({
     data: {
       dormitoryId: compDorm.id,
       roomId: createdRooms['105'].id,
       tenantId: tenantPimpa.id,
       contractNumber: 'CTR-2026-105-TERM',
-      startDate: new Date('2026-11-01T00:00:00.000Z'),
-      endDate: new Date('2027-02-28T00:00:00.000Z'),
+      startDate: new Date('2026-09-01T00:00:00.000Z'),
+      endDate: new Date('2026-12-31T00:00:00.000Z'),
       durationMonths: 4,
       rentBillingType: 'term',
       rentAmount: 18000,
       depositAmount: 4500,
-      terms: 'ข้อกำหนดสัญญาเช่าตามระยะเวลา (Term 4 เดือน: พ.ย. 2569 - ก.พ. 2570) ห้ามส่งเสียงดังหลัง 22:00 น. ชำระค่าบริการภายในวันที่ 5 ของรอบบิล และห้ามสูบบุหรี่ภายในห้องพัก',
+      terms: 'ข้อกำหนดสัญญาเช่าตามระยะเวลา (Term 4 เดือน) ห้ามส่งเสียงดังหลัง 22:00 น. ชำระค่าบริการภายในวันที่ 5 ของรอบบิล และห้ามสูบบุหรี่ภายในห้องพัก',
       tenantSignature: termSigRes.objectKey,
       ownerSignature: compOwnerSig.objectKey,
       status: 'active',
       createdAt: new Date('2026-07-01T09:00:00.000Z'),
+    },
+  });
+
+  await prisma.room.update({
+    where: { id: createdRooms['105'].id },
+    data: {
+      currentContractId: contract105.id,
     },
   });
 

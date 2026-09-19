@@ -1,0 +1,521 @@
+/**
+ * @license Apache-2.0
+ * HorPlus Tenant Portal — Tab 1: Home (Mobile-First Dashboard)
+ */
+
+import React from 'react';
+import {
+  Building as BuildingIcon,
+  Bell,
+  AlertCircle,
+  CreditCard,
+  UserCheck,
+  FileText,
+  Wrench,
+  Zap,
+  FileCheck2,
+  History,
+  QrCode,
+  Megaphone,
+  Pin,
+  Droplet,
+  Shield,
+  Sparkles,
+  CheckCircle2,
+  LogOut,
+  ChevronDown,
+  ChevronRight,
+  Clock
+} from 'lucide-react';
+import { Tenant, Bill, Announcement } from '../../../types';
+import { getThaiGreeting, formatToBeDate, formatToBeFullDate, getAuthorRoleName } from '../tenantHelpers';
+import { formatThaiDate } from '../../../components/GlobalComponents';
+
+export interface TenantHomeTabProps {
+  localTenant: Tenant;
+  tenantRoom: any;
+  hasRoom: boolean;
+  financialLoading: boolean;
+  financialError: string | null;
+  activeUnpaidBill: Bill | null;
+  totalNotificationsCount: number;
+  notices: any[];
+  announcements: Announcement[];
+  utilitiesData?: any;
+  dormitoryName?: string;
+  onOpenRoomSwitcher: () => void;
+  onOpenNotifications: () => void;
+  onOpenInvoice: (tab?: 'current' | 'history') => void;
+  onOpenPayment: () => void;
+  onOpenRepairs: () => void;
+  onOpenUtilities: () => void;
+  onOpenContract: () => void;
+  onOpenMoveOut: () => void;
+  onOpenRenewal: () => void;
+  onGoToAnnouncements: () => void;
+  onStartRegister: () => void;
+  onRefresh: () => void;
+  onZoomImage?: (url: string) => void;
+}
+
+export const TenantHomeTab: React.FC<TenantHomeTabProps> = ({
+  localTenant,
+  tenantRoom,
+  hasRoom,
+  financialLoading,
+  financialError,
+  activeUnpaidBill,
+  totalNotificationsCount,
+  notices = [],
+  announcements = [],
+  utilitiesData,
+  dormitoryName,
+  onOpenRoomSwitcher,
+  onOpenNotifications,
+  onOpenInvoice,
+  onOpenPayment,
+  onOpenRepairs,
+  onOpenUtilities,
+  onOpenContract,
+  onOpenMoveOut,
+  onOpenRenewal,
+  onGoToAnnouncements,
+  onStartRegister,
+  onRefresh,
+  onZoomImage,
+}) => {
+  const filteredAnnouncements = announcements || [];
+
+  return (
+    <div className="space-y-5 pb-6 animate-in fade-in duration-200">
+      {/* 1. Visual Indigo-Blue Gradient Hero Banner */}
+      <div className="bg-gradient-to-br from-indigo-600 via-blue-600 to-indigo-700 text-white rounded-b-[32px] pt-7 pb-20 px-5 flex flex-col justify-between relative shadow-md">
+        <div className="flex justify-between items-start">
+          <div>
+            <span className="text-[10px] uppercase font-bold tracking-wider text-indigo-100 opacity-90 block">
+              {dormitoryName || tenantRoom?.dormitoryName || 'หอพัก HorPlus'}
+            </span>
+            <h3 className="text-base font-black mt-0.5 tracking-tight text-white">
+              คุณ {localTenant.name}
+            </h3>
+            <div className="flex items-center gap-2 mt-2">
+              <button
+                type="button"
+                data-testid="tenant-room-switcher-btn"
+                onClick={onOpenRoomSwitcher}
+                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-white/20 hover:bg-white/30 active:scale-95 transition-all rounded-full text-[11px] text-white font-extrabold border border-white/25 backdrop-blur-md shadow-xs cursor-pointer"
+                title="คลิกเพื่อสลับห้องพัก หรือเช่าห้องพักเพิ่ม"
+              >
+                <BuildingIcon className="w-3.5 h-3.5 text-indigo-200 shrink-0" />
+                <span>
+                  {financialLoading
+                    ? 'กำลังโหลดข้อมูล...'
+                    : hasRoom
+                      ? `ห้อง ${tenantRoom?.roomNumber} • ${tenantRoom?.buildingName || 'อาคารหลัก'}`
+                      : 'ยังไม่มีห้องพัก'}
+                </span>
+                <ChevronDown className="w-3.5 h-3.5 text-white/80 shrink-0" />
+              </button>
+            </div>
+          </div>
+
+          {/* Notification bell badge */}
+          <button
+            type="button"
+            data-testid="tenant-notification-bell-btn"
+            onClick={onOpenNotifications}
+            className="relative p-2.5 bg-white/15 hover:bg-white/25 active:scale-95 transition-all rounded-2xl text-white shrink-0 cursor-pointer border border-white/20 backdrop-blur-md shadow-xs"
+            aria-label="การแจ้งเตือน"
+          >
+            <Bell className="w-4 h-4 stroke-[2.2]" />
+            {totalNotificationsCount > 0 && (
+              <span className="absolute -top-1 -right-1 min-w-[18px] h-4.5 px-1 bg-rose-500 rounded-full border-2 border-indigo-700 text-[9px] text-white flex items-center justify-center font-black animate-pulse shadow-sm">
+                {totalNotificationsCount > 99 ? '99+' : totalNotificationsCount}
+              </span>
+            )}
+          </button>
+        </div>
+      </div>
+
+      {/* 2. Persistent Tenant Notices (Critical Announcements from Owner, excluding repair status updates which show in notification center) */}
+      {(() => {
+        const homeBannerNotices = notices.filter(
+          (n: any) => n.category !== 'MAINTENANCE_STATUS_UPDATED' && !n.title?.includes('แจ้งซ่อม')
+        );
+        if (homeBannerNotices.length === 0) return null;
+        return (
+          <div className="mx-4 space-y-2 relative z-20">
+            {homeBannerNotices.map((n: any) => (
+              <div
+                key={n.id || n.title}
+                className="p-4 bg-rose-50 border border-rose-200 rounded-2xl space-y-1.5 text-rose-900 shadow-xs"
+              >
+                <div className="flex items-center gap-2 font-black text-xs text-rose-900">
+                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 stroke-[2.5]" />
+                  <span>{n.title || 'แจ้งเตือนสำคัญจากผู้ดูแลหอพัก'}</span>
+                </div>
+                <p className="text-xs font-semibold leading-relaxed pl-6">
+                  {n.message || n.noticeText || n.content}
+                </p>
+              </div>
+            ))}
+          </div>
+        );
+      })()}
+
+      {/* 3. Floating Overlapping Hero Card */}
+      <div className="mt-[-60px] mx-4 bg-white rounded-3xl p-5 border border-slate-100 shadow-xl flex flex-col gap-3 relative z-10 transition-all">
+        {financialLoading ? (
+          <div className="space-y-3 pt-0.5 animate-pulse">
+            <div className="h-4 bg-slate-200 rounded w-1/3" />
+            <div className="h-8 bg-slate-200 rounded w-1/2" />
+            <div className="h-3 bg-slate-200 rounded w-2/3" />
+          </div>
+        ) : (() => {
+          const isSimulatingPending = Boolean(
+            typeof window !== 'undefined' &&
+            typeof window.localStorage !== 'undefined' &&
+            window.localStorage?.getItem?.('dev_simulate_pending_registration') === 'true'
+          );
+
+          if (hasRoom && !isSimulatingPending) {
+            return activeUnpaidBill ? (
+              /* Mode A: ยอดค้างชำระ (Unpaid Bill Hero Card) */
+              <div className="space-y-3 pt-0.5 animate-in fade-in duration-200" data-testid="tenant-unpaid-card">
+                <div className="flex justify-between items-start">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-1.5 text-amber-700 font-black text-xs">
+                      <AlertCircle className="w-4 h-4 text-amber-500 stroke-[2.5]" />
+                      <span>ยอดค้างชำระ</span>
+                    </div>
+                    <h2 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight leading-none pt-1" data-testid="tenant-unpaid-amount">
+                      ฿ {Number(activeUnpaidBill.totalAmount).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </h2>
+                    <p className="text-[11px] sm:text-xs text-slate-500 font-bold pt-1">
+                      กำหนดชำระภายใน: <span className="font-black text-slate-700">{formatToBeDate(activeUnpaidBill.dueDate)}</span>
+                    </p>
+                    {financialError && (
+                      <div className="bg-rose-50 border border-rose-200 rounded-xl p-2.5 text-xs text-rose-700 flex items-center justify-between mt-2">
+                        <span>{financialError}</span>
+                        <button
+                          type="button"
+                          onClick={onRefresh}
+                          className="px-2.5 py-1 bg-rose-600 text-white font-bold rounded-lg hover:bg-rose-700 text-[10px]"
+                        >
+                          ลองใหม่
+                        </button>
+                      </div>
+                    )}
+                    {(() => {
+                      const rejectedPay = (activeUnpaidBill.payments || (activeUnpaidBill as any).Payment || []).find((p: any) => p.status === 'REJECTED');
+                      if (!rejectedPay) return null;
+                      return (
+                        <div className="bg-rose-50 border border-rose-200 rounded-xl p-2.5 text-xs text-rose-800 font-bold flex flex-col gap-1 mt-2">
+                          <div className="flex items-center gap-1.5 text-rose-700">
+                            <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 stroke-[2]" />
+                            <span>สลิปถูกปฏิเสธ: {rejectedPay.rejectedReason || 'สลิปไม่ชัดเจน กรุณาแนบภาพใหม่'}</span>
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                  <span className="px-3 py-1 rounded-full text-[10px] font-black bg-amber-50 border border-amber-200 text-amber-800 shrink-0 shadow-3xs">
+                    รอชำระ
+                  </span>
+                </div>
+
+                <div className="pt-1">
+                  <button
+                    type="button"
+                    data-testid="tenant-pay-btn"
+                    onClick={onOpenPayment}
+                    className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-black py-3 px-4 rounded-xl text-center transition-all text-xs shadow-md shadow-indigo-600/20 flex items-center justify-center gap-2 cursor-pointer active:scale-98"
+                  >
+                    <CreditCard className="w-4 h-4 text-indigo-200 stroke-[2.2]" />
+                    <span>ชำระเงิน</span>
+                  </button>
+                </div>
+              </div>
+            ) : (
+              /* Mode B: ไม่มีบิลค้างชำระ (Zero Balance) */
+              <div className="space-y-3 pt-0.5 text-center py-4 animate-in fade-in duration-200" data-testid="tenant-zero-balance-card">
+                <div className="w-12 h-12 rounded-2xl bg-emerald-50 text-emerald-600 border border-emerald-100 flex items-center justify-center mx-auto shadow-3xs">
+                  <CheckCircle2 className="w-6 h-6 stroke-[2.2]" />
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-slate-900 tracking-tight">ไม่มีบิลค้างชำระในรอบนี้</h3>
+                  <p className="text-xs text-slate-400 font-medium mt-0.5">
+                    ท่านได้ชำระเงินค่าห้องพักเรียบร้อยแล้ว
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onOpenInvoice('history')}
+                  className="inline-flex items-center gap-1.5 text-xs font-bold text-indigo-600 hover:text-indigo-700 hover:underline pt-1 cursor-pointer"
+                >
+                  <span>ดูประวัติการชำระเงินย้อนหลัง</span>
+                  <ChevronRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            );
+          }
+
+          /* Mode C: ลงทะเบียนผู้เช่า (สำหรับผู้เช่าที่ยังไม่มีห้อง หรือโหมดจำลอง) */
+          const isPendingRegistration = Boolean(
+            isSimulatingPending ||
+            (localTenant as any)?.status === 'pending_owner_approval' ||
+            (typeof window !== 'undefined' && typeof window.localStorage !== 'undefined' && window.localStorage?.getItem?.('pending_tenant_registration'))
+          );
+
+          return (
+            <div className="space-y-3 pt-0.5 animate-in fade-in duration-200">
+              <div className="flex justify-between items-start">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-1.5 text-indigo-600 font-black text-xs">
+                    <Sparkles className="w-4 h-4 text-amber-500 fill-amber-400" />
+                    <span>{isPendingRegistration ? 'อยู่ระหว่างดำเนินการ' : 'ระบบลงทะเบียนผู้เช่าใหม่'}</span>
+                  </div>
+                  <h2 className="text-lg font-black text-slate-900 tracking-tight">
+                    {isPendingRegistration ? 'รอการตรวจสอบข้อมูล' : 'ลงทะเบียนผู้เช่า'}
+                  </h2>
+                  <p className="text-[10px] text-slate-500 font-medium leading-relaxed">
+                    {isPendingRegistration
+                      ? 'ข้อมูลและสัญญาเช่าถูกส่งเรียบร้อยแล้ว เมื่อได้รับการอนุมัติระบบจะเปิดใช้งานห้องพักให้คุณทันที'
+                      : 'กรอกข้อมูลผู้เช่า เลือกประเภทค่าเช่า มัดจำ ยานพาหนะ สัตว์เลี้ยง และเซ็นสัญญาเช่า'}
+                  </p>
+                </div>
+                {isPendingRegistration ? (
+                  <span className="px-2.5 py-0.5 rounded-full text-[9px] font-black bg-amber-50 border border-amber-200 text-amber-800 shrink-0">
+                    รอการอนุมัติ
+                  </span>
+                ) : (
+                  <span className="px-2.5 py-0.5 rounded-full text-[9px] font-black bg-indigo-50 border border-indigo-100 text-indigo-700 shrink-0">
+                    ยังไม่มีห้อง
+                  </span>
+                )}
+              </div>
+
+              {isPendingRegistration ? (
+                <button
+                  type="button"
+                  data-testid="tenant-pending-register-btn"
+                  disabled
+                  className="bg-amber-500 hover:bg-amber-500 text-white font-black py-3 px-4 rounded-xl w-full text-center transition-all text-xs shadow-md shadow-amber-500/20 flex items-center justify-center gap-2 opacity-95 cursor-not-allowed"
+                >
+                  <Clock className="w-4 h-4 text-amber-100 animate-pulse" />
+                  <span>อยู่ระหว่างรอเจ้าของหอพักอนุมัติ</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  data-testid="tenant-start-register-btn"
+                  onClick={onStartRegister}
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white font-black py-3 px-4 rounded-xl w-full text-center transition-all text-xs shadow-md shadow-indigo-600/20 flex items-center justify-center gap-2 cursor-pointer active:scale-98"
+                >
+                  <UserCheck className="w-4 h-4 text-indigo-200" />
+                  <span>ลงทะเบียนผู้เช่า</span>
+                </button>
+              )}
+            </div>
+          );
+        })()}
+      </div>
+
+      {/* 4. Quick Action Grid (6 Key Functions) */}
+      <div>
+        <h4 className="text-xs font-black text-slate-900 mb-3 px-5">เมนูหลัก</h4>
+        <div className="grid grid-cols-3 gap-3 px-4">
+          {/* 1. ใบแจ้งหนี้ */}
+          <button
+            type="button"
+            data-testid="menu-invoice-btn"
+            onClick={() => onOpenInvoice('current')}
+            className="bg-white rounded-2xl border border-slate-100 p-3.5 flex flex-col items-center justify-center text-center gap-2 hover:bg-slate-50 hover:shadow-xs active:scale-95 transition-all cursor-pointer shadow-3xs"
+          >
+            <div className="bg-purple-50 text-purple-600 p-2.5 rounded-xl border border-purple-100/60 shadow-3xs">
+              <FileText className="w-4 h-4 stroke-[2.2]" />
+            </div>
+            <span className="text-[10px] font-bold text-slate-700">ใบแจ้งหนี้</span>
+          </button>
+
+          {/* 2. ชำระค่าเช่า */}
+          <button
+            type="button"
+            data-testid="menu-payment-btn"
+            onClick={onOpenPayment}
+            className="bg-white rounded-2xl border border-slate-100 p-3.5 flex flex-col items-center justify-center text-center gap-2 hover:bg-slate-50 hover:shadow-xs active:scale-95 transition-all cursor-pointer shadow-3xs"
+          >
+            <div className="bg-emerald-50 text-emerald-600 p-2.5 rounded-xl border border-emerald-100/60 shadow-3xs">
+              <CreditCard className="w-4 h-4 stroke-[2.2]" />
+            </div>
+            <span className="text-[10px] font-bold text-slate-700">ชำระค่าเช่า</span>
+          </button>
+
+          {/* 3. แจ้งซ่อมบำรุง */}
+          <button
+            type="button"
+            data-testid="menu-repairs-btn"
+            onClick={onOpenRepairs}
+            className="bg-white rounded-2xl border border-slate-100 p-3.5 flex flex-col items-center justify-center text-center gap-2 hover:bg-slate-50 hover:shadow-xs active:scale-95 transition-all cursor-pointer shadow-3xs"
+          >
+            <div className="bg-rose-50 text-rose-600 p-2.5 rounded-xl border border-rose-100/60 shadow-3xs">
+              <Wrench className="w-4 h-4 stroke-[2.2]" />
+            </div>
+            <span className="text-[10px] font-bold text-slate-700">แจ้งซ่อมบำรุง</span>
+          </button>
+
+          {/* 4. ค่าน้ำ / ค่าไฟ */}
+          <button
+            type="button"
+            data-testid="menu-utilities-btn"
+            onClick={onOpenUtilities}
+            className="bg-white rounded-2xl border border-slate-100 p-3.5 flex flex-col items-center justify-center text-center gap-2 hover:bg-slate-50 hover:shadow-xs active:scale-95 transition-all cursor-pointer shadow-3xs"
+          >
+            <div className="bg-blue-50 text-blue-500 p-2.5 rounded-xl border border-blue-100/60 shadow-3xs">
+              <Zap className="w-4 h-4 stroke-[2.2]" />
+            </div>
+            <span className="text-[10px] font-bold text-slate-700">ค่าน้ำ / ค่าไฟ</span>
+          </button>
+
+          {/* 5. เอกสารสัญญา */}
+          <button
+            type="button"
+            data-testid="menu-contract-btn"
+            onClick={onOpenContract}
+            className="bg-white rounded-2xl border border-slate-100 p-3.5 flex flex-col items-center justify-center text-center gap-2 hover:bg-slate-50 hover:shadow-xs active:scale-95 transition-all cursor-pointer shadow-3xs"
+          >
+            <div className="bg-indigo-50 text-indigo-600 p-2.5 rounded-xl border border-indigo-100/60 shadow-3xs">
+              <FileCheck2 className="w-4 h-4 stroke-[2.2]" />
+            </div>
+            <span className="text-[10px] font-bold text-slate-700">เอกสารสัญญา</span>
+          </button>
+
+          {/* 6. ประวัติการชำระ */}
+          <button
+            type="button"
+            data-testid="menu-history-btn"
+            onClick={() => onOpenInvoice('history')}
+            className="bg-white rounded-2xl border border-slate-100 p-3.5 flex flex-col items-center justify-center text-center gap-2 hover:bg-slate-50 hover:shadow-xs active:scale-95 transition-all cursor-pointer shadow-3xs"
+          >
+            <div className="bg-slate-100 text-slate-600 p-2.5 rounded-xl border border-slate-200/60 shadow-3xs">
+              <History className="w-4 h-4 stroke-[2.2]" />
+            </div>
+            <span className="text-[10px] font-bold text-slate-700">ประวัติการชำระ</span>
+          </button>
+        </div>
+      </div>
+
+      {/* 5. Announcements Section (Latest News) */}
+      <div className="mx-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <h4 className="text-xs font-black text-slate-900">ประกาศล่าสุด</h4>
+          <button
+            type="button"
+            data-testid="view-all-announcements-btn"
+            onClick={onGoToAnnouncements}
+            className="text-[10px] font-bold text-indigo-600 hover:underline cursor-pointer"
+          >
+            ดูทั้งหมด ({filteredAnnouncements.length})
+          </button>
+        </div>
+
+        {filteredAnnouncements.length > 0 ? (
+          (() => {
+            const ann = filteredAnnouncements[0];
+            const authorRole = getAuthorRoleName(ann.author);
+            const authorInitial = authorRole.substring(0, 2);
+            const authorBg = authorRole.includes('ช่าง') ? 'bg-emerald-500 text-white' : 'bg-violet-600 text-white';
+
+            let badgeBg = 'bg-indigo-50 text-indigo-700 border-indigo-100';
+            let badgeLabel = 'ทั่วไป';
+            let badgeIcon = <Megaphone className="w-3 h-3 text-indigo-500" />;
+
+            if (ann.type === 'electric_off') {
+              badgeBg = 'bg-violet-50 text-violet-700 border-violet-100';
+              badgeLabel = 'บำรุงรักษาระบบไฟฟ้า';
+              badgeIcon = <Zap className="w-3 h-3 text-violet-500" />;
+            } else if (ann.type === 'water_off') {
+              badgeBg = 'bg-rose-50 text-rose-700 border-rose-100';
+              badgeLabel = 'บำรุงรักษาระบบประปา';
+              badgeIcon = <Droplet className="w-3 h-3 text-rose-500" />;
+            } else if (ann.type === 'maintenance') {
+              badgeBg = 'bg-emerald-50 text-emerald-700 border-emerald-100';
+              badgeLabel = 'งานซ่อมบำรุง';
+              badgeIcon = <Wrench className="w-3 h-3 text-emerald-500" />;
+            } else if (ann.type === 'payment') {
+              badgeBg = 'bg-amber-50 text-amber-700 border-amber-100';
+              badgeLabel = 'แจ้งชำระเงินค่าเช่ารายเดือน';
+              badgeIcon = <CreditCard className="w-3 h-3 text-amber-500" />;
+            } else if (ann.type === 'safety') {
+              badgeBg = 'bg-slate-50 text-slate-700 border-slate-100';
+              badgeLabel = 'ระเบียบหอพัก';
+              badgeIcon = <Shield className="w-3 h-3 text-slate-500" />;
+            }
+
+            return (
+              <div className="bg-white border border-slate-100 rounded-3xl overflow-hidden shadow-3xs hover:shadow-xs transition-all">
+                {ann.attachmentUrl && (
+                  <img
+                    src={ann.attachmentUrl}
+                    alt="announcement"
+                    className="w-full h-32 object-cover border-b border-slate-50 cursor-zoom-in hover:brightness-95 transition-all"
+                    referrerPolicy="no-referrer"
+                    onClick={() => onZoomImage && onZoomImage(ann.attachmentUrl!)}
+                  />
+                )}
+                <div className="p-4 space-y-2.5">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    {ann.isPinned && (
+                      <span className="inline-flex items-center gap-0.5 text-[9px] bg-violet-600 text-white font-black px-2 py-0.5 rounded-full shadow-3xs">
+                        <Pin className="w-2.5 h-2.5 fill-white text-white" />
+                        ปักหมุด
+                      </span>
+                    )}
+                    {ann.isUrgent && (
+                      <span className="inline-flex items-center gap-0.5 text-[9px] bg-rose-500 text-white font-black px-2 py-0.5 rounded-full shadow-3xs animate-pulse">
+                        <AlertCircle className="w-2.5 h-2.5" />
+                        ด่วน
+                      </span>
+                    )}
+                    <span className={`inline-flex items-center gap-1 text-[9px] font-bold px-2 py-0.5 rounded-full border ${badgeBg}`}>
+                      {badgeIcon}
+                      <span>{badgeLabel}</span>
+                    </span>
+                  </div>
+
+                  <div className="flex">
+                    <span className="inline-flex items-center gap-1 text-[9px] bg-slate-100 text-slate-600 font-extrabold px-2 py-0.5 rounded-md">
+                      <BuildingIcon className="w-3 h-3 text-slate-500" />
+                      <span>{ann.customTarget || 'ทุกอาคาร'}</span>
+                    </span>
+                  </div>
+
+                  <h5 className="font-extrabold text-slate-900 text-xs tracking-tight line-clamp-1">
+                    {ann.title}
+                  </h5>
+                  <p className="text-[11px] text-slate-500 line-clamp-2 leading-relaxed">
+                    {ann.content}
+                  </p>
+
+                  <div className="border-t border-slate-100 pt-2 flex items-center justify-between text-[9px] text-slate-400">
+                    <div className="flex items-center gap-1.5">
+                      <div className={`w-4.5 h-4.5 rounded-full flex items-center justify-center text-[8px] font-black ${authorBg}`}>
+                        {authorInitial}
+                      </div>
+                      <span className="font-bold text-slate-500">โดย {authorRole}</span>
+                    </div>
+                    <span className="font-bold">{formatThaiDate(ann.publishDate || ann.createdAt.split('T')[0])}</span>
+                  </div>
+                </div>
+              </div>
+            );
+          })()
+        ) : (
+          <p className="text-center py-6 text-slate-400 font-medium bg-white border border-slate-100 rounded-2xl shadow-3xs text-xs">
+            ไม่มีประกาศแจ้งเตือนในขณะนี้
+          </p>
+        )}
+      </div>
+    </div>
+  );
+};

@@ -7,10 +7,12 @@ import { AnnouncementService } from '../services/announcement.service.js';
 import { DocumentPdfService } from '../services/document-pdf.service.js';
 import { AuthenticationService } from '../services/auth.service.js';
 import { SensitiveFieldService } from '../services/sensitive-field.service.js';
-import { generatePromptPayPayload, maskPromptPayDisplay, generatePromptPayQrSvg } from '../services/promptpay-payload.service.js';
+import { generatePromptPayPayload, maskPromptPayDisplay, formatPromptPayDisplay, generatePromptPayQrSvg } from '../services/promptpay-payload.service.js';
 import { billingOrchestrationService } from '../services/billing-orchestration.service.js';
 import { CreateCoOccupantSchema } from '../schemas/property-tenant-contract.schemas.js';
 import { isBillVisibleToTenant, getTenantRentCutoffDate } from '../utils/tenant-visibility.util.js';
+import { LocalStorageProvider } from '../services/local-storage.service.js';
+import { SignatureStorageService } from '../services/signature-storage.service.js';
 
 type TenantContextResult = {
   error?: undefined;
@@ -51,7 +53,7 @@ async function resolveTenantContext(req: Request): Promise<TenantContextResult> 
     return { error: { code: 'FORBIDDEN', message: 'Not a tenant', statusCode: 403 } };
   }
 
-  const requestedRoomId = (req.headers['x-room-id'] as string) || (req.query.roomId as string);
+  const requestedRoomId = (req.headers['x-room-id'] as string) || (req.query.roomId as string) || (req.body?.roomId as string);
 
   const tenants = await prisma.tenant.findMany({
     where: { linkedUserId: userId, dormitoryId: membership.dormitoryId, deletedAt: null }
@@ -75,13 +77,27 @@ async function resolveTenantContext(req: Request): Promise<TenantContextResult> 
     contract = contracts[0];
   }
 
+  // Validate room ownership / tenancy strictly: contract takes priority, followed by active occupancy (e.g. daily stay)
+  const occupancies = await prisma.occupancy.findMany({
+    where: { tenantId: { in: tenantIds }, status: 'ACTIVE' }
+  });
+
+  let validRoomId: string | undefined = undefined;
+  if (contract?.roomId) {
+    validRoomId = contract.roomId;
+  } else if (requestedRoomId && occupancies.some(o => o.roomId === requestedRoomId)) {
+    validRoomId = requestedRoomId;
+  } else if (occupancies.length > 0 && occupancies[0].roomId) {
+    validRoomId = occupancies[0].roomId;
+  }
+
   const tenant = (contract ? tenants.find(t => t.id === contract.tenantId) : null) || tenants[0];
 
   return {
     tenant,
     dormitoryId: membership.dormitoryId,
     contract: contract || null,
-    roomId: contract?.roomId || requestedRoomId || undefined
+    roomId: validRoomId
   };
 }
 
@@ -128,7 +144,7 @@ async function getTenantBillWhere(prisma: any, ctx: { dormitoryId: string; tenan
   };
 }
 
-async function checkBillOwnership(prisma: any, billId: string, ctx: { dormitoryId: string; tenant: { id: string } }, asOfDate: Date = new Date()) {
+async function checkBillOwnership(prisma: any, billId: string, ctx: { dormitoryId: string; tenant: { id: string; linkedUserId?: string | null } }, asOfDate: Date = new Date()) {
   const bill = await prisma.bill.findUnique({
     where: { id: billId },
     include: {
@@ -150,26 +166,38 @@ async function checkBillOwnership(prisma: any, billId: string, ctx: { dormitoryI
     return null;
   }
 
+  const linkedUserId = ctx.tenant.linkedUserId;
+  let allTenantIds = [ctx.tenant.id];
+  if (linkedUserId) {
+    const userTenants = await prisma.tenant.findMany({
+      where: { linkedUserId, dormitoryId: ctx.dormitoryId, deletedAt: null },
+      select: { id: true }
+    });
+    if (userTenants.length > 0) {
+      allTenantIds = userTenants.map((t: any) => t.id);
+    }
+  }
+
   const contracts = await prisma.contract.findMany({
-    where: { tenantId: ctx.tenant.id, dormitoryId: ctx.dormitoryId },
+    where: { tenantId: { in: allTenantIds }, dormitoryId: ctx.dormitoryId },
     select: { id: true }
   });
   const contractIds = contracts.map((c: any) => c.id);
 
-  const isOwned = bill.tenantId === ctx.tenant.id || (bill.contractId && contractIds.includes(bill.contractId));
+  const isOwned = allTenantIds.includes(bill.tenantId) || (bill.contractId && contractIds.includes(bill.contractId));
   if (!isOwned) return null;
 
   return bill;
 }
 
-export function createTenantPortalRouter(authService?: AuthenticationService): Router {
+export function createTenantPortalRouter(authService?: AuthenticationService, injectedSensitiveFieldService?: SensitiveFieldService): Router {
   const router = Router();
   const prisma = getPrismaClient();
 
   const auditService = new AuditService();
   const maintenanceService = new MaintenanceService();
   const announcementService = new AnnouncementService();
-  const sensitiveFieldService = new SensitiveFieldService(process.env.ENCRYPTION_KEY || 'default-secret-key-32-chars-01234');
+  const sensitiveFieldService = injectedSensitiveFieldService || new SensitiveFieldService(process.env.FIELD_ENCRYPTION_KEY);
 
   if (authService) {
     router.use(authService.requireAuth());
@@ -223,6 +251,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
               floor: c.room.floor,
               buildingId: c.room.buildingId,
               buildingName: c.room.building?.name || 'อาคารหลัก',
+              termMonths: Number(c.room.building?.termMonths || c.room.termMonths || 5),
               dormitoryId: t.dormitoryId,
               dormitoryName: t.dormitory.name,
               contractId: c.id,
@@ -244,6 +273,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
               floor: occ.room.floor,
               buildingId: occ.room.buildingId,
               buildingName: occ.room.building?.name || 'อาคารหลัก',
+              termMonths: Number(occ.room.building?.termMonths || occ.room.termMonths || 5),
               dormitoryId: t.dormitoryId,
               dormitoryName: t.dormitory.name,
               contractId: null,
@@ -294,8 +324,15 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
         return a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true, sensitivity: 'base' });
       });
 
+      const defaults = await prisma.dormitoryPropertyDefaults.findUnique({
+        where: { dormitoryId: ctx.dormitoryId },
+        select: { version: true }
+      });
+      const policyVersion = defaults?.version ?? 1;
+
       res.json({
         success: true,
+        policyVersion,
         data: rooms.map(r => ({
           id: r.id,
           roomNumber: r.roomNumber,
@@ -303,7 +340,8 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
           buildingId: r.buildingId,
           buildingName: r.building?.name || 'อาคารหลัก',
           monthlyRent: Number(r.monthlyRent || 0),
-          status: r.status
+          status: r.status,
+          policyVersion,
         }))
       });
     } catch (err: any) {
@@ -322,26 +360,52 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
         return res.json({ success: true, data: { water: null, electric: null, readings: [] } });
       }
 
+      // Tenancy boundary isolation: only include readings since the current tenant's earliest tenancy start date in this room
+      const tenantContracts = await prisma.contract.findMany({
+        where: {
+          dormitoryId: ctx.dormitoryId,
+          roomId: ctx.roomId,
+          tenantId: ctx.tenant.id,
+        },
+        orderBy: { startDate: 'asc' },
+        select: { startDate: true }
+      });
+      const earliestStartDate = tenantContracts.length > 0 ? tenantContracts[0].startDate : (ctx.contract?.startDate || null);
+
       const readings = await prisma.meterReading.findMany({
         where: {
           dormitoryId: ctx.dormitoryId,
           roomId: ctx.roomId,
+          ...(earliestStartDate ? { readAt: { gte: earliestStartDate } } : {})
         },
         orderBy: { readAt: 'desc' },
-        take: 12
+        take: 24
       });
 
       const latestWater = readings.find(r => r.meterType.toLowerCase() === 'water');
-      const latestElectric = readings.find(r => r.meterType.toLowerCase() === 'electric');
+      const latestElectric = readings.find(r => r.meterType.toLowerCase() === 'electric' || r.meterType.toLowerCase() === 'electricity');
 
       const room = ctx.roomId ? await prisma.room.findUnique({
         where: { id: ctx.roomId },
-        select: { waterRate: true, electricityRate: true }
+        select: {
+          waterRate: true,
+          electricityRate: true,
+          waterBillingType: true,
+          electricityBillingType: true,
+        }
       }) : null;
 
       const billingSettings = await prisma.dormitoryBillingSettings.findUnique({
         where: { dormitoryId: ctx.dormitoryId }
       });
+
+      const coOccupantsCount = await prisma.tenantCoOccupant.count({
+        where: { tenantId: ctx.tenant.id, dormitoryId: ctx.dormitoryId, deletedAt: null }
+      });
+      const peopleCount = 1 + coOccupantsCount;
+
+      const waterBillingType = (room?.waterBillingType || billingSettings?.waterBillingType || 'per_unit').toLowerCase();
+      const electricityBillingType = (room?.electricityBillingType || billingSettings?.electricityBillingType || 'per_unit').toLowerCase();
 
       const waterUnitPrice = Number(room?.waterRate ?? billingSettings?.waterRate ?? 18);
       const electricUnitPrice = Number(room?.electricityRate ?? billingSettings?.electricityRate ?? 8);
@@ -349,28 +413,35 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
       res.json({
         success: true,
         data: {
+          waterBillingType,
+          electricityBillingType,
+          waterRate: waterUnitPrice,
+          electricityRate: electricUnitPrice,
+          waterTierRates: billingSettings?.waterTierRates || null,
+          electricityTierRates: billingSettings?.electricityTierRates || null,
+          peopleCount,
           latestWater: latestWater ? {
             id: latestWater.id,
-            previousReading: Number(latestWater.previousReading || 0),
-            currentReading: Number(latestWater.currentReading || 0),
-            usageUnits: Number(latestWater.usageUnits || 0),
+            previousReading: latestWater.previousReading !== null && latestWater.previousReading !== undefined ? Number(latestWater.previousReading) : null,
+            currentReading: (latestWater.currentReading !== null && latestWater.currentReading !== undefined && !(Number(latestWater.previousReading) > 0 && Number(latestWater.currentReading) === 0)) ? Number(latestWater.currentReading) : null,
+            usageUnits: (latestWater.usageUnits !== null && latestWater.usageUnits !== undefined && !(Number(latestWater.previousReading) > 0 && Number(latestWater.currentReading) === 0)) ? Number(latestWater.usageUnits) : null,
             unitPrice: waterUnitPrice,
             readAt: latestWater.readAt.toISOString()
           } : null,
           latestElectric: latestElectric ? {
             id: latestElectric.id,
-            previousReading: Number(latestElectric.previousReading || 0),
-            currentReading: Number(latestElectric.currentReading || 0),
-            usageUnits: Number(latestElectric.usageUnits || 0),
+            previousReading: latestElectric.previousReading !== null && latestElectric.previousReading !== undefined ? Number(latestElectric.previousReading) : null,
+            currentReading: (latestElectric.currentReading !== null && latestElectric.currentReading !== undefined && !(Number(latestElectric.previousReading) > 0 && Number(latestElectric.currentReading) === 0)) ? Number(latestElectric.currentReading) : null,
+            usageUnits: (latestElectric.usageUnits !== null && latestElectric.usageUnits !== undefined && !(Number(latestElectric.previousReading) > 0 && Number(latestElectric.currentReading) === 0)) ? Number(latestElectric.usageUnits) : null,
             unitPrice: electricUnitPrice,
             readAt: latestElectric.readAt.toISOString()
           } : null,
           readings: readings.map(r => ({
             id: r.id,
             meterType: r.meterType,
-            previousReading: Number(r.previousReading || 0),
-            currentReading: Number(r.currentReading || 0),
-            usageUnits: Number(r.usageUnits || 0),
+            previousReading: r.previousReading !== null && r.previousReading !== undefined ? Number(r.previousReading) : null,
+            currentReading: r.currentReading !== null && r.currentReading !== undefined ? Number(r.currentReading) : null,
+            usageUnits: r.usageUnits !== null && r.usageUnits !== undefined ? Number(r.usageUnits) : null,
             readAt: r.readAt.toISOString()
           }))
         }
@@ -392,9 +463,30 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
       const contract = ctx.contract;
       const room = ctx.roomId ? await prisma.room.findUnique({ where: { id: ctx.roomId } }) : null;
       const dorm = await prisma.dormitory.findUnique({ where: { id: ctx.dormitoryId } });
+      const propDefaults = await prisma.dormitoryPropertyDefaults.findUnique({
+        where: { dormitoryId: ctx.dormitoryId },
+        select: { petPolicy: true }
+      });
       const coOccupants = await prisma.tenantCoOccupant.findMany({
         where: { tenantId: tenant.id, dormitoryId: ctx.dormitoryId, deletedAt: null }
       });
+
+      const vehicles = await prisma.tenantVehicle.findMany({
+        where: { tenantId: tenant.id, dormitoryId: ctx.dormitoryId, status: 'active' }
+      });
+      const primaryVehicle = vehicles[0] || null;
+      const petInfo = tenant.petInfo
+        ? (typeof tenant.petInfo === 'string' ? JSON.parse(tenant.petInfo) : tenant.petInfo)
+        : null;
+
+      const emergencyContacts = await prisma.tenantEmergencyContact.findMany({
+        where: { tenantId: tenant.id, dormitoryId: ctx.dormitoryId }
+      });
+      const primaryEmergency = emergencyContacts[0] ? {
+        name: emergencyContacts[0].name,
+        relationship: emergencyContacts[0].relationship,
+        phone: emergencyContacts[0].phone
+      } : null;
 
       const phone = tenant.phone || null;
       let rawCitizenId = tenant.nationalIdMasked || null;
@@ -418,10 +510,27 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
         pictureUrl: tenant.photoUrl || null,
         nationalIdMasked: tenant.nationalIdMasked || null,
         citizenId: rawCitizenId,
+        hasIdentityDocument: !!(tenant.idCardObjectKey || tenant.photoUrl),
+        idCardPhotoMock: tenant.idCardObjectKey ? '/api/v1/tenant-portal/id-card-photo' : (tenant.photoUrl || null),
+        idCardPhotoUrl: tenant.idCardObjectKey ? '/api/v1/tenant-portal/id-card-photo' : (tenant.photoUrl || null),
+        emergencyContact: primaryEmergency,
+        emergencyContacts: emergencyContacts.map((ec: any) => ({
+          name: ec.name,
+          relationship: ec.relationship,
+          phone: ec.phone
+        })),
         dormitory: dorm ? {
           id: dorm.id,
           name: dorm.name,
-          logoUrl: (dorm as any).logoUrl || null
+          addressLine1: dorm.addressLine1 || (dorm as any).address,
+          address: dorm.addressLine1 || (dorm as any).address,
+          subdistrict: dorm.subdistrict,
+          district: dorm.district,
+          province: dorm.province,
+          postalCode: dorm.postalCode,
+          phone: dorm.phone,
+          logoUrl: (dorm as any).logoUrl || null,
+          petPolicy: propDefaults?.petPolicy || (dorm as any).petPolicy || null
         } : null,
         room: room ? {
           id: room.id,
@@ -430,6 +539,27 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
           buildingId: room.buildingId
         } : null,
         roomMembers: [],
+        vehicle: primaryVehicle ? {
+          type: primaryVehicle.type,
+          licensePlate: primaryVehicle.licensePlate,
+          brand: primaryVehicle.brand || '',
+          model: primaryVehicle.model || '',
+          color: primaryVehicle.color || '',
+        } : null,
+        vehicles: vehicles.map((v: any) => ({
+          id: v.id,
+          type: v.type,
+          licensePlate: v.licensePlate,
+          brand: v.brand || '',
+          model: v.model || '',
+          color: v.color || '',
+        })),
+        pet: petInfo || { hasPet: false, type: '', name: '' },
+        pets: Array.isArray(petInfo?.pets)
+          ? petInfo.pets
+          : (petInfo?.hasPet && petInfo?.type
+            ? [{ id: 'pet-1', type: petInfo.type, customType: petInfo.customType || '', name: petInfo.name || '' }]
+            : []),
         coOccupants: coOccupants.map((c: any) => ({
           id: c.id,
           name: c.name,
@@ -449,6 +579,174 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
           advancePaymentAmount: contract.advancePaymentAmount.toString(),
           coOccupantsCount: coOccupants.length
         } : null
+      });
+    } catch (err: any) {
+      return res.status(500).json({
+        error: { code: 'INTERNAL_ERROR', message: err.message, requestId: req.requestId }
+      });
+    }
+  });
+
+  router.patch('/profile', async (req: Request, res: Response) => {
+    try {
+      const ctx = await resolveTenantContext(req);
+      if (ctx.error) {
+        return res.status(ctx.error.statusCode).json({ error: { code: ctx.error.code, message: ctx.error.message, requestId: req.requestId } });
+      }
+
+      const { vehicle, vehicles, pet, pets } = req.body;
+      const tenantId = ctx.tenant.id;
+      const dormitoryId = ctx.dormitoryId;
+
+      const propDefaults = await prisma.dormitoryPropertyDefaults.findUnique({
+        where: { dormitoryId },
+        select: { petPolicy: true }
+      });
+      const petPolicyAllowed = (propDefaults?.petPolicy as any)?.allowed;
+      const isPetRestricted = petPolicyAllowed === 'none' || petPolicyAllowed === 'not_allowed';
+
+      // 1. Update Pet in tenant.petInfo
+      if (pets !== undefined) {
+        const petsList = Array.isArray(pets) ? pets : [];
+        if (isPetRestricted && petsList.length > 0) {
+          return res.status(400).json({
+            error: {
+              code: 'PET_POLICY_RESTRICTED',
+              message: 'หอพักไม่อนุญาตให้นำสัตว์เลี้ยงเข้าพัก',
+              requestId: req.requestId
+            }
+          });
+        }
+        await prisma.tenant.update({
+          where: { id: tenantId },
+          data: {
+            petInfo: {
+              hasPet: petsList.length > 0,
+              pets: petsList.map((p: any) => ({
+                id: p.id || `pet-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+                type: p.type || 'other',
+                customType: p.customType || '',
+                name: p.name || ''
+              })),
+              type: petsList[0]?.type || '',
+              name: petsList[0]?.name || ''
+            }
+          }
+        });
+      } else if (pet !== undefined) {
+        if (isPetRestricted && pet?.hasPet) {
+          return res.status(400).json({
+            error: {
+              code: 'PET_POLICY_RESTRICTED',
+              message: 'หอพักไม่อนุญาตให้นำสัตว์เลี้ยงเข้าพัก',
+              requestId: req.requestId
+            }
+          });
+        }
+        await prisma.tenant.update({
+          where: { id: tenantId },
+          data: {
+            petInfo: pet ? {
+              hasPet: Boolean(pet.hasPet),
+              type: pet.type || '',
+              customType: pet.customType || '',
+              name: pet.name || '',
+              pets: pet.hasPet && pet.type ? [{ id: 'pet-1', type: pet.type, customType: pet.customType || '', name: pet.name || '' }] : []
+            } : { hasPet: false, type: '', customType: '', name: '', pets: [] }
+          }
+        });
+      }
+
+      // 2. Update Vehicle in tenant_vehicles
+      if (vehicles !== undefined && Array.isArray(vehicles)) {
+        await prisma.tenantVehicle.updateMany({
+          where: { tenantId, dormitoryId, status: 'active' },
+          data: { status: 'inactive' }
+        });
+        for (const v of vehicles) {
+          if (v && v.licensePlate && v.type !== 'none') {
+            await prisma.tenantVehicle.create({
+              data: {
+                dormitoryId,
+                tenantId,
+                type: v.type || 'car',
+                licensePlate: v.licensePlate.trim(),
+                brand: v.brand || '',
+                model: v.model || '',
+                color: v.color || '',
+                status: 'active'
+              }
+            });
+          }
+        }
+      } else if (vehicle !== undefined) {
+        if (vehicle && vehicle.licensePlate && vehicle.type !== 'none') {
+          const existingVehicle = await prisma.tenantVehicle.findFirst({
+            where: { tenantId, dormitoryId, status: 'active' }
+          });
+          if (existingVehicle) {
+            await prisma.tenantVehicle.update({
+              where: { id: existingVehicle.id },
+              data: {
+                type: vehicle.type || 'car',
+                licensePlate: vehicle.licensePlate.trim(),
+                brand: vehicle.brand || '',
+                model: vehicle.model || '',
+                color: vehicle.color || '',
+              }
+            });
+          } else {
+            await prisma.tenantVehicle.create({
+              data: {
+                dormitoryId,
+                tenantId,
+                type: vehicle.type || 'car',
+                licensePlate: vehicle.licensePlate.trim(),
+                brand: vehicle.brand || '',
+                model: vehicle.model || '',
+                color: vehicle.color || '',
+                status: 'active'
+              }
+            });
+          }
+        } else if (vehicle === null || vehicle.type === 'none' || !vehicle.licensePlate) {
+          await prisma.tenantVehicle.updateMany({
+            where: { tenantId, dormitoryId, status: 'active' },
+            data: { status: 'inactive' }
+          });
+        }
+      }
+
+      const updatedTenant = await prisma.tenant.findUnique({ where: { id: tenantId } });
+      const updatedVehicles = await prisma.tenantVehicle.findMany({
+        where: { tenantId, dormitoryId, status: 'active' }
+      });
+      const activeVeh = updatedVehicles[0] || null;
+      const updatedPetInfo = updatedTenant?.petInfo
+        ? (typeof updatedTenant.petInfo === 'string' ? JSON.parse(updatedTenant.petInfo) : updatedTenant.petInfo)
+        : null;
+
+      res.json({
+        success: true,
+        data: {
+          vehicle: activeVeh ? {
+            type: activeVeh.type,
+            licensePlate: activeVeh.licensePlate,
+            brand: activeVeh.brand || '',
+            model: activeVeh.model || '',
+            color: activeVeh.color || '',
+          } : null,
+          vehicles: updatedVehicles.map((v: any) => ({
+            id: v.id,
+            type: v.type,
+            licensePlate: v.licensePlate,
+            brand: v.brand || '',
+            model: v.model || '',
+            color: v.color || '',
+          })),
+          pet: updatedPetInfo || { hasPet: false, type: '', name: '' },
+          pets: Array.isArray(updatedPetInfo?.pets) ? updatedPetInfo.pets : []
+        }
       });
     } catch (err: any) {
       return res.status(500).json({
@@ -535,14 +833,20 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
           } : null
         }));
 
+        const effectivePaidAt = b.paidAt
+          ? b.paidAt.toISOString()
+          : (mappedPayments.find((p: any) => p.status === 'APPROVED')?.paymentDate || mappedPayments[0]?.paymentDate || null);
+
         return {
           id: b.id,
           tenantId: b.tenantId || ctx.tenant.id,
           billNumber: b.billNumber,
+          billKind: b.billKind || 'MONTHLY_UTILITY',
           billingCycleId: b.billingCycleId,
           cycleId: b.billingCycleId,
           billingDate: b.billingDate.toISOString(),
           dueDate: b.dueDate ? b.dueDate.toISOString() : null,
+          paidAt: effectivePaidAt,
           createdAt: b.createdAt.toISOString(),
           status: b.status,
           totalAmount: b.totalAmount.toString(),
@@ -553,10 +857,13 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
             type: item.itemType || item.type,
             description: item.description,
             amount: item.amount.toString(),
+            quantity: item.quantity !== undefined && item.quantity !== null ? item.quantity.toString() : null,
+            unit: item.unit || null,
+            unitPrice: item.unitPrice ? item.unitPrice.toString() : null,
             meterStart: item.meterStart,
             meterEnd: item.meterEnd,
             unitUsed: item.unitUsed,
-            unitPrice: item.unitPrice ? item.unitPrice.toString() : null
+            metadata: item.metadata || null
           })),
           payments: mappedPayments,
           Payment: mappedPayments
@@ -605,14 +912,20 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
         } : null
       }));
 
+      const effectivePaidAt = bill.paidAt
+        ? bill.paidAt.toISOString()
+        : (mappedPayments.find((p: any) => p.status === 'APPROVED')?.paymentDate || mappedPayments[0]?.paymentDate || null);
+
       return res.json({
         success: true,
         data: {
           id: bill.id,
           tenantId: bill.tenantId,
           billNumber: bill.billNumber,
+          billKind: bill.billKind || 'MONTHLY_UTILITY',
           billingDate: bill.billingDate.toISOString(),
           dueDate: bill.dueDate ? bill.dueDate.toISOString() : null,
+          paidAt: effectivePaidAt,
           status: bill.status,
           totalAmount: bill.totalAmount.toString(),
           paidAmount: bill.paidAmount.toString(),
@@ -620,10 +933,14 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
           roomNumber: room?.roomNumber || 'ไม่ระบุ',
           items: bill.items.map((it: any) => ({
             id: it.id,
+            type: it.type || it.itemType || 'other',
             itemType: it.type || it.itemType || 'other',
             description: it.description,
             amount: it.amount.toString(),
-            quantity: it.quantity
+            quantity: it.quantity !== undefined && it.quantity !== null ? it.quantity.toString() : null,
+            unit: it.unit || null,
+            unitPrice: it.unitPrice ? it.unitPrice.toString() : null,
+            metadata: it.metadata || null
           })),
           payments: mappedPayments,
           Payment: mappedPayments
@@ -644,9 +961,23 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
         return res.status(ctx.error.statusCode).json({ error: { code: ctx.error.code, message: ctx.error.message, requestId: req.requestId } });
       }
 
-      const bill = await checkBillOwnership(prisma, req.params.billId, ctx);
-      if (!bill) {
-        return res.status(404).json({ error: { code: 'TENANT_BILL_NOT_FOUND', message: 'ไม่พบรายการบิลนี้', requestId: req.requestId } });
+      let qrAmount = '0.00';
+      const billIdParam = req.params.billId;
+      if (req.query.amount) {
+        qrAmount = Number(req.query.amount).toFixed(2);
+      } else if (billIdParam.includes(',')) {
+        const ids = billIdParam.split(',').filter(Boolean);
+        const bills = await prisma.bill.findMany({
+          where: { id: { in: ids }, dormitoryId: ctx.dormitoryId }
+        });
+        const sum = bills.reduce((acc: number, b: any) => acc + Number(b.totalAmount || 0), 0);
+        qrAmount = sum.toFixed(2);
+      } else {
+        const bill = await checkBillOwnership(prisma, billIdParam, ctx);
+        if (!bill) {
+          return res.status(404).json({ error: { code: 'TENANT_BILL_NOT_FOUND', message: 'ไม่พบรายการบิลนี้', requestId: req.requestId } });
+        }
+        qrAmount = bill.totalAmount.toString();
       }
 
       const settings = await prisma.dormitoryBillingSettings.findUnique({
@@ -665,7 +996,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
         return res.status(500).json({ error: { code: 'PAYMENT_METHOD_CONFIGURATION_ERROR', message: 'เกิดข้อผิดพลาดในการอ่านข้อมูล PromptPay', requestId: req.requestId } });
       }
 
-      const svg = await generatePromptPayQrSvg(rawPromptPay, bill.totalAmount.toString());
+      const svg = await generatePromptPayQrSvg(rawPromptPay, qrAmount);
       res.setHeader('Content-Type', 'image/svg+xml');
       res.setHeader('Cache-Control', 'no-store, max-age=0, must-revalidate');
       return res.status(200).send(svg);
@@ -686,7 +1017,23 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
       let targetAmount = '0.00';
       let targetBillId = '';
 
-      if (req.params.billId) {
+      if (req.query.billIds) {
+        const ids = (req.query.billIds as string).split(',').filter(Boolean);
+        const bills = await prisma.bill.findMany({
+          where: { id: { in: ids }, dormitoryId: ctx.dormitoryId, status: { not: 'cancelled' } }
+        });
+        const total = bills.reduce((sum: number, b: any) => sum + Number(b.totalAmount || 0), 0);
+        targetAmount = total.toFixed(2);
+        targetBillId = ids.join(',');
+      } else if (req.params.billId && req.params.billId.includes(',')) {
+        const ids = req.params.billId.split(',').filter(Boolean);
+        const bills = await prisma.bill.findMany({
+          where: { id: { in: ids }, dormitoryId: ctx.dormitoryId, status: { not: 'cancelled' } }
+        });
+        const total = bills.reduce((sum: number, b: any) => sum + Number(b.totalAmount || 0), 0);
+        targetAmount = total.toFixed(2);
+        targetBillId = ids.join(',');
+      } else if (req.params.billId) {
         const bill = await checkBillOwnership(prisma, req.params.billId, ctx);
         if (!bill) {
           return res.status(404).json({ error: { code: 'TENANT_BILL_NOT_FOUND', message: 'ไม่พบรายการบิลนี้', requestId: req.requestId } });
@@ -710,6 +1057,9 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
 
       const settings = await prisma.dormitoryBillingSettings.findUnique({
         where: { dormitoryId: ctx.dormitoryId }
+      });
+      const dorm = await prisma.dormitory.findUnique({
+        where: { id: ctx.dormitoryId }
       });
 
       if (!settings) {
@@ -738,8 +1088,19 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
         }
       }
 
+      let rawBankAcc: string | null = null;
+      if (settings.bankAccountNumberEncrypted) {
+        try {
+          rawBankAcc = sensitiveFieldService.decrypt(settings.bankAccountNumberEncrypted);
+        } catch (err) {
+          console.error('[TenantPortal] Bank account decryption failed:', err);
+        }
+      } else if (settings.bankAccountNumber && !settings.bankAccountNumber.includes('X') && !settings.bankAccountNumber.includes('*')) {
+        rawBankAcc = settings.bankAccountNumber;
+      }
+
       const promptPayConfigured = Boolean(rawPromptPay && !decryptionError);
-      const bankTransferConfigured = Boolean(settings.bankAccountNumber);
+      const bankTransferConfigured = Boolean(rawBankAcc || settings.bankAccountNumber);
       const isConfigured = promptPayConfigured || bankTransferConfigured;
 
       return res.json({
@@ -752,11 +1113,13 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
           targetAmount,
           paymentMethod: 'PROMPTPAY',
           promptPayType: settings.promptPayType || 'NATID',
-          promptPayDisplay: promptPayConfigured ? maskPromptPayDisplay(rawPromptPay!, settings.promptPayType) : null,
-          qrUrl: (promptPayConfigured && targetBillId) ? `/api/v1/tenant-portal/payment-options/${targetBillId}/qr` : null,
+          promptPayDisplay: promptPayConfigured ? formatPromptPayDisplay(rawPromptPay!, settings.promptPayType) : null,
+          promptPayAccountName: settings.promptPayAccountName || dorm?.name || null,
+          qrUrl: (promptPayConfigured && targetBillId) ? `/api/v1/tenant-portal/payment-options/${targetBillId}/qr${ctx.roomId ? `?roomId=${ctx.roomId}` : ''}` : null,
           bankCode: settings.bankCode || null,
           bankAccountName: settings.bankAccountName || null,
-          bankAccountNumber: settings.bankAccountNumber || null
+          bankAccountNumber: rawBankAcc || settings.bankAccountNumber || null,
+          bankQrCode: settings.bankQrCode || null
         }
       });
     } catch (err: any) {
@@ -925,13 +1288,14 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
         return res.status(ctx.error.statusCode).json({ error: { code: ctx.error.code, message: ctx.error.message, requestId: req.requestId } });
       }
 
-      const { category, title, description, priority, preferredDate, preferredTimeRange } = req.body;
+      const { category, title, description, priority, preferredDate, preferredTimeRange, imageBefore } = req.body;
 
       if (!category || !title || !description) {
         return res.status(400).json({ error: { code: 'INVALID_INPUT', message: 'Category, title, and description are required', requestId: req.requestId } });
       }
 
-      if (!ctx.roomId) {
+      const targetRoomId = req.body?.roomId || ctx.roomId;
+      if (!targetRoomId) {
         return res.status(400).json({ error: { code: 'INVALID_INPUT', message: 'Room context missing for tenant', requestId: req.requestId } });
       }
 
@@ -939,13 +1303,14 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
         dormitoryId: ctx.dormitoryId,
         tenantId: ctx.tenant.id,
         contractId: ctx.contract?.id || undefined,
-        roomId: ctx.roomId,
+        roomId: targetRoomId,
         category,
         title,
         description,
         priority,
         preferredDate,
-        preferredTimeRange
+        preferredTimeRange,
+        imageBefore: imageBefore || undefined
       });
 
       return res.status(201).json({ success: true, data: request });
@@ -1092,7 +1457,10 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
         });
       }
 
-      const dorm = await prisma.dormitory.findUnique({ where: { id: ctx.dormitoryId } });
+      const dorm = await prisma.dormitory.findUnique({
+        where: { id: ctx.dormitoryId },
+        include: { billingSettings: true },
+      });
       const room = ctx.roomId ? await prisma.room.findUnique({ where: { id: ctx.roomId }, include: { building: true } }) : null;
       const snapshot = await prisma.contractSnapshot.findFirst({
         where: { contractId: ctx.contract.id, dormitoryId: ctx.dormitoryId },
@@ -1157,15 +1525,56 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
         ? ctx.contract.createdAt.toISOString().split('T')[0]
         : (ctx.contract.startDate ? ctx.contract.startDate.toISOString().split('T')[0] : 'ไม่ระบุ');
 
+      const rawBankName = dorm?.billingSettings?.bankAccountName?.trim() || dorm?.billingSettings?.promptPayAccountName?.trim() || null;
+      const ownerDisplayName = rawBankName ? `${rawBankName} (${dorm?.name || 'หอพัก'})` : (dorm?.name || 'เจ้าของหอพัก');
+
+      const coTenantsList = await prisma.tenantCoOccupant.findMany({
+        where: { tenantId: ctx.tenant.id, dormitoryId: ctx.dormitoryId, status: 'active' },
+        select: { name: true, phone: true },
+      });
+      const coTenants = coTenantsList.map((c) => ({ name: c.name, phone: c.phone || undefined }));
+
+      let ownerSignatureUrl: string | null = null;
+      let tenantSignatureUrl: string | null = null;
+      const sigStorage = new SignatureStorageService(prisma);
+
+      if (ctx.contract.ownerSignature) {
+        if (ctx.contract.ownerSignature.startsWith('data:image/')) {
+          ownerSignatureUrl = ctx.contract.ownerSignature;
+        } else {
+          try {
+            const stream = await sigStorage.getSignatureStream(ctx.contract.ownerSignature);
+            const chunks: Buffer[] = [];
+            for await (const chunk of stream) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+            ownerSignatureUrl = `data:image/png;base64,${Buffer.concat(chunks).toString('base64')}`;
+          } catch {}
+        }
+      }
+
+      if (ctx.contract.tenantSignature) {
+        if (ctx.contract.tenantSignature.startsWith('data:image/')) {
+          tenantSignatureUrl = ctx.contract.tenantSignature;
+        } else {
+          try {
+            const stream = await sigStorage.getSignatureStream(ctx.contract.tenantSignature);
+            const chunks: Buffer[] = [];
+            for await (const chunk of stream) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+            tenantSignatureUrl = `data:image/png;base64,${Buffer.concat(chunks).toString('base64')}`;
+          } catch {}
+        }
+      }
+
       const pdfService = new DocumentPdfService();
       const pdfBuffer = await pdfService.generateContractPdf({
         contractNumber: ctx.contract.contractNumber,
         dormitoryName: dorm?.name || 'หอพัก',
         dormitoryAddress: dorm?.addressLine1 || undefined,
         dormitoryPhone: dorm?.phone || undefined,
-        ownerName: dorm?.name || 'เจ้าของหอพัก',
+        ownerName: ownerDisplayName,
+        ownerSignatureUrl,
         tenantName: ctx.tenant.displayName || `${ctx.tenant.firstName} ${ctx.tenant.lastName}`.trim(),
         tenantPhone: ctx.tenant.phone,
+        coTenants,
         buildingName,
         roomNumber: resolvedRoomNumber,
         rentBillingType: ctx.contract.rentBillingType === 'term' ? 'term' : 'monthly',
@@ -1181,16 +1590,258 @@ export function createTenantPortalRouter(authService?: AuthenticationService): R
         billingDay: billingDayVal,
         dueDay: dueDayVal,
         terms: ctx.contract.terms || undefined,
+        tenantSignature: tenantSignatureUrl,
         createdAt: createdAtStr,
       });
 
+      const isDownload = req.query.download === 'true' || req.query.download === '1';
+      const dispositionType = isDownload ? 'attachment' : 'inline';
       res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename="Contract-${ctx.contract.contractNumber}.pdf"`);
+      res.setHeader('Content-Disposition', `${dispositionType}; filename="Contract-${ctx.contract.contractNumber}.pdf"`);
       return res.send(pdfBuffer);
     } catch (err: any) {
       return res.status(500).json({
         error: { code: 'INTERNAL_ERROR', message: err.message, requestId: req.requestId }
       });
+    }
+  });
+
+  // GET /api/v1/tenant-portal/id-card
+  router.get('/id-card', async (req: Request, res: Response) => {
+    try {
+      const ctx = await resolveTenantContext(req);
+      if (ctx.error) {
+        return res.status(ctx.error.statusCode).json({ error: { code: ctx.error.code, message: ctx.error.message, requestId: req.requestId } });
+      }
+
+      const tenant = ctx.tenant;
+      const dorm = await prisma.dormitory.findUnique({
+        where: { id: ctx.dormitoryId },
+      });
+
+      const pdfService = new DocumentPdfService();
+      const pdfBuffer = await pdfService.generateIdCardPdf({
+        tenantName: tenant.displayName || `${tenant.firstName || ''} ${tenant.lastName || ''}`.trim(),
+        citizenId: tenant.citizenId || tenant.nationalIdMasked || 'ไม่ระบุ',
+        phone: tenant.phone,
+        email: tenant.email,
+        roomNumber: ctx.contract?.room?.roomNumber || 'ไม่ระบุ',
+        dormitoryName: dorm?.name || 'หอพัก',
+        photoUrl: tenant.photoUrl,
+      });
+
+      const isDownload = req.query.download === 'true' || req.query.download === '1';
+      const dispositionType = isDownload ? 'attachment' : 'inline';
+      const safeId = (tenant.citizenId || tenant.id.slice(0, 8)).replace(/[^a-zA-Z0-9_-]/g, '');
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `${dispositionType}; filename="IDCard-${safeId}.pdf"`);
+      return res.send(pdfBuffer);
+    } catch (err: any) {
+      return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message, requestId: req.requestId } });
+    }
+  });
+
+  // GET /api/v1/tenant-portal/id-card-photo
+  router.get('/id-card-photo', async (req: Request, res: Response) => {
+    try {
+      const ctx = await resolveTenantContext(req);
+      if (ctx.error) {
+        return res.status(ctx.error.statusCode).json({ error: { code: ctx.error.code, message: ctx.error.message, requestId: req.requestId } });
+      }
+      const tenant = ctx.tenant;
+      const isDownload = req.query.download === 'true' || req.query.download === '1';
+      const safeName = (tenant.displayName || `${tenant.firstName || ''}_${tenant.lastName || ''}`.trim() || tenant.id.slice(0, 8)).replace(/[^a-zA-Z0-9_\u0E00-\u0E7F-]/g, '_');
+
+      if (tenant.idCardObjectKey) {
+        const localStorageProvider = new LocalStorageProvider();
+        const fileBuffer = await localStorageProvider.getFile(tenant.idCardObjectKey);
+        const isPdf = tenant.idCardMimeType === 'application/pdf' || tenant.idCardObjectKey.endsWith('.pdf');
+        const isPng = tenant.idCardMimeType === 'image/png' || tenant.idCardObjectKey.endsWith('.png');
+        const isWebp = tenant.idCardMimeType === 'image/webp' || tenant.idCardObjectKey.endsWith('.webp');
+        const ext = isPdf ? '.pdf' : (isPng ? '.png' : (isWebp ? '.webp' : '.jpg'));
+        const contentType = isPdf ? 'application/pdf' : (tenant.idCardMimeType || (isPng ? 'image/png' : 'image/jpeg'));
+        res.setHeader('Content-Type', contentType);
+        res.setHeader('Cache-Control', 'private, max-age=3600');
+        if (isDownload) {
+          res.setHeader('Content-Disposition', `attachment; filename="IDCard-${encodeURIComponent(safeName)}${ext}"`);
+        } else {
+          res.setHeader('Content-Disposition', 'inline');
+        }
+        return res.send(fileBuffer);
+      }
+      if (tenant.photoUrl) {
+        return res.redirect(tenant.photoUrl);
+      }
+      return res.status(404).json({ error: { code: 'NO_ID_CARD', message: 'ผู้เช่ายังไม่ได้อัปโหลดเอกสารสำเนาบัตรประชาชน' } });
+    } catch (err: any) {
+      return res.status(404).json({ error: { code: 'ID_CARD_NOT_FOUND', message: err.message || 'ไม่พบรูปถ่ายสำเนาบัตรประชาชน' } });
+    }
+  });
+
+  // POST /api/v1/tenant-portal/id-card-photo
+  router.post('/id-card-photo', async (req: Request, res: Response) => {
+    try {
+      const ctx = await resolveTenantContext(req);
+      if (ctx.error) {
+        return res.status(ctx.error.statusCode).json({ error: { code: ctx.error.code, message: ctx.error.message, requestId: req.requestId } });
+      }
+
+      let buffer: Buffer | null = null;
+      if (req.body?.image && typeof req.body.image === 'string') {
+        const base64Data = req.body.image.replace(/^data:image\/\w+;base64,/, '');
+        buffer = Buffer.from(base64Data, 'base64');
+      }
+
+      if (!buffer) {
+        return res.status(400).json({ error: { code: 'INVALID_IMAGE', message: 'กรุณาเลือกไฟล์ภาพสำเนาบัตรประชาชน' } });
+      }
+
+      const storage = new LocalStorageProvider();
+      const objectKey = `tenants/${ctx.dormitoryId}/${ctx.tenant.id}/id-card-${Date.now()}.jpg`;
+      await storage.saveFile(objectKey, buffer);
+
+      const uploadedAt = new Date();
+      await prisma.tenant.update({
+        where: { id: ctx.tenant.id },
+        data: {
+          idCardObjectKey: objectKey,
+          idCardMimeType: 'image/jpeg',
+          idCardByteSize: buffer.length,
+          idCardUploadedAt: uploadedAt,
+        }
+      });
+
+      return res.status(200).json({
+        success: true,
+        data: {
+          hasIdentityDocument: true,
+          photoUrl: '/api/v1/tenant-portal/id-card-photo',
+          idCardUploadedAt: uploadedAt.toISOString()
+        }
+      });
+    } catch (err: any) {
+      return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
+    }
+  });
+
+  // GET /api/v1/tenant-portal/contract/signatures/tenant
+  router.get('/contract/signatures/tenant', async (req: Request, res: Response) => {
+    try {
+      const ctx = await resolveTenantContext(req);
+      if (ctx.error) {
+        return res.status(ctx.error.statusCode).json({ error: { code: ctx.error.code, message: ctx.error.message, requestId: req.requestId } });
+      }
+      if (!ctx.contract || !ctx.contract.tenantSignature) {
+        return res.status(404).json({ error: { message: 'Tenant signature not found' } });
+      }
+      if (ctx.contract.tenantSignature.startsWith('data:') || ctx.contract.tenantSignature.startsWith('http')) {
+        return res.redirect(ctx.contract.tenantSignature);
+      }
+      const signatureService = new SignatureStorageService(prisma);
+      const stream = await signatureService.getSignatureStream(ctx.contract.tenantSignature);
+      res.setHeader('Content-Type', 'image/png');
+      res.setHeader('Cache-Control', 'private, max-age=3600');
+      stream.pipe(res);
+    } catch (err: any) {
+      return res.status(err.statusCode || 404).json({ error: { message: err.message || 'Signature not found' } });
+    }
+  });
+
+  // GET /api/v1/tenant-portal/contract/signatures/owner
+  router.get('/contract/signatures/owner', async (req: Request, res: Response) => {
+    try {
+      const ctx = await resolveTenantContext(req);
+      if (ctx.error) {
+        return res.status(ctx.error.statusCode).json({ error: { code: ctx.error.code, message: ctx.error.message, requestId: req.requestId } });
+      }
+      if (!ctx.contract) {
+        return res.status(404).json({ error: { message: 'Contract not found' } });
+      }
+      const signatureService = new SignatureStorageService(prisma);
+      let objectKey = ctx.contract.ownerSignature;
+      if (!objectKey) {
+        const latestOwnerSig = await signatureService.getLatestSignatureRecord(ctx.dormitoryId);
+        objectKey = latestOwnerSig?.objectKey || null;
+      }
+      if (!objectKey) {
+        return res.status(404).json({ error: { message: 'Owner signature not found' } });
+      }
+      if (objectKey.startsWith('data:') || objectKey.startsWith('http')) {
+        return res.redirect(objectKey);
+      }
+      const stream = await signatureService.getSignatureStream(objectKey);
+      res.setHeader('Content-Type', 'image/png');
+      res.setHeader('Cache-Control', 'private, max-age=3600');
+      stream.pipe(res);
+    } catch (err: any) {
+      return res.status(err.statusCode || 404).json({ error: { message: err.message || 'Signature not found' } });
+    }
+  });
+
+  // GET /api/v1/tenant-portal/rules
+  router.get('/rules', async (req: Request, res: Response) => {
+    try {
+      const ctx = await resolveTenantContext(req);
+      const dorm = await prisma.dormitory.findUnique({
+        where: { id: ctx.dormitoryId },
+      });
+      const dormName = dorm?.name || 'หอพักสุขสบาย';
+      const html = `<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>กฎระเบียบและข้อบังคับอาคาร - ${dormName}</title>
+  <style>
+    body { font-family: 'Tahoma', 'Leelawadee UI', sans-serif; padding: 40px; color: #1e293b; line-height: 1.6; max-width: 800px; margin: 0 auto; background-color: #ffffff; }
+    h1 { color: #1e1b4b; border-bottom: 2px solid #e2e8f0; padding-bottom: 12px; font-size: 20px; }
+    .header { text-align: center; margin-bottom: 30px; }
+    .rules-list { margin-top: 20px; }
+    .rule-item { margin-bottom: 16px; padding: 14px 18px; background: #f8fafc; border-left: 4px solid #4f46e5; border-radius: 8px; }
+    .rule-title { font-weight: bold; color: #1e293b; margin-bottom: 4px; font-size: 14px; }
+    .rule-desc { font-size: 13px; color: #475569; margin: 0; }
+    .print-btn { background: #4f46e5; color: white; border: none; padding: 8px 16px; border-radius: 8px; cursor: pointer; float: right; font-size: 12px; font-weight: bold; }
+    @media print { .print-btn { display: none; } }
+  </style>
+</head>
+<body>
+  <button class="print-btn" onclick="window.print()">พิมพ์ / บันทึกเอกสาร</button>
+  <div class="header">
+    <h1>กฎระเบียบและข้อบังคับการพักอาศัย</h1>
+    <p style="font-size: 14px; color: #64748b;"><strong>${dormName}</strong></p>
+  </div>
+  <div class="rules-list">
+    <div class="rule-item">
+      <div class="rule-title">1. ความสงบเรียบร้อยและการใช้เสียง</div>
+      <p class="rule-desc">ห้ามส่งเสียงดังยามวิกาลหลังเวลา 22:00 น. เพื่อไม่ให้รบกวนผู้พักอาศัยห้องอื่น</p>
+    </div>
+    <div class="rule-item">
+      <div class="rule-title">2. การรักษาความสะอาด</div>
+      <p class="rule-desc">ห้ามวางขยะ รองเท้า หรือสิ่งของกีดขวางบริเวณทางเดินส่วนกลางและบันไดหนีไฟเด็ดขาด</p>
+    </div>
+    <div class="rule-item">
+      <div class="rule-title">3. ข้อห้ามเรื่องการสูบบุหรี่และสารเสพติด</div>
+      <p class="rule-desc">ห้ามสูบบุหรี่ หรือบุหรี่ไฟฟ้า ภายในห้องพัก ระเบียง และพื้นที่ส่วนกลางทั้งหมด</p>
+    </div>
+    <div class="rule-item">
+      <div class="rule-title">4. นโยบายการเลี้ยงสัตว์</div>
+      <p class="rule-desc">การนำสัตว์เลี้ยงเข้าพักต้องเป็นไปตามเงื่อนไขและได้รับอนุญาตจากทางหอพักเป็นลายลักษณ์อักษรเท่านั้น</p>
+    </div>
+    <div class="rule-item">
+      <div class="rule-title">5. การดัดแปลงห้องพัก</div>
+      <p class="rule-desc">ห้ามดัดแปลง ต่อเติม ทาสี หรือเจาะผนังอาคารโดยไม่ได้รับอนุมัติจากผู้จัดการหอพัก</p>
+    </div>
+    <div class="rule-item">
+      <div class="rule-title">6. การชำระเงินค่าเช่าและค่าสาธารณูปโภค</div>
+      <p class="rule-desc">ผู้เช่าต้องชำระค่าเช่าและค่าบริการภายในวันที่กำหนดในสัญญาเช่าของแต่ละเดือน</p>
+    </div>
+  </div>
+</body>
+</html>`;
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      return res.send(html);
+    } catch (err: any) {
+      return res.status(500).send('Error loading rules');
     }
   });
 

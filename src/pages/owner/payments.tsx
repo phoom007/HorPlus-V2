@@ -231,6 +231,7 @@ export interface PaymentsOwnerViewProps {
   onAddLog?: (action: string, details: string, type: string, id: string) => void;
   onUpdateBills?: () => void;
   onNavigateToLineConfig?: () => void;
+  initialTab?: 'paid' | 'checking' | 'cash' | 'rejected';
 }
 
 /* =========================================================================
@@ -293,7 +294,7 @@ export function resolveRecordBillingCycleId(
   return null;
 }
 
-export function renderItemAmountWithVat(it: any, vatSettings: any) {
+export function getItemVatDetails(it: any, vatSettings: any) {
   const isTaxable = Boolean(
     it.metadata?.isTaxable ||
     isCategoryTaxable(it.type || it.category || it.description || '', vatSettings)
@@ -312,6 +313,11 @@ export function renderItemAmountWithVat(it: any, vatSettings: any) {
       hasVat = true;
     }
   }
+  return { hasVat, itemDisplayAmount };
+}
+
+export function renderItemAmountWithVat(it: any, vatSettings: any) {
+  const { hasVat, itemDisplayAmount } = getItemVatDetails(it, vatSettings);
   return (
     <span className="font-semibold text-slate-700 shrink-0">
       {hasVat ? `(+VAT) ${formatBaht(itemDisplayAmount)}` : formatBaht(itemDisplayAmount)}
@@ -785,6 +791,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
   onAddLog = (_a?: string, _b?: string, _c?: string, _d?: string) => {},
   onUpdateBills = () => {},
   onNavigateToLineConfig,
+  initialTab,
 }) => {
   const queryClient = useQueryClient();
 
@@ -813,7 +820,22 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
   const vatSettings = billingSettings?.vatSettings || null;
 
   // Active Tab: 'paid' | 'checking' | 'cash' | 'rejected'
-  const [activeTab, setActiveTab] = useState<'paid' | 'checking' | 'cash' | 'rejected'>('checking');
+  const [activeTab, setActiveTab] = useState<'paid' | 'checking' | 'cash' | 'rejected'>(() => {
+    if (initialTab) return initialTab;
+    try {
+      const saved = localStorage.getItem('payments_active_tab');
+      if (saved === 'paid' || saved === 'checking' || saved === 'cash' || saved === 'rejected') {
+        return saved;
+      }
+    } catch {}
+    return 'checking';
+  });
+
+  useEffect(() => {
+    if (initialTab) {
+      setActiveTab(initialTab);
+    }
+  }, [initialTab]);
   const [searchQuery, setSearchQuery] = useState('');
 
   // Selected item states
@@ -2455,14 +2477,19 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                             {/* Canonical line items when expanded */}
                             {isExpanded && (
                               <div className="space-y-1 my-1.5 pt-1">
-                                {sortedNonZero.map((it, idx) => (
-                                  <div key={idx} className="flex justify-between items-center">
-                                    <span className="truncate pr-1 text-slate-500 font-medium">
-                                      {formatCanonicalLineItemDescription(it)}:
-                                    </span>
-                                    {renderItemAmountWithVat(it, vatSettings)}
-                                  </div>
-                                ))}
+                                {sortedNonZero.map((it, idx) => {
+                                  const { hasVat, itemDisplayAmount } = getItemVatDetails(it, vatSettings);
+                                  return (
+                                    <div key={idx} className="flex justify-between items-center">
+                                      <span className="truncate pr-1 text-slate-500 font-medium">
+                                        {formatCanonicalLineItemDescription(it)}{hasVat ? ' +VAT:' : ':'}
+                                      </span>
+                                      <span className="font-semibold text-slate-700 shrink-0">
+                                        {formatBaht(itemDisplayAmount)}
+                                      </span>
+                                    </div>
+                                  );
+                                })}
                               </div>
                             )}
 
@@ -2493,14 +2520,19 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                       if (count <= 3) {
                         return (
                           <div className="space-y-1 mb-1.5">
-                            {sortedNonZero.map((it, idx) => (
-                              <div key={idx} className="flex justify-between items-center">
-                                <span className="truncate pr-1 text-slate-500 font-medium">
-                                  {formatCanonicalLineItemDescription(it)}:
-                                </span>
-                                {renderItemAmountWithVat(it, vatSettings)}
-                              </div>
-                            ))}
+                            {sortedNonZero.map((it, idx) => {
+                              const { hasVat, itemDisplayAmount } = getItemVatDetails(it, vatSettings);
+                              return (
+                                <div key={idx} className="flex justify-between items-center">
+                                  <span className="truncate pr-1 text-slate-500 font-medium">
+                                    {formatCanonicalLineItemDescription(it)}{hasVat ? ' +VAT:' : ':'}
+                                  </span>
+                                  <span className="font-semibold text-slate-700 shrink-0">
+                                    {formatBaht(itemDisplayAmount)}
+                                  </span>
+                                </div>
+                              );
+                            })}
                           </div>
                         );
                       }
@@ -2513,14 +2545,19 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                       return (
                         <div>
                           <div className="space-y-1 mb-1.5">
-                            {visibleItems.map((it, idx) => (
-                              <div key={idx} className="flex justify-between items-center">
-                                <span className="truncate pr-1 text-slate-500 font-medium">
-                                  {formatCanonicalLineItemDescription(it)}:
-                                </span>
-                                {renderItemAmountWithVat(it, vatSettings)}
-                              </div>
-                            ))}
+                            {visibleItems.map((it, idx) => {
+                              const { hasVat, itemDisplayAmount } = getItemVatDetails(it, vatSettings);
+                              return (
+                                <div key={idx} className="flex justify-between items-center">
+                                  <span className="truncate pr-1 text-slate-500 font-medium">
+                                    {formatCanonicalLineItemDescription(it)}{hasVat ? ' +VAT:' : ':'}
+                                  </span>
+                                  <span className="font-semibold text-slate-700 shrink-0">
+                                    {formatBaht(itemDisplayAmount)}
+                                  </span>
+                                </div>
+                              );
+                            })}
                           </div>
                           <button
                             type="button"

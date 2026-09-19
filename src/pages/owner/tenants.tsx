@@ -56,6 +56,7 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { LineLogo as LineIcon } from '../../components/LineLogo';
 import { QuickAddTenantModal, QuickAddSuccessResult } from '../../components/QuickAddTenantModal';
+import { TenantRejectSheet } from '../../components/TenantRejectSheet';
 import { httpRequest } from '../../data/httpClient';
 import { approveTenantRegistrationRequest, rejectTenantRegistrationRequest, terminateContract, fetchTenantProfile, TenantBasicProfileUpdateInput } from '../../data/adapters/api';
 import { UpdateTenantProfilePayload } from '../../data/contracts';
@@ -81,6 +82,7 @@ import { formatOwnerRoomOptionLabel } from '../../utils/room-label.util';
 import { resolveLandlordSignerName } from '../../utils/landlord-signer.util';
 import { getPaymentSettings, PaymentSettingsDTO } from '../../services/payment-settings.service';
 import { sortRoomsByBuildingAndNumber } from '../../utils/roomSorter';
+import { openTenantContractPrintWindow } from '../tenant/tenantHelpers';
 
 export function useAuthenticatedBlobUrl(url: string | null | undefined, dormitoryId?: string): string | null {
   const [blobUrl, setBlobUrl] = useState<string | null>(() => {
@@ -805,7 +807,12 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
   onNavigateToLineConfig,
 }) => {
   const queryClient = React.useContext(QueryClientContext) || null;
-  const effectiveDormId = dormitoryId || dormitory?.id || (typeof window !== 'undefined' ? (localStorage.getItem('selected_dormitory_id') || sessionStorage.getItem('active_dormitory_selected_for_session')) : '') || '';
+  const effectiveDormId =
+    dormitoryId ||
+    dormitory?.id ||
+    (typeof localStorage !== 'undefined' ? localStorage.getItem('selected_dormitory_id') : null) ||
+    (typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('active_dormitory_selected_for_session') : null) ||
+    '';
   const [tenantDetailsData, setTenantDetailsData] = useState<any | null>(null);
   const [paymentSettings, setPaymentSettings] = useState<PaymentSettingsDTO | null>(null);
   const [fetchedBuildings, setFetchedBuildings] = useState<Array<{ id: string; name: string }>>([]);
@@ -884,11 +891,15 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
     return () => { isMounted = false; };
   }, [dormitory, effectiveDormId]);
 
+  const initialTargetTenantId = initialTenantId || returnContext?.tenantId;
+  const initialFoundTenant = initialTargetTenantId ? (tenants.find(t => t.id === initialTargetTenantId) || null) : null;
   const [searchQuery, setSearchQuery] = useState('');
-  const [activeStatusTab, setActiveStatusTab] = useState<'pending' | 'active' | 'inactive'>('active');
-  const [selectedTenant, setSelectedTenant] = useState<Tenant | null>(null);
-
-
+  const [activeStatusTab, setActiveStatusTab] = useState<'pending' | 'active' | 'inactive'>(() => {
+    if (initialFoundTenant?.status === 'pending') return 'pending';
+    if (initialFoundTenant?.status === 'inactive') return 'inactive';
+    return 'active';
+  });
+  const [selectedTenant, setSelectedTenant] = useState<Tenant | null>(initialFoundTenant);
 
   const [cameFromMeters, setCameFromMeters] = useState(Boolean(cameFromMetersProp));
   const [originTab, setOriginTab] = useState<'rooms' | 'meters' | string | null>(tenantOriginTab || returnContext?.source || (cameFromMetersProp ? 'meters' : null));
@@ -1195,7 +1206,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
   const [emergencyRelation, setEmergencyRelation] = useState('');
   const [emergencyPhone, setEmergencyPhone] = useState('');
 
-  const [vehicleType, setVehicleType] = useState<'car' | 'motorcycle' | 'none'>('none');
+  const [vehicleType, setVehicleType] = useState<'car' | 'motorcycle' | 'bicycle' | 'none'>('none');
   const [vehiclePlate, setVehiclePlate] = useState('');
   const [vehicleBrand, setVehicleBrand] = useState('');
   const [vehiclesList, setVehiclesList] = useState<VehicleItem[]>([]);
@@ -1219,15 +1230,13 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
 
   const handlePetChange = (index: number, field: keyof PetItem, value: string) => {
     setPetsList(prev => prev.map((p, i) => {
-      if (i !== index) return p;
-      if (field === 'type') {
-        return {
-          ...p,
-          type: value,
-          customType: (value === 'อื่นๆ' || value === 'other') ? (p.customType || '') : ''
-        };
+      if (i === index) {
+        if (field === 'type' && value !== 'อื่นๆ') {
+          return { ...p, type: value, customType: '' };
+        }
+        return { ...p, [field]: value };
       }
-      return { ...p, [field]: value };
+      return p;
     }));
   };
 
@@ -1247,6 +1256,9 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
       if (i === index) {
         if (field === 'type' && value === 'none') {
           return { ...v, type: 'none', licensePlate: '', brand: '' };
+        }
+        if (field === 'type' && value === 'bicycle') {
+          return { ...v, type: 'bicycle', licensePlate: '-' };
         }
         return { ...v, [field]: value };
       }
@@ -1614,7 +1626,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
       },
       vehicle: {
         type: vehicleType,
-        licensePlate: vehiclePlate.trim(),
+        licensePlate: vehicleType === 'bicycle' ? (vehiclePlate.trim() || '-') : vehiclePlate.trim(),
         brand: vehicleBrand.trim()
       },
       pet: {
@@ -2168,15 +2180,13 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
       return;
     }
 
-    // Validate vehicles: license plate required if vehicle type is selected
+    // Validate vehicles: license plate required if vehicle type is selected (except bicycle)
     for (const veh of vehiclesList) {
-      if (veh.type !== 'none' && !veh.licensePlate?.trim()) {
+      if (veh.type !== 'none' && veh.type !== 'bicycle' && !veh.licensePlate?.trim()) {
         setErrorText('กรุณาระบุเลขทะเบียนสำหรับยานพาหนะที่เลือก');
         return;
       }
     }
-
-
 
     try {
       const dataProvider = getDataProvider();
@@ -2187,12 +2197,12 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
       // Reconcile vehicles
       const serverVehicles = (tenantDetailsData?.vehicles || (selectedTenant as any).vehicles || []).filter((v: any) => v.id && v.type !== 'none');
       const serverVehIdSet = new Set(serverVehicles.map((v: any) => v.id));
-      const activeFormVehicles = vehiclesList.filter(v => v.type !== 'none' && v.licensePlate?.trim());
+      const activeFormVehicles = vehiclesList.filter(v => v.type !== 'none' && (v.type === 'bicycle' || v.licensePlate?.trim()));
 
       const payloadVehicles = activeFormVehicles.map(v => ({
         id: (v.id && serverVehIdSet.has(v.id)) ? v.id : undefined,
-        type: (v.type === 'motorcycle' || v.type === 'car' || v.type === 'none' || v.type === 'other') ? v.type : ('other' as const),
-        licensePlate: v.licensePlate.trim(),
+        type: (v.type === 'motorcycle' || v.type === 'car' || v.type === 'bicycle' || v.type === 'none' || v.type === 'other') ? v.type : ('other' as const),
+        licensePlate: v.type === 'bicycle' ? (v.licensePlate?.trim() || '-') : v.licensePlate.trim(),
         brand: v.brand?.trim() || undefined,
       }));
 
@@ -2676,13 +2686,14 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
     setIsRejectOpen(true);
   };
 
-  const handleConfirmReject = async () => {
+  const handleConfirmReject = async (reasonOverride?: string) => {
     if (!selectedTenant) return;
 
+    const finalReason = reasonOverride || rejectReason || 'ข้อมูลเอกสารไม่ครบถ้วน';
     const reqId = (selectedTenant as any).registrationRequestId || (selectedTenant as any).requestId || selectedTenant.id;
     if (reqId) {
       try {
-        await rejectTenantRegistrationRequest(reqId, rejectReason);
+        await rejectTenantRegistrationRequest(reqId, finalReason);
       } catch (err) {
         console.error('Failed to reject registration request via API:', err);
       }
@@ -2743,282 +2754,24 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
   };
 
   const handleOpenPrintContract = (contract: Contract) => {
-    const resolvedLandlord = resolveLandlordSignerName(paymentSettings);
     const conTenant = tenants.find(t => t.id === contract.tenantId) || selectedTenant;
     const conRoom = rooms.find(r => r.id === contract.roomId || r.roomNumber === contract.roomId);
-    const tenantName = conTenant ? conTenant.name : 'ผู้เช่า';
-    const tenantPhone = conTenant?.phone || '-';
-    const tenantCitizenId = conTenant?.citizenId || '-';
-    const roomNum = conRoom ? conRoom.roomNumber : contract.roomId;
-    const roomFloor = conRoom?.floor ? ` (ชั้น ${conRoom.floor})` : '';
-    const createdDate = contract.createdAt ? contract.createdAt.split('T')[0] : contract.startDate;
-    const dormName = dorm?.name || 'หอพัก';
-    const dormAddress = [
-      dorm.addressLine1,
-      dorm.subdistrict ? `ต.${dorm.subdistrict}` : '',
-      dorm.district ? `อ.${dorm.district}` : '',
-      dorm.province ? `จ.${dorm.province}` : '',
-      dorm.postalCode
-    ].filter(Boolean).join(' ') || (dorm as any).address || '-';
-    const dormOwner = resolvedLandlord || dorm?.name || 'ผู้ให้เช่า';
-    const isTermContract = contract.rentBillingType === 'term' || (contract as any).rentalType === 'TERM' || (contract as any).rentalPlan === 'term';
-    const tenantSigUrl = (contract.tenantSignature && (contract.tenantSignature.startsWith('http') || contract.tenantSignature.startsWith('data:') || contract.tenantSignature.startsWith('/api/')))
-      ? contract.tenantSignature
-      : (contract.tenantSignature && dorm?.id ? `/api/v1/dormitories/${dorm.id}/contracts/${contract.id}/tenant-signature` : null);
-    const ownerSigUrl = (contract.ownerSignature && (contract.ownerSignature.startsWith('http') || contract.ownerSignature.startsWith('data:') || contract.ownerSignature.startsWith('/api/')))
-      ? contract.ownerSignature
-      : (dorm?.id ? (contract.ownerSignature ? `/api/v1/dormitories/${dorm.id}/contracts/${contract.id}/owner-signature` : `/api/v1/dormitories/${dorm.id}/signature`) : null);
-
-    const tenantSig = tenantSigUrl
-      ? `<img src="${tenantSigUrl}" style="max-height: 44px; max-width: 140px; object-fit: contain;" alt="ลายเซ็นผู้เช่า" onerror="this.style.display='none';" />`
-      : '<div style="height: 44px;"></div>';
-    const ownerSig = ownerSigUrl
-      ? `<img src="${ownerSigUrl}" style="max-height: 44px; max-width: 140px; object-fit: contain;" alt="ลายเซ็นผู้ให้เช่า" onerror="this.style.display='none';" />`
-      : '<div style="height: 44px;"></div>';
-
     try {
-      const printWindow = window.open('', '_blank', 'width=850,height=950');
-      if (printWindow) {
-        printWindow.document.write(`
-          <!DOCTYPE html>
-          <html lang="th">
-          <head>
-            <meta charset="UTF-8">
-            <title>สัญญาเช่าห้องพักเลขที่ ${contract.contractNumber} - ห้อง ${roomNum}</title>
-            <link rel="preconnect" href="https://fonts.googleapis.com">
-            <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-            <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;500;600;700;800&family=Prompt:wght@400;500;600;700&display=swap" rel="stylesheet">
-            <style>
-              @page {
-                size: A4;
-                margin: 15mm;
-              }
-              * {
-                box-sizing: border-box;
-              }
-              body {
-                font-family: 'Sarabun', 'Prompt', system-ui, -apple-system, sans-serif;
-                font-size: 14px;
-                line-height: 1.7;
-                color: #0f172a;
-                background-color: #ffffff;
-                margin: 0;
-                padding: 24px;
-              }
-              .contract-container {
-                max-width: 760px;
-                margin: 0 auto;
-                background: #ffffff;
-              }
-              .header-box {
-                text-align: center;
-                margin-bottom: 24px;
-                padding-bottom: 16px;
-                border-bottom: 2px solid #0f172a;
-              }
-              .title {
-                font-size: 20px;
-                font-weight: 800;
-                color: #0f172a;
-                margin: 0 0 6px 0;
-                letter-spacing: 0.5px;
-              }
-              .contract-no {
-                font-size: 13px;
-                font-weight: 600;
-                color: #475569;
-              }
-              .content-section {
-                margin-bottom: 18px;
-                text-align: justify;
-                text-justify: inter-word;
-              }
-              .highlight-box {
-                background-color: #f8fafc;
-                border: 1px solid #e2e8f0;
-                border-radius: 12px;
-                padding: 16px 20px;
-                margin: 18px 0;
-              }
-              .highlight-box ul {
-                margin: 0;
-                padding-left: 20px;
-              }
-              .highlight-box li {
-                margin-bottom: 8px;
-              }
-              .highlight-box li:last-child {
-                margin-bottom: 0;
-              }
-              .terms-box {
-                background-color: #f8fafc;
-                border: 1px solid #e2e8f0;
-                border-radius: 10px;
-                padding: 14px 18px;
-                margin-top: 8px;
-                white-space: pre-line;
-                color: #334155;
-                font-size: 13px;
-              }
-              .signatures-grid {
-                display: grid;
-                grid-template-columns: 1fr 1fr;
-                gap: 32px;
-                margin-top: 36px;
-                padding-top: 24px;
-                border-top: 1px dashed #cbd5e1;
-                page-break-inside: avoid;
-                width: 100%;
-                box-sizing: border-box;
-              }
-              .signature-block {
-                text-align: center;
-                max-width: 100%;
-                overflow: hidden;
-              }
-              .signature-label {
-                font-size: 12px;
-                font-weight: 600;
-                color: #64748b;
-                margin-bottom: 8px;
-              }
-              .signature-space {
-                height: 48px;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                margin-bottom: 6px;
-                overflow: hidden;
-              }
-              .signature-space img {
-                max-height: 44px;
-                max-width: 140px;
-                object-fit: contain;
-              }
-              .signer-name {
-                font-weight: 700;
-                font-size: 13px;
-                color: #0f172a;
-                margin-top: 4px;
-                white-space: nowrap;
-                overflow: hidden;
-                text-overflow: ellipsis;
-              }
-              .no-print-bar {
-                margin-bottom: 24px;
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                background-color: #f1f5f9;
-                padding: 12px 18px;
-                border-radius: 12px;
-                border: 1px solid #cbd5e1;
-              }
-              .print-btn {
-                padding: 9px 22px;
-                background-color: #0f172a;
-                color: #ffffff;
-                border: none;
-                border-radius: 10px;
-                font-weight: 700;
-                font-size: 13px;
-                cursor: pointer;
-                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-                font-family: inherit;
-              }
-              .print-btn:hover {
-                background-color: #334155;
-              }
-              @media print {
-                body {
-                  padding: 0;
-                  background: none;
-                }
-                .no-print-bar {
-                  display: none !important;
-                }
-                .contract-container {
-                  max-width: 100%;
-                }
-              }
-            </style>
-          </head>
-          <body>
-            <div class="no-print-bar">
-              <div style="font-weight: 700; color: #1e293b; font-size: 14px;">
-                📄 หนังสือสัญญาเช่าเลขที่: ${contract.contractNumber} (ห้อง ${roomNum})
-              </div>
-              <button class="print-btn" onclick="window.print()">
-                🖨️ พิมพ์เอกสารสัญญา
-              </button>
-            </div>
-
-            <div class="contract-container">
-              <div class="header-box">
-                <h1 class="title">หนังสือสัญญาเช่าที่พักอาศัย</h1>
-                <div class="contract-no">สัญญาเลขที่: ${contract.contractNumber} &bull; อาคารหอพัก ${dormName}</div>
-              </div>
-
-              <div class="content-section">
-                <p>
-                  สัญญาฉบับนี้ทำขึ้น ณ <strong>อาคารหอพัก ${dormName}</strong> ตั้งอยู่เลขที่ ${dormAddress} เมื่อวันที่ <strong>${formatThaiDate(createdDate)}</strong> ระหว่าง
-                  <strong>นิติบุคคล ${dormName} (ผู้ให้เช่า)</strong> โดย <strong>${dormOwner}</strong> ฝ่ายหนึ่ง กับ
-                  <strong>คุณ${tenantName}</strong> (เลขประจำตัวประชาชน: <strong>${tenantCitizenId}</strong>, เบอร์โทรศัพท์: <strong>${tenantPhone}</strong>) ซึ่งต่อไปนี้ในสัญญาจะเรียกว่า "ผู้เช่า" อีกฝ่ายหนึ่ง
-                </p>
-                <p>
-                  ทั้งสองฝ่ายตกลงยินยอมทำสัญญาเช่าห้องพัก โดยมีข้อกำหนดและเงื่อนไขตามรายละเอียดดังต่อไปนี้:
-                </p>
-              </div>
-
-              <div class="highlight-box">
-                <ul>
-                  <li><strong>ห้องพักที่ตกลงเช่า:</strong> ผู้เช่าตกลงเช่าห้องพักหมายเลข <strong>ห้อง ${roomNum}${roomFloor}</strong> ของอาคาร ${dormName}</li>
-                  <li><strong>ระยะเวลาสัญญาเช่า:</strong> กำหนดเวลาเช่าอาศัย <strong>${contract.durationMonths} เดือน</strong> เริ่มต้นตั้งแต่วันที่ <strong>${formatThaiDate(contract.startDate)}</strong> ถึงวันที่ <strong>${formatThaiDate(contract.endDate)}</strong></li>
-                  <li><strong>อัตราค่าบริการเช่าห้องพัก:</strong> ${isTermContract ? 'อัตราเทอมละ' : 'อัตราเดือนละ'} <strong>${formatBaht(contract.rentAmount)}</strong> โดยผู้เช่าตกลงชำระค่าเช่าตามกำหนด</li>
-                  <li><strong>เงินประกันความเสียหายแรกเข้า:</strong> ผู้เช่าได้วางเงินประกันความเสียหายไว้จำนวน <strong>${formatBaht(contract.depositAmount)}</strong> (${contract.depositType === 'deduct_rent' ? 'นำไปหักชำระกับค่าเช่างวดสุดท้าย' : 'คืนให้เต็มจำนวนเมื่อสิ้นสุดสัญญาโดยไม่มีสิ่งของชำรุดเสียหาย'})</li>
-                  ${Number(contract.advancePaymentAmount) > 0 ? `<li><strong>เงินชำระล่วงหน้า:</strong> ชำระค่าเช่าล่วงหน้าจำนวน <strong>${formatBaht(contract.advancePaymentAmount)}</strong></li>` : ''}
-                </ul>
-              </div>
-
-              <div class="content-section">
-                <strong>ข้อตกลงและระเบียบการอยู่อาศัย:</strong>
-                <div class="terms-box">${contract.terms || '1. ผู้เช่าตกลงชำระค่าเช่าและค่าสาธารณูปโภคตามกำหนดเวลา\n2. รักษาความสงบเรียบร้อยและไม่สร้างความเดือดร้อนรำคาญแก่ผู้อื่น\n3. ปฏิบัติตามระเบียบข้อบังคับของหอพักอย่างเคร่งครัด'}</div>
-              </div>
-
-              <div class="content-section" style="margin-top: 14px;">
-                <p>
-                  สัญญานี้ทำขึ้นเป็นสองฉบับมีข้อความถูกต้องตรงกัน คู่สัญญาทั้งสองฝ่ายได้อ่านและเข้าใจข้อความโดยละเอียดแล้ว จึงได้ลงลายมือชื่อไว้เป็นหลักฐานสำคัญต่อหน้าพยาน
-                </p>
-              </div>
-
-              <div class="signatures-grid">
-                <div class="signature-block">
-                  <div class="signature-label">ลงชื่อ ผู้เช่าห้องพัก</div>
-                  <div class="signature-space">${tenantSig}</div>
-                  <div class="signer-name">(คุณ${tenantName})</div>
-                </div>
-
-                <div class="signature-block">
-                  <div class="signature-label">ลงชื่อ นิติหอพัก / ผู้ให้เช่า</div>
-                  <div class="signature-space">${ownerSig}</div>
-                  <div class="signer-name">${resolvedLandlord ? `(${resolvedLandlord})` : ''}</div>
-                </div>
-              </div>
-            </div>
-
-            <script>
-              window.onload = function() {
-                setTimeout(function() {
-                  window.print();
-                }, 400);
-              };
-            </script>
-          </body>
-          </html>
-        `);
-        printWindow.document.close();
-        return;
-      }
+      const win = openTenantContractPrintWindow(
+        contract,
+        conTenant,
+        conRoom,
+        {
+          ...dorm,
+          paymentSettings,
+          billingSettings: paymentSettings,
+          bankAccountName: paymentSettings?.bankAccountName,
+          promptPayAccountName: paymentSettings?.promptPayAccountName,
+          ownerSignature: (contract as any).ownerSignature || (dorm as any).ownerSignature,
+        },
+        { autoPrint: true }
+      );
+      if (win) return;
     } catch (err) {
       console.error('Error opening print window:', err);
     }
@@ -3405,6 +3158,16 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
       (t.status as any) === 'completed'
     ) return 'inactive';
 
+    // Pending applicants must always appear in pending tab for owner approval
+    if (
+      t.status === 'pending' ||
+      (t.status as any) === 'pending_owner_approval' ||
+      (t.status as any) === 'revision_requested' ||
+      (t as any).lifecycleStage === 'WAITING_OWNER_APPROVAL'
+    ) {
+      return 'pending';
+    }
+
     // Daily tenant stay check: if stay has ended or checked out, it is inactive regardless of billing cycle
     const isDaily = t.rentalType === 'DAILY' || (t as any).rentalPlan === 'daily';
     if (isDaily) {
@@ -3422,10 +3185,6 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
     // Quick Add tenants start with OWNER_CREATED or WAITING_LINE_BIND and must be in active
     if (t.lifecycleStage === 'OWNER_CREATED' || t.lifecycleStage === 'WAITING_LINE_BIND') {
       return 'active';
-    }
-
-    if (t.status === 'pending' || (t.status as any) === 'revision_requested' || (t as any).lifecycleStage === 'WAITING_OWNER_APPROVAL') {
-      return 'pending';
     }
 
     if (t.status === 'active') {
@@ -3644,7 +3403,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 sm:gap-2 bg-slate-50/80 p-1.5 rounded-2xl border border-slate-100 w-full sm:w-auto flex-1 max-w-xl">
             <button
               type="button"
-              onClick={() => { setActiveStatusTab('pending'); setSelectedTenant(null); setSelectedContractForReview(null); setProfileTab('contract'); setOriginTab(null); setCameFromMeters(false); }}
+              onClick={() => { setActiveStatusTab('pending'); setSelectedTenant(null); setSelectedContractForReview(null); setProfileTab('contract'); setOriginTab(null); setCameFromMeters(false); if (onDismissReturnContext) onDismissReturnContext(); }}
               className={`col-span-2 sm:col-span-1 px-2.5 sm:px-3 py-2 sm:py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 w-full text-center ${activeStatusTab === 'pending'
                 ? 'bg-white text-indigo-600 shadow-2xs font-extrabold'
                 : 'text-slate-500 hover:text-slate-800'
@@ -3655,7 +3414,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
             </button>
             <button
               type="button"
-              onClick={() => { setActiveStatusTab('active'); setSelectedTenant(null); setSelectedContractForReview(null); setOriginTab(null); setCameFromMeters(false); }}
+              onClick={() => { setActiveStatusTab('active'); setSelectedTenant(null); setSelectedContractForReview(null); setOriginTab(null); setCameFromMeters(false); if (onDismissReturnContext) onDismissReturnContext(); }}
               className={`col-span-1 px-2.5 sm:px-3 py-2 sm:py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 w-full text-center ${activeStatusTab === 'active'
                 ? 'bg-white text-indigo-600 shadow-2xs font-extrabold'
                 : 'text-slate-500 hover:text-slate-800'
@@ -3666,7 +3425,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
             </button>
             <button
               type="button"
-              onClick={() => { setActiveStatusTab('inactive'); setSelectedTenant(null); setSelectedContractForReview(null); setOriginTab(null); setCameFromMeters(false); }}
+              onClick={() => { setActiveStatusTab('inactive'); setSelectedTenant(null); setSelectedContractForReview(null); setOriginTab(null); setCameFromMeters(false); if (onDismissReturnContext) onDismissReturnContext(); }}
               className={`col-span-1 px-2.5 sm:px-3 py-2 sm:py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 w-full text-center ${activeStatusTab === 'inactive'
                 ? 'bg-white text-indigo-600 shadow-2xs font-extrabold'
                 : 'text-slate-500 hover:text-slate-800'
@@ -3741,6 +3500,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                     setProfileTab(isDailyTenant(tenant, contracts) ? 'info' : 'contract');
                     setOriginTab(null);
                     setCameFromMeters(false);
+                    if (onDismissReturnContext) onDismissReturnContext();
                   }}
                   className={`p-3.5 rounded-2xl cursor-pointer transition-all mb-2 border ${isSelected ? 'bg-amber-50/70 border-amber-200 shadow-2xs' : 'bg-white hover:bg-slate-50/90 border-slate-200/80 shadow-3xs'
                     }`}
@@ -3879,6 +3639,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                     setProfileTab('info');
                     setOriginTab(null);
                     setCameFromMeters(false);
+                    if (onDismissReturnContext) onDismissReturnContext();
                   }}
                   className={`p-3.5 rounded-2xl cursor-pointer transition-all mb-1.5 ${isSelected ? 'bg-indigo-50/70 border border-indigo-150/40 shadow-2xs' : 'hover:bg-slate-50 border border-transparent'
                     }`}
@@ -3962,11 +3723,41 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
             <div className="bg-white p-4 sm:p-6 rounded-3xl border border-gray-100 shadow-xs h-[700px] flex flex-col justify-between w-full min-w-0 overflow-hidden">
               <div>
                 {/* Context-Aware Back Button */}
-                {returnContext?.source === 'rooms' ? (
+                {(returnContext?.source === 'dashboard' || returnContext?.source === 'home') ? (
+                  <div className="flex items-center justify-between gap-2 mb-4 pb-2.5 border-b border-gray-100">
+                    <button
+                      type="button"
+                      data-testid="back-to-dashboard-btn"
+                      onClick={() => {
+                        if (returnContext && onReturnToSource) {
+                          onReturnToSource(returnContext);
+                        } else {
+                          setSelectedTenant(null);
+                        }
+                      }}
+                      className="inline-flex items-center gap-2 text-indigo-700 hover:text-indigo-900 bg-indigo-50 hover:bg-indigo-100/90 px-3.5 py-1.5 rounded-xl font-extrabold text-xs transition-all border border-indigo-200/80 cursor-pointer shadow-3xs group w-fit active:scale-95"
+                    >
+                      <ArrowLeft className="w-4 h-4 text-indigo-600 group-hover:-translate-x-0.5 transition-transform" />
+                      <span>กลับไปยังหน้าหลัก</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (onDismissReturnContext) onDismissReturnContext();
+                        setSelectedTenant(null);
+                      }}
+                      className="md:hidden inline-flex items-center gap-1 text-slate-500 hover:text-slate-700 text-xs font-bold px-2 py-1"
+                    >
+                      <span>ดูรายชื่อผู้เช่า</span>
+                    </button>
+                  </div>
+                ) : returnContext?.source === 'rooms' || originTab === 'rooms' ? (
                   <div className="flex items-center justify-between gap-2 mb-4 pb-2.5 border-b border-gray-100">
                     <div className="flex items-center gap-1.5 sm:gap-2.5 min-w-0 font-sans">
                       <button
                         type="button"
+                        aria-label={`กลับไปยังผังห้องพัก (ห้อง ${getRoomNumber(selectedTenant.id)})`}
                         onClick={() => {
                           const targetRoom = rooms.find(r => r.currentTenantId === selectedTenant.id || r.id === (selectedTenant as any).roomId);
                           setSelectedTenant(null);
@@ -3979,7 +3770,8 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                         className="inline-flex items-center gap-1 px-2 sm:px-2.5 py-1.5 -ml-2 rounded-xl text-slate-700 hover:text-indigo-600 hover:bg-slate-100 active:bg-slate-200 transition-colors cursor-pointer font-extrabold text-xs sm:text-sm shrink-0 group"
                         title="ย้อนกลับ"
                       >
-                        <span>กลับ</span>
+                        <span className="sr-only">กลับไปยังผังห้องพัก (ห้อง {getRoomNumber(selectedTenant.id)})</span>
+                        <span aria-hidden="true">กลับ</span>
                       </button>
 
                       <ChevronLeft className="w-4 h-4 text-slate-400 shrink-0 stroke-[2.5]" />
@@ -4395,13 +4187,13 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                               {allVehicles.length > 1 && (
                                 <div className="text-[10px] font-bold text-emerald-800 flex items-center gap-1.5">
                                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-                                  คันที่ {vIdx + 1}: {veh.type === 'car' ? 'รถยนต์' : 'จักรยานยนต์'}
+                                  คันที่ {vIdx + 1}: {veh.type === 'car' ? 'รถยนต์' : veh.type === 'bicycle' ? 'รถจักรยาน' : 'จักรยานยนต์'}
                                 </div>
                               )}
                               <div className="space-y-1">
                                 <div className="flex items-center justify-between">
                                   <span className="text-gray-400 text-[10px]">ประเภท:</span>
-                                  <span className="font-bold text-slate-700">{veh.type === 'car' ? 'รถยนต์' : 'จักรยานยนต์'}</span>
+                                  <span className="font-bold text-slate-700">{veh.type === 'car' ? 'รถยนต์' : veh.type === 'bicycle' ? 'รถจักรยาน' : 'จักรยานยนต์'}</span>
                                 </div>
                                 <div className="flex items-center justify-between">
                                   <span className="text-gray-400 text-[10px]">ทะเบียน:</span>
@@ -5643,8 +5435,20 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                     <option value="none">ไม่มีพาหนะ</option>
                     <option value="motorcycle">รถจักรยานยนต์</option>
                     <option value="car">รถยนต์ส่วนบุคคล</option>
+                    <option value="bicycle">รถจักรยาน</option>
                   </select>
-                  {vehicleType !== 'none' && (
+                  {vehicleType === 'bicycle' && (
+                    <div className="flex flex-col gap-2 pt-1 animate-in slide-in-from-top-1">
+                      <input
+                        type="text"
+                        placeholder="ยี่ห้อ / สี / จุดสังเกตของจักรยาน"
+                        value={vehicleBrand}
+                        onChange={(e) => setVehicleBrand(e.target.value)}
+                        className="px-2 py-1 border border-gray-200 rounded-lg text-xs bg-white text-slate-800"
+                      />
+                    </div>
+                  )}
+                  {vehicleType !== 'none' && vehicleType !== 'bicycle' && (
                     <div className="flex flex-col gap-2 pt-1 animate-in slide-in-from-top-1">
                       <input
                         type="text"
@@ -6507,11 +6311,23 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                           onChange={(e) => handleVehicleChange(idx, 'type', e.target.value)}
                           className="w-full px-2 py-1.5 border border-gray-200 rounded-lg text-xs bg-white text-slate-700 font-bold"
                         >
-                          <option value="none">ไม่มีพาหนะ</option>
+                          {idx === 0 && <option value="none">ไม่มีพาหนะ</option>}
                           <option value="motorcycle">รถจักรยานยนต์</option>
                           <option value="car">รถยนต์ส่วนบุคคล</option>
+                          <option value="bicycle">รถจักรยาน</option>
                         </select>
-                        {vehItem.type !== 'none' && (
+                        {vehItem.type === 'bicycle' && (
+                          <div className="animate-in slide-in-from-top-1">
+                            <input
+                              type="text"
+                              placeholder="ยี่ห้อ / สี / จุดสังเกตของจักรยาน"
+                              value={vehItem.brand || ''}
+                              onChange={(e) => handleVehicleChange(idx, 'brand', e.target.value)}
+                              className="w-full px-2 py-1.5 border border-gray-200 rounded-lg text-xs bg-white text-slate-800"
+                            />
+                          </div>
+                        )}
+                        {vehItem.type !== 'none' && vehItem.type !== 'bicycle' && (
                           <div className="grid grid-cols-2 gap-2 animate-in slide-in-from-top-1">
                             <input
                               type="text"
@@ -7220,12 +7036,25 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
               <button
                 type="button"
                 onClick={() => setIsApproveOpen(false)}
-                className="px-4 py-2 border border-slate-200 bg-white hover:bg-slate-100 text-slate-600 rounded-xl text-xs font-bold transition-all cursor-pointer"
+                className="px-4 py-2 border border-slate-200 bg-white hover:bg-slate-100 text-slate-600 rounded-xl text-xs font-bold transition-all cursor-pointer shadow-3xs"
               >
                 ยกเลิก
               </button>
               <button
                 type="button"
+                data-testid="reject-from-approve-btn"
+                onClick={() => {
+                  setIsApproveOpen(false);
+                  setIsRejectOpen(true);
+                }}
+                className="px-4 py-2 border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shadow-3xs"
+              >
+                <XCircle className="w-4 h-4 text-rose-500" />
+                <span>ปฏิเสธคำขอ</span>
+              </button>
+              <button
+                type="button"
+                data-testid="confirm-approve-tenant-btn"
                 onClick={handleConfirmApprove}
                 disabled={!approveRoomId}
                 className={`px-5 py-2 font-bold text-xs rounded-xl flex items-center gap-1.5 shadow-sm transition-all ${approveRoomId
@@ -7234,7 +7063,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                   }`}
               >
                 <CheckCircle2 className="w-4 h-4" />
-                <span>ยืนยันรับเข้าพัก</span>
+                <span>ยืนยันอนุมัติและรับผู้เช่าเข้าพัก</span>
               </button>
             </div>
           </div>
@@ -7374,72 +7203,24 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
         </Modal>
       )}
 
-      {/* Reject Tenant Modal */}
+      {/* Reject Tenant Modal / Responsive Bottom Sheet */}
       {selectedTenant && (
-        <Modal
+        <TenantRejectSheet
           isOpen={isRejectOpen}
-          onClose={() => setIsRejectOpen(false)}
-          title="ยืนยันการปฏิเสธคำขอเช่า"
-          size="sm"
-        >
-          <div className="space-y-4">
-            <div className="p-3.5 bg-rose-50/80 border border-rose-200/80 rounded-2xl flex items-center gap-3">
-              <div className="w-10 h-10 rounded-full bg-rose-100 text-rose-700 flex items-center justify-center font-bold text-base shrink-0">
-                <XCircle className="w-5 h-5 text-rose-600" />
-              </div>
-              <div>
-                <h4 className="text-xs font-bold text-rose-950">ปฏิเสธคำขอคุณ {selectedTenant.name}</h4>
-                <p className="text-[11px] text-rose-700 mt-0.5">
-                  เบอร์โทร: {formatPhone(selectedTenant.phone)}
-                </p>
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">
-                เหตุผลในการปฏิเสธคำขอ
-              </label>
-              <select
-                value={rejectReason}
-                onChange={(e) => setRejectReason(e.target.value)}
-                className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold mb-2"
-              >
-                <option value="ข้อมูลเอกสารไม่ครบถ้วน">ข้อมูลเอกสารไม่ครบถ้วน</option>
-                <option value="ห้องพักประเภทที่ต้องการเต็มแล้ว">ห้องพักประเภทที่ต้องการเต็มแล้ว</option>
-                <option value="ไม่ผ่านเกณฑ์การพิจารณาเบื้องต้น">ไม่ผ่านเกณฑ์การพิจารณาเบื้องต้น</option>
-                <option value="ผู้เช่ายกเลิกความประสงค์">ผู้เช่ายกเลิกความประสงค์</option>
-                <option value="อื่นๆ">อื่นๆ</option>
-              </select>
-
-              {rejectReason === 'อื่นๆ' && (
-                <input
-                  type="text"
-                  placeholder="ระบุเหตุผลเพิ่มเติม..."
-                  onChange={(e) => setRejectReason(e.target.value)}
-                  className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-medium"
-                />
-              )}
-            </div>
-
-            <div className="p-5 -mx-6 -mb-6 bg-slate-50 border-t border-slate-100 flex justify-end gap-2 rounded-b-3xl mt-4">
-              <button
-                type="button"
-                onClick={() => setIsRejectOpen(false)}
-                className="px-4 py-2 border border-slate-200 bg-white hover:bg-slate-100 text-slate-600 rounded-xl text-xs font-bold transition-all cursor-pointer"
-              >
-                ยกเลิก
-              </button>
-              <button
-                type="button"
-                onClick={handleConfirmReject}
-                className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-xl flex items-center gap-1.5 shadow-sm transition-all cursor-pointer"
-              >
-                <XCircle className="w-4 h-4" />
-                <span>ยืนยันปฏิเสธ</span>
-              </button>
-            </div>
-          </div>
-        </Modal>
+          onClose={() => {
+            setIsRejectOpen(false);
+            setIsApproveOpen(true);
+          }}
+          tenant={{
+            name: selectedTenant.name,
+            phone: selectedTenant.phone,
+            roomNumber: rooms.find(r => r.id === approveRoomId)?.roomNumber || selectedTenant.roomNumber,
+          }}
+          onConfirm={async (reason) => {
+            setRejectReason(reason);
+            await handleConfirmReject(reason);
+          }}
+        />
       )}
 
       {/* Modal: Print Contract Preview */}
@@ -8064,7 +7845,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
             <div className="space-y-2">
               <div className="flex items-center gap-1.5 text-slate-700 font-bold text-[11px]">
                 <AlertCircle className="w-3.5 h-3.5 text-amber-500 shrink-0" />
-                <span>ระเบียบการแจ้งผู้พักร่วม (คิดอัตรา บาท/คน)</span>
+                <span>ู้พักร่วม (คิดอัตรา บาท/คน)</span>
               </div>
 
               <div className="space-y-1.5">

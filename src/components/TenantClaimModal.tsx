@@ -5,8 +5,8 @@
  * Privacy-masked candidate discovery & single-input tenant self-claim modal.
  */
 
-import React, { useState, useEffect } from 'react';
-import { X, ShieldCheck, UserCheck, Phone, AlertCircle, Loader2, CheckCircle2 } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { ShieldCheck, UserCheck, Phone, AlertCircle, Loader2, CheckCircle2 } from 'lucide-react';
 import { httpRequest } from '../data/httpClient';
 
 interface TenantClaimModalProps {
@@ -35,6 +35,62 @@ export const TenantClaimModal: React.FC<TenantClaimModalProps> = ({
   const [claimInput, setClaimInput] = useState(initialClaimInput || '');
   const [submitting, setSubmitting] = useState(false);
   const [errorText, setErrorText] = useState<string | null>(null);
+
+  // Drag-to-dismiss gesture state
+  const [startY, setStartY] = useState<number | null>(null);
+  const [currentTranslateY, setCurrentTranslateY] = useState<number>(0);
+  const isDraggingRef = useRef(false);
+  const startYRef = useRef<number | null>(null);
+
+  const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    try {
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    } catch {}
+    isDraggingRef.current = true;
+    startYRef.current = e.clientY;
+    setStartY(e.clientY);
+  };
+
+  const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!isDraggingRef.current || startYRef.current === null) return;
+    const deltaY = e.clientY - startYRef.current;
+    setCurrentTranslateY(deltaY > 0 ? deltaY : 0);
+  };
+
+  const handlePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!isDraggingRef.current) return;
+    isDraggingRef.current = false;
+    try {
+      (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+    } catch {}
+    if (currentTranslateY > 80) {
+      onClose();
+    }
+    setStartY(null);
+    setCurrentTranslateY(0);
+    startYRef.current = null;
+  };
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    setStartY(e.touches[0].clientY);
+    startYRef.current = e.touches[0].clientY;
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (startYRef.current === null) return;
+    const deltaY = e.touches[0].clientY - startYRef.current;
+    setCurrentTranslateY(deltaY > 0 ? deltaY : 0);
+  };
+
+  const handleTouchEnd = () => {
+    if (currentTranslateY > 80) {
+      onClose();
+    }
+    setStartY(null);
+    setCurrentTranslateY(0);
+    startYRef.current = null;
+  };
 
   // Fetch candidate discovery
   useEffect(() => {
@@ -96,11 +152,41 @@ export const TenantClaimModal: React.FC<TenantClaimModalProps> = ({
     }
   };
 
+  const backdropOpacity = Math.max(0, 1 - currentTranslateY / 320);
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200">
-      <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full overflow-hidden border border-slate-100 max-h-[90vh] flex flex-col">
-        {/* Header */}
-        <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-indigo-50/50">
+    <div
+      onClick={onClose}
+      className="fixed inset-0 z-50 flex items-end justify-center p-0 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200"
+      style={{ opacity: backdropOpacity }}
+    >
+      <div
+        data-testid="tenant-claim-bottom-sheet"
+        data-modal-container="true"
+        id="tenant-claim-modal-container"
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          transform: `translateY(${currentTranslateY}px)`,
+          transition: startY !== null || isDraggingRef.current ? 'none' : 'transform 0.22s cubic-bezier(0.16, 1, 0.3, 1)',
+        }}
+        className="bg-white rounded-t-[32px] rounded-b-none shadow-2xl max-w-md w-full mx-auto overflow-hidden border-t border-slate-100 max-h-[90vh] flex flex-col animate-in slide-in-from-bottom duration-300"
+      >
+        {/* Mobile Drag Handle Bar */}
+        <div
+          data-testid="bottom-sheet-grab-handle"
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
+          onTouchStart={handleTouchStart}
+          onTouchMove={handleTouchMove}
+          onTouchEnd={handleTouchEnd}
+          className="pt-3.5 pb-2 flex justify-center bg-indigo-50/50 cursor-grab active:cursor-grabbing touch-none select-none"
+        >
+          <div className="w-12 h-1.5 bg-slate-300 rounded-full" />
+        </div>
+
+        {/* Header (No 'X' button, matches other bottom sheets) */}
+        <div className="px-5 py-3.5 border-b border-slate-100 flex items-center justify-between bg-indigo-50/50">
           <div>
             <h2 className="text-base font-extrabold text-slate-800 flex items-center gap-2">
               <ShieldCheck className="w-5 h-5 text-indigo-600" />
@@ -110,13 +196,6 @@ export const TenantClaimModal: React.FC<TenantClaimModalProps> = ({
               ยืนยันตัวตนเพื่อเชื่อมต่อบัญชีเข้ากับห้องพัก
             </p>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="p-2 rounded-xl text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-all cursor-pointer"
-          >
-            <X className="w-5 h-5" />
-          </button>
         </div>
 
         {/* Error notification */}

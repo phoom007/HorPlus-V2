@@ -272,19 +272,10 @@ describe('Direct Access Grant & Staff Workspace Suite (DAG-01 to DAG-07)', () =>
         />
       );
 
-      // Verify Disallowed menu buttons have disabled attribute, pointer-events-none, and opacity-40
+      // Verify Disallowed menu buttons are completely hidden from the DOM for staff
       const disallowedMenus = ['payments', 'rooms', 'tenants', 'announcements', 'reports', 'users', 'settings'];
       disallowedMenus.forEach((menuId) => {
-        const btn = screen.getByTestId(`dashboard-menu-${menuId}`) as HTMLButtonElement;
-        expect(btn).toBeDefined();
-        expect(btn.disabled).toBe(true);
-        expect(btn.className).toContain('opacity-40');
-        expect(btn.className).toContain('cursor-not-allowed');
-        expect(btn.className).toContain('pointer-events-none');
-
-        // Clicking disabled button must not call onNavigate
-        fireEvent.click(btn);
-        expect(navigateMock).not.toHaveBeenCalledWith(menuId);
+        expect(screen.queryByTestId(`dashboard-menu-${menuId}`)).toBeNull();
       });
 
       // Verify Permitted menu buttons remain active

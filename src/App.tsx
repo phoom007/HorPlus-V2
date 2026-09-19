@@ -136,7 +136,8 @@ export default function App() {
           <Route path="/onboarding/*" element={<Navigate to="/owner/register" replace />} />
 
           {/* Owner Workspace (Protected) */}
-          <Route path="/owner" element={<Navigate to="/owner/dashboard" replace />} />
+          <Route path="/owner" element={<Navigate to="/owner/home" replace />} />
+          <Route path="/owner/dashboard" element={<Navigate to="/owner/home" replace />} />
           <Route
             path="/owner/*"
             element={

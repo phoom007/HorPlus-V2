@@ -91,7 +91,7 @@ describe('TENANT PHASE 2 Step 3 — Registration Flow & Claim Implementation', (
       );
 
       expect(screen.getByText('ลงทะเบียนผู้เช่า')).toBeDefined();
-      expect(document.body.textContent).toContain('ขั้นตอน 1/7: เลือกห้อง');
+      expect(document.body.textContent).toContain('ขั้นตอน 1/5: ห้องพัก & วันเข้าพัก');
     });
 
     it('displays canonical status label "กรุณาตรวจสอบอีกครั้ง" when revision is requested (Option B)', () => {
@@ -218,6 +218,7 @@ describe('TENANT PHASE 2 Step 3 — Registration Flow & Claim Implementation', (
           lastName: 'ใจดี',
           phone: '0812347890',
           citizenId: '1-1002-00034-56-7',
+          birthDate: '1995-05-15',
           room: { id: 'room-102', roomNumber: '102' },
           lockedFinancials: {
             monthlyRent: 5000,
@@ -227,6 +228,11 @@ describe('TENANT PHASE 2 Step 3 — Registration Flow & Claim Implementation', (
             rentalType: 'monthly',
             depositStatus: 'paid',
             terms: 'เงื่อนไขมาตรฐาน',
+          },
+          emergencyContact: {
+            name: 'สมศรี ใจดี',
+            relationship: 'มารดา',
+            phone: '0898765432',
           },
         },
       });
@@ -263,6 +269,10 @@ describe('TENANT PHASE 2 Step 3 — Registration Flow & Claim Implementation', (
       await waitFor(() => {
         expect(screen.getByText(/ยืนยันตัวตนสำเร็จ/)).toBeDefined();
       });
+
+      // Fill in mandatory address
+      fireEvent.change(screen.getByTestId('tenant-address-input'), { target: { value: '123/45 ถนนสุขุมวิท กทม.' } });
+      fireEvent.change(screen.getByTestId('tenant-birthdate-input'), { target: { value: '1995-01-01' } });
 
       // Agree to legal terms
       fireEvent.click(screen.getByTestId('tenant-agree-terms-checkbox'));
@@ -325,6 +335,13 @@ describe('TENANT PHASE 2 Step 3 — Registration Flow & Claim Implementation', (
       fireEvent.change(screen.getByPlaceholderText('เช่น สมชาย ใจดี'), { target: { value: 'วิภาวี สุวรรณ' } });
       fireEvent.change(screen.getByPlaceholderText('081-234-5678'), { target: { value: '0891234567' } });
       fireEvent.change(screen.getByPlaceholderText('1-2345-67890-12-3'), { target: { value: '1100200345678' } });
+      fireEvent.change(screen.getByTestId('tenant-address-input'), { target: { value: '99/1 ถ.สุขุมวิท กทม.' } });
+      fireEvent.change(screen.getByTestId('tenant-birthdate-input'), { target: { value: '1995-01-01' } });
+
+      // Fill in mandatory emergency contact
+      fireEvent.change(screen.getByTestId('tenant-emergency-name-input'), { target: { value: 'สมศรี สุวรรณ' } });
+      fireEvent.change(screen.getByTestId('tenant-emergency-rel-input'), { target: { value: 'มารดา' } });
+      fireEvent.change(screen.getByTestId('tenant-emergency-phone-input'), { target: { value: '0898765432' } });
 
       // Agree to terms
       fireEvent.click(screen.getByTestId('tenant-agree-terms-checkbox'));
@@ -376,6 +393,13 @@ describe('TENANT PHASE 2 Step 3 — Registration Flow & Claim Implementation', (
           proposedRent: 4500,
           proposedDeposit: 5000,
           durationMonths: 12,
+          birthDate: '2000-01-01',
+          address: '99/1 ถ.สุขุมวิท กทม.',
+          emergencyContact: {
+            name: 'สมศรี มั่นคง',
+            relationship: 'มารดา',
+            phone: '0812345678',
+          },
         },
       };
 
@@ -441,18 +465,16 @@ describe('TENANT PHASE 2 Step 3 — Registration Flow & Claim Implementation', (
           rooms={mockRooms}
           policy={mockPolicy}
           dormitoryId="dorm-001"
+          initialRentPlan="daily"
+          initialStep={1}
         />
       );
 
-      // Select Daily rental plan in Step 3
-      const dailyPlanBtn = screen.getByRole('button', { name: 'รายวัน' });
-      fireEvent.click(dailyPlanBtn);
-
       // Check daily banner appears
-      expect(screen.getByText(/การเข้าพักรายวัน ไม่ต้องทำสัญญาเช่าระยะยาว/)).toBeDefined();
+      expect(screen.getAllByText(/การเข้าพักรายวัน/).length).toBeGreaterThan(0);
 
-      // Check submit button changes to daily text
-      expect(screen.getByRole('button', { name: /ยืนยันคำขอเข้าพักรายวัน/ })).toBeDefined();
+      // Check button for daily flow
+      expect(screen.getByTestId('bottom-nav-next-btn')).toBeDefined();
     });
   });
 

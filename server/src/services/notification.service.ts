@@ -150,16 +150,27 @@ export class NotificationService {
       case 'MAINTENANCE_STATUS_UPDATED':
         if (params.status === 'assigned') {
           return `รับเรื่องแจ้งซ่อมแล้ว ขณะนี้เจ้าหน้าที่กำลังเตรียมดำเนินการ [ เปิดดูสถานะ ]`;
-        } else if (params.status === 'in_progress') {
+        } else if (params.status === 'in_progress' || params.status === 'inprogress') {
           return `กำลังดำเนินการแจ้งซ่อม [ เปิดดูสถานะ ]`;
         } else if (params.status === 'waiting_parts') {
           return `งานแจ้งซ่อมกำลังรออุปกรณ์หรืออะไหล่ [ เปิดดูสถานะ ]`;
-        } else if (params.status === 'resolved') {
+        } else if (params.status === 'resolved' || params.status === 'completed') {
           return `ดำเนินการแจ้งซ่อมเรียบร้อยแล้ว กรุณาตรวจสอบผลการดำเนินงาน [ เปิดดูงาน ]`;
         } else if (params.status === 'closed') {
           return `งานแจ้งซ่อมถูกปิดเรียบร้อยแล้ว [ เปิดดูประวัติ ]`;
         }
-        return `อัปเดตสถานะการแจ้งซ่อม #${params.requestNumber || ''}: ${params.statusLabel || params.status}`;
+        const statusMap: Record<string, string> = {
+          pending: 'รอดำเนินการ',
+          in_progress: 'กำลังซ่อมแซม',
+          inprogress: 'กำลังซ่อมแซม',
+          waiting_parts: 'รออะไหล่',
+          resolved: 'ดำเนินการเสร็จสิ้น',
+          completed: 'ดำเนินการเสร็จสิ้น',
+          closed: 'ปิดงาน',
+          cancelled: 'ยกเลิก',
+        };
+        const stLabel = params.statusLabel || (params.status ? statusMap[params.status] || params.status : 'อัปเดตแล้ว');
+        return `อัปเดตสถานะการแจ้งซ่อม: ${stLabel}`;
       case 'ANNOUNCEMENT_PUBLISHED':
         return `📢 ประกาศใหม่จากหอพัก: ${params.title || ''}\n${params.summary || params.content || ''}`;
       default:

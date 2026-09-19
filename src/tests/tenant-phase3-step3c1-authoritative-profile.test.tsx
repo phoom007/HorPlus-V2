@@ -2603,7 +2603,7 @@ describe('TENANT PHASE 3 STEP 3C.1B: Visible-Field Mutation Scope & Authoritativ
 
       // resolveAllowedPetOptions on fail-closed policy returns empty
       expect(resolveAllowedPetOptions(policy)).toEqual([]);
-      localStorage.removeItem('registered_dorm_profile');
+      try { localStorage.removeItem('registered_dorm_profile'); } catch { }
     });
 
     // 17. REQUIRED TESTS — DEPOSIT

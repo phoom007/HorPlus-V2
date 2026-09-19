@@ -308,9 +308,17 @@ export class SignatureStorageService {
   async getLatestSignatureRecord(dormitoryId: string) {
     return await this.prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
-      return await tx.ownerSignature.findFirst({
+      let sig = await tx.ownerSignature.findFirst({
         where: { dormitoryId, isCurrent: true },
+        orderBy: { createdAt: 'desc' },
       });
+      if (!sig) {
+        sig = await tx.ownerSignature.findFirst({
+          where: { dormitoryId },
+          orderBy: { createdAt: 'desc' },
+        });
+      }
+      return sig;
     });
   }
 

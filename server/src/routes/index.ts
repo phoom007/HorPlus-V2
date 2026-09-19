@@ -97,7 +97,9 @@ export function createApiRouter(deps: AppApiDependencies | AuthenticationService
 
   router.use('/auth', createAuthRouter(authService));
   router.use('/subscription', createSubscriptionRouter(authService));
+  router.use('/subscriptions', createSubscriptionRouter(authService));
   router.use('/subscription', createSubscriptionQuoteRouter(authService));
+  router.use('/subscriptions', createSubscriptionQuoteRouter(authService));
   router.use('/referral', createReferralRouter(authService));
   router.use('/billboard', createBillboardRouter());
   router.use('/', createUserRouter(authService));
@@ -182,6 +184,7 @@ export function createApiRouter(deps: AppApiDependencies | AuthenticationService
     }
 
     protectedRouter.use('/move-out', moveOutRouter);
+    protectedRouter.use('/', moveOutRouter);
     protectedRouter.use('/contract-renewals', createContractRenewalRouter(fullDeps.authService));
     protectedRouter.use('/settlements', createSettlementRouter(fullDeps.authService));
     const maintenanceRouter = createMaintenanceRouter();
@@ -197,7 +200,7 @@ export function createApiRouter(deps: AppApiDependencies | AuthenticationService
     router.use('/', protectedRouter);
     router.use('/', staffRoutes.protectedRouter);
     router.use('/', lineOaRoutes.protectedRouter);
-    router.use('/tenant-portal', createTenantPortalRouter(fullDeps.authService));
+    router.use('/tenant-portal', createTenantPortalRouter(fullDeps.authService, fullDeps.sensitiveFieldService));
     router.use('/tenant-notifications', createTenantNotificationRouter(undefined, fullDeps.authService));
   }
 

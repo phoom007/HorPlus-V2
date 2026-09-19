@@ -26,6 +26,7 @@ export interface CreateMaintenanceInput {
   preferredTimeRange?: string;
   submittedByTenantId?: string;
   createdByUserId?: string;
+  imageBefore?: string;
 }
 
 export interface AssignMaintenanceInput {
@@ -123,6 +124,7 @@ export class MaintenanceService {
       preferredDate: input.preferredDate,
       preferredTimeRange: input.preferredTimeRange,
       submittedByTenantId: input.tenantId,
+      imageBefore: input.imageBefore,
       status: 'submitted'
     });
 
@@ -375,12 +377,31 @@ export class MaintenanceService {
       actorUserId: input.actorUserId,
       actorTenantId: input.actorTenantId,
       statusSnapshot: input.status,
-      message: input.note || `อัปเดตสถานะเป็น ${input.status}`,
+      message: input.note || `อัปเดตสถานะเป็น ${
+        input.status === 'in_progress' || (input.status as string) === 'inprogress' ? 'กำลังซ่อมแซม'
+        : input.status === 'waiting_parts' ? 'รออะไหล่'
+        : input.status === 'resolved' || (input.status as string) === 'completed' ? 'ดำเนินการเสร็จสิ้น'
+        : input.status === 'closed' ? 'ปิดงาน'
+        : input.status === 'cancelled' ? 'ยกเลิก'
+        : 'รอดำเนินการ'
+      }`,
       visibility: 'tenant_visible'
     });
 
     // Create In-App Notification for Tenant
     if (req.tenantId) {
+      const statusMapTh: Record<string, string> = {
+        pending: 'รอดำเนินการ',
+        in_progress: 'กำลังซ่อมแซม',
+        inprogress: 'กำลังซ่อมแซม',
+        waiting_parts: 'รออะไหล่',
+        resolved: 'ดำเนินการเสร็จสิ้น',
+        completed: 'ดำเนินการเสร็จสิ้น',
+        closed: 'ปิดงาน',
+        cancelled: 'ยกเลิก',
+        reopened: 'เปิดงานอีกครั้ง',
+      };
+      const translatedStatus = statusMapTh[input.status] || input.status;
       const room = req.roomId ? await this.roomRepo.findById(input.dormitoryId, req.roomId) : null;
       await this.notificationService.createInAppNotification({
         dormitoryId: input.dormitoryId,
@@ -388,7 +409,7 @@ export class MaintenanceService {
         targetTenantId: req.tenantId,
         category: 'MAINTENANCE_STATUS_UPDATED',
         title: 'อัปเดตสถานะการแจ้งซ่อม',
-        body: `รายการแจ้งซ่อม #${req.requestNumber} [${req.title}] เปลี่ยนสถานะเป็น ${input.status}`,
+        body: `รายการแจ้งซ่อม [${req.title}] เปลี่ยนสถานะเป็น ${translatedStatus}`,
         metadata: { requestId: req.id, requestNumber: req.requestNumber }
       });
     }

@@ -343,26 +343,30 @@ describe('TENANT PHASE 2 Step 4 — Registration Domain Correction & Specificati
           rooms={mockRoomsMatrix}
           policy={mockPolicy}
           dormitoryId="dorm-001"
+          initialRentPlan="daily"
+          initialStep={2}
         />
       );
 
       // Fill Tenant Info (Step 2)
       const nameInput = screen.getByPlaceholderText('เช่น สมชาย ใจดี');
       const phoneInput = screen.getByPlaceholderText('081-234-5678');
+      const citizenInput = screen.getByPlaceholderText('1-2345-67890-12-3');
+      const birthDateInput = screen.getByTestId('tenant-birthdate-input');
+      const addressInput = screen.getByTestId('tenant-address-input');
       fireEvent.change(nameInput, { target: { value: 'สมปอง ท่องเที่ยว' } });
       fireEvent.change(phoneInput, { target: { value: '0851122334' } });
+      fireEvent.change(citizenInput, { target: { value: '1100500112233' } });
+      fireEvent.change(birthDateInput, { target: { value: '1995-01-01' } });
+      fireEvent.change(addressInput, { target: { value: '99/1 ถ.สุขุมวิท กทม.' } });
 
-      // In Step 3, switch to 'รายวัน'
-      const dailyRentBtn = screen.getByText('รายวัน');
-      fireEvent.click(dailyRentBtn);
-
-      // 1. Navigation header adjusts to 3 steps
-      expect(document.body.textContent).toContain('/3:');
+      // 1. Navigation header adjusts to 2 steps
+      expect(document.body.textContent).toContain('/2:');
 
       // 2. Dedicated DailyStay card appears
       expect(screen.getByText(/การเข้าพักรายวัน \(DailyStay Workflow\)/)).toBeDefined();
       expect(screen.getByText('วันเริ่มเข้าพัก (Check-in) *')).toBeDefined();
-      expect(screen.getByText('วันสิ้นสุดการเข้าพัก (Check-out) *')).toBeDefined();
+      expect(screen.getByText('วันสิ้นสุดเข้าพัก (Check-out) *')).toBeDefined();
 
       // 3. Steps 4, 5, 6, 7 are NOT rendered
       expect(screen.queryByText('ผู้ติดต่อฉุกเฉิน & ผู้พักอาศัยร่วม')).toBeNull();
@@ -425,6 +429,13 @@ describe('TENANT PHASE 2 Step 4 — Registration Domain Correction & Specificati
       fireEvent.change(screen.getByPlaceholderText('เช่น สมชาย ใจดี'), { target: { value: 'สมศักดิ์ มั่นคง' } });
       fireEvent.change(screen.getByPlaceholderText('081-234-5678'), { target: { value: '0812345678' } });
       fireEvent.change(screen.getByPlaceholderText('1-2345-67890-12-3'), { target: { value: '1234567890123' } });
+      fireEvent.change(screen.getByTestId('tenant-address-input'), { target: { value: '123 ถนนสุขุมวิท กทม.' } });
+      fireEvent.change(screen.getByTestId('tenant-birthdate-input'), { target: { value: '1995-01-01' } });
+
+      // Fill emergency contact (mandatory in Step 4)
+      fireEvent.change(screen.getByTestId('tenant-emergency-name-input'), { target: { value: 'สมศรี มั่นคง' } });
+      fireEvent.change(screen.getByTestId('tenant-emergency-rel-input'), { target: { value: 'มารดา' } });
+      fireEvent.change(screen.getByTestId('tenant-emergency-phone-input'), { target: { value: '0898765432' } });
 
       // Draw signature & check terms
       const canvas = document.querySelector('canvas')!;

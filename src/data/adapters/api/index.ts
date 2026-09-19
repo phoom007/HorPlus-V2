@@ -616,6 +616,9 @@ export interface SubmitRegistrationPayload {
   proposedDeposit?: number | string;
   durationMonths?: number;
   startDate?: string;
+  endDate?: string;
+  dailyRateAmount?: number | string;
+  depositAmount?: number | string;
   citizenId?: string;
   birthDate?: string;
   address?: string;
@@ -623,7 +626,12 @@ export interface SubmitRegistrationPayload {
   emergencyContact?: { name: string; relationship: string; phone: string };
   coOccupants?: Array<{ name: string; phone?: string; citizenId?: string }>;
   vehicle?: { type: string; licensePlate: string; brand?: string };
+  vehicles?: Array<{ type: string; licensePlate: string; brand?: string }>;
   pet?: { hasPet: boolean; type?: string; name?: string; count?: number };
+  pets?: any[];
+  depositSlipImageUrl?: string;
+  depositDeclaredStatus?: string;
+  terms?: string;
 }
 
 export async function submitTenantRegistrationRequest(payload: SubmitRegistrationPayload): Promise<DataResult<any>> {
@@ -675,6 +683,8 @@ export async function verifyTenantClaim(payload: {
   lastName: string;
   phone: string;
   citizenId?: string | null;
+  birthDate?: string;
+  address?: string;
   room: { id: string; roomNumber: string; floor?: number };
   lockedFinancials: {
     monthlyRent: number;
@@ -788,6 +798,7 @@ export async function submitDailyStayRequest(payload: {
   dailyRateAmount?: string;
   depositAmount?: string;
   depositDeclaredStatus?: 'PAID' | 'UNPAID';
+  depositSlipImageUrl?: string;
 }): Promise<DataResult<any>> {
   try {
     const res = await httpRequest<any>('POST', '/daily-stays/request', payload, {

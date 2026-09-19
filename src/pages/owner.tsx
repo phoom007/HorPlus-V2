@@ -205,6 +205,7 @@ export function getTargetQueriesForTab(targetTab: string, dormId: string, cycleI
   // Role-Aware Scoping for Staff (Tech / Maid)
   if (userRole === 'staff') {
     switch (targetTab) {
+      case 'home':
       case 'dashboard': {
         const queries: any[] = [
           { queryKey: queryKeys.rooms(dormId), queryFn: () => fetchAuthoritativeRooms(dormHeader), staleTime: STALE_TIMES.ROOMS },
@@ -268,6 +269,7 @@ export function getTargetQueriesForTab(targetTab: string, dormId: string, cycleI
   }
 
   switch (targetTab) {
+    case 'home':
     case 'dashboard': {
       const queries: any[] = [
         { queryKey: queryKeys.rooms(dormId), queryFn: () => fetchAuthoritativeRooms(dormHeader), staleTime: STALE_TIMES.ROOMS },
@@ -457,7 +459,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
 
   const pathSegment = isAddDormRegistrationMode
     ? 'dormitories/new'
-    : (onboardingRequired ? 'register' : (location.pathname.split('/')[2] || 'dashboard'));
+    : (onboardingRequired ? 'register' : (location.pathname.split('/')[2] || 'home'));
   const activeTab = isRegistrationMode
     ? (isAddDormRegistrationMode ? 'dormitories/new' : 'register')
     : pathSegment;
@@ -479,6 +481,12 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
       } catch { }
     }
   };
+
+  useEffect(() => {
+    if (location.pathname === '/owner/dashboard' || location.pathname === '/owner/dashboard/') {
+      navigate('/owner/home', { replace: true });
+    }
+  }, [location.pathname, navigate]);
 
   useEffect(() => {
     if (onboardingRequired && pathSegment !== 'register') {
@@ -506,7 +514,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
 
   const changeTab = (tabId: string, state?: Record<string, any>) => {
     setIsDetailViewOpen(false);
-    if (userRole === 'staff' && !['dashboard', 'meters', 'maintenance'].includes(tabId)) {
+    if (userRole === 'staff' && !['home', 'dashboard', 'meters', 'maintenance'].includes(tabId)) {
       return;
     }
     if (userRole === 'manager' && ['users', 'settings'].includes(tabId)) {
@@ -536,20 +544,21 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
 
   useEffect(() => {
     if (userRole === 'staff' && !isRegistrationMode) {
-      const allowedTabs = ['dashboard', 'meters', 'maintenance'];
+      const allowedTabs = ['home', 'dashboard', 'meters', 'maintenance'];
       if (!allowedTabs.includes(activeTab)) {
-        navigate('/owner/dashboard', { replace: true });
+        navigate('/owner/home', { replace: true });
       }
     } else if (userRole === 'manager' && !isRegistrationMode) {
-      const allowedTabs = ['dashboard', 'meters', 'payments', 'rooms', 'tenants', 'maintenance', 'announcements', 'reports', 'line-oa', 'subscription'];
+      const allowedTabs = ['home', 'dashboard', 'meters', 'payments', 'rooms', 'tenants', 'maintenance', 'announcements', 'reports', 'line-oa', 'subscription'];
       if (!allowedTabs.includes(activeTab)) {
-        navigate('/owner/dashboard', { replace: true });
+        navigate('/owner/home', { replace: true });
       }
     }
   }, [userRole, activeTab, isRegistrationMode, navigate]);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [initialRoomId, setInitialRoomId] = useState<string | undefined>(undefined);
   const [initialTenantId, setInitialTenantId] = useState<string | undefined>(undefined);
+  const [initialPaymentTab, setInitialPaymentTab] = useState<'paid' | 'checking' | 'cash' | 'rejected' | undefined>(undefined);
   const [initialContractId, setInitialContractId] = useState<string | undefined>(undefined);
   const [cameFromMetersContext, setCameFromMetersContext] = useState<{ roomId?: string; cycleId?: string } | null>(null);
   const [tenantReturnContext, setTenantReturnContext] = useState<TenantReturnContext | null>(null);
@@ -1069,7 +1078,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
   // Sidebar Menu Items with role boundaries
   const menuItems = [
     { id: 'register', label: 'ลงทะเบียน', icon: FileSpreadsheet, roles: ['owner', 'manager'] },
-    { id: 'dashboard', label: 'หน้าหลัก', icon: LayoutDashboard, roles: ['owner', 'manager', 'staff'] },
+    { id: 'home', label: 'หน้าหลัก', icon: LayoutDashboard, roles: ['owner', 'manager', 'staff'] },
     { id: 'meters', label: 'จดมิเตอร์', icon: Gauge, roles: ['owner', 'manager', 'staff'] },
     { id: 'payments', label: 'การชำระเงิน', icon: FileCheck2, roles: ['owner', 'manager'] },
     { id: 'rooms', label: 'ห้องพัก', icon: BuildingIcon, roles: ['owner', 'manager'] },
@@ -1141,10 +1150,14 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
     }
 
     switch (activeTab) {
+      case 'home':
       case 'dashboard':
         return (
           <OwnerDashboard
+            dormitoryId={activeDormitoryId}
+            dormitory={currentDormitory}
             rooms={rooms}
+            buildings={buildings}
             bills={bills}
             maintenance={repairs}
             contracts={contracts}
@@ -1156,8 +1169,20 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
             meterReadings={meterReadings}
             setSelectedCycle={(c: string) => setSelectedCycleCode(c)}
             onAddLog={handleAddLog}
-            onNavigate={(tab, param) => {
-              if (param) setInitialRoomId(param);
+            onNavigate={(tab, param, roomId, roomNumber) => {
+              if (tab === 'tenants' && param) {
+                setInitialTenantId(param);
+                setTenantReturnContext({
+                  source: 'home',
+                  tenantId: param,
+                  roomId,
+                  roomNumber,
+                });
+              } else if (tab === 'rooms' && param) {
+                setInitialRoomId(param);
+              } else if (tab === 'payments' && param) {
+                setInitialPaymentTab(param as any);
+              }
               changeTab(tab);
             }}
           />
@@ -1265,6 +1290,9 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
                   setCameFromMetersContext(null);
                   changeTab('meters');
                 });
+              } else if (ctx.source === 'home' || ctx.source === 'dashboard') {
+                setTenantReturnContext(null);
+                changeTab('home');
               }
             }}
             cameFromMeters={Boolean(cameFromMetersContext)}
@@ -1365,6 +1393,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
             onAddLog={handleAddLog}
             onUpdateBills={() => queryClient.invalidateQueries({ queryKey: queryKeys.bills(activeDormitoryId) })}
             onNavigateToLineConfig={() => setShowDirectLineOaModal(true)}
+            initialTab={initialPaymentTab}
           />
         );
 
@@ -1441,7 +1470,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
         return (
           <OwnerLineOaPage
             dormitoryId={activeDormitoryId}
-            onNavigateBack={() => changeTab('dashboard')}
+            onNavigateBack={() => changeTab('home')}
             onAddLog={handleAddLog}
           />
         );

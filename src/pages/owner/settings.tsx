@@ -2028,6 +2028,18 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                           const updated = { ...dorm, ownerSignature: undefined, updatedAt: new Date().toISOString() };
                           setDorm(updated);
                           setOwnerSignatureUrl(null);
+                          try {
+                            localStorage.setItem(`dormitory_${activeDormId}`, JSON.stringify(updated));
+                            localStorage.setItem('dormitory', JSON.stringify(updated));
+                            const regDorm = localStorage.getItem('registered_dorm_profile');
+                            if (regDorm) {
+                              const parsedReg = JSON.parse(regDorm);
+                              delete parsedReg.ownerSignature;
+                              delete parsedReg.signatureUrl;
+                              delete parsedReg.ownerSignatureUrl;
+                              localStorage.setItem('registered_dorm_profile', JSON.stringify(parsedReg));
+                            }
+                          } catch { }
                           triggerSaveNow(updated);
                           showToast('ลบลายเซ็นหอพักเรียบร้อยแล้ว');
                           if (onRefreshData) onRefreshData();
@@ -2049,6 +2061,18 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                       const updated = { ...dorm, ownerSignature: dataUrl, updatedAt: new Date().toISOString() };
                       setDorm(updated);
                       setOwnerSignatureUrl(dataUrl);
+                      try {
+                        localStorage.setItem(`dormitory_${activeDormId}`, JSON.stringify(updated));
+                        localStorage.setItem('dormitory', JSON.stringify(updated));
+                        const regDorm = localStorage.getItem('registered_dorm_profile');
+                        if (regDorm) {
+                          const parsedReg = JSON.parse(regDorm);
+                          parsedReg.ownerSignature = dataUrl;
+                          parsedReg.signatureUrl = dataUrl;
+                          parsedReg.ownerSignatureUrl = dataUrl;
+                          localStorage.setItem('registered_dorm_profile', JSON.stringify(parsedReg));
+                        }
+                      } catch { }
                       triggerSaveNow(updated);
                       showToast('บันทึกลายเซ็นเรียบร้อยแล้ว');
                       if (onRefreshData) onRefreshData();
@@ -2057,6 +2081,10 @@ export const OwnerSettings: React.FC<OwnerSettingsProps> = ({
                       setOwnerSignatureUrl(null);
                       const updated = { ...dorm, ownerSignature: undefined, updatedAt: new Date().toISOString() };
                       setDorm(updated);
+                      try {
+                        localStorage.setItem(`dormitory_${activeDormId}`, JSON.stringify(updated));
+                        localStorage.setItem('dormitory', JSON.stringify(updated));
+                      } catch { }
                       triggerSaveNow(updated);
                     }}
                   />

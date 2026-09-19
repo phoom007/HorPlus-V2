@@ -204,6 +204,11 @@ export class InMemoryMaintenanceRepository {
       preferredTimeRange: data.preferredTimeRange || null,
       submittedByTenantId: data.submittedByTenantId || null,
       createdByUserId: data.createdByUserId || null,
+      imageBefore: data.imageBefore || null,
+      imageAfter: data.imageAfter || null,
+      assignedStaff: data.assignedStaff || null,
+      note: data.note || null,
+      cost: data.cost ? Number(data.cost) : 0,
       version: 1,
       createdAt: now,
       updatedAt: now

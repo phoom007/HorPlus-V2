@@ -44,14 +44,32 @@ export class DocumentPdfService {
    */
   private async loadFonts(pdfDoc: PDFDocument) {
     pdfDoc.registerFontkit(fontkit);
+    const tahomaCandidates = [
+      path.join(process.cwd(), 'assets', 'fonts', 'tahoma.ttf'),
+      path.join(process.cwd(), 'server', 'assets', 'fonts', 'tahoma.ttf'),
+      'C:/Windows/Fonts/tahoma.ttf',
+    ];
+    const tahomaBoldCandidates = [
+      path.join(process.cwd(), 'assets', 'fonts', 'tahomabd.ttf'),
+      path.join(process.cwd(), 'server', 'assets', 'fonts', 'tahomabd.ttf'),
+      'C:/Windows/Fonts/tahomabd.ttf',
+    ];
+
+    const validTahoma = tahomaCandidates.find((p) => fs.existsSync(p));
+    const validTahomaBold = tahomaBoldCandidates.find((p) => fs.existsSync(p));
+
+    if (validTahoma && validTahomaBold) {
+      const font = await pdfDoc.embedFont(fs.readFileSync(validTahoma));
+      const fontBold = await pdfDoc.embedFont(fs.readFileSync(validTahomaBold));
+      return { font, fontBold };
+    }
+
     const notoPath = path.join(process.cwd(), 'assets', 'fonts', 'noto-sans-thai-regular.woff');
     const notoBoldPath = path.join(process.cwd(), 'assets', 'fonts', 'noto-sans-thai-bold.woff');
     const fontsourceNotoPath1 = path.join(process.cwd(), 'node_modules', '@fontsource', 'noto-sans-thai', 'files', 'noto-sans-thai-thai-400-normal.woff');
     const fontsourceNotoBoldPath1 = path.join(process.cwd(), 'node_modules', '@fontsource', 'noto-sans-thai', 'files', 'noto-sans-thai-thai-700-normal.woff');
     const fontsourceNotoPath2 = path.join(process.cwd(), 'server', 'node_modules', '@fontsource', 'noto-sans-thai', 'files', 'noto-sans-thai-thai-400-normal.woff');
     const fontsourceNotoBoldPath2 = path.join(process.cwd(), 'server', 'node_modules', '@fontsource', 'noto-sans-thai', 'files', 'noto-sans-thai-thai-700-normal.woff');
-    const tahomaPath = path.join(process.cwd(), 'assets', 'fonts', 'tahoma.ttf');
-    const tahomaBoldPath = path.join(process.cwd(), 'assets', 'fonts', 'tahomabd.ttf');
 
     if (fs.existsSync(notoPath) && fs.existsSync(notoBoldPath)) {
       const font = await pdfDoc.embedFont(fs.readFileSync(notoPath));
@@ -64,10 +82,6 @@ export class DocumentPdfService {
     } else if (fs.existsSync(fontsourceNotoPath2) && fs.existsSync(fontsourceNotoBoldPath2)) {
       const font = await pdfDoc.embedFont(fs.readFileSync(fontsourceNotoPath2));
       const fontBold = await pdfDoc.embedFont(fs.readFileSync(fontsourceNotoBoldPath2));
-      return { font, fontBold };
-    } else if (fs.existsSync(tahomaPath) && fs.existsSync(tahomaBoldPath)) {
-      const font = await pdfDoc.embedFont(fs.readFileSync(tahomaPath));
-      const fontBold = await pdfDoc.embedFont(fs.readFileSync(tahomaBoldPath));
       return { font, fontBold };
     } else {
       const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
@@ -211,6 +225,25 @@ export class DocumentPdfService {
     page.drawText(`วันที่: ${data.createdAt || data.startDate}`, { x: 70, y, size: 8, font });
     page.drawText(`วันที่: ${data.createdAt || data.startDate}`, { x: 350, y, size: 8, font });
 
+    // Embed Owner Signature image if valid base64 provided
+    if (data.ownerSignatureUrl && data.ownerSignatureUrl.startsWith('data:image/')) {
+      try {
+        const base64Data = data.ownerSignatureUrl.split(',')[1];
+        const imageBytes = Buffer.from(base64Data, 'base64');
+        const img = data.ownerSignatureUrl.includes('jpeg') || data.ownerSignatureUrl.includes('jpg')
+          ? await pdfDoc.embedJpg(imageBytes)
+          : await pdfDoc.embedPng(imageBytes);
+        page.drawImage(img, {
+          x: 70,
+          y: y + 25,
+          width: 100,
+          height: 35,
+        });
+      } catch (err) {
+        // Fallback gracefully if image parsing fails
+      }
+    }
+
     // Embed Tenant Signature image if valid base64 provided
     if (data.tenantSignature && data.tenantSignature.startsWith('data:image/')) {
       try {
@@ -243,6 +276,171 @@ export class DocumentPdfService {
     return Buffer.from(pdfBytes);
   }
 
+  /**
+   * Generates authentic Tenant ID Card document PDF (สำเนาบัตรประจำตัวประชาชนผู้เช่า).
+   */
+  async generateIdCardPdf(data: {
+    tenantName: string;
+    citizenId: string;
+    phone?: string | null;
+    email?: string | null;
+    roomNumber?: string | null;
+    dormitoryName?: string | null;
+    photoUrl?: string | null;
+  }): Promise<Buffer> {
+    const pdfDoc = await PDFDocument.create();
+    const { font, fontBold } = await this.loadFonts(pdfDoc);
+    const page = pdfDoc.addPage([595.28, 841.89]); // A4
+    const { width, height } = page.getSize();
+
+    const safeDormName = this.safeText(data.dormitoryName, 'หอพัก');
+    const safeTenantName = this.safeText(data.tenantName, 'ไม่ระบุชื่อ');
+    const safeCitizenId = this.safeText(data.citizenId, 'ไม่ระบุ');
+    const safePhone = this.safeText(data.phone, 'ไม่ระบุ');
+    const safeEmail = this.safeText(data.email, 'ไม่ระบุ');
+    const safeRoomNumber = this.safeText(data.roomNumber, 'ไม่ระบุ');
+
+    // Header
+    page.drawText(safeDormName, {
+      x: 50,
+      y: height - 50,
+      size: 16,
+      font: fontBold,
+      color: rgb(0.1, 0.1, 0.1),
+    });
+    page.drawText('สำเนาบัตรประจำตัวประชาชนผู้เช่า (TENANT IDENTIFICATION DOCUMENT)', {
+      x: 50,
+      y: height - 72,
+      size: 11,
+      font: fontBold,
+      color: rgb(0.2, 0.3, 0.6),
+    });
+
+    page.drawLine({
+      start: { x: 50, y: height - 85 },
+      end: { x: width - 50, y: height - 85 },
+      thickness: 1.5,
+      color: rgb(0.3, 0.4, 0.8),
+    });
+
+    // Outer card container
+    const cardY = height - 360;
+    const cardH = 250;
+    page.drawRectangle({
+      x: 50,
+      y: cardY,
+      width: width - 100,
+      height: cardH,
+      borderColor: rgb(0.75, 0.8, 0.9),
+      borderWidth: 1,
+      color: rgb(0.97, 0.98, 1.0),
+    });
+
+    // ID Card Banner
+    page.drawRectangle({
+      x: 50,
+      y: cardY + cardH - 35,
+      width: width - 100,
+      height: 35,
+      color: rgb(0.2, 0.3, 0.6),
+    });
+    page.drawText('บัตรประจำตัวประชาชน / THAILAND NATIONAL ID CARD', {
+      x: 65,
+      y: cardY + cardH - 23,
+      size: 10,
+      font: fontBold,
+      color: rgb(1, 1, 1),
+    });
+
+    // ID Card Details
+    let curY = cardY + cardH - 60;
+    page.drawText(`ชื่อ-นามสกุล:`, { x: 70, y: curY, size: 10, font: fontBold, color: rgb(0.2, 0.2, 0.2) });
+    page.drawText(safeTenantName, { x: 180, y: curY, size: 10, font, color: rgb(0.1, 0.1, 0.1) });
+    curY -= 25;
+
+    page.drawText(`เลขประจำตัวประชาชน:`, { x: 70, y: curY, size: 10, font: fontBold, color: rgb(0.2, 0.2, 0.2) });
+    page.drawText(safeCitizenId, { x: 180, y: curY, size: 10, font, color: rgb(0.1, 0.1, 0.1) });
+    curY -= 25;
+
+    page.drawText(`ห้องพักที่ทำสัญญา:`, { x: 70, y: curY, size: 10, font: fontBold, color: rgb(0.2, 0.2, 0.2) });
+    page.drawText(`ห้อง ${safeRoomNumber}`, { x: 180, y: curY, size: 10, font, color: rgb(0.1, 0.1, 0.1) });
+    curY -= 25;
+
+    page.drawText(`เบอร์โทรศัพท์:`, { x: 70, y: curY, size: 10, font: fontBold, color: rgb(0.2, 0.2, 0.2) });
+    page.drawText(safePhone, { x: 180, y: curY, size: 10, font, color: rgb(0.1, 0.1, 0.1) });
+    curY -= 25;
+
+    page.drawText(`อีเมล:`, { x: 70, y: curY, size: 10, font: fontBold, color: rgb(0.2, 0.2, 0.2) });
+    page.drawText(safeEmail, { x: 180, y: curY, size: 10, font, color: rgb(0.1, 0.1, 0.1) });
+    curY -= 25;
+
+    page.drawText(`สถานะเอกสาร:`, { x: 70, y: curY, size: 10, font: fontBold, color: rgb(0.2, 0.2, 0.2) });
+    page.drawText('ตรวจสอบและรับรองความถูกต้องในระบบ HorPlus แล้ว', {
+      x: 180,
+      y: curY,
+      size: 9,
+      font,
+      color: rgb(0.1, 0.5, 0.2),
+    });
+
+    // Embed Photo if available
+    if (data.photoUrl && data.photoUrl.startsWith('data:image/')) {
+      try {
+        const base64Data = data.photoUrl.split(',')[1];
+        const imageBytes = Buffer.from(base64Data, 'base64');
+        const img = data.photoUrl.includes('jpeg') || data.photoUrl.includes('jpg')
+          ? await pdfDoc.embedJpg(imageBytes)
+          : await pdfDoc.embedPng(imageBytes);
+        page.drawImage(img, {
+          x: width - 180,
+          y: cardY + 30,
+          width: 100,
+          height: 130,
+        });
+      } catch (err) {
+        // Continue if photo embedding fails
+      }
+    }
+
+    // Certification Stamp Box
+    const certY = cardY - 90;
+    page.drawRectangle({
+      x: 50,
+      y: certY,
+      width: width - 100,
+      height: 70,
+      borderColor: rgb(0.85, 0.85, 0.85),
+      borderWidth: 1,
+      color: rgb(0.99, 0.99, 0.99),
+    });
+    page.drawText('คำรับรองสำเนาถูกต้อง:', { x: 65, y: certY + 48, size: 9, font: fontBold, color: rgb(0.3, 0.3, 0.3) });
+    page.drawText('\"สำเนาถูกต้อง ใช้สำหรับเป็นหลักฐานประกอบการเช่าพักอาศัย ณ หอพักแห่งนี้เท่านั้น ห้ามนำไปใช้นอกเหนือวัตถุประสงค์\"', {
+      x: 65,
+      y: certY + 30,
+      size: 8.5,
+      font,
+      color: rgb(0.4, 0.4, 0.4),
+    });
+    page.drawText(`ลงชื่อ: ${safeTenantName} (ผู้เช่า)`, {
+      x: 65,
+      y: certY + 12,
+      size: 8.5,
+      font,
+      color: rgb(0.2, 0.2, 0.2),
+    });
+
+    // Footer
+    page.drawText(`เอกสารสำเนาประจำตัวผู้เช่าอย่างเป็นทางการ — ระบบบริหารจัดการหอพัก HorPlus — หน้า 1 จาก 1`, {
+      x: 50,
+      y: 25,
+      size: 8,
+      font,
+      color: rgb(0.5, 0.5, 0.5),
+    });
+
+    const pdfBytes = await pdfDoc.save();
+    return Buffer.from(pdfBytes);
+  }
 
   private safeText(str?: string | null, fallback = ''): string {
     if (!str) return fallback;

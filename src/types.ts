@@ -183,15 +183,15 @@ export interface EmergencyContact {
 }
 
 export interface Vehicle {
-  type: 'car' | 'motorcycle' | 'none';
-  licensePlate: string;
+  type: 'car' | 'motorcycle' | 'bicycle' | 'none';
+  licensePlate?: string;
   brand?: string;
 }
 
 export interface VehicleItem {
   id?: string;
-  type: 'car' | 'motorcycle' | 'none';
-  licensePlate: string;
+  type: 'car' | 'motorcycle' | 'bicycle' | 'none';
+  licensePlate?: string;
   brand?: string;
 }
 
@@ -292,9 +292,10 @@ export interface TenantStayHistoryItem {
 }
 
 export interface TenantReturnContext {
-  source: 'meters' | 'rooms';
+  source: 'meters' | 'rooms' | 'dashboard' | 'home';
   tenantId: string;
   roomId?: string;
+  roomNumber?: string;
   cycleId?: string;
   cycleCode?: string;
   viewMode?: 'grid' | 'list' | 'floor';

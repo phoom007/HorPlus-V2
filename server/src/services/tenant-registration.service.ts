@@ -35,6 +35,9 @@ export interface CreateRegistrationDto {
   proposedDeposit?: number | string;
   durationMonths?: number;
   startDate?: string;
+  endDate?: string;
+  dailyRateAmount?: string | number;
+  depositAmount?: string | number;
   citizenId?: string;
   birthDate?: string;
   address?: string;
@@ -43,6 +46,9 @@ export interface CreateRegistrationDto {
   coOccupants?: Array<{ name: string; phone?: string; citizenId?: string }>;
   vehicle?: { type: string; licensePlate: string; brand?: string };
   pet?: { hasPet: boolean; type?: string; name?: string; count?: number };
+  depositSlipImageUrl?: string;
+  depositDeclaredStatus?: string;
+  terms?: string | null;
 }
 
 // Actor-scoped 5-minute lockout rate limiter store (Room is NOT locked)
@@ -102,12 +108,48 @@ export class TenantRegistrationService {
       where: { dormitoryId },
     });
 
+    const billingSettings = await prisma.dormitoryBillingSettings.findUnique({
+      where: { dormitoryId },
+      select: {
+        bankAccountName: true,
+        promptPayAccountName: true,
+        dueDay: true,
+      },
+    });
+
+    const building = await prisma.building.findFirst({
+      where: { dormitoryId, deletedAt: null },
+      select: { termMonths: true },
+    });
+    const termMonths = building?.termMonths || 6;
+
+    let ownerSignature: string | null = null;
+    try {
+      const sigStorage = new SignatureStorageService(prisma);
+      const sigRecord = await sigStorage.getLatestSignatureRecord(dormitoryId);
+      if (sigRecord) {
+        const stream = await sigStorage.getSignatureStream(sigRecord.objectKey);
+        const chunks: Buffer[] = [];
+        for await (const chunk of stream) {
+          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        }
+        ownerSignature = `data:${sigRecord.mimeType || 'image/png'};base64,${Buffer.concat(chunks).toString('base64')}`;
+      }
+    } catch {
+      ownerSignature = null;
+    }
+
     return {
       dormitoryId,
       dormitoryName: dorm.name,
       defaultTerms: defaults?.defaultTerms || '',
       petPolicy: defaults?.petPolicy || { allowed: 'none', allowedTypes: [] },
       version: defaults?.version || 1,
+      bankAccountName: billingSettings?.bankAccountName || null,
+      promptPayAccountName: billingSettings?.promptPayAccountName || null,
+      dueDay: billingSettings?.dueDay || 5,
+      ownerSignature,
+      termMonths,
     };
   }
 
@@ -231,6 +273,7 @@ export class TenantRegistrationService {
           requestedRoomId: room.id,
           requestedRoomNumber: room.roomNumber,
           defaultTerms,
+          terms: payload.terms || defaultTerms,
           petPolicy,
           policyVersion: currentVersion,
           acceptedAt: acceptedAt.toISOString(),
@@ -241,6 +284,9 @@ export class TenantRegistrationService {
           proposedDeposit: payload.proposedDeposit !== undefined ? payload.proposedDeposit : undefined,
           durationMonths: payload.durationMonths,
           startDate: payload.startDate,
+          endDate: payload.endDate,
+          dailyRateAmount: payload.dailyRateAmount,
+          depositAmount: payload.depositAmount,
           citizenId: payload.citizenId,
           birthDate: payload.birthDate,
           address: payload.address,
@@ -249,6 +295,8 @@ export class TenantRegistrationService {
           coOccupants: payload.coOccupants || [],
           vehicle: payload.vehicle,
           pet: payload.pet,
+          depositSlipImageUrl: payload.depositSlipImageUrl,
+          depositDeclaredStatus: payload.depositDeclaredStatus,
           revisionHistory: [],
         };
         const acceptanceSnapshotSha256 = computeSnapshotSha256(acceptanceSnapshot);
@@ -1058,7 +1106,7 @@ export class TenantRegistrationService {
           rentAmount: String(payload.rentAmount || 0),
           depositAmount: String(payload.depositAmount || 0),
           advancePaymentAmount: String(payload.advancePaymentAmount || 0),
-          terms: payload.terms || null,
+          terms: payload.terms || (snap.terms as string) || (snap.defaultTerms as string) || null,
           tenantSignature: req.tenantSignatureObjectKey || req.tenantSignatureSha256 || 'SIGNED',
           ownerSignature: frozenOwnerSignature,
           createdByUserId: safeActorId,
@@ -1711,6 +1759,7 @@ export class TenantRegistrationService {
 
     const allRooms = await prisma.room.findMany({
       where: { dormitoryId, deletedAt: null },
+      include: { building: true },
       orderBy: { roomNumber: 'asc' },
     });
 
@@ -1816,12 +1865,35 @@ export class TenantRegistrationService {
         };
       }
 
+      const roomBuilding = (r as any).building;
+      const bName = roomBuilding?.name || '';
+      const mRent = Number(r.monthlyRent ?? roomBuilding?.monthlyRent ?? 0);
+      const tRent = Number(r.termRent ?? roomBuilding?.termRent ?? 0);
+      const dRent = Number(r.dailyRent ?? roomBuilding?.dailyRent ?? 0);
+      const depAmt = Number(r.depositAmount ?? roomBuilding?.depositAmount ?? 0);
+      const mDeposit = Number(r.monthlyDeposit ?? roomBuilding?.monthlyDeposit ?? depAmt);
+      const tDeposit = Number(r.termDeposit ?? roomBuilding?.termDeposit ?? depAmt);
+      const dDeposit = Number(r.dailyDeposit ?? roomBuilding?.dailyDeposit ?? 0);
+
       return {
         id: r.id,
         roomNumber: r.roomNumber,
+        buildingId: r.buildingId,
+        buildingName: bName,
         floor: r.floor,
-        monthlyRent: Number(r.monthlyRent),
-        depositAmount: Number(r.depositAmount),
+        monthlyRent: mRent,
+        termRent: tRent,
+        dailyRent: dRent,
+        depositAmount: depAmt,
+        monthlyDeposit: mDeposit,
+        termDeposit: tDeposit,
+        dailyDeposit: dDeposit,
+        maxTermRentInstallments: roomBuilding?.maxTermRentInstallments ?? 1,
+        building: roomBuilding ? {
+          id: roomBuilding.id,
+          name: roomBuilding.name,
+          maxTermRentInstallments: roomBuilding.maxTermRentInstallments ?? 1,
+        } : undefined,
         status: r.status,
         isVacant,
         isUnboundClaimable,
@@ -1886,6 +1958,7 @@ export class TenantRegistrationService {
           { occupancies: { some: { roomId, status: 'ACTIVE' } } },
           { contracts: { some: { roomId, status: 'active', deletedAt: null } } },
           { provisionalRentalTerms: { some: { roomId, status: { in: ['ACTIVE', 'RESERVED'] }, deletedAt: null } } },
+          ...(room.currentTenantId ? [{ id: room.currentTenantId }] : []),
         ],
       },
       include: {
@@ -1902,21 +1975,31 @@ export class TenantRegistrationService {
       throw new AppError('ไม่พบข้อมูลผู้เช่าที่รอการยืนยันสิทธิ์ในห้องพักนี้', 404, 'CLAIM_UNAVAILABLE');
     }
 
-    // 4. Test tolerant match
+    // 4. Test tolerant match (Phone OR Name OR Both)
     let isMatched = false;
     const inputPhone = normalizeThaiPhone(trimmedInput);
     if (inputPhone && candidateTenant.phone) {
       const storedPhone = normalizeThaiPhone(candidateTenant.phone);
-      if (storedPhone && storedPhone === inputPhone) {
+      if (storedPhone && (storedPhone === inputPhone || storedPhone.endsWith(inputPhone) || inputPhone.endsWith(storedPhone))) {
         isMatched = true;
       }
     }
 
     if (!isMatched) {
-      const rawStoredName = candidateTenant.displayName || `${candidateTenant.firstName} ${candidateTenant.lastName || ''}`.trim();
-      const similarity = calculateNameSimilarity(rawStoredName, trimmedInput);
-      if (similarity >= 0.90) {
-        isMatched = true;
+      const rawStoredName = candidateTenant.displayName || `${candidateTenant.firstName || ''} ${candidateTenant.lastName || ''}`.trim();
+      if (rawStoredName) {
+        const similarity = calculateNameSimilarity(rawStoredName, trimmedInput);
+        const cleanInput = trimmedInput.toLowerCase().replace(/\s+/g, '');
+        const cleanStored = rawStoredName.toLowerCase().replace(/\s+/g, '');
+        const cleanFirst = (candidateTenant.firstName || '').toLowerCase().replace(/\s+/g, '');
+
+        if (
+          similarity >= 0.85 ||
+          (cleanFirst.length >= 2 && (cleanInput.includes(cleanFirst) || cleanFirst.includes(cleanInput))) ||
+          (cleanStored.length >= 2 && (cleanInput.includes(cleanStored) || cleanStored.includes(cleanInput)))
+        ) {
+          isMatched = true;
+        }
       }
     }
 
@@ -2002,11 +2085,14 @@ export class TenantRegistrationService {
     birthDate?: string;
     address?: string;
     idCardImageUrl?: string;
+    depositSlipImageUrl?: string;
+    depositDeclaredStatus?: string;
     emergencyContact?: { name: string; relationship: string; phone: string };
     coOccupants?: Array<{ name: string; phone?: string; citizenId?: string }>;
     vehicle?: { type: string; licensePlate: string; brand?: string };
     pet?: { hasPet: boolean; type?: string; name?: string; count?: number };
     signatureBase64: string;
+    actorUserId?: string;
   }) {
     const {
       dormitoryId,
@@ -2023,6 +2109,7 @@ export class TenantRegistrationService {
       vehicle,
       pet,
       signatureBase64,
+      actorUserId,
     } = params;
 
     if (!signatureBase64 || typeof signatureBase64 !== 'string' || !signatureBase64.trim()) {
@@ -2069,6 +2156,7 @@ export class TenantRegistrationService {
         lastName: lastName ? lastName.trim() : tenant.lastName,
         phone: phone ? phone.trim() : tenant.phone,
         status: 'active',
+        ...(actorUserId ? { linkedUserId: actorUserId } : {}),
       };
       if (pet) {
         updateData.petInfo = pet as Prisma.InputJsonValue;
@@ -2083,6 +2171,29 @@ export class TenantRegistrationService {
         where: { id: tenantId },
         data: updateData,
       });
+
+      // If actorUserId provided, ensure DormitoryMember exists with TENANT role
+      if (actorUserId) {
+        let tenantRole = await tx.role.findFirst({ where: { code: 'TENANT' } });
+        if (!tenantRole) {
+          tenantRole = await tx.role.create({
+            data: { code: 'TENANT', name: 'ผู้เช่า', permissions: [], isSystem: true },
+          });
+        }
+        const existingMember = await tx.dormitoryMember.findFirst({
+          where: { userId: actorUserId, dormitoryId },
+        });
+        if (!existingMember) {
+          await tx.dormitoryMember.create({
+            data: {
+              userId: actorUserId,
+              dormitoryId,
+              roleId: tenantRole.id,
+              status: 'active',
+            },
+          });
+        }
+      }
 
       // Emergency contact
       if (emergencyContact?.name) {
