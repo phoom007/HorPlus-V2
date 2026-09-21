@@ -16,7 +16,10 @@ let liffInitialized = false;
 let initPromise: Promise<boolean> | null = null;
 
 export function getLiffId(): string {
-  return (import.meta as any).env?.VITE_LINE_LIFF_ID || '2011672957-pIlWUt9e';
+  if (typeof window !== 'undefined' && window.location.pathname.startsWith('/owner')) {
+    return (import.meta as any).env?.VITE_LINE_OWNER_LIFF_ID || '2011672957-NOfBsIcJ';
+  }
+  return (import.meta as any).env?.VITE_LINE_TENANT_LIFF_ID || (import.meta as any).env?.VITE_LINE_LIFF_ID || '2011672957-pIlWUt9e';
 }
 
 /**

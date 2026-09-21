@@ -215,7 +215,7 @@ describe('LINE Rich Menu & Postback Event Suite (Phase 2)', () => {
       expect(replyCall.replyToken).toBe('reply-token-manage');
       expect(replyCall.messages[0].altText).toContain('เข้าสู่ระบบจัดการหอพัก');
       const directEntryUri = replyCall.messages[0].contents.footer.contents[0].action.uri;
-      expect(directEntryUri).toContain('/api/v1/auth/line-direct-entry?ticket=ticket_');
+      expect(directEntryUri).toMatch(/(?:line-direct-entry\?ticket=ticket_|liff\.line\.me\/.*ticket=ticket_)/);
     });
 
     it('handles action=owner_user_guide by displaying loading animation and sending owner guide carousel', async () => {

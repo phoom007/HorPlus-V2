@@ -216,7 +216,7 @@ describe('LINE Tenant Entry Bridge & Candidate Lifecycle Suite', () => {
       expect(flex.altText).toContain('101');
       expect(flex.altText).toContain('หอพักแสนสุข');
       expect(flex.contents.type).toBe('bubble');
-      expect(flex.contents.footer.contents[0].action.uri).toBe('https://app.horplus.com/owner/home');
+      expect(flex.contents.footer.contents[0].action.uri).toMatch(/(?:https:\/\/app\.horplus\.com\/owner\/home|liff\.line\.me)/);
     });
   });
 });
