@@ -109,12 +109,25 @@ export function getPublicAppOrigin(): string {
   return origin || 'http://localhost:5173';
 }
 
+export const CANONICAL_OWNER_LIFF_ID = '2011672957-NOfBsIcJ';
+export const CANONICAL_TENANT_LIFF_ID = '2011672957-pIlWUt9e';
+
+export function getOwnerLiffId(): string {
+  const envVal = process.env.LINE_OWNER_LIFF_ID || process.env.VITE_LINE_OWNER_LIFF_ID;
+  return (envVal && envVal.trim()) ? envVal.trim() : CANONICAL_OWNER_LIFF_ID;
+}
+
+export function getTenantLiffId(): string {
+  const envVal = process.env.LINE_TENANT_LIFF_ID || process.env.VITE_LINE_TENANT_LIFF_ID || process.env.VITE_LINE_LIFF_ID || process.env.LINE_LIFF_ID;
+  return (envVal && envVal.trim()) ? envVal.trim() : CANONICAL_TENANT_LIFF_ID;
+}
+
 export function getTenantRegistrationUrl(rawToken: string, appOrigin?: string): string {
   const origin = (appOrigin || getPublicAppOrigin()).trim().replace(/\/+$/, '');
-  const tenantLiffId = process.env.LINE_TENANT_LIFF_ID || process.env.VITE_LINE_TENANT_LIFF_ID || process.env.VITE_LINE_LIFF_ID || process.env.LINE_LIFF_ID;
+  const tenantLiffId = getTenantLiffId();
   const preferDirect = process.env.PREFER_DIRECT_LINE_ENTRY === 'true';
-  if (!preferDirect && tenantLiffId && tenantLiffId.trim()) {
-    return `https://liff.line.me/${tenantLiffId.trim()}?t=${encodeURIComponent(rawToken)}`;
+  if (!preferDirect && tenantLiffId) {
+    return `https://liff.line.me/${tenantLiffId}?t=${encodeURIComponent(rawToken)}`;
   }
   return `${origin}/api/v1/auth/line-tenant-entry?t=${encodeURIComponent(rawToken)}`;
 }
@@ -410,10 +423,10 @@ export function buildOwnerNewTenantRegistrationFlexMessage(
   appOrigin?: string
 ) {
   const origin = (appOrigin || getPublicAppOrigin()).trim().replace(/\/+$/, '');
-  const ownerLiffId = process.env.LINE_OWNER_LIFF_ID || process.env.VITE_LINE_OWNER_LIFF_ID;
+  const ownerLiffId = getOwnerLiffId();
   const preferDirect = process.env.PREFER_DIRECT_LINE_ENTRY === 'true';
-  const ownerHomeUrl = (!preferDirect && ownerLiffId && ownerLiffId.trim())
-    ? `https://liff.line.me/${ownerLiffId.trim()}`
+  const ownerHomeUrl = (!preferDirect && ownerLiffId)
+    ? `https://liff.line.me/${ownerLiffId}`
     : `${origin}/owner/home`;
 
   return {
@@ -513,10 +526,10 @@ export function buildOwnerMoveOutRequestFlexMessage(
   appOrigin?: string
 ) {
   const origin = (appOrigin || getPublicAppOrigin()).trim().replace(/\/+$/, '');
-  const ownerLiffId = process.env.LINE_OWNER_LIFF_ID || process.env.VITE_LINE_OWNER_LIFF_ID;
+  const ownerLiffId = getOwnerLiffId();
   const preferDirect = process.env.PREFER_DIRECT_LINE_ENTRY === 'true';
-  const ownerHomeUrl = (!preferDirect && ownerLiffId && ownerLiffId.trim())
-    ? `https://liff.line.me/${ownerLiffId.trim()}`
+  const ownerHomeUrl = (!preferDirect && ownerLiffId)
+    ? `https://liff.line.me/${ownerLiffId}`
     : `${origin}/owner/home`;
 
   return {
@@ -617,10 +630,10 @@ export function buildOwnerRenewalRequestFlexMessage(
   appOrigin?: string
 ) {
   const origin = (appOrigin || getPublicAppOrigin()).trim().replace(/\/+$/, '');
-  const ownerLiffId = process.env.LINE_OWNER_LIFF_ID || process.env.VITE_LINE_OWNER_LIFF_ID;
+  const ownerLiffId = getOwnerLiffId();
   const preferDirect = process.env.PREFER_DIRECT_LINE_ENTRY === 'true';
-  const ownerHomeUrl = (!preferDirect && ownerLiffId && ownerLiffId.trim())
-    ? `https://liff.line.me/${ownerLiffId.trim()}`
+  const ownerHomeUrl = (!preferDirect && ownerLiffId)
+    ? `https://liff.line.me/${ownerLiffId}`
     : `${origin}/owner/home`;
 
   return {
@@ -876,10 +889,10 @@ export function buildTenantRenewalOutcomeFlexMessage(
 
 export function buildOwnerGuideCarouselFlexMessage(dormitoryName: string, appOrigin?: string) {
   const origin = (appOrigin || getPublicAppOrigin()).trim().replace(/\/+$/, '');
-  const ownerLiffId = process.env.LINE_OWNER_LIFF_ID || process.env.VITE_LINE_OWNER_LIFF_ID;
+  const ownerLiffId = getOwnerLiffId();
   const preferDirect = process.env.PREFER_DIRECT_LINE_ENTRY === 'true';
-  const ownerRoomsUrl = (!preferDirect && ownerLiffId && ownerLiffId.trim())
-    ? `https://liff.line.me/${ownerLiffId.trim()}?target=/owner/rooms`
+  const ownerRoomsUrl = (!preferDirect && ownerLiffId)
+    ? `https://liff.line.me/${ownerLiffId}?target=/owner/rooms`
     : `${origin}/owner/rooms`;
 
   return {
@@ -2366,7 +2379,7 @@ export class LineOaService {
 
         if (action.type === 'manage_dormitory') {
           if (action.authorized && action.ticket) {
-            const ownerLiffId = process.env.LINE_OWNER_LIFF_ID || process.env.VITE_LINE_OWNER_LIFF_ID;
+            const ownerLiffId = getOwnerLiffId();
             const directEntryPath = `/api/v1/auth/line-direct-entry?ticket=${action.ticket}`;
             const directEntryUrl = (ownerLiffId && ownerLiffId.trim())
               ? `https://liff.line.me/${ownerLiffId.trim()}?ticket=${action.ticket}`

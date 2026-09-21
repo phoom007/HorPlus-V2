@@ -4,6 +4,7 @@
  */
 
 import React, { useEffect } from 'react';
+import { cleanLiffStateFromUrl, isTicketConsumed, markTicketConsumed } from '../../utils/liffToken';
 
 export const OwnerDirectEntryPage: React.FC = () => {
   useEffect(() => {
@@ -24,11 +25,17 @@ export const OwnerDirectEntryPage: React.FC = () => {
       }
     }
 
+    cleanLiffStateFromUrl();
+
     if (ticket) {
-      window.location.replace(`/api/v1/auth/line-direct-entry?ticket=${encodeURIComponent(ticket)}`);
-    } else {
-      window.location.replace('/owner/home');
+      const raw = ticket.trim();
+      if (!isTicketConsumed(raw)) {
+        markTicketConsumed(raw);
+        window.location.replace(`/api/v1/auth/line-direct-entry?ticket=${encodeURIComponent(raw)}`);
+        return;
+      }
     }
+    window.location.replace('/owner/home');
   }, []);
 
   return (

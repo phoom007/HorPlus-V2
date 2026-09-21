@@ -5,7 +5,12 @@
 
 import React from 'react';
 import { Navigate, Outlet, useLocation } from 'react-router-dom';
-import { extractTenantTokenFromUrl } from '../utils/liffToken';
+import {
+  extractTenantTokenFromUrl,
+  cleanLiffStateFromUrl,
+  isTokenConsumed,
+  markTokenConsumed
+} from '../utils/liffToken';
 
 export const AuthContext = React.createContext<any>(null);
 
@@ -118,10 +123,14 @@ export const TenantAuthGuard: React.FC<{ children?: React.ReactNode }> = ({ chil
     // 1. Direct Entry Token Bridge: check if ?t= or ?token= or liff.state is present in URL
     const token = extractTenantTokenFromUrl();
     if (token) {
-      window.history.replaceState({}, '', window.location.pathname);
-      window.location.replace(`/api/v1/auth/line-tenant-entry?t=${encodeURIComponent(token)}`);
-      return;
+      if (!isTokenConsumed(token)) {
+        markTokenConsumed(token);
+        cleanLiffStateFromUrl();
+        window.location.replace(`/api/v1/auth/line-tenant-entry?t=${encodeURIComponent(token)}`);
+        return;
+      }
     }
+    cleanLiffStateFromUrl();
 
     fetch('/api/v1/tenant-portal/profile', { credentials: 'include' })
       .then(res => res.ok ? res.json() : null)

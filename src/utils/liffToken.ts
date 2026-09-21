@@ -1,15 +1,88 @@
 /**
- * Utility to extract tenant entry token from window.location.
+ * @license Apache-2.0
+ * Utility to extract and manage tenant entry tokens and LIFF destination routing.
  * Supports direct query params (?t=... / ?token=...)
  * AND LIFF state encoded params (?liff.state=%3Ft%3D...)
  * AND hash-based routes (#/?liff.state=... / #?t=...)
  * AND percent-encoded query keys (?t%3D...)
  */
-export function extractTenantTokenFromUrl(): string | null {
+
+export function isTokenConsumed(token: string): boolean {
+  if (typeof window === 'undefined' || !token) return false;
+  try {
+    return window.sessionStorage?.getItem(`consumed_token_${token.trim()}`) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function markTokenConsumed(token: string): void {
+  if (typeof window === 'undefined' || !token) return;
+  try {
+    window.sessionStorage?.setItem(`consumed_token_${token.trim()}`, '1');
+  } catch {}
+}
+
+export function isTicketConsumed(ticket: string): boolean {
+  if (typeof window === 'undefined' || !ticket) return false;
+  try {
+    return window.sessionStorage?.getItem(`consumed_ticket_${ticket.trim()}`) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function markTicketConsumed(ticket: string): void {
+  if (typeof window === 'undefined' || !ticket) return;
+  try {
+    window.sessionStorage?.setItem(`consumed_ticket_${ticket.trim()}`, '1');
+  } catch {}
+}
+
+/**
+ * Remove liff.state, ticket, and token parameters from window.location
+ * without reloading the page, preventing infinite re-triggers.
+ */
+export function cleanLiffStateFromUrl(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const url = new URL(window.location.href);
+    let changed = false;
+
+    for (const key of ['liff.state', 'liff_state', 't', 'token', 'ticket']) {
+      if (url.searchParams.has(key)) {
+        url.searchParams.delete(key);
+        changed = true;
+      }
+    }
+
+    for (const [key] of Array.from(url.searchParams.entries())) {
+      if (/^(?:t|token|ticket)(?:=|%3D)/i.test(key)) {
+        url.searchParams.delete(key);
+        changed = true;
+      }
+    }
+
+    let cleanHash = url.hash;
+    if (cleanHash && /liff\.state/i.test(cleanHash)) {
+      cleanHash = '';
+      changed = true;
+    }
+
+    if (changed) {
+      const searchStr = url.searchParams.toString();
+      const cleanUrl = url.pathname + (searchStr ? `?${searchStr}` : '') + cleanHash;
+      window.history.replaceState({}, '', cleanUrl);
+    }
+  } catch {}
+}
+
+export function extractTenantTokenFromUrl(options: { ignoreConsumed?: boolean } = {}): string | null {
   if (typeof window === 'undefined') {
     return null;
   }
 
+  const { ignoreConsumed = false } = options;
   const searchSources = [window.location.search, window.location.hash];
 
   for (const src of searchSources) {
@@ -20,18 +93,25 @@ export function extractTenantTokenFromUrl(): string | null {
     // 1. Direct query parameter matching
     const directToken = params.get('t') || params.get('token');
     if (directToken && directToken.trim()) {
-      return directToken.trim();
+      const t = directToken.trim();
+      if (!ignoreConsumed || !isTokenConsumed(t)) {
+        return t;
+      }
     }
 
     // 2. Encoded key matching (e.g. t%3D<token> or t=<token> stored as query key)
     for (const [key] of params.entries()) {
       if (/^t(?:=|%3D)/i.test(key)) {
         const valPart = key.replace(/^t(?:=|%3D)/i, '').trim();
-        if (valPart) return valPart;
+        if (valPart && (!ignoreConsumed || !isTokenConsumed(valPart))) {
+          return valPart;
+        }
       }
       if (/^token(?:=|%3D)/i.test(key)) {
         const valPart = key.replace(/^token(?:=|%3D)/i, '').trim();
-        if (valPart) return valPart;
+        if (valPart && (!ignoreConsumed || !isTokenConsumed(valPart))) {
+          return valPart;
+        }
       }
     }
 
@@ -47,16 +127,23 @@ export function extractTenantTokenFromUrl(): string | null {
         const innerParams = new URLSearchParams(searchPart);
         const innerToken = innerParams.get('t') || innerParams.get('token');
         if (innerToken && innerToken.trim()) {
-          return innerToken.trim();
+          const t = innerToken.trim();
+          if (!ignoreConsumed || !isTokenConsumed(t)) {
+            return t;
+          }
         }
         for (const [k] of innerParams.entries()) {
           if (/^t(?:=|%3D)/i.test(k)) {
             const v = k.replace(/^t(?:=|%3D)/i, '').trim();
-            if (v) return v;
+            if (v && (!ignoreConsumed || !isTokenConsumed(v))) {
+              return v;
+            }
           }
           if (/^token(?:=|%3D)/i.test(k)) {
             const v = k.replace(/^token(?:=|%3D)/i, '').trim();
-            if (v) return v;
+            if (v && (!ignoreConsumed || !isTokenConsumed(v))) {
+              return v;
+            }
           }
         }
       } catch {}
@@ -68,7 +155,10 @@ export function extractTenantTokenFromUrl(): string | null {
     const fullHref = decodeURIComponent(window.location.href);
     const match = fullHref.match(/(?:[?&#]|liff\.state=.*?)(?:t|token)(?:=|%3D)([a-f0-9]{32,64})/i);
     if (match && match[1]) {
-      return match[1].trim();
+      const t = match[1].trim();
+      if (!ignoreConsumed || !isTokenConsumed(t)) {
+        return t;
+      }
     }
   } catch {}
 
@@ -116,4 +206,3 @@ export function extractLiffDestinationPath(): string | null {
 
   return null;
 }
-

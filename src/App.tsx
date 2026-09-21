@@ -28,7 +28,15 @@ import { OnboardingWizard } from './pages/onboarding/OnboardingWizard';
 
 import { OwnerWorkspace } from './pages/owner';
 import { TenantWorkspace } from './pages/tenant';
-import { extractTenantTokenFromUrl, extractLiffDestinationPath } from './utils/liffToken';
+import {
+  extractTenantTokenFromUrl,
+  extractLiffDestinationPath,
+  cleanLiffStateFromUrl,
+  isTokenConsumed,
+  markTokenConsumed,
+  isTicketConsumed,
+  markTicketConsumed
+} from './utils/liffToken';
 import { initLiff } from './utils/liff';
 import { TenantRegisterPage } from './pages/tenant/TenantRegisterPage';
 import { OwnerDirectEntryPage } from './pages/owner/OwnerDirectEntryPage';
@@ -94,17 +102,33 @@ export default function App() {
     // 1. LIFF deep-link destination handling (when LINE passes liff.state to Endpoint URL)
     const destinationPath = extractLiffDestinationPath();
     if (destinationPath) {
+      cleanLiffStateFromUrl();
+
       const tokenMatch = destinationPath.match(/(?:[?&])(?:t|token)=([^&#]+)/i);
       if (tokenMatch && tokenMatch[1]) {
-        window.location.replace(`/api/v1/auth/line-tenant-entry?t=${tokenMatch[1]}`);
-        return;
+        const rawToken = tokenMatch[1].trim();
+        if (!isTokenConsumed(rawToken)) {
+          markTokenConsumed(rawToken);
+          window.location.replace(`/api/v1/auth/line-tenant-entry?t=${encodeURIComponent(rawToken)}`);
+          return;
+        }
       }
+
       const ticketMatch = destinationPath.match(/(?:[?&])ticket=([^&#]+)/i);
       if (ticketMatch && ticketMatch[1]) {
-        window.location.replace(`/api/v1/auth/line-direct-entry?ticket=${ticketMatch[1]}`);
-        return;
+        const rawTicket = ticketMatch[1].trim();
+        if (!isTicketConsumed(rawTicket)) {
+          markTicketConsumed(rawTicket);
+          window.location.replace(`/api/v1/auth/line-direct-entry?ticket=${encodeURIComponent(rawTicket)}`);
+          return;
+        }
       }
-      window.location.replace(destinationPath);
+
+      // If destinationPath points to where we already are (e.g. /tenant or /owner/home), do NOT call window.location.replace to prevent infinite reload loops
+      const currentFull = window.location.pathname + window.location.search;
+      if (destinationPath !== window.location.pathname && destinationPath !== currentFull) {
+        window.history.replaceState({}, '', destinationPath);
+      }
       return;
     }
 
@@ -112,13 +136,20 @@ export default function App() {
     const urlParams = new URLSearchParams(window.location.search);
     const ownerTicket = urlParams.get('ticket');
     if (ownerTicket && ownerTicket.trim()) {
-      window.location.replace(`/api/v1/auth/line-direct-entry?ticket=${encodeURIComponent(ownerTicket.trim())}`);
-      return;
+      const rawTicket = ownerTicket.trim();
+      cleanLiffStateFromUrl();
+      if (!isTicketConsumed(rawTicket)) {
+        markTicketConsumed(rawTicket);
+        window.location.replace(`/api/v1/auth/line-direct-entry?ticket=${encodeURIComponent(rawTicket)}`);
+        return;
+      }
     }
 
     // 3. Direct tenant token check: ?t= or ?token= on ANY path
-    const token = extractTenantTokenFromUrl();
+    const token = extractTenantTokenFromUrl({ ignoreConsumed: true });
     if (token) {
+      markTokenConsumed(token);
+      cleanLiffStateFromUrl();
       window.location.replace(`/api/v1/auth/line-tenant-entry?t=${encodeURIComponent(token)}`);
       return;
     }
