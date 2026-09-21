@@ -249,7 +249,7 @@ export class LineRichMenuService {
    * Build Active Tenant Rich Menu Payload (2 Buttons)
    */
   buildActiveTenantRichMenuPayload(dormitoryName: string, liffId?: string) {
-    const explicitLiffId = liffId || process.env.VITE_LINE_LIFF_ID || process.env.LINE_LIFF_ID || '2011672957-pIlWUt9e';
+    const tenantLiffId = liffId || process.env.LINE_TENANT_LIFF_ID || process.env.VITE_LINE_TENANT_LIFF_ID || process.env.VITE_LINE_LIFF_ID || process.env.LINE_LIFF_ID || '2011672957-pIlWUt9e';
     return {
       size: { width: 2500, height: 843 },
       selected: true,
@@ -260,7 +260,7 @@ export class LineRichMenuService {
           bounds: { x: 0, y: 0, width: 1250, height: 843 },
           action: {
             type: 'uri',
-            uri: `https://liff.line.me/${explicitLiffId.trim()}/tenant`,
+            uri: `https://liff.line.me/${tenantLiffId.trim()}`,
             label: 'เข้าสู่ระบบผู้เช่า',
           },
         },

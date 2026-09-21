@@ -31,6 +31,7 @@ import { TenantWorkspace } from './pages/tenant';
 import { extractTenantTokenFromUrl, extractLiffDestinationPath } from './utils/liffToken';
 import { initLiff } from './utils/liff';
 import { TenantRegisterPage } from './pages/tenant/TenantRegisterPage';
+import { OwnerDirectEntryPage } from './pages/owner/OwnerDirectEntryPage';
 
 import { OwnerAuthGuard, TenantAuthGuard, AuthContext } from './router/guards';
 
@@ -98,13 +99,26 @@ export default function App() {
         window.location.replace(`/api/v1/auth/line-tenant-entry?t=${tokenMatch[1]}`);
         return;
       }
+      const ticketMatch = destinationPath.match(/(?:[?&])ticket=([^&#]+)/i);
+      if (ticketMatch && ticketMatch[1]) {
+        window.location.replace(`/api/v1/auth/line-direct-entry?ticket=${ticketMatch[1]}`);
+        return;
+      }
       window.location.replace(destinationPath);
       return;
     }
 
-    // 2. Direct tenant token check: ?t= or ?token=
+    // 2. Direct owner ticket check on ANY path: ?ticket=
+    const urlParams = new URLSearchParams(window.location.search);
+    const ownerTicket = urlParams.get('ticket');
+    if (ownerTicket && ownerTicket.trim()) {
+      window.location.replace(`/api/v1/auth/line-direct-entry?ticket=${encodeURIComponent(ownerTicket.trim())}`);
+      return;
+    }
+
+    // 3. Direct tenant token check: ?t= or ?token= on ANY path
     const token = extractTenantTokenFromUrl();
-    if (token && window.location.pathname !== '/tenant') {
+    if (token) {
       window.location.replace(`/api/v1/auth/line-tenant-entry?t=${encodeURIComponent(token)}`);
       return;
     }
@@ -232,6 +246,7 @@ export default function App() {
           <Route path="/onboarding/*" element={<Navigate to="/owner/register" replace />} />
 
           {/* Owner Workspace (Protected) */}
+          <Route path="/owner/direct-entry" element={<OwnerDirectEntryPage />} />
           <Route path="/owner" element={<Navigate to="/owner/home" replace />} />
           <Route path="/owner/dashboard" element={<Navigate to="/owner/home" replace />} />
           <Route path="/owner/settings/line-oa" element={<Navigate to="/owner/line-oa" replace />} />
@@ -245,6 +260,8 @@ export default function App() {
           />
 
           {/* Tenant Workspace (Protected) */}
+          <Route path="/tenant/tenant/*" element={<Navigate to="/tenant" replace />} />
+          <Route path="/tenant/tenant" element={<Navigate to="/tenant" replace />} />
           <Route
             path="/tenant"
             element={

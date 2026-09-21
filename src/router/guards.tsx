@@ -152,7 +152,41 @@ export const TenantAuthGuard: React.FC<{ children?: React.ReactNode }> = ({ chil
   }
 
   if (!session || session.userType !== 'tenant' || !session.tenant) {
-    return <Navigate to="/" replace />;
+    return (
+      <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6 text-center font-sans">
+        <div className="w-16 h-16 bg-indigo-50 border border-indigo-100 rounded-3xl flex items-center justify-center mb-5 text-indigo-600 shadow-sm">
+          <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+          </svg>
+        </div>
+        <h2 className="text-lg font-black text-slate-800 mb-2">ยินดีต้อนรับสู่ระบบผู้เช่า HorPlus</h2>
+        <p className="text-slate-500 text-xs max-w-sm mb-6 leading-relaxed">
+          ไม่พบข้อมูลเซสชันผู้เช่าในอุปกรณ์นี้ กรุณากดปุ่มเมนูใน LINE OA ของหอพักเพื่อเข้าสู่ระบบ หรือลงทะเบียนเช่าห้องพักใหม่
+        </p>
+        <div className="flex flex-col w-full max-w-xs gap-2.5">
+          <a
+            href="/tenant/register"
+            className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl text-xs font-black shadow-md shadow-indigo-200 text-center transition-all cursor-pointer"
+          >
+            ลงทะเบียนผู้เช่าใหม่
+          </a>
+          <button
+            type="button"
+            onClick={() => {
+              try {
+                if (typeof window !== 'undefined' && (window as any).liff) {
+                  (window as any).liff.closeWindow();
+                }
+              } catch {}
+              window.location.replace('/');
+            }}
+            className="w-full py-3 bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-2xl text-xs font-bold text-center transition-all cursor-pointer"
+          >
+            กลับสู่หน้าหลัก
+          </button>
+        </div>
+      </div>
+    );
   }
 
   return (
