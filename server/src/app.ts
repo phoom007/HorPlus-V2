@@ -206,6 +206,13 @@ export function createApp(optionsOrAuth?: CreateAppOptions | AuthenticationServi
         if (env.CORS_ORIGINS.includes('*') || env.CORS_ORIGINS.includes(origin)) {
           return callback(null, true);
         }
+        const publicOrigin = process.env.PUBLIC_APP_ORIGIN || process.env.PUBLIC_APP_URL || process.env.PUBLIC_WEBHOOK_ORIGIN;
+        if (publicOrigin && origin.startsWith(publicOrigin)) {
+          return callback(null, true);
+        }
+        if (origin.endsWith('.trycloudflare.com') || origin.includes('localhost:3001') || origin.includes('127.0.0.1:3001')) {
+          return callback(null, true);
+        }
         return callback(new Error(`CORS policy blocked access from origin: ${origin}`));
       },
       credentials: true,

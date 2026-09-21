@@ -33,6 +33,7 @@ export interface TenantInvoiceViewProps {
   dormitoryName?: string;
   buildingName?: string;
   roomNumber?: string;
+  hasRoom?: boolean;
   activeUnpaidBill: Bill | null;
   tenantBills: Bill[];
   selectedBillId?: string | null;
@@ -46,6 +47,7 @@ export const TenantInvoiceView: React.FC<TenantInvoiceViewProps> = ({
   dormitoryName,
   buildingName,
   roomNumber,
+  hasRoom = Boolean(roomNumber),
   activeUnpaidBill,
   tenantBills,
   selectedBillId = null,
@@ -54,6 +56,29 @@ export const TenantInvoiceView: React.FC<TenantInvoiceViewProps> = ({
   onBack,
   onGoToPayment,
 }) => {
+  if (!hasRoom || !roomNumber) {
+    return (
+      <div className="flex flex-col h-full bg-slate-50">
+        <div className="flex items-center justify-between px-4 py-3 bg-white border-b border-gray-200/50 sticky top-0 z-30 shrink-0">
+          <button
+            onClick={onBack}
+            className="p-1 hover:bg-slate-100 text-slate-700 rounded-xl transition-all cursor-pointer"
+            aria-label="ย้อนกลับ"
+          >
+            <ChevronLeft className="w-5 h-5 stroke-[2.5]" />
+          </button>
+          <h3 className="text-xs font-black text-slate-900 text-center flex-1">ใบแจ้งหนี้</h3>
+          <div className="w-7 flex justify-end shrink-0">
+            <FileText className="w-5 h-5 text-indigo-500" />
+          </div>
+        </div>
+
+        <div className="py-24 text-center flex-1 flex items-center justify-center">
+          <p className="text-slate-400 font-semibold text-xs">ยังไม่มีใบแจ้งหนี้ในระบบ</p>
+        </div>
+      </div>
+    );
+  }
   const [expandedHistoryBillIds, setExpandedHistoryBillIds] = useState<string[]>(() => {
     if (selectedBillId && invoiceTab === 'history') {
       return [selectedBillId];

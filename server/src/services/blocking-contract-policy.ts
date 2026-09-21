@@ -6,6 +6,7 @@
 export const BLOCKING_CONTRACT_STATUSES = [
   'active',
   'approved',
+  'approved_scheduled',
   'expiring_soon',
   'waiting_extension',
   'checking_out',

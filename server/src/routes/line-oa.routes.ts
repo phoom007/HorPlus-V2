@@ -7,7 +7,7 @@
 
 import { Router, Request, Response, NextFunction } from 'express';
 import { PrismaClient } from '@prisma/client';
-import { LineOaService, getPublicWebhookOrigin } from '../services/line-oa.service.js';
+import { LineOaService, getPublicWebhookOrigin, validatePublicWebhookOrigin, setActiveAppOrigin } from '../services/line-oa.service.js';
 import { AuthenticationService } from '../services/auth.service.js';
 import { LinePlatformAdapter } from '../services/line-platform-adapter.js';
 import { ILineChannelTokenProvider } from '../services/line-channel-token-provider.js';
@@ -15,6 +15,22 @@ import { requireDormitoryPermission } from '../middleware/permission.js';
 import { requireDormitoryWriteEntitlement } from '../middleware/entitlement.js';
 import { resolveAuthoritativeDormitoryContext } from '../middleware/dormitory-context.js';
 import { createCsrfMiddleware } from '../middleware/csrf.js';
+
+export function resolveWebhookBaseUrl(req: Request): string {
+  const host = req.get('x-forwarded-host') || req.get('host');
+  if (host && (host.includes('.trycloudflare.com') || host.includes('ngrok') || (!host.includes('localhost') && !host.includes('127.0.0.1')))) {
+    let proto = req.get('x-forwarded-proto') === 'https' || req.protocol === 'https' ? 'https' : 'http';
+    if (host.includes('.trycloudflare.com') || host.includes('ngrok')) {
+      proto = 'https';
+    }
+    const candidate = `${proto}://${host}`;
+    const validated = validatePublicWebhookOrigin(candidate);
+    if (validated.isConfigured && validated.origin) {
+      return validated.origin;
+    }
+  }
+  return getPublicWebhookOrigin();
+}
 
 export function createLineOaRoutes(
   prisma: PrismaClient,
@@ -118,8 +134,13 @@ export function createLineOaRoutes(
           ? req.body
           : Buffer.from(typeof req.body === 'string' ? req.body : JSON.stringify(req.body || {}));
 
+        const detectedOrigin = resolveWebhookBaseUrl(req);
+        if (detectedOrigin) {
+          setActiveAppOrigin(detectedOrigin);
+        }
+
         const result = await lineOaService.processWebhookEvent(
-          opaqueKey, bodyBuffer, signatureHeader
+          opaqueKey, bodyBuffer, signatureHeader, detectedOrigin
         );
 
         return res.status(200).json(result);
@@ -139,7 +160,8 @@ export function createLineOaRoutes(
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const dormId = await getDormitoryId(req);
-        const baseUrl = getPublicWebhookOrigin();
+        const baseUrl = resolveWebhookBaseUrl(req);
+        setActiveAppOrigin(baseUrl);
         const config = await lineOaService.getDormitoryLineConfig(dormId, baseUrl);
         return res.status(200).json({ success: true, data: config, config });
       } catch (err) {
@@ -154,7 +176,7 @@ export function createLineOaRoutes(
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const dormId = await getDormitoryId(req);
-        const baseUrl = getPublicWebhookOrigin();
+        const baseUrl = resolveWebhookBaseUrl(req);
         const updated = await lineOaService.updateDormitoryLineConfig(
           dormId,
           { channelId: req.body.channelId, channelSecret: req.body.channelSecret },
@@ -173,7 +195,7 @@ export function createLineOaRoutes(
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const dormId = await getDormitoryId(req);
-        const baseUrl = getPublicWebhookOrigin();
+        const baseUrl = resolveWebhookBaseUrl(req);
         const updated = req.path.includes('rotate')
           ? await lineOaService.rotateWebhookKey(dormId, baseUrl)
           : await lineOaService.setWebhookEndpoint(dormId, baseUrl);
@@ -185,12 +207,12 @@ export function createLineOaRoutes(
   );
 
   protectedRouter.post(
-    '/dormitories/:dormId/line-oa/webhook/test',
+    ['/dormitories/:dormId/line-oa/webhook/test', '/dormitories/:dormId/line-oa/test-webhook'],
     ...mutationGuard('line_oa:manage'),
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const dormId = await getDormitoryId(req);
-        const baseUrl = getPublicWebhookOrigin();
+        const baseUrl = resolveWebhookBaseUrl(req);
         const updated = await lineOaService.testWebhookEndpoint(dormId, baseUrl);
         return res.status(200).json({ success: true, data: updated, config: updated });
       } catch (err) {
@@ -205,7 +227,8 @@ export function createLineOaRoutes(
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const dormId = await getDormitoryId(req);
-        const disconnected = await lineOaService.disconnectLineConfig(dormId);
+        const baseUrl = resolveWebhookBaseUrl(req);
+        const disconnected = await lineOaService.disconnectLineConfig(dormId, baseUrl);
         return res.status(200).json({ success: true, data: disconnected, config: disconnected });
       } catch (err) {
         next(err);
@@ -219,14 +242,32 @@ export function createLineOaRoutes(
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const dormId = await getDormitoryId(req);
+        const baseUrl = resolveWebhookBaseUrl(req);
         const updated = await lineOaService.updatePreferences(dormId, {
           notifyRepairRequest: req.body.notifyRepairRequest,
           notifyRepairCompleted: req.body.notifyRepairCompleted,
           notifyPaymentReceived: req.body.notifyPaymentReceived,
           notifyTenantRegister: req.body.notifyTenantRegister,
           notifyTenantApproved: req.body.notifyTenantApproved,
-        });
+        }, baseUrl);
         return res.status(200).json({ success: true, data: updated, preferences: updated });
+      } catch (err) {
+        next(err);
+      }
+    }
+  );
+
+  protectedRouter.post(
+    ['/dormitories/:dormId/line-oa/rich-menu/sync', '/dormitories/:dormId/line-oa/config/rich-menu/sync'],
+    ...mutationGuard('line_oa:manage'),
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const dormId = await getDormitoryId(req);
+        const baseUrl = resolveWebhookBaseUrl(req);
+        setActiveAppOrigin(baseUrl);
+        const force = Boolean(req.body?.force || req.query?.force === 'true');
+        const result = await lineOaService.syncRichMenus(dormId, baseUrl, force);
+        return res.status(200).json({ success: true, data: result });
       } catch (err) {
         next(err);
       }

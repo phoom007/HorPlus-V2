@@ -293,6 +293,21 @@ export const Task009ApiAdapter = {
   },
 
   /**
+   * Sync Rich Menus (Owner & Tenant) to LINE Platform
+   */
+  async syncRichMenus(dormId: string): Promise<{ success: boolean; data?: any; error?: any }> {
+    try {
+      const res = await httpRequest<any>('POST', `/dormitories/${dormId}/line-oa/rich-menu/sync`);
+      return { success: true, data: res.data || res };
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err instanceof HttpClientError ? err.domainError : { code: 'INTERNAL_ERROR', message: err.message }
+      };
+    }
+  },
+
+  /**
    * Redeem raw bearer token for staff access session
    */
   async redeemStaffAccess(token: string): Promise<{ success: boolean; data?: RedeemResult; error?: any }> {

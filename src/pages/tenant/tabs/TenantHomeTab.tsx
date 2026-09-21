@@ -25,7 +25,8 @@ import {
   LogOut,
   ChevronDown,
   ChevronRight,
-  Clock
+  Clock,
+  Edit3
 } from 'lucide-react';
 import { Tenant, Bill, Announcement } from '../../../types';
 import { getThaiGreeting, formatToBeDate, formatToBeFullDate, getAuthorRoleName } from '../tenantHelpers';
@@ -38,6 +39,8 @@ export interface TenantHomeTabProps {
   financialLoading: boolean;
   financialError: string | null;
   activeUnpaidBill: Bill | null;
+  totalUnpaidAmount?: number;
+  allUnpaidBills?: Bill[];
   totalNotificationsCount: number;
   notices: any[];
   announcements: Announcement[];
@@ -65,6 +68,8 @@ export const TenantHomeTab: React.FC<TenantHomeTabProps> = ({
   financialLoading,
   financialError,
   activeUnpaidBill,
+  totalUnpaidAmount,
+  allUnpaidBills,
   totalNotificationsCount,
   notices = [],
   announcements = [],
@@ -86,6 +91,21 @@ export const TenantHomeTab: React.FC<TenantHomeTabProps> = ({
 }) => {
   const filteredAnnouncements = announcements || [];
 
+  const effectivePrefix = (localTenant as any)?.prefix === 'ระบุเอง' || (localTenant as any)?.prefix === 'กำหนดเอง'
+    ? ((localTenant as any)?.customPrefix || (localTenant as any)?.prefix || '')
+    : ((localTenant as any)?.prefix || '');
+
+  let rawName = localTenant.name || 'ผู้เช่า';
+  if (rawName.startsWith('คุณ ')) {
+    rawName = rawName.slice(4).trim();
+  }
+  const isUnregistered = !hasRoom || (localTenant as any)?.status === 'unregistered' || rawName === 'ยังไม่ได้ลงทะเบียน';
+  const greetingName = isUnregistered
+    ? 'ยังไม่ได้ลงทะเบียน'
+    : (effectivePrefix
+        ? (rawName.startsWith(effectivePrefix) ? rawName : `${effectivePrefix} ${rawName}`)
+        : `คุณ ${rawName}`);
+
   return (
     <div className="space-y-5 pb-6 animate-in fade-in duration-200">
       {/* 1. Visual Indigo-Blue Gradient Hero Banner */}
@@ -96,7 +116,7 @@ export const TenantHomeTab: React.FC<TenantHomeTabProps> = ({
               {dormitoryName || tenantRoom?.dormitoryName || 'หอพัก HorPlus'}
             </span>
             <h3 className="text-base font-black mt-0.5 tracking-tight text-white">
-              คุณ {localTenant.name}
+              {greetingName}
             </h3>
             <div className="flex items-center gap-2 mt-2">
               <button
@@ -137,31 +157,14 @@ export const TenantHomeTab: React.FC<TenantHomeTabProps> = ({
         </div>
       </div>
 
-      {/* 2. Persistent Tenant Notices (Critical Announcements from Owner, excluding repair status updates which show in notification center) */}
-      {(() => {
-        const homeBannerNotices = notices.filter(
-          (n: any) => n.category !== 'MAINTENANCE_STATUS_UPDATED' && !n.title?.includes('แจ้งซ่อม')
-        );
-        if (homeBannerNotices.length === 0) return null;
-        return (
-          <div className="mx-4 space-y-2 relative z-20">
-            {homeBannerNotices.map((n: any) => (
-              <div
-                key={n.id || n.title}
-                className="p-4 bg-rose-50 border border-rose-200 rounded-2xl space-y-1.5 text-rose-900 shadow-xs"
-              >
-                <div className="flex items-center gap-2 font-black text-xs text-rose-900">
-                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 stroke-[2.5]" />
-                  <span>{n.title || 'แจ้งเตือนสำคัญจากผู้ดูแลหอพัก'}</span>
-                </div>
-                <p className="text-xs font-semibold leading-relaxed pl-6">
-                  {n.message || n.noticeText || n.content}
-                </p>
-              </div>
-            ))}
-          </div>
-        );
-      })()}
+      {/*
+        # CRITICAL ARCHITECTURAL DESIGN RULE:
+        # DO NOT render notification/announcement banners inside HomeTab above the hero card!
+        # Any banner placed here shifts the floating hero card (mt-[-60px]) and pushes down
+        # all subsequent navigation menus and bills, breaking the mobile UI layout (Layout Shift).
+        # All notifications and notices MUST remain exclusively inside the Notification Center
+        # modal accessible via the top-right bell button (totalNotificationsCount).
+      */}
 
       {/* 3. Floating Overlapping Hero Card */}
       <div className="mt-[-60px] mx-4 bg-white rounded-3xl p-5 border border-slate-100 shadow-xl flex flex-col gap-3 relative z-10 transition-all">
@@ -179,17 +182,22 @@ export const TenantHomeTab: React.FC<TenantHomeTabProps> = ({
           );
 
           if (hasRoom && !isSimulatingPending) {
-            return activeUnpaidBill ? (
+            const hasUnpaid = Boolean(activeUnpaidBill || (allUnpaidBills && allUnpaidBills.length > 0));
+            const displayUnpaidAmount = totalUnpaidAmount !== undefined
+              ? totalUnpaidAmount
+              : (activeUnpaidBill ? Number(activeUnpaidBill.totalAmount || 0) : 0);
+
+            return hasUnpaid && activeUnpaidBill ? (
               /* Mode A: ยอดค้างชำระ (Unpaid Bill Hero Card) */
               <div className="space-y-3 pt-0.5 animate-in fade-in duration-200" data-testid="tenant-unpaid-card">
                 <div className="flex justify-between items-start">
                   <div className="space-y-1">
                     <div className="flex items-center gap-1.5 text-amber-700 font-black text-xs">
                       <AlertCircle className="w-4 h-4 text-amber-500 stroke-[2.5]" />
-                      <span>ยอดค้างชำระ</span>
+                      <span>ยอดค้างชำระ{allUnpaidBills && allUnpaidBills.length > 1 ? ` (${allUnpaidBills.length} รายการ)` : ''}</span>
                     </div>
                     <h2 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight leading-none pt-1" data-testid="tenant-unpaid-amount">
-                      ฿ {Number(activeUnpaidBill.totalAmount).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      ฿ {displayUnpaidAmount.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </h2>
                     <p className="text-[11px] sm:text-xs text-slate-500 font-bold pt-1">
                       กำหนดชำระภายใน: <span className="font-black text-slate-700">{formatToBeDate(activeUnpaidBill.dueDate)}</span>
@@ -261,10 +269,108 @@ export const TenantHomeTab: React.FC<TenantHomeTabProps> = ({
           }
 
           /* Mode C: ลงทะเบียนผู้เช่า (สำหรับผู้เช่าที่ยังไม่มีห้อง หรือโหมดจำลอง) */
+          const isAwaitingConfirmation = Boolean(
+            !hasRoom && (
+              (localTenant as any)?.status === 'awaiting_tenant_confirmation' ||
+              (localTenant as any)?.pendingRequest?.status === 'awaiting_tenant_confirmation' ||
+              (localTenant as any)?.registrationRequestStatus === 'awaiting_tenant_confirmation'
+            )
+          );
+
+          if (hasRoom || (localTenant as any)?.status === 'active' || (localTenant as any)?.pendingRequest?.status === 'approved' || isAwaitingConfirmation) {
+            try {
+              if (typeof window !== 'undefined' && window.localStorage) {
+                window.localStorage.removeItem('pending_tenant_registration');
+              }
+            } catch {}
+          }
+
+          if (isAwaitingConfirmation) {
+            const req = (localTenant as any)?.pendingRequest;
+            return (
+              <div className="space-y-3 pt-0.5 animate-in fade-in duration-200" data-testid="tenant-awaiting-confirmation-card">
+                <div className="flex justify-between items-start">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-1.5 text-emerald-600 font-black text-xs">
+                      <Sparkles className="w-4 h-4 text-emerald-500 fill-emerald-400" />
+                      <span>คำขอได้รับการอนุมัติแล้ว</span>
+                    </div>
+                    <h2 className="text-lg font-black text-slate-900 tracking-tight">
+                      ยืนยันสัญญาเช่าห้อง {req?.requestedRoomNumber || ''}
+                    </h2>
+                    <p className="text-[10px] text-slate-500 font-medium leading-relaxed">
+                      เจ้าของหอพักได้ตรวจสอบและอนุมัติคำขอเช่าแล้ว กรุณาตรวจสอบเงื่อนไขสัญญาและลงนามเพื่อเปิดใช้งานห้องพัก
+                    </p>
+                  </div>
+                  <span className="px-2.5 py-0.5 rounded-full text-[9px] font-black bg-emerald-50 border border-emerald-200 text-emerald-800 shrink-0">
+                    รอคุณยืนยัน
+                  </span>
+                </div>
+
+                <button
+                  type="button"
+                  data-testid="tenant-confirm-register-btn"
+                  onClick={onStartRegister}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-black py-3 px-4 rounded-xl w-full text-center transition-all text-xs shadow-md shadow-emerald-600/20 flex items-center justify-center gap-2 cursor-pointer active:scale-98"
+                >
+                  <FileCheck2 className="w-4 h-4 text-emerald-100" />
+                  <span>ตรวจสอบและยืนยันสัญญาเช่า</span>
+                </button>
+              </div>
+            );
+          }
+
+          const isRejectedRegistration = Boolean(
+            !hasRoom && (
+              (localTenant as any)?.status === 'rejected' ||
+              (localTenant as any)?.pendingRequest?.status === 'rejected' ||
+              (localTenant as any)?.registrationRequestStatus === 'rejected'
+            )
+          );
+
+          if (isRejectedRegistration) {
+            const req = (localTenant as any)?.pendingRequest;
+            const reason = req?.rejectedReason || 'กรุณาตรวจสอบและแก้ไขข้อมูลให้ถูกต้องตามที่เจ้าของหอพักร้องขอ';
+            return (
+              <div className="space-y-3 pt-0.5 animate-in fade-in duration-200" data-testid="tenant-rejected-card">
+                <div className="flex justify-between items-start">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-1.5 text-rose-600 font-black text-xs">
+                      <AlertCircle className="w-4 h-4 text-rose-500 fill-rose-100" />
+                      <span>คำขอลงทะเบียนถูกปฏิเสธ</span>
+                    </div>
+                    <h2 className="text-lg font-black text-slate-900 tracking-tight">
+                      คำขอห้อง {req?.requestedRoomNumber || ''} ไม่ผ่านการอนุมัติ
+                    </h2>
+                    <p className="text-[11px] text-rose-700 bg-rose-50/90 border border-rose-200 p-2.5 rounded-xl font-medium leading-relaxed">
+                      <span className="font-bold">เหตุผลจากเจ้าของหอพัก:</span> {reason}
+                    </p>
+                  </div>
+                  <span className="px-2.5 py-0.5 rounded-full text-[9px] font-black bg-rose-50 border border-rose-200 text-rose-800 shrink-0">
+                    ถูกปฏิเสธ
+                  </span>
+                </div>
+
+                <button
+                  type="button"
+                  data-testid="tenant-resubmit-register-btn"
+                  onClick={onStartRegister}
+                  className="bg-rose-600 hover:bg-rose-700 text-white font-black py-3 px-4 rounded-xl w-full text-center transition-all text-xs shadow-md shadow-rose-600/20 flex items-center justify-center gap-2 cursor-pointer active:scale-98"
+                >
+                  <Edit3 className="w-4 h-4 text-rose-100" />
+                  <span>แก้ไขและส่งคำขอใหม่</span>
+                </button>
+              </div>
+            );
+          }
+
           const isPendingRegistration = Boolean(
             isSimulatingPending ||
-            (localTenant as any)?.status === 'pending_owner_approval' ||
-            (typeof window !== 'undefined' && typeof window.localStorage !== 'undefined' && window.localStorage?.getItem?.('pending_tenant_registration'))
+            (!hasRoom && !isAwaitingConfirmation && !isRejectedRegistration && (
+              (localTenant as any)?.status === 'pending_owner_approval' ||
+              (localTenant as any)?.pendingRequest?.status === 'pending_owner_approval' ||
+              (typeof window !== 'undefined' && typeof window.localStorage !== 'undefined' && window.localStorage?.getItem?.('pending_tenant_registration'))
+            ))
           );
 
           return (

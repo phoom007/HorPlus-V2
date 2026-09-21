@@ -188,6 +188,27 @@ export function createContractRenewalRouter(authService: AuthenticationService):
   router.post('/requests/:id/reject', ...mutationGuard('contract:write'), rejectRequestHandler);
   router.post('/:id/reject', ...mutationGuard('contract:write'), rejectRequestHandler);
 
+  // POST /api/v1/contract-renewals/requests/:id/cancel or /:id/cancel (Tenant cancels pending renewal)
+  const cancelRequestHandler = async (req: Request, res: Response) => {
+    if (!verifyCsrf(req, res)) return;
+    try {
+      const dormId = getAuthoritativeDormitoryId(req);
+      const tenantId = req.body?.tenantId;
+
+      const result = await contractRenewalService.cancelRenewalRequest({
+        dormitoryId: dormId,
+        requestId: req.params.id,
+        tenantId,
+      });
+
+      res.json({ data: result });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  };
+  router.post('/requests/:id/cancel', requireDormitoryPermission('contract:read'), cancelRequestHandler);
+  router.post('/:id/cancel', requireDormitoryPermission('contract:read'), cancelRequestHandler);
+
   // POST /api/v1/contract-renewals/activate-scheduled (Owner/Manager or System triggers scheduled contract activation)
   router.post('/activate-scheduled', ...mutationGuard('contract:write'), async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;

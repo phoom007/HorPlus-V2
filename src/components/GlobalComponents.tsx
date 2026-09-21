@@ -706,6 +706,7 @@ export const SignaturePad: React.FC<SignaturePadProps> = ({
           ref={canvasRef}
           width={400}
           height={160}
+          style={{ touchAction: 'none' }}
           className="w-full h-40 cursor-crosshair touch-none"
           onMouseDown={startDrawing}
           onMouseMove={draw}

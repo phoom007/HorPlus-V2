@@ -195,6 +195,24 @@ export class AccessGrantService {
       };
     });
 
+    // Update Rich Menu based on roleCode: if OWNER/MANAGER/STAFF, link Owner Rich Menu
+    if (['OWNER', 'MANAGER', 'STAFF'].includes(grantResult.grant.roleCode) && grantResult.grant.lineFriendId) {
+      try {
+        const friend = await this.prisma.dormitoryLineFriend.findUnique({
+          where: { id: grantResult.grant.lineFriendId }
+        });
+        if (friend && friend.lineUserIdEncrypted) {
+          const { decryptText } = await import('../utils/crypto-encryption.js');
+          const lineUserId = decryptText(friend.lineUserIdEncrypted);
+          const { LineRichMenuService } = await import('./line-richmenu.service.js');
+          const richMenuService = new LineRichMenuService(this.prisma, this.lineAdapter);
+          await richMenuService.linkOwnerRichMenu(dormitoryId, lineUserId);
+        }
+      } catch (rmErr: any) {
+        console.warn('Failed to switch rich menu on access grant creation:', rmErr.message);
+      }
+    }
+
     return {
       grant: grantResult.grant,
       bearerUrl: grantResult.bearerUrl,
@@ -530,7 +548,7 @@ export class AccessGrantService {
       throw new AppError('Role must be OWNER, MANAGER, or STAFF', 400, 'INVALID_ROLE_CODE');
     }
 
-    return await this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
       const grant = await tx.dormitoryAccessGrant.findFirst({
         where: { id: grantId, dormitoryId }
@@ -564,13 +582,41 @@ export class AccessGrantService {
 
       return updated;
     });
+
+    // Update Rich Menu dynamically based on new role
+    try {
+      const grant = await this.prisma.dormitoryAccessGrant.findUnique({
+        where: { id: grantId }
+      });
+      const friendId = grant?.lineFriendId;
+      if (friendId) {
+        const friend = await this.prisma.dormitoryLineFriend.findUnique({
+          where: { id: friendId }
+        });
+        if (friend?.lineUserIdEncrypted) {
+          const { decryptText } = await import('../utils/crypto-encryption.js');
+          const lineUserId = decryptText(friend.lineUserIdEncrypted);
+          const { LineRichMenuService } = await import('./line-richmenu.service.js');
+          const richMenuService = new LineRichMenuService(this.prisma, this.lineAdapter);
+          if (['OWNER', 'MANAGER', 'STAFF'].includes(newRoleCode)) {
+            await richMenuService.linkOwnerRichMenu(dormitoryId, lineUserId);
+          } else {
+            await richMenuService.unlinkOwnerRichMenu(dormitoryId, lineUserId);
+          }
+        }
+      }
+    } catch (rmErr: any) {
+      console.warn('Failed to switch rich menu on role update:', rmErr.message);
+    }
+
+    return result;
   }
 
   /**
    * Revoke an Access Grant immediately
    */
   async revokeAccessGrant(dormitoryId: string, grantId: string, revokedByPrincipal: string) {
-    return await this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
       const grant = await tx.dormitoryAccessGrant.findFirst({
         where: { id: grantId, dormitoryId }
@@ -613,6 +659,30 @@ export class AccessGrantService {
 
       return revokedGrant;
     });
+
+    // Revert Rich Menu to default Tenant Rich Menu
+    try {
+      const grant = await this.prisma.dormitoryAccessGrant.findUnique({
+        where: { id: grantId }
+      });
+      const friendId = grant?.lineFriendId;
+      if (friendId) {
+        const friend = await this.prisma.dormitoryLineFriend.findUnique({
+          where: { id: friendId }
+        });
+        if (friend?.lineUserIdEncrypted) {
+          const { decryptText } = await import('../utils/crypto-encryption.js');
+          const lineUserId = decryptText(friend.lineUserIdEncrypted);
+          const { LineRichMenuService } = await import('./line-richmenu.service.js');
+          const richMenuService = new LineRichMenuService(this.prisma, this.lineAdapter);
+          await richMenuService.unlinkOwnerRichMenu(dormitoryId, lineUserId);
+        }
+      }
+    } catch (rmErr: any) {
+      console.warn('Failed to unlink rich menu on grant revocation:', rmErr.message);
+    }
+
+    return result;
   }
 
   /**

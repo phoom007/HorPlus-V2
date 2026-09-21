@@ -325,6 +325,10 @@ describe('Tenant Modular Portal Architecture & UI Overhaul Suite', () => {
     const payTile = await screen.findByText('ชำระค่าเช่า');
     fireEvent.click(payTile);
 
+    // Ticket 05 Point 1: HomeTab "ชำระค่าเช่า" opens invoice view first to review bill, then clicking 'แจ้งชำระเงิน' opens payment subview
+    const invoicePayBtn = await screen.findByTestId('btn-invoice-pay');
+    fireEvent.click(invoicePayBtn);
+
     // Payment Subview
     expect(await screen.findByText('แจ้งชำระเงิน')).toBeDefined();
     expect(screen.getByText('ช่องทางการชำระเงิน')).toBeDefined();
@@ -368,16 +372,15 @@ describe('Tenant Modular Portal Architecture & UI Overhaul Suite', () => {
     expect(screen.getByText('แจ้งย้ายออก / เลิกเช่าห้องพัก')).toBeDefined();
   });
 
-  it('renders the DevTenantSwitcher button in non-production mode', async () => {
+  it('does not render DevTenantSwitcher in tenant workspace (PO requirement)', async () => {
     render(
       <MemoryRouter initialEntries={['/tenant']}>
         <TenantWorkspace tenant={mockTenant} onLogout={() => { }} />
       </MemoryRouter>
     );
 
-    const devSwitcher = await screen.findByTestId('dev-tenant-switcher-btn');
-    expect(devSwitcher).toBeDefined();
-    expect(screen.getByText('DEV SWITCHER')).toBeDefined();
+    expect(screen.queryByTestId('dev-tenant-switcher-btn')).toBeNull();
+    expect(screen.queryByText('DEV SWITCHER')).toBeNull();
   });
 
   it('hides fixed bottom navigation bar when inside subviews to prevent button collision', async () => {
@@ -585,9 +588,9 @@ describe('Tenant Modular Portal Architecture & UI Overhaul Suite', () => {
     const editBtn = await screen.findByTestId('btn-edit-tenant-info');
     expect(editBtn.textContent).toContain('แก้ไขข้อมูล');
 
-    // Click to expand inline form
+    // Click to expand inline form / open bottom sheet
     fireEvent.click(editBtn);
-    expect(await screen.findByText('แก้ไขข้อมูลยานพาหนะและสัตว์เลี้ยง')).toBeDefined();
+    expect(await screen.findByTestId('tenant-bottom-sheet')).toBeDefined();
 
     // Verify vehicle options
     expect(screen.getByText('รถยนต์')).toBeDefined();
@@ -686,7 +689,9 @@ describe('Tenant Modular Portal Architecture & UI Overhaul Suite', () => {
     fireEvent.click(contractTile);
 
     const idCardDoc = await screen.findByTestId('tenant-doc-item-id_card');
-    expect(idCardDoc.textContent).toContain('อัปโหลดแล้ว');
+    // PO Requirement (Ticket 03): When ID card is uploaded, badge is null/empty, not 'อัปโหลดแล้ว'
+    expect(idCardDoc.textContent).not.toContain('อัปโหลดแล้ว');
+    expect(idCardDoc.textContent).not.toContain('ยังไม่อัปโหลด');
 
     fireEvent.click(idCardDoc);
     expect(mockWindowOpen).toHaveBeenCalledWith('', '_blank');
@@ -742,16 +747,14 @@ describe('Tenant Modular Portal Architecture & UI Overhaul Suite', () => {
     expect(mockWindowOpen).toHaveBeenCalledWith('', '_blank', expect.any(String));
     expect(writtenHtml).not.toContain('window.onload');
 
-    // 2. Download Button Click: Should contain auto-print script (PO Q1=A: กดปุ่ม download สั่งพิมพ์/Save as PDF ทันที)
+    // 2. Download Button Click: Should open contract PDF URL directly in new tab (PO requirement)
     mockWindowOpen.mockClear();
     writtenHtml = '';
     const contractDownloadBtn = screen.getByTestId('btn-download-doc-contract');
     fireEvent.click(contractDownloadBtn);
-    // Must be dispatched EXACTLY ONCE (no duplicate popups)
+    // Must be dispatched EXACTLY ONCE with PDF URL
     expect(mockWindowOpen).toHaveBeenCalledTimes(1);
-    expect(mockWindowOpen).toHaveBeenCalledWith('', '_blank', expect.any(String));
-    expect(writtenHtml).toContain('window.onload');
-    expect(writtenHtml).toContain('window.print()');
+    expect(mockWindowOpen).toHaveBeenCalledWith('/api/v1/tenant-portal/contract/pdf', '_blank');
   });
 
   it('handles ID card download button: triggers download link when photo exists or file picker when missing', async () => {
@@ -985,6 +988,55 @@ describe('Tenant Modular Portal Architecture & UI Overhaul Suite', () => {
     expect(regBtn.textContent).toContain('ลงทะเบียนผู้เช่า');
 
     fireEvent.click(regBtn);
+    expect(onStartRegister).toHaveBeenCalledTimes(1);
+    cleanup();
+  });
+
+  it('CRIT-AWAITING-CONFIRMATION-CTA: verifies TenantHomeTab renders awaiting confirmation CTA when tenant status is awaiting_tenant_confirmation', () => {
+    const onStartRegister = vi.fn();
+    render(
+      <TenantHomeTab
+        localTenant={{
+          ...mockTenant,
+          roomId: undefined,
+          roomNumber: undefined,
+          status: 'awaiting_tenant_confirmation',
+          pendingRequest: {
+            id: 'req-123',
+            status: 'awaiting_tenant_confirmation',
+            requestedRoomNumber: '204',
+          },
+        } as any}
+        tenantRoom={null}
+        hasRoom={false}
+        financialLoading={false}
+        financialError={null}
+        activeUnpaidBill={null}
+        totalNotificationsCount={0}
+        notices={[]}
+        announcements={[]}
+        onOpenRoomSwitcher={() => { }}
+        onOpenNotifications={() => { }}
+        onOpenUtilities={() => { }}
+        onOpenContract={() => { }}
+        onOpenRepairs={() => { }}
+        onOpenInvoice={() => { }}
+        onOpenPayment={() => { }}
+        onOpenMoveOut={() => { }}
+        onOpenRenewal={() => { }}
+        onGoToAnnouncements={() => { }}
+        onRefresh={() => { }}
+        onStartRegister={onStartRegister}
+      />
+    );
+    expect(screen.getByTestId('tenant-awaiting-confirmation-card')).toBeDefined();
+    expect(screen.getByText('คำขอได้รับการอนุมัติแล้ว')).toBeDefined();
+    expect(screen.getByText('ยืนยันสัญญาเช่าห้อง 204')).toBeDefined();
+    const confirmBtn = screen.getByTestId('tenant-confirm-register-btn');
+    expect(confirmBtn).toBeDefined();
+    expect(confirmBtn.textContent).toContain('ตรวจสอบและยืนยันสัญญาเช่า');
+
+    fireEvent.click(confirmBtn);
     expect(onStartRegister).toHaveBeenCalledTimes(1);
     cleanup();
   });
@@ -1281,7 +1333,7 @@ describe('Tenant Modular Portal Architecture & UI Overhaul Suite', () => {
         cleanup();
       });
 
-      it('CRIT-PREFIX-HONORIFIC-02: Prefix dropdown contains เด็กชาย, เด็กหญิง, กำหนดเอง and shows text input when กำหนดเอง is selected', () => {
+      it('CRIT-PREFIX-HONORIFIC-02: Prefix dropdown contains เด็กชาย, เด็กหญิง, ระบุเอง and shows text input when ระบุเอง is selected', () => {
         const mockRooms = [{
           id: 'room-101',
           roomNumber: '101',
@@ -1296,10 +1348,10 @@ describe('Tenant Modular Portal Architecture & UI Overhaul Suite', () => {
         expect(prefixSelect).toBeDefined();
         expect(screen.getByRole('option', { name: 'เด็กชาย' })).toBeDefined();
         expect(screen.getByRole('option', { name: 'เด็กหญิง' })).toBeDefined();
-        expect(screen.getByRole('option', { name: 'กำหนดเอง' })).toBeDefined();
+        expect(screen.getByRole('option', { name: 'ระบุเอง' })).toBeDefined();
 
-        // Select 'กำหนดเอง'
-        fireEvent.change(prefixSelect, { target: { value: 'กำหนดเอง' } });
+        // Select 'ระบุเอง'
+        fireEvent.change(prefixSelect, { target: { value: 'ระบุเอง' } });
         expect(screen.getByTestId('tenant-custom-prefix-input')).toBeDefined();
         expect(screen.getByPlaceholderText('เช่น ยศ, ด.ช., พระ ฯลฯ')).toBeDefined();
         cleanup();
@@ -2394,10 +2446,9 @@ describe('Tenant Modular Portal Architecture & UI Overhaul Suite', () => {
           // Clause 5 must be present with total occupants = 2 (1 main + 1 co)
           expect(step5Container?.textContent).toContain('ข้อ 5. จำนวนผู้พักอาศัยและผู้พักร่วม:');
           expect(step5Container?.textContent).toContain('2 คน');
-          expect(step5Container?.textContent).toContain('เพื่อความปลอดภัยและเพื่อใช้เป็นฐานในการคำนวณตามจำนวนคนจริง');
 
-          // Rules must be renumbered to Clause 6
-          expect(step5Container?.textContent).toContain('ข้อ 6. ข้อตกลงและระเบียบโครงการสำคัญ');
+          // Rules must be Clause 6
+          expect(step5Container?.textContent).toContain('ข้อ 6. ข้อตกลงและระเบียบการอยู่อาศัย:');
 
           cleanup();
         });
@@ -2456,10 +2507,10 @@ describe('Tenant Modular Portal Architecture & UI Overhaul Suite', () => {
           expect(writtenHtml).toContain('นายภัทร อัครเดช (หอพักภัทรเฮ้าส์)');
           expect(writtenHtml).toContain('(นายภัทร อัครเดช)');
           // Verify Clause 5 occupants count (1 main + 1 coTenant = 2)
-          expect(writtenHtml).toContain('จำนวนผู้พักอาศัยและผู้พักร่วม (ข้อ 5):');
+          expect(writtenHtml).toContain('ข้อ 5. จำนวนผู้พักอาศัยและผู้พักร่วม:');
           expect(writtenHtml).toContain('2 คน');
           // Verify Clause 6 rules
-          expect(writtenHtml).toContain('ข้อ 6. ข้อตกลงและระเบียบการอยู่อาศัย');
+          expect(writtenHtml).toContain('ข้อ 6. ข้อตกลงและระเบียบการอยู่อาศัย:');
           // Verify signatures present
           expect(writtenHtml).toContain('mockTenantSig');
           expect(writtenHtml).toContain('mockOwnerSig');
@@ -2619,8 +2670,8 @@ describe('Tenant Modular Portal Architecture & UI Overhaul Suite', () => {
           const hasItalicSigner = Array.from(italicSpans || []).some(s => s.textContent?.trim() === 'นายเจ้าของ หอพัก');
           expect(hasItalicSigner).toBe(false);
 
-          // Dotted line space rendered
-          expect(step5Container?.textContent).toContain('........................................');
+          // Clean signature space rendered without dots (Round 28 Q6)
+          expect(step5Container?.textContent).toContain('ผู้ให้เช่าลงนามแล้ว');
 
           // Printed name below
           expect(step5Container?.textContent).toContain('(นายเจ้าของ หอพัก)');
@@ -2791,7 +2842,7 @@ describe('Tenant Modular Portal Architecture & UI Overhaul Suite', () => {
         expect(screen.getByText('รวมค่าห้องพัก:')).toBeDefined();
 
         // Key deposit and deposit status
-        expect(screen.getByText('ค่ามัดจำกุญแจ/ห้อง (ถ้ามี)')).toBeDefined();
+        expect(screen.getByText('ค่าประกัน / ค่ามัดจำ (บาท) *')).toBeDefined();
         expect(screen.getByText('สถานะเงินมัดจำ')).toBeDefined();
         expect(screen.getByText('ชำระแล้ว')).toBeDefined();
         expect(screen.getByText('ยังไม่ชำระ')).toBeDefined();

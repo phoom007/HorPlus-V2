@@ -211,6 +211,8 @@ export interface PetItem {
 export interface Tenant {
   id: string;
   name: string;
+  prefix?: string;
+  customPrefix?: string;
   phone: string;
   email: string;
   citizenId: string;

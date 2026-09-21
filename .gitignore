@@ -24,6 +24,7 @@ coverage/
 # ----------------------------------------------------------------------
 backups/
 scratch/
+.scratch/
 !scripts/
 scripts/*
 !scripts/local07/

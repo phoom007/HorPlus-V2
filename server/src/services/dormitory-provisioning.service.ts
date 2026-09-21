@@ -866,7 +866,8 @@ export class DormitoryProvisioningService {
 
       // Save Buildings and Rooms if provided (idempotent upsert)
       if (buildings && buildings.length > 0) {
-        for (const b of buildings) {
+        for (let bIdx = 0; bIdx < buildings.length; bIdx++) {
+          const b = buildings[bIdx];
           const bMonthlyStr = (b.monthlyRent !== undefined && b.monthlyRent !== null && String(b.monthlyRent) !== '') ? String(b.monthlyRent) : null;
           const bDailyStr = (b.dailyRent !== undefined && b.dailyRent !== null && String(b.dailyRent) !== '') ? String(b.dailyRent) : null;
           const bTermStr = (b.termRent !== undefined && b.termRent !== null && String(b.termRent) !== '') ? String(b.termRent) : null;
@@ -883,6 +884,7 @@ export class DormitoryProvisioningService {
           const bDailyDepositStr = (b.dailyDeposit !== undefined && b.dailyDeposit !== null && String(b.dailyDeposit) !== '') ? String(b.dailyDeposit) : null;
           const bMaxOcc = b.maximumOccupants ?? 2;
           const bNumPattern = b.numberingPattern || b.formatPattern || null;
+          const bDisplayOrder = (b as any).displayOrder !== undefined && (b as any).displayOrder !== null ? Number((b as any).displayOrder) : bIdx;
 
           const createdBld = await tx.building.upsert({
             where: {
@@ -901,6 +903,7 @@ export class DormitoryProvisioningService {
               hasElevator: b.hasElevator ?? false,
               numberingPattern: bNumPattern,
               description: b.description || null,
+              displayOrder: bDisplayOrder,
               monthlyRent: bMonthlyStr,
               dailyRent: bDailyStr,
               termRent: bTermStr,
@@ -920,6 +923,7 @@ export class DormitoryProvisioningService {
               hasElevator: b.hasElevator ?? false,
               numberingPattern: bNumPattern,
               description: b.description || null,
+              displayOrder: bDisplayOrder,
               monthlyRent: bMonthlyStr,
               dailyRent: bDailyStr,
               termRent: bTermStr,

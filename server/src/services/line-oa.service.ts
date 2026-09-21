@@ -10,6 +10,7 @@ import {
   encryptText,
   decryptText,
   generateOpaqueWebhookKey,
+  generateGrantToken,
   hashToken,
   verifyLineSignature
 } from '../utils/crypto-encryption.js';
@@ -19,6 +20,8 @@ import { LinePlatformAdapter, MockLinePlatformAdapter } from './line-platform-ad
 import { createLinePlatformAdapter } from './line-adapter-factory.js';
 import { LineChannelTokenProvider, ILineChannelTokenProvider, FakeLineTokenProvider } from './line-channel-token-provider.js';
 import { TenantRegistrationInviteService, tenantRegistrationInviteService } from './tenant-registration-invite.service.js';
+import { LinePushUsageService } from './line-push-usage.service.js';
+import { LineRichMenuService } from './line-richmenu.service.js';
 import QRCode from 'qrcode';
 
 export interface PublicWebhookOriginStatus {
@@ -63,13 +66,31 @@ export function getPublicWebhookOrigin(): string {
   return status.origin || '';
 }
 
+let dynamicPublicAppOrigin: string | null = null;
+
+export function setActiveAppOrigin(origin: string | null | undefined): void {
+  if (!origin || typeof origin !== 'string') return;
+  const trimmed = origin.trim().replace(/\/+$/, '');
+  if (trimmed && (trimmed.startsWith('https://') || trimmed.startsWith('http://'))) {
+    dynamicPublicAppOrigin = trimmed;
+  }
+}
+
+export function getActiveAppOrigin(): string | null {
+  return dynamicPublicAppOrigin;
+}
+
+export function resetActiveAppOriginForTest(): void {
+  dynamicPublicAppOrigin = null;
+}
+
 export function getPublicAppOrigin(): string {
   const isE2E = process.env.NODE_ENV === 'test' || process.env.HORPLUS_E2E === 'true';
   const isProd = process.env.NODE_ENV === 'production';
 
-  const rawOrigin = isProd
+  const rawOrigin = dynamicPublicAppOrigin || (isProd
     ? (process.env.PUBLIC_APP_ORIGIN || '')
-    : (process.env.PUBLIC_APP_ORIGIN || (isE2E ? 'https://app.horplus.com' : 'http://localhost:5173'));
+    : (process.env.PUBLIC_APP_ORIGIN || (isE2E ? 'https://app.horplus.com' : 'http://localhost:5173')));
 
   const origin = rawOrigin.trim().replace(/\/+$/, '');
 
@@ -86,6 +107,16 @@ export function getPublicAppOrigin(): string {
   }
 
   return origin || 'http://localhost:5173';
+}
+
+export function getTenantRegistrationUrl(rawToken: string, appOrigin?: string): string {
+  const origin = (appOrigin || getPublicAppOrigin()).trim().replace(/\/+$/, '');
+  const explicitLiffId = process.env.VITE_LINE_LIFF_ID || process.env.LINE_LIFF_ID;
+  const preferDirect = process.env.PREFER_DIRECT_LINE_ENTRY === 'true';
+  if (!preferDirect && explicitLiffId && explicitLiffId.trim()) {
+    return `https://liff.line.me/${explicitLiffId.trim()}/tenant?t=${encodeURIComponent(rawToken)}`;
+  }
+  return `${origin}/api/v1/auth/line-tenant-entry?t=${encodeURIComponent(rawToken)}`;
 }
 
 export function buildTenantRegistrationFlexMessage(dormitoryName: string, registrationUrl: string) {
@@ -244,7 +275,11 @@ export function buildTenantApprovalOutcomeFlexMessage(
     });
   }
 
-  const targetUrl = `${appUrl || 'http://localhost:5173'}/tenant`;
+  const origin = (appUrl || getPublicAppOrigin()).trim().replace(/\/+$/, '');
+  const explicitLiffId = process.env.VITE_LINE_LIFF_ID || process.env.LINE_LIFF_ID;
+  const targetUrl = explicitLiffId && explicitLiffId.trim()
+    ? `https://liff.line.me/${explicitLiffId.trim()}/tenant`
+    : `${origin}/tenant`;
 
   return {
     type: 'flex',
@@ -302,11 +337,1028 @@ export function buildTenantApprovalOutcomeFlexMessage(
   };
 }
 
+export function buildOwnerDirectEntryFlexMessage(dormitoryName: string, directEntryUrl: string) {
+  return {
+    type: 'flex',
+    altText: `เข้าสู่ระบบจัดการหอพัก - ${dormitoryName}`,
+    contents: {
+      type: 'bubble',
+      header: {
+        type: 'box',
+        layout: 'vertical',
+        backgroundColor: '#4F46E5',
+        paddingAll: '20px',
+        contents: [
+          {
+            type: 'text',
+            text: dormitoryName,
+            color: '#C7D2FE',
+            size: 'xs',
+            weight: 'regular',
+          },
+          {
+            type: 'text',
+            text: '🏢 จัดการหอพัก',
+            color: '#FFFFFF',
+            size: 'lg',
+            weight: 'bold',
+            wrap: true,
+          },
+        ],
+      },
+      body: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'md',
+        paddingAll: '20px',
+        contents: [
+          {
+            type: 'text',
+            text: 'เข้าสู่ระบบจัดการหอพักได้ทันทีโดยไม่ต้องกรอกรหัสผ่าน (ลิงก์มีอายุ 60 วินาทีเพื่อความปลอดภัย)',
+            size: 'sm',
+            color: '#475569',
+            wrap: true,
+          },
+        ],
+      },
+      footer: {
+        type: 'box',
+        layout: 'vertical',
+        paddingAll: '16px',
+        contents: [
+          {
+            type: 'button',
+            style: 'primary',
+            color: '#4F46E5',
+            action: {
+              type: 'uri',
+              label: 'เปิด Dashboard จัดการหอพัก',
+              uri: directEntryUrl,
+            },
+          },
+        ],
+      },
+    },
+  };
+}
+
+export function buildOwnerNewTenantRegistrationFlexMessage(
+  dormitoryName: string,
+  applicantName: string,
+  roomNumber: string,
+  phone: string,
+  appOrigin?: string
+) {
+  const origin = (appOrigin || getPublicAppOrigin()).trim().replace(/\/+$/, '');
+  const explicitLiffId = process.env.VITE_LINE_LIFF_ID || process.env.LINE_LIFF_ID;
+  const preferDirect = process.env.PREFER_DIRECT_LINE_ENTRY === 'true';
+  const ownerHomeUrl = (!preferDirect && explicitLiffId && explicitLiffId.trim())
+    ? `https://liff.line.me/${explicitLiffId.trim()}/owner/home`
+    : `${origin}/owner/home`;
+
+  return {
+    type: 'flex',
+    altText: `มีคำขอลงทะเบียนผู้เช่าใหม่ ห้อง ${roomNumber} - ${dormitoryName}`,
+    contents: {
+      type: 'bubble',
+      header: {
+        type: 'box',
+        layout: 'vertical',
+        backgroundColor: '#4F46E5',
+        paddingAll: '20px',
+        contents: [
+          {
+            type: 'text',
+            text: dormitoryName,
+            color: '#C7D2FE',
+            size: 'xs',
+            weight: 'regular',
+          },
+          {
+            type: 'text',
+            text: '📝 คำขอลงทะเบียนผู้เช่าใหม่',
+            color: '#FFFFFF',
+            size: 'md',
+            weight: 'bold',
+            wrap: true,
+          },
+        ],
+      },
+      body: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'sm',
+        paddingAll: '20px',
+        contents: [
+          {
+            type: 'box',
+            layout: 'horizontal',
+            contents: [
+              { type: 'text', text: 'ห้องพัก', size: 'sm', color: '#64748B', flex: 2 },
+              { type: 'text', text: `ห้อง ${roomNumber}`, size: 'sm', color: '#0F172A', weight: 'bold', flex: 4, align: 'end' },
+            ],
+          },
+          {
+            type: 'box',
+            layout: 'horizontal',
+            contents: [
+              { type: 'text', text: 'ชื่อผู้สมัคร', size: 'sm', color: '#64748B', flex: 2 },
+              { type: 'text', text: applicantName, size: 'sm', color: '#0F172A', weight: 'bold', flex: 4, align: 'end' },
+            ],
+          },
+          {
+            type: 'box',
+            layout: 'horizontal',
+            contents: [
+              { type: 'text', text: 'เบอร์ติดต่อ', size: 'sm', color: '#64748B', flex: 2 },
+              { type: 'text', text: phone, size: 'sm', color: '#0F172A', weight: 'bold', flex: 4, align: 'end' },
+            ],
+          },
+          {
+            type: 'text',
+            text: 'มีผู้เช่าส่งคำขอลงทะเบียนเข้ามาในระบบ กรุณาตรวจสอบข้อมูลและอนุมัติสัญญาเช่า',
+            size: 'xs',
+            color: '#475569',
+            margin: 'md',
+            wrap: true,
+          },
+        ],
+      },
+      footer: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'sm',
+        contents: [
+          {
+            type: 'button',
+            style: 'primary',
+            color: '#4F46E5',
+            action: {
+              type: 'uri',
+              label: 'ตรวจสอบคำขอลงทะเบียน',
+              uri: ownerHomeUrl,
+            },
+          },
+        ],
+      },
+    },
+  };
+}
+
+export function buildOwnerMoveOutRequestFlexMessage(
+  dormitoryName: string,
+  applicantName: string,
+  roomNumber: string,
+  intendedMoveOutDate: string,
+  appOrigin?: string
+) {
+  const origin = (appOrigin || getPublicAppOrigin()).trim().replace(/\/+$/, '');
+  const explicitLiffId = process.env.VITE_LINE_LIFF_ID || process.env.LINE_LIFF_ID;
+  const preferDirect = process.env.PREFER_DIRECT_LINE_ENTRY === 'true';
+  const ownerHomeUrl = (!preferDirect && explicitLiffId && explicitLiffId.trim())
+    ? `https://liff.line.me/${explicitLiffId.trim()}/owner/home`
+    : `${origin}/owner/home`;
+
+  return {
+    type: 'flex',
+    altText: `มีคำขอแจ้งย้ายออก ห้อง ${roomNumber} - ${dormitoryName}`,
+    contents: {
+      type: 'bubble',
+      header: {
+        type: 'box',
+        layout: 'vertical',
+        backgroundColor: '#DC2626',
+        paddingAll: '20px',
+        contents: [
+          {
+            type: 'text',
+            text: dormitoryName,
+            color: '#FECACA',
+            size: 'xs',
+            weight: 'regular',
+          },
+          {
+            type: 'text',
+            text: 'คำขอแจ้งย้ายออกใหม่',
+            color: '#FFFFFF',
+            size: 'md',
+            weight: 'bold',
+            wrap: true,
+          },
+        ],
+      },
+      body: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'sm',
+        paddingAll: '20px',
+        contents: [
+          {
+            type: 'box',
+            layout: 'horizontal',
+            contents: [
+              { type: 'text', text: 'ห้องพัก', size: 'sm', color: '#64748B', flex: 2 },
+              { type: 'text', text: `ห้อง ${roomNumber}`, size: 'sm', color: '#0F172A', weight: 'bold', flex: 4, align: 'end' },
+            ],
+          },
+          {
+            type: 'box',
+            layout: 'horizontal',
+            contents: [
+              { type: 'text', text: 'ชื่อผู้เช่า', size: 'sm', color: '#64748B', flex: 2 },
+              { type: 'text', text: applicantName, size: 'sm', color: '#0F172A', weight: 'bold', flex: 4, align: 'end' },
+            ],
+          },
+          {
+            type: 'box',
+            layout: 'horizontal',
+            contents: [
+              { type: 'text', text: 'วันที่ประสงค์ย้ายออก', size: 'sm', color: '#64748B', flex: 3 },
+              { type: 'text', text: intendedMoveOutDate, size: 'sm', color: '#DC2626', weight: 'bold', flex: 3, align: 'end' },
+            ],
+          },
+          {
+            type: 'text',
+            text: 'ผู้เช่าได้ส่งคำขอแจ้งย้ายออกล่วงหน้า กรุณาตรวจสอบรายละเอียดและดำเนินการเมื่อถึงกำหนด',
+            size: 'xs',
+            color: '#475569',
+            margin: 'md',
+            wrap: true,
+          },
+        ],
+      },
+      footer: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'sm',
+        contents: [
+          {
+            type: 'button',
+            style: 'primary',
+            color: '#DC2626',
+            action: {
+              type: 'uri',
+              label: 'ตรวจสอบคำขอย้ายออก',
+              uri: ownerHomeUrl,
+            },
+          },
+        ],
+      },
+    },
+  };
+}
+
+export function buildOwnerRenewalRequestFlexMessage(
+  dormitoryName: string,
+  applicantName: string,
+  roomNumber: string,
+  durationMonths: number,
+  startDate: string,
+  appOrigin?: string
+) {
+  const origin = (appOrigin || getPublicAppOrigin()).trim().replace(/\/+$/, '');
+  const explicitLiffId = process.env.VITE_LINE_LIFF_ID || process.env.LINE_LIFF_ID;
+  const preferDirect = process.env.PREFER_DIRECT_LINE_ENTRY === 'true';
+  const ownerHomeUrl = (!preferDirect && explicitLiffId && explicitLiffId.trim())
+    ? `https://liff.line.me/${explicitLiffId.trim()}/owner/home`
+    : `${origin}/owner/home`;
+
+  return {
+    type: 'flex',
+    altText: `มีคำขอต่อสัญญาเช่า ห้อง ${roomNumber} - ${dormitoryName}`,
+    contents: {
+      type: 'bubble',
+      header: {
+        type: 'box',
+        layout: 'vertical',
+        backgroundColor: '#2563EB',
+        paddingAll: '20px',
+        contents: [
+          {
+            type: 'text',
+            text: dormitoryName,
+            color: '#BFDBFE',
+            size: 'xs',
+            weight: 'regular',
+          },
+          {
+            type: 'text',
+            text: 'คำขอต่อสัญญาเช่าใหม่',
+            color: '#FFFFFF',
+            size: 'md',
+            weight: 'bold',
+            wrap: true,
+          },
+        ],
+      },
+      body: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'sm',
+        paddingAll: '20px',
+        contents: [
+          {
+            type: 'box',
+            layout: 'horizontal',
+            contents: [
+              { type: 'text', text: 'ห้องพัก', size: 'sm', color: '#64748B', flex: 2 },
+              { type: 'text', text: `ห้อง ${roomNumber}`, size: 'sm', color: '#0F172A', weight: 'bold', flex: 4, align: 'end' },
+            ],
+          },
+          {
+            type: 'box',
+            layout: 'horizontal',
+            contents: [
+              { type: 'text', text: 'ชื่อผู้เช่า', size: 'sm', color: '#64748B', flex: 2 },
+              { type: 'text', text: applicantName, size: 'sm', color: '#0F172A', weight: 'bold', flex: 4, align: 'end' },
+            ],
+          },
+          {
+            type: 'box',
+            layout: 'horizontal',
+            contents: [
+              { type: 'text', text: 'ระยะเวลาต่อสัญญา', size: 'sm', color: '#64748B', flex: 3 },
+              { type: 'text', text: `${durationMonths} เดือน`, size: 'sm', color: '#2563EB', weight: 'bold', flex: 3, align: 'end' },
+            ],
+          },
+          {
+            type: 'box',
+            layout: 'horizontal',
+            contents: [
+              { type: 'text', text: 'วันเริ่มสัญญาใหม่', size: 'sm', color: '#64748B', flex: 3 },
+              { type: 'text', text: startDate, size: 'sm', color: '#0F172A', weight: 'bold', flex: 3, align: 'end' },
+            ],
+          },
+          {
+            type: 'text',
+            text: 'ผู้เช่าได้ส่งคำขอต่อสัญญาเข้ามาในระบบ กรุณาตรวจสอบเงื่อนไขและอนุมัติสัญญาเช่า',
+            size: 'xs',
+            color: '#475569',
+            margin: 'md',
+            wrap: true,
+          },
+        ],
+      },
+      footer: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'sm',
+        contents: [
+          {
+            type: 'button',
+            style: 'primary',
+            color: '#2563EB',
+            action: {
+              type: 'uri',
+              label: 'ตรวจสอบคำขอต่อสัญญา',
+              uri: ownerHomeUrl,
+            },
+          },
+        ],
+      },
+    },
+  };
+}
+
+export function buildTenantRenewalOutcomeFlexMessage(
+  dormitoryName: string,
+  roomNumber: string,
+  isApproved: boolean,
+  reason?: string,
+  appUrl?: string
+) {
+  const isOk = Boolean(isApproved);
+  const headerBgColor = isOk ? '#059669' : '#DC2626';
+  const headerTitle = isOk ? 'อนุมัติการต่อสัญญาเช่าเรียบร้อยแล้ว' : 'แจ้งผลการพิจารณาคำขอต่อสัญญาเช่า';
+  const statusBadgeColor = isOk ? '#166534' : '#991B1B';
+  const statusText = isOk ? 'อนุมัติแล้ว' : 'ไม่อนุมัติ';
+
+  const bodyContents: any[] = [
+    {
+      type: 'box',
+      layout: 'horizontal',
+      contents: [
+        {
+          type: 'text',
+          text: 'สถานะ',
+          size: 'sm',
+          color: '#64748B',
+          flex: 2,
+        },
+        {
+          type: 'text',
+          text: statusText,
+          size: 'sm',
+          color: statusBadgeColor,
+          weight: 'bold',
+          flex: 4,
+          align: 'end',
+        },
+      ],
+    },
+    {
+      type: 'box',
+      layout: 'horizontal',
+      contents: [
+        {
+          type: 'text',
+          text: 'ห้องพัก',
+          size: 'sm',
+          color: '#64748B',
+          flex: 2,
+        },
+        {
+          type: 'text',
+          text: `ห้อง ${roomNumber}`,
+          size: 'sm',
+          color: '#0F172A',
+          weight: 'bold',
+          flex: 4,
+          align: 'end',
+        },
+      ],
+    },
+  ];
+
+  if (!isOk && reason) {
+    bodyContents.push({
+      type: 'box',
+      layout: 'vertical',
+      margin: 'md',
+      contents: [
+        {
+          type: 'text',
+          text: 'เหตุผล:',
+          size: 'xs',
+          color: '#64748B',
+        },
+        {
+          type: 'text',
+          text: reason,
+          size: 'sm',
+          color: '#DC2626',
+          wrap: true,
+        },
+      ],
+    });
+  } else if (isOk) {
+    bodyContents.push({
+      type: 'text',
+      text: 'สัญญาเช่าฉบับใหม่ได้รับการอนุมัติเรียบร้อยแล้ว ท่านสามารถเข้าสู่ระบบเพื่อตรวจสอบสัญญาและกำหนดเวลาการเช่าได้',
+      size: 'xs',
+      color: '#475569',
+      margin: 'md',
+      wrap: true,
+    });
+  }
+
+  const origin = (appUrl || getPublicAppOrigin()).trim().replace(/\/+$/, '');
+  const explicitLiffId = process.env.VITE_LINE_LIFF_ID || process.env.LINE_LIFF_ID;
+  const targetUrl = explicitLiffId && explicitLiffId.trim()
+    ? `https://liff.line.me/${explicitLiffId.trim()}/tenant`
+    : `${origin}/tenant`;
+
+  return {
+    type: 'flex',
+    altText: `ผลการพิจารณาคำขอต่อสัญญาเช่าห้องพัก ${roomNumber} - ${dormitoryName}`,
+    contents: {
+      type: 'bubble',
+      header: {
+        type: 'box',
+        layout: 'vertical',
+        backgroundColor: headerBgColor,
+        paddingAll: '20px',
+        contents: [
+          {
+            type: 'text',
+            text: dormitoryName,
+            color: '#FFFFFF',
+            size: 'xs',
+            weight: 'regular',
+          },
+          {
+            type: 'text',
+            text: headerTitle,
+            color: '#FFFFFF',
+            size: 'md',
+            weight: 'bold',
+            wrap: true,
+          },
+        ],
+      },
+      body: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'sm',
+        paddingAll: '20px',
+        contents: bodyContents,
+      },
+      footer: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'sm',
+        contents: [
+          {
+            type: 'button',
+            style: 'primary',
+            color: isOk ? '#059669' : '#4F46E5',
+            action: {
+              type: 'uri',
+              label: 'เข้าสู่ระบบผู้เช่า',
+              uri: targetUrl,
+            },
+          },
+        ],
+      },
+    },
+  };
+}
+
+export function buildOwnerGuideCarouselFlexMessage(dormitoryName: string, appOrigin?: string) {
+  const origin = (appOrigin || getPublicAppOrigin()).trim().replace(/\/+$/, '');
+  const explicitLiffId = process.env.VITE_LINE_LIFF_ID || process.env.LINE_LIFF_ID;
+  const preferDirect = process.env.PREFER_DIRECT_LINE_ENTRY === 'true';
+  const ownerRoomsUrl = (!preferDirect && explicitLiffId && explicitLiffId.trim())
+    ? `https://liff.line.me/${explicitLiffId.trim()}/owner/rooms`
+    : `${origin}/owner/rooms`;
+
+  return {
+    type: 'flex',
+    altText: `คู่มือการใช้งานสำหรับเจ้าของหอพัก - ${dormitoryName}`,
+    contents: {
+      type: 'carousel',
+      contents: [
+        {
+          type: 'bubble',
+          size: 'kilo',
+          header: {
+            type: 'box',
+            layout: 'vertical',
+            backgroundColor: '#4F46E5',
+            paddingAll: '16px',
+            contents: [
+              { type: 'text', text: 'ขั้นตอนที่ 1', color: '#C7D2FE', size: 'xs', weight: 'bold' },
+              { type: 'text', text: '🏢 ตั้งค่าหอพัก & ห้องพัก', color: '#FFFFFF', size: 'md', weight: 'bold' },
+            ],
+          },
+          body: {
+            type: 'box',
+            layout: 'vertical',
+            spacing: 'sm',
+            paddingAll: '16px',
+            contents: [
+              {
+                type: 'text',
+                text: 'กำหนดรายละเอียดหอพัก เพิ่มอาคาร ชั้น และราคาห้องพัก พร้อมตั้งค่าค่าน้ำ ค่าไฟ และเงินประกันให้พร้อมใช้งาน',
+                size: 'xs',
+                color: '#475569',
+                wrap: true,
+              },
+            ],
+          },
+          footer: {
+            type: 'box',
+            layout: 'vertical',
+            paddingAll: '12px',
+            contents: [
+              {
+                type: 'button',
+                style: 'primary',
+                color: '#4F46E5',
+                height: 'sm',
+                action: {
+                  type: 'uri',
+                  label: 'ดูห้องพักทั้งหมด',
+                  uri: ownerRoomsUrl,
+                },
+              },
+            ],
+          },
+        },
+        {
+          type: 'bubble',
+          size: 'kilo',
+          header: {
+            type: 'box',
+            layout: 'vertical',
+            backgroundColor: '#059669',
+            paddingAll: '16px',
+            contents: [
+              { type: 'text', text: 'ขั้นตอนที่ 2', color: '#A7F3D0', size: 'xs', weight: 'bold' },
+              { type: 'text', text: '📱 เชื่อมต่อ LINE OA', color: '#FFFFFF', size: 'md', weight: 'bold' },
+            ],
+          },
+          body: {
+            type: 'box',
+            layout: 'vertical',
+            spacing: 'sm',
+            paddingAll: '16px',
+            contents: [
+              {
+                type: 'text',
+                text: 'เชื่อมต่อบัญชี LINE Official Account ในเมนูตั้งค่า เพื่อเปิดระบบรับการแจ้งเตือนคำขอเช่า และส่งบิลหาผู้เช่าอัตโนมัติ',
+                size: 'xs',
+                color: '#475569',
+                wrap: true,
+              },
+            ],
+          },
+          footer: {
+            type: 'box',
+            layout: 'vertical',
+            paddingAll: '12px',
+            contents: [
+              {
+                type: 'button',
+                style: 'primary',
+                color: '#059669',
+                height: 'sm',
+                action: {
+                  type: 'uri',
+                  label: 'ตั้งค่า LINE OA',
+                  uri: `${origin}/owner/line-oa`,
+                },
+              },
+            ],
+          },
+        },
+        {
+          type: 'bubble',
+          size: 'kilo',
+          header: {
+            type: 'box',
+            layout: 'vertical',
+            backgroundColor: '#0284C7',
+            paddingAll: '16px',
+            contents: [
+              { type: 'text', text: 'ขั้นตอนที่ 3', color: '#BAE6FD', size: 'xs', weight: 'bold' },
+              { type: 'text', text: '📝 ตรวจสอบ & อนุมัติผู้เช่า', color: '#FFFFFF', size: 'md', weight: 'bold' },
+            ],
+          },
+          body: {
+            type: 'box',
+            layout: 'vertical',
+            spacing: 'sm',
+            paddingAll: '16px',
+            contents: [
+              {
+                type: 'text',
+                text: 'ดูคำขอลงทะเบียนจากผู้เช่า ตรวจรูปบัตรประชาชน สัญญา และอนุมัติรับเข้าพักได้ในคลิกเดียวผ่านระบบ Bottom Sheet',
+                size: 'xs',
+                color: '#475569',
+                wrap: true,
+              },
+            ],
+          },
+          footer: {
+            type: 'box',
+            layout: 'vertical',
+            paddingAll: '12px',
+            contents: [
+              {
+                type: 'button',
+                style: 'primary',
+                color: '#0284C7',
+                height: 'sm',
+                action: {
+                  type: 'uri',
+                  label: 'ตรวจสอบคำขอเช่า',
+                  uri: `${origin}/owner/home`,
+                },
+              },
+            ],
+          },
+        },
+        {
+          type: 'bubble',
+          size: 'kilo',
+          header: {
+            type: 'box',
+            layout: 'vertical',
+            backgroundColor: '#D97706',
+            paddingAll: '16px',
+            contents: [
+              { type: 'text', text: 'ขั้นตอนที่ 4', color: '#FDE68A', size: 'xs', weight: 'bold' },
+              { type: 'text', text: '💵 มิเตอร์ & การเงิน', color: '#FFFFFF', size: 'md', weight: 'bold' },
+            ],
+          },
+          body: {
+            type: 'box',
+            layout: 'vertical',
+            spacing: 'sm',
+            paddingAll: '16px',
+            contents: [
+              {
+                type: 'text',
+                text: 'จดมิเตอร์น้ำไฟ ออกใบแจ้งหนี้อัตโนมัติ สแกนตรวจสลิปโอนเงิน และบันทึกประวัติการชำระเงินได้อย่างแม่นยำ',
+                size: 'xs',
+                color: '#475569',
+                wrap: true,
+              },
+            ],
+          },
+          footer: {
+            type: 'box',
+            layout: 'vertical',
+            paddingAll: '12px',
+            contents: [
+              {
+                type: 'button',
+                style: 'primary',
+                color: '#D97706',
+                height: 'sm',
+                action: {
+                  type: 'uri',
+                  label: 'จัดการบิล & การเงิน',
+                  uri: `${origin}/owner/payments`,
+                },
+              },
+            ],
+          },
+        },
+        {
+          type: 'bubble',
+          size: 'kilo',
+          header: {
+            type: 'box',
+            layout: 'vertical',
+            backgroundColor: '#7C3AED',
+            paddingAll: '16px',
+            contents: [
+              { type: 'text', text: 'ขั้นตอนที่ 5', color: '#DDD6FE', size: 'xs', weight: 'bold' },
+              { type: 'text', text: '📊 รายงาน & ภาพรวมรายได้', color: '#FFFFFF', size: 'md', weight: 'bold' },
+            ],
+          },
+          body: {
+            type: 'box',
+            layout: 'vertical',
+            spacing: 'sm',
+            paddingAll: '16px',
+            contents: [
+              {
+                type: 'text',
+                text: 'ติดตามสถิติอัตราการเช่า รายรับ-รายจ่าย ยอดค้างชำระ และส่งออกรายงานสรุปสำหรับบัญชีได้ทุกเดือน',
+                size: 'xs',
+                color: '#475569',
+                wrap: true,
+              },
+            ],
+          },
+          footer: {
+            type: 'box',
+            layout: 'vertical',
+            paddingAll: '12px',
+            contents: [
+              {
+                type: 'button',
+                style: 'primary',
+                color: '#7C3AED',
+                height: 'sm',
+                action: {
+                  type: 'uri',
+                  label: 'ดูรายงานสรุป',
+                  uri: `${origin}/owner/reports`,
+                },
+              },
+            ],
+          },
+        },
+      ],
+    },
+  };
+}
+
+export function buildTenantGuideCarouselFlexMessage(dormitoryName: string, appOrigin?: string) {
+  const origin = (appOrigin || getPublicAppOrigin()).trim().replace(/\/+$/, '');
+  const explicitLiffId = process.env.VITE_LINE_LIFF_ID || process.env.LINE_LIFF_ID;
+  const tenantPortalUrl = explicitLiffId && explicitLiffId.trim()
+    ? `https://liff.line.me/${explicitLiffId.trim()}/tenant`
+    : `${origin}/tenant`;
+
+  return {
+    type: 'flex',
+    altText: `คู่มือการใช้งานสำหรับผู้เช่า - ${dormitoryName}`,
+    contents: {
+      type: 'carousel',
+      contents: [
+        {
+          type: 'bubble',
+          size: 'kilo',
+          header: {
+            type: 'box',
+            layout: 'vertical',
+            backgroundColor: '#059669',
+            paddingAll: '16px',
+            contents: [
+              { type: 'text', text: 'ขั้นตอนที่ 1', color: '#A7F3D0', size: 'xs', weight: 'bold' },
+              { type: 'text', text: '📝 ลงทะเบียนเข้าพัก', color: '#FFFFFF', size: 'md', weight: 'bold' },
+            ],
+          },
+          body: {
+            type: 'box',
+            layout: 'vertical',
+            spacing: 'sm',
+            paddingAll: '16px',
+            contents: [
+              {
+                type: 'text',
+                text: 'กดปุ่ม "ลงทะเบียนผู้เช่า" ใน Rich Menu เพื่อเลือกห้องพัก กรอกข้อมูลส่วนตัว สัตว์เลี้ยง ยานพาหนะ และแนบรูปบัตรประชาชนอย่างปลอดภัย',
+                size: 'xs',
+                color: '#475569',
+                wrap: true,
+              },
+            ],
+          },
+          footer: {
+            type: 'box',
+            layout: 'vertical',
+            paddingAll: '12px',
+            contents: [
+              {
+                type: 'button',
+                style: 'primary',
+                color: '#059669',
+                height: 'sm',
+                action: {
+                  type: 'uri',
+                  label: 'ลงทะเบียนผู้เช่า',
+                  uri: tenantPortalUrl,
+                },
+              },
+            ],
+          },
+        },
+        {
+          type: 'bubble',
+          size: 'kilo',
+          header: {
+            type: 'box',
+            layout: 'vertical',
+            backgroundColor: '#0284C7',
+            paddingAll: '16px',
+            contents: [
+              { type: 'text', text: 'ขั้นตอนที่ 2', color: '#BAE6FD', size: 'xs', weight: 'bold' },
+              { type: 'text', text: '🔔 รับผลการอนุมัติทาง LINE', color: '#FFFFFF', size: 'md', weight: 'bold' },
+            ],
+          },
+          body: {
+            type: 'box',
+            layout: 'vertical',
+            spacing: 'sm',
+            paddingAll: '16px',
+            contents: [
+              {
+                type: 'text',
+                text: 'เมื่อเจ้าของหอพักตรวจสอบและอนุมัติคำขอ ระบบจะส่งข้อความแจ้งเตือนผลผ่าน LINE OA ทันที พร้อมเปิดสัญญาห้องพัก',
+                size: 'xs',
+                color: '#475569',
+                wrap: true,
+              },
+            ],
+          },
+          footer: {
+            type: 'box',
+            layout: 'vertical',
+            paddingAll: '12px',
+            contents: [
+              {
+                type: 'button',
+                style: 'primary',
+                color: '#0284C7',
+                height: 'sm',
+                action: {
+                  type: 'uri',
+                  label: 'เข้าสู่ระบบผู้เช่า',
+                  uri: tenantPortalUrl,
+                },
+              },
+            ],
+          },
+        },
+        {
+          type: 'bubble',
+          size: 'kilo',
+          header: {
+            type: 'box',
+            layout: 'vertical',
+            backgroundColor: '#4F46E5',
+            paddingAll: '16px',
+            contents: [
+              { type: 'text', text: 'ขั้นตอนที่ 3', color: '#C7D2FE', size: 'xs', weight: 'bold' },
+              { type: 'text', text: '💳 บิลค่าเช่า & ชำระเงิน', color: '#FFFFFF', size: 'md', weight: 'bold' },
+            ],
+          },
+          body: {
+            type: 'box',
+            layout: 'vertical',
+            spacing: 'sm',
+            paddingAll: '16px',
+            contents: [
+              {
+                type: 'text',
+                text: 'เปิดดูใบแจ้งหนี้ ค่าน้ำ ค่าไฟ สแกนจ่ายผ่าน QR Code พร้อมแนบสลิปโอนเงินผ่านระบบได้อย่างสะดวกและปลอดภัย',
+                size: 'xs',
+                color: '#475569',
+                wrap: true,
+              },
+            ],
+          },
+          footer: {
+            type: 'box',
+            layout: 'vertical',
+            paddingAll: '12px',
+            contents: [
+              {
+                type: 'button',
+                style: 'primary',
+                color: '#4F46E5',
+                height: 'sm',
+                action: {
+                  type: 'uri',
+                  label: 'ดูบิล & ชำระเงิน',
+                  uri: tenantPortalUrl,
+                },
+              },
+            ],
+          },
+        },
+        {
+          type: 'bubble',
+          size: 'kilo',
+          header: {
+            type: 'box',
+            layout: 'vertical',
+            backgroundColor: '#E11D48',
+            paddingAll: '16px',
+            contents: [
+              { type: 'text', text: 'ขั้นตอนที่ 4', color: '#FECDD3', size: 'xs', weight: 'bold' },
+              { type: 'text', text: '🔧 แจ้งซ่อม & ติดต่อหอพัก', color: '#FFFFFF', size: 'md', weight: 'bold' },
+            ],
+          },
+          body: {
+            type: 'box',
+            layout: 'vertical',
+            spacing: 'sm',
+            paddingAll: '16px',
+            contents: [
+              {
+                type: 'text',
+                text: 'แจ้งปัญหาห้องพักหรืออุปกรณ์ชำรุด แนบรูปภาพ และติดตามสถานะการเข้าซ่อมของช่างได้ตลอด 24 ชั่วโมง',
+                size: 'xs',
+                color: '#475569',
+                wrap: true,
+              },
+            ],
+          },
+          footer: {
+            type: 'box',
+            layout: 'vertical',
+            paddingAll: '12px',
+            contents: [
+              {
+                type: 'button',
+                style: 'primary',
+                color: '#E11D48',
+                height: 'sm',
+                action: {
+                  type: 'uri',
+                  label: 'แจ้งซ่อมออนไลน์',
+                  uri: tenantPortalUrl,
+                },
+              },
+            ],
+          },
+        },
+      ],
+    },
+  };
+}
+
+interface CachedPlatformQuota {
+  remaining: number;
+  type: 'limited' | 'none';
+  value?: number;
+  totalUsage?: number;
+  cachedAt: number;
+}
+
+const LINE_QUOTA_CACHE = new Map<string, CachedPlatformQuota>();
+const CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes
+
+export function clearLineQuotaCache(dormitoryId?: string) {
+  if (dormitoryId) {
+    LINE_QUOTA_CACHE.delete(dormitoryId);
+  } else {
+    LINE_QUOTA_CACHE.clear();
+  }
+}
+
 export class LineOaService {
   private friendService: LineFriendService;
   private inviteService: TenantRegistrationInviteService;
   private lineAdapter: LinePlatformAdapter;
   private tokenProvider: ILineChannelTokenProvider;
+  private richMenuService: LineRichMenuService;
 
   constructor(private prisma: PrismaClient, adapter?: LinePlatformAdapter, tokenProvider?: ILineChannelTokenProvider, inviteService?: TenantRegistrationInviteService) {
     this.friendService = new LineFriendService(prisma);
@@ -328,6 +1380,18 @@ export class LineOaService {
       this.lineAdapter = createLinePlatformAdapter();
       this.tokenProvider = tokenProvider || new LineChannelTokenProvider();
     }
+    this.richMenuService = new LineRichMenuService(this.prisma, this.lineAdapter, this.tokenProvider);
+  }
+
+  getRichMenuService(): LineRichMenuService {
+    return this.richMenuService;
+  }
+
+  async syncRichMenus(dormitoryId: string, baseUrl?: string, forceRefresh: boolean = false) {
+    if (baseUrl) {
+      setActiveAppOrigin(baseUrl);
+    }
+    return await this.richMenuService.syncDormitoryRichMenus(dormitoryId, forceRefresh);
   }
 
   /**
@@ -387,6 +1451,8 @@ export class LineOaService {
           friendAddUrl: null,
           qrSvg: null,
           accessTokenVerifiedAt: null,
+          webhookEndpointSetAt: null,
+          webhookTestSucceededAt: null,
           webhookVerifiedAt: null,
           webhookUrl: null,
           notifyRepairRequest: true,
@@ -410,57 +1476,64 @@ export class LineOaService {
         }
       }
 
-      const credentialsVerified = !!(config.channelId && config.channelSecretEncrypted && config.accessTokenVerifiedAt);
-      const webhookEndpointSet = !!config.webhookEndpointSetAt;
-      const webhookTestSucceeded = !!config.webhookTestSucceededAt;
-      const webhookActive = Boolean(config.webhookActive);
-      const isReady = credentialsVerified && webhookEndpointSet && webhookTestSucceeded && webhookActive;
+      const isConnected = Boolean(
+        config.accessTokenVerifiedAt &&
+        config.webhookEndpointSetAt &&
+        config.webhookTestSucceededAt &&
+        config.webhookActive
+      );
 
-      const rawPublicId = config.botPremiumId || config.lineOaId;
-      const effectiveLineId = rawPublicId ? (rawPublicId.startsWith('@') ? rawPublicId : `@${rawPublicId}`) : null;
-      let friendAddUrl: string | null = null;
+      const isReady = Boolean(
+        config.accessTokenVerifiedAt &&
+        config.webhookEndpointSetAt &&
+        config.webhookActive
+      );
+
+      const formattedLineOaId = config.lineOaId
+        ? (config.lineOaId.startsWith('@') ? '@' + config.lineOaId.replace(/^@+/, '') : `@${config.lineOaId}`)
+        : null;
+
+      // Generate QR Code SVG if friendAddUrl is available
       let qrSvg: string | null = null;
-
-      if (isReady && effectiveLineId) {
-        const cleanId = effectiveLineId.replace(/^@/, '').trim();
-        friendAddUrl = `https://line.me/R/ti/p/%40${encodeURIComponent(cleanId)}`;
+      const friendAddUrl = formattedLineOaId ? `https://line.me/R/ti/p/${formattedLineOaId}` : null;
+      if (friendAddUrl) {
         try {
           qrSvg = await QRCode.toString(friendAddUrl, {
             type: 'svg',
-            margin: 1,
-            width: 256,
+            margin: 2,
+            width: 200,
             errorCorrectionLevel: 'M',
           });
-        } catch {
+        } catch (qrErr: any) {
+          console.warn('[LineOaService] Failed to generate QR code SVG:', qrErr.message);
           qrSvg = null;
         }
       }
 
       return {
-        connected: credentialsVerified,
+        connected: isConnected,
         isReady,
-        credentialsVerified,
-        webhookEndpointSet,
-        webhookTestSucceeded,
-        webhookActive,
-        hasChannelSecret: !!config.channelSecretEncrypted,
-        hasAccessToken: !!config.accessTokenVerifiedAt,
+        credentialsVerified: Boolean(config.accessTokenVerifiedAt),
+        webhookEndpointSet: Boolean(config.webhookEndpointSetAt),
+        webhookTestSucceeded: Boolean(config.webhookTestSucceededAt),
+        webhookActive: Boolean(config.webhookActive),
+        hasChannelSecret: Boolean(config.channelSecretEncrypted),
         isPublicWebhookConfigured: originStatus.isConfigured,
         webhookOriginError: originStatus.errorReason || null,
-        lineOaId: config.lineOaId,
+        lineOaId: formattedLineOaId,
         channelId: config.channelId,
         botUserId: config.botUserId,
         botDisplayName: config.botDisplayName,
         botPictureUrl: config.botPictureUrl,
         botPremiumId: config.botPremiumId,
         botChatMode: config.botChatMode,
-        effectiveLineId,
+        effectiveLineId: config.botPremiumId || formattedLineOaId || null,
         friendAddUrl,
         qrSvg,
         accessTokenVerifiedAt: config.accessTokenVerifiedAt,
-        webhookVerifiedAt: config.webhookVerifiedAt,
         webhookEndpointSetAt: config.webhookEndpointSetAt,
         webhookTestSucceededAt: config.webhookTestSucceededAt,
+        webhookVerifiedAt: config.webhookVerifiedAt,
         webhookUrl,
         notifyRepairRequest: config.notifyRepairRequest,
         notifyRepairCompleted: config.notifyRepairCompleted,
@@ -475,43 +1548,52 @@ export class LineOaService {
   }
 
   /**
-   * Update notification preferences for LINE OA events
-   */
-  async updatePreferences(
-    dormitoryId: string,
-    preferences: {
-      notifyRepairRequest?: boolean;
-      notifyRepairCompleted?: boolean;
-      notifyPaymentReceived?: boolean;
-      notifyTenantRegister?: boolean;
-      notifyTenantApproved?: boolean;
-    }
-  ) {
-    return await this.prisma.$transaction(async (tx) => {
-      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
-      return await tx.dormitoryLineConfig.update({
-        where: { dormitoryId },
-        data: {
-          notifyRepairRequest: preferences.notifyRepairRequest !== undefined ? preferences.notifyRepairRequest : undefined,
-          notifyRepairCompleted: preferences.notifyRepairCompleted !== undefined ? preferences.notifyRepairCompleted : undefined,
-          notifyPaymentReceived: preferences.notifyPaymentReceived !== undefined ? preferences.notifyPaymentReceived : undefined,
-          notifyTenantRegister: preferences.notifyTenantRegister !== undefined ? preferences.notifyTenantRegister : undefined,
-          notifyTenantApproved: preferences.notifyTenantApproved !== undefined ? preferences.notifyTenantApproved : undefined,
-        },
-      });
-    });
-  }
-
-  /**
-   * Configure LINE OA Channel ID & Channel Secret ONLY.
-   * Access token is statelessly issued and verified via GET /v2/bot/info.
-   * Basic ID (lineOaId) is derived ONLY from verified botInfo.
+   * Save or Update LINE OA Channel credentials
    */
   async updateDormitoryLineConfig(
     dormitoryId: string,
     data: { channelId?: string; channelSecret?: string },
     baseUrl = getPublicWebhookOrigin()
   ) {
+    if (!data.channelId && !data.channelSecret) {
+      throw new AppError('Either channelId or channelSecret is required', 400, 'MISSING_CREDENTIALS');
+    }
+
+    let accessTokenVerifiedAt: Date | null = null;
+    let botUserId: string | null = null;
+    let botDisplayName: string | null = null;
+    let botPictureUrl: string | null = null;
+    let botPremiumId: string | null = null;
+    let botChatMode: string | null = null;
+    let lineOaId: string | null = null;
+
+    if (data.channelId && data.channelSecret) {
+      let token: string | null = null;
+      try {
+        token = await this.tokenProvider.getChannelAccessToken(data.channelId, data.channelSecret);
+      } catch (err: any) {
+        throw new AppError(err.message || 'Invalid LINE Channel credentials', 400, 'LINE_CREDENTIALS_INVALID');
+      }
+
+      if (!token) {
+        throw new AppError('Failed to acquire stateless token from LINE platform', 400, 'LINE_TOKEN_ISSUANCE_FAILED');
+      }
+
+      const verification = await this.lineAdapter.verifyAccessToken(token);
+      if (!verification.verified || !verification.botInfo) {
+        throw new AppError('Failed to retrieve bot info with provided credentials', 400, 'LINE_BOT_INFO_FAILED');
+      }
+
+      const botInfo = verification.botInfo;
+      botUserId = botInfo.userId || null;
+      botDisplayName = botInfo.displayName || null;
+      botPictureUrl = botInfo.pictureUrl || null;
+      botPremiumId = botInfo.premiumId || null;
+      botChatMode = botInfo.chatMode || null;
+      lineOaId = botInfo.basicId ? (botInfo.basicId.startsWith('@') ? botInfo.basicId : `@${botInfo.basicId}`) : null;
+      accessTokenVerifiedAt = new Date();
+    }
+
     await this.prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
 
@@ -520,51 +1602,6 @@ export class LineOaService {
       });
 
       let channelSecretEncrypted = existing?.channelSecretEncrypted;
-      let accessTokenVerifiedAt = existing?.accessTokenVerifiedAt;
-      let lineOaId = existing?.lineOaId || null;
-
-      let botUserId = existing?.botUserId || null;
-      let botDisplayName = existing?.botDisplayName || null;
-      let botPictureUrl = existing?.botPictureUrl || null;
-      let botPremiumId = existing?.botPremiumId || null;
-      let botChatMode = existing?.botChatMode || null;
-
-      const isChannelIdChanged = Boolean(data.channelId && data.channelId !== existing?.channelId);
-      const isSecretProvided = Boolean(data.channelSecret);
-
-      if (isChannelIdChanged || isSecretProvided) {
-        const channelIdToVerify = data.channelId || existing?.channelId;
-        const channelSecretToVerify = data.channelSecret || (existing?.channelSecretEncrypted ? decryptText(existing.channelSecretEncrypted) : null);
-
-        if (channelIdToVerify && channelSecretToVerify) {
-          if (existing?.channelId) {
-            await this.tokenProvider.clearCache?.(existing.channelId);
-          }
-          if (channelIdToVerify) {
-            await this.tokenProvider.clearCache?.(channelIdToVerify);
-          }
-
-          const statelessToken = await this.tokenProvider.getChannelAccessToken(channelIdToVerify, channelSecretToVerify);
-          const verification = await this.lineAdapter.verifyAccessToken(statelessToken);
-
-          if (!verification.verified) {
-            throw new AppError('LINE Channel Credentials validation failed. Check your Channel ID and Secret.', 400, 'INVALID_CHANNEL_CREDENTIALS');
-          }
-
-          accessTokenVerifiedAt = new Date();
-          if (verification.botInfo) {
-            botUserId = verification.botInfo.userId || null;
-            botDisplayName = verification.botInfo.displayName || null;
-            botPictureUrl = verification.botInfo.pictureUrl || null;
-            botPremiumId = verification.botInfo.premiumId || null;
-            botChatMode = verification.botInfo.chatMode || null;
-            if (verification.botInfo.basicId) {
-              lineOaId = verification.botInfo.basicId;
-            }
-          }
-        }
-      }
-
       if (data.channelSecret) {
         channelSecretEncrypted = encryptText(data.channelSecret);
       }
@@ -610,6 +1647,12 @@ export class LineOaService {
         }
       });
     });
+
+    if (accessTokenVerifiedAt) {
+      this.richMenuService.syncDormitoryRichMenus(dormitoryId).catch((err) => {
+        console.warn('LINE OA Rich Menu auto-sync warning:', err.message);
+      });
+    }
 
     return await this.getDormitoryLineConfig(dormitoryId, baseUrl);
   }
@@ -662,39 +1705,175 @@ export class LineOaService {
       throw new AppError('Webhook URL is missing', 400, 'WEBHOOK_URL_MISSING');
     }
 
+    if (baseUrl) {
+      setActiveAppOrigin(baseUrl);
+    }
+
     const accessToken = await this.resolveAccessToken(dormitoryId);
     if (!accessToken) {
       throw new AppError('Failed to acquire stateless token for webhook test', 500, 'TOKEN_ISSUANCE_FAILED');
     }
 
+    let getEndpointInfo = await this.lineAdapter.getWebhookEndpoint(accessToken);
+
+    // Auto-align webhook endpoint on LINE platform if changed or not set
+    if (config.webhookUrl && getEndpointInfo && getEndpointInfo.endpoint !== config.webhookUrl) {
+      try {
+        const setRes = await this.lineAdapter.setWebhookEndpoint(config.webhookUrl, accessToken);
+        if (setRes.success) {
+          getEndpointInfo = await this.lineAdapter.getWebhookEndpoint(accessToken);
+        }
+      } catch (autoSetErr: any) {
+        console.warn('[LineOaService] Webhook endpoint auto-alignment warning:', autoSetErr.message);
+      }
+    }
+
     const testResult = await this.lineAdapter.testWebhookEndpoint(config.webhookUrl, accessToken);
-    const getEndpointInfo = await this.lineAdapter.getWebhookEndpoint(accessToken);
 
     // LINE-02: webhookTestSucceeded and webhookActive are strictly separated and fail-closed
     const webhookTestSucceeded = testResult.success === true;
     const isWebhookActive = Boolean(getEndpointInfo && getEndpointInfo.active === true);
+    const hasEndpointConfigured = Boolean(getEndpointInfo && getEndpointInfo.endpoint);
+    const now = new Date();
+    const endpointSetAt = config.webhookEndpointSetAt ? new Date(config.webhookEndpointSetAt as any) : (hasEndpointConfigured ? now : null);
+    const isEndpointConfigured = Boolean(config.webhookEndpointSet || endpointSetAt);
 
     await this.prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
       await tx.dormitoryLineConfig.update({
         where: { dormitoryId },
         data: {
-          webhookTestSucceededAt: webhookTestSucceeded ? new Date() : null,
+          webhookEndpointSetAt: endpointSetAt,
+          webhookTestSucceededAt: webhookTestSucceeded ? now : null,
           webhookActive: isWebhookActive,
-          webhookActiveCheckedAt: new Date(),
-          isConnected: webhookTestSucceeded && isWebhookActive,
+          isConnected: Boolean(config.accessTokenVerifiedAt && isEndpointConfigured && webhookTestSucceeded && isWebhookActive),
         },
       });
     });
 
-    return {
-      testResult,
-      config: await this.getDormitoryLineConfig(dormitoryId, baseUrl),
-    };
+    // --- SILENT FIRST-FOLLOWER OWNER AUTO-CLAIM & OWNER RICH MENU LINKING ---
+    try {
+      const existingOwnerGrant = await this.prisma.dormitoryAccessGrant.findFirst({
+        where: {
+          dormitoryId,
+          roleCode: 'OWNER',
+          status: 'ACTIVE',
+        },
+      });
+
+      let ownerLineUserId: string | null = null;
+
+      if (existingOwnerGrant && existingOwnerGrant.lineFriendId) {
+        const friend = await this.prisma.dormitoryLineFriend.findUnique({
+          where: { id: existingOwnerGrant.lineFriendId },
+        });
+        if (friend && friend.lineUserIdEncrypted) {
+          const { decryptText } = await import('../utils/crypto-encryption.js');
+          ownerLineUserId = decryptText(friend.lineUserIdEncrypted);
+        }
+      } else if (!existingOwnerGrant && this.lineAdapter.getFollowers) {
+        const followersRes = await this.lineAdapter.getFollowers(accessToken).catch(() => null);
+        if (followersRes && followersRes.userIds && followersRes.userIds.length > 0) {
+          const firstFollowerUserId = followersRes.userIds[0];
+          const profile = await this.lineAdapter.getProfile(firstFollowerUserId, accessToken).catch(() => null);
+          const displayName = profile?.displayName || `LINE User (${firstFollowerUserId.slice(-4)})`;
+          const pictureUrl = profile?.pictureUrl || null;
+
+          await this.prisma.$transaction(async (tx) => {
+            await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
+
+            const dorm = await tx.dormitory.findUnique({
+              where: { id: dormitoryId },
+              select: { createdByUserId: true },
+            });
+
+            const friend = await this.friendService.upsertFriendFromWebhook(
+              dormitoryId,
+              firstFollowerUserId,
+              displayName,
+              pictureUrl,
+              'FOLLOWING',
+              tx
+            );
+
+            // Double check inside transaction to guarantee strict idempotency
+            const doubleCheckOwner = await tx.dormitoryAccessGrant.findFirst({
+              where: {
+                dormitoryId,
+                roleCode: 'OWNER',
+                status: 'ACTIVE',
+              },
+            });
+
+            if (!doubleCheckOwner) {
+              const { rawToken, tokenHash, tokenPrefix } = generateGrantToken();
+              const tokenEncrypted = encryptText(rawToken);
+              await tx.dormitoryAccessGrant.create({
+                data: {
+                  dormitoryId,
+                  lineFriendId: friend.id,
+                  tokenHash,
+                  tokenEncrypted,
+                  tokenPrefix,
+                  roleCode: 'OWNER',
+                  status: 'ACTIVE',
+                  createdByPrincipal: dorm?.createdByUserId ? `usr_${dorm.createdByUserId}` : 'system_line_oa',
+                },
+              });
+            }
+          });
+
+          ownerLineUserId = firstFollowerUserId;
+        }
+      }
+
+      // Link 3-button Owner Rich Menu to the owner LINE user ID whenever available
+      if (ownerLineUserId) {
+        await this.richMenuService.linkOwnerRichMenu(dormitoryId, ownerLineUserId).catch((err) => {
+          console.warn('Failed to link owner rich menu during webhook test:', err.message);
+        });
+      }
+    } catch (silentClaimErr: any) {
+      console.warn('Silent owner auto-claim / rich menu link non-fatal error:', silentClaimErr.message);
+    }
+
+    return await this.getDormitoryLineConfig(dormitoryId, baseUrl);
   }
 
   /**
-   * Disconnect LINE OA
+   * Update notification preferences
+   */
+  async updatePreferences(
+    dormitoryId: string,
+    prefs: {
+      notifyRepairRequest?: boolean;
+      notifyRepairCompleted?: boolean;
+      notifyPaymentReceived?: boolean;
+      notifyTenantRegister?: boolean;
+      notifyTenantApproved?: boolean;
+    },
+    baseUrl = getPublicWebhookOrigin()
+  ) {
+    await this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
+
+      await tx.dormitoryLineConfig.update({
+        where: { dormitoryId },
+        data: {
+          notifyRepairRequest: prefs.notifyRepairRequest,
+          notifyRepairCompleted: prefs.notifyRepairCompleted,
+          notifyPaymentReceived: prefs.notifyPaymentReceived,
+          notifyTenantRegister: prefs.notifyTenantRegister,
+          notifyTenantApproved: prefs.notifyTenantApproved,
+        }
+      });
+    });
+
+    return await this.getDormitoryLineConfig(dormitoryId, baseUrl);
+  }
+
+  /**
+   * Disconnect LINE OA credentials & deactivate webhook
    */
   async disconnectLineConfig(dormitoryId: string, baseUrl = getPublicWebhookOrigin()) {
     await this.prisma.$transaction(async (tx) => {
@@ -787,7 +1966,10 @@ export class LineOaService {
   /**
    * Process raw LINE Webhook payload.
    */
-  async processWebhookEvent(rawKey: string, bodyBuffer: Buffer, signatureHeader: string) {
+  async processWebhookEvent(rawKey: string, bodyBuffer: Buffer, signatureHeader: string, detectedOrigin?: string) {
+    if (detectedOrigin) {
+      setActiveAppOrigin(detectedOrigin);
+    }
     const keyHash = hashToken(rawKey);
 
     const configs = await this.prisma.$queryRaw<any[]>`
@@ -811,6 +1993,20 @@ export class LineOaService {
       dormitoryId?: string;
     }> = [];
 
+    const postbackActions: Array<{
+      type: 'manage_dormitory' | 'tenant_register' | 'owner_user_guide' | 'tenant_user_guide';
+      replyToken: string;
+      lineUserId: string;
+      accessToken: string;
+      dormitoryName: string;
+      dormitoryId: string;
+      ticket?: string;
+      rawToken?: string;
+      inviteId?: string;
+      authorized?: boolean;
+      shouldLinkOwnerMenu?: boolean;
+    }> = [];
+
     const result = await this.prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${resolvedDormitoryId}, true)`;
 
@@ -819,6 +2015,8 @@ export class LineOaService {
         select: {
           channelSecretEncrypted: true,
           channelAccessTokenEncrypted: true,
+          accessTokenVerifiedAt: true,
+          webhookEndpointSetAt: true,
           isConnected: true,
           webhookVerifiedAt: true,
           id: true
@@ -835,12 +2033,17 @@ export class LineOaService {
         throw new AppError('Invalid x-line-signature header', 401, 'INVALID_SIGNATURE');
       }
 
-      if (!fullConfig.webhookVerifiedAt) {
-        await tx.dormitoryLineConfig.update({
-          where: { dormitoryId: resolvedDormitoryId },
-          data: { webhookVerifiedAt: new Date() }
-        });
-      }
+      const now = new Date();
+      await tx.dormitoryLineConfig.update({
+        where: { dormitoryId: resolvedDormitoryId },
+        data: {
+          webhookVerifiedAt: now,
+          webhookEndpointSetAt: fullConfig.webhookEndpointSetAt || now,
+          webhookTestSucceededAt: now,
+          webhookActive: true,
+          isConnected: Boolean(fullConfig.accessTokenVerifiedAt),
+        }
+      });
 
       let accessToken: string | null = null;
       if (fullConfig.channelAccessTokenEncrypted) {
@@ -919,9 +2122,183 @@ export class LineOaService {
                 resolvedDormitoryId, lineUserId, displayName, pictureUrl, 'UNFOLLOWED', tx
               );
             } else if (event.type === 'message' || event.type === 'postback') {
-              await this.friendService.upsertFriendFromWebhook(
+              const friend = await this.friendService.upsertFriendFromWebhook(
                 resolvedDormitoryId, lineUserId, displayName, pictureUrl, 'FOLLOWING', tx
               );
+
+              let action: string | null = null;
+              if (event.type === 'postback') {
+                const postbackData = event.postback?.data || '';
+                const params = new URLSearchParams(postbackData);
+                action = params.get('action');
+              } else if (event.type === 'message' && event.message?.type === 'text') {
+                const text = (event.message.text || '').trim().toLowerCase();
+                if (text.includes('จัดการหอพัก') || text.includes('dashboard') || text.includes('เข้าสู่ระบบจัดการ')) {
+                  action = 'manage_dormitory';
+                } else if (text.includes('ลงทะเบียน') || text.includes('จองห้อง')) {
+                  action = 'tenant_register';
+                } else if (text.includes('วิธี') || text.includes('คู่มือ') || text.includes('guide')) {
+                  const isOwner = await tx.dormitoryAccessGrant.findFirst({
+                    where: {
+                      dormitoryId: resolvedDormitoryId,
+                      lineFriendId: friend.id,
+                      roleCode: { in: ['OWNER', 'MANAGER', 'STAFF'] },
+                      status: 'ACTIVE',
+                    },
+                  });
+                  action = isOwner ? 'owner_user_guide' : 'tenant_user_guide';
+                }
+              }
+
+              if (action) {
+                const dorm = await tx.dormitory.findUnique({
+                  where: { id: resolvedDormitoryId },
+                  select: { name: true, createdByUserId: true },
+                });
+                const dormName = dorm?.name || 'หอพัก';
+
+                if (action === 'manage_dormitory') {
+                  const grant = await tx.dormitoryAccessGrant.findFirst({
+                    where: {
+                      dormitoryId: resolvedDormitoryId,
+                      lineFriendId: friend.id,
+                      status: 'ACTIVE',
+                    },
+                  });
+
+                  if (grant && ['OWNER', 'MANAGER', 'STAFF'].includes(grant.roleCode)) {
+                    const ticket = this.richMenuService.createDirectEntryTicket({
+                      dormitoryId: resolvedDormitoryId,
+                      lineUserId,
+                      roleCode: grant.roleCode,
+                      grantId: grant.id,
+                    });
+                    if (event.replyToken && accessToken) {
+                      postbackActions.push({
+                        type: 'manage_dormitory',
+                        replyToken: event.replyToken,
+                        lineUserId,
+                        accessToken,
+                        dormitoryName: dormName,
+                        dormitoryId: resolvedDormitoryId,
+                        ticket,
+                        authorized: true,
+                        shouldLinkOwnerMenu: true,
+                      });
+                    }
+                  } else {
+                    // Check if any active OWNER grant exists in this dormitory
+                    const existingOwnerGrant = await tx.dormitoryAccessGrant.findFirst({
+                      where: {
+                        dormitoryId: resolvedDormitoryId,
+                        roleCode: 'OWNER',
+                        status: 'ACTIVE',
+                      },
+                    });
+
+                    if (!existingOwnerGrant) {
+                      // First owner accessing via LINE OA: auto-provision OWNER grant
+                      const { rawToken, tokenHash, tokenPrefix } = generateGrantToken();
+                      const tokenEncrypted = encryptText(rawToken);
+                      const newGrant = await tx.dormitoryAccessGrant.create({
+                        data: {
+                          dormitoryId: resolvedDormitoryId,
+                          lineFriendId: friend.id,
+                          tokenHash,
+                          tokenEncrypted,
+                          tokenPrefix,
+                          roleCode: 'OWNER',
+                          status: 'ACTIVE',
+                          createdByPrincipal: dorm?.createdByUserId ? `usr_${dorm.createdByUserId}` : 'system_line_oa',
+                        },
+                      });
+
+                      const ticket = this.richMenuService.createDirectEntryTicket({
+                        dormitoryId: resolvedDormitoryId,
+                        lineUserId,
+                        roleCode: 'OWNER',
+                        grantId: newGrant.id,
+                      });
+
+                      if (event.replyToken && accessToken) {
+                        postbackActions.push({
+                          type: 'manage_dormitory',
+                          replyToken: event.replyToken,
+                          lineUserId,
+                          accessToken,
+                          dormitoryName: dormName,
+                          dormitoryId: resolvedDormitoryId,
+                          ticket,
+                          authorized: true,
+                          shouldLinkOwnerMenu: true,
+                        });
+                      }
+                    } else {
+                      if (event.replyToken && accessToken) {
+                        postbackActions.push({
+                          type: 'manage_dormitory',
+                          replyToken: event.replyToken,
+                          lineUserId,
+                          accessToken,
+                          dormitoryName: dormName,
+                          dormitoryId: resolvedDormitoryId,
+                          authorized: false,
+                        });
+                      }
+                    }
+                  }
+                } else if (action === 'tenant_register') {
+                  const invite = await this.inviteService.createInvite(
+                    resolvedDormitoryId,
+                    friend.id,
+                    tx
+                  );
+
+                  if (event.replyToken && accessToken) {
+                    postbackActions.push({
+                      type: 'tenant_register',
+                      replyToken: event.replyToken,
+                      lineUserId,
+                      accessToken,
+                      dormitoryName: dormName,
+                      dormitoryId: resolvedDormitoryId,
+                      rawToken: invite.rawToken,
+                      inviteId: invite.id,
+                    });
+                  }
+                } else if (action === 'owner_user_guide') {
+                  const isOwner = await tx.dormitoryAccessGrant.findFirst({
+                    where: {
+                      dormitoryId: resolvedDormitoryId,
+                      lineFriendId: friend.id,
+                      roleCode: { in: ['OWNER', 'MANAGER', 'STAFF'] },
+                      status: 'ACTIVE',
+                    },
+                  });
+                  if (event.replyToken && accessToken) {
+                    postbackActions.push({
+                      type: 'owner_user_guide',
+                      replyToken: event.replyToken,
+                      lineUserId,
+                      accessToken,
+                      dormitoryName: dormName,
+                      dormitoryId: resolvedDormitoryId,
+                      shouldLinkOwnerMenu: Boolean(isOwner),
+                    });
+                  }
+                } else if (action === 'tenant_user_guide') {
+                  if (event.replyToken && accessToken) {
+                    postbackActions.push({
+                      type: 'tenant_user_guide',
+                      replyToken: event.replyToken,
+                      lineUserId,
+                      accessToken,
+                      dormitoryName: dormName,
+                      dormitoryId: resolvedDormitoryId,
+                    });
+                  }
+                }
+              }
             }
           }
 
@@ -943,11 +2320,11 @@ export class LineOaService {
       return { success: true, processedCount, deduplicatedCount };
     });
 
-    // Send replies outside database transaction
+    // Send follow replies outside database transaction
     for (const action of replyActions) {
       try {
-        const appOrigin = getPublicAppOrigin();
-        const registrationUrl = `${appOrigin}/tenant/register?t=${action.rawToken}`;
+        const appOrigin = detectedOrigin || getPublicAppOrigin();
+        const registrationUrl = getTenantRegistrationUrl(action.rawToken, appOrigin);
         const flexMessage = buildTenantRegistrationFlexMessage(action.dormitoryName, registrationUrl);
         const deliveryResult = await this.lineAdapter.replyMessage(action.replyToken, [flexMessage], action.accessToken);
 
@@ -961,20 +2338,6 @@ export class LineOaService {
             errorCode: deliveryResult.errorCode,
             requestId: deliveryResult.requestId,
           });
-          if (action.receiptId && action.dormitoryId) {
-            await this.prisma.$transaction(async (tx) => {
-              await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${action.dormitoryId}, true)`;
-              await tx.lineWebhookEventReceipt.update({
-                where: { id: action.receiptId },
-                data: { status: 'failed' },
-              });
-            }).catch(() => {});
-          }
-        } else if (deliveryResult.outcome === 'UNKNOWN') {
-          console.warn('LINE follow reply delivery outcome is UNKNOWN (transport uncertainty):', {
-            transportErrorCode: deliveryResult.transportErrorCode,
-          });
-          // CRITICAL C1 INVARIANT: Do NOT mark receipt as failed and do NOT revoke invite!
         }
       } catch (err: any) {
         console.warn('Unexpected error in LINE follow reply loop:', { message: err.message });
@@ -987,7 +2350,122 @@ export class LineOaService {
       }
     }
 
+    // Handle postback actions outside database transaction
+    for (const action of postbackActions) {
+      try {
+        const appOrigin = detectedOrigin || getPublicAppOrigin();
+
+        // Trigger LINE loading animation API immediately for responsiveness
+        if (action.lineUserId && action.accessToken && this.lineAdapter.displayLoadingAnimation) {
+          await this.lineAdapter.displayLoadingAnimation(action.lineUserId, action.accessToken, 5).catch(() => {});
+        }
+
+        if (action.shouldLinkOwnerMenu) {
+          await this.richMenuService.linkOwnerRichMenu(action.dormitoryId, action.lineUserId).catch(() => {});
+        }
+
+        if (action.type === 'manage_dormitory') {
+          if (action.authorized && action.ticket) {
+            const directEntryPath = `/api/v1/auth/line-direct-entry?ticket=${action.ticket}`;
+            const directEntryUrl = `${appOrigin}${directEntryPath}`;
+            const flex = buildOwnerDirectEntryFlexMessage(action.dormitoryName, directEntryUrl);
+            await this.lineAdapter.replyMessage(action.replyToken, [flex], action.accessToken);
+          } else {
+            const textMsg = {
+              type: 'text',
+              text: `บัญชี LINE นี้ยังไม่ได้รับสิทธิ์จัดการหอพัก ${action.dormitoryName}\nกรุณาติดต่อเจ้าของหอพักเพื่อขอสิทธิ์การเข้าถึง`,
+            };
+            await this.lineAdapter.replyMessage(action.replyToken, [textMsg], action.accessToken);
+          }
+        } else if (action.type === 'tenant_register' && action.rawToken) {
+          const registrationUrl = getTenantRegistrationUrl(action.rawToken, appOrigin);
+          const flex = buildTenantRegistrationFlexMessage(action.dormitoryName, registrationUrl);
+          const deliveryResult = await this.lineAdapter.replyMessage(action.replyToken, [flex], action.accessToken);
+          if (action.inviteId) {
+            await this.inviteService.updateDeliveryOutcome(action.inviteId, deliveryResult).catch(() => {});
+          }
+        } else if (action.type === 'owner_user_guide') {
+          const flex = buildOwnerGuideCarouselFlexMessage(action.dormitoryName, appOrigin);
+          await this.lineAdapter.replyMessage(action.replyToken, [flex], action.accessToken);
+        } else if (action.type === 'tenant_user_guide') {
+          const flex = buildTenantGuideCarouselFlexMessage(action.dormitoryName, appOrigin);
+          await this.lineAdapter.replyMessage(action.replyToken, [flex], action.accessToken);
+        }
+      } catch (err: any) {
+        console.warn('Unexpected error in LINE postback reply loop:', { message: err.message, actionType: action.type });
+      }
+    }
+
     return result;
+  }
+
+  /**
+   * Get cached LINE Platform quota status with 15-minute TTL.
+   */
+  async getLinePlatformQuotaStatus(dormitoryId: string): Promise<{
+    available: boolean;
+    remaining: number;
+    type: 'limited' | 'none';
+    totalUsage?: number;
+    limit?: number;
+  }> {
+    const cached = LINE_QUOTA_CACHE.get(dormitoryId);
+    const now = Date.now();
+    if (cached && now - cached.cachedAt < CACHE_TTL_MS) {
+      return {
+        available: cached.type === 'none' || cached.remaining > 0,
+        remaining: cached.remaining,
+        type: cached.type,
+        totalUsage: cached.totalUsage,
+        limit: cached.value,
+      };
+    }
+
+    const accessToken = await this.resolveAccessToken(dormitoryId);
+    if (!accessToken) {
+      return { available: false, remaining: 0, type: 'limited' };
+    }
+
+    if (!this.lineAdapter.getQuota) {
+      return { available: true, remaining: 999, type: 'none' };
+    }
+
+    const quota = await this.lineAdapter.getQuota(accessToken);
+    if (!quota) {
+      return { available: true, remaining: 999, type: 'none' };
+    }
+
+    if (quota.type === 'none') {
+      LINE_QUOTA_CACHE.set(dormitoryId, {
+        remaining: Infinity,
+        type: 'none',
+        cachedAt: now,
+      });
+      return { available: true, remaining: Infinity, type: 'none' };
+    }
+
+    const consumption = this.lineAdapter.getQuotaConsumption
+      ? await this.lineAdapter.getQuotaConsumption(accessToken)
+      : null;
+    const totalUsage = consumption?.totalUsage ?? 0;
+    const limit = quota.value ?? 500;
+    const remaining = Math.max(0, limit - totalUsage);
+
+    LINE_QUOTA_CACHE.set(dormitoryId, {
+      remaining,
+      type: 'limited',
+      value: limit,
+      totalUsage,
+      cachedAt: now,
+    });
+
+    return {
+      available: remaining > 0,
+      remaining,
+      type: 'limited',
+      totalUsage,
+      limit,
+    };
   }
 
   async pushOutcomeNotification(
@@ -996,11 +2474,77 @@ export class LineOaService {
     flexMessage: any
   ): Promise<boolean> {
     try {
+      // 1. Check Dormitory Preferences & Connection Status
+      if (this.prisma && typeof (this.prisma as any).$transaction === 'function') {
+        const config = await this.prisma.dormitoryLineConfig?.findUnique?.({
+          where: { dormitoryId },
+          select: { isConnected: true, notifyTenantApproved: true },
+        }).catch(() => null);
+
+        if (config && (!config.isConnected || config.notifyTenantApproved === false)) {
+          console.info(`[LineOaService] Push skipped: config isConnected=${config?.isConnected}, notifyTenantApproved=${config?.notifyTenantApproved}`);
+          return false;
+        }
+      }
+
+      // 2. Guard 1: HorPlus Business Quota (DB-First, Short-Circuit)
+      if (this.prisma && typeof (this.prisma as any).$transaction === 'function') {
+        try {
+          const pushUsageService = new LinePushUsageService(this.prisma);
+          const quotaStatus = await pushUsageService.getQuotaStatus(dormitoryId);
+          if (!quotaStatus.isAvailable) {
+            console.warn(`[LineOaService] Push blocked: HorPlus quota exhausted for dormitory ${dormitoryId}`);
+            return false;
+          }
+        } catch (quotaErr: any) {
+          console.warn('[LineOaService] Could not verify HorPlus quota status:', quotaErr.message);
+        }
+      }
+
+      // 3. Guard 2: LINE Platform Quota (Cached with 15-min TTL)
+      const platformQuota = await this.getLinePlatformQuotaStatus(dormitoryId);
+      if (!platformQuota.available) {
+        console.warn(`[LineOaService] Push blocked: LINE platform quota exhausted for dormitory ${dormitoryId}`);
+        return false;
+      }
+
+      // 4. Resolve Token and Dispatch
       const accessToken = await this.resolveAccessToken(dormitoryId);
       if (!accessToken) return false;
       const retryKey = crypto.randomUUID();
       const res = await this.lineAdapter.pushMessage(toLineUserId, flexMessage, accessToken, retryKey);
-      return res.outcome === 'ACCEPTED' || res.outcome === 'ALREADY_ACCEPTED';
+      const isAccepted = res.outcome === 'ACCEPTED' || res.outcome === 'ALREADY_ACCEPTED';
+
+      // 5. Update usage count if accepted
+      if (isAccepted && this.prisma && typeof (this.prisma as any).$transaction === 'function') {
+        try {
+          const pushUsageService = new LinePushUsageService(this.prisma);
+          const dorm = await this.prisma.dormitory?.findUnique?.({
+            where: { id: dormitoryId },
+            select: { timezone: true },
+          });
+          const timezone = dorm?.timezone || 'Asia/Bangkok';
+          const periodKey = pushUsageService.getCurrentPeriodKey(timezone);
+
+          await this.prisma.$executeRaw`
+            INSERT INTO "line_push_usage" ("id", "dormitory_id", "period_key", "success_count", "reserved_count", "created_at", "updated_at")
+            VALUES (gen_random_uuid(), ${dormitoryId}::uuid, ${periodKey}, 1, 0, NOW(), NOW())
+            ON CONFLICT ("dormitory_id", "period_key")
+            DO UPDATE SET "success_count" = "line_push_usage"."success_count" + 1, "updated_at" = NOW()
+          `;
+
+          // Decrement cached remaining
+          const cached = LINE_QUOTA_CACHE.get(dormitoryId);
+          if (cached && cached.type === 'limited' && cached.remaining > 0) {
+            cached.remaining -= 1;
+            if (cached.totalUsage !== undefined) cached.totalUsage += 1;
+          }
+        } catch (updateErr: any) {
+          console.warn('[LineOaService] Failed to increment line_push_usage on push outcome:', updateErr.message);
+        }
+      }
+
+      return isAccepted;
     } catch (err: any) {
       console.warn('Failed to push LINE outcome notification:', err.message);
       return false;

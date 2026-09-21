@@ -1498,7 +1498,7 @@ export class DefaultsService {
     const roomIds = rooms.map((r) => r.id);
     const buildingIds = Array.from(new Set(rooms.map((r) => r.buildingId).filter(Boolean)));
 
-    const [billingSettings, propertyDefaults, buildings, activeContracts, activeProvisionals, activeDailyStays] = await Promise.all([
+    const [billingSettings, propertyDefaults, buildings, activeContracts, activeProvisionals, activeDailyStays, scheduledContracts] = await Promise.all([
       prisma.dormitoryBillingSettings.findUnique({ where: { dormitoryId } }),
       prisma.dormitoryPropertyDefaults.findUnique({ where: { dormitoryId } }),
       prisma.building.findMany({ where: { id: { in: buildingIds }, dormitoryId, deletedAt: null } }),
@@ -1527,6 +1527,14 @@ export class DefaultsService {
           deletedAt: null,
         },
       }),
+      prisma.contract.findMany({
+        where: {
+          dormitoryId,
+          roomId: { in: roomIds },
+          status: 'approved_scheduled',
+          deletedAt: null,
+        },
+      }),
     ]);
 
     const buildingMap = new Map(buildings.map((b: any) => [b.id, b]));
@@ -1535,6 +1543,10 @@ export class DefaultsService {
 
     const activeRentalMap = new Map<string, ActiveRentalSummary | null>();
     const activeContractMap = new Map<string, any>();
+    const scheduledContractMap = new Map<string, any>();
+    for (const sc of (scheduledContracts || [])) {
+      if (sc.roomId) scheduledContractMap.set(sc.roomId, sc);
+    }
 
         const now = new Date();
     const batchOpActionsMap = await resolveCurrentMaintenanceEligibilityByRoom(dormitoryId, roomIds, prisma, now);
@@ -1730,6 +1742,9 @@ export class DefaultsService {
         currentTenantId: room.currentTenantId || activeContract?.tenantId || null,
         currentContractId: room.currentContractId || activeContract?.id || null,
         activeRentalSummary,
+        isReservedScheduled: scheduledContractMap.has(room.id),
+        hasScheduledRenewal: scheduledContractMap.has(room.id),
+        bookingStatus: scheduledContractMap.has(room.id) ? 'RESERVED_SCHEDULED' : null,
         currentOperationalActions: batchOpActionsMap.get(room.id) || { canSetMaintenance: false, maintenanceBlockReason: null },
         createdAt: room.createdAt,
       };

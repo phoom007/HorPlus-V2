@@ -8,12 +8,14 @@ export interface OwnerDateInputProps {
   max?: string; // ISO date format YYYY-MM-DD
   disabled?: boolean;
   required?: boolean;
+  readOnly?: boolean;
   className?: string;
   placeholder?: string;
   id?: string;
   name?: string;
   'data-testid'?: string;
   align?: 'left' | 'right' | 'auto';
+  verticalAlign?: 'top' | 'bottom' | 'auto';
 }
 
 /**
@@ -35,6 +37,9 @@ export function isoToThaiBe(isoStr?: string): string {
 export function thaiBeToIso(thaiStr?: string): string | null {
   if (!thaiStr) return '';
   const clean = thaiStr.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(clean)) {
+    return clean;
+  }
   const parts = clean.split(/[/.-]/);
   if (parts.length !== 3) return null;
 
@@ -82,35 +87,57 @@ export const OwnerDateInput: React.FC<OwnerDateInputProps> = ({
   max,
   disabled = false,
   required = false,
+  readOnly = true,
   className = '',
   placeholder = 'วว/ดด/ปปปป',
   id,
   name,
   'data-testid': testId,
   align = 'auto',
+  verticalAlign = 'auto',
 }) => {
   const [displayText, setDisplayText] = useState<string>(() => isoToThaiBe(value));
   const [isOpen, setIsOpen] = useState(false);
   const [isYearPickerOpen, setIsYearPickerOpen] = useState(false);
   const [placement, setPlacement] = useState<'left' | 'right'>(align === 'right' ? 'right' : 'left');
+  const [verticalPlacement, setVerticalPlacement] = useState<'top' | 'bottom'>('bottom');
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (align === 'right') {
-      setPlacement('right');
-    } else if (align === 'left') {
-      setPlacement('left');
-    } else if (isOpen && containerRef.current) {
-      if (typeof window !== 'undefined') {
-        const rect = containerRef.current.getBoundingClientRect();
-        if (rect && rect.left + 260 > window.innerWidth) {
+    if (isOpen && containerRef.current && typeof window !== 'undefined') {
+      const rect = containerRef.current.getBoundingClientRect();
+      if (rect) {
+        if (align === 'right') {
+          setPlacement('right');
+        } else if (align === 'left') {
+          setPlacement('left');
+        } else if (rect.left + 260 > window.innerWidth) {
           setPlacement('right');
         } else {
           setPlacement('left');
         }
+
+        if (verticalAlign === 'top') {
+          setVerticalPlacement('top');
+        } else if (verticalAlign === 'bottom') {
+          setVerticalPlacement('bottom');
+        } else {
+          // Smart dynamic flip: if space below input is less than 320px and space above is larger, flip to open upwards
+          const spaceBelow = window.innerHeight - rect.bottom;
+          if (spaceBelow < 320 && rect.top > 280) {
+            setVerticalPlacement('top');
+          } else {
+            setVerticalPlacement('bottom');
+          }
+        }
       }
+    } else {
+      if (align === 'right') setPlacement('right');
+      else if (align === 'left') setPlacement('left');
+      if (verticalAlign === 'top') setVerticalPlacement('top');
+      else if (verticalAlign === 'bottom') setVerticalPlacement('bottom');
     }
-  }, [isOpen, align]);
+  }, [isOpen, align, verticalAlign]);
 
   // Sync internal display text when external value changes
   useEffect(() => {
@@ -147,6 +174,12 @@ export const OwnerDateInput: React.FC<OwnerDateInputProps> = ({
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const text = e.target.value;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(text.trim())) {
+      const be = isoToThaiBe(text.trim());
+      setDisplayText(be || text);
+      onChange(text.trim());
+      return;
+    }
     setDisplayText(text);
 
     if (!text.trim()) {
@@ -169,6 +202,16 @@ export const OwnerDateInput: React.FC<OwnerDateInputProps> = ({
     }
     const iso = thaiBeToIso(displayText);
     if (iso) {
+      if (min && iso < min) {
+        onChange(min);
+        setDisplayText(isoToThaiBe(min));
+        return;
+      }
+      if (max && iso > max) {
+        onChange(max);
+        setDisplayText(isoToThaiBe(max));
+        return;
+      }
       onChange(iso);
       setDisplayText(isoToThaiBe(iso));
     } else {
@@ -182,6 +225,8 @@ export const OwnerDateInput: React.FC<OwnerDateInputProps> = ({
     const mm = String(activeMonth + 1).padStart(2, '0');
     const dd = String(d).padStart(2, '0');
     const iso = `${yyyy}-${mm}-${dd}`;
+    if (min && iso < min) return;
+    if (max && iso > max) return;
     onChange(iso);
     setDisplayText(isoToThaiBe(iso));
     setIsOpen(false);
@@ -205,6 +250,22 @@ export const OwnerDateInput: React.FC<OwnerDateInputProps> = ({
     }
   };
 
+  // Min/Max year and month bounds
+  const minYear = min ? parseInt(min.slice(0, 4), 10) : null;
+  const minMonth = min ? parseInt(min.slice(5, 7), 10) - 1 : null;
+  const maxYear = max ? parseInt(max.slice(0, 4), 10) : null;
+  const maxMonth = max ? parseInt(max.slice(5, 7), 10) - 1 : null;
+
+  const isPrevMonthDisabled = Boolean(
+    isYearPickerOpen ||
+    (minYear !== null && minMonth !== null && (activeYear < minYear || (activeYear === minYear && activeMonth <= minMonth)))
+  );
+
+  const isNextMonthDisabled = Boolean(
+    isYearPickerOpen ||
+    (maxYear !== null && maxMonth !== null && (activeYear > maxYear || (activeYear === maxYear && activeMonth >= maxMonth)))
+  );
+
   // Calendar calculations
   const daysInMonth = new Date(Date.UTC(activeYear, activeMonth + 1, 0)).getUTCDate();
   const firstDayOfWeek = new Date(Date.UTC(activeYear, activeMonth, 1)).getUTCDay();
@@ -220,14 +281,22 @@ export const OwnerDateInput: React.FC<OwnerDateInputProps> = ({
           value={displayText}
           onChange={handleInputChange}
           onBlur={handleInputBlur}
+          onClick={() => !disabled && setIsOpen(prev => !prev)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              if (!disabled) setIsOpen(prev => !prev);
+            }
+          }}
+          readOnly={readOnly}
           disabled={disabled}
           required={required}
           placeholder={placeholder}
-          className={`w-full pl-9 pr-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold disabled:bg-slate-50 disabled:text-slate-400 ${className}`}
+          className={`w-full pl-9 pr-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold disabled:bg-slate-50 disabled:text-slate-400 cursor-pointer ${className}`}
         />
         <button
           type="button"
-          data-testid="owner-date-input-calendar-btn"
+          data-testid={testId ? `${testId}-picker-btn` : 'owner-date-input-calendar-btn'}
           disabled={disabled}
           onClick={() => !disabled && setIsOpen(prev => !prev)}
           className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-indigo-600 transition-colors cursor-pointer p-0.5"
@@ -243,15 +312,17 @@ export const OwnerDateInput: React.FC<OwnerDateInputProps> = ({
           data-testid="owner-date-input-popover"
           className={`absolute ${
             placement === 'right' ? 'right-0' : 'left-0 sm:left-0 sm:right-auto'
-          } top-full mt-1 z-50 bg-white border border-slate-200 rounded-2xl shadow-xl p-3 w-64 max-w-[calc(100vw-2rem)] text-slate-800`}
+          } ${
+            verticalPlacement === 'top' ? 'bottom-full mb-1' : 'top-full mt-1'
+          } z-50 bg-white border border-slate-200 rounded-2xl shadow-xl p-3 w-64 max-w-[calc(100vw-2rem)] text-slate-800`}
         >
           {/* Header Month / Year in Buddhist Era */}
           <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-100">
             <button
               type="button"
               onClick={handlePrevMonth}
-              disabled={isYearPickerOpen}
-              className="p-1 hover:bg-slate-100 rounded-lg text-slate-600 transition-colors disabled:opacity-25"
+              disabled={isPrevMonthDisabled}
+              className="p-1 hover:bg-slate-100 rounded-lg text-slate-600 transition-colors disabled:opacity-25 disabled:cursor-not-allowed"
             >
               <ChevronLeft className="w-4 h-4" />
             </button>
@@ -274,8 +345,8 @@ export const OwnerDateInput: React.FC<OwnerDateInputProps> = ({
             <button
               type="button"
               onClick={handleNextMonth}
-              disabled={isYearPickerOpen}
-              className="p-1 hover:bg-slate-100 rounded-lg text-slate-600 transition-colors disabled:opacity-25"
+              disabled={isNextMonthDisabled}
+              className="p-1 hover:bg-slate-100 rounded-lg text-slate-600 transition-colors disabled:opacity-25 disabled:cursor-not-allowed"
             >
               <ChevronRight className="w-4 h-4" />
             </button>
@@ -291,27 +362,34 @@ export const OwnerDateInput: React.FC<OwnerDateInputProps> = ({
                 data-testid="year-grid-container"
                 className="max-h-48 overflow-y-auto grid grid-cols-3 gap-1.5 p-1 border border-slate-100 rounded-xl bg-slate-50/50"
               >
-                {Array.from({ length: 90 }, (_, i) => (new Date().getFullYear() + 543 + 5) - i).map((beYear) => {
-                  const isSelected = (activeYear + 543) === beYear;
-                  return (
-                    <button
-                      key={beYear}
-                      type="button"
-                      data-testid={`year-option-${beYear}`}
-                      onClick={() => {
-                        setActiveYear(beYear - 543);
-                        setIsYearPickerOpen(false);
-                      }}
-                      className={`py-1.5 px-1 rounded-xl text-center text-[11px] font-bold transition-all cursor-pointer ${
-                        isSelected
-                          ? 'bg-indigo-600 text-white font-black shadow-xs'
-                          : 'bg-white hover:bg-indigo-50 text-slate-700 hover:text-indigo-700 border border-slate-100'
-                      }`}
-                    >
-                      {beYear}
-                    </button>
-                  );
-                })}
+                {Array.from({ length: 90 }, (_, i) => (new Date().getFullYear() + 543 + 5) - i)
+                  .filter(beYear => {
+                    const ceYear = beYear - 543;
+                    if (minYear !== null && ceYear < minYear) return false;
+                    if (maxYear !== null && ceYear > maxYear) return false;
+                    return true;
+                  })
+                  .map((beYear) => {
+                    const isSelected = (activeYear + 543) === beYear;
+                    return (
+                      <button
+                        key={beYear}
+                        type="button"
+                        data-testid={`year-option-${beYear}`}
+                        onClick={() => {
+                          setActiveYear(beYear - 543);
+                          setIsYearPickerOpen(false);
+                        }}
+                        className={`py-1.5 px-1 rounded-xl text-center text-[11px] font-bold transition-all cursor-pointer ${
+                          isSelected
+                            ? 'bg-indigo-600 text-white font-black shadow-xs'
+                            : 'bg-white hover:bg-indigo-50 text-slate-700 hover:text-indigo-700 border border-slate-100'
+                        }`}
+                      >
+                        {beYear}
+                      </button>
+                    );
+                  })}
               </div>
             </div>
           ) : (
@@ -335,16 +413,22 @@ export const OwnerDateInput: React.FC<OwnerDateInputProps> = ({
                   const dd = String(day).padStart(2, '0');
                   const currentIso = `${yyyy}-${mm}-${dd}`;
                   const isSelected = value === currentIso;
+                  const isDayDisabled = Boolean(
+                    (min && currentIso < min) || (max && currentIso > max)
+                  );
 
                   return (
                     <button
                       key={day}
                       type="button"
-                      onClick={() => handleSelectDate(day)}
-                      className={`h-7 w-7 rounded-lg text-[11px] font-bold flex items-center justify-center transition-all cursor-pointer ${
-                        isSelected
-                          ? 'bg-indigo-600 text-white shadow-xs'
-                          : 'hover:bg-indigo-50 text-slate-700 hover:text-indigo-700'
+                      disabled={isDayDisabled}
+                      onClick={() => !isDayDisabled && handleSelectDate(day)}
+                      className={`h-7 w-7 rounded-lg text-[11px] font-bold flex items-center justify-center transition-all ${
+                        isDayDisabled
+                          ? 'opacity-25 cursor-not-allowed text-slate-300'
+                          : isSelected
+                          ? 'bg-indigo-600 text-white shadow-xs cursor-pointer'
+                          : 'hover:bg-indigo-50 text-slate-700 hover:text-indigo-700 cursor-pointer'
                       }`}
                     >
                       {day}
@@ -357,18 +441,29 @@ export const OwnerDateInput: React.FC<OwnerDateInputProps> = ({
 
           {/* Today Button */}
           <div className="mt-2 pt-2 border-t border-slate-100 flex items-center justify-between">
-            <button
-              type="button"
-              onClick={() => {
-                const todayIso = new Date().toISOString().slice(0, 10);
-                onChange(todayIso);
-                setDisplayText(isoToThaiBe(todayIso));
-                setIsOpen(false);
-              }}
-              className="text-[11px] font-bold text-indigo-600 hover:text-indigo-800 transition-colors"
-            >
-              วันนี้
-            </button>
+            {(() => {
+              const todayIso = new Date().toISOString().slice(0, 10);
+              const isTodayDisabled = Boolean((min && todayIso < min) || (max && todayIso > max));
+              return (
+                <button
+                  type="button"
+                  disabled={isTodayDisabled}
+                  onClick={() => {
+                    if (isTodayDisabled) return;
+                    onChange(todayIso);
+                    setDisplayText(isoToThaiBe(todayIso));
+                    setIsOpen(false);
+                  }}
+                  className={`text-[11px] font-bold transition-colors ${
+                    isTodayDisabled
+                      ? 'text-slate-300 cursor-not-allowed opacity-40'
+                      : 'text-indigo-600 hover:text-indigo-800 cursor-pointer'
+                  }`}
+                >
+                  วันนี้
+                </button>
+              );
+            })()}
             <button
               type="button"
               onClick={() => setIsOpen(false)}

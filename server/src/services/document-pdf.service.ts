@@ -2,6 +2,7 @@ import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import fontkit from '@pdf-lib/fontkit';
 import fs from 'fs';
 import path from 'path';
+import { chromium, type Browser } from 'playwright';
 
 export interface ContractPdfData {
   contractNumber: string;
@@ -11,15 +12,20 @@ export interface ContractPdfData {
   ownerName: string;
   ownerSignatureUrl?: string | null;
   tenantName: string;
+  tenantCitizenId?: string | null;
   tenantPhone?: string | null;
   coTenants?: Array<{ name: string; phone?: string }>;
   buildingName?: string | null;
+  floor?: string | number | null;
   roomNumber: string;
   rentBillingType: 'monthly' | 'term';
   startDate: string;
   endDate: string;
+  durationMonths?: number | string | null;
   rentAmount: string;
   depositAmount: string;
+  depositType?: string | null;
+  advancePaymentAmount?: string | number | null;
   waterRate: string;
   electricityRate: string;
   commonFee: string;
@@ -37,8 +43,295 @@ export interface ContractPdfData {
   createdAt?: string;
 }
 
-
 export class DocumentPdfService {
+  /**
+   * Generates authentic HTML for the Official Thai Lease Agreement (matching PO Image 3).
+   * Formatted with Sarabun font, Clauses 1-6, BE dates, two-party signatures, and clean layout.
+   */
+  public generateContractHtml(data: ContractPdfData): string {
+    const safeDormName = this.safeText(data.dormitoryName, 'หอพัก');
+    const safeOwnerName = this.safeText(data.ownerName, 'เจ้าของหอพัก');
+    const safeTenantName = this.safeText(data.tenantName, 'ผู้เช่า');
+    const hasTitlePrefix = /^(นาย|นาง|นางสาว|ด\.ช\.|ด\.ญ\.|เด็กชาย|เด็กหญิง|ดร\.|ดร\s|ผศ\.|ผศ\s|รศ\.|รศ\s|ศ\.|ศ\s|อาจารย์|ว่าที่ร้อยตรี|คุณ)/i.test(safeTenantName.trim());
+    const formattedTenantName = hasTitlePrefix ? safeTenantName : `คุณ${safeTenantName}`;
+    const safeAddress = this.safeText(data.dormitoryAddress, 'อาคารพักอาศัยส่วนบุคคล');
+    const tenantCitizenId = this.safeText(data.tenantCitizenId, '-');
+    const tenantPhone = this.safeText(data.tenantPhone, '-');
+    const roomNum = this.safeText(data.roomNumber, '101');
+    const roomFloor = data.floor ? ` (ชั้น ${data.floor})` : '';
+
+    const createdDateStr = data.createdAt ? data.createdAt.split('T')[0] : data.startDate;
+    const createdDateThai = this.formatThaiDate(createdDateStr);
+    const startDateThai = this.formatThaiDate(data.startDate);
+    const endDateThai = this.formatThaiDate(data.endDate);
+    const duration = data.durationMonths ? Number(data.durationMonths) : this.calculateDurationMonths(data.startDate, data.endDate);
+
+    const isTermContract = data.rentBillingType === 'term';
+    const contractTypeLabel = isTermContract ? 'สัญญาเช่ารายเทอม' : 'สัญญาเช่ารายเดือน';
+    const rentFormatted = this.formatBaht(data.rentAmount);
+    const depositFormatted = this.formatBaht(data.depositAmount);
+    const advanceFormatted = data.advancePaymentAmount && Number(data.advancePaymentAmount) > 0 ? this.formatBaht(data.advancePaymentAmount) : null;
+    const depositTypeText = data.depositType === 'deduct_rent'
+      ? 'นำไปหักชำระกับค่าเช่างวดสุดท้าย'
+      : 'คืนให้เต็มจำนวนเมื่อสิ้นสุดสัญญาโดยไม่มีสิ่งของชำรุดเสียหาย';
+
+    const totalOccupants = 1 + (data.coTenants && Array.isArray(data.coTenants) ? data.coTenants.length : 0);
+
+    const waterRateStr = data.waterRate !== undefined && data.waterRate !== null ? `${data.waterRate} บาท/หน่วย` : 'ไม่ระบุ';
+    const elecRateStr = data.electricityRate !== undefined && data.electricityRate !== null ? `${data.electricityRate} บาท/หน่วย` : 'ไม่ระบุ';
+    const commonFeeStr = data.commonFee !== undefined && data.commonFee !== null ? `${data.commonFee} บาท/เดือน` : 'ไม่ระบุ';
+    const internetFeeStr = data.internetFee && data.internetFee !== '0.00' && data.internetFee !== 'ไม่ระบุ' ? `, ค่าอินเทอร์เน็ต ${data.internetFee} บาท/เดือน` : '';
+    const parkingFeeStr = data.parkingFee && data.parkingFee !== '0.00' && data.parkingFee !== 'ไม่ระบุ' ? `, ค่าที่จอดรถ ${data.parkingFee} บาท/เดือน` : '';
+    const billingDayStr = data.billingDay !== undefined && data.billingDay !== null ? String(data.billingDay) : 'ไม่ระบุ';
+    const dueDayStr = data.dueDay !== undefined && data.dueDay !== null ? String(data.dueDay) : 'ไม่ระบุ';
+
+    const termsText = this.safeText(
+      data.terms,
+      '1. ห้ามสูบบุหรี่ภายในห้องพักและพื้นที่ส่วนกลาง\n2. ห้ามส่งเสียงดังรบกวนผู้อื่นหลังเวลา 22:00 น.\n3. ชำระค่าเช่าและค่าน้ำไฟตรงตามกำหนดเวลา ภายในวันที่ 5 ของทุกเดือน\n4. ห้ามนำบุคคลภายนอกมาพักค้างคืนโดยไม่แจ้งเจ้าหน้าที่\n5. รักษาความสะอาดและดูแลรักษาทรัพย์สินของหอพักอย่างเคร่งครัด'
+    );
+
+    const tenantSigHtml = data.tenantSignature && (data.tenantSignature.startsWith('data:') || data.tenantSignature.startsWith('http'))
+      ? `<img src="${data.tenantSignature}" alt="ลายเซ็นผู้เช่า" style="max-height: 48px; max-width: 150px; object-fit: contain;" />`
+      : `<div style="height: 44px; border-bottom: 1px dotted #94a3b8; width: 140px; margin: 0 auto;"></div>`;
+
+    const ownerSigHtml = data.ownerSignatureUrl && (data.ownerSignatureUrl.startsWith('data:') || data.ownerSignatureUrl.startsWith('http'))
+      ? `<img src="${data.ownerSignatureUrl}" alt="ลายเซ็นผู้ให้เช่า" style="max-height: 48px; max-width: 150px; object-fit: contain;" />`
+      : `<div style="height: 44px; border-bottom: 1px dotted #94a3b8; width: 140px; margin: 0 auto;"></div>`;
+
+    let installmentsHtml = '';
+    if (isTermContract && data.installmentSchedule && data.installmentSchedule.length > 0) {
+      installmentsHtml = `
+        <div style="margin-top: 10px; padding: 10px 14px; background-color: #f1f5f9; border-radius: 8px; border: 1px solid #e2e8f0;">
+          <div style="font-weight: 700; font-size: 12px; margin-bottom: 6px; color: #1e293b;">ตารางงวดชำระค่าเช่ารายเทอม:</div>
+          <table style="width: 100%; font-size: 11.5px; border-collapse: collapse;">
+            ${data.installmentSchedule.map(s => `
+              <tr>
+                <td style="padding: 4px 6px; color: #475569;">งวดที่ #${s.installmentNo} (${s.cycleName})</td>
+                <td style="padding: 4px 6px; text-align: right; font-weight: 700; color: #0f172a;">฿ ${this.formatBaht(s.amount)} บาท</td>
+              </tr>
+            `).join('')}
+          </table>
+        </div>
+      `;
+    }
+
+    return `
+      <!DOCTYPE html>
+      <html lang="th">
+      <head>
+        <meta charset="UTF-8">
+        <title>สัญญาเช่าห้องพักเลขที่ ${data.contractNumber || 'CTR'} - ห้อง ${roomNum}</title>
+        <link rel="preconnect" href="https://fonts.googleapis.com">
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+        <style>
+          @page {
+            size: A4;
+            margin: 15mm;
+          }
+          * {
+            box-sizing: border-box;
+          }
+          body {
+            font-family: 'Sarabun', 'Segoe UI', Tahoma, -apple-system, sans-serif;
+            font-size: 13.5px;
+            line-height: 1.65;
+            color: #0f172a;
+            background-color: #ffffff;
+            margin: 0;
+            padding: 0;
+          }
+          .contract-container {
+            width: 100%;
+            max-width: 100%;
+            margin: 0 auto;
+            background: #ffffff;
+          }
+          .header-box {
+            text-align: center;
+            margin-bottom: 20px;
+            padding-bottom: 14px;
+            border-bottom: 2px solid #0f172a;
+          }
+          .title {
+            font-size: 20px;
+            font-weight: 800;
+            color: #0f172a;
+            margin: 0 0 6px 0;
+            letter-spacing: 0.5px;
+          }
+          .contract-no {
+            font-size: 13px;
+            font-weight: 600;
+            color: #475569;
+          }
+          .content-section {
+            margin-bottom: 16px;
+            text-align: justify;
+            text-justify: inter-word;
+          }
+          .highlight-box {
+            background-color: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 12px;
+            padding: 14px 18px;
+            margin: 16px 0;
+          }
+          .highlight-box ul {
+            margin: 0;
+            padding-left: 20px;
+          }
+          .highlight-box li {
+            margin-bottom: 7px;
+          }
+          .highlight-box li:last-child {
+            margin-bottom: 0;
+          }
+          .terms-box {
+            background-color: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 10px;
+            padding: 12px 16px;
+            margin-top: 8px;
+            white-space: pre-line;
+            color: #334155;
+            font-size: 12.5px;
+            line-height: 1.7;
+          }
+          .signatures-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            margin-top: 36px;
+            page-break-inside: avoid;
+          }
+          .signature-block {
+            text-align: center;
+            border: none;
+            padding: 18px 12px 14px 12px;
+            background-color: transparent;
+          }
+          .signature-label {
+            font-weight: 700;
+            font-size: 13px;
+            color: #1e293b;
+            margin-bottom: 12px;
+          }
+          .signature-space {
+            height: 52px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 8px;
+          }
+          .signer-name {
+            font-size: 13px;
+            font-weight: 600;
+            color: #334155;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="contract-container">
+          <div class="header-box">
+            <div class="title">หนังสือสัญญาเช่าห้องพักอาศัย</div>
+            <div class="contract-no">สัญญาเลขที่: <strong>${data.contractNumber || 'CTR'}</strong> | วันที่ทำสัญญา: <strong>${createdDateThai}</strong></div>
+            <div style="font-size: 12.5px; color: #64748b; margin-top: 4px;">ทำที่: ${safeDormName} (${safeAddress})</div>
+          </div>
+
+          <div class="content-section">
+            <p style="margin: 0 0 12px 0; text-indent: 32px;">
+              สัญญาฉบับนี้ทำขึ้นระหว่าง <strong>${safeDormName}</strong> โดย <strong>${safeOwnerName}</strong> ("ผู้ให้เช่า") ฝ่ายหนึ่ง กับ <strong>${formattedTenantName}</strong> ถือบัตรประจำตัวประชาชนเลขที่ <strong>${tenantCitizenId}</strong> เบอร์โทรศัพท์ <strong>${tenantPhone}</strong> ("ผู้เช่า") อีกฝ่ายหนึ่ง โดยคู่สัญญาทั้งสองฝ่ายได้ตกลงทำสัญญากันตามข้อกำหนดและเงื่อนไขดังต่อไปนี้:
+            </p>
+          </div>
+
+          <div class="highlight-box">
+            <ul>
+              <li><strong>ข้อ 1. ทรัพย์สินที่เช่า:</strong> ผู้ให้เช่าตกลงให้เช่า และผู้เช่าตกลงเช่าห้องพักหมายเลข <strong>ห้อง ${roomNum}</strong> ของอาคาร <strong>${safeDormName}</strong> พร้อมอุปกรณ์ เฟอร์นิเจอร์ เครื่องใช้ไฟฟ้า และสิ่งอำนวยความสะดวกในสภาพเรียบร้อยสมบูรณ์</li>
+              <li><strong>ข้อ 2. อัตราค่าเช่า เงินประกัน และการคืนเงิน:</strong> ผู้เช่าตกลงชำระค่าเช่าประเภท <strong>${contractTypeLabel}</strong> ในอัตรา <strong>฿ ${rentFormatted} บาทต่อ${isTermContract ? 'เทอม' : 'เดือน'}</strong> กำหนดชำระตามรอบบิลที่หอพักกำหนด (ตัดรอบบิลวันที่ ${billingDayStr} | ครบกำหนดชำระวันที่ ${dueDayStr} ของทุกเดือน) พร้อมวางเงินประกันความเสียหายจำนวน <strong>฿ ${depositFormatted} บาท</strong> โดยเงินประกันนี้จะได้รับคืนเมื่อสิ้นสุดสัญญาเช่า หลังจากหักค่าใช้จ่ายค้างชำระ หนี้สิน หรือค่าความเสียหายต่อทรัพย์สิน (ถ้ามี) ตามระเบียบและเงื่อนไขที่หอพักกำหนด</li>
+              <li><strong>ข้อ 3. ระยะเวลาการเช่า:</strong> สัญญานี้มีกำหนดระยะเวลา <strong>${duration} เดือน</strong> โดยเริ่มต้นตั้งแต่วันที่ <strong>${startDateThai}</strong> ถึงวันที่ <strong>${endDateThai}</strong></li>
+              <li><strong>ข้อ 4. ยานพาหนะ สัตว์เลี้ยง และการใช้พื้นที่ส่วนกลาง:</strong> ผู้เช่าตกลงปฏิบัติตามระเบียบการจอดยานพาหนะ การนำสัตว์เลี้ยงเข้าพัก (หากหอพักอนุญาต) และการใช้พื้นที่ส่วนกลาง โดยต้องบันทึกข้อมูลยานพาหนะและสัตว์เลี้ยงลงในระบบของหอพักให้ถูกต้องตรงตามความเป็นจริง</li>
+              <li><strong>ข้อ 5. จำนวนผู้พักอาศัยและผู้พักร่วม:</strong> ผู้เช่าตกลงแจ้งข้อมูลผู้พักอาศัยในห้องพักตามความเป็นจริง โดยในวันทำสัญญามีผู้เช่าหลักและผู้พักอาศัยร่วม รวมทั้งสิ้น <strong>${totalOccupants} คน</strong> หากมีการเปลี่ยนแปลงหรือมีผู้พักอาศัยร่วมเพิ่มเติมในภายหลัง ผู้เช่าจะต้องแจ้งให้ผู้ให้เช่าทราบล่วงหน้าและบันทึกข้อมูลลงในระบบตามระเบียบของหอพัก</li>
+            </ul>
+            ${installmentsHtml}
+          </div>
+
+          <div class="content-section">
+            <strong>ข้อ 6. ข้อตกลงและระเบียบการอยู่อาศัย:</strong>
+            <div class="terms-box">${termsText}</div>
+          </div>
+
+          <div class="content-section" style="margin-top: 14px;">
+            <p style="margin: 0; text-indent: 32px;">
+              สัญญานี้ทำขึ้นเป็นสองฉบับมีข้อความถูกต้องตรงกัน คู่สัญญาทั้งสองฝ่ายได้อ่านและเข้าใจข้อความโดยละเอียดแล้ว จึงได้ลงลายมือชื่อไว้เป็นหลักฐานสำคัญต่อหน้าพยาน
+            </p>
+          </div>
+
+          <div class="signatures-grid">
+            <div class="signature-block">
+              <div class="signature-label">ลงชื่อ (ผู้ให้เช่า)</div>
+              <div class="signature-space">${ownerSigHtml}</div>
+              <div class="signer-name">(${safeOwnerName})</div>
+            </div>
+
+            <div class="signature-block">
+              <div class="signature-label">ลงชื่อ (ผู้เช่า)</div>
+              <div class="signature-space">${tenantSigHtml}</div>
+              <div class="signer-name">(${formattedTenantName})</div>
+            </div>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+  }
+
+  /**
+   * Generates a server-authoritative Lease Contract PDF document using Headless Chromium.
+   * Renders the authentic official Thai agreement template (matching PO Image 3) with Sarabun font.
+   */
+  public async generateContractPdf(data: ContractPdfData): Promise<Buffer> {
+    const html = this.generateContractHtml(data);
+
+    let browser: Browser | null = null;
+    try {
+      browser = await chromium.launch({
+        headless: true,
+        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu']
+      });
+      const page = await browser.newPage();
+      await page.setContent(html, { waitUntil: 'networkidle' });
+      const rawPdfBytes = await page.pdf({
+        format: 'A4',
+        printBackground: true,
+        margin: {
+          top: '15mm',
+          bottom: '15mm',
+          left: '15mm',
+          right: '15mm',
+        }
+      });
+      await browser.close();
+      browser = null;
+
+      // Ensure creationDate and modificationDate metadata match contractual timestamps
+      const pdfDoc = await PDFDocument.load(rawPdfBytes);
+      if (data.createdAt) {
+        const createdDate = new Date(data.createdAt);
+        if (!isNaN(createdDate.getTime())) {
+          pdfDoc.setCreationDate(createdDate);
+          pdfDoc.setModificationDate(createdDate);
+        }
+      }
+      const finalPdfBytes = await pdfDoc.save();
+      return Buffer.from(finalPdfBytes);
+    } finally {
+      if (browser) {
+        await (browser as Browser).close().catch(() => {});
+      }
+    }
+  }
+
   /**
    * Helper to register fontkit and load embedded TTF custom font (Tahoma/Sarabun) or standard font fallback.
    */
@@ -88,192 +381,6 @@ export class DocumentPdfService {
       const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
       return { font, fontBold };
     }
-  }
-
-  /**
-   * Generates a server-authoritative Lease Contract PDF document with full Thai Unicode support.
-   */
-  public async generateContractPdf(data: ContractPdfData): Promise<Buffer> {
-    const pdfDoc = await PDFDocument.create();
-    if (data.createdAt) {
-      const createdDate = new Date(data.createdAt);
-      if (!isNaN(createdDate.getTime())) {
-        pdfDoc.setCreationDate(createdDate);
-        pdfDoc.setModificationDate(createdDate);
-      }
-    }
-    const { font, fontBold } = await this.loadFonts(pdfDoc);
-
-    const page = pdfDoc.addPage([595.28, 841.89]); // A4
-    const { width, height } = page.getSize();
-    let y = height - 50;
-
-    // Header
-    page.drawText('หนังสือสัญญาเช่าห้องพัก (Lease Agreement)', {
-      x: 50,
-      y,
-      size: 16,
-      font: fontBold,
-      color: rgb(0.1, 0.2, 0.5),
-    });
-    y -= 25;
-
-    page.drawText(`สัญญาเลขที่: ${data.contractNumber}`, {
-      x: 50,
-      y,
-      size: 11,
-      font: fontBold,
-      color: rgb(0.2, 0.2, 0.2),
-    });
-    page.drawText(`วันที่ทำสัญญา: ${data.createdAt || data.startDate}`, {
-      x: width - 220,
-      y,
-      size: 10,
-      font,
-    });
-    y -= 20;
-
-    // Divider
-    page.drawLine({
-      start: { x: 50, y },
-      end: { x: width - 50, y },
-      thickness: 1,
-      color: rgb(0.8, 0.8, 0.8),
-    });
-    y -= 20;
-
-    const safeDormName = this.safeText(data.dormitoryName, 'หอพัก');
-    const safeOwnerName = this.safeText(data.ownerName, 'เจ้าของหอพัก');
-    const safeTenantName = this.safeText(data.tenantName, 'ผู้เช่า');
-    const safeAddress = this.safeText(data.dormitoryAddress, '');
-
-    // Party Information
-    page.drawText(`1. คู่สัญญาและสถานที่เช่า (PARTIES & PREMISES)`, { x: 50, y, size: 12, font: fontBold });
-    y -= 18;
-    page.drawText(`ผู้ให้เช่า / หอพัก: ${safeDormName} (เจ้าของ: ${safeOwnerName})`, { x: 60, y, size: 10, font });
-    y -= 15;
-    if (safeAddress) {
-      page.drawText(`ที่อยู่: ${safeAddress}`, { x: 60, y, size: 9, font });
-      y -= 15;
-    }
-    page.drawText(`ผู้เช่า: ${safeTenantName} (เบอร์โทร: ${data.tenantPhone || 'N/A'})`, { x: 60, y, size: 10, font });
-    y -= 15;
-    if (data.coTenants && data.coTenants.length > 0) {
-      const coText = data.coTenants.map((c) => `${this.safeText(c.name, 'ผู้พักร่วม')} (${c.phone || 'N/A'})`).join(', ');
-      page.drawText(`ผู้พักอาศัยร่วม: ${coText}`, { x: 60, y, size: 9, font });
-      y -= 15;
-    }
-    const roomStr = data.buildingName ? `${this.safeText(data.buildingName, 'อาคาร')} - ห้อง ${data.roomNumber}` : `ห้อง ${data.roomNumber}`;
-    page.drawText(`ห้องพักที่เช่า: ${roomStr}`, { x: 60, y, size: 10, font: fontBold });
-    y -= 25;
-
-    // Lease Terms & Rates
-    page.drawText(`2. ระยะเวลาเช่าและอัตราค่าเช่า (LEASE TERMS & RATES)`, { x: 50, y, size: 12, font: fontBold });
-    y -= 18;
-    const typeLabel = data.rentBillingType === 'term' ? 'สัญญาเช่ารายเทอม (Semester Contract)' : 'สัญญาเช่ารายเดือน (Monthly Contract)';
-    page.drawText(`ประเภทสัญญา: ${typeLabel}`, { x: 60, y, size: 10, font });
-    y -= 15;
-    page.drawText(`ระยะเวลาสัญญา: ${data.startDate} ถึง ${data.endDate}`, { x: 60, y, size: 10, font });
-    y -= 15;
-    page.drawText(`ค่าเช่าห้องพัก: ${data.rentAmount} บาท/เดือน | เงินประกันสัญญา: ${data.depositAmount} บาท`, { x: 60, y, size: 10, font: fontBold });
-    y -= 15;
-    page.drawText(`อัตราค่าสาธารณูปโภค: ค่าน้ำ ${data.waterRate} บาท/หน่วย | ค่าไฟ ${data.electricityRate} บาท/หน่วย`, { x: 60, y, size: 9, font });
-    y -= 15;
-    page.drawText(`ค่าส่วนกลาง: ${data.commonFee} บาท/เดือน | ค่าอินเทอร์เน็ต: ${data.internetFee || 'ไม่ระบุ'} บาท/เดือน`, { x: 60, y, size: 9, font });
-    y -= 15;
-    page.drawText(`กำหนดการชำระ: ตัดรอบวันที่ ${data.billingDay} | ครบกำหนดชำระวันที่ ${data.dueDay} ของเดือน`, { x: 60, y, size: 9, font });
-    y -= 25;
-
-    // Semester Installments Breakdown (If Semester Contract)
-    if (data.rentBillingType === 'term') {
-      page.drawText(`3. ตารางงวดชำระค่าเช่ารายเทอม (SEMESTER INSTALLMENT SCHEDULE)`, { x: 50, y, size: 12, font: fontBold });
-      y -= 18;
-      const count = data.installmentCount || 1;
-      const modeText = count > 1 ? `แบ่งชำระเป็น ${count} งวด (สูงสุดไม่เกิน ${data.maxInstallmentsAllowed || count} งวด)` : `ชำระค่าเช่ารายเทอมเต็มจำนวนในงวดแรก`;
-      page.drawText(`รูปแบบการชำระเงิน: ${modeText}`, { x: 60, y, size: 10, font });
-      y -= 18;
-
-      if (data.installmentSchedule && data.installmentSchedule.length > 0) {
-        for (const inst of data.installmentSchedule) {
-          page.drawText(`งวดที่ #${inst.installmentNo}: ${inst.amount} บาท (${inst.cycleName})`, { x: 70, y, size: 9, font });
-          y -= 14;
-        }
-      }
-      y -= 15;
-    }
-
-    // Signatures Section
-    y = Math.min(y, 180);
-    page.drawLine({
-      start: { x: 50, y },
-      end: { x: width - 50, y },
-      thickness: 1,
-      color: rgb(0.8, 0.8, 0.8),
-    });
-    y -= 25;
-
-    page.drawText(`4. ลงนามลายมือชื่อ (SIGNATURES & FINALIZATION)`, { x: 50, y, size: 12, font: fontBold });
-    y -= 35;
-
-    // Owner Signature Box
-    page.drawText(`________________________`, { x: 70, y, size: 10, font });
-    page.drawText(`________________________`, { x: 350, y, size: 10, font });
-    y -= 15;
-    page.drawText(`ผู้ให้เช่า: ${safeOwnerName}`, { x: 70, y, size: 9, font });
-    page.drawText(`ผู้เช่า: ${safeTenantName}`, { x: 350, y, size: 9, font });
-    y -= 15;
-    page.drawText(`วันที่: ${data.createdAt || data.startDate}`, { x: 70, y, size: 8, font });
-    page.drawText(`วันที่: ${data.createdAt || data.startDate}`, { x: 350, y, size: 8, font });
-
-    // Embed Owner Signature image if valid base64 provided
-    if (data.ownerSignatureUrl && data.ownerSignatureUrl.startsWith('data:image/')) {
-      try {
-        const base64Data = data.ownerSignatureUrl.split(',')[1];
-        const imageBytes = Buffer.from(base64Data, 'base64');
-        const img = data.ownerSignatureUrl.includes('jpeg') || data.ownerSignatureUrl.includes('jpg')
-          ? await pdfDoc.embedJpg(imageBytes)
-          : await pdfDoc.embedPng(imageBytes);
-        page.drawImage(img, {
-          x: 70,
-          y: y + 25,
-          width: 100,
-          height: 35,
-        });
-      } catch (err) {
-        // Fallback gracefully if image parsing fails
-      }
-    }
-
-    // Embed Tenant Signature image if valid base64 provided
-    if (data.tenantSignature && data.tenantSignature.startsWith('data:image/')) {
-      try {
-        const base64Data = data.tenantSignature.split(',')[1];
-        const imageBytes = Buffer.from(base64Data, 'base64');
-        const img = data.tenantSignature.includes('jpeg') || data.tenantSignature.includes('jpg')
-          ? await pdfDoc.embedJpg(imageBytes)
-          : await pdfDoc.embedPng(imageBytes);
-        page.drawImage(img, {
-          x: 350,
-          y: y + 25,
-          width: 100,
-          height: 35,
-        });
-      } catch (err) {
-        // Fallback gracefully if image parsing fails
-      }
-    }
-
-    // Footer
-    page.drawText(`หนังสือสัญญาเช่าฉบับสมบูรณ์ — ระบบบริหารจัดการหอพัก HorPlus — หน้า 1 จาก 1`, {
-      x: 50,
-      y: 25,
-      size: 8,
-      font,
-      color: rgb(0.5, 0.5, 0.5),
-    });
-
-    const pdfBytes = await pdfDoc.save();
-    return Buffer.from(pdfBytes);
   }
 
   /**
@@ -402,33 +509,6 @@ export class DocumentPdfService {
       }
     }
 
-    // Certification Stamp Box
-    const certY = cardY - 90;
-    page.drawRectangle({
-      x: 50,
-      y: certY,
-      width: width - 100,
-      height: 70,
-      borderColor: rgb(0.85, 0.85, 0.85),
-      borderWidth: 1,
-      color: rgb(0.99, 0.99, 0.99),
-    });
-    page.drawText('คำรับรองสำเนาถูกต้อง:', { x: 65, y: certY + 48, size: 9, font: fontBold, color: rgb(0.3, 0.3, 0.3) });
-    page.drawText('\"สำเนาถูกต้อง ใช้สำหรับเป็นหลักฐานประกอบการเช่าพักอาศัย ณ หอพักแห่งนี้เท่านั้น ห้ามนำไปใช้นอกเหนือวัตถุประสงค์\"', {
-      x: 65,
-      y: certY + 30,
-      size: 8.5,
-      font,
-      color: rgb(0.4, 0.4, 0.4),
-    });
-    page.drawText(`ลงชื่อ: ${safeTenantName} (ผู้เช่า)`, {
-      x: 65,
-      y: certY + 12,
-      size: 8.5,
-      font,
-      color: rgb(0.2, 0.2, 0.2),
-    });
-
     // Footer
     page.drawText(`เอกสารสำเนาประจำตัวผู้เช่าอย่างเป็นทางการ — ระบบบริหารจัดการหอพัก HorPlus — หน้า 1 จาก 1`, {
       x: 50,
@@ -442,9 +522,46 @@ export class DocumentPdfService {
     return Buffer.from(pdfBytes);
   }
 
+  private formatThaiDate(dateStr?: string | null): string {
+    if (!dateStr) return '-';
+    try {
+      const d = new Date(dateStr);
+      if (isNaN(d.getTime())) return dateStr;
+      const thMonths = [
+        'มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน',
+        'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'
+      ];
+      const day = d.getDate();
+      const month = thMonths[d.getMonth()];
+      const year = d.getFullYear() + 543;
+      return `${day} ${month} ${year}`;
+    } catch {
+      return dateStr;
+    }
+  }
+
+  private formatBaht(amount?: string | number | null): string {
+    if (amount === undefined || amount === null || amount === '') return '0.00';
+    const num = Number(amount);
+    if (isNaN(num)) return String(amount);
+    return num.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
+  private calculateDurationMonths(startStr?: string, endStr?: string): number {
+    if (!startStr || !endStr) return 1;
+    try {
+      const d1 = new Date(startStr);
+      const d2 = new Date(endStr);
+      let months = (d2.getFullYear() - d1.getFullYear()) * 12 + (d2.getMonth() - d1.getMonth());
+      if (d2.getDate() >= d1.getDate() - 2) months += 1;
+      return Math.max(1, months);
+    } catch {
+      return 1;
+    }
+  }
+
   private safeText(str?: string | null, fallback = ''): string {
     if (!str) return fallback;
-    // Retain all valid printable characters including Thai unicode, numbers, letters, symbols, slashes, hyphens
     const cleaned = str.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '').trim();
     return cleaned || fallback;
   }

@@ -50,8 +50,8 @@ import {
   RefreshCw,
   Edit3,
   DoorOpen,
-  Coins,
-  Trash2
+  Trash2,
+  ArrowRightLeft
 } from 'lucide-react';
 import { formatBaht, ConfirmDialog } from '../../components/GlobalComponents';
 import { LineLogo } from '../../components/LineLogo';
@@ -73,6 +73,7 @@ import {
   fetchCurrentSubscription,
   approveTenantRegistration,
   rejectTenantRegistration,
+  reassignTenantRegistrationRoom,
   approveContractRenewal,
   rejectContractRenewal,
   terminateMoveOutTenancy,
@@ -146,6 +147,8 @@ const OwnerDashboardContent: React.FC<OwnerDashboardProps> = ({
   const [inspectingReq, setInspectingReq] = useState<TenantRequestItem | null>(null);
   const [rejectModalReq, setRejectModalReq] = useState<TenantRequestItem | null>(null);
   const [rejectReason, setRejectReason] = useState<string>('');
+  const [reassignModalReq, setReassignModalReq] = useState<TenantRequestItem | null>(null);
+  const [selectedReassignRoomId, setSelectedReassignRoomId] = useState<string>('');
   const [terminateModalReq, setTerminateModalReq] = useState<TenantRequestItem | null>(null);
   const [terminateDate, setTerminateDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [terminateReason, setTerminateReason] = useState<string>('ผู้เช่าย้ายออกตามกำหนด');
@@ -291,12 +294,39 @@ const OwnerDashboardContent: React.FC<OwnerDashboardProps> = ({
 
   // Mutations
   const approveRegMutation = useMutation({
-    mutationFn: async (req: TenantRequestItem) => {
-      return await approveTenantRegistration(activeDormitoryId, req.id, {
-        roomId: req.roomId,
-        depositAmount: req.deposit,
-        monthlyRent: req.monthlyRent,
-        startDate: req.moveInDate || req.contractStartDate,
+    mutationFn: async (payload: any) => {
+      const reqId = payload.reqId || payload.id;
+      const rType = payload.rentalType || (payload.rentType ? String(payload.rentType).toUpperCase() : 'MONTHLY');
+      const sDate = payload.startDate || payload.moveInDate || payload.contractStartDate || new Date().toISOString().split('T')[0];
+
+      let effEndDate = payload.endDate;
+      if (!effEndDate) {
+        const d = new Date(sDate);
+        if (rType === 'DAILY') {
+          d.setDate(d.getDate() + (payload.days || payload.totalDays || 1));
+        } else if (rType === 'TERM') {
+          d.setMonth(d.getMonth() + (payload.durationMonths || 4));
+        } else {
+          d.setMonth(d.getMonth() + (payload.durationMonths || 12));
+        }
+        effEndDate = d.toISOString().split('T')[0];
+      }
+
+      const rentVal = payload.rentAmount !== undefined ? payload.rentAmount : (payload.monthlyRent !== undefined ? payload.monthlyRent : 0);
+      const depVal = payload.depositAmount !== undefined ? payload.depositAmount : (payload.deposit !== undefined ? payload.deposit : 0);
+
+      return await approveTenantRegistration(activeDormitoryId, reqId, {
+        roomId: payload.roomId ? payload.roomId : undefined,
+        rentalType: rType,
+        startDate: sDate,
+        endDate: effEndDate,
+        rentAmount: Number(rentVal) || 0,
+        depositAmount: Number(depVal) || 0,
+        depositDeclaredStatus: payload.depositDeclaredStatus || 'UNPAID',
+        durationMonths: rType !== 'DAILY' ? (payload.durationMonths || (rType === 'TERM' ? 4 : 12)) : undefined,
+        totalDays: rType === 'DAILY' ? (payload.days || payload.totalDays || 1) : undefined,
+        dailyRate: rType === 'DAILY' ? (payload.dailyRate || Number(rentVal)) : undefined,
+        requireTenantConfirmation: payload.requireTenantConfirmation !== undefined ? payload.requireTenantConfirmation : false,
       });
     },
     onSuccess: () => {
@@ -307,7 +337,7 @@ const OwnerDashboardContent: React.FC<OwnerDashboardProps> = ({
       queryClient.invalidateQueries({ queryKey: ['contracts'] });
     },
     onError: (err: any) => {
-      setSuccessNotice(`❌ ไม่สามารถอนุมัติได้: ${err?.message || 'เกิดข้อผิดพลาด'}`);
+      setSuccessNotice(`[ERROR] ไม่สามารถอนุมัติได้: ${err?.message || 'เกิดข้อผิดพลาด'}`);
     }
   });
 
@@ -320,7 +350,22 @@ const OwnerDashboardContent: React.FC<OwnerDashboardProps> = ({
       queryClient.invalidateQueries({ queryKey: ['tenant-registrations'] });
     },
     onError: (err: any) => {
-      setSuccessNotice(`❌ ไม่สามารถปฏิเสธได้: ${err?.message || 'เกิดข้อผิดพลาด'}`);
+      setSuccessNotice(`[ERROR] ไม่สามารถปฏิเสธได้: ${err?.message || 'เกิดข้อผิดพลาด'}`);
+    }
+  });
+
+  const reassignRegMutation = useMutation({
+    mutationFn: async ({ reqId, targetRoomId }: { reqId: string; targetRoomId: string }) => {
+      return await reassignTenantRegistrationRoom(activeDormitoryId, reqId, targetRoomId);
+    },
+    onSuccess: () => {
+      setSuccessNotice('เปลี่ยนห้องพักสำหรับคำขอลงทะเบียนเรียบร้อย');
+      queryClient.invalidateQueries({ queryKey: ['tenant-registrations'] });
+      setReassignModalReq(null);
+      setSelectedReassignRoomId('');
+    },
+    onError: (err: any) => {
+      setSuccessNotice(`[ERROR] ไม่สามารถเปลี่ยนห้องพักได้: ${err?.message || 'เกิดข้อผิดพลาด'}`);
     }
   });
 
@@ -337,7 +382,7 @@ const OwnerDashboardContent: React.FC<OwnerDashboardProps> = ({
       queryClient.invalidateQueries({ queryKey: ['contracts'] });
     },
     onError: (err: any) => {
-      setSuccessNotice(`❌ ไม่สามารถอนุมัติได้: ${err?.message || 'เกิดข้อผิดพลาด'}`);
+      setSuccessNotice(`[ERROR] ไม่สามารถอนุมัติได้: ${err?.message || 'เกิดข้อผิดพลาด'}`);
     }
   });
 
@@ -350,7 +395,7 @@ const OwnerDashboardContent: React.FC<OwnerDashboardProps> = ({
       queryClient.invalidateQueries({ queryKey: ['contract-renewals'] });
     },
     onError: (err: any) => {
-      setSuccessNotice(`❌ ไม่สามารถปฏิเสธได้: ${err?.message || 'เกิดข้อผิดพลาด'}`);
+      setSuccessNotice(`[ERROR] ไม่สามารถปฏิเสธได้: ${err?.message || 'เกิดข้อผิดพลาด'}`);
     }
   });
 
@@ -367,7 +412,7 @@ const OwnerDashboardContent: React.FC<OwnerDashboardProps> = ({
       queryClient.invalidateQueries({ queryKey: ['bills'] });
     },
     onError: (err: any) => {
-      setSuccessNotice(`❌ การทำรายการล้มเหลว: ${err?.message || 'เกิดข้อผิดพลาด'}`);
+      setSuccessNotice(`[ERROR] การทำรายการล้มเหลว: ${err?.message || 'เกิดข้อผิดพลาด'}`);
     }
   });
 
@@ -380,7 +425,7 @@ const OwnerDashboardContent: React.FC<OwnerDashboardProps> = ({
       queryClient.invalidateQueries({ queryKey: ['rooms'] });
     },
     onError: (err: any) => {
-      setSuccessNotice(`❌ บันทึกไม่สำเร็จ: ${err?.message || 'เกิดข้อผิดพลาด'}`);
+      setSuccessNotice(`[ERROR] บันทึกไม่สำเร็จ: ${err?.message || 'เกิดข้อผิดพลาด'}`);
     }
   });
 
@@ -395,7 +440,7 @@ const OwnerDashboardContent: React.FC<OwnerDashboardProps> = ({
       setDeleteConfirmData(null);
     },
     onError: (err: any) => {
-      setSuccessNotice(`❌ จัดเก็บห้องพักไม่สำเร็จ: ${err?.message || 'เกิดข้อผิดพลาด'}`);
+      setSuccessNotice(`[ERROR] จัดเก็บห้องพักไม่สำเร็จ: ${err?.message || 'เกิดข้อผิดพลาด'}`);
       setDeleteConfirmData(null);
     }
   });
@@ -851,34 +896,38 @@ const OwnerDashboardContent: React.FC<OwnerDashboardProps> = ({
   return (
     <div className="space-y-6 max-w-7xl mx-auto pb-10">
       {/* Toast Notification (Floating Top-Right) */}
-      {successNotice && (
-        <div className="fixed top-5 right-5 z-[9999] max-w-sm w-full bg-slate-900/95 text-white p-4 rounded-2xl shadow-2xl border border-slate-700/80 flex items-start justify-between gap-3 animate-in slide-in-from-top-3 fade-in duration-300">
-          <div className="flex items-start gap-2.5">
-            <div className={`p-1.5 rounded-xl shrink-0 mt-0.5 border ${
-              successNotice.includes('❌') 
-                ? 'bg-rose-500/20 text-rose-400 border-rose-500/30' 
-                : 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
-            }`}>
-              {successNotice.includes('❌') ? <AlertCircle className="w-5 h-5" /> : <CheckCircle2 className="w-5 h-5" />}
-            </div>
-            <div>
-              <h4 className={`text-[11px] font-black uppercase tracking-wider ${
-                successNotice.includes('❌') ? 'text-rose-400' : 'text-emerald-400'
+      {successNotice && (() => {
+        const isErrorToast = successNotice.startsWith('[ERROR]') || successNotice.includes('ไม่สามารถ') || successNotice.includes('ล้มเหลว');
+        const displayToastMessage = successNotice.replace(/^\[ERROR\]\s*/, '');
+        return (
+          <div className="fixed top-5 right-5 z-[9999] max-w-sm w-full bg-slate-900/95 text-white p-4 rounded-2xl shadow-2xl border border-slate-700/80 flex items-start justify-between gap-3 animate-in slide-in-from-top-3 fade-in duration-300">
+            <div className="flex items-start gap-2.5">
+              <div className={`p-1.5 rounded-xl shrink-0 mt-0.5 border ${
+                isErrorToast 
+                  ? 'bg-rose-500/20 text-rose-400 border-rose-500/30' 
+                  : 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
               }`}>
-                {successNotice.includes('❌') ? 'แจ้งเตือน' : 'ทำรายการสำเร็จ'}
-              </h4>
-              <p className="text-xs font-bold text-slate-100 leading-snug mt-0.5">{successNotice}</p>
+                {isErrorToast ? <AlertCircle className="w-5 h-5" /> : <CheckCircle2 className="w-5 h-5" />}
+              </div>
+              <div>
+                <h4 className={`text-[11px] font-black uppercase tracking-wider ${
+                  isErrorToast ? 'text-rose-400' : 'text-emerald-400'
+                }`}>
+                  {isErrorToast ? 'แจ้งเตือน' : 'ทำรายการสำเร็จ'}
+                </h4>
+                <p className="text-xs font-bold text-slate-100 leading-snug mt-0.5">{displayToastMessage}</p>
+              </div>
             </div>
+            <button
+              type="button"
+              onClick={() => setSuccessNotice('')}
+              className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-white/10 transition-colors cursor-pointer shrink-0"
+            >
+              <X className="w-4 h-4" />
+            </button>
           </div>
-          <button
-            type="button"
-            onClick={() => setSuccessNotice('')}
-            className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-white/10 transition-colors cursor-pointer shrink-0"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-      )}
+        );
+      })()}
       
       {/* 1. TOP SUMMARY CARD: "สรุปยอดค้างชำระทั้งหมด" */}
       <div className="-mx-4 -mt-4 md:-mx-6 md:-mt-6 mb-6 bg-[#2b64f6] relative overflow-hidden transition-all duration-300">
@@ -991,98 +1040,135 @@ const OwnerDashboardContent: React.FC<OwnerDashboardProps> = ({
               คำขอเช่าห้องใหม่ แจ้งย้ายออก หรือต่อสัญญาจากผู้เช่าจะปรากฏที่นี่
             </p>
           </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
-            {pendingRequests.map((req) => {
-              const isReg = req.category === 'registration';
-              const isMoveOut = req.category === 'move_out';
-              const isRenewal = req.category === 'contract_extension';
-              const isExpired = req.category === 'contract_expired';
+        ) : (() => {
+          const collidingRoomNumbers = new Set<string>();
+          const roomCounts: Record<string, number> = {};
+          pendingRequests.forEach((r) => {
+            if (r.roomNumber) {
+              roomCounts[r.roomNumber] = (roomCounts[r.roomNumber] || 0) + 1;
+            }
+          });
+          Object.keys(roomCounts).forEach((rn) => {
+            if (roomCounts[rn] > 1) collidingRoomNumbers.add(rn);
+          });
 
-              let badgeText = 'คำขอเช่าห้องใหม่';
-              let badgeColor = 'bg-emerald-50 text-emerald-700 border-emerald-200';
-              if (isMoveOut) {
-                badgeText = 'แจ้งย้ายออก';
-                badgeColor = 'bg-rose-50 text-rose-700 border-rose-200';
-              } else if (isRenewal) {
-                badgeText = 'ขอต่อสัญญาเช่า';
-                badgeColor = 'bg-indigo-50 text-indigo-700 border-indigo-200';
-              } else if (isExpired) {
-                badgeText = 'สัญญาหมดอายุ';
-                badgeColor = 'bg-amber-50 text-amber-700 border-amber-200';
-              }
+          return (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
+              {pendingRequests.map((req) => {
+                const isReg = req.category === 'registration';
+                const isMoveOut = req.category === 'move_out';
+                const isRenewal = req.category === 'contract_extension';
+                const isExpired = req.category === 'contract_expired';
 
-              return (
-                <div
-                  key={req.id}
-                  data-testid={`tenant-request-item`}
-                  className="p-4 rounded-2xl border border-slate-100 bg-slate-50/40 hover:bg-slate-50 transition-all flex flex-col justify-between gap-3 shadow-3xs"
-                >
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-sm font-black text-slate-800">
-                        ห้อง {req.roomNumber}
-                      </span>
-                      <span className={`text-[10px] font-black px-2.5 py-0.5 rounded-full border ${badgeColor}`}>
-                        {badgeText}
-                      </span>
-                    </div>
+                let badgeText = 'คำขอเช่าห้องใหม่';
+                let badgeColor = 'bg-emerald-50 text-emerald-700 border-emerald-200';
+                if (isMoveOut) {
+                  badgeText = 'แจ้งย้ายออก';
+                  badgeColor = 'bg-rose-50 text-rose-700 border-rose-200';
+                } else if (isRenewal) {
+                  badgeText = 'ขอต่อสัญญาเช่า';
+                  badgeColor = 'bg-indigo-50 text-indigo-700 border-indigo-200';
+                } else if (isExpired) {
+                  badgeText = 'สัญญาหมดอายุ';
+                  badgeColor = 'bg-amber-50 text-amber-700 border-amber-200';
+                }
 
-                    <div className="space-y-1 text-xs">
-                      <div className="flex items-center gap-1.5 font-bold text-slate-700">
-                        <User className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                        <span className="truncate">{req.tenantName}</span>
-                      </div>
-                      <div className="flex items-center gap-1.5 text-slate-500 font-medium">
-                        <Phone className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                        <span>{req.phone || '-'}</span>
-                      </div>
-                      {req.monthlyRent > 0 && (
-                        <div className="flex items-center gap-1.5 text-slate-600 font-medium">
-                          <DollarSign className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                          <span>ค่าเช่า ฿{formatBaht(req.monthlyRent)}/ด. {req.deposit > 0 ? `(ประกัน ฿${formatBaht(req.deposit)})` : ''}</span>
+                return (
+                  <div
+                    key={req.id}
+                    data-testid={`tenant-request-item`}
+                    className="p-4 rounded-2xl border border-slate-100 bg-slate-50/40 hover:bg-slate-50 transition-all flex flex-col justify-between gap-3 shadow-3xs"
+                  >
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span className="text-sm font-black text-slate-800">
+                            ห้อง {req.roomNumber}
+                          </span>
+                          {collidingRoomNumbers.has(req.roomNumber) && (
+                            <span
+                              data-testid="collision-chip"
+                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-50 border border-amber-200 text-amber-800 text-[10px] font-bold shrink-0"
+                            >
+                              <AlertTriangle className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                              <span>คำขอซ้อนทับ: ห้อง {req.roomNumber}</span>
+                            </span>
+                          )}
                         </div>
-                      )}
-                      {req.moveInDate && (
+                        <span className={`text-[10px] font-black px-2.5 py-0.5 rounded-full border shrink-0 ${badgeColor}`}>
+                          {badgeText}
+                        </span>
+                      </div>
+
+                      <div className="space-y-1 text-xs">
+                        <div className="flex items-center gap-1.5 font-bold text-slate-700">
+                          <User className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                          <span className="truncate">{req.tenantName}</span>
+                        </div>
                         <div className="flex items-center gap-1.5 text-slate-500 font-medium">
-                          <Calendar className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                          <span>เข้าพัก: {req.moveInDate}</span>
+                          <Phone className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                          <span>{req.phone || '-'}</span>
                         </div>
-                      )}
-                      {req.moveOutDate && (
-                        <div className="flex items-center gap-1.5 text-rose-600 font-medium">
-                          <Calendar className="w-3.5 h-3.5 text-rose-400 shrink-0" />
-                          <span>กำหนดย้ายออก: {req.moveOutDate}</span>
-                        </div>
-                      )}
-                      {req.stayDurationText && (
-                        <div className="flex items-center gap-1.5 text-indigo-600 font-medium">
-                          <Clock className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
-                          <span>ระยะเวลาที่ขอต่อ: {req.stayDurationText}</span>
-                        </div>
-                      )}
-                      {req.reason && (
-                        <p className="text-[11px] text-slate-500 bg-white/70 p-2 rounded-xl border border-slate-100 mt-1 line-clamp-2">
-                          {req.reason}
-                        </p>
-                      )}
+                        {req.monthlyRent > 0 && (
+                          <div className="flex items-center gap-1.5 text-slate-600 font-medium">
+                            <DollarSign className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                            <span>ค่าเช่า ฿{formatBaht(req.monthlyRent)}/ด. {req.deposit > 0 ? `(ประกัน ฿${formatBaht(req.deposit)})` : ''}</span>
+                          </div>
+                        )}
+                        {req.moveInDate && (
+                          <div className="flex items-center gap-1.5 text-slate-500 font-medium">
+                            <Calendar className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                            <span>เข้าพัก: {req.moveInDate}</span>
+                          </div>
+                        )}
+                        {req.moveOutDate && (
+                          <div className="flex items-center gap-1.5 text-rose-600 font-medium">
+                            <Calendar className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                            <span>กำหนดย้ายออก: {req.moveOutDate}</span>
+                          </div>
+                        )}
+                        {req.stayDurationText && (
+                          <div className="flex items-center gap-1.5 text-indigo-600 font-medium">
+                            <Clock className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                            <span>ระยะเวลาที่ขอต่อ: {req.stayDurationText}</span>
+                          </div>
+                        )}
+                        {req.reason && (
+                          <p className="text-[11px] text-slate-500 bg-white/70 p-2 rounded-xl border border-slate-100 mt-1 line-clamp-2">
+                            {req.reason}
+                          </p>
+                        )}
+                      </div>
                     </div>
-                  </div>
 
-                  {/* Actions depending on category */}
-                  {!isStaff && (
-                    <div className="pt-2 border-t border-slate-100 flex items-center justify-end gap-2">
-                      {isReg && (
-                        <button
-                          type="button"
-                          data-testid="inspect-registration-btn"
-                          onClick={() => setInspectingReq(req)}
-                          className="px-4 py-1.5 text-xs font-black bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl transition-all cursor-pointer shadow-xs flex items-center gap-1.5 active:scale-98"
-                        >
-                          <Eye className="w-3.5 h-3.5" />
-                          <span>ตรวจสอบ</span>
-                        </button>
-                      )}
+                    {/* Actions depending on category */}
+                    {!isStaff && (
+                      <div className="pt-2 border-t border-slate-100 flex items-center justify-end gap-2">
+                        {isReg && (
+                          <>
+                            <button
+                              type="button"
+                              data-testid="reassign-room-btn"
+                              onClick={() => {
+                                setReassignModalReq(req);
+                                setSelectedReassignRoomId('');
+                              }}
+                              className="px-3 py-1.5 text-xs font-bold bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-xl transition-all cursor-pointer flex items-center gap-1 shadow-xs active:scale-98"
+                            >
+                              <ArrowRightLeft className="w-3.5 h-3.5" />
+                              <span>เปลี่ยนห้องพัก</span>
+                            </button>
+                            <button
+                              type="button"
+                              data-testid="inspect-registration-btn"
+                              onClick={() => setInspectingReq(req)}
+                              className="px-4 py-1.5 text-xs font-black bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl transition-all cursor-pointer shadow-xs flex items-center gap-1.5 active:scale-98"
+                            >
+                              <Eye className="w-3.5 h-3.5" />
+                              <span>ตรวจสอบ</span>
+                            </button>
+                          </>
+                        )}
 
                       {isMoveOut && (
                         <button
@@ -1138,11 +1224,12 @@ const OwnerDashboardContent: React.FC<OwnerDashboardProps> = ({
                       )}
                     </div>
                   )}
-                </div>
-              );
-            })}
-          </div>
-        )}
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })()}
       </div>
     )}
 
@@ -1679,11 +1766,8 @@ const OwnerDashboardContent: React.FC<OwnerDashboardProps> = ({
           buildings={buildings}
           onApprove={async (payload) => {
             await approveRegMutation.mutateAsync({
-              ...inspectingReq,
-              roomId: payload.roomId,
-              deposit: payload.depositAmount,
-              monthlyRent: payload.rentAmount,
-              moveInDate: payload.startDate,
+              reqId: inspectingReq.id,
+              ...payload,
             });
             setInspectingReq(null);
           }}
@@ -1757,6 +1841,79 @@ const OwnerDashboardContent: React.FC<OwnerDashboardProps> = ({
                 className="px-4 py-2 text-xs font-black bg-rose-600 hover:bg-rose-700 text-white rounded-xl shadow-xs cursor-pointer"
               >
                 {rejectRegMutation.isPending || rejectRenewalMutation.isPending ? 'กำลังบันทึก...' : 'ยืนยันปฏิเสธ'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* REASSIGN ROOM MODAL */}
+      {reassignModalReq && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in duration-200">
+          <div className="bg-white w-full max-w-md rounded-3xl shadow-xl border border-slate-100 p-6 space-y-4">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <ArrowRightLeft className="w-5 h-5 text-amber-600" />
+                <h3 className="text-base font-black text-slate-800">เปลี่ยนห้องพักสำหรับผู้ขอเช่า</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setReassignModalReq(null)}
+                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 flex items-center justify-center transition-colors cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-100 space-y-1.5 text-xs">
+              <div className="flex justify-between">
+                <span className="text-slate-500">ผู้ขอเช่า:</span>
+                <span className="font-bold text-slate-800">{reassignModalReq.tenantName}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">ห้องเดิม:</span>
+                <span className="font-bold text-rose-600">ห้อง {reassignModalReq.roomNumber}</span>
+              </div>
+            </div>
+
+            <div className="space-y-1.5 text-xs">
+              <label className="block font-bold text-slate-700">เลือกห้องว่างเป้าหมายใหม่ *</label>
+              <select
+                value={selectedReassignRoomId}
+                onChange={(e) => setSelectedReassignRoomId(e.target.value)}
+                className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl font-bold text-slate-800 focus:outline-indigo-500 text-xs bg-white"
+              >
+                <option value="">-- กรุณาเลือกห้องว่างใหม่ --</option>
+                {rooms
+                  .filter((r) => r.isVacant && r.number !== reassignModalReq.roomNumber)
+                  .map((r) => (
+                    <option key={r.id} value={r.id}>
+                      ห้อง {r.number} • ชั้น {r.floor} • ค่าเช่า ฿{Number(r.monthlyRent || 0).toLocaleString()}
+                    </option>
+                  ))}
+              </select>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setReassignModalReq(null)}
+                className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl transition-all cursor-pointer"
+              >
+                ยกเลิก
+              </button>
+              <button
+                type="button"
+                disabled={!selectedReassignRoomId || reassignRegMutation.isPending}
+                onClick={() => {
+                  reassignRegMutation.mutate({
+                    reqId: reassignModalReq.id,
+                    targetRoomId: selectedReassignRoomId,
+                  });
+                }}
+                className="px-4 py-2 text-xs font-black bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl shadow-xs cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
+              >
+                {reassignRegMutation.isPending ? 'กำลังบันทึก...' : 'ยืนยันเปลี่ยนห้องพัก'}
               </button>
             </div>
           </div>

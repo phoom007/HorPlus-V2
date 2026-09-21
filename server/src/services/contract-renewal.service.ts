@@ -165,17 +165,37 @@ export class ContractRenewalService {
       throw new AppError(eligibility.message || 'ไม่สามารถส่งคำขอต่อสัญญาได้', 400, eligibility.reasonCode || 'RENEWAL_INELIGIBLE');
     }
 
+    const prevContract = eligibility.contract!;
+
     const startDate = new Date(requestedStartDate);
     if (isNaN(startDate.getTime())) {
       throw new AppError('วันเริ่มต้นสัญญาที่ขอไม่ถูกต้อง', 400, 'INVALID_DATE');
     }
 
+    const prevEndDateStr = prevContract.endDate ? toBangkokDateString(new Date(prevContract.endDate)) : '';
+    const startDateStr = toBangkokDateString(startDate);
+    if (prevEndDateStr && startDateStr < prevEndDateStr) {
+      throw new AppError('วันที่เริ่มต้นต่อสัญญาต้องอยู่หลังจากวันสิ้นสุดสัญญาเดิม', 400, 'START_DATE_BEFORE_PREV_END_DATE');
+    }
+
+    // Strict single renewal check (Case 7: only 1 renewal at a time)
+    const existingScheduled = await prisma.contract.findFirst({
+      where: {
+        dormitoryId,
+        roomId: prevContract.roomId,
+        tenantId,
+        previousContractId: contractId,
+        status: { in: ['approved_scheduled', 'waiting_extension'] },
+        deletedAt: null,
+      },
+    });
+    if (existingScheduled) {
+      throw new AppError('ได้รับการต่อสัญญาเช่าล่วงหน้าเรียบร้อยแล้ว ไม่สามารถขอต่อสัญญาซ้อนได้', 400, 'ALREADY_HAS_SCHEDULED_RENEWAL');
+    }
+
     const durationMonths = Math.max(1, Math.floor(requestedDurationMonths || 1));
     const endDate = new Date(startDate);
     endDate.setMonth(endDate.getMonth() + durationMonths);
-
-    // Derives financial terms directly from previous contract — ignores any monetary inputs from client
-    const prevContract = eligibility.contract!;
 
     const request = await prisma.tenantRenewalRequest.create({
       data: {
@@ -199,6 +219,104 @@ export class ContractRenewalService {
       action: 'RENEWAL_REQUEST_SUBMITTED',
       msg: `Tenant submitted renewal request for contract ${contractId}`,
     });
+
+    // In-app staff notification for owner(s) and manager(s)
+    try {
+      const room = await prisma.room.findUnique({
+        where: { id: prevContract.roomId },
+        select: { roomNumber: true },
+      });
+      const dorm = await prisma.dormitory.findUnique({
+        where: { id: dormitoryId },
+        select: { createdByUserId: true, name: true },
+      });
+      const tenant = await prisma.tenant.findUnique({
+        where: { id: tenantId },
+        select: { firstName: true, lastName: true, phone: true },
+      });
+      const tenantName = tenant ? `${tenant.firstName} ${tenant.lastName || ''}`.trim() : 'ผู้เช่า';
+      const formattedStartDate = requestedStartDate.slice(0, 10);
+
+      const ownerMembers = await prisma.dormitoryMember.findMany({
+        where: {
+          dormitoryId,
+          status: 'active',
+          role: { code: { in: ['OWNER', 'MANAGER'] } },
+        },
+        select: { userId: true },
+      });
+
+      const targetUserIds = new Set<string>();
+      if (dorm?.createdByUserId) targetUserIds.add(dorm.createdByUserId);
+      for (const m of ownerMembers) {
+        if (m.userId) targetUserIds.add(m.userId);
+      }
+
+      for (const uid of targetUserIds) {
+        await prisma.staffNotification.create({
+          data: {
+            dormitoryId,
+            userId: uid,
+            roleCode: 'OWNER',
+            category: 'CONTRACT_RENEWAL',
+            title: `มีคำขอต่อสัญญาเช่าใหม่ (ห้อง ${room?.roomNumber || 'ไม่ระบุ'})`,
+            message: `คุณ${tenantName} ได้ส่งคำขอต่อสัญญาเช่าห้อง ${room?.roomNumber || 'ไม่ระบุ'} ระยะเวลา ${durationMonths} เดือน เริ่มต้น ${formattedStartDate}`,
+            metadata: {
+              requestId: request.id,
+              contractId,
+              roomId: prevContract.roomId,
+              roomNumber: room?.roomNumber,
+              tenantId,
+              tenantName,
+              requestedDurationMonths: durationMonths,
+              requestedStartDate: formattedStartDate,
+              action: 'RENEWAL_REQUESTED',
+            },
+          },
+        }).catch((err) => {
+          logger.warn('Failed to create staff notification for renewal:', { userId: uid, error: err.message });
+        });
+      }
+
+      // LINE OA push notification to owner(s) if connected
+      const dormConfig = await prisma.dormitoryLineConfig.findUnique({
+        where: { dormitoryId },
+      });
+      if (dormConfig && dormConfig.notifyTenantRegister !== false) {
+        const ownerGrants = await prisma.dormitoryAccessGrant.findMany({
+          where: {
+            dormitoryId,
+            roleCode: { in: ['OWNER', 'MANAGER'] },
+            status: 'ACTIVE',
+          },
+          include: { lineFriend: true },
+        });
+
+        const { LineOaService, buildOwnerRenewalRequestFlexMessage, getPublicAppOrigin } = await import('./line-oa.service.js');
+        const lineOaService = new LineOaService(prisma);
+        const flexMsg = buildOwnerRenewalRequestFlexMessage(
+          dorm?.name || 'หอพัก',
+          tenantName,
+          room?.roomNumber || 'ไม่ระบุ',
+          durationMonths,
+          formattedStartDate,
+          getPublicAppOrigin()
+        );
+
+        const { decryptText } = await import('../utils/crypto-encryption.js');
+        for (const og of ownerGrants) {
+          const friend = og.lineFriend;
+          if (friend && friend.lineUserIdEncrypted) {
+            const ownerLineUserId = decryptText(friend.lineUserIdEncrypted);
+            await lineOaService.pushOutcomeNotification(dormitoryId, ownerLineUserId, flexMsg).catch((err) => {
+              logger.warn('Failed to push renewal notification to owner:', { error: err.message });
+            });
+          }
+        }
+      }
+    } catch (notifyErr: any) {
+      logger.warn('Contract renewal notification error:', { error: notifyErr.message });
+    }
 
     return request;
   }
@@ -378,6 +496,40 @@ export class ContractRenewalService {
       logger.error({ event: 'OUTBOX_DISPATCH_AFTER_RENEWAL_APPROVE_ERROR', error: err.message });
     }
 
+    // LINE OA push notification to tenant if linked
+    try {
+      const tenant = await prisma.tenant.findUnique({
+        where: { id: result.request.tenantId },
+        include: { lineFriend: true },
+      });
+      if (tenant?.lineFriend?.lineUserIdEncrypted) {
+        const { LineOaService, buildTenantRenewalOutcomeFlexMessage, getPublicAppOrigin } = await import('./line-oa.service.js');
+        const { decryptText } = await import('../utils/crypto-encryption.js');
+        const lineOaService = new LineOaService(prisma);
+        const dorm = await prisma.dormitory.findUnique({
+          where: { id: dormitoryId },
+          select: { name: true },
+        });
+        const room = await prisma.room.findUnique({
+          where: { id: result.request.roomId },
+          select: { roomNumber: true },
+        });
+        const flexMsg = buildTenantRenewalOutcomeFlexMessage(
+          dorm?.name || 'หอพัก',
+          room?.roomNumber || '',
+          true,
+          undefined,
+          getPublicAppOrigin()
+        );
+        const tenantLineUserId = decryptText(tenant.lineFriend.lineUserIdEncrypted);
+        await lineOaService.pushOutcomeNotification(dormitoryId, tenantLineUserId, flexMsg).catch((err) => {
+          logger.warn('Failed to push renewal approval to tenant LINE:', { error: err.message });
+        });
+      }
+    } catch (lineErr: any) {
+      logger.warn('Tenant renewal approval LINE notification error:', { error: lineErr.message });
+    }
+
     logger.info({
       event: 'SECURITY_AUDIT',
       dormitoryId,
@@ -546,6 +698,70 @@ export class ContractRenewalService {
 
     outboxService.processPendingOutboxEvents().catch((err) => {
       logger.error({ event: 'OUTBOX_DISPATCH_AFTER_RENEWAL_REJECT_ERROR', error: err.message });
+    });
+
+    // LINE OA push notification to tenant if linked
+    try {
+      const tenant = await prisma.tenant.findUnique({
+        where: { id: reqRecord.tenantId },
+        include: { lineFriend: true },
+      });
+      if (tenant?.lineFriend?.lineUserIdEncrypted) {
+        const { LineOaService, buildTenantRenewalOutcomeFlexMessage, getPublicAppOrigin } = await import('./line-oa.service.js');
+        const { decryptText } = await import('../utils/crypto-encryption.js');
+        const lineOaService = new LineOaService(prisma);
+        const dorm = await prisma.dormitory.findUnique({
+          where: { id: dormitoryId },
+          select: { name: true },
+        });
+        const flexMsg = buildTenantRenewalOutcomeFlexMessage(
+          dorm?.name || 'หอพัก',
+          updated.room?.roomNumber || '',
+          false,
+          reason?.trim() || undefined,
+          getPublicAppOrigin()
+        );
+        const tenantLineUserId = decryptText(tenant.lineFriend.lineUserIdEncrypted);
+        await lineOaService.pushOutcomeNotification(dormitoryId, tenantLineUserId, flexMsg).catch((err) => {
+          logger.warn('Failed to push renewal rejection to tenant LINE:', { error: err.message });
+        });
+      }
+    } catch (lineErr: any) {
+      logger.warn('Tenant renewal rejection LINE notification error:', { error: lineErr.message });
+    }
+
+    return updated;
+  }
+
+  /**
+   * Tenant Cancels Pending Renewal Request (Case 6)
+   */
+  public async cancelRenewalRequest(input: { dormitoryId: string; requestId: string; tenantId?: string }) {
+    const { dormitoryId, requestId, tenantId } = input;
+    const prisma = getPrismaClient();
+
+    const reqRecord = await prisma.tenantRenewalRequest.findUnique({
+      where: { id: requestId },
+      include: { room: true },
+    });
+
+    if (!reqRecord || reqRecord.dormitoryId !== dormitoryId) {
+      throw new AppError('ไม่พบคำขอต่อสัญญาที่ระบุ', 404, 'RENEWAL_REQUEST_NOT_FOUND');
+    }
+
+    if (tenantId && reqRecord.tenantId !== tenantId) {
+      throw new AppError('ไม่มีสิทธิ์ยกเลิกคำขอต่อสัญญานี้', 403, 'FORBIDDEN');
+    }
+
+    if (reqRecord.status !== 'PENDING_OWNER_APPROVAL') {
+      throw new AppError('สามารถยกเลิกได้เฉพาะคำขอที่อยู่ระหว่างรอการอนุมัติเท่านั้น', 400, 'CANNOT_CANCEL_NON_PENDING_REQUEST');
+    }
+
+    const updated = await prisma.tenantRenewalRequest.update({
+      where: { id: requestId },
+      data: {
+        status: 'CANCELLED',
+      },
     });
 
     return updated;

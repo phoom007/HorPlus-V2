@@ -80,7 +80,12 @@ export const TenantClaimModal: React.FC<TenantClaimModalProps> = ({
   const handleTouchMove = (e: React.TouchEvent) => {
     if (startYRef.current === null) return;
     const deltaY = e.touches[0].clientY - startYRef.current;
-    setCurrentTranslateY(deltaY > 0 ? deltaY : 0);
+    if (deltaY > 0) {
+      if (e.cancelable) e.preventDefault();
+      setCurrentTranslateY(deltaY);
+    } else {
+      setCurrentTranslateY(0);
+    }
   };
 
   const handleTouchEnd = () => {

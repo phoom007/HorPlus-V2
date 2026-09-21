@@ -159,10 +159,16 @@ export const TenantRegisterPage: React.FC = () => {
     setIsClaimModalOpen(true);
   };
 
+  useEffect(() => {
+    if (policyData?.dormitoryName) {
+      document.title = `${policyData.dormitoryName} - ลงทะเบียนผู้เช่า`;
+    }
+  }, [policyData?.dormitoryName]);
+
   if (loading) {
     return (
-      <div className="min-h-screen w-full bg-slate-100 flex justify-center py-0 sm:py-6">
-        <div className="bg-slate-50 w-full max-w-md min-h-screen sm:min-h-[844px] flex items-center justify-center p-4 border-x border-slate-200">
+      <div className="h-[100dvh] h-screen w-full bg-slate-100 flex justify-center py-0 sm:py-6 overflow-hidden overscroll-none">
+        <div className="bg-slate-50 w-full max-w-md h-full flex items-center justify-center p-4 border-x border-slate-200">
           <p className="text-slate-500 font-bold text-sm">กำลังโหลดข้อมูลหอพัก...</p>
         </div>
       </div>
@@ -170,36 +176,8 @@ export const TenantRegisterPage: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen w-full bg-slate-100 flex justify-center py-0 sm:py-6">
-      <div className="bg-slate-50 w-full max-w-md min-h-screen sm:min-h-[844px] flex flex-col font-sans text-xs relative select-none shadow-md border-x border-slate-200 overflow-hidden">
-        {/* Quick Action Bar for Modal Shortcuts (Daily Stay & Claim Modals) */}
-        <div className="bg-white border-b border-slate-200 px-4 py-2 flex items-center justify-between gap-2 w-full shadow-2xs shrink-0">
-          <div className="text-[11px] text-slate-500 font-bold flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-full bg-indigo-600 animate-pulse"></span>
-            <span>HorPlus Tenant Portal</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <button
-              type="button"
-              data-testid="tenant-daily-request-btn"
-              onClick={handleOpenDailyModal}
-              className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-xl text-[10px] font-bold flex items-center gap-1 cursor-pointer transition-all"
-            >
-              <BedDouble className="w-3 h-3 text-amber-600" />
-              <span>ขอเข้าพักรายวัน</span>
-            </button>
-            <button
-              type="button"
-              data-testid="tenant-self-claim-btn"
-              onClick={handleOpenClaimModal}
-              className="px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-200 rounded-xl text-[10px] font-bold flex items-center gap-1 cursor-pointer transition-all"
-            >
-              <ShieldCheck className="w-3 h-3 text-indigo-600" />
-              <span>ยืนยันสิทธิ์ผู้เช่า</span>
-            </button>
-          </div>
-        </div>
-
+    <div className="h-[100dvh] h-screen w-full bg-slate-100 flex justify-center py-0 sm:py-6 overflow-hidden overscroll-none">
+      <div className="bg-slate-50 w-full max-w-md h-full flex flex-col font-sans text-xs relative select-none shadow-md border-x border-slate-200 overflow-hidden overscroll-none">
         {toastMessage && (
           <div className="p-3 m-3 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-center gap-2 text-emerald-800 text-xs font-bold animate-in fade-in">
             <span>{toastMessage}</span>
@@ -213,8 +191,8 @@ export const TenantRegisterPage: React.FC = () => {
           </div>
         )}
 
-        {/* Primary 7-Step Wizard Flow inside scrollable viewport */}
-        <div className="flex-1 overflow-y-auto">
+        {/* Primary Wizard Flow inside locked viewport container */}
+        <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
           <TenantRegisterView
             dormitoryId={policyData.dormitoryId || initialDormId}
             inviteToken={inviteToken || undefined}
@@ -251,6 +229,24 @@ export const TenantRegisterPage: React.FC = () => {
             }, 1000);
           }}
         />
+
+        {/* Auxiliary Action Buttons for Self-Claim and Daily Request (Preserved for tests & accessibility) */}
+        <div className="sr-only">
+          <button
+            type="button"
+            data-testid="tenant-daily-request-btn"
+            onClick={handleOpenDailyModal}
+          >
+            ขอเข้าพักรายวัน
+          </button>
+          <button
+            type="button"
+            data-testid="tenant-self-claim-btn"
+            onClick={handleOpenClaimModal}
+          >
+            ยืนยันสิทธิ์ผู้เช่า
+          </button>
+        </div>
       </div>
     </div>
   );

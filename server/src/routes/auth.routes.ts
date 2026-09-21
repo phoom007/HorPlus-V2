@@ -8,6 +8,12 @@ import { createCsrfMiddleware } from '../middleware/csrf.js';
 import { createRateLimiterMiddleware } from '../middleware/rate-limiter.js';
 import { notFoundMiddleware } from '../middleware/not-found.js';
 import { getPrismaClient } from '../db/prisma.js';
+import crypto from 'crypto';
+import { consumeDirectEntryTicket } from '../services/line-richmenu.service.js';
+import { SessionTokenService } from '../services/session-token.service.js';
+import { tenantRegistrationInviteService } from '../services/tenant-registration-invite.service.js';
+import { generateGrantToken, encryptText } from '../utils/crypto-encryption.js';
+import { getActiveAppOrigin } from '../services/line-oa.service.js';
 
 const googleAuthSchema = z.object({
   idToken: z.string().min(1, 'idToken is required'),
@@ -24,8 +30,37 @@ export function createAuthRouter(authService: AuthenticationService): Router {
   const authRateLimiter = createRateLimiterMiddleware({ windowMs: 15 * 60 * 1000, maxRequests: 20 });
 
   // Cookie helper options
-  const isProd = env.COOKIE_SECURE || env.NODE_ENV === 'production';
+  const isProduction = env.NODE_ENV === 'production';
+  const isCookieSecure = env.COOKIE_SECURE || isProduction;
+  const isProd = isCookieSecure; // Maintain backward compat for cookie security references
   const sameSite = env.COOKIE_SAME_SITE;
+
+  const resolveAppUrl = (req: Request) => {
+    const host = req.get('x-forwarded-host') || req.get('host');
+    if (host && (host.includes('.trycloudflare.com') || host.includes('ngrok') || (!host.includes('localhost') && !host.includes('127.0.0.1')))) {
+      const proto =
+        req.get('x-forwarded-proto') === 'https' ||
+        req.protocol === 'https' ||
+        host.includes('.trycloudflare.com') ||
+        host.includes('ngrok')
+          ? 'https'
+          : 'http';
+      return `${proto}://${host}`;
+    }
+
+    // Configured public URL takes precedence over dynamic memory cache
+    const configuredPublicUrl = (process.env.PUBLIC_APP_URL || process.env.PUBLIC_APP_ORIGIN || '').trim().replace(/\/+$/, '');
+    if (configuredPublicUrl && !configuredPublicUrl.includes('localhost') && !configuredPublicUrl.includes('127.0.0.1')) {
+      return configuredPublicUrl;
+    }
+
+    const dynamicOrigin = getActiveAppOrigin();
+    if (dynamicOrigin && !dynamicOrigin.includes('localhost') && !dynamicOrigin.includes('127.0.0.1')) {
+      return dynamicOrigin;
+    }
+
+    return configuredPublicUrl || 'http://127.0.0.1:5173';
+  };
 
   // POST /api/v1/auth/google
   router.post('/google', authRateLimiter, async (req: Request, res: Response, next) => {
@@ -162,14 +197,91 @@ export function createAuthRouter(authService: AuthenticationService): Router {
     }
   });
 
-  // GET /api/v1/auth/dev-login (DEV ONLY: One-Click Local Login for Google Owner & other test users)
-  router.get('/dev-login', async (req: Request, res: Response, next) => {
+  // GET /api/v1/auth/dev-login or /owner-direct-entry (One-Click Direct Login for Dormitory Owner)
+  router.get(['/dev-login', '/owner-direct-entry'], async (req: Request, res: Response, next) => {
     try {
-      if (isProd) {
+      if (isProduction) {
         return res.status(404).json({ error: 'Not Found' });
       }
 
-      const userId = (req.query.userId as string) || '20000002-0000-4000-8000-000000000002';
+      const grantId = req.query.grantId as string | undefined;
+      const prisma = getPrismaClient();
+
+      if (grantId) {
+        const rows = await prisma.$queryRaw<any[]>`
+          SELECT dormitory_id FROM public.resolve_access_grant_by_id(${grantId}::uuid)
+        `.catch(() => []);
+        const targetDormitoryId = rows?.[0]?.dormitory_id;
+
+        if (targetDormitoryId) {
+          const grant = await prisma.$transaction(async (tx) => {
+            await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${targetDormitoryId}, true)`;
+            return await tx.dormitoryAccessGrant.findUnique({
+              where: { id: grantId },
+              include: { lineFriend: true, dormitory: true }
+            });
+          });
+
+          if (grant && grant.status === 'ACTIVE') {
+            const sessionId = crypto.randomUUID();
+            const sessionIdHash = SessionTokenService.hashSessionId(sessionId);
+            const ttlSeconds = env.SESSION_TTL_SECONDS || (30 * 24 * 60 * 60);
+            const expiresAt = new Date(Date.now() + ttlSeconds * 1000);
+            const userAgent = req.headers['user-agent'] ? String(req.headers['user-agent']) : undefined;
+            const userAgentHash = userAgent ? crypto.createHash('sha256').update(userAgent).digest('hex') : undefined;
+            const ipMetadata = (req.headers['x-forwarded-for'] as string) || req.ip || undefined;
+
+            await prisma.session.create({
+              data: {
+                principalType: 'ACCESS_GRANT',
+                accessGrantId: grant.id,
+                sessionIdHash,
+                tokenVersion: 1,
+                status: 'active',
+                expiresAt,
+                userAgentHash,
+                ipMetadata,
+              },
+            });
+
+            const sessionToken = authService.getSessionTokenService().encryptToken(
+              { sub: `ag_${grant.id}`, sid: sessionId, type: 'session', version: 1 },
+              ttlSeconds
+            );
+            const csrfToken = authService.getCsrfService().generateCsrfToken(sessionId);
+
+            res.cookie(env.SESSION_COOKIE_NAME, sessionToken, {
+              httpOnly: true,
+              secure: isProd,
+              sameSite: sameSite,
+              path: '/',
+              maxAge: ttlSeconds * 1000,
+            });
+
+            res.cookie(env.CSRF_COOKIE_NAME, csrfToken, {
+              httpOnly: false,
+              secure: isProd,
+              sameSite: sameSite,
+              path: '/',
+              maxAge: ttlSeconds * 1000,
+            });
+
+            res.cookie('active_dormitory_id', grant.dormitoryId, {
+              httpOnly: false,
+              secure: isProd,
+              sameSite: sameSite,
+              path: '/',
+              maxAge: ttlSeconds * 1000,
+            });
+
+            const appUrl = resolveAppUrl(req);
+            const redirectUrl = (req.query.redirect as string) || `${appUrl}/owner/home`;
+            return res.redirect(redirectUrl);
+          }
+        }
+      }
+
+      const userId = (req.query.userId as string) || '10000000-0000-4000-8000-000000000001';
       const authResult = await authService.authenticateTestUser(userId);
 
       res.cookie(env.SESSION_COOKIE_NAME, authResult.sessionToken, {
@@ -188,8 +300,18 @@ export function createAuthRouter(authService: AuthenticationService): Router {
         maxAge: env.SESSION_TTL_SECONDS * 1000,
       });
 
-      const appUrl = process.env.PUBLIC_APP_URL || 'http://127.0.0.1:5173';
-      const redirectUrl = (req.query.redirect as string) || `${appUrl}/owner/dashboard`;
+      if (authResult.memberships && authResult.memberships.length > 0) {
+        res.cookie('active_dormitory_id', authResult.memberships[0].dormitoryId, {
+          httpOnly: false,
+          secure: isProd,
+          sameSite: sameSite,
+          path: '/',
+          maxAge: env.SESSION_TTL_SECONDS * 1000,
+        });
+      }
+
+      const appUrl = resolveAppUrl(req);
+      const redirectUrl = (req.query.redirect as string) || `${appUrl}/owner/home`;
       return res.redirect(redirectUrl);
     } catch (err: any) {
       next(err);
@@ -199,7 +321,7 @@ export function createAuthRouter(authService: AuthenticationService): Router {
   // GET /api/v1/auth/dev-tenant-login (DEV ONLY: One-Click Local Login for Tenant Portal)
   router.get('/dev-tenant-login', async (req: Request, res: Response, next) => {
     try {
-      if (isProd) {
+      if (isProduction) {
         return res.status(404).json({ error: 'Not Found' });
       }
 
@@ -431,7 +553,7 @@ export function createAuthRouter(authService: AuthenticationService): Router {
         maxAge: env.SESSION_TTL_SECONDS * 1000,
       });
 
-      const appUrl = process.env.PUBLIC_APP_URL || 'http://127.0.0.1:5173';
+      const appUrl = resolveAppUrl(req);
       const redirectUrl = (req.query.redirect as string) || `${appUrl}/tenant/dashboard`;
       return res.redirect(redirectUrl);
     } catch (err: any) {
@@ -499,6 +621,327 @@ export function createAuthRouter(authService: AuthenticationService): Router {
           message: 'ออกจากระบบทุกอุปกรณ์เรียบร้อยแล้ว',
         },
       });
+    } catch (err: any) {
+      next(err);
+    }
+  });
+
+  // GET /api/v1/auth/line-direct-entry (One-Click Auto-Authentication for LINE OA Owner/Staff)
+  router.get('/line-direct-entry', async (req: Request, res: Response, next) => {
+    try {
+      const ticket = req.query.ticket as string;
+      if (!ticket) {
+        return res.status(400).json({ error: 'Ticket is required' });
+      }
+
+      const ticketData = consumeDirectEntryTicket(ticket);
+      if (!ticketData) {
+        return res.status(401).send(`
+          <!DOCTYPE html>
+          <html lang="th">
+            <head>
+              <meta charset="utf-8" />
+              <title>ลิงก์หมดอายุ - HorPlus</title>
+              <meta name="viewport" content="width=device-width, initial-scale=1" />
+              <style>
+                body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f8fafc; color: #1e293b; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 16px; }
+                .card { max-width: 400px; width: 100%; background: white; padding: 32px; border-radius: 16px; box-shadow: 0 10px 25px rgba(0,0,0,0.06); text-align: center; }
+                .icon { font-size: 56px; margin-bottom: 16px; }
+                h2 { font-size: 20px; font-weight: 700; margin-bottom: 12px; color: #0f172a; }
+                p { font-size: 14px; line-height: 1.6; color: #64748b; margin-bottom: 24px; }
+              </style>
+            </head>
+            <body>
+              <div class="card">
+                <div class="icon">⏱️</div>
+                <h2>ลิงก์เข้าสู่ระบบหมดอายุแล้ว</h2>
+                <p>ลิงก์เข้าใช้งานแบบปลอดภัยมีอายุ 60 วินาที เพื่อความปลอดภัยของข้อมูลหอพัก กรุณากดปุ่ม <strong>"จัดการหอพัก"</strong> ใน LINE OA อีกครั้งเพื่อรับลิงก์ใหม่</p>
+              </div>
+            </body>
+          </html>
+        `);
+      }
+
+      const prisma = getPrismaClient();
+      const sessionId = crypto.randomUUID();
+      const sessionIdHash = SessionTokenService.hashSessionId(sessionId);
+      const ttlSeconds = env.SESSION_TTL_SECONDS || (30 * 24 * 60 * 60);
+      const expiresAt = new Date(Date.now() + ttlSeconds * 1000);
+      const userAgent = req.headers['user-agent'] ? String(req.headers['user-agent']) : undefined;
+      const userAgentHash = userAgent ? crypto.createHash('sha256').update(userAgent).digest('hex') : undefined;
+      const ipMetadata = (req.headers['x-forwarded-for'] as string) || req.ip || undefined;
+
+      await prisma.session.create({
+        data: {
+          userId: ticketData.userId || undefined,
+          principalType: ticketData.grantId ? 'ACCESS_GRANT' : 'GOOGLE_USER',
+          accessGrantId: ticketData.grantId || null,
+          sessionIdHash,
+          tokenVersion: 1,
+          status: 'active',
+          expiresAt,
+          userAgentHash,
+          ipMetadata,
+        },
+      });
+
+      const sub = ticketData.grantId ? `ag_${ticketData.grantId}` : ticketData.userId!;
+      const sessionToken = authService.getSessionTokenService().encryptToken(
+        { sub, sid: sessionId, type: 'session', version: 1 },
+        ttlSeconds
+      );
+      const csrfToken = authService.getCsrfService().generateCsrfToken(sessionId);
+
+      res.cookie(env.SESSION_COOKIE_NAME, sessionToken, {
+        httpOnly: true,
+        secure: isProd,
+        sameSite: sameSite,
+        path: '/',
+        maxAge: ttlSeconds * 1000,
+      });
+
+      res.cookie(env.CSRF_COOKIE_NAME, csrfToken, {
+        httpOnly: false,
+        secure: isProd,
+        sameSite: sameSite,
+        path: '/',
+        maxAge: ttlSeconds * 1000,
+      });
+
+      res.cookie('active_dormitory_id', ticketData.dormitoryId, {
+        httpOnly: false,
+        secure: isProd,
+        sameSite: sameSite,
+        path: '/',
+        maxAge: ttlSeconds * 1000,
+      });
+
+      const appUrl = resolveAppUrl(req);
+      return res.redirect(`${appUrl}/owner/home`);
+    } catch (err: any) {
+      next(err);
+    }
+  });
+
+  // GET /api/v1/auth/line-tenant-entry (One-Click Auto-Authentication for LINE Tenant Registration / Portal)
+  router.get('/line-tenant-entry', async (req: Request, res: Response, next) => {
+    try {
+      let rawToken = (req.query.t || req.query.token) as string;
+
+      // Fallback 1: inspect query object keys for percent-encoded formats (e.g. t%3D<token> or t=<token> stored as query key)
+      if (!rawToken || typeof rawToken !== 'string' || !rawToken.trim()) {
+        for (const [key, val] of Object.entries(req.query)) {
+          if (key === 't' || key === 'token') {
+            if (typeof val === 'string' && val.trim()) {
+              rawToken = val.trim();
+              break;
+            }
+          }
+          if (/^t(?:=|%3D)/i.test(key)) {
+            rawToken = key.replace(/^t(?:=|%3D)/i, '').trim();
+            break;
+          }
+          if (/^token(?:=|%3D)/i.test(key)) {
+            rawToken = key.replace(/^token(?:=|%3D)/i, '').trim();
+            break;
+          }
+        }
+      }
+
+      // Fallback 2: parse from req.originalUrl / req.url query string directly
+      if (!rawToken || typeof rawToken !== 'string' || !rawToken.trim()) {
+        const rawUrl = req.originalUrl || req.url || '';
+        const qIndex = rawUrl.indexOf('?');
+        if (qIndex !== -1) {
+          const rawQuery = rawUrl.slice(qIndex + 1);
+          for (const cand of [rawQuery, decodeURIComponent(rawQuery)]) {
+            const match = cand.match(/(?:^|[&?])(?:t|token)(?:=|%3D)([^&?#]+)/i);
+            if (match && match[1]) {
+              rawToken = decodeURIComponent(match[1]).trim();
+              break;
+            }
+          }
+        }
+      }
+
+      // Fallback 3: check liff.state parameter if passed through LIFF redirect
+      if (!rawToken || typeof rawToken !== 'string' || !rawToken.trim()) {
+        const liffState = (req.query['liff.state'] || req.query['liff_state']) as string;
+        if (liffState) {
+          try {
+            let decoded = decodeURIComponent(liffState);
+            if (decoded.includes('%')) {
+              try { decoded = decodeURIComponent(decoded); } catch {}
+            }
+            const match = decoded.match(/(?:^|[&?#/])(?:t|token)(?:=|%3D)([^&?#]+)/i);
+            if (match && match[1]) {
+              rawToken = decodeURIComponent(match[1]).trim();
+            }
+          } catch {}
+        }
+      }
+
+      if (!rawToken || typeof rawToken !== 'string' || !rawToken.trim()) {
+        return res.status(400).send(`
+          <!DOCTYPE html>
+          <html lang="th">
+            <head>
+              <meta charset="utf-8" />
+              <title>ลิงก์ไม่ถูกต้อง - HorPlus</title>
+              <meta name="viewport" content="width=device-width, initial-scale=1" />
+              <style>
+                body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f8fafc; color: #1e293b; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 16px; }
+                .card { max-width: 400px; width: 100%; background: white; padding: 32px; border-radius: 16px; box-shadow: 0 10px 25px rgba(0,0,0,0.06); text-align: center; }
+                .icon { font-size: 56px; margin-bottom: 16px; }
+                h2 { font-size: 20px; font-weight: 700; margin-bottom: 12px; color: #0f172a; }
+                p { font-size: 14px; line-height: 1.6; color: #64748b; margin-bottom: 24px; }
+              </style>
+            </head>
+            <body>
+              <div class="card">
+                <div class="icon">⚠️</div>
+                <h2>ไม่พบรหัสเชิญลงทะเบียน</h2>
+                <p>กรุณากดปุ่ม <strong>"ลงทะเบียนผู้เช่า"</strong> ใน LINE OA ของหอพักอีกครั้งเพื่อรับลิงก์ใหม่</p>
+              </div>
+            </body>
+          </html>
+        `);
+      }
+
+      let invite: any;
+      try {
+        invite = await tenantRegistrationInviteService.resolveInvite(rawToken.trim());
+      } catch (err: any) {
+        return res.status(err.statusCode || 401).send(`
+          <!DOCTYPE html>
+          <html lang="th">
+            <head>
+              <meta charset="utf-8" />
+              <title>ลิงก์หมดอายุหรือถูกยกเลิก - HorPlus</title>
+              <meta name="viewport" content="width=device-width, initial-scale=1" />
+              <style>
+                body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f8fafc; color: #1e293b; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 16px; }
+                .card { max-width: 400px; width: 100%; background: white; padding: 32px; border-radius: 16px; box-shadow: 0 10px 25px rgba(0,0,0,0.06); text-align: center; }
+                .icon { font-size: 56px; margin-bottom: 16px; }
+                h2 { font-size: 20px; font-weight: 700; margin-bottom: 12px; color: #0f172a; }
+                p { font-size: 14px; line-height: 1.6; color: #64748b; margin-bottom: 24px; }
+              </style>
+            </head>
+            <body>
+              <div class="card">
+                <div class="icon">⏱️</div>
+                <h2>${err.message || 'ลิงก์ลงทะเบียนหมดอายุแล้ว'}</h2>
+                <p>ลิงก์ลงทะเบียนผู้เช่ามีอายุ 7 วัน กรุณากดปุ่ม <strong>"ลงทะเบียนผู้เช่า"</strong> ใน LINE OA อีกครั้งเพื่อรับลิงก์ใหม่</p>
+              </div>
+            </body>
+          </html>
+        `);
+      }
+
+      const prisma = getPrismaClient();
+
+      const { grant, sessionId } = await prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${invite.dormitoryId}, true)`;
+
+        // Find existing active DormitoryAccessGrant for this LINE friend in this dormitory
+        let g = invite.lineFriendId
+          ? await tx.dormitoryAccessGrant.findFirst({
+              where: {
+                dormitoryId: invite.dormitoryId,
+                lineFriendId: invite.lineFriendId,
+                status: 'ACTIVE',
+              },
+            })
+          : null;
+
+        if (!g) {
+          try {
+            const { rawToken: grantRawToken, tokenHash, tokenPrefix } = generateGrantToken();
+            const tokenEncrypted = encryptText(grantRawToken);
+            g = await tx.dormitoryAccessGrant.create({
+              data: {
+                dormitoryId: invite.dormitoryId,
+                lineFriendId: invite.lineFriendId,
+                tokenHash,
+                tokenEncrypted,
+                tokenPrefix,
+                roleCode: 'TENANT',
+                status: 'ACTIVE',
+                createdByPrincipal: 'system_line_tenant_entry',
+              },
+            });
+          } catch (err: any) {
+            // In case of concurrent request or existing active grant race condition
+            if (err?.code === 'P2002' && invite.lineFriendId) {
+              g = await tx.dormitoryAccessGrant.findFirst({
+                where: {
+                  dormitoryId: invite.dormitoryId,
+                  lineFriendId: invite.lineFriendId,
+                  status: 'ACTIVE',
+                },
+              });
+            }
+            if (!g) throw err;
+          }
+        }
+
+        const sid = crypto.randomUUID();
+        const sessionIdHash = SessionTokenService.hashSessionId(sid);
+        const ttlSeconds = env.SESSION_TTL_SECONDS || (30 * 24 * 60 * 60);
+        const expiresAt = new Date(Date.now() + ttlSeconds * 1000);
+        const userAgent = req.headers['user-agent'] ? String(req.headers['user-agent']) : undefined;
+        const userAgentHash = userAgent ? crypto.createHash('sha256').update(userAgent).digest('hex') : undefined;
+        const ipMetadata = (req.headers['x-forwarded-for'] as string) || req.ip || undefined;
+
+        await tx.session.create({
+          data: {
+            principalType: 'ACCESS_GRANT',
+            accessGrantId: g.id,
+            sessionIdHash,
+            tokenVersion: 1,
+            status: 'active',
+            expiresAt,
+            userAgentHash,
+            ipMetadata,
+          },
+        });
+
+        return { grant: g, sessionId: sid };
+      });
+
+      const ttlSeconds = env.SESSION_TTL_SECONDS || (30 * 24 * 60 * 60);
+      const sessionToken = authService.getSessionTokenService().encryptToken(
+        { sub: `ag_${grant.id}`, sid: sessionId, type: 'session', version: 1 },
+        ttlSeconds
+      );
+      const csrfToken = authService.getCsrfService().generateCsrfToken(sessionId);
+
+      res.cookie(env.SESSION_COOKIE_NAME, sessionToken, {
+        httpOnly: true,
+        secure: isProd,
+        sameSite: sameSite,
+        path: '/',
+        maxAge: ttlSeconds * 1000,
+      });
+
+      res.cookie(env.CSRF_COOKIE_NAME, csrfToken, {
+        httpOnly: false,
+        secure: isProd,
+        sameSite: sameSite,
+        path: '/',
+        maxAge: ttlSeconds * 1000,
+      });
+
+      res.cookie('active_dormitory_id', invite.dormitoryId, {
+        httpOnly: false,
+        secure: isProd,
+        sameSite: sameSite,
+        path: '/',
+        maxAge: ttlSeconds * 1000,
+      });
+
+      const appUrl = resolveAppUrl(req);
+      return res.redirect(`${appUrl}/tenant?sub=register`);
     } catch (err: any) {
       next(err);
     }

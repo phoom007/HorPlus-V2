@@ -22,16 +22,47 @@ import { getAuthorRoleName } from '../tenantHelpers';
 
 export interface TenantAnnouncementsTabProps {
   announcements: Announcement[];
+  hasRoom?: boolean;
   onZoomImage: (url: string) => void;
   onBack?: () => void;
 }
 
 export const TenantAnnouncementsTab: React.FC<TenantAnnouncementsTabProps> = ({
   announcements,
+  hasRoom = true,
   onZoomImage,
   onBack,
 }) => {
   const filteredAnnouncements = announcements || [];
+
+  if (hasRoom === false) {
+    return (
+      <div className="pb-20 animate-in fade-in duration-200 flex flex-col h-full bg-slate-50">
+        <div className="flex items-center justify-between px-4 py-3 bg-white border-b border-gray-200/50 sticky top-0 z-30 shrink-0">
+          {onBack ? (
+            <button
+              type="button"
+              onClick={onBack}
+              className="p-1 hover:bg-slate-100 text-slate-700 rounded-xl transition-all cursor-pointer"
+              aria-label="ย้อนกลับ"
+            >
+              <ChevronLeft className="w-5 h-5 stroke-[2.5]" />
+            </button>
+          ) : (
+            <div className="w-7" />
+          )}
+          <h3 className="text-xs font-black text-slate-900 text-center flex-1">ประกาศและข่าวสาร</h3>
+          <div className="w-7 flex justify-end shrink-0">
+            <Megaphone className="w-5 h-5 text-indigo-500" />
+          </div>
+        </div>
+
+        <div className="py-24 text-center flex-1 flex items-center justify-center">
+          <p className="text-slate-400 font-semibold text-xs">ไม่มีประกาศแจ้งเตือนในขณะนี้</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="pb-20 animate-in fade-in duration-200">
@@ -177,7 +208,7 @@ export const TenantAnnouncementsTab: React.FC<TenantAnnouncementsTabProps> = ({
 
         {filteredAnnouncements.length === 0 && (
           <p className="text-center py-16 text-slate-400 font-semibold text-xs">
-            ยังไม่มีประกาศใดๆ ในระบบ
+            ไม่มีประกาศแจ้งเตือนในขณะนี้
           </p>
         )}
       </div>

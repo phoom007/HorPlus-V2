@@ -303,9 +303,12 @@ export function createTenantRegistrationRouter(
     dormitoryId: z.string().optional(),
     inviteToken: z.string().optional(),
     requestedRoomId: z.string().min(1, 'กรุณาระบุห้องพักที่ต้องการสมัคร'),
+    prefix: z.string().optional(),
+    customPrefix: z.string().optional(),
     firstName: z.string().trim().min(1, 'กรุณาระบุชื่อจริง'),
-    lastName: z.string().trim().min(1, 'กรุณาระบุนามสกุล'),
+    lastName: z.string().trim().optional().default(''),
     phone: z.string().trim().min(1, 'กรุณาระบุเบอร์โทรศัพท์'),
+    email: z.string().optional().nullable(),
     note: z.string().optional().nullable(),
     agreedTerms: z.literal(true, {
       errorMap: () => ({ message: 'กรุณายอมรับกฎระเบียบและเงื่อนไขของหอพักก่อนส่งคำขอลงทะเบียน' }),
@@ -327,6 +330,9 @@ export function createTenantRegistrationRouter(
     idCardImageUrl: z.string().optional(),
     depositSlipImageUrl: z.string().optional(),
     depositDeclaredStatus: z.string().optional(),
+    isInstallmentRequested: z.boolean().optional(),
+    selectedInstallmentPlan: z.string().optional().nullable(),
+    installments: z.array(z.any()).optional(),
     emergencyContact: z.object({
       name: z.string(),
       relationship: z.string(),
@@ -350,6 +356,7 @@ export function createTenantRegistrationRouter(
       count: z.number().optional(),
     }).optional(),
     pets: z.array(z.any()).optional(),
+    lineFollowerId: z.string().optional(),
   });
 
   router.post('/', async (req: Request, res: Response) => {
@@ -384,13 +391,33 @@ export function createTenantRegistrationRouter(
       if (!validData.inviteToken) {
         dormId = getPublicDormitoryId(req);
       }
+
+      let grantLineFriendId: string | undefined;
+      const authAccessGrantId = (req as any).auth?.session?.accessGrantId ||
+        ((req as any).auth?.userId?.startsWith('ag_user_') ? (req as any).auth.userId.replace('ag_user_', '') :
+         ((req as any).auth?.userId?.startsWith('ag_') ? (req as any).auth.userId.replace('ag_', '') : null));
+      if (authAccessGrantId) {
+        const prisma = getPrismaClient();
+        const grant = await prisma.dormitoryAccessGrant.findUnique({
+          where: { id: authAccessGrantId },
+        });
+        if (grant) {
+          grantLineFriendId = grant.lineFriendId || undefined;
+          if (!dormId) dormId = grant.dormitoryId;
+        }
+      }
+
       const newReq = await registrationService.createRequest(dormId, {
         dormitoryId: dormId || undefined,
         inviteToken: validData.inviteToken || undefined,
+        lineFollowerId: grantLineFriendId || validData.lineFollowerId,
         requestedRoomId: validData.requestedRoomId,
+        prefix: validData.prefix,
+        customPrefix: validData.customPrefix,
         firstName: validData.firstName,
         lastName: validData.lastName,
         phone: validData.phone,
+        email: validData.email,
         note: validData.note || undefined,
         agreedTerms: validData.agreedTerms,
         signatureBase64: validData.signatureBase64,
@@ -400,16 +427,25 @@ export function createTenantRegistrationRouter(
         proposedDeposit: validData.proposedDeposit,
         durationMonths: validData.durationMonths,
         startDate: validData.startDate,
+        endDate: validData.endDate,
+        dailyRateAmount: validData.dailyRateAmount,
+        depositAmount: validData.depositAmount,
+        terms: validData.terms,
         citizenId: validData.citizenId,
         birthDate: validData.birthDate,
         address: validData.address,
         idCardImageUrl: validData.idCardImageUrl,
         depositSlipImageUrl: validData.depositSlipImageUrl,
         depositDeclaredStatus: validData.depositDeclaredStatus,
+        isInstallmentRequested: validData.isInstallmentRequested,
+        selectedInstallmentPlan: validData.selectedInstallmentPlan,
+        installments: validData.installments,
         emergencyContact: validData.emergencyContact,
         coOccupants: validData.coOccupants,
         vehicle: validData.vehicle,
+        vehicles: validData.vehicles,
         pet: validData.pet,
+        pets: validData.pets,
       });
       res.status(201).json({ data: newReq });
     } catch (err) {
@@ -618,7 +654,7 @@ export function createTenantRegistrationRouter(
       }
       const approvePayload = {
         ...parsed.data,
-        requireTenantConfirmation: parsed.data.requireTenantConfirmation !== false,
+        requireTenantConfirmation: parsed.data.requireTenantConfirmation,
       };
       const result = await registrationService.approveRequest(req.params.id, dormId, approvePayload, req.auth?.userId);
       res.json({ data: result });
@@ -633,6 +669,29 @@ export function createTenantRegistrationRouter(
     try {
       const dormId = getAuthoritativeDormitoryId(req);
       const result = await registrationService.rejectRequest(req.params.id, dormId, req.body?.reason, req.auth?.userId);
+      res.json({ data: result });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  });
+
+  // POST /api/v1/tenant-registrations/:id/reassign-room
+  privateRouter.post('/:id/reassign-room', ...mutationGuard('tenant:write'), async (req: Request, res: Response) => {
+    if (!verifyCsrf(req, res)) return;
+    try {
+      const dormId = getAuthoritativeDormitoryId(req);
+      const targetRoomId = req.body?.targetRoomId;
+      if (!targetRoomId) {
+        return res.status(400).json({
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'กรุณาระบุ targetRoomId',
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+      const result = await registrationService.reassignRequestRoom(req.params.id, dormId, targetRoomId, req.auth?.userId);
       res.json({ data: result });
     } catch (err) {
       handleServiceError(res, err, req);

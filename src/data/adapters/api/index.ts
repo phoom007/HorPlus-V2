@@ -603,9 +603,12 @@ export async function getTenantRegistrationRequests(): Promise<DataResult<any[]>
 export interface SubmitRegistrationPayload {
   dormitoryId?: string;
   requestedRoomId: string;
+  prefix?: string;
+  customPrefix?: string;
   firstName: string;
   lastName: string;
   phone: string;
+  email?: string;
   note?: string;
   agreedTerms?: boolean;
   signatureBase64?: string;
@@ -631,6 +634,9 @@ export interface SubmitRegistrationPayload {
   pets?: any[];
   depositSlipImageUrl?: string;
   depositDeclaredStatus?: string;
+  isInstallmentRequested?: boolean;
+  selectedInstallmentPlan?: string;
+  installments?: any[];
   terms?: string;
 }
 

@@ -3,7 +3,7 @@
  * HorPlus Tenant Portal — Main Tenant Workspace Orchestrator
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
   Home,
@@ -47,7 +47,6 @@ import { TenantCoOccupantsModal } from './modals/TenantCoOccupantsModal';
 import { TenantNotificationModal } from './modals/TenantNotificationModal';
 import { TenantDocumentModal } from './modals/TenantDocumentModal';
 import { TenantClaimModal } from '../../components/TenantClaimModal';
-import { DevTenantSwitcher } from './components/DevTenantSwitcher';
 import { compressImage, openTenantContractPrintWindow, openTenantIdCardPrintWindow } from './tenantHelpers';
 
 export interface TenantWorkspaceProps {
@@ -270,9 +269,21 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
       reqHeaders['x-room-id'] = activeRoomId;
     }
 
+    if (typeof window !== 'undefined' && window.localStorage) {
+      try {
+        const pendingRaw = window.localStorage.getItem('pending_tenant_registration');
+        if (pendingRaw) {
+          const parsed = JSON.parse(pendingRaw);
+          if (parsed?.id) {
+            reqHeaders['x-registration-id'] = parsed.id;
+          }
+        }
+      } catch {}
+    }
+
     try {
       // 1. Fetch all tenant active rooms
-      const roomsRes = await fetch('/api/v1/tenant-portal/rooms', { credentials: 'include' });
+      const roomsRes = await fetch('/api/v1/tenant-portal/rooms', { credentials: 'include', headers: reqHeaders });
       let currentActiveRoomId = activeRoomId;
       if (roomsRes.ok) {
         const roomsJson = await roomsRes.json();
@@ -316,6 +327,11 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
             ...prev,
             id: profile.id || prev?.id || '',
             name: profileName,
+            dormitoryId: profile.dormitory?.id || profile.dormitoryId || prev?.dormitoryId,
+            dormitory: profile.dormitory || prev?.dormitory,
+            status: profile.status || prev?.status,
+            pendingRequest: profile.pendingRequest || prev?.pendingRequest,
+            registrationRequestStatus: profile.pendingRequest?.status || profile.status || prev?.registrationRequestStatus,
             phone: profile.phone || prev?.phone || '-',
             citizenId: profile.citizenId || profile.nationalIdMasked || prev?.citizenId || '-',
             email: profile.email || prev?.email || '-',
@@ -339,15 +355,20 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
             }
           }
         }
-        if (profile.room) {
-          setRooms([
-            {
-              id: profile.room.id,
-              roomNumber: profile.room.roomNumber,
-              buildingId: profile.room.buildingId,
-              currentTenantId: profile.id,
-            } as any,
-          ]);
+        if (profile.room || profile.hasRoom || profile.status === 'active' || profile.pendingRequest?.status === 'approved') {
+          if (profile.room) {
+            setRooms([
+              {
+                id: profile.room.id,
+                roomNumber: profile.room.roomNumber,
+                buildingId: profile.room.buildingId,
+                currentTenantId: profile.id,
+              } as any,
+            ]);
+          }
+          try {
+            localStorage.removeItem('pending_tenant_registration');
+          } catch {}
         } else {
           setRooms([]);
         }
@@ -459,7 +480,13 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
       });
       if (repRes.ok) {
         const repJson = await repRes.json();
-        const loadedRepairs = Array.isArray(repJson.data) ? repJson.data : repJson || [];
+        const loadedRepairs = Array.isArray(repJson.data)
+          ? repJson.data
+          : Array.isArray(repJson.requests)
+            ? repJson.requests
+            : Array.isArray(repJson)
+              ? repJson
+              : [];
         setRepairs(loadedRepairs);
       }
     } catch (e) {}
@@ -471,7 +498,13 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
       });
       if (annRes.ok) {
         const annJson = await annRes.json();
-        const loadedAnnouncements = Array.isArray(annJson.data) ? annJson.data : annJson || [];
+        const loadedAnnouncements = Array.isArray(annJson.data)
+          ? annJson.data
+          : Array.isArray(annJson.announcements)
+            ? annJson.announcements
+            : Array.isArray(annJson)
+              ? annJson
+              : [];
         setAnnouncements(loadedAnnouncements);
       }
     } catch (e) {}
@@ -687,6 +720,31 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
       .catch(() => setNotices([]));
   }, [tenant]);
 
+  // Visibilitychange and focus sync (no polling loop, scalable for 10,000 dorms)
+  useEffect(() => {
+    const isPending = Boolean(
+      (localTenant as any)?.status === 'pending_owner_approval' ||
+      (localTenant as any)?.pendingRequest?.status === 'pending_owner_approval' ||
+      (typeof window !== 'undefined' && window.localStorage?.getItem?.('pending_tenant_registration'))
+    );
+
+    if (!isPending) return;
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        refreshData();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', handleVisibilityChange);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleVisibilityChange);
+    };
+  }, [localTenant?.status, (localTenant as any)?.pendingRequest?.status]);
+
   const handleMarkNoticeAsRead = async (noticeId: string) => {
     try {
       await httpRequest('POST', `/api/v1/tenant-portal/notices/${noticeId}/read`);
@@ -732,6 +790,40 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
       showToast('error', 'ไม่สามารถส่งคำขอได้', err.message || 'เกิดข้อผิดพลาดในการส่งคำขอต่อสัญญา');
     } finally {
       setIsSubmittingRenewal(false);
+    }
+  };
+
+  const [isCancellingRenewal, setIsCancellingRenewal] = useState(false);
+  const handleCancelRenewal = async () => {
+    const pendingId =
+      renewalEligibility?.pendingRequest?.id ||
+      renewalEligibility?.activeRenewalRequest?.id ||
+      renewalEligibility?.requestId;
+    if (!pendingId) {
+      showToast('error', 'ไม่พบคำขอ', 'ไม่พบรหัสคำขอต่อสัญญาที่ต้องการยกเลิก');
+      return;
+    }
+    setIsCancellingRenewal(true);
+    try {
+      await httpRequest('POST', `/api/v1/contract-renewals/requests/${pendingId}/cancel`, {
+        tenantId: tenant.id,
+      });
+      showToast('success', 'ยกเลิกคำขอสำเร็จ', 'ยกเลิกคำขอต่อสัญญาเรียบร้อยแล้ว');
+      const activeCtr =
+        tenantContracts.find(
+          (c) => c.status === 'active' || c.status === 'expiring_soon' || c.status === 'expired'
+        ) || (tenantContracts.length > 0 ? tenantContracts[0] : null);
+      if (activeCtr) {
+        const updatedElig: any = await httpRequest(
+          'GET',
+          `/api/v1/contract-renewals/eligibility?contractId=${activeCtr.id}&tenantId=${tenant.id}`
+        );
+        setRenewalEligibility(updatedElig?.data || updatedElig);
+      }
+    } catch (err: any) {
+      showToast('error', 'ไม่สามารถยกเลิกคำขอได้', err.message || 'เกิดข้อผิดพลาดในการยกเลิกคำขอ');
+    } finally {
+      setIsCancellingRenewal(false);
     }
   };
 
@@ -850,37 +942,63 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
     : rooms.find((r) => r.currentTenantId === tenant.id || r.currentTenantId === localTenant.id) ||
       (rooms.length > 0 && (rooms[0].currentTenantId === tenant.id || rooms[0].currentTenantId === localTenant.id) ? rooms[0] : undefined);
 
-  const hasRoom = !financialLoading && !!tenantRoom?.roomNumber;
+  const hasRoom = !!(tenantRoom?.roomNumber || localTenant?.roomNumber || tenant?.roomNumber || localTenant?.roomId || tenant?.roomId);
   const activeDormitoryName =
     tenantRoom?.dormitoryName ||
     dormitoryInfo?.name ||
     (localTenant as any)?.dormitory?.name ||
     (tenant as any)?.dormitory?.name ||
     'หอพัก HorPlus UAT Comprehensive Manor';
+
+  const effectiveTenantRooms = useMemo(() => {
+    if (tenantRooms && tenantRooms.length > 0) return tenantRooms;
+    if (tenantRoom?.roomNumber) {
+      return [
+        {
+          roomId: tenantRoom.id || 'current-room',
+          roomNumber: tenantRoom.roomNumber,
+          buildingName: tenantRoom.buildingName || 'อาคารหลัก',
+          dormitoryName: activeDormitoryName,
+          tenantId: tenantRoom.currentTenantId,
+          monthlyRent: tenantRoom.monthlyRent,
+        },
+      ];
+    }
+    return [];
+  }, [tenantRooms, tenantRoom, activeDormitoryName]);
+
+  useEffect(() => {
+    if (activeDormitoryName && typeof document !== 'undefined') {
+      document.title = `${activeDormitoryName} - ระบบผู้เช่า`;
+    }
+  }, [activeDormitoryName]);
   const activeBuildingName = tenantRoom?.buildingName || 'อาคารหลัก';
   const activeRoomNumber = tenantRoom?.roomNumber || '';
   const activeDormitoryId =
     tenantRoom?.dormitoryId ||
+    dormitoryInfo?.id ||
+    (localTenant as any)?.dormitory?.id ||
     localTenant?.dormitoryId ||
+    (tenant as any)?.dormitory?.id ||
     tenant?.dormitoryId;
-  const tenantBills = [...bills]
+  const tenantBills = (Array.isArray(bills) ? [...bills] : [])
     .filter((b) => {
-      const status = (b.status || '').toLowerCase();
+      const status = (b?.status || '').toLowerCase();
       return status !== 'draft' && status !== 'cancelled';
     })
     .sort(
       (a, b) =>
-        (b.cycleId || (b as any).billingCycleId || '').localeCompare(
-          a.cycleId || (a as any).billingCycleId || ''
-        ) || (b.createdAt || '').localeCompare(a.createdAt || '')
+        (b?.cycleId || (b as any)?.billingCycleId || '').localeCompare(
+          a?.cycleId || (a as any)?.billingCycleId || ''
+        ) || (b?.createdAt || '').localeCompare(a?.createdAt || '')
     );
-  const tenantRepairs = repairs.filter(
-    (r) => r.roomId === tenantRoom?.id || r.tenantId === tenant.id
+  const tenantRepairs = (Array.isArray(repairs) ? repairs : []).filter(
+    (r) => r?.roomId === tenantRoom?.id || r?.tenantId === tenant?.id || r?.tenantId === localTenant?.id
   );
-  const tenantContracts = contracts;
+  const tenantContracts = Array.isArray(contracts) ? contracts : [];
 
   // Filter announcements for this tenant's building or all
-  const filteredAnnouncements = announcements
+  const filteredAnnouncements = (Array.isArray(announcements) ? announcements : [])
     .filter((ann) => {
       if (!ann.targetType || ann.targetType === 'all') return true;
 
@@ -932,12 +1050,14 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
       return dateB.localeCompare(dateA);
     });
 
-  // Active Unpaid Bill
-  const activeUnpaidBill = tenantBills.find((b) =>
+  // Active Unpaid Bills & Total Aggregate Unpaid Amount
+  const allUnpaidBills = tenantBills.filter((b) =>
     ['unpaid', 'pending', 'overdue', 'rejected', 'issued', 'UNPAID', 'PENDING', 'OVERDUE', 'REJECTED', 'ISSUED'].includes(
       b.status
     )
-  ) || null;
+  );
+  const activeUnpaidBill = allUnpaidBills[0] || null;
+  const totalUnpaidAmount = allUnpaidBills.reduce((sum, b) => sum + Number(b.totalAmount || 0), 0);
 
   useEffect(() => {
     const fetchHeaders: HeadersInit = selectedRoomId ? { 'x-room-id': selectedRoomId } : {};
@@ -1086,14 +1206,8 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
   ) => {
     try {
       if (docType === 'contract' || (!docType && (title.includes('สัญญา') || fileName.includes('สัญญา')))) {
-        const activeCon = contracts[0];
-        const activeRoom = rooms[0];
-        if (activeCon) {
-          openTenantContractPrintWindow(activeCon, localTenant || tenant, activeRoom, dormitoryInfo, { autoPrint: true });
-        } else {
-          window.open('/api/v1/tenant-portal/contract/pdf?download=true', '_blank');
-        }
-        showToast('success', 'ดาวน์โหลดสำเร็จ', `กำลังพิมพ์ / บันทึกเอกสาร ${title} (PDF)...`);
+        window.open('/api/v1/tenant-portal/contract/pdf', '_blank');
+        showToast('success', 'เปิดเอกสารสำเร็จ', `กำลังเปิดเอกสาร ${title} (PDF)...`);
         return;
       }
       if (docType === 'id_card' || (!docType && (title.includes('บัตรประชาชน') || fileName.includes('บัตรประชาชน')))) {
@@ -1376,19 +1490,11 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
   };
 
   return (
-    <div className="h-screen w-full bg-slate-100 flex justify-center overflow-hidden">
-      {/* Dev Quick-Switcher Pill (in local development) */}
-      <DevTenantSwitcher
-        currentRoomNumber={activeRoomNumber}
-        currentTenantName={localTenant?.name}
-        currentDormitoryId={activeDormitoryId}
-        currentDormitoryName={activeDormitoryName}
-      />
-
+    <div className="h-[100dvh] min-h-[100dvh] w-full bg-slate-50 flex justify-center overflow-hidden overscroll-none">
       {/* Main Container */}
-      <div className="bg-slate-50 w-full max-w-md h-full flex flex-col font-sans text-xs relative select-none shadow-md border-x border-slate-200">
+      <div className="bg-slate-50 w-full sm:max-w-md h-full min-h-[100dvh] flex flex-col font-sans text-xs relative select-none sm:shadow-md sm:border-x sm:border-slate-200 overflow-hidden overscroll-none">
         {/* Main scrollable body area */}
-        <div id="tenant-main-scroll-container" className={`flex-1 overflow-y-auto bg-slate-50/50 ${subView === null ? 'pb-16' : 'pb-0'}`}>
+        <div id="tenant-main-scroll-container" className={`flex-1 ${subView === 'register' ? 'overflow-hidden flex flex-col' : 'overflow-y-auto overscroll-contain'} bg-slate-50/50 ${subView === null ? 'pb-24' : 'pb-0'}`}>
           {/* MAIN PORTAL ROOT NAVIGATION */}
           {subView === null && (
             <>
@@ -1402,6 +1508,8 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                   financialLoading={financialLoading}
                   financialError={financialError}
                   activeUnpaidBill={activeUnpaidBill}
+                  totalUnpaidAmount={totalUnpaidAmount}
+                  allUnpaidBills={allUnpaidBills}
                   totalNotificationsCount={totalNotificationsCount}
                   notices={notices}
                   announcements={filteredAnnouncements}
@@ -1414,8 +1522,11 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                     setSubView('invoice');
                   }}
                   onOpenPayment={() => {
-                    setSelectedPaymentBillIds(activeUnpaidBill ? [activeUnpaidBill.id] : []);
-                    setSubView('payment');
+                    setInvoiceTab('current');
+                    setSelectedInvoiceBillId(
+                      activeUnpaidBill ? activeUnpaidBill.id : (allUnpaidBills[0]?.id || null)
+                    );
+                    setSubView('invoice');
                   }}
                   onOpenRepairs={() => setSubView('repairs')}
                   onOpenUtilities={() => setSubView('utilities')}
@@ -1433,6 +1544,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
               {activeTab === 'announcements' && (
                 <TenantAnnouncementsTab
                   announcements={filteredAnnouncements}
+                  hasRoom={hasRoom}
                   onZoomImage={(url) => setZoomedImage(url)}
                   onBack={() => setActiveTab('home')}
                 />
@@ -1444,6 +1556,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                   dormitoryName={activeDormitoryName}
                   buildingName={activeBuildingName}
                   roomNumber={activeRoomNumber}
+                  hasRoom={hasRoom}
                   tenantBills={tenantBills}
                   onOpenInvoice={(billId) => {
                     setSelectedInvoiceBillId(billId || null);
@@ -1472,6 +1585,8 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                   buildingName={activeBuildingName}
                   roomNumber={activeRoomNumber}
                   localTenant={localTenant}
+                  hasRoom={hasRoom}
+                  onStartRegister={() => setSubView('register')}
                   petPolicy={dormitoryPetPolicy}
                   onOpenCoOccupantsModal={handleOpenCoOccupantsModal}
                   onUpdateProfile={handleUpdateProfile}
@@ -1492,6 +1607,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                   dormitoryName={activeDormitoryName}
                   buildingName={activeBuildingName}
                   roomNumber={activeRoomNumber}
+                  hasRoom={hasRoom}
                   activeUnpaidBill={activeUnpaidBill}
                   tenantBills={tenantBills}
                   selectedBillId={selectedInvoiceBillId}
@@ -1547,6 +1663,8 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
               {subView === 'repairs' && (
                 <TenantRepairsView
                   tenantRepairs={tenantRepairs}
+                  hasRoom={hasRoom}
+                  onStartRegister={() => setSubView('register')}
                   repairTab={repairTab}
                   setRepairTab={setRepairTab}
                   isNewRepairOpen={isNewRepairOpen}
@@ -1570,6 +1688,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
               {subView === 'utilities' && (
                 <TenantUtilitiesView
                   tenantRoom={tenantRoom}
+                  hasRoom={hasRoom}
                   utilitiesData={utilitiesData}
                   contractStartDate={tenantContracts[0]?.startDate || tenantRoom?.startDate}
                   onBack={() => setSubView(null)}
@@ -1581,6 +1700,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                   tenantContracts={tenantContracts}
                   tenant={localTenant || tenant}
                   tenantRoom={tenantRoom}
+                  hasRoom={hasRoom}
                   dormitory={dormitoryInfo}
                   renewalEligibility={renewalEligibility}
                   requestedStartDate={requestedStartDate}
@@ -1589,6 +1709,9 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                   setRequestedDurationMonths={setRequestedDurationMonths}
                   isSubmittingRenewal={isSubmittingRenewal}
                   handleSubmitRenewal={handleSubmitRenewal}
+                  unpaidBalance={totalUnpaidAmount}
+                  onCancelRenewal={handleCancelRenewal}
+                  isCancellingRenewal={isCancellingRenewal}
                   onOpenDocModal={(doc) => setSelectedDocModal(doc)}
                   handleDownloadDoc={handleDownloadDoc}
                   onUploadIdCard={handleUploadIdCard}
@@ -1599,8 +1722,10 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
               {subView === 'register' && (
                 <TenantRegisterView
                   dormitoryId={activeDormitoryId}
-                  initialViewState="room_picker"
+                  inviteToken={searchParams.get('t') || searchParams.get('token') || undefined}
+                  initialViewState={(localTenant as any)?.pendingRequest ? 'form' : 'room_picker'}
                   existingTenantProfile={localTenant}
+                  revisionRequest={(localTenant as any)?.pendingRequest}
                   onBack={() => setSubView(null)}
                   onSuccess={(registeredTenant: any) => {
                     if (registeredTenant) setLocalTenant((prev: any) => ({ ...prev, ...registeredTenant }));
@@ -1630,7 +1755,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
 
         {/* Fixed bottom navigation bar (only visible when in root tab views, hidden in subviews) */}
         {subView === null && (
-          <div className="absolute bottom-0 inset-x-0 bg-white border-t border-slate-100 p-2 flex justify-between items-center z-20 shrink-0 shadow-sm">
+          <div className="absolute bottom-0 inset-x-0 bg-white border-t border-slate-100 px-2 pt-2 pb-[max(0.75rem,env(safe-area-inset-bottom,0px))] flex justify-between items-center z-20 shrink-0 shadow-sm">
             {[
               { id: 'home', label: 'หน้าหลัก', icon: Home },
               { id: 'announcements', label: 'ประกาศ', icon: Bell },
@@ -1666,8 +1791,8 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
       <TenantRoomSwitcherModal
         isOpen={isRoomSwitcherOpen}
         onClose={() => setIsRoomSwitcherOpen(false)}
-        tenantRooms={tenantRooms}
-        currentRoomId={tenantRoom?.id}
+        tenantRooms={effectiveTenantRooms}
+        currentRoomId={tenantRoom?.id || activeTenantRoomOption?.roomId || effectiveTenantRooms[0]?.roomId}
         onSelectRoom={(roomId) => {
           setSelectedRoomId(roomId);
           if (typeof sessionStorage !== 'undefined') {

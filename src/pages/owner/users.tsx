@@ -476,9 +476,9 @@ export const OwnerUsers: React.FC<OwnerUsersProps> = ({
             if (finalBearerUrl) {
               try {
                 if (navigator.clipboard && navigator.clipboard.writeText) {
-                  navigator.clipboard.writeText(finalBearerUrl).catch(() => {});
+                  navigator.clipboard.writeText(finalBearerUrl).catch(() => { });
                 }
-              } catch (e) {}
+              } catch (e) { }
             }
             if (grant?.id) {
               setCopiedTokenId(grant.id);
@@ -584,7 +584,7 @@ export const OwnerUsers: React.FC<OwnerUsersProps> = ({
         }
       } else {
         if (navigator.clipboard && navigator.clipboard.writeText) {
-          navigator.clipboard.writeText(linkUrl).catch(() => {});
+          navigator.clipboard.writeText(linkUrl).catch(() => { });
         }
         setCopiedTokenId(newTokenId);
         setTimeout(() => setCopiedTokenId(null), 2000);
@@ -836,8 +836,8 @@ export const OwnerUsers: React.FC<OwnerUsersProps> = ({
                 color: '#ffffff'
               }}
               className={`w-full py-2.5 text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-1.5 shadow-sm transition-all focus:outline-none focus:ring-2 focus:ring-[#06C755]/50 ${(selectedFriend || justSentToLine)
-                  ? 'bg-[#06C755] hover:bg-[#05b34c] active:bg-[#04a044] text-white disabled:bg-[#06C755] disabled:text-white shadow-emerald-200'
-                  : 'bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white disabled:bg-indigo-600 disabled:text-white shadow-indigo-200'
+                ? 'bg-[#06C755] hover:bg-[#05b34c] active:bg-[#04a044] text-white disabled:bg-[#06C755] disabled:text-white shadow-emerald-200'
+                : 'bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white disabled:bg-indigo-600 disabled:text-white shadow-indigo-200'
                 } ${isCreating
                   ? 'opacity-95 cursor-wait'
                   : justSentToLine
@@ -928,8 +928,8 @@ export const OwnerUsers: React.FC<OwnerUsersProps> = ({
                         <td className="py-3 px-1.5 sm:px-2 font-bold whitespace-nowrap">
                           <div className="space-y-1.5">
                             <span className={`px-2 py-0.5 sm:px-2.5 sm:py-1 rounded-lg border text-[10px] font-extrabold inline-flex items-center gap-1 ${t.role === 'owner' ? 'bg-indigo-50 border-indigo-100 text-indigo-700' :
-                                t.role === 'manager' ? 'bg-emerald-50 border-emerald-100 text-emerald-700' :
-                                  'bg-amber-50 border-amber-100 text-amber-700'
+                              t.role === 'manager' ? 'bg-emerald-50 border-emerald-100 text-emerald-700' :
+                                'bg-amber-50 border-amber-100 text-amber-700'
                               }`}>
                               {t.role === 'owner' && <Users2 className="w-3 h-3" />}
                               {t.role === 'manager' && <Briefcase className="w-3 h-3" />}
@@ -962,8 +962,8 @@ export const OwnerUsers: React.FC<OwnerUsersProps> = ({
                                 if (!isDeleted) handleCopyLink(t.id);
                               }}
                               className={`text-[9px] rounded-lg px-2 py-1.5 w-[84px] sm:w-[96px] font-mono select-none truncate transition-all border-0 outline-none ring-0 shadow-none text-left ${isDeleted
-                                  ? 'bg-rose-50 text-rose-500 italic font-sans cursor-default'
-                                  : 'bg-slate-100 hover:bg-indigo-50 text-slate-600 hover:text-indigo-700 font-semibold cursor-pointer'
+                                ? 'bg-rose-50 text-rose-500 italic font-sans cursor-default'
+                                : 'bg-slate-100 hover:bg-indigo-50 text-slate-600 hover:text-indigo-700 font-semibold cursor-pointer'
                                 }`}
                               title={isDeleted ? undefined : 'คลิกเพื่อคัดลอกลิงก์เข้าใช้งาน'}
                             >
@@ -1076,8 +1076,8 @@ export const OwnerUsers: React.FC<OwnerUsersProps> = ({
                       type="button"
                       onClick={() => setCurrentPage(p)}
                       className={`min-w-[28px] h-7 flex items-center justify-center text-xs font-extrabold rounded-lg transition-all border cursor-pointer ${currentPage === p
-                          ? 'bg-indigo-600 border-indigo-600 text-white shadow-xs'
-                          : 'bg-white border-slate-200 text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 hover:border-indigo-100'
+                        ? 'bg-indigo-600 border-indigo-600 text-white shadow-xs'
+                        : 'bg-white border-slate-200 text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 hover:border-indigo-100'
                         }`}
                     >
                       {p}
@@ -1228,8 +1228,8 @@ export const OwnerUsers: React.FC<OwnerUsersProps> = ({
                 type="button"
                 onClick={handleNextRevokeStep}
                 className={`flex-1 py-2.5 text-white text-xs font-extrabold rounded-xl transition-all cursor-pointer shadow-sm ${revokeConfirm.step === 1
-                    ? 'bg-amber-600 hover:bg-amber-700'
-                    : 'bg-rose-600 hover:bg-rose-700'
+                  ? 'bg-amber-600 hover:bg-amber-700'
+                  : 'bg-rose-600 hover:bg-rose-700'
                   }`}
               >
                 {revokeConfirm.step === 1 ? 'ถัดไป' : 'ยืนยันและระงับสิทธิ์ถาวร'}
@@ -1301,8 +1301,8 @@ export const OwnerUsers: React.FC<OwnerUsersProps> = ({
                     type="button"
                     onClick={() => setFriendFilterStatus(st)}
                     className={`px-3 py-1.5 rounded-xl font-extrabold text-xs transition-all cursor-pointer ${friendFilterStatus === st
-                        ? 'bg-emerald-600 text-white shadow-2xs'
-                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      ? 'bg-emerald-600 text-white shadow-2xs'
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                       }`}
                   >
                     {st}
@@ -1323,8 +1323,8 @@ export const OwnerUsers: React.FC<OwnerUsersProps> = ({
                   setIsFriendPickerOpen(false);
                 }}
                 className={`w-full p-3 rounded-2xl border text-left flex items-center justify-between gap-3 transition-all cursor-pointer ${!selectedLineFriendId
-                    ? 'bg-indigo-50/60 border-indigo-200 shadow-2xs'
-                    : 'bg-slate-50/60 hover:bg-slate-100 border-slate-200/80'
+                  ? 'bg-indigo-50/60 border-indigo-200 shadow-2xs'
+                  : 'bg-slate-50/60 hover:bg-slate-100 border-slate-200/80'
                   }`}
               >
                 <div className="flex items-center gap-3 min-w-0">
@@ -1393,8 +1393,8 @@ export const OwnerUsers: React.FC<OwnerUsersProps> = ({
                         setIsFriendPickerOpen(false);
                       }}
                       className={`p-3 rounded-2xl border flex items-center justify-between gap-3 transition-all cursor-pointer mt-1.5 ${isSelected
-                          ? 'bg-emerald-50/80 border-emerald-300 ring-1 ring-emerald-400 shadow-xs'
-                          : 'bg-white hover:bg-slate-50 border-slate-150 hover:border-emerald-200'
+                        ? 'bg-emerald-50/80 border-emerald-300 ring-1 ring-emerald-400 shadow-xs'
+                        : 'bg-white hover:bg-slate-50 border-slate-150 hover:border-emerald-200'
                         }`}
                     >
                       {/* Left: Avatar / Profile */}
@@ -1466,8 +1466,8 @@ export const OwnerUsers: React.FC<OwnerUsersProps> = ({
         <div
           role="status"
           className={`fixed bottom-20 left-1/2 -translate-x-1/2 sm:bottom-8 sm:right-8 sm:left-auto sm:translate-x-0 z-[9999] px-4.5 py-3 rounded-2xl shadow-2xl border flex items-center gap-2.5 text-xs font-bold transition-all duration-500 ease-in-out ${isToastFading
-              ? 'opacity-0 translate-y-3 pointer-events-none'
-              : 'opacity-100 translate-y-0 animate-in fade-in slide-in-from-bottom-3 duration-300'
+            ? 'opacity-0 translate-y-3 pointer-events-none'
+            : 'opacity-100 translate-y-0 animate-in fade-in slide-in-from-bottom-3 duration-300'
             } ${toast.type === 'error'
               ? 'bg-rose-50/95 border-rose-200 text-rose-800'
               : 'bg-white border-slate-200/90 text-slate-800'

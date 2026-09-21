@@ -1598,5 +1598,63 @@ describe('LINE OA Setup & Step 6 Parity Suite (LOA-01 to LOA-03)', () => {
         screen.getAllByText('คัดลอก Webhook URL เพื่อนำไปเชื่อมต่อให้พร้อมใช้งาน').length
       ).toBeGreaterThanOrEqual(1);
     });
+
+    it('LOA-24: Dynamic Webhook URL Origin Parity on Cloudflare Tunnel > normalizes webhook URL to active tunnel origin', async () => {
+      const origLocation = window.location;
+      delete (window as any).location;
+      (window as any).location = new URL('https://envelope-ethics-reporting-defence.trycloudflare.com/owner/home');
+
+      try {
+        vi.spyOn(Task009ApiAdapter, 'getLineOaConfig').mockResolvedValue({
+          success: true,
+          data: {
+            connected: true,
+            isReady: false,
+            credentialsVerified: true,
+            channelId: '2010923779',
+            hasChannelSecret: true,
+            webhookUrl: 'https://conditioning-thrown-devices-inside.trycloudflare.com/api/v1/line/webhook/whk_test123',
+          } as any,
+        });
+
+        render(<OwnerLineOaPage dormitoryId="dorm-test-01" />);
+
+        await waitFor(() => {
+          expect(
+            screen.getByDisplayValue('https://envelope-ethics-reporting-defence.trycloudflare.com/api/v1/line/webhook/whk_test123')
+          ).toBeDefined();
+        });
+      } finally {
+        (window as any).location = origLocation;
+      }
+    });
+
+    it('LOA-25: Bot Profile Header Card Presentation on Verified Credentials > displays bot avatar, name, LINE ID, and verified status when credentials are verified', async () => {
+      vi.spyOn(Task009ApiAdapter, 'getLineOaConfig').mockResolvedValue({
+        success: true,
+        data: {
+          connected: false,
+          isReady: false,
+          credentialsVerified: true,
+          channelId: '2010923779',
+          hasChannelSecret: true,
+          botDisplayName: 'แจ้งบิล TheRiCH',
+          botPictureUrl: 'https://profile.line-scdn.net/test_avatar.png',
+          lineOaId: '@@358crklo',
+          webhookUrl: 'https://envelope-ethics-reporting-defence.trycloudflare.com/api/v1/line/webhook/whk_test123',
+        } as any,
+      });
+
+      render(<OwnerLineOaPage dormitoryId="dorm-test-01" />);
+
+      await waitFor(() => {
+        expect(screen.getByText('แจ้งบิล TheRiCH')).toBeDefined();
+        expect(screen.getByText('@358crklo')).toBeDefined();
+        expect(screen.getByText('เชื่อมต่อสำเร็จ')).toBeDefined();
+      });
+
+      const avatarImg = screen.getByRole('img', { name: 'แจ้งบิล TheRiCH' });
+      expect(avatarImg.getAttribute('src')).toBe('https://profile.line-scdn.net/test_avatar.png');
+    });
   });
 });

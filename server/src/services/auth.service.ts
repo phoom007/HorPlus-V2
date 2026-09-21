@@ -393,4 +393,8 @@ export class AuthenticationService {
   public getCsrfService(): CsrfService {
     return this.csrfService;
   }
+
+  public getSessionTokenService(): SessionTokenService {
+    return this.sessionTokenService;
+  }
 }

@@ -699,16 +699,16 @@ export function openTenantContractPrintWindow(
 
         <div class="highlight-box">
           <ul>
-            <li><strong>ห้องพักที่ตกลงเช่า (ข้อ 1):</strong> ผู้เช่าตกลงเช่าห้องพักหมายเลข <strong>ห้อง ${roomNum}${roomFloor}</strong> ของอาคาร ${dormName}</li>
-            <li><strong>อัตราค่าเช่า & เงินมัดจำ (ข้อ 2):</strong> ${isTermContract ? 'อัตราเทอมละ' : 'อัตราเดือนละ'} <strong>${formatBaht(contract.rentAmount || contract.monthlyRent || 0)}</strong> โดยกำหนดชำระตามรอบบิล พร้อมเงินประกันความเสียหาย <strong>${formatBaht(contract.depositAmount || 0)}</strong> (${contract.depositType === 'deduct_rent' ? 'นำไปหักชำระกับค่าเช่างวดสุดท้าย' : 'คืนให้เต็มจำนวนเมื่อสิ้นสุดสัญญาโดยไม่มีสิ่งของชำรุดเสียหาย'})</li>
-            <li><strong>ระยะเวลาสัญญาเช่า (ข้อ 3):</strong> กำหนดเวลาเช่าอาศัย <strong>${contract.durationMonths || 12} เดือน</strong> เริ่มต้นตั้งแต่วันที่ <strong>${formatThaiDate(contract.startDate)}</strong> ถึงวันที่ <strong>${formatThaiDate(contract.endDate)}</strong></li>
-            ${Number(contract.advancePaymentAmount) > 0 ? `<li><strong>เงินชำระล่วงหน้า:</strong> ชำระค่าเช่าล่วงหน้าจำนวน <strong>${formatBaht(contract.advancePaymentAmount)}</strong></li>` : ''}
-            <li><strong>จำนวนผู้พักอาศัยและผู้พักร่วม (ข้อ 5):</strong> ผู้เช่าตกลงแจ้งข้อมูลผู้พักอาศัยในห้องพักตามความเป็นจริง โดยในวันทำสัญญามีผู้เช่าหลักและผู้พักอาศัยร่วม รวมทั้งสิ้น <strong>${totalOccupants} คน</strong> (รายนามระบุในระบบทะเบียนผู้เช่า) เพื่อความปลอดภัยและเพื่อใช้เป็นฐานในการคำนวณตามจำนวนคนจริง</li>
+            <li><strong>ข้อ 1. ทรัพย์สินที่เช่า:</strong> ผู้ให้เช่าตกลงให้เช่า และผู้เช่าตกลงเช่าห้องพักหมายเลข <strong>ห้อง ${roomNum}</strong> ของอาคาร <strong>${dormName}</strong> พร้อมอุปกรณ์ เฟอร์นิเจอร์ เครื่องใช้ไฟฟ้า และสิ่งอำนวยความสะดวกในสภาพเรียบร้อยสมบูรณ์</li>
+            <li><strong>ข้อ 2. อัตราค่าเช่า เงินประกัน และการคืนเงิน:</strong> ผู้เช่าตกลงชำระค่าเช่าในอัตรา <strong>฿ ${formatBaht(contract.rentAmount || contract.monthlyRent || 0)} บาทต่อ${isTermContract ? 'เทอม' : 'เดือน'}</strong> กำหนดชำระตามรอบบิลที่หอพักกำหนด พร้อมวางเงินประกันความเสียหายจำนวน <strong>฿ ${formatBaht(contract.depositAmount || 0)} บาท</strong> โดยเงินประกันนี้จะได้รับคืนเมื่อสิ้นสุดสัญญาเช่า หลังจากหักค่าใช้จ่ายค้างชำระ หนี้สิน หรือค่าความเสียหายต่อทรัพย์สิน (ถ้ามี) ตามระเบียบและเงื่อนไขที่หอพักกำหนด</li>
+            <li><strong>ข้อ 3. ระยะเวลาการเช่า:</strong> สัญญานี้มีกำหนดระยะเวลา <strong>${contract.durationMonths || 12} เดือน</strong> โดยเริ่มต้นตั้งแต่วันที่ <strong>${formatThaiDate(contract.startDate)}</strong> ถึงวันที่ <strong>${formatThaiDate(contract.endDate)}</strong></li>
+            <li><strong>ข้อ 4. ยานพาหนะ สัตว์เลี้ยง และการใช้พื้นที่ส่วนกลาง:</strong> ผู้เช่าตกลงปฏิบัติตามระเบียบการจอดยานพาหนะ การนำสัตว์เลี้ยงเข้าพัก (หากหอพักอนุญาต) และการใช้พื้นที่ส่วนกลาง โดยต้องบันทึกข้อมูลยานพาหนะและสัตว์เลี้ยงลงในระบบของหอพักให้ถูกต้องตรงตามความเป็นจริง</li>
+            <li><strong>ข้อ 5. จำนวนผู้พักอาศัยและผู้พักร่วม:</strong> ผู้เช่าตกลงแจ้งข้อมูลผู้พักอาศัยในห้องพักตามความเป็นจริง โดยในวันทำสัญญามีผู้เช่าหลักและผู้พักอาศัยร่วม รวมทั้งสิ้น <strong>${totalOccupants} คน</strong> หากมีการเปลี่ยนแปลงหรือมีผู้พักอาศัยร่วมเพิ่มเติมในภายหลัง ผู้เช่าจะต้องแจ้งให้ผู้ให้เช่าทราบล่วงหน้าและบันทึกข้อมูลลงในระบบตามระเบียบของหอพัก</li>
           </ul>
         </div>
 
         <div class="content-section">
-          <strong>ข้อ 6. ข้อตกลงและระเบียบการอยู่อาศัย (ข้อความระเบียบจากเจ้าของหอพัก):</strong>
+          <strong>ข้อ 6. ข้อตกลงและระเบียบการอยู่อาศัย:</strong>
           <div class="terms-box">${contract.terms || '1. ผู้เช่าตกลงชำระค่าเช่าและค่าสาธารณูปโภคตามกำหนดเวลา\n2. รักษาความสงบเรียบร้อยและไม่สร้างความเดือดร้อนรำคาญแก่ผู้อื่น\n3. ปฏิบัติตามระเบียบข้อบังคับของหอพักอย่างเคร่งครัด'}</div>
         </div>
 
@@ -720,15 +720,15 @@ export function openTenantContractPrintWindow(
 
         <div class="signatures-grid">
           <div class="signature-block">
-            <div class="signature-label">ลงชื่อ ผู้เช่าห้องพัก</div>
-            <div class="signature-space">${tenantSig}</div>
-            <div class="signer-name">(คุณ${tenantName})</div>
+            <div class="signature-label">ลงชื่อ (ผู้ให้เช่า)</div>
+            <div class="signature-space">${ownerSig}</div>
+            <div class="signer-name">(${lessorSignerName})</div>
           </div>
 
           <div class="signature-block">
-            <div class="signature-label">ลงชื่อ นิติหอพัก / ผู้ให้เช่า</div>
-            <div class="signature-space">${ownerSig}</div>
-            <div class="signer-name">(${lessorSignerName})</div>
+            <div class="signature-label">ลงชื่อ (ผู้เช่า)</div>
+            <div class="signature-space">${tenantSig}</div>
+            <div class="signer-name">(คุณ${tenantName})</div>
           </div>
         </div>
       </div>

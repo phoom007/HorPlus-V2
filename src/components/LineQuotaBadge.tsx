@@ -367,7 +367,7 @@ export const LineQuotaBadge: React.FC<LineQuotaBadgeProps> = ({
                       if (onNavigateToLineConfig) {
                         onNavigateToLineConfig();
                       } else {
-                        window.location.href = '/owner/settings/line-oa';
+                        window.location.href = '/owner/line-oa';
                       }
                     }}
                     className="w-full py-2.5 bg-gradient-to-r from-[#06C755] to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 text-white font-extrabold text-xs rounded-xl transition-all shadow-md shadow-emerald-500/20 cursor-pointer flex items-center justify-center gap-2"

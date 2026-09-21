@@ -17,6 +17,9 @@ import {
   Edit2,
   RotateCw,
   Download,
+  Image as ImageIcon,
+  Maximize2,
+  ExternalLink,
 } from 'lucide-react';
 import { Room } from '../types';
 import { formatBaht, formatThaiDate } from './GlobalComponents';
@@ -93,6 +96,9 @@ export const TenantApprovalModal: React.FC<TenantApprovalModalProps> = ({
 
   // Reject Sheet state
   const [isRejectSheetOpen, setIsRejectSheetOpen] = useState<boolean>(false);
+
+  // Fullscreen Image Lightbox state
+  const [isImageModalOpen, setIsImageModalOpen] = useState<boolean>(false);
 
   // Bottom Sheet gesture states
   const [startY, setStartY] = useState<number | null>(null);
@@ -295,11 +301,44 @@ export const TenantApprovalModal: React.FC<TenantApprovalModalProps> = ({
 
   const tenantName = tenant.tenantName || tenant.name || 'ผู้เช่า';
   const tenantPhone = tenant.phone || '-';
-  const tenantCitizenId = tenant.citizenId || tenant.idCard || '-';
+  const tenantCitizenId = tenant.citizenId || tenant.idCard || tenant.nationalId || tenant.acceptanceSnapshot?.citizenId || '-';
 
   // Attachment (ID document)
-  const attachmentUrl = tenant.idCardPhoto || tenant.idCardPhotoMock || tenant.idCardUrl || (tenant.attachments && tenant.attachments[0]?.url);
-  const attachmentName = tenant.idCardFileName || (tenant.attachments && tenant.attachments[0]?.name) || `สำเนาบัตรประชาชน_${tenantName.split(' ')[0]}.pdf`;
+  const attachmentUrl =
+    tenant.idCardPhoto ||
+    tenant.idCardUrl ||
+    tenant.idCardPhotoMock ||
+    (tenant.attachments && tenant.attachments[0]?.url) ||
+    tenant.acceptanceSnapshot?.idCardImageUrl ||
+    (tenant.id ? `/api/v1/tenant-registrations/${tenant.id}/identity-document` : undefined);
+
+  // Deposit Slip Attachment
+  const depositSlipUrl =
+    tenant.depositSlipImageUrl ||
+    tenant.depositSlipUrl ||
+    tenant.acceptanceSnapshot?.depositSlipImageUrl ||
+    (tenant.attachments && tenant.attachments.find((a: any) => a.type === 'deposit_slip' || a.name?.includes('slip'))?.url);
+
+  const [activeLightboxImage, setActiveLightboxImage] = useState<{ url: string; title: string } | null>(null);
+
+  const isDataUrlImage = typeof attachmentUrl === 'string' && attachmentUrl.startsWith('data:image/');
+  const isImageFile =
+    isDataUrlImage ||
+    (typeof attachmentUrl === 'string' && /\.(png|jpe?g|webp|gif|svg)($|\?)/i.test(attachmentUrl)) ||
+    (typeof tenant.idCardFileName === 'string' && /\.(png|jpe?g|webp|gif|svg)$/i.test(tenant.idCardFileName));
+
+  const isPdf =
+    (!isImageFile && typeof tenant.idCardFileName === 'string' && tenant.idCardFileName.toLowerCase().endsWith('.pdf')) ||
+    (!isImageFile && typeof attachmentUrl === 'string' && (attachmentUrl.startsWith('data:application/pdf') || attachmentUrl.toLowerCase().includes('.pdf')));
+
+  const defaultExtension = isImageFile
+    ? (typeof attachmentUrl === 'string' && attachmentUrl.startsWith('data:image/png') ? '.png' : '.jpg')
+    : (isPdf ? '.pdf' : '.jpg');
+
+  const attachmentName =
+    tenant.idCardFileName ||
+    (tenant.attachments && tenant.attachments[0]?.name) ||
+    `สำเนาบัตรประชาชน_${tenantName.split(' ')[0]}${defaultExtension}`;
 
   return (
     <>
@@ -412,6 +451,20 @@ export const TenantApprovalModal: React.FC<TenantApprovalModalProps> = ({
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">
+                  ค่าเช่าห้อง ({rentalType === 'DAILY' ? 'บาท/วัน' : rentalType === 'TERM' ? 'บาท/เทอม' : 'บาท/เดือน'}) <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="number"
+                  data-testid="modal-approve-rent-input"
+                  value={rentAmount}
+                  onChange={(e) => setRentAmount(e.target.value)}
+                  className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl bg-white text-slate-800 font-semibold focus:outline-none focus:border-indigo-600 shadow-3xs"
+                  placeholder="0"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
                   เงินประกัน / มัดจำ (บาท)
                 </label>
                 <input
@@ -420,10 +473,11 @@ export const TenantApprovalModal: React.FC<TenantApprovalModalProps> = ({
                   value={depositAmount}
                   onChange={(e) => setDepositAmount(e.target.value)}
                   className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl bg-white text-slate-800 font-semibold focus:outline-none focus:border-indigo-600 shadow-3xs"
+                  placeholder="0"
                 />
               </div>
 
-              <div>
+              <div className="sm:col-span-2">
                 <label className="block text-xs font-bold text-slate-700 mb-1">
                   สถานะเงินประกัน
                 </label>
@@ -456,41 +510,228 @@ export const TenantApprovalModal: React.FC<TenantApprovalModalProps> = ({
               </div>
             </div>
 
-            {/* Document Preview (Image 2 Parity) */}
-            <div className="space-y-2 pt-1">
-              <span className="block text-xs font-bold text-slate-700">
-                รูปเอกสารสำเนาบัตรประชาชน (ถ้ามี)
-              </span>
-              <div className="border border-indigo-100 rounded-2xl overflow-hidden bg-slate-900 text-white shadow-xs">
-                {/* PDF Toolbar Header */}
-                <div className="bg-indigo-50 border-b border-indigo-100 px-4 py-2 flex items-center justify-between">
-                  <div className="flex items-center gap-2 text-indigo-900 font-bold text-xs">
-                    <FileText className="w-4 h-4 text-indigo-600" />
-                    <span>{attachmentName}</span>
-                  </div>
-                  <span className="text-[10px] font-bold px-2 py-0.5 bg-indigo-100 text-indigo-700 rounded-md">
-                    PDF • 1 KB
+            {/* Compact Financial & Contract Summary */}
+            <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-2xl space-y-2.5">
+              <div className="flex items-center justify-between text-xs font-bold text-slate-800 border-b border-slate-200 pb-2">
+                <span className="flex items-center gap-1.5">
+                  <DollarSign className="w-4 h-4 text-indigo-600" />
+                  สรุปข้อมูลการเงินและสัญญา
+                </span>
+                <span className="text-[11px] font-semibold text-slate-500">
+                  {rentalType === 'DAILY' ? `ระยะเวลา ${dailyDays} วัน` : `ระยะเวลา ${durationMonths} เดือน`}
+                </span>
+              </div>
+              <div className="grid grid-cols-2 gap-2 text-[11px]">
+                <div className="space-y-1">
+                  <span className="text-slate-500 block">ช่วงเวลาสัญญา:</span>
+                  <span className="font-bold text-slate-700 block">
+                    {startDate ? formatThaiDate(startDate) : '-'} ถึง {endDate ? formatThaiDate(endDate) : '-'}
                   </span>
                 </div>
-
-                {/* PDF Viewer Mock / Document View */}
-                <div className="p-4 bg-slate-800 flex items-center justify-center min-h-[220px]">
-                  <div className="bg-white text-slate-900 p-6 rounded-lg shadow-lg max-w-sm w-full space-y-3">
-                    <div className="border-b border-slate-100 pb-2">
-                      <h5 className="text-xs font-black tracking-wider text-slate-800 uppercase">
-                        IDENTITY DOCUMENT COPY
-                      </h5>
-                      <p className="text-[10px] text-slate-500 mt-0.5">
-                        Citizen ID: {formatCitizenId(tenantCitizenId)}
-                      </p>
-                      <p className="text-[9px] text-slate-400">
-                        For tenancy agreement verification only
-                      </p>
+                <div className="space-y-1">
+                  <span className="text-slate-500 block">ยอดชำระวันทำสัญญา:</span>
+                  <span className="font-black text-indigo-600 block text-xs">
+                    {formatBaht((Number(rentAmount) || 0) + (depositStatus === 'PAID' ? 0 : (Number(depositAmount) || 0)))}
+                    {depositStatus === 'PAID' && <span className="text-[10px] font-normal text-emerald-600 ml-1">(มัดจำชำระแล้ว)</span>}
+                  </span>
+                </div>
+              </div>
+              {(tenant.isInstallmentRequested || (tenant.installments && tenant.installments.length > 0)) && (
+                <div className="pt-2 border-t border-slate-200">
+                  <span className="text-[11px] font-bold text-slate-700 block mb-1">
+                    ขอแบ่งชำระค่างวด: {tenant.selectedInstallmentPlan === '2_terms' ? '2 งวด' : tenant.selectedInstallmentPlan === '3_terms' ? '3 งวด' : 'ตามที่ตกลง'}
+                  </span>
+                  {Array.isArray(tenant.installments) && tenant.installments.length > 0 && (
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
+                      {tenant.installments.map((inst: any, idx: number) => (
+                        <div key={idx} className="p-1.5 bg-white border border-slate-200 rounded-lg text-[10px]">
+                          <span className="text-slate-500 block">งวดที่ {inst.installmentNumber || idx + 1}</span>
+                          <span className="font-bold text-slate-800">{formatBaht(inst.amount)}</span>
+                        </div>
+                      ))}
                     </div>
-                    <div className="w-28 h-16 bg-slate-900 rounded-md flex items-center justify-center text-white text-[10px] font-bold">
-                      [ ID CARD ]
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Vehicles and Pets Summary (if requested) */}
+            {(() => {
+              const reqVehicles: any[] = tenant.vehicles && tenant.vehicles.length > 0
+                ? tenant.vehicles.filter((v: any) => v.type && v.type !== 'none')
+                : (tenant.vehicle && tenant.vehicle.type && tenant.vehicle.type !== 'none' ? [tenant.vehicle] : []);
+              const reqPets: any[] = tenant.pets && tenant.pets.length > 0
+                ? tenant.pets.filter((p: any) => (p.type && p.type.trim() !== '') || (p.name && p.name.trim() !== ''))
+                : (tenant.pet && tenant.pet.hasPet ? [tenant.pet] : []);
+
+              if (reqVehicles.length === 0 && reqPets.length === 0) return null;
+
+              return (
+                <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-2xl space-y-3">
+                  <div className="flex items-center justify-between text-xs font-bold text-slate-800 border-b border-slate-200 pb-2">
+                    <span>ข้อมูลยานพาหนะ & การขอเลี้ยงสัตว์</span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-[11px]">
+                    {/* Vehicles */}
+                    <div className="space-y-1.5">
+                      <span className="font-bold text-emerald-800 flex items-center gap-1">
+                        <span>ยานพาหนะ ({reqVehicles.length > 0 ? `${reqVehicles.length} คัน` : 'ไม่มี'})</span>
+                      </span>
+                      {reqVehicles.length > 0 ? (
+                        <div className="space-y-1">
+                          {reqVehicles.map((v: any, vIdx: number) => (
+                            <div key={vIdx} className="p-2 bg-white border border-slate-200 rounded-xl space-y-0.5">
+                              <div className="flex justify-between font-bold text-slate-700">
+                                <span>{v.type === 'car' ? 'รถยนต์' : v.type === 'bicycle' ? 'รถจักรยาน' : 'จักรยานยนต์'}</span>
+                                <span className="text-slate-900">{v.licensePlate || '-'}</span>
+                              </div>
+                              {(v.brand || v.note) && (
+                                <div className="text-[10px] text-slate-500">{v.brand || v.note}</div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-slate-400 text-[10px] italic">ไม่ได้ลงทะเบียนยานพาหนะ</p>
+                      )}
+                    </div>
+
+                    {/* Pets */}
+                    <div className="space-y-1.5">
+                      <span className="font-bold text-rose-800 flex items-center gap-1">
+                        <span>สัตว์เลี้ยง ({reqPets.length > 0 ? `${reqPets.length} ตัว` : 'ไม่ได้ขอเลี้ยง'})</span>
+                      </span>
+                      {reqPets.length > 0 ? (
+                        <div className="space-y-1">
+                          {reqPets.map((p: any, pIdx: number) => (
+                            <div key={pIdx} className="p-2 bg-white border border-slate-200 rounded-xl space-y-0.5">
+                              <div className="flex justify-between font-bold text-slate-700">
+                                <span>{p.type === 'other' ? (p.customType || 'อื่นๆ') : (p.type === 'dog' ? 'สุนัข' : p.type === 'cat' ? 'แมว' : p.type === 'bird' ? 'นก' : p.type === 'fish' ? 'ปลา' : (p.type || '-'))}</span>
+                                <span className="text-slate-900">{p.name || '-'}</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-slate-400 text-[10px] italic">ไม่ได้ขอเลี้ยงสัตว์เลี้ยง</p>
+                      )}
                     </div>
                   </div>
+                </div>
+              );
+            })()}
+
+            {/* Document Previews (ID Card + Deposit Slip) */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+              {/* ID Card */}
+              <div className="space-y-1.5">
+                <span className="block text-xs font-bold text-slate-700">
+                  รูปเอกสารสำเนาบัตรประชาชน
+                </span>
+                <div className="border border-indigo-100 rounded-2xl overflow-hidden bg-slate-900 text-white shadow-xs flex flex-col">
+                  <div className="bg-indigo-50 border-b border-indigo-100 px-3 py-2 flex items-center justify-between">
+                    <div className="flex items-center gap-1.5 text-indigo-900 font-bold text-xs min-w-0">
+                      {isImageFile ? (
+                        <ImageIcon className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                      ) : (
+                        <FileText className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                      )}
+                      <span className="truncate max-w-[120px]">{attachmentName}</span>
+                    </div>
+                    {isImageFile && attachmentUrl && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveLightboxImage({ url: attachmentUrl, title: 'สำเนาบัตรประชาชน' });
+                          setIsImageModalOpen(true);
+                        }}
+                        className="text-[10px] text-indigo-700 hover:text-indigo-900 font-bold flex items-center gap-1 cursor-pointer bg-white px-2 py-0.5 rounded-lg border border-indigo-200 hover:bg-indigo-50 transition-colors shadow-3xs"
+                      >
+                        <Maximize2 className="w-3 h-3" />
+                        <span>ขยายรูป</span>
+                      </button>
+                    )}
+                  </div>
+
+                  {attachmentUrl && (isImageFile || !isPdf) ? (
+                    <div className="p-3 bg-slate-800 flex flex-col items-center justify-center min-h-[160px]">
+                      <img
+                        src={attachmentUrl}
+                        alt="สำเนาบัตรประชาชน"
+                        onClick={() => {
+                          setActiveLightboxImage({ url: attachmentUrl, title: 'สำเนาบัตรประชาชน' });
+                          setIsImageModalOpen(true);
+                        }}
+                        className="max-h-[140px] w-auto max-w-full rounded-xl object-contain shadow-md cursor-pointer hover:opacity-95 transition-opacity border border-slate-700"
+                      />
+                    </div>
+                  ) : attachmentUrl && isPdf ? (
+                    <div className="p-4 bg-slate-800 flex flex-col items-center justify-center min-h-[160px] text-center space-y-2">
+                      <FileText className="w-6 h-6 text-indigo-300" />
+                      <p className="text-[11px] text-slate-300 truncate max-w-[160px]">{attachmentName}</p>
+                      <a
+                        href={attachmentUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-[11px] font-bold transition-colors"
+                      >
+                        <ExternalLink className="w-3 h-3" />
+                        เปิดดู PDF
+                      </a>
+                    </div>
+                  ) : (
+                    <div className="p-4 bg-slate-800 flex items-center justify-center min-h-[160px] text-center">
+                      <span className="text-xs text-slate-400 font-semibold">ไม่มีสำเนาบัตรประชาชน</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Deposit Slip */}
+              <div className="space-y-1.5">
+                <span className="block text-xs font-bold text-slate-700">
+                  สลิปการโอนเงินมัดจำ
+                </span>
+                <div className="border border-emerald-100 rounded-2xl overflow-hidden bg-slate-900 text-white shadow-xs flex flex-col">
+                  <div className="bg-emerald-50 border-b border-emerald-100 px-3 py-2 flex items-center justify-between">
+                    <div className="flex items-center gap-1.5 text-emerald-950 font-bold text-xs min-w-0">
+                      <ImageIcon className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                      <span className="truncate max-w-[120px]">
+                        {depositSlipUrl ? 'สลิปมัดจำ' : 'ไม่มีสลิป'}
+                      </span>
+                    </div>
+                    {depositSlipUrl && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveLightboxImage({ url: depositSlipUrl, title: 'สลิปการโอนเงินมัดจำ' });
+                          setIsImageModalOpen(true);
+                        }}
+                        className="text-[10px] text-emerald-800 hover:text-emerald-950 font-bold flex items-center gap-1 cursor-pointer bg-white px-2 py-0.5 rounded-lg border border-emerald-200 hover:bg-emerald-50 transition-colors shadow-3xs"
+                      >
+                        <Maximize2 className="w-3 h-3" />
+                        <span>ขยายรูป</span>
+                      </button>
+                    )}
+                  </div>
+
+                  {depositSlipUrl ? (
+                    <div className="p-3 bg-slate-800 flex flex-col items-center justify-center min-h-[160px]">
+                      <img
+                        src={depositSlipUrl}
+                        alt="สลิปการโอนเงินมัดจำ"
+                        onClick={() => {
+                          setActiveLightboxImage({ url: depositSlipUrl, title: 'สลิปการโอนเงินมัดจำ' });
+                          setIsImageModalOpen(true);
+                        }}
+                        className="max-h-[140px] w-auto max-w-full rounded-xl object-contain shadow-md cursor-pointer hover:opacity-95 transition-opacity border border-slate-700"
+                      />
+                    </div>
+                  ) : (
+                    <div className="p-4 bg-slate-800 flex items-center justify-center min-h-[160px] text-center">
+                      <span className="text-xs text-slate-400 font-semibold">ไม่มีสลิปการโอนเงินมัดจำ</span>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -551,6 +792,47 @@ export const TenantApprovalModal: React.FC<TenantApprovalModalProps> = ({
         }}
         isSubmitting={isRejecting}
       />
+
+      {/* Lightbox Fullscreen Modal */}
+      {(activeLightboxImage || (isImageModalOpen && attachmentUrl)) && (
+        <div
+          data-testid="id-card-lightbox"
+          className="fixed inset-0 z-[600] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-150"
+          onClick={() => {
+            setActiveLightboxImage(null);
+            setIsImageModalOpen(false);
+          }}
+        >
+          <div
+            className="relative max-w-3xl max-h-[90vh] bg-slate-900 rounded-2xl overflow-hidden shadow-2xl p-2 flex flex-col items-center"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="w-full flex items-center justify-between p-3 border-b border-slate-800 text-white">
+              <span className="text-xs font-bold text-slate-300 flex items-center gap-2">
+                <ImageIcon className="w-4 h-4 text-emerald-400" />
+                {activeLightboxImage?.title || attachmentName}
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveLightboxImage(null);
+                  setIsImageModalOpen(false);
+                }}
+                className="p-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-3 overflow-auto flex items-center justify-center max-h-[80vh]">
+              <img
+                src={activeLightboxImage?.url || attachmentUrl}
+                alt={activeLightboxImage?.title || 'รูปภาพขนาดเต็ม'}
+                className="max-h-[75vh] w-auto max-w-full rounded-lg object-contain shadow-lg"
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 };

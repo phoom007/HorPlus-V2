@@ -28,6 +28,8 @@ import { OnboardingWizard } from './pages/onboarding/OnboardingWizard';
 
 import { OwnerWorkspace } from './pages/owner';
 import { TenantWorkspace } from './pages/tenant';
+import { extractTenantTokenFromUrl, extractLiffDestinationPath } from './utils/liffToken';
+import { initLiff } from './utils/liff';
 import { TenantRegisterPage } from './pages/tenant/TenantRegisterPage';
 
 import { OwnerAuthGuard, TenantAuthGuard, AuthContext } from './router/guards';
@@ -85,6 +87,100 @@ const TenantWorkspaceContainer: React.FC = () => {
 export default function App() {
   const [tokenError, setTokenError] = useState<string | null>(null);
 
+  useEffect(() => {
+    initLiff().catch(() => {});
+
+    // 1. LIFF deep-link destination handling (when LINE passes liff.state to Endpoint URL)
+    const destinationPath = extractLiffDestinationPath();
+    if (destinationPath) {
+      const tokenMatch = destinationPath.match(/(?:[?&])(?:t|token)=([^&#]+)/i);
+      if (tokenMatch && tokenMatch[1]) {
+        window.location.replace(`/api/v1/auth/line-tenant-entry?t=${tokenMatch[1]}`);
+        return;
+      }
+      window.location.replace(destinationPath);
+      return;
+    }
+
+    // 2. Direct tenant token check: ?t= or ?token=
+    const token = extractTenantTokenFromUrl();
+    if (token && window.location.pathname !== '/tenant') {
+      window.location.replace(`/api/v1/auth/line-tenant-entry?t=${encodeURIComponent(token)}`);
+      return;
+    }
+  }, []);
+
+  // Global guard against LINE In-App Browser pull-to-close / swipe-down dismiss
+  // Explicitly preserves custom Bottom Sheet swipe gestures
+  useEffect(() => {
+    let touchStartY = 0;
+
+    const handleTouchStart = (e: TouchEvent) => {
+      if (e.touches && e.touches.length > 0) {
+        touchStartY = e.touches[0].clientY;
+      }
+    };
+
+    const handleTouchMove = (e: TouchEvent) => {
+      if (!e.touches || e.touches.length === 0) return;
+      const currentY = e.touches[0].clientY;
+      const deltaY = currentY - touchStartY;
+
+      // Prevent LINE In-App Browser pull-to-close on Bottom Sheet drag gestures
+      const target = e.target as HTMLElement | null;
+      const isBottomSheet = Boolean(
+        target?.closest(
+          '[data-testid="tenant-bottom-sheet"], [data-testid="tenant-claim-bottom-sheet"], [data-bottom-sheet="true"], .bottom-sheet-container'
+        )
+      );
+      if (isBottomSheet) {
+        if (deltaY > 0 && e.cancelable) {
+          e.preventDefault();
+        }
+        return;
+      }
+
+      // Find closest scrollable ancestor
+      let el = target;
+      let scrollable: HTMLElement | null = null;
+      while (el && el !== document.body && el !== document.documentElement) {
+        const style = window.getComputedStyle(el);
+        if (
+          (style.overflowY === 'auto' || style.overflowY === 'scroll') &&
+          el.scrollHeight > el.clientHeight
+        ) {
+          scrollable = el;
+          break;
+        }
+        el = el.parentElement;
+      }
+
+      // 1. If dragging on fixed/non-scrollable elements: prevent LINE pull-to-close
+      if (!scrollable) {
+        if (deltaY > 0 && e.cancelable) {
+          e.preventDefault();
+        }
+        return;
+      }
+
+      // 2. If scrollable container is already at the top (scrollTop <= 0) and dragging downward:
+      // prevent elastic overscroll bounce that causes LINE to close the in-app browser
+      if (scrollable.scrollTop <= 0 && deltaY > 0) {
+        if (e.cancelable) {
+          e.preventDefault();
+        }
+      }
+    };
+
+    window.addEventListener('touchstart', handleTouchStart, { passive: true });
+    window.addEventListener('touchmove', handleTouchMove, { passive: false });
+
+    return () => {
+      window.removeEventListener('touchstart', handleTouchStart);
+      window.removeEventListener('touchmove', handleTouchMove);
+    };
+  }, []);
+
   const isDemoAllowed =
     (import.meta as any).env?.VITE_ENABLE_DEMO === 'true' &&
     (import.meta as any).env?.MODE !== 'production';
@@ -138,6 +234,7 @@ export default function App() {
           {/* Owner Workspace (Protected) */}
           <Route path="/owner" element={<Navigate to="/owner/home" replace />} />
           <Route path="/owner/dashboard" element={<Navigate to="/owner/home" replace />} />
+          <Route path="/owner/settings/line-oa" element={<Navigate to="/owner/line-oa" replace />} />
           <Route
             path="/owner/*"
             element={
@@ -148,7 +245,14 @@ export default function App() {
           />
 
           {/* Tenant Workspace (Protected) */}
-          <Route path="/tenant" element={<Navigate to="/tenant/dashboard" replace />} />
+          <Route
+            path="/tenant"
+            element={
+              <TenantAuthGuard>
+                <TenantWorkspaceContainer />
+              </TenantAuthGuard>
+            }
+          />
           <Route
             path="/tenant/*"
             element={

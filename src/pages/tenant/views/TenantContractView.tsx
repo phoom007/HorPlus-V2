@@ -11,7 +11,8 @@ import {
   CheckCircle2,
   Download,
   AlertCircle,
-  Clock
+  Clock,
+  XCircle
 } from 'lucide-react';
 import { Contract, Tenant } from '../../../types';
 import {
@@ -23,6 +24,7 @@ import {
   openTenantIdCardPrintWindow
 } from '../tenantHelpers';
 import { TenantBottomSheet } from '../components/TenantBottomSheet';
+import { OwnerDateInput } from '../../../components/OwnerDateInput';
 
 export interface TenantContractViewProps {
   tenantContracts: Contract[];
@@ -36,6 +38,10 @@ export interface TenantContractViewProps {
   setRequestedDurationMonths: (m: number) => void;
   isSubmittingRenewal: boolean;
   handleSubmitRenewal: () => void;
+  unpaidBalance?: number;
+  onCancelRenewal?: () => Promise<void> | void;
+  isCancellingRenewal?: boolean;
+  hasRoom?: boolean;
   onOpenDocModal: (doc: any) => void;
   handleDownloadDoc: (title: string, fileName: string, content: string, docType?: string, docId?: string) => void;
   onUploadIdCard?: (file: File) => void;
@@ -54,12 +60,40 @@ export const TenantContractView: React.FC<TenantContractViewProps> = ({
   setRequestedDurationMonths,
   isSubmittingRenewal,
   handleSubmitRenewal,
+  unpaidBalance = 0,
+  onCancelRenewal,
+  isCancellingRenewal = false,
+  hasRoom = Boolean(tenantRoom || tenantContracts.length > 0),
   onOpenDocModal,
   handleDownloadDoc,
   onUploadIdCard,
   onBack,
 }) => {
+  if (!hasRoom || (!tenantRoom && tenantContracts.length === 0)) {
+    return (
+      <div className="flex flex-col h-full bg-slate-50">
+        <div className="flex items-center justify-between px-4 py-3 bg-white border-b border-gray-200/50 sticky top-0 z-30 shrink-0">
+          <button
+            onClick={onBack}
+            className="p-1 hover:bg-slate-100 text-slate-700 rounded-xl transition-all cursor-pointer"
+            aria-label="ย้อนกลับ"
+          >
+            <ChevronLeft className="w-5 h-5 stroke-[2.5]" />
+          </button>
+          <h3 className="text-xs font-black text-slate-900 text-center flex-1">เอกสารสัญญา</h3>
+          <div className="w-7 flex justify-end shrink-0">
+            <FileText className="w-5 h-5 text-indigo-500" />
+          </div>
+        </div>
+
+        <div className="py-24 text-center flex-1 flex items-center justify-center">
+          <p className="text-slate-400 font-semibold text-xs">ยังไม่มีเอกสารสัญญาในระบบ</p>
+        </div>
+      </div>
+    );
+  }
   const [isRenewalSheetOpen, setIsRenewalSheetOpen] = useState(false);
+  const [isCancelConfirmOpen, setIsCancelConfirmOpen] = useState(false);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
   const isPendingRenewal =
@@ -86,8 +120,17 @@ export const TenantContractView: React.FC<TenantContractViewProps> = ({
 
       <div className="p-4 space-y-4 pb-20 overflow-y-auto">
         {tenantContracts.map((con) => {
+          const minRenewalDate = con.endDate
+            ? (() => {
+                const d = new Date(con.endDate);
+                d.setDate(d.getDate() + 1);
+                return d.toISOString().split('T')[0];
+              })()
+            : '';
           const effectiveStartDate =
-            requestedStartDate || (con.endDate ? String(con.endDate).split('T')[0] : '');
+            requestedStartDate && (!minRenewalDate || requestedStartDate >= minRenewalDate)
+              ? requestedStartDate
+              : minRenewalDate || (con.endDate ? String(con.endDate).split('T')[0] : '');
           const calculatedEndDate = calculateContractEndDate(
             effectiveStartDate,
             requestedDurationMonths
@@ -112,10 +155,21 @@ export const TenantContractView: React.FC<TenantContractViewProps> = ({
 
                   {/* Top-Right Contract Renewal Action Button (PO Image 4) */}
                   {isPendingRenewal ? (
-                    <span className="px-2.5 py-1 bg-amber-50 text-amber-800 border border-amber-200 rounded-xl text-[9px] font-extrabold flex items-center gap-1 shrink-0">
-                      <Clock className="w-3 h-3 text-amber-600" />
-                      รออนุมัติต่อสัญญา
-                    </span>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <span className="px-2.5 py-1 bg-amber-50 text-amber-800 border border-amber-200 rounded-xl text-[9px] font-extrabold flex items-center gap-1">
+                        <Clock className="w-3 h-3 text-amber-600" />
+                        รออนุมัติต่อสัญญา
+                      </span>
+                      <button
+                        type="button"
+                        data-testid="btn-open-cancel-sheet"
+                        onClick={() => setIsCancelConfirmOpen(true)}
+                        className="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 active:scale-95 text-rose-700 border border-rose-200 rounded-xl text-[9px] font-extrabold transition-all shadow-xs cursor-pointer flex items-center gap-1"
+                      >
+                        <XCircle className="w-3 h-3" />
+                        ยกเลิกคำขอ
+                      </button>
+                    </div>
                   ) : (
                     <button
                       type="button"
@@ -165,6 +219,87 @@ export const TenantContractView: React.FC<TenantContractViewProps> = ({
                       สถานะ: กำลังพักอาศัย / สัญญาปัจจุบัน
                     </span>
                   )}
+                </div>
+              </div>
+
+              {/* Official Thai Contract Agreement Preview */}
+              <div className="bg-white p-5 border border-slate-100 rounded-3xl space-y-4 shadow-xs font-sarabun text-xs leading-relaxed text-slate-800">
+                <div className="text-center space-y-1 pb-3 border-b border-slate-100">
+                  <h3 className="font-bold text-sm text-slate-900 tracking-tight">
+                    หนังสือสัญญาเช่าห้องพักอาศัย
+                  </h3>
+                  <p className="text-[10px] text-slate-500 italic">
+                    ทำที่: {dormitory?.name || 'HorPlus Residence'} ({dormitory?.address || 'อาคารพักอาศัยส่วนบุคคล'})
+                  </p>
+                  <p className="text-[10px] font-bold text-slate-700">
+                    วันที่ทำสัญญา: {formatToBeFullDate(con.startDate)}
+                  </p>
+                </div>
+
+                <div className="space-y-3 text-justify">
+                  <p>
+                    <span className="font-bold">สัญญาฉบับนี้ทำขึ้นระหว่าง</span> <span className="font-bold text-indigo-900">{dormitory?.ownerName || dormitory?.name || 'ผู้ให้เช่า'}</span> ("ผู้ให้เช่า") ฝ่ายหนึ่ง กับ <span className="font-bold text-indigo-900">คุณ {tenant.name}</span> ถือบัตรประชาชนเลขที่ <span className="font-bold text-indigo-900">{tenant.citizenId || '-'}</span> เบอร์โทรศัพท์ <span className="font-bold text-indigo-900">{tenant.phone || '-'}</span> ("ผู้เช่า") อีกฝ่ายหนึ่ง โดยมีข้อตกลงสำคัญดังต่อไปนี้:
+                  </p>
+
+                  <div className="space-y-2 text-slate-700">
+                    <p>
+                      <span className="font-bold text-slate-900">ข้อ 1. ทรัพย์สินที่เช่า:</span> ผู้ให้เช่าตกลงให้เช่า และผู้เช่าตกลงเช่าห้องพักหมายเลข <span className="font-bold text-indigo-900">ห้อง {tenantRoom?.roomNumber || con.roomNumber || '-'}</span> ของอาคาร <span className="font-bold text-indigo-900">{dormitory?.name || 'หอพัก'}</span> พร้อมอุปกรณ์ เฟอร์นิเจอร์ เครื่องใช้ไฟฟ้า และสิ่งอำนวยความสะดวกในสภาพเรียบร้อยสมบูรณ์
+                    </p>
+
+                    <p>
+                      <span className="font-bold text-slate-900">ข้อ 2. อัตราค่าเช่า เงินประกัน และการคืนเงิน:</span> ผู้เช่าตกลงชำระค่าเช่าในอัตรา <span className="font-bold text-indigo-900">฿ {Number(con.monthlyRent || (con as any).rentAmount || 0).toLocaleString('th-TH', { minimumFractionDigits: 2 })} บาทต่อ{con.terms?.includes('เทอม') ? 'เทอม' : (con as any).rentPlan === 'daily' ? 'วัน' : 'เดือน'}</span> กำหนดชำระตามรอบบิลที่หอพักกำหนด พร้อมวางเงินประกันความเสียหายจำนวน <span className="font-bold text-indigo-900">฿ {Number(con.depositAmount || 0).toLocaleString('th-TH', { minimumFractionDigits: 2 })} บาท</span> โดยเงินประกันนี้จะได้รับคืนเมื่อสิ้นสุดสัญญาเช่า หลังจากหักค่าใช้จ่ายค้างชำระ หนี้สิน หรือค่าความเสียหายต่อทรัพย์สิน (ถ้ามี) ตามระเบียบและเงื่อนไขที่หอพักกำหนด
+                    </p>
+
+                    <p>
+                      <span className="font-bold text-slate-900">ข้อ 3. ระยะเวลาการเช่า:</span> สัญญานี้มีกำหนดระยะเวลา <span className="font-bold text-indigo-900">{getContractDurationMonths(con.startDate, con.endDate)} {(con as any).rentPlan === 'daily' ? 'วัน' : 'เดือน'}</span> โดยเริ่มต้นตั้งแต่วันที่ <span className="font-bold text-indigo-900">{formatToBeFullDate(con.startDate)}</span> ถึงวันที่ <span className="font-bold text-indigo-900">{formatToBeFullDate(con.endDate)}</span>
+                    </p>
+
+                    <p>
+                      <span className="font-bold text-slate-900">ข้อ 4. ยานพาหนะ สัตว์เลี้ยง และการใช้พื้นที่ส่วนกลาง:</span> ผู้เช่าตกลงปฏิบัติตามระเบียบการจอดยานพาหนะ การนำสัตว์เลี้ยงเข้าพัก (หากหอพักอนุญาต) และการใช้พื้นที่ส่วนกลาง โดยต้องบันทึกข้อมูลยานพาหนะและสัตว์เลี้ยงลงในระบบของหอพักให้ถูกต้องตรงตามความเป็นจริง
+                    </p>
+
+                    <p>
+                      <span className="font-bold text-slate-900">ข้อ 5. จำนวนผู้พักอาศัยและผู้พักร่วม:</span> ผู้เช่าตกลงแจ้งข้อมูลผู้พักอาศัยในห้องพักตามความเป็นจริง โดยในวันทำสัญญามีผู้เช่าหลักและผู้พักอาศัยร่วม รวมทั้งสิ้น <span className="font-bold text-indigo-900">{con.occupantCount || (1 + (tenant.coOccupants?.length || 0))} คน</span> หากมีการเปลี่ยนแปลงหรือมีผู้พักอาศัยร่วมเพิ่มเติมในภายหลัง ผู้เช่าจะต้องแจ้งให้ผู้ให้เช่าทราบล่วงหน้าและบันทึกข้อมูลลงในระบบตามระเบียบของหอพัก
+                    </p>
+
+                    <div className="pt-2 border-t border-slate-100 space-y-1">
+                      <p className="font-bold text-slate-900">
+                        ข้อ 6. ข้อตกลงและระเบียบการอยู่อาศัย:
+                      </p>
+                      <div className="whitespace-pre-line text-slate-600 text-[11px] leading-relaxed">
+                        {dormitory?.rules || con.terms || 'ปฏิบัติตามกฎระเบียบของหอพักอย่างเคร่งครัด รักษาความสะอาด และห้ามก่อความเดือดร้อนรำคาญต่อผู้อื่น'}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Digital Signature Block */}
+                <div className="pt-4 border-t border-slate-100 grid grid-cols-2 gap-4 text-center font-sarabun">
+                  <div className="space-y-1">
+                    <p className="text-[10px] text-slate-500 font-bold">ลงชื่อ (ผู้ให้เช่า)</p>
+                    <div className="h-12 flex items-center justify-center overflow-hidden">
+                      {dormitory?.ownerSignature ? (
+                        <img src={dormitory.ownerSignature} alt="ลายเซ็นผู้ให้เช่า" className="h-10 object-contain mx-auto" />
+                      ) : (
+                        <span className="text-[10px] text-slate-400 select-none">ผู้ให้เช่าลงนามแล้ว</span>
+                      )}
+                    </div>
+                    <p className="text-[10px] text-slate-800 font-bold">({dormitory?.ownerName || dormitory?.name || 'ผู้ให้เช่า'})</p>
+                  </div>
+
+                  <div className="space-y-1">
+                    <p className="text-[10px] text-slate-500 font-bold">ลงชื่อ (ผู้เช่า)</p>
+                    <div className="h-12 flex items-center justify-center overflow-hidden">
+                      {(tenant as any)?.signatureUrl || (tenant as any)?.signatureMock ? (
+                        <img src={(tenant as any)?.signatureUrl || (tenant as any)?.signatureMock} alt="ลายเซ็นผู้เช่า" className="h-10 object-contain mx-auto" />
+                      ) : (
+                        <span className="text-[10px] text-slate-500 font-medium">ลงนามดิจิทัลแล้ว</span>
+                      )}
+                    </div>
+                    <p className="text-[10px] text-slate-800 font-bold">
+                      ({tenant.name})
+                    </p>
+                  </div>
                 </div>
               </div>
 
@@ -226,12 +361,8 @@ export const TenantContractView: React.FC<TenantContractViewProps> = ({
                         docId: tenant.id,
                         pdfUrl: '/api/v1/tenant-portal/id-card',
                         fileName: `สำเนาบัตรประชาชน_${tenant.name}.pdf`,
-                        content: `=== สำเนาบัตรประจำตัวประชาชนผู้เช่า ===\nชื่อ-นามสกุล: ${tenant.name}\nเลขประจำตัวประชาชน: ${tenant.citizenId}\nเบอร์โทรศัพท์: ${tenant.phone}\nอีเมล: ${tenant.email}\nสถานะ: รับรองสำเนาถูกต้องสำหรับใช้ในการทำสัญญาเช่าพักอาศัยห้อง ${tenantRoom?.roomNumber || 'ไม่ระบุ'} เท่านั้น\n\n* ท่านสามารถเปิดดูเอกสารหรือรูปภาพบัตรประชาชนฉบับจริงได้ที่ปุ่มด้านล่าง`,
-                        badge: hasIdPhoto ? (
-                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[8px] font-bold bg-emerald-50 text-emerald-600 border border-emerald-200 shrink-0">
-                            อัปโหลดแล้ว
-                          </span>
-                        ) : (
+                        content: `=== สำเนาบัตรประจำตัวประชาชนผู้เช่า ===\nชื่อ-นามสกุล: ${tenant.name}\nเลขประจำตัวประชาชน: ${tenant.citizenId}\nเบอร์โทรศัพท์: ${tenant.phone}\nอีเมล: ${tenant.email}\nห้องพัก: ${tenantRoom?.roomNumber || 'ไม่ระบุ'}\n\n* ท่านสามารถเปิดดูเอกสารหรือรูปภาพบัตรประชาชนฉบับจริงได้ที่ปุ่มด้านล่าง`,
+                        badge: hasIdPhoto ? null : (
                           <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[8px] font-bold bg-amber-50 text-amber-600 border border-amber-200 shrink-0">
                             ยังไม่อัปโหลด
                           </span>
@@ -344,15 +475,29 @@ export const TenantContractView: React.FC<TenantContractViewProps> = ({
                     </div>
                   ) : (
                     <div className="space-y-3.5">
+                      {unpaidBalance > 0 && (
+                        <div className="p-2.5 bg-amber-50/90 border border-amber-200 rounded-xl flex items-center gap-2 text-amber-800 text-[10px] font-bold">
+                          <AlertCircle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                          <span>ค้างชำระ ฿{unpaidBalance.toLocaleString('th-TH')} (กรุณาชำระก่อน)</span>
+                        </div>
+                      )}
+
+                      <div className="p-3 bg-slate-50 border border-slate-100 rounded-xl flex items-center justify-between text-[11px]">
+                        <span className="text-slate-500 font-medium">อัตราค่าเช่าตามประกาศหอพัก:</span>
+                        <span className="font-extrabold text-slate-800">
+                          ฿{Number(tenantRoom?.monthlyRent || con.monthlyRent || (con as any).rentAmount || 0).toLocaleString('th-TH')} /เดือน
+                        </span>
+                      </div>
+
                       <div>
                         <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                          วันที่ต้องการเริ่มสัญญาใหม่
+                          วันที่ต้องการเริ่มสัญญาใหม่ (พ.ศ.)
                         </label>
-                        <input
+                        <OwnerDateInput
                           id="renewalStartDateInput"
-                          type="date"
                           value={effectiveStartDate}
-                          onChange={(e) => setRequestedStartDate(e.target.value)}
+                          min={minRenewalDate}
+                          onChange={(iso) => setRequestedStartDate(iso)}
                           className="w-full px-3 py-2.5 border border-slate-200 rounded-xl bg-white text-slate-800 font-medium text-xs focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none"
                         />
                       </div>
@@ -413,6 +558,57 @@ export const TenantContractView: React.FC<TenantContractViewProps> = ({
                       </button>
                     </div>
                   )}
+                </div>
+              </TenantBottomSheet>
+
+              {/* Cancellation Confirmation Bottom Sheet */}
+              <TenantBottomSheet
+                isOpen={isCancelConfirmOpen}
+                onClose={() => setIsCancelConfirmOpen(false)}
+                title="ยืนยันการยกเลิกคำขอต่อสัญญา"
+                maxHeightClass="max-h-[80vh]"
+              >
+                <div className="space-y-4 font-sans text-xs pb-4">
+                  <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-2xl flex items-start gap-3">
+                    <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                    <div className="space-y-1">
+                      <h5 className="font-extrabold text-amber-900 text-xs">คุณต้องการยกเลิกคำขอต่อสัญญาใช่หรือไม่?</h5>
+                      <p className="text-[11px] text-amber-700 leading-relaxed">
+                        การยกเลิกคำขอต่อสัญญาสำหรับห้อง {tenantRoom?.roomNumber || con.roomNumber || ''} จะทำให้คำขอที่ส่งไปถูกยกเลิกทันที และคุณสามารถส่งคำขอใหม่ได้ในภายหลัง
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex gap-2 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => setIsCancelConfirmOpen(false)}
+                      className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 active:scale-98 text-slate-700 rounded-xl font-bold text-xs transition-all cursor-pointer"
+                    >
+                      ย้อนกลับ
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="btn-confirm-cancel-renewal"
+                      disabled={isCancellingRenewal}
+                      onClick={async () => {
+                        if (onCancelRenewal) {
+                          await onCancelRenewal();
+                        }
+                        setIsCancelConfirmOpen(false);
+                      }}
+                      className="flex-1 py-3 bg-rose-600 hover:bg-rose-700 active:scale-98 text-white rounded-xl font-extrabold text-xs transition-all shadow-xs flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                    >
+                      {isCancellingRenewal ? (
+                        <span>กำลังยกเลิก...</span>
+                      ) : (
+                        <>
+                          <XCircle className="w-4 h-4" />
+                          <span>ยืนยันยกเลิกคำขอ</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
                 </div>
               </TenantBottomSheet>
             </div>

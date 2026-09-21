@@ -75,6 +75,13 @@ export interface TenantRequestItem {
     relationship?: string;
   }[];
   idCardPhotoMock?: string;
+  idCardPhoto?: string;
+  idCardUrl?: string;
+  idCardFileName?: string;
+  citizenId?: string;
+  acceptanceSnapshot?: any;
+  rentalType?: 'MONTHLY' | 'TERM' | 'DAILY';
+  rentalPlan?: string;
 }
 
 export interface DashboardSubscriptionData {
@@ -194,6 +201,18 @@ export async function rejectTenantRegistration(
 ): Promise<any> {
   const headers = dormitoryId ? { 'x-dormitory-id': dormitoryId } : undefined;
   return await httpRequest('POST', `/tenant-registrations/${requestId}/reject`, { reason }, { headers });
+}
+
+/**
+ * Reassign room for a pending tenant registration request.
+ */
+export async function reassignTenantRegistrationRoom(
+  dormitoryId: string | undefined,
+  requestId: string,
+  targetRoomId: string
+): Promise<any> {
+  const headers = dormitoryId ? { 'x-dormitory-id': dormitoryId } : undefined;
+  return await httpRequest('POST', `/tenant-registrations/${requestId}/reassign-room`, { targetRoomId }, { headers });
 }
 
 /**
@@ -328,10 +347,20 @@ export function aggregateTenantRequests(params: {
     const buildingName = reg.buildingName || room?.buildingName || room?.building || 'อาคาร A';
     const fullName = reg.tenantName || [reg.firstName, reg.lastName].filter(Boolean).join(' ') || 'ผู้ขอเช่า';
 
+    const snap = reg.acceptanceSnapshot || {};
+    const effectiveCitizenId = reg.citizenId || snap.citizenId || reg.nationalId;
+    const rawType = String(snap.rentalPlan || reg.rentalPlan || room?.rentCycle || 'monthly').toUpperCase();
+    const rentType: 'monthly' | 'daily' | 'term' = rawType === 'DAILY' ? 'daily' : rawType === 'TERM' ? 'term' : 'monthly';
+    const rentalType: 'MONTHLY' | 'TERM' | 'DAILY' = rawType === 'DAILY' ? 'DAILY' : rawType === 'TERM' ? 'TERM' : 'MONTHLY';
+    const effectiveIdCardPhoto = snap.idCardImageUrl || reg.idCardPhoto || reg.idCardImageUrl || (reg.id ? `/api/v1/tenant-registrations/${reg.id}/identity-document` : undefined);
+    const effectiveIdCardFileName = snap.idCardDocument?.filename || (snap.attachments && snap.attachments[0]?.name) || reg.idCardFileName;
+
     const reqItem: TenantRequestItem = {
       id: reg.id || `reg-${Date.now()}`,
       category: 'registration',
-      rentType: (reg.rentalPlan as any) || (room?.rentCycle as any) || 'monthly',
+      rentType,
+      rentalType,
+      rentalPlan: snap.rentalPlan || reg.rentalPlan,
       roomId: room?.id || reg.requestedRoomId,
       roomNumber,
       roomType,
@@ -339,21 +368,28 @@ export function aggregateTenantRequests(params: {
       buildingName,
       tenantName: fullName,
       phone: reg.phone || '-',
-      idCard: reg.citizenId,
+      idCard: effectiveCitizenId,
+      citizenId: effectiveCitizenId,
       lineId: reg.lineId,
       lineName: reg.lineDisplayName || reg.lineName,
       email: reg.email,
-      requestedAt: reg.createdAt ? new Date(reg.createdAt).toISOString() : new Date().toISOString(),
-      moveInDate: reg.startDate || reg.moveInDate,
-      contractStartDate: reg.startDate,
-      deposit: Number(reg.proposedDeposit ?? room?.depositAmount ?? 0),
-      monthlyRent: Number(reg.proposedRent ?? room?.monthlyRent ?? 0),
+      requestedAt: reg.submittedAt ? new Date(reg.submittedAt).toISOString() : (reg.createdAt ? new Date(reg.createdAt).toISOString() : new Date().toISOString()),
+      moveInDate: reg.startDate || reg.moveInDate || snap.startDate,
+      contractStartDate: reg.startDate || snap.startDate,
+      deposit: Number(reg.proposedDeposit ?? snap.proposedDeposit ?? snap.depositAmount ?? room?.depositAmount ?? 0),
+      monthlyRent: Number(reg.proposedRent ?? snap.proposedRent ?? room?.monthlyRent ?? 0),
       status: reg.status === 'pending_owner_approval' ? 'pending' : ((reg.status || 'pending').toLowerCase() as any),
       note: reg.note,
-      emergencyContact: reg.emergencyContact,
-      vehicle: reg.vehicle,
-      pet: reg.pet,
-      coOccupants: reg.coOccupants,
+      emergencyContact: reg.emergencyContact || snap.emergencyContact,
+      vehicle: reg.vehicle || snap.vehicle,
+      vehicles: reg.vehicles || snap.vehicles,
+      pet: reg.pet || snap.pet,
+      pets: reg.pets || snap.pets,
+      coOccupants: reg.coOccupants || snap.coOccupants,
+      idCardPhoto: effectiveIdCardPhoto,
+      idCardUrl: effectiveIdCardPhoto,
+      idCardFileName: effectiveIdCardFileName,
+      acceptanceSnapshot: snap,
     };
 
     results.push(reqItem);
@@ -473,7 +509,7 @@ export function aggregateTenantRequests(params: {
     }
   });
 
-  return results;
+  return results.sort((a, b) => new Date(b.requestedAt).getTime() - new Date(a.requestedAt).getTime());
 }
 
 /**

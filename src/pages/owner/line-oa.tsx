@@ -15,6 +15,7 @@ import {
   ShieldCheck,
   Eye,
   EyeOff,
+  LayoutGrid,
 } from 'lucide-react';
 import { Task009ApiAdapter } from '../../data/adapters/task009';
 import { LineLogo } from '../../components/LineLogo';
@@ -45,6 +46,8 @@ export const OwnerLineOaPage: React.FC<OwnerLineOaPageProps> = ({
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [lineStatusMsg, setLineStatusMsg] = useState<{ type: 'success' | 'error'; msg: string } | null>(null);
   const [isEditingCredentials, setIsEditingCredentials] = useState(false);
+  const [syncingRichMenu, setSyncingRichMenu] = useState(false);
+  const [syncRichMenuResult, setSyncRichMenuResult] = useState<{ type: 'success' | 'error'; msg: string } | null>(null);
 
   // Form inputs
   const [channelId, setChannelId] = useState('');
@@ -115,12 +118,33 @@ export const OwnerLineOaPage: React.FC<OwnerLineOaPageProps> = ({
 
   const dormId = dormitoryId || (typeof window !== 'undefined' ? (localStorage.getItem('horplus_current_dormitory_id') || localStorage.getItem('selected_dormitory_id')) : '') || 'dorm-fresh-01';
 
+  const currentOrigin = typeof window !== 'undefined' ? window.location.origin : '';
+  const normalizeWebhookUrl = (url: string | null | undefined, ready = false): string => {
+    if (!url) {
+      return ready && currentOrigin ? `${currentOrigin}/api/v1/line/webhook/${dormId}` : '';
+    }
+    if (currentOrigin && (currentOrigin.includes('.trycloudflare.com') || currentOrigin.includes('ngrok'))) {
+      const pathPart = url.replace(/^https?:\/\/[^/]+/, '');
+      return `${currentOrigin}${pathPart}`;
+    }
+    return url;
+  };
+
+  const formatLineId = (id?: string | null): string => {
+    if (!id) return '';
+    const clean = id.replace(/^@+/, '');
+    return clean ? `@${clean}` : '';
+  };
+
   const loadConfig = async () => {
     try {
       setLoading(true);
       const res = await Task009ApiAdapter.getLineOaConfig(dormId);
       if (res.data) {
-        setConfig(res.data);
+        setConfig({
+          ...res.data,
+          webhookUrl: normalizeWebhookUrl(res.data.webhookUrl),
+        });
         if (res.data.channelId) {
           setChannelId(res.data.channelId);
         }
@@ -163,8 +187,11 @@ export const OwnerLineOaPage: React.FC<OwnerLineOaPageProps> = ({
       }
 
       if (updateRes.data) {
-        let currentConf = updateRes.data;
-        const effectiveWebhook = currentConf.webhookUrl || `${typeof window !== 'undefined' ? window.location.origin : ''}/api/v1/line/webhook/${dormId}`;
+        let currentConf = {
+          ...updateRes.data,
+          webhookUrl: normalizeWebhookUrl(updateRes.data.webhookUrl),
+        };
+        const effectiveWebhook = currentConf.webhookUrl || normalizeWebhookUrl('', true);
         if (!currentConf.webhookUrl) {
           currentConf = { ...currentConf, webhookUrl: effectiveWebhook };
         }
@@ -179,7 +206,7 @@ export const OwnerLineOaPage: React.FC<OwnerLineOaPageProps> = ({
           if (webhookTestRes.data) {
             currentConf = {
               ...webhookTestRes.data,
-              webhookUrl: webhookTestRes.data.webhookUrl || effectiveWebhook,
+              webhookUrl: normalizeWebhookUrl(webhookTestRes.data.webhookUrl) || effectiveWebhook,
             };
             setConfig(currentConf);
           }
@@ -217,7 +244,10 @@ export const OwnerLineOaPage: React.FC<OwnerLineOaPageProps> = ({
       if (res.error) {
         setErrorMessage(res.error.message || 'การทดสอบ Webhook ล้มเหลว');
       } else if (res.data) {
-        setConfig(res.data);
+        setConfig({
+          ...res.data,
+          webhookUrl: normalizeWebhookUrl(res.data.webhookUrl),
+        });
         setSuccessMessage('ทดสอบ Webhook สำเร็จ! พร้อมรับข้อความแจ้งเตือน');
       }
     } catch (err: any) {
@@ -239,13 +269,45 @@ export const OwnerLineOaPage: React.FC<OwnerLineOaPageProps> = ({
       if (res.error) {
         setErrorMessage(res.error.message || 'ไม่สามารถหมุนเวียนคีย์ Webhook ได้');
       } else if (res.data) {
-        setConfig(res.data);
+        setConfig({
+          ...res.data,
+          webhookUrl: normalizeWebhookUrl(res.data.webhookUrl),
+        });
         setSuccessMessage('หมุนเวียนคีย์ Webhook ใหม่เรียบร้อยแล้ว');
       }
     } catch (err: any) {
       setErrorMessage(err.message || 'เกิดข้อผิดพลาดในการหมุนเวียนคีย์ Webhook');
     } finally {
       setRotatingKey(false);
+    }
+  };
+
+  const handleSyncRichMenu = async () => {
+    setSyncingRichMenu(true);
+    setSyncRichMenuResult(null);
+    try {
+      const res = await Task009ApiAdapter.syncRichMenus(dormId);
+      if (res.error) {
+        setSyncRichMenuResult({
+          type: 'error',
+          msg: res.error.message || 'ไม่สามารถซิงค์ Rich Menu ได้ กรุณาตรวจสอบการเชื่อมต่อ LINE OA',
+        });
+      } else {
+        setSyncRichMenuResult({
+          type: 'success',
+          msg: 'ซิงค์ Rich Menu (เมนูเจ้าของ 3 ปุ่ม และเมนูผู้เช่า 2 ปุ่ม) ไปยัง LINE เรียบร้อยแล้ว!',
+        });
+        if (onAddLog) {
+          onAddLog('ซิงค์ Rich Menu LINE OA', 'สร้างและอัปโหลด Rich Menu สำเร็จ', 'LineOA', dormId);
+        }
+      }
+    } catch (err: any) {
+      setSyncRichMenuResult({
+        type: 'error',
+        msg: err.message || 'เกิดข้อผิดพลาดในการซิงค์ Rich Menu',
+      });
+    } finally {
+      setSyncingRichMenu(false);
     }
   };
 
@@ -300,7 +362,8 @@ export const OwnerLineOaPage: React.FC<OwnerLineOaPageProps> = ({
   const isConfiguredAndReady = Boolean(config.connected && config.isReady);
   const showStep6View = !isConfiguredAndReady || isEditingCredentials;
   const isWebhookReady = Boolean(config.connected || config.credentialsVerified);
-  const effectiveWebhookUrl = config.webhookUrl || (isWebhookReady ? `${typeof window !== 'undefined' ? window.location.origin : ''}/api/v1/line/webhook/${dormId}` : '');
+  const isBotVerified = Boolean(config.connected || config.credentialsVerified || (config.botDisplayName && config.botPictureUrl));
+  const effectiveWebhookUrl = normalizeWebhookUrl(config.webhookUrl, isWebhookReady);
   const effectiveChannelId = (channelId || config.channelId || '').trim();
 
   return (
@@ -380,7 +443,7 @@ export const OwnerLineOaPage: React.FC<OwnerLineOaPageProps> = ({
           <div className="p-3 sm:p-4 rounded-2xl bg-slate-50 border border-slate-200/70 flex items-center justify-between gap-3">
             <div className="flex items-center gap-3 min-w-0">
               <div className="w-10 h-10 rounded-xl bg-white border border-slate-200 flex items-center justify-center shrink-0 shadow-2xs overflow-hidden">
-                {config.connected && config.botPictureUrl ? (
+                {isBotVerified && config.botPictureUrl ? (
                   <img
                     src={config.botPictureUrl}
                     alt={config.botDisplayName || 'LINE OA'}
@@ -388,23 +451,23 @@ export const OwnerLineOaPage: React.FC<OwnerLineOaPageProps> = ({
                     referrerPolicy="no-referrer"
                   />
                 ) : (
-                  <LineLogo className={`w-6 h-6 shrink-0 rounded-xs ${!config.connected ? 'opacity-60 grayscale' : ''}`} />
+                  <LineLogo className={`w-6 h-6 shrink-0 rounded-xs ${!isBotVerified ? 'opacity-60 grayscale' : ''}`} />
                 )}
               </div>
               <div className="min-w-0">
                 <h4 className="text-xs sm:text-sm font-black text-slate-800 truncate">
-                  {config.connected
+                  {isBotVerified
                     ? (config.botDisplayName || 'LINE Official Account')
                     : 'ยังไม่ได้เชื่อมต่อ LINE Official Account'}
                 </h4>
                 <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
                   <span className="text-[11px] text-slate-500 font-bold">LINE ID:</span>
-                  <span className={`text-[11px] font-black px-2 py-0.5 rounded-md ${config.connected
+                  <span className={`text-[11px] font-black px-2 py-0.5 rounded-md ${isBotVerified
                     ? 'text-emerald-800 bg-emerald-100/90'
                     : 'text-slate-500 bg-slate-100'
                     }`}>
-                    {config.connected
-                      ? (config.lineOaId || 'เชื่อมต่อแล้ว')
+                    {isBotVerified
+                      ? (formatLineId(config.lineOaId) || 'เชื่อมต่อแล้ว')
                       : 'ยังไม่ได้ตรวจสอบ'}
                   </span>
                 </div>
@@ -412,12 +475,12 @@ export const OwnerLineOaPage: React.FC<OwnerLineOaPageProps> = ({
             </div>
 
             <div className="shrink-0">
-              <span className={`px-2.5 py-1 rounded-full text-xs font-black flex items-center gap-1.5 whitespace-nowrap shrink-0 ${config.connected
+              <span className={`px-2.5 py-1 rounded-full text-xs font-black flex items-center gap-1.5 whitespace-nowrap shrink-0 ${isBotVerified
                 ? 'bg-emerald-100 text-emerald-700 border border-emerald-200'
                 : 'bg-slate-100 text-slate-600 border border-slate-200'
                 }`}>
-                <span className={`w-2 h-2 rounded-full shrink-0 ${config.connected ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`} />
-                {config.connected ? 'เชื่อมต่อสำเร็จ' : 'ยังไม่ได้ตรวจสอบ'}
+                <span className={`w-2 h-2 rounded-full shrink-0 ${isBotVerified ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`} />
+                {isBotVerified ? 'เชื่อมต่อสำเร็จ' : 'ยังไม่ได้ตรวจสอบ'}
               </span>
             </div>
           </div>
@@ -749,7 +812,7 @@ export const OwnerLineOaPage: React.FC<OwnerLineOaPageProps> = ({
                 <div className="flex items-center gap-2">
                   <ShieldCheck className="w-4 h-4 text-emerald-600" />
                   <span className="font-bold text-slate-700">LINE OA Basic ID:</span>
-                  <span className="font-mono font-black text-emerald-800">{config.lineOaId}</span>
+                  <span className="font-mono font-black text-emerald-800">{formatLineId(config.lineOaId)}</span>
                 </div>
                 {config.botDisplayName && (
                   <span className="text-slate-500 font-medium">ชื่อบอท: {config.botDisplayName}</span>
@@ -775,16 +838,16 @@ export const OwnerLineOaPage: React.FC<OwnerLineOaPageProps> = ({
               </button>
             </div>
 
-            {config.webhookUrl ? (
+            {effectiveWebhookUrl ? (
               <div className="space-y-3">
                 <div className="p-3 bg-slate-900 text-emerald-400 font-mono text-xs rounded-2xl break-all border border-slate-800 select-all">
-                  {config.webhookUrl}
+                  {effectiveWebhookUrl}
                 </div>
 
                 <div className="flex flex-col sm:flex-row gap-2">
                   <button
                     onClick={() => {
-                      navigator.clipboard.writeText(config.webhookUrl || '');
+                      navigator.clipboard.writeText(effectiveWebhookUrl || '');
                       setCopiedWebhook(true);
                       setTimeout(() => setCopiedWebhook(false), 2000);
                     }}
@@ -811,7 +874,49 @@ export const OwnerLineOaPage: React.FC<OwnerLineOaPageProps> = ({
             )}
           </div>
 
-          {/* 3. Event Notification Preferences */}
+          {/* 3. Rich Menu Management */}
+          <div className="p-5 bg-white rounded-3xl border border-slate-200/80 shadow-xs space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h2 className="text-sm font-black text-slate-900 flex items-center gap-2">
+                  <LayoutGrid className="w-4 h-4 text-emerald-600 shrink-0" />
+                  เมนูลัด LINE Official Account (Rich Menu)
+                </h2>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  ระบบจะสร้าง Rich Menu 2500x843 px อัตโนมัติ: เมนู 3 ปุ่มสำหรับเจ้าของหอพัก และเมนู 2 ปุ่มสำหรับผู้เช่า
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleSyncRichMenu}
+                disabled={syncingRichMenu}
+                className="px-3.5 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1.5 whitespace-nowrap shadow-2xs disabled:opacity-50"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 shrink-0 ${syncingRichMenu ? 'animate-spin text-emerald-600' : ''}`} />
+                <span>{syncingRichMenu ? 'กำลังซิงค์ Rich Menu...' : 'ซิงค์ Rich Menu ไปยัง LINE'}</span>
+              </button>
+            </div>
+
+            {syncRichMenuResult && (
+              <div
+                className={`p-3 rounded-2xl text-xs font-medium flex items-center gap-2 ${
+                  syncRichMenuResult.type === 'success'
+                    ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                    : 'bg-rose-50 text-rose-800 border border-rose-200'
+                }`}
+              >
+                {syncRichMenuResult.type === 'success' ? (
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                ) : (
+                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                )}
+                <span>{syncRichMenuResult.msg}</span>
+              </div>
+            )}
+          </div>
+
+          {/* 4. Event Notification Preferences */}
           <div className="p-5 bg-white rounded-3xl border border-slate-200/80 shadow-xs space-y-4">
             <h2 className="text-sm font-black text-slate-900 flex items-center gap-2">
               <LineLogo className="w-4 h-4 shrink-0 rounded-xs" />

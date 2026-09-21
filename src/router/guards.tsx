@@ -5,6 +5,7 @@
 
 import React from 'react';
 import { Navigate, Outlet, useLocation } from 'react-router-dom';
+import { extractTenantTokenFromUrl } from '../utils/liffToken';
 
 export const AuthContext = React.createContext<any>(null);
 
@@ -114,14 +115,26 @@ export const TenantAuthGuard: React.FC<{ children?: React.ReactNode }> = ({ chil
   const [loading, setLoading] = React.useState(true);
 
   React.useEffect(() => {
+    // 1. Direct Entry Token Bridge: check if ?t= or ?token= or liff.state is present in URL
+    const token = extractTenantTokenFromUrl();
+    if (token) {
+      window.history.replaceState({}, '', window.location.pathname);
+      window.location.replace(`/api/v1/auth/line-tenant-entry?t=${encodeURIComponent(token)}`);
+      return;
+    }
+
     fetch('/api/v1/tenant-portal/profile', { credentials: 'include' })
       .then(res => res.ok ? res.json() : null)
       .then(json => {
         const rawTenant = json?.data?.tenant || (json?.id ? json : null);
         if (rawTenant) {
+          const realFullName = (rawTenant.firstName && rawTenant.firstName !== '-')
+            ? `${rawTenant.firstName} ${rawTenant.lastName && rawTenant.lastName !== '-' ? rawTenant.lastName : ''}`.trim()
+            : '';
+          const effectiveName = realFullName || rawTenant.displayName || rawTenant.name || 'ผู้เช่า';
           const tenantData = {
             ...rawTenant,
-            name: rawTenant.displayName || `${rawTenant.firstName || ''} ${rawTenant.lastName || ''}`.trim() || rawTenant.name || 'ผู้เช่า'
+            name: effectiveName,
           };
           setSession({ userType: 'tenant', tenant: tenantData, user: tenantData });
         } else {

@@ -22,10 +22,14 @@ import crypto from 'crypto';
 export interface CreateRegistrationDto {
   dormitoryId?: string;
   inviteToken?: string;
+  lineFollowerId?: string;
   requestedRoomId: string;
+  prefix?: string;
+  customPrefix?: string;
   firstName: string;
   lastName: string;
   phone: string;
+  email?: string | null;
   note?: string;
   agreedTerms: true;
   signatureBase64: string;
@@ -45,9 +49,14 @@ export interface CreateRegistrationDto {
   emergencyContact?: { name: string; relationship: string; phone: string };
   coOccupants?: Array<{ name: string; phone?: string; citizenId?: string }>;
   vehicle?: { type: string; licensePlate: string; brand?: string };
+  vehicles?: any[];
   pet?: { hasPet: boolean; type?: string; name?: string; count?: number };
+  pets?: any[];
   depositSlipImageUrl?: string;
   depositDeclaredStatus?: string;
+  isInstallmentRequested?: boolean;
+  selectedInstallmentPlan?: string | null;
+  installments?: any[];
   terms?: string | null;
 }
 
@@ -191,9 +200,9 @@ export class TenantRegistrationService {
 
     // 3. Authoritative DB Transaction with FOR UPDATE lock on policy defaults to prevent TOCTOU race
     try {
-      return await prisma.$transaction(async (tx) => {
+      const createdReq = await prisma.$transaction(async (tx) => {
         let targetDormitoryId = dormitoryId;
-        let lineFollowerId: string | null = null;
+        let lineFollowerId: string | null = payload.lineFollowerId || null;
 
         if (payload.inviteToken) {
           const inviteResult = await tenantRegistrationInviteService.consumeInviteInTransaction(payload.inviteToken, tx);
@@ -277,8 +286,11 @@ export class TenantRegistrationService {
           petPolicy,
           policyVersion: currentVersion,
           acceptedAt: acceptedAt.toISOString(),
+          prefix: payload.prefix,
+          customPrefix: payload.customPrefix,
           applicantName: `${payload.firstName.trim()} ${payload.lastName.trim()}`,
           applicantPhone: payload.phone.trim(),
+          email: payload.email,
           rentalPlan: payload.rentalPlan || 'monthly',
           proposedRent: payload.proposedRent !== undefined ? payload.proposedRent : undefined,
           proposedDeposit: payload.proposedDeposit !== undefined ? payload.proposedDeposit : undefined,
@@ -294,9 +306,14 @@ export class TenantRegistrationService {
           emergencyContact: payload.emergencyContact,
           coOccupants: payload.coOccupants || [],
           vehicle: payload.vehicle,
+          vehicles: payload.vehicles || (payload.vehicle ? [payload.vehicle] : []),
           pet: payload.pet,
+          pets: payload.pets || (payload.pet ? [payload.pet] : []),
           depositSlipImageUrl: payload.depositSlipImageUrl,
           depositDeclaredStatus: payload.depositDeclaredStatus,
+          isInstallmentRequested: payload.isInstallmentRequested,
+          selectedInstallmentPlan: payload.selectedInstallmentPlan,
+          installments: payload.installments || [],
           revisionHistory: [],
         };
         const acceptanceSnapshotSha256 = computeSnapshotSha256(acceptanceSnapshot);
@@ -322,6 +339,110 @@ export class TenantRegistrationService {
           },
         });
       });
+
+      // 1. In-App Notification for Owner/Staff (Notification Bell)
+      try {
+        const dorm = await prisma.dormitory.findUnique({
+          where: { id: createdReq.dormitoryId },
+          select: { name: true, createdByUserId: true },
+        });
+        const room = await prisma.room.findUnique({
+          where: { id: createdReq.requestedRoomId },
+          select: { roomNumber: true },
+        });
+        const applicantName = `${createdReq.firstName} ${createdReq.lastName}`.trim();
+
+        const ownerMembers = await prisma.dormitoryMember.findMany({
+          where: {
+            dormitoryId: createdReq.dormitoryId,
+            status: 'active',
+            role: { code: { in: ['OWNER', 'MANAGER'] } },
+          },
+          select: { userId: true },
+        });
+
+        const targetUserIds = new Set<string>();
+        if (dorm?.createdByUserId) targetUserIds.add(dorm.createdByUserId);
+        for (const m of ownerMembers) {
+          if (m.userId) targetUserIds.add(m.userId);
+        }
+
+        for (const uid of targetUserIds) {
+          await prisma.staffNotification.create({
+            data: {
+              dormitoryId: createdReq.dormitoryId,
+              userId: uid,
+              roleCode: 'OWNER',
+              category: 'TENANT_REGISTRATION',
+              title: `มีคำขอลงทะเบียนผู้เช่าใหม่ (ห้อง ${room?.roomNumber || 'ไม่ระบุ'})`,
+              message: `คุณ${applicantName} ได้ส่งคำขอลงทะเบียนเช่าห้อง ${room?.roomNumber || 'ไม่ระบุ'} กรุณาตรวจสอบและดำเนินการ`,
+              metadata: {
+                registrationId: createdReq.id,
+                roomId: createdReq.requestedRoomId,
+                roomNumber: room?.roomNumber,
+                applicantName,
+                phone: createdReq.phone,
+              },
+            },
+          }).catch((err) => {
+            logger.warn('Failed to create staff notification for user:', { userId: uid, error: err.message });
+          });
+        }
+      } catch (inAppErr: any) {
+        logger.warn('In-app notification for new tenant registration error:', { error: inAppErr.message });
+      }
+
+      // 2. Push notification to owner(s) via LINE OA
+      try {
+        const dormConfig = await prisma.dormitoryLineConfig.findUnique({
+          where: { dormitoryId: createdReq.dormitoryId },
+        });
+        if (dormConfig && dormConfig.notifyTenantRegister !== false) {
+          const ownerGrants = await prisma.dormitoryAccessGrant.findMany({
+            where: {
+              dormitoryId: createdReq.dormitoryId,
+              roleCode: { in: ['OWNER', 'MANAGER'] },
+              status: 'ACTIVE',
+            },
+            include: { lineFriend: true },
+          });
+
+          const { LineOaService, buildOwnerNewTenantRegistrationFlexMessage, getPublicAppOrigin } = await import('./line-oa.service.js');
+          const lineOaService = new LineOaService(prisma);
+          const dorm = await prisma.dormitory.findUnique({
+            where: { id: createdReq.dormitoryId },
+            select: { name: true },
+          });
+          const room = await prisma.room.findUnique({
+            where: { id: createdReq.requestedRoomId },
+            select: { roomNumber: true },
+          });
+
+          const applicantName = `${createdReq.firstName} ${createdReq.lastName}`.trim();
+          const flexMsg = buildOwnerNewTenantRegistrationFlexMessage(
+            dorm?.name || 'หอพัก',
+            applicantName,
+            room?.roomNumber || 'ไม่ระบุ',
+            createdReq.phone,
+            getPublicAppOrigin()
+          );
+
+          const { decryptText } = await import('../utils/crypto-encryption.js');
+          for (const og of ownerGrants) {
+            const friend = og.lineFriend;
+            if (friend && friend.lineUserIdEncrypted) {
+              const ownerLineUserId = decryptText(friend.lineUserIdEncrypted);
+              await lineOaService.pushOutcomeNotification(createdReq.dormitoryId, ownerLineUserId, flexMsg).catch((err) => {
+                logger.warn('Failed to push new tenant registration notification to owner:', { error: err.message });
+              });
+            }
+          }
+        }
+      } catch (ownerPushErr: any) {
+        logger.warn('Owner push notification for new tenant registration error:', { error: ownerPushErr.message });
+      }
+
+      return createdReq;
     } catch (txErr: any) {
       // Clean up orphan signature binary if request creation or TOCTOU lock failed
       if (savedObjectKey) {
@@ -401,7 +522,7 @@ export class TenantRegistrationService {
     const prisma = getPrismaClient();
     return prisma.tenantRegistrationRequest.findMany({
       where: { dormitoryId },
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ submittedAt: 'desc' }, { createdAt: 'desc' }],
     });
   }
 
@@ -481,7 +602,7 @@ export class TenantRegistrationService {
     // Check request snapshot to determine rental type if not specified in payload
     const existingReq = await prisma.tenantRegistrationRequest.findFirst({
       where: { id, dormitoryId },
-      select: { acceptanceSnapshot: true },
+      select: { acceptanceSnapshot: true, lineFollowerId: true },
     });
     const reqSnap = (existingReq?.acceptanceSnapshot as any) || {};
     const isDaily = payload?.rentalType?.toUpperCase() === 'DAILY' || reqSnap.rentalType === 'DAILY' || reqSnap.rentalPlan === 'daily';
@@ -537,7 +658,7 @@ export class TenantRegistrationService {
         throw err;
       }
 
-      if (req.status !== 'pending_owner_approval' && req.status !== 'pending') {
+      if (req.status !== 'pending_owner_approval' && req.status !== 'pending' && req.status !== 'awaiting_tenant_confirmation') {
         const err = new Error('INVALID_REQUEST_STATUS');
         (err as any).statusCode = 400;
         (err as any).code = 'INVALID_REQUEST_STATUS';
@@ -817,8 +938,19 @@ export class TenantRegistrationService {
 
       const safeActorId = actorUserId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(actorUserId) ? actorUserId : null;
 
-      // Two-Phase Registration (Rule 1 & Q1=A): Move to awaiting_tenant_confirmation without creating Tenant/Contract/Occupancy
-      if (payload.requireTenantConfirmation === true) {
+      // Two-Phase Registration: Move to awaiting_tenant_confirmation only when terms were modified or explicitly required
+      const snapTerms = (req.acceptanceSnapshot as any) || {};
+      const termsModified = Boolean(
+        (payload.roomId && payload.roomId !== req.requestedRoomId) ||
+        (payload.rentAmount !== undefined && snapTerms.proposedRent !== undefined && Number(payload.rentAmount) !== Number(snapTerms.proposedRent)) ||
+        (payload.depositAmount !== undefined && snapTerms.proposedDeposit !== undefined && Number(payload.depositAmount) !== Number(snapTerms.proposedDeposit)) ||
+        (payload.startDate && snapTerms.startDate && payload.startDate !== snapTerms.startDate) ||
+        (payload.durationMonths !== undefined && snapTerms.durationMonths !== undefined && Number(payload.durationMonths) !== Number(snapTerms.durationMonths))
+      );
+
+      const shouldRequireConfirmation = payload.requireTenantConfirmation === true || (payload.requireTenantConfirmation !== false && termsModified);
+
+      if (shouldRequireConfirmation) {
         const approvedTerms = {
           startDate: payload.startDate,
           endDate: payload.endDate,
@@ -870,6 +1002,12 @@ export class TenantRegistrationService {
         });
       }
 
+      let linkedUserId = tenant?.linkedUserId || null;
+      if (linkedUserId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(linkedUserId)) {
+        linkedUserId = null;
+      }
+      const targetFriendId = req.lineFollowerId || tenant?.lineFriendId;
+
       if (tenant) {
         tenant = await tx.tenant.update({
           where: { id: tenant.id },
@@ -879,7 +1017,8 @@ export class TenantRegistrationService {
             lastName: req.lastName,
             displayName,
             phone: req.phone,
-            lineFriendId: req.lineFollowerId || tenant.lineFriendId,
+            lineFriendId: targetFriendId || null,
+            linkedUserId: linkedUserId || tenant.linkedUserId,
           },
         });
       } else {
@@ -891,7 +1030,8 @@ export class TenantRegistrationService {
             lastName: req.lastName,
             displayName,
             phone: req.phone,
-            lineFriendId: req.lineFollowerId || null,
+            lineFriendId: targetFriendId || null,
+            linkedUserId,
             status: 'active',
           },
         });
@@ -911,8 +1051,21 @@ export class TenantRegistrationService {
       // Sync profile from registration snapshot onto tenant
       const snap = (req.acceptanceSnapshot as any) || {};
       const tenantUpdateData: Prisma.TenantUpdateInput = {};
-      if (snap.pet) {
-        tenantUpdateData.petInfo = snap.pet as Prisma.InputJsonValue;
+      if (snap.pet || snap.pets) {
+        const petsList = Array.isArray(snap.pets) && snap.pets.length > 0
+          ? snap.pets
+          : (snap.pet?.hasPet && snap.pet?.type ? [snap.pet] : []);
+        tenantUpdateData.petInfo = {
+          hasPet: petsList.length > 0,
+          pets: petsList.map((p: any, idx: number) => ({
+            id: p.id || `pet-${Date.now()}-${idx}`,
+            type: p.type || '',
+            customType: p.customType || '',
+            name: p.name || '',
+          })),
+          type: petsList[0]?.type || snap.pet?.type || '',
+          name: petsList[0]?.name || snap.pet?.name || '',
+        } as Prisma.InputJsonValue;
       }
       if (snap.citizenId) {
         const cleanId = String(snap.citizenId).replace(/\D/g, '');
@@ -981,7 +1134,11 @@ export class TenantRegistrationService {
 
       const now = new Date();
       const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-      const startStr = String(payload.startDate || '').slice(0, 10);
+      const startDateObj = (payload.startDate as any) instanceof Date ? (payload.startDate as any) : new Date(payload.startDate);
+      const startYear = startDateObj.getFullYear();
+      const startMonth = String(startDateObj.getMonth() + 1).padStart(2, '0');
+      const startDay = String(startDateObj.getDate()).padStart(2, '0');
+      const startStr = `${startYear}-${startMonth}-${startDay}`;
       const isFutureStartDate = Boolean(startStr && startStr > todayStr);
 
       const isDaily = payload.rentalType?.toUpperCase() === 'DAILY' || snap.rentalType === 'DAILY';
@@ -1139,7 +1296,8 @@ export class TenantRegistrationService {
         });
       } else {
         const currentRoom = await tx.room.findUnique({ where: { id: effectiveRoomId } });
-        if (currentRoom?.status === 'vacant') {
+        const roomNorm = (currentRoom?.status || '').trim().toLowerCase();
+        if (roomNorm === 'vacant' || roomNorm === 'available') {
           await tx.room.update({
             where: { id: effectiveRoomId },
             data: { status: 'reserved' },
@@ -1282,29 +1440,42 @@ export class TenantRegistrationService {
     }
 
     try {
-      const lineFollowerId = (existingReq as any)?.lineFollowerId;
-      if (lineFollowerId) {
-        const lineFriend = await prisma.dormitoryLineFriend.findUnique({
-          where: { id: lineFollowerId },
-        });
-        if (lineFriend && lineFriend.lineUserIdEncrypted) {
-          const { decryptText } = await import('../utils/crypto-encryption.js');
-          const lineUserId = decryptText(lineFriend.lineUserIdEncrypted);
-          const dorm = await prisma.dormitory.findUnique({ where: { id: dormitoryId }, select: { name: true } });
-          const targetRoomId = (resTx as any)?.occupancy?.roomId || (resTx as any)?.contract?.roomId || (resTx as any)?.request?.approvedRoomId;
-          const room = targetRoomId
-            ? await prisma.room.findUnique({ where: { id: targetRoomId }, select: { roomNumber: true } })
-            : null;
-          const { LineOaService, buildTenantApprovalOutcomeFlexMessage, getPublicAppOrigin } = await import('./line-oa.service.js');
-          const lineOaService = new LineOaService(prisma);
-          const flexMsg = buildTenantApprovalOutcomeFlexMessage(
-            dorm?.name || 'หอพัก',
-            room?.roomNumber || 'ไม่ระบุ',
-            true,
-            undefined,
-            getPublicAppOrigin()
-          );
-          await lineOaService.pushOutcomeNotification(dormitoryId, lineUserId, flexMsg);
+      const dormConfig = await prisma.dormitoryLineConfig.findUnique({
+        where: { dormitoryId },
+      });
+      if (dormConfig?.notifyTenantApproved !== false) {
+        let lineFollowerId = (resTx as any)?.request?.lineFollowerId || (existingReq as any)?.lineFollowerId || (resTx as any)?.tenant?.lineFriendId;
+        if (!lineFollowerId && (resTx as any)?.tenant?.id) {
+          const tRecord = await prisma.tenant.findUnique({
+            where: { id: (resTx as any).tenant.id },
+            select: { lineFriendId: true },
+          });
+          lineFollowerId = tRecord?.lineFriendId || null;
+        }
+
+        if (lineFollowerId) {
+          const lineFriend = await prisma.dormitoryLineFriend.findUnique({
+            where: { id: lineFollowerId },
+          });
+          if (lineFriend && lineFriend.lineUserIdEncrypted) {
+            const { decryptText } = await import('../utils/crypto-encryption.js');
+            const lineUserId = decryptText(lineFriend.lineUserIdEncrypted);
+            const dorm = await prisma.dormitory.findUnique({ where: { id: dormitoryId }, select: { name: true } });
+            const targetRoomId = (resTx as any)?.occupancy?.roomId || (resTx as any)?.contract?.roomId || (resTx as any)?.request?.approvedRoomId;
+            const room = targetRoomId
+              ? await prisma.room.findUnique({ where: { id: targetRoomId }, select: { roomNumber: true } })
+              : null;
+            const { LineOaService, buildTenantApprovalOutcomeFlexMessage, getPublicAppOrigin } = await import('./line-oa.service.js');
+            const lineOaService = new LineOaService(prisma);
+            const flexMsg = buildTenantApprovalOutcomeFlexMessage(
+              dorm?.name || 'หอพัก',
+              room?.roomNumber || 'ไม่ระบุ',
+              true,
+              undefined,
+              getPublicAppOrigin()
+            );
+            await lineOaService.pushOutcomeNotification(dormitoryId, lineUserId, flexMsg);
+          }
         }
       }
     } catch (pushErr: any) {
@@ -1389,8 +1560,21 @@ export class TenantRegistrationService {
       });
 
       const tenantUpdateData: Prisma.TenantUpdateInput = {};
-      if (snap.pet) {
-        tenantUpdateData.petInfo = snap.pet as Prisma.InputJsonValue;
+      if (snap.pet || snap.pets) {
+        const petsList = Array.isArray(snap.pets) && snap.pets.length > 0
+          ? snap.pets
+          : (snap.pet?.hasPet && snap.pet?.type ? [snap.pet] : []);
+        tenantUpdateData.petInfo = {
+          hasPet: petsList.length > 0,
+          pets: petsList.map((p: any, idx: number) => ({
+            id: p.id || `pet-${Date.now()}-${idx}`,
+            type: p.type || '',
+            customType: p.customType || '',
+            name: p.name || '',
+          })),
+          type: petsList[0]?.type || snap.pet?.type || '',
+          name: petsList[0]?.name || snap.pet?.name || '',
+        } as Prisma.InputJsonValue;
       }
       if (snap.citizenId) {
         const cleanId = String(snap.citizenId).replace(/\D/g, '');
@@ -1629,13 +1813,15 @@ export class TenantRegistrationService {
       }
     }
 
+    const safeActorId = actorUserId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(actorUserId) ? actorUserId : null;
+
     const updated = await prisma.tenantRegistrationRequest.update({
       where: { id: req.id },
       data: {
         status: 'rejected',
         rejectedReason: reasonText,
         reviewedAt: new Date(),
-        reviewedByUserId: actorUserId,
+        reviewedByUserId: safeActorId,
         acceptanceSnapshot: updatedSnapshot,
       },
     });
@@ -1728,13 +1914,16 @@ export class TenantRegistrationService {
       resubmittedAt: new Date().toISOString(),
     };
 
-    return prisma.tenantRegistrationRequest.update({
+    const effectiveRoomId = payload.requestedRoomId || req.requestedRoomId;
+
+    const updated = await prisma.tenantRegistrationRequest.update({
       where: { id },
       data: {
         status: 'pending_owner_approval',
         rejectedReason: null,
+        requestedRoomId: effectiveRoomId,
         firstName: payload.firstName ? payload.firstName.trim() : req.firstName,
-        lastName: payload.lastName ? payload.lastName.trim() : req.lastName,
+        lastName: payload.lastName !== undefined ? payload.lastName.trim() : req.lastName,
         phone: payload.phone ? payload.phone.trim() : req.phone,
         note: payload.note !== undefined ? payload.note : req.note,
         submittedAt: new Date(),
@@ -1745,6 +1934,111 @@ export class TenantRegistrationService {
         tenantSignatureByteSize: newSigByte,
       },
     });
+
+    // 1. In-app notification for owner(s) on resubmit
+    try {
+      const room = await prisma.room.findUnique({
+        where: { id: effectiveRoomId },
+        select: { roomNumber: true },
+      });
+      const dorm = await prisma.dormitory.findUnique({
+        where: { id: dormitoryId },
+        select: { createdByUserId: true, name: true },
+      });
+      const applicantName = `${updated.firstName} ${updated.lastName || ''}`.trim();
+
+      const ownerMembers = await prisma.dormitoryMember.findMany({
+        where: {
+          dormitoryId: updated.dormitoryId,
+          status: 'active',
+          role: { code: { in: ['OWNER', 'MANAGER'] } },
+        },
+        select: { userId: true },
+      });
+
+      const targetUserIds = new Set<string>();
+      if (dorm?.createdByUserId) targetUserIds.add(dorm.createdByUserId);
+      for (const m of ownerMembers) {
+        if (m.userId) targetUserIds.add(m.userId);
+      }
+
+      for (const uid of targetUserIds) {
+        await prisma.staffNotification.create({
+          data: {
+            dormitoryId: updated.dormitoryId,
+            userId: uid,
+            roleCode: 'OWNER',
+            category: 'TENANT_REGISTRATION',
+            title: `มีคำขอลงทะเบียนผู้เช่าที่แก้ไขใหม่ (ห้อง ${room?.roomNumber || 'ไม่ระบุ'})`,
+            message: `คุณ${applicantName} ได้ส่งคำขอลงทะเบียนที่แก้ไขใหม่สำหรับห้อง ${room?.roomNumber || 'ไม่ระบุ'} กรุณาตรวจสอบและดำเนินการ`,
+            metadata: {
+              registrationId: updated.id,
+              roomId: updated.requestedRoomId,
+              roomNumber: room?.roomNumber,
+              applicantName,
+              phone: updated.phone,
+              action: 'RESUBMITTED',
+            },
+          },
+        }).catch((err) => {
+          logger.warn('Failed to create staff notification for resubmit:', { userId: uid, error: err.message });
+        });
+      }
+    } catch (inAppErr: any) {
+      logger.warn('In-app notification for resubmitted tenant registration error:', { error: inAppErr.message });
+    }
+
+    // 2. LINE OA Push notification for owner(s) on resubmit
+    try {
+      const dormConfig = await prisma.dormitoryLineConfig.findUnique({
+        where: { dormitoryId: updated.dormitoryId },
+      });
+      if (dormConfig && dormConfig.notifyTenantRegister !== false) {
+        const ownerGrants = await prisma.dormitoryAccessGrant.findMany({
+          where: {
+            dormitoryId: updated.dormitoryId,
+            roleCode: { in: ['OWNER', 'MANAGER'] },
+            status: 'ACTIVE',
+          },
+          include: { lineFriend: true },
+        });
+
+        const { LineOaService, buildOwnerNewTenantRegistrationFlexMessage, getPublicAppOrigin } = await import('./line-oa.service.js');
+        const lineOaService = new LineOaService(prisma);
+        const dorm = await prisma.dormitory.findUnique({
+          where: { id: updated.dormitoryId },
+          select: { name: true },
+        });
+        const room = await prisma.room.findUnique({
+          where: { id: effectiveRoomId },
+          select: { roomNumber: true },
+        });
+
+        const applicantName = `${updated.firstName} ${updated.lastName || ''}`.trim();
+        const flexMsg = buildOwnerNewTenantRegistrationFlexMessage(
+          dorm?.name || 'หอพัก',
+          applicantName,
+          room?.roomNumber || 'ไม่ระบุ',
+          updated.phone,
+          getPublicAppOrigin()
+        );
+
+        const { decryptText } = await import('../utils/crypto-encryption.js');
+        for (const og of ownerGrants) {
+          const friend = og.lineFriend;
+          if (friend && friend.lineUserIdEncrypted) {
+            const ownerLineUserId = decryptText(friend.lineUserIdEncrypted);
+            await lineOaService.pushOutcomeNotification(updated.dormitoryId, ownerLineUserId, flexMsg).catch((err) => {
+              logger.warn('Failed to push tenant resubmission notification to owner:', { error: err.message });
+            });
+          }
+        }
+      }
+    } catch (ownerPushErr: any) {
+      logger.warn('Owner push notification for resubmitted tenant registration error:', { error: ownerPushErr.message });
+    }
+
+    return updated;
   }
 
   public async getPublicRooms(dormitoryId: string) {
@@ -1809,16 +2103,38 @@ export class TenantRegistrationService {
       }
     }
 
+    const scheduledContracts = await prisma.contract.findMany({
+      where: {
+        dormitoryId,
+        status: 'approved_scheduled',
+        deletedAt: null,
+      },
+      select: { roomId: true },
+    });
+    const scheduledRoomIds = new Set(scheduledContracts.map((c) => c.roomId).filter(Boolean));
+
     return allRooms.map((r) => {
+      const isReservedScheduled = scheduledRoomIds.has(r.id);
       const unlinked = unlinkedByRoomId.get(r.id);
       const isUnboundClaimable = Boolean(unlinked);
-      const isVacant = r.status === 'vacant' && !isUnboundClaimable;
+      const normStatus = (r.status || '').trim().toLowerCase();
+      const hasNoTenantOrContract = !r.currentTenantId && !r.currentContractId;
+      const isVacant =
+        (normStatus === 'vacant' ||
+          normStatus === 'available' ||
+          (hasNoTenantOrContract && normStatus !== 'maintenance' && normStatus !== 'reserved')) &&
+        !isUnboundClaimable &&
+        !isReservedScheduled;
 
       let selectable = false;
       let selectionType: 'PUBLIC_REGISTER' | 'CLAIM_UNLINKED' | 'LOCKED' = 'LOCKED';
       let badgeLabel = '';
 
-      if (r.status === 'maintenance') {
+      if (isReservedScheduled) {
+        selectable = false;
+        selectionType = 'LOCKED';
+        badgeLabel = 'ติดจองล่วงหน้า';
+      } else if (normStatus === 'maintenance') {
         selectable = false;
         selectionType = 'LOCKED';
         badgeLabel = 'ปิดปรับปรุง';
@@ -1830,11 +2146,11 @@ export class TenantRegistrationService {
         selectable = true;
         selectionType = 'CLAIM_UNLINKED';
         badgeLabel = 'ยังไม่ผูก LINE (ยืนยันสิทธิ์)';
-      } else if (r.status === 'occupied') {
+      } else if (normStatus === 'occupied') {
         selectable = false;
         selectionType = 'LOCKED';
         badgeLabel = 'มีผู้เช่าแล้ว (ผูก LINE แล้ว)';
-      } else if (r.status === 'reserved') {
+      } else if (normStatus === 'reserved') {
         selectable = false;
         selectionType = 'LOCKED';
         badgeLabel = 'จองแล้ว (ผูก LINE แล้ว)';
@@ -1896,6 +2212,9 @@ export class TenantRegistrationService {
         } : undefined,
         status: r.status,
         isVacant,
+        isReservedScheduled,
+        hasScheduledRenewal: isReservedScheduled,
+        bookingStatus: isReservedScheduled ? 'RESERVED_SCHEDULED' : null,
         isUnboundClaimable,
         selectable,
         selectionType,
@@ -2462,6 +2781,48 @@ export class TenantRegistrationService {
       mimeType: isPdf ? 'application/pdf' : (snapDoc.mimeType || 'image/webp'),
       extension: isPdf ? '.pdf' : '.webp',
       filename: snapDoc.filename || `registration-id-document${isPdf ? '.pdf' : '.webp'}`,
+    };
+  }
+
+  public async reassignRequestRoom(requestId: string, dormitoryId: string, targetRoomId: string, actorUserId?: string) {
+    const prisma = getPrismaClient();
+    const req = await prisma.tenantRegistrationRequest.findUnique({
+      where: { id: requestId },
+    });
+    if (!req || req.dormitoryId !== dormitoryId) {
+      throw new AppError('ไม่พบคำขอลงทะเบียนที่ระบุ', 404, 'REGISTRATION_NOT_FOUND');
+    }
+    if (req.status !== 'pending_owner_approval') {
+      throw new AppError('สามารถเปลี่ยนห้องพักได้เฉพาะคำขอที่รอการอนุมัติเท่านั้น', 400, 'CANNOT_REASSIGN_NON_PENDING_REQUEST');
+    }
+    const targetRoom = await prisma.room.findUnique({
+      where: { id: targetRoomId },
+    });
+    if (!targetRoom || targetRoom.dormitoryId !== dormitoryId) {
+      throw new AppError('ไม่พบห้องพักเป้าหมาย', 404, 'ROOM_NOT_FOUND');
+    }
+
+    const currentSnapshot = (req.acceptanceSnapshot as any) || {};
+    const updatedSnapshot = {
+      ...currentSnapshot,
+      roomId: targetRoom.id,
+      roomNumber: targetRoom.roomNumber,
+      floor: targetRoom.floor,
+      monthlyRent: targetRoom.monthlyRent,
+    };
+
+    const updated = await prisma.tenantRegistrationRequest.update({
+      where: { id: requestId },
+      data: {
+        requestedRoomId: targetRoom.id,
+        acceptanceSnapshot: updatedSnapshot,
+      },
+    });
+
+    return {
+      requestId: updated.id,
+      requestedRoomId: updated.requestedRoomId,
+      roomNumber: targetRoom.roomNumber,
     };
   }
 }

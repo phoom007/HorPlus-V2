@@ -1,6 +1,7 @@
 import {StrictMode} from 'react';
 import {createRoot} from 'react-dom/client';
 import { GoogleOAuthProvider } from '@react-oauth/google';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import App from './App.tsx';
 import './index.css';
 
@@ -20,8 +21,10 @@ window.fetch = async function (input, init) {
 
 createRoot(document.getElementById('root') as HTMLElement).render(
   <StrictMode>
-    <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>
-      <App />
-    </GoogleOAuthProvider>
+    <ErrorBoundary>
+      <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>
+        <App />
+      </GoogleOAuthProvider>
+    </ErrorBoundary>
   </StrictMode>,
 );

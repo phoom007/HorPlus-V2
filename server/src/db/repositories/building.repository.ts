@@ -221,6 +221,15 @@ export class PrismaBuildingRepository implements IBuildingRepository {
 
   public async create(dormitoryId: string, data: CreateBuildingData, tx?: any): Promise<BuildingEntity> {
     const client = this.getClient(tx);
+    let displayOrder = data.displayOrder;
+    if (displayOrder === undefined || displayOrder === null) {
+      const maxBld = await client.building.findFirst({
+        where: { dormitoryId, deletedAt: null },
+        orderBy: { displayOrder: 'desc' },
+        select: { displayOrder: true },
+      });
+      displayOrder = (maxBld?.displayOrder !== undefined && maxBld?.displayOrder !== null ? maxBld.displayOrder : -1) + 1;
+    }
     return client.building.create({
       data: {
         id: data.id,
@@ -230,7 +239,7 @@ export class PrismaBuildingRepository implements IBuildingRepository {
         floorCount: data.floorCount || 1,
         description: data.description || null,
         status: data.status || 'active',
-        displayOrder: data.displayOrder ?? 0,
+        displayOrder,
         numberingPattern: data.numberingPattern || null,
       },
     });

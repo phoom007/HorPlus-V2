@@ -110,6 +110,101 @@ export class MoveOutService {
       msg: `Tenant submitted move-out request for room ${roomId}`
     });
 
+    // 5. In-app staff notification for owner(s) and manager(s)
+    try {
+      const room = await prisma.room.findUnique({
+        where: { id: roomId },
+        select: { roomNumber: true },
+      });
+      const dorm = await prisma.dormitory.findUnique({
+        where: { id: dormitoryId },
+        select: { createdByUserId: true, name: true },
+      });
+      const tenant = await prisma.tenant.findUnique({
+        where: { id: tenantId },
+        select: { firstName: true, lastName: true, phone: true },
+      });
+      const tenantName = tenant ? `${tenant.firstName} ${tenant.lastName || ''}`.trim() : 'ผู้เช่า';
+      const formattedDate = intendedMoveOutDate.slice(0, 10);
+
+      const ownerMembers = await prisma.dormitoryMember.findMany({
+        where: {
+          dormitoryId,
+          status: 'active',
+          role: { code: { in: ['OWNER', 'MANAGER'] } },
+        },
+        select: { userId: true },
+      });
+
+      const targetUserIds = new Set<string>();
+      if (dorm?.createdByUserId) targetUserIds.add(dorm.createdByUserId);
+      for (const m of ownerMembers) {
+        if (m.userId) targetUserIds.add(m.userId);
+      }
+
+      for (const uid of targetUserIds) {
+        await prisma.staffNotification.create({
+          data: {
+            dormitoryId,
+            userId: uid,
+            roleCode: 'OWNER',
+            category: 'TENANT_MOVE_OUT',
+            title: `มีคำขอแจ้งย้ายออกใหม่ (ห้อง ${room?.roomNumber || 'ไม่ระบุ'})`,
+            message: `คุณ${tenantName} ได้ส่งคำขอแจ้งย้ายออกสำหรับห้อง ${room?.roomNumber || 'ไม่ระบุ'} กำหนดวันที่ ${formattedDate}`,
+            metadata: {
+              requestId: request.id,
+              roomId,
+              roomNumber: room?.roomNumber,
+              tenantId,
+              tenantName,
+              intendedMoveOutDate: formattedDate,
+              action: 'MOVE_OUT_REQUESTED',
+            },
+          },
+        }).catch((err) => {
+          logger.warn('Failed to create staff notification for move-out:', { userId: uid, error: err.message });
+        });
+      }
+
+      // LINE OA push notification to owner(s) if connected
+      const dormConfig = await prisma.dormitoryLineConfig.findUnique({
+        where: { dormitoryId },
+      });
+      if (dormConfig && dormConfig.notifyTenantRegister !== false) {
+        const ownerGrants = await prisma.dormitoryAccessGrant.findMany({
+          where: {
+            dormitoryId,
+            roleCode: { in: ['OWNER', 'MANAGER'] },
+            status: 'ACTIVE',
+          },
+          include: { lineFriend: true },
+        });
+
+        const { LineOaService, buildOwnerMoveOutRequestFlexMessage, getPublicAppOrigin } = await import('./line-oa.service.js');
+        const lineOaService = new LineOaService(prisma);
+        const flexMsg = buildOwnerMoveOutRequestFlexMessage(
+          dorm?.name || 'หอพัก',
+          tenantName,
+          room?.roomNumber || 'ไม่ระบุ',
+          formattedDate,
+          getPublicAppOrigin()
+        );
+
+        const { decryptText } = await import('../utils/crypto-encryption.js');
+        for (const og of ownerGrants) {
+          const friend = og.lineFriend;
+          if (friend && friend.lineUserIdEncrypted) {
+            const ownerLineUserId = decryptText(friend.lineUserIdEncrypted);
+            await lineOaService.pushOutcomeNotification(dormitoryId, ownerLineUserId, flexMsg).catch((err) => {
+              logger.warn('Failed to push move-out notification to owner:', { error: err.message });
+            });
+          }
+        }
+      }
+    } catch (notifyErr: any) {
+      logger.warn('Move-out notification error:', { error: notifyErr.message });
+    }
+
     return {
       request,
       message: 'ส่งคำขอแจ้งย้ายออกเรียบร้อยแล้ว ระบบจะดำเนินการย้ายออกอัตโนมัติเมื่อถึงวันกำหนด'
@@ -241,7 +336,64 @@ export class MoveOutService {
         }
       });
 
-      // 4. Update Move-Out Request to COMPLETED
+      // 4. Transition active contract to checked_out
+      const contractToClose = occupancy.contractId
+        ? await tx.contract.findUnique({ where: { id: occupancy.contractId } })
+        : await tx.contract.findFirst({
+            where: {
+              dormitoryId,
+              roomId: reqRecord.roomId,
+              tenantId: reqRecord.tenantId,
+              status: { in: ['active', 'expiring_soon', 'checking_out'] },
+              deletedAt: null,
+            },
+          });
+
+      if (contractToClose && ['active', 'expiring_soon', 'checking_out'].includes(contractToClose.status)) {
+        await tx.contract.update({
+          where: { id: contractToClose.id },
+          data: {
+            status: 'checked_out',
+            terminatedAt: new Date(),
+            terminationEffectiveDate: actualDate,
+            terminationReason: reqRecord.reason || 'ย้ายออกตามคำขอผู้เช่า',
+            updatedByUserId: reviewedByUserId,
+          },
+        });
+      }
+
+      // 5. Update tenant status to former if no other active occupancies exist
+      const otherActiveOccupancies = await tx.occupancy.count({
+        where: {
+          dormitoryId,
+          tenantId: reqRecord.tenantId,
+          id: { not: occupancy.id },
+          status: 'ACTIVE',
+        },
+      });
+      if (otherActiveOccupancies === 0) {
+        await tx.tenant.update({
+          where: { id: reqRecord.tenantId },
+          data: { status: 'former' },
+        });
+      }
+
+      // 6. In-app notice for tenant
+      const room = await tx.room.findUnique({
+        where: { id: reqRecord.roomId },
+        select: { roomNumber: true },
+      });
+      await tx.tenantNotice.create({
+        data: {
+          dormitoryId,
+          tenantId: reqRecord.tenantId,
+          title: 'การสิ้นสุดการเช่าพักอาศัยเสร็จสมบูรณ์',
+          message: `การสิ้นสุดการเช่าห้อง ${room?.roomNumber || ''} มีผลบังคับใช้เรียบร้อยแล้วเมื่อวันที่ ${actualEndedAt.slice(0, 10)}`,
+          type: 'MOVE_OUT_COMPLETED',
+        },
+      });
+
+      // 7. Update Move-Out Request to COMPLETED
       const updatedRequest = await tx.tenantMoveOutRequest.update({
         where: { id: reqRecord.id },
         data: {
@@ -347,6 +499,60 @@ export class MoveOutService {
           await tx.room.update({
             where: { id: reqRecord.roomId },
             data: { status: 'vacant', currentTenantId: null, currentContractId: null }
+          });
+
+          // Transition active contract to checked_out
+          const contractToClose = occupancy.contractId
+            ? await tx.contract.findUnique({ where: { id: occupancy.contractId } })
+            : await tx.contract.findFirst({
+                where: {
+                  dormitoryId: reqRecord.dormitoryId,
+                  roomId: reqRecord.roomId,
+                  tenantId: reqRecord.tenantId,
+                  status: { in: ['active', 'expiring_soon', 'checking_out'] },
+                  deletedAt: null,
+                },
+              });
+
+          if (contractToClose && ['active', 'expiring_soon', 'checking_out'].includes(contractToClose.status)) {
+            await tx.contract.update({
+              where: { id: contractToClose.id },
+              data: {
+                status: 'checked_out',
+                terminatedAt: new Date(),
+                terminationEffectiveDate: actualDate,
+                terminationReason: reqRecord.reason || 'ย้ายออกตามกำหนด (ระบบอัตโนมัติ)',
+              },
+            });
+          }
+
+          const otherActiveOccupancies = await tx.occupancy.count({
+            where: {
+              dormitoryId: reqRecord.dormitoryId,
+              tenantId: reqRecord.tenantId,
+              id: { not: occupancy.id },
+              status: 'ACTIVE',
+            },
+          });
+          if (otherActiveOccupancies === 0) {
+            await tx.tenant.update({
+              where: { id: reqRecord.tenantId },
+              data: { status: 'former' },
+            });
+          }
+
+          const room = await tx.room.findUnique({
+            where: { id: reqRecord.roomId },
+            select: { roomNumber: true },
+          });
+          await tx.tenantNotice.create({
+            data: {
+              dormitoryId: reqRecord.dormitoryId,
+              tenantId: reqRecord.tenantId,
+              title: 'การสิ้นสุดการเช่าพักอาศัยเสร็จสมบูรณ์',
+              message: `การสิ้นสุดการเช่าห้อง ${room?.roomNumber || ''} มีผลบังคับใช้เรียบร้อยแล้ว`,
+              type: 'MOVE_OUT_COMPLETED',
+            },
           });
 
           const updatedRequest = await tx.tenantMoveOutRequest.update({

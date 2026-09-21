@@ -75,6 +75,18 @@ export interface LinePlatformAdapter {
   setWebhookEndpoint(endpointUrl: string, accessToken: string): Promise<{ success: boolean }>;
   testWebhookEndpoint(endpointUrl: string, accessToken: string): Promise<LineWebhookTestResult>;
   getWebhookEndpoint(accessToken: string): Promise<LineWebhookEndpointInfo | null>;
+  getQuota(accessToken: string): Promise<{ type: 'limited' | 'none'; value?: number } | null>;
+  getQuotaConsumption(accessToken: string): Promise<{ totalUsage: number } | null>;
+  displayLoadingAnimation(chatId: string, accessToken: string, loadingSeconds?: number): Promise<boolean>;
+  getFollowers(accessToken: string): Promise<{ userIds: string[]; next?: string } | null>;
+
+  createRichMenu(richMenu: any, accessToken: string): Promise<string | null>;
+  uploadRichMenuImage(richMenuId: string, imageBuffer: Buffer, contentType: string, accessToken: string): Promise<boolean>;
+  setDefaultRichMenu(richMenuId: string, accessToken: string): Promise<boolean>;
+  linkRichMenuToUser(lineUserId: string, richMenuId: string, accessToken: string): Promise<boolean>;
+  unlinkRichMenuFromUser(lineUserId: string, accessToken: string): Promise<boolean>;
+  getRichMenuList(accessToken: string): Promise<any[]>;
+  deleteRichMenu(richMenuId: string, accessToken: string): Promise<boolean>;
 }
 
 /**
@@ -348,6 +360,226 @@ export class HttpLinePlatformAdapter implements LinePlatformAdapter {
       return null;
     }
   }
+
+  async getQuota(accessToken: string): Promise<{ type: 'limited' | 'none'; value?: number } | null> {
+    try {
+      const res = await fetch(`${this.baseUrl}/v2/bot/message/quota`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+        },
+      });
+      if (!res.ok) {
+        console.warn('LINE getQuota: non-OK status', { status: res.status });
+        return null;
+      }
+      const body = await res.json() as any;
+      return {
+        type: body.type || 'none',
+        value: body.value !== undefined ? Number(body.value) : undefined,
+      };
+    } catch (err: any) {
+      console.warn('LINE getQuota: network error', { errorCode: err.code || 'UNKNOWN' });
+      return null;
+    }
+  }
+
+  async getQuotaConsumption(accessToken: string): Promise<{ totalUsage: number } | null> {
+    try {
+      const res = await fetch(`${this.baseUrl}/v2/bot/message/quota/consumption`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+        },
+      });
+      if (!res.ok) {
+        console.warn('LINE getQuotaConsumption: non-OK status', { status: res.status });
+        return null;
+      }
+      const body = await res.json() as any;
+      return {
+        totalUsage: Number(body.totalUsage || 0),
+      };
+    } catch (err: any) {
+      console.warn('LINE getQuotaConsumption: network error', { errorCode: err.code || 'UNKNOWN' });
+      return null;
+    }
+  }
+
+  async displayLoadingAnimation(chatId: string, accessToken: string, loadingSeconds: number = 5): Promise<boolean> {
+    try {
+      const res = await fetch(`${this.baseUrl}/v2/bot/chat/loading/start`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({
+          chatId,
+          loadingSeconds: Math.min(Math.max(1, loadingSeconds), 60),
+        }),
+      });
+      return res.ok || res.status === 202;
+    } catch (err: any) {
+      console.warn('LINE displayLoadingAnimation: network error', { errorCode: err.code || 'UNKNOWN' });
+      return false;
+    }
+  }
+
+  async getFollowers(accessToken: string): Promise<{ userIds: string[]; next?: string } | null> {
+    try {
+      const res = await fetch(`${this.baseUrl}/v2/bot/followers/ids?limit=10`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+        },
+      });
+      if (!res.ok) {
+        console.warn('LINE getFollowers: non-OK status', { status: res.status });
+        return null;
+      }
+      const body = await res.json() as any;
+      return {
+        userIds: Array.isArray(body.userIds) ? body.userIds : [],
+        next: body.next,
+      };
+    } catch (err: any) {
+      console.warn('LINE getFollowers: network error', { errorCode: err.code || 'UNKNOWN' });
+      return null;
+    }
+  }
+
+  async createRichMenu(richMenu: any, accessToken: string): Promise<string | null> {
+    try {
+      const res = await fetch(`${this.baseUrl}/v2/bot/richmenu`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify(richMenu),
+      });
+      if (!res.ok) {
+        console.warn('LINE createRichMenu: non-OK status', { status: res.status });
+        return null;
+      }
+      const body = await res.json() as any;
+      return body.richMenuId || null;
+    } catch (err: any) {
+      console.warn('LINE createRichMenu: network error', { errorCode: err.code || 'UNKNOWN' });
+      return null;
+    }
+  }
+
+  async uploadRichMenuImage(
+    richMenuId: string,
+    imageBuffer: Buffer,
+    contentType: string,
+    accessToken: string
+  ): Promise<boolean> {
+    try {
+      const uploadBaseUrl = this.baseUrl.includes('api.line.me') ? 'https://api-data.line.me' : this.baseUrl;
+      const res = await fetch(`${uploadBaseUrl}/v2/bot/richmenu/${richMenuId}/content`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': contentType,
+          'Authorization': `Bearer ${accessToken}`,
+        },
+        body: imageBuffer,
+      });
+      return res.ok;
+    } catch (err: any) {
+      console.warn('LINE uploadRichMenuImage: network error', { errorCode: err.code || 'UNKNOWN' });
+      return false;
+    }
+  }
+
+  async setDefaultRichMenu(richMenuId: string, accessToken: string): Promise<boolean> {
+    try {
+      const res = await fetch(`${this.baseUrl}/v2/bot/user/all/richmenu/${richMenuId}`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+        },
+      });
+      return res.ok;
+    } catch (err: any) {
+      console.warn('LINE setDefaultRichMenu: network error', { errorCode: err.code || 'UNKNOWN' });
+      return false;
+    }
+  }
+
+  async linkRichMenuToUser(lineUserId: string, richMenuId: string, accessToken: string): Promise<boolean> {
+    try {
+      const res = await fetch(`${this.baseUrl}/v2/bot/user/${lineUserId}/richmenu/${richMenuId}`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+        },
+      });
+      if (!res.ok) {
+        const errorText = await res.text().catch(() => '');
+        console.warn('LINE linkRichMenuToUser failed:', { status: res.status, statusText: res.statusText, errorText, lineUserId, richMenuId });
+        return false;
+      }
+      return true;
+    } catch (err: any) {
+      console.warn('LINE linkRichMenuToUser: network error', { errorCode: err.code || 'UNKNOWN', message: err.message });
+      return false;
+    }
+  }
+
+  async unlinkRichMenuFromUser(lineUserId: string, accessToken: string): Promise<boolean> {
+    try {
+      const res = await fetch(`${this.baseUrl}/v2/bot/user/${lineUserId}/richmenu`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+        },
+      });
+      if (!res.ok) {
+        const errorText = await res.text().catch(() => '');
+        console.warn('LINE unlinkRichMenuFromUser failed:', { status: res.status, statusText: res.statusText, errorText, lineUserId });
+        return false;
+      }
+      return true;
+    } catch (err: any) {
+      console.warn('LINE unlinkRichMenuFromUser: network error', { errorCode: err.code || 'UNKNOWN', message: err.message });
+      return false;
+    }
+  }
+
+  async getRichMenuList(accessToken: string): Promise<any[]> {
+    try {
+      const res = await fetch(`${this.baseUrl}/v2/bot/richmenu/list`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+        },
+      });
+      if (!res.ok) return [];
+      const body = await res.json() as any;
+      return body.richmenus || [];
+    } catch (err: any) {
+      console.warn('LINE getRichMenuList: network error', { errorCode: err.code || 'UNKNOWN' });
+      return [];
+    }
+  }
+
+  async deleteRichMenu(richMenuId: string, accessToken: string): Promise<boolean> {
+    try {
+      const res = await fetch(`${this.baseUrl}/v2/bot/richmenu/${richMenuId}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+        },
+      });
+      return res.ok;
+    } catch (err: any) {
+      console.warn('LINE deleteRichMenu: network error', { errorCode: err.code || 'UNKNOWN' });
+      return false;
+    }
+  }
 }
 
 /**
@@ -503,5 +735,75 @@ export class MockLinePlatformAdapter implements LinePlatformAdapter {
       httpStatus: 200,
       requestId: `req_mock_${Date.now()}`,
     };
+  }
+
+  public mockQuota: { type: 'limited' | 'none'; value?: number } = { type: 'limited', value: 500 };
+  public mockQuotaConsumption: { totalUsage: number } = { totalUsage: 0 };
+  public loadingAnimationCalls: Array<{ chatId: string; loadingSeconds: number }> = [];
+
+  async getQuota(_accessToken: string): Promise<{ type: 'limited' | 'none'; value?: number } | null> {
+    return this.mockQuota;
+  }
+
+  async getQuotaConsumption(_accessToken: string): Promise<{ totalUsage: number } | null> {
+    return this.mockQuotaConsumption;
+  }
+
+  async displayLoadingAnimation(chatId: string, _accessToken: string, loadingSeconds: number = 5): Promise<boolean> {
+    this.loadingAnimationCalls.push({ chatId, loadingSeconds });
+    return true;
+  }
+
+  public mockFollowers: string[] = ['U_MOCK_FIRST_FOLLOWER'];
+  async getFollowers(_accessToken: string): Promise<{ userIds: string[]; next?: string } | null> {
+    return { userIds: this.mockFollowers };
+  }
+
+  public mockRichMenus: Map<string, any> = new Map();
+  public defaultRichMenuId: string | null = null;
+  public userRichMenuLinks: Map<string, string> = new Map();
+
+  async createRichMenu(richMenu: any, _accessToken: string): Promise<string | null> {
+    const id = `richmenu_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    this.mockRichMenus.set(id, richMenu);
+    return id;
+  }
+
+  async uploadRichMenuImage(_richMenuId: string, _imageBuffer: Buffer, _contentType: string, _accessToken: string): Promise<boolean> {
+    return true;
+  }
+
+  async setDefaultRichMenu(richMenuId: string, _accessToken: string): Promise<boolean> {
+    this.defaultRichMenuId = richMenuId;
+    return true;
+  }
+
+  async linkRichMenuToUser(lineUserId: string, richMenuId: string, _accessToken: string): Promise<boolean> {
+    this.userRichMenuLinks.set(lineUserId, richMenuId);
+    return true;
+  }
+
+  async unlinkRichMenuFromUser(lineUserId: string, _accessToken: string): Promise<boolean> {
+    this.userRichMenuLinks.delete(lineUserId);
+    return true;
+  }
+
+  async getRichMenuList(_accessToken: string): Promise<any[]> {
+    const list: any[] = [];
+    for (const [richMenuId, menu] of this.mockRichMenus.entries()) {
+      list.push({ richMenuId, ...menu });
+    }
+    return list;
+  }
+
+  async deleteRichMenu(richMenuId: string, _accessToken: string): Promise<boolean> {
+    this.mockRichMenus.delete(richMenuId);
+    if (this.defaultRichMenuId === richMenuId) {
+      this.defaultRichMenuId = null;
+    }
+    for (const [userId, mId] of this.userRichMenuLinks.entries()) {
+      if (mId === richMenuId) this.userRichMenuLinks.delete(userId);
+    }
+    return true;
   }
 }

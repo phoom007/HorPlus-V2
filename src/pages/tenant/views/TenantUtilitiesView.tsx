@@ -22,6 +22,7 @@ export interface TenantUtilitiesViewProps {
   tenantRoom: any;
   utilitiesData: any;
   contractStartDate?: string;
+  hasRoom?: boolean;
   onBack: () => void;
 }
 
@@ -29,8 +30,32 @@ export const TenantUtilitiesView: React.FC<TenantUtilitiesViewProps> = ({
   tenantRoom,
   utilitiesData,
   contractStartDate,
+  hasRoom = Boolean(tenantRoom),
   onBack,
 }) => {
+  if (!tenantRoom || !hasRoom) {
+    return (
+      <div className="flex flex-col h-full bg-slate-50">
+        <div className="flex items-center justify-between px-4 py-3 bg-white border-b border-gray-200/50 sticky top-0 z-30 shrink-0">
+          <button
+            onClick={onBack}
+            className="p-1 hover:bg-slate-100 text-slate-700 rounded-xl transition-all cursor-pointer"
+            aria-label="ย้อนกลับ"
+          >
+            <ChevronLeft className="w-5 h-5 stroke-[2.5]" />
+          </button>
+          <h3 className="text-xs font-black text-slate-900 text-center flex-1">ค่าน้ำ / ค่าไฟ</h3>
+          <div className="w-7 flex justify-end shrink-0">
+            <Zap className="w-5 h-5 text-amber-500" />
+          </div>
+        </div>
+
+        <div className="py-24 text-center flex-1 flex items-center justify-center">
+          <p className="text-slate-400 font-semibold text-xs">ยังไม่มีข้อมูลการใช้น้ำและไฟฟ้า</p>
+        </div>
+      </div>
+    );
+  }
   // PO Requirement Q6=A: Strictly filter readings on or after current tenant's contractStartDate
   const filteredReadings = (utilitiesData?.readings || []).filter((r: any) => {
     if (!contractStartDate) return true;

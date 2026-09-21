@@ -198,6 +198,19 @@ describe('Contract PDF Evidence Gate — Route-Level & Immutability Verification
       },
     });
 
+    await prisma.billingCycle.create({
+      data: {
+        dormitoryId: dorm.id,
+        cycleCode: '2026-01',
+        name: 'มกราคม 2026',
+        periodStart: new Date('2026-01-01'),
+        periodEnd: new Date('2026-01-31'),
+        billingDate: new Date('2026-01-25'),
+        dueDate: new Date('2026-02-05'),
+        status: 'published',
+      },
+    });
+
     const role = await prisma.role.create({
       data: {
         dormitoryId: dorm.id,
@@ -233,6 +246,9 @@ describe('Contract PDF Evidence Gate — Route-Level & Immutability Verification
         normalizedRoomNumber: roomNum.toLowerCase(),
         roomType: 'STANDARD',
         monthlyRent: 4321.00,
+        monthlyDeposit: 0,
+        termDeposit: 0,
+        dailyDeposit: 0,
       },
     });
 
@@ -332,6 +348,9 @@ describe('Contract PDF Evidence Gate — Route-Level & Immutability Verification
     expect(textAfter).not.toContain('888.00');
 
     // Clean up test records
+    await prisma.billItem.deleteMany({ where: { bill: { dormitoryId: dorm.id } } });
+    await prisma.bill.deleteMany({ where: { dormitoryId: dorm.id } });
+    await prisma.billingCycle.deleteMany({ where: { dormitoryId: dorm.id } });
     await prisma.contractSnapshot.deleteMany({ where: { contractId: contract.id } });
     await prisma.contract.delete({ where: { id: contract.id } });
     await prisma.tenant.delete({ where: { id: tenant.id } });
@@ -386,6 +405,19 @@ describe('Contract PDF Evidence Gate — Route-Level & Immutability Verification
       },
     });
 
+    await prisma.billingCycle.create({
+      data: {
+        dormitoryId: dorm.id,
+        cycleCode: '2025-01',
+        name: 'มกราคม 2025',
+        periodStart: new Date('2025-01-01'),
+        periodEnd: new Date('2025-01-31'),
+        billingDate: new Date('2025-01-25'),
+        dueDate: new Date('2025-02-05'),
+        status: 'published',
+      },
+    });
+
     const role = await prisma.role.create({
       data: {
         dormitoryId: dorm.id,
@@ -421,6 +453,9 @@ describe('Contract PDF Evidence Gate — Route-Level & Immutability Verification
         normalizedRoomNumber: roomNum.toLowerCase(),
         roomType: 'STANDARD',
         monthlyRent: 3500.00,
+        monthlyDeposit: 0,
+        termDeposit: 0,
+        dailyDeposit: 0,
       },
     });
 
@@ -480,6 +515,9 @@ describe('Contract PDF Evidence Gate — Route-Level & Immutability Verification
     expect(text).toContain('ไม่ระบุ');
 
     // Clean up test records
+    await prisma.billItem.deleteMany({ where: { bill: { dormitoryId: dorm.id } } });
+    await prisma.bill.deleteMany({ where: { dormitoryId: dorm.id } });
+    await prisma.billingCycle.deleteMany({ where: { dormitoryId: dorm.id } });
     await prisma.contractSnapshot.deleteMany({ where: { contractId: contract.id } });
     await prisma.contract.delete({ where: { id: contract.id } });
     await prisma.tenant.delete({ where: { id: tenant.id } });
@@ -567,6 +605,9 @@ describe('Contract PDF Evidence Gate — Route-Level & Immutability Verification
         normalizedRoomNumber: roomNum.toLowerCase(),
         roomType: 'STANDARD',
         monthlyRent: 5000.00,
+        monthlyDeposit: 0,
+        termDeposit: 0,
+        dailyDeposit: 0,
       },
     });
 
@@ -633,5 +674,57 @@ describe('Contract PDF Evidence Gate — Route-Level & Immutability Verification
     await prisma.dormitory.delete({ where: { id: dorm.id } });
     await prisma.session.deleteMany({ where: { userId: user.id } });
     await prisma.user.delete({ where: { id: user.id } });
+  });
+
+  it('CRIT-R30-PDF-HONORIFIC-01: generateContractHtml does not prepend duplicate "คุณ" when title prefix is present', () => {
+    const htmlWithDoctor = pdfService.generateContractHtml({
+      contractNumber: 'CTR-001',
+      dormitoryName: 'หอพักสุขใจ',
+      ownerName: 'สมศักดิ์ มั่งมี',
+      tenantName: 'ดร. สมชาย ใจดี',
+      roomNumber: '101',
+      rentBillingType: 'monthly',
+      startDate: '2026-09-01',
+      endDate: '2027-08-31',
+      rentAmount: '4500',
+      depositAmount: '5000',
+    });
+
+    expect(htmlWithDoctor).toContain('<strong>ดร. สมชาย ใจดี</strong>');
+    expect(htmlWithDoctor).not.toContain('คุณดร. สมชาย ใจดี');
+    expect(htmlWithDoctor).toContain('(ดร. สมชาย ใจดี)');
+    expect(htmlWithDoctor).not.toContain('(คุณดร. สมชาย ใจดี)');
+
+    const htmlWithMr = pdfService.generateContractHtml({
+      contractNumber: 'CTR-002',
+      dormitoryName: 'หอพักสุขใจ',
+      ownerName: 'สมศักดิ์ มั่งมี',
+      tenantName: 'นาย สมหญิง รักดี',
+      roomNumber: '102',
+      rentBillingType: 'monthly',
+      startDate: '2026-09-01',
+      endDate: '2027-08-31',
+      rentAmount: '4500',
+      depositAmount: '5000',
+    });
+
+    expect(htmlWithMr).toContain('<strong>นาย สมหญิง รักดี</strong>');
+    expect(htmlWithMr).not.toContain('คุณนาย สมหญิง รักดี');
+
+    const htmlWithoutTitle = pdfService.generateContractHtml({
+      contractNumber: 'CTR-003',
+      dormitoryName: 'หอพักสุขใจ',
+      ownerName: 'สมศักดิ์ มั่งมี',
+      tenantName: 'สมศรี งามเลิศ',
+      roomNumber: '103',
+      rentBillingType: 'monthly',
+      startDate: '2026-09-01',
+      endDate: '2027-08-31',
+      rentAmount: '4500',
+      depositAmount: '5000',
+    });
+
+    expect(htmlWithoutTitle).toContain('<strong>คุณสมศรี งามเลิศ</strong>');
+    expect(htmlWithoutTitle).toContain('(คุณสมศรี งามเลิศ)');
   });
 });

@@ -10,9 +10,13 @@
   font-family: 'Sarabun', 'Prompt', sans-serif;
 }
 
-/* Global brand typography: Ensure Prompt is applied to root, body, and all form controls */
+/* Global brand typography & overscroll containment to prevent LINE pull-to-close */
 html, body, #root {
   font-family: "Prompt", var(--font-sans), sans-serif;
+  overscroll-behavior: none;
+  overscroll-behavior-y: none;
+  overflow-x: hidden;
+  height: 100%;
 }
 
 input, textarea, select, button, label {

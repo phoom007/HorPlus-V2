@@ -51,6 +51,7 @@ export function mapRegistrationBuildingForFinalize(
     depositAmount: monthlyDep,
     securityDeposit: monthlyDep,
     maximumOccupants: Number(b.rentRates?.maxOccupants) || 2,
+    displayOrder: idx,
   };
 }
 
@@ -300,6 +301,7 @@ export function getRegistrationInitialFormData() {
     buildings: [
       {
         id: 'b-1',
+        creationOrder: 1,
         name: '',
         totalFloors: 1 as number | string,
         roomsPerFloor: 0 as number | string,
@@ -407,12 +409,18 @@ export function mapRegistrationFormDataToFinalizePayload(params: {
     coinToApply = 0,
   } = params;
 
-  const mappedBuildings = formData.buildings.map((b: any, idx: number) =>
+  const sortedBuildingsForFinalize = [...formData.buildings].sort((a: any, b: any) => {
+    const orderA = typeof a.creationOrder === 'number' ? a.creationOrder : 0;
+    const orderB = typeof b.creationOrder === 'number' ? b.creationOrder : 0;
+    return orderA - orderB;
+  });
+
+  const mappedBuildings = sortedBuildingsForFinalize.map((b: any, idx: number) =>
     mapRegistrationBuildingForFinalize(b, idx, formData.deposits?.securityDeposit)
   );
 
   const mappedRooms: any[] = [];
-  formData.buildings.forEach((b: any) => {
+  sortedBuildingsForFinalize.forEach((b: any) => {
     const roomNumbers = generateBuildingRoomNumbers(b);
     const rentRates = b.rentRates || {};
     const termDep = resolveFirstDefinedNumber(b.termDeposit, b.securityDeposit, formData.deposits?.securityDeposit);
@@ -1045,8 +1053,12 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
       });
       const botDisplayName = lineRes?.data?.botDisplayName || lineRes?.botDisplayName || '';
       const botPictureUrl = lineRes?.data?.botPictureUrl || lineRes?.botPictureUrl || '';
-      const lineOaId = lineRes?.data?.lineOaId || lineRes?.lineOaId || '';
-      const webhookUrl = lineRes?.data?.webhookUrl || lineRes?.config?.webhookUrl || lineRes?.webhookUrl || `${window.location.origin}/api/v1/line/webhook/${provDormId}`;
+      const rawWebhookUrl = lineRes?.data?.webhookUrl || lineRes?.config?.webhookUrl || lineRes?.webhookUrl;
+      const currentOrigin = typeof window !== 'undefined' ? window.location.origin : '';
+      let webhookUrl = rawWebhookUrl || (currentOrigin ? `${currentOrigin}/api/v1/line/webhook/${provDormId}` : '');
+      if (webhookUrl && currentOrigin && (currentOrigin.includes('.trycloudflare.com') || currentOrigin.includes('ngrok'))) {
+        webhookUrl = `${currentOrigin}${webhookUrl.replace(/^https?:\/\/[^/]+/, '')}`;
+      }
 
       setFormData(prev => ({
         ...prev,
@@ -1102,8 +1114,11 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
   };
 
   const handleAddBuilding = () => {
+    const existingOrders = formData.buildings.map((b: any) => typeof b.creationOrder === 'number' ? b.creationOrder : 0);
+    const nextOrder = (existingOrders.length > 0 ? Math.max(...existingOrders) : 0) + 1;
     const newBuilding = {
       id: `b-${Date.now()}`,
+      creationOrder: nextOrder,
       name: '',
       totalFloors: 1,
       roomsPerFloor: 0,

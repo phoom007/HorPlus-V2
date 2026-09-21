@@ -86,6 +86,7 @@ export const TenantBottomSheet: React.FC<TenantBottomSheetProps> = ({
     const currentY = e.touches[0].clientY;
     const deltaY = currentY - startYRef.current;
     if (deltaY > 0) {
+      if (e.cancelable) e.preventDefault();
       setCurrentTranslateY(deltaY);
     }
   };
@@ -118,6 +119,7 @@ export const TenantBottomSheet: React.FC<TenantBottomSheetProps> = ({
     const currentY = e.touches[0].clientY;
     const deltaY = currentY - startYRef.current;
     if (deltaY > 0) {
+      if (e.cancelable) e.preventDefault();
       setCurrentTranslateY(deltaY);
     }
   };

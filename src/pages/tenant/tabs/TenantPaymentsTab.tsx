@@ -76,6 +76,7 @@ export const TenantPaymentsTab: React.FC<TenantPaymentsTabProps> = ({
   buildingName,
   roomNumber,
   tenantBills,
+  hasRoom = Boolean(roomNumber) || (tenantBills && tenantBills.length > 0),
   onOpenInvoice,
   onOpenPayment,
   onBack,
@@ -86,6 +87,34 @@ export const TenantPaymentsTab: React.FC<TenantPaymentsTabProps> = ({
   const paidBills = tenantBills.filter(
     (b) => ['paid', 'PAID', 'settled', 'SETTLED'].includes(b.status)
   );
+
+  if (!hasRoom) {
+    return (
+      <div className="pb-20 animate-in fade-in duration-200 flex flex-col h-full bg-slate-50">
+        <div className="flex items-center justify-between px-4 py-3 bg-white border-b border-gray-200/50 sticky top-0 z-30 shrink-0">
+          {onBack ? (
+            <button
+              onClick={onBack}
+              className="p-1 hover:bg-slate-100 text-slate-700 rounded-xl transition-all cursor-pointer"
+              aria-label="ย้อนกลับ"
+            >
+              <ChevronLeft className="w-5 h-5 stroke-[2.5]" />
+            </button>
+          ) : (
+            <div className="w-7" />
+          )}
+          <h3 className="text-xs font-black text-slate-900 text-center flex-1">บิลและการชำระเงิน</h3>
+          <div className="w-7 flex justify-end shrink-0">
+            <FileText className="w-5 h-5 text-indigo-500" />
+          </div>
+        </div>
+
+        <div className="py-24 text-center flex-1 flex items-center justify-center">
+          <p className="text-slate-400 font-semibold text-xs">ยังไม่มีบิลค่าน้ำค่าไฟหรือค่าเช่าให้ตรวจสอบ</p>
+        </div>
+      </div>
+    );
+  }
 
   const renderBillCard = (b: Bill) => {
     const paymentsList = b.payments || (b as any).Payment || [];
@@ -99,102 +128,92 @@ export const TenantPaymentsTab: React.FC<TenantPaymentsTabProps> = ({
     return (
       <div
         key={b.id}
-        className="p-4 bg-white border border-slate-100 rounded-2xl space-y-3 shadow-2xs"
+        data-testid={`bill-card-${b.id}`}
+        className="bg-white border border-slate-100 rounded-2xl p-4 shadow-3xs hover:border-indigo-200 transition-all space-y-3"
       >
-        <div className="flex justify-between items-start gap-3">
+        <div className="flex items-start justify-between">
           <div>
-            <h5 className="font-black text-slate-800 text-xs">
-              {billKindTitle} (ยอดรวม {formatBaht(b.totalAmount)})
-            </h5>
-            <p className="text-[9px] text-slate-400 mt-0.5">
-              เลขที่: {b.billNumber || b.id.slice(0, 8)} • รอบประจำเดือน {formatThaiCycle(b.cycleId || (b as any).billingCycleId || b.billNumber, (b as any).billingDate || b.createdAt)}
-            </p>
-            <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px]">
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-bold text-slate-400">
+                {b.invoiceNumber || (b as any).billNumber || `BILL-${b.id.slice(0, 6)}`}
+              </span>
               {renderBillStatusBadge(b.status)}
-              {formattedPaidTime && (
-                <span className="text-slate-500 font-bold flex items-center gap-1 text-[9px]">
-                  <span>•</span>
-                  <span>ชำระเมื่อ {formattedPaidTime}</span>
-                </span>
-              )}
             </div>
+            <h5 className="font-extrabold text-sm text-slate-800 mt-1">
+              {billKindTitle}
+            </h5>
+            <p className="text-[10px] text-slate-500 font-medium">
+              รอบบิล: {formatThaiCycle(b.cycleMonth, b.cycleYear)}
+            </p>
           </div>
 
-          <div className="shrink-0 flex flex-col items-end gap-2">
-            {isPaid && approvedPay?.receipt ? (
-              <div className="flex flex-col items-end gap-1.5">
-                <button
-                  type="button"
-                  onClick={() =>
-                    window.open(`/api/v1/receipts/${approvedPay.receipt.id}/html`, '_blank')
-                  }
-                  className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-[9px] rounded-lg transition-colors cursor-pointer flex items-center gap-1 shadow-xs"
-                >
-                  <FileText className="w-3.5 h-3.5" />
-                  <span>ดูใบเสร็จ ({approvedPay.receipt.receiptNumber})</span>
-                </button>
-                <button
-                  type="button"
-                  data-testid={`btn-bill-detail-${b.id}`}
-                  onClick={() => onOpenInvoice(b.id)}
-                  className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold text-[9px] rounded-lg transition-colors cursor-pointer flex items-center gap-1"
-                >
-                  <FileText className="w-3 h-3" />
-                  <span>รายละเอียด</span>
-                </button>
-              </div>
-            ) : (
+          <div className="text-right">
+            <span className="text-[10px] font-bold text-slate-400 block">ยอดรวม</span>
+            <span className="font-black text-sm text-indigo-700">
+              {formatBaht(b.totalAmount)}
+            </span>
+          </div>
+        </div>
+
+        {/* Due Date or Paid Date */}
+        <div className="flex items-center justify-between text-[10px] pt-2 border-t border-slate-50">
+          {isPaid && formattedPaidTime ? (
+            <span className="text-emerald-700 font-bold">
+              ชำระเมื่อ {formattedPaidTime}
+            </span>
+          ) : (
+            <span className="text-slate-500 font-medium">
+              กำหนดชำระ:{' '}
+              <strong className="text-slate-700 font-extrabold">
+                {b.dueDate ? new Date(b.dueDate).toLocaleDateString('th-TH') : '-'}
+              </strong>
+            </span>
+          )}
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              data-testid={`btn-view-invoice-${b.id}`}
+              onClick={() => onOpenInvoice(b.id)}
+              className="text-[10px] font-bold text-slate-600 hover:text-indigo-600 underline cursor-pointer"
+            >
+              ดูใบแจ้งหนี้
+            </button>
+
+            {!isPaid && (
               <button
                 type="button"
-                data-testid={`btn-bill-detail-${b.id}`}
-                onClick={() => onOpenInvoice(b.id)}
-                className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold text-[9px] rounded-lg transition-colors cursor-pointer"
+                data-testid={`btn-pay-bill-${b.id}`}
+                onClick={onOpenPayment}
+                className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-[10px] rounded-lg shadow-3xs cursor-pointer transition-all active:scale-95"
               >
-                <FileText className="w-3.5 h-3.5 inline mr-1" />
-                รายละเอียด
+                ชำระเงิน
               </button>
             )}
           </div>
         </div>
-
-        {rejectedPay && !isPaid && (
-          <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl space-y-1.5 text-[9px]">
-            <div className="flex items-center justify-between text-rose-800 font-bold">
-              <span className="flex items-center gap-1">
-                <AlertCircle className="w-3.5 h-3.5 text-rose-600" />
-                ถูกปฏิเสธสลิป: {rejectedPay.rejectedReason || 'สลิปไม่ชัดเจน กรุณาแนบภาพใหม่'}
-              </span>
-            </div>
-            <div className="flex justify-end pt-1">
-              <button
-                type="button"
-                onClick={onOpenPayment}
-                className="px-3 py-1 bg-rose-600 hover:bg-rose-700 text-white font-black text-[9px] rounded-lg transition-colors cursor-pointer shadow-2xs"
-              >
-                แนบสลิปใหม่ (Resubmit)
-              </button>
-            </div>
-          </div>
-        )}
       </div>
     );
   };
 
   return (
     <div className="pb-20 animate-in fade-in duration-200">
-      {/* Subview Header */}
+      {/* Top Header */}
       <div className="flex items-center justify-between px-4 py-3 bg-white border-b border-gray-200/50 sticky top-0 z-30 shrink-0">
-        <button
-          type="button"
-          onClick={onBack}
-          className="p-1 hover:bg-slate-100 text-slate-700 rounded-xl transition-all cursor-pointer"
-          aria-label="ย้อนกลับ"
-        >
-          <ChevronLeft className="w-5 h-5 stroke-[2.5]" />
-        </button>
+        {onBack ? (
+          <button
+            onClick={onBack}
+            className="p-1 hover:bg-slate-100 text-slate-700 rounded-xl transition-all cursor-pointer"
+            aria-label="ย้อนกลับ"
+          >
+            <ChevronLeft className="w-5 h-5 stroke-[2.5]" />
+          </button>
+        ) : (
+          <div className="w-7" />
+        )}
         <h3 className="text-xs font-black text-slate-900 text-center flex-1">บิลและการชำระเงิน</h3>
         <div className="w-7 flex justify-end shrink-0">
-          <FileText className="w-5 h-5 text-slate-400" />
+          <FileText className="w-5 h-5 text-indigo-500" />
         </div>
       </div>
 
@@ -212,11 +231,9 @@ export const TenantPaymentsTab: React.FC<TenantPaymentsTabProps> = ({
             {unpaidBills.map((b) => renderBillCard(b))}
 
             {unpaidBills.length === 0 && (
-              <div className="p-4 bg-emerald-50/50 border border-emerald-100 rounded-2xl text-center">
-                <p className="text-[11px] font-bold text-emerald-700">
-                  ✓ ไม่มีรายการบิลค้างชำระในขณะนี้
-                </p>
-              </div>
+              <p className="text-center py-6 text-slate-400 font-semibold text-xs bg-slate-50/60 rounded-2xl border border-dashed border-slate-200">
+                ยังไม่มีรายการบิลค้างชำระ
+              </p>
             )}
           </div>
         </div>
@@ -240,12 +257,6 @@ export const TenantPaymentsTab: React.FC<TenantPaymentsTabProps> = ({
             )}
           </div>
         </div>
-
-        {tenantBills.length === 0 && (
-          <p className="text-center py-12 text-slate-400 font-semibold text-xs">
-            ยังไม่มีบิลค่าน้ำไฟหรือค่าเช่าออกให้ตรวจสอบ
-          </p>
-        )}
       </div>
     </div>
   );
