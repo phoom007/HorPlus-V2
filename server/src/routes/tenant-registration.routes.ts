@@ -384,16 +384,30 @@ export function createTenantRegistrationRouter(
 
     const prisma = getPrismaClient();
     if (authAccessGrantId) {
-      const grant = await prisma.dormitoryAccessGrant.findUnique({
-        where: { id: authAccessGrantId },
-        include: { lineFriend: true },
-      });
-      if (grant) {
-        return {
-          lineFriendId: grant.lineFriendId || undefined,
-          lineDisplayName: grant.lineFriend?.displayName || undefined,
-          dormitoryId: grant.dormitoryId || undefined,
-        };
+      let targetDormId = (req.body?.dormitoryId as string) || (req.headers['x-dormitory-id'] as string) || req.cookies?.['active_dormitory_id'];
+      if (!targetDormId) {
+        const rows = await prisma.$queryRaw<any[]>`
+          SELECT dormitory_id FROM public.resolve_access_grant_by_id(${authAccessGrantId}::uuid)
+        `.catch(() => []);
+        if (rows && rows.length > 0) {
+          targetDormId = rows[0].dormitory_id;
+        }
+      }
+      if (targetDormId) {
+        const grant = await prisma.$transaction(async (tx) => {
+          await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${targetDormId}, true)`;
+          return await tx.dormitoryAccessGrant.findUnique({
+            where: { id: authAccessGrantId },
+            include: { lineFriend: true },
+          });
+        }).catch(() => null);
+        if (grant) {
+          return {
+            lineFriendId: grant.lineFriendId || undefined,
+            lineDisplayName: grant.lineFriend?.displayName || undefined,
+            dormitoryId: grant.dormitoryId || undefined,
+          };
+        }
       }
     }
 

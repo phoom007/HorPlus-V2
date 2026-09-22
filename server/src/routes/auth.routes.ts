@@ -36,18 +36,31 @@ export function createAuthRouter(authService: AuthenticationService): Router {
   const sameSite = env.COOKIE_SAME_SITE;
 
   const resolveAppUrl = (req: Request) => {
+    const isExternalLineOrigin = (urlStr: string) =>
+      urlStr.includes('line.me') || urlStr.includes('line-scdn.net') || urlStr.includes('line.naver.jp');
+
     // 1. Check referer or origin header from browser request (accurately captures public tunnel / mobile origin)
     const referer = req.get('referer');
     if (referer) {
       try {
         const refUrl = new URL(referer);
-        if (refUrl.origin && !refUrl.origin.includes('localhost') && !refUrl.origin.includes('127.0.0.1')) {
+        if (
+          refUrl.origin &&
+          !refUrl.origin.includes('localhost') &&
+          !refUrl.origin.includes('127.0.0.1') &&
+          !isExternalLineOrigin(refUrl.origin)
+        ) {
           return refUrl.origin;
         }
       } catch {}
     }
     const origin = req.get('origin');
-    if (origin && !origin.includes('localhost') && !origin.includes('127.0.0.1')) {
+    if (
+      origin &&
+      !origin.includes('localhost') &&
+      !origin.includes('127.0.0.1') &&
+      !isExternalLineOrigin(origin)
+    ) {
       return origin;
     }
 

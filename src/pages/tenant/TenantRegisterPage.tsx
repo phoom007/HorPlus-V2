@@ -28,7 +28,13 @@ export const TenantRegisterPage: React.FC = () => {
   const [revisionRequest, setRevisionRequest] = useState<any | null>(null);
 
   const urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
-  const initialDormId = urlParams?.get('dormitoryId') || (typeof localStorage !== 'undefined' ? localStorage.getItem('selected_dormitory_id') || undefined : undefined) || '20000001-0000-4000-8000-000000000002';
+  const cookieDormMatch = typeof document !== 'undefined' ? document.cookie.match(/(?:^|;\s*)active_dormitory_id=([^;]+)/) : null;
+  const cookieDormId = cookieDormMatch ? decodeURIComponent(cookieDormMatch[1].trim()) : undefined;
+  const initialDormId =
+    urlParams?.get('dormitoryId') ||
+    cookieDormId ||
+    (typeof localStorage !== 'undefined' ? localStorage.getItem('selected_dormitory_id') || undefined : undefined) ||
+    'd99948ec-49d4-4629-9fea-567241e5049d';
 
   const [policyData, setPolicyData] = useState<{
     dormitoryId: string;
@@ -41,7 +47,7 @@ export const TenantRegisterPage: React.FC = () => {
     promptPayAccountName?: string;
   }>({
     dormitoryId: initialDormId,
-    dormitoryName: 'HorPlus Dormitory',
+    dormitoryName: 'TheRICH Apartment',
     defaultTerms: '',
     petPolicy: { allowed: 'none', allowedTypes: [] },
     version: 1,
@@ -95,7 +101,11 @@ export const TenantRegisterPage: React.FC = () => {
         }
       } else {
         const urlDormId = urlParams?.get('dormitoryId') || undefined;
-        const defaultDormId = urlDormId || (typeof localStorage !== 'undefined' ? localStorage.getItem('selected_dormitory_id') || undefined : undefined) || '20000001-0000-4000-8000-000000000002';
+        const defaultDormId =
+          urlDormId ||
+          cookieDormId ||
+          (typeof localStorage !== 'undefined' ? localStorage.getItem('selected_dormitory_id') || undefined : undefined) ||
+          'd99948ec-49d4-4629-9fea-567241e5049d';
         const policyRes = await getPublicDormitoryPolicy(defaultDormId);
         if (policyRes.success && policyRes.data) {
           setPolicyData(policyRes.data);

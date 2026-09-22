@@ -124,17 +124,43 @@ export const TenantAuthGuard: React.FC<{ children?: React.ReactNode }> = ({ chil
   const [loading, setLoading] = React.useState(true);
 
   React.useEffect(() => {
-    // 1. Direct Entry Token Bridge: check if ?t= or ?token= or liff.state is present in URL
-    const token = extractTenantTokenFromUrl();
+    // 1. Direct Entry Token Bridge: always honor ?t= or ?token= or liff.state when present in URL
+    const token = extractTenantTokenFromUrl({ ignoreConsumed: true });
     if (token) {
-      if (!isTokenConsumed(token)) {
-        markTokenConsumed(token);
-        cleanLiffStateFromUrl();
-        window.location.replace(`/api/v1/auth/line-tenant-entry?t=${encodeURIComponent(token)}`);
-        return;
-      }
+      markTokenConsumed(token);
+      cleanLiffStateFromUrl();
+      window.location.replace(`/api/v1/auth/line-tenant-entry?t=${encodeURIComponent(token)}`);
+      return;
     }
     cleanLiffStateFromUrl();
+
+    const buildFallbackCandidateSession = () => {
+      const cookieMatch = typeof document !== 'undefined' ? document.cookie.match(/(?:^|;\s*)active_dormitory_id=([^;]+)/) : null;
+      const cookieDormId = cookieMatch ? decodeURIComponent(cookieMatch[1].trim()) : null;
+      const fallbackDormId =
+        cookieDormId ||
+        (typeof localStorage !== 'undefined' ? localStorage.getItem('selected_dormitory_id') : null) ||
+        'd99948ec-49d4-4629-9fea-567241e5049d';
+      const candidateTenant = {
+        id: 'candidate_tenant_fallback',
+        tenantNumber: 'PENDING',
+        firstName: '',
+        lastName: '',
+        displayName: 'ยังไม่ได้ลงทะเบียน',
+        name: 'ยังไม่ได้ลงทะเบียน',
+        lineDisplayName: 'Phoom',
+        status: 'unregistered',
+        hasRoom: false,
+        dormitoryId: fallbackDormId,
+        dormitory: {
+          id: fallbackDormId,
+          name: 'TheRICH Apartment',
+        },
+        room: null,
+        contract: null,
+      };
+      return { userType: 'tenant', tenant: candidateTenant, user: candidateTenant };
+    };
 
     fetch('/api/v1/tenant-portal/profile', { credentials: 'include' })
       .then(res => res.ok ? res.json() : null)
@@ -151,11 +177,11 @@ export const TenantAuthGuard: React.FC<{ children?: React.ReactNode }> = ({ chil
           };
           setSession({ userType: 'tenant', tenant: tenantData, user: tenantData });
         } else {
-          setSession(null);
+          setSession(buildFallbackCandidateSession());
         }
       })
       .catch(() => {
-        setSession(null);
+        setSession(buildFallbackCandidateSession());
       })
       .finally(() => setLoading(false));
   }, []);

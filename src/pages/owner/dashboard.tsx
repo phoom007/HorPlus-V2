@@ -665,7 +665,7 @@ const OwnerDashboardContent: React.FC<OwnerDashboardProps> = ({
   const currentMonthBills = bills.filter(b => b.cycleId === selectedCycle || b.month === selectedCycle || (b as any).billingCycleId === selectedBillingCycle?.id);
   const checkingCount = currentMonthBills.filter(b => (b.status || '').toLowerCase() === 'checking').length;
   const occupiedRooms = rooms.filter(r => r.status === 'occupied');
-  
+
   const unpaidBills = financialSummary.unpaidBills;
   const totalUnpaidAmount = financialSummary.totalUnpaidAmount;
   const unpaidRoomsCount = financialSummary.unpaidRoomsCount;
@@ -702,7 +702,7 @@ const OwnerDashboardContent: React.FC<OwnerDashboardProps> = ({
 
   // Billing Cycle Workflow Stats for selectedCycle
   const actualOccupiedCount = rooms.filter(r => r.status === 'occupied').length;
-  
+
   // 1. Meter recorded count (from MeterReading records for selectedBillingCycle)
   const currentCycleBills = bills.filter(b => b.cycleId === selectedCycle);
   const metersRecordedCount = selectedBillingCycle?.id
@@ -787,7 +787,7 @@ const OwnerDashboardContent: React.FC<OwnerDashboardProps> = ({
       } else {
         setSeenTenantIds(getTenantIdsList(tenants));
       }
-    } catch {}
+    } catch { }
   }, [selectedCycle, tenants]);
 
   const hasUnviewedTenants = tenants.some(t => !seenTenantIds.includes(t.id));
@@ -815,7 +815,7 @@ const OwnerDashboardContent: React.FC<OwnerDashboardProps> = ({
       } else {
         setSeenContractIds(getContractIdsList(contracts));
       }
-    } catch {}
+    } catch { }
   }, [selectedCycle, contracts]);
 
   const hasUnviewedContracts = contracts.some(c => !seenContractIds.includes(c.id));
@@ -828,7 +828,7 @@ const OwnerDashboardContent: React.FC<OwnerDashboardProps> = ({
         const subs = JSON.parse(saved);
         return subs.filter((s: any) => s.status === 'pending').length;
       }
-    } catch {}
+    } catch { }
     return 0;
   });
 
@@ -985,17 +985,15 @@ const OwnerDashboardContent: React.FC<OwnerDashboardProps> = ({
         return (
           <div className="fixed top-5 right-5 z-[9999] max-w-sm w-full bg-slate-900/95 text-white p-4 rounded-2xl shadow-2xl border border-slate-700/80 flex items-start justify-between gap-3 animate-in slide-in-from-top-3 fade-in duration-300">
             <div className="flex items-start gap-2.5">
-              <div className={`p-1.5 rounded-xl shrink-0 mt-0.5 border ${
-                isErrorToast 
-                  ? 'bg-rose-500/20 text-rose-400 border-rose-500/30' 
+              <div className={`p-1.5 rounded-xl shrink-0 mt-0.5 border ${isErrorToast
+                  ? 'bg-rose-500/20 text-rose-400 border-rose-500/30'
                   : 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
-              }`}>
+                }`}>
                 {isErrorToast ? <AlertCircle className="w-5 h-5" /> : <CheckCircle2 className="w-5 h-5" />}
               </div>
               <div>
-                <h4 className={`text-[11px] font-black uppercase tracking-wider ${
-                  isErrorToast ? 'text-rose-400' : 'text-emerald-400'
-                }`}>
+                <h4 className={`text-[11px] font-black uppercase tracking-wider ${isErrorToast ? 'text-rose-400' : 'text-emerald-400'
+                  }`}>
                   {isErrorToast ? 'แจ้งเตือน' : 'ทำรายการสำเร็จ'}
                 </h4>
                 <p className="text-xs font-bold text-slate-100 leading-snug mt-0.5">{displayToastMessage}</p>
@@ -1011,10 +1009,10 @@ const OwnerDashboardContent: React.FC<OwnerDashboardProps> = ({
           </div>
         );
       })()}
-      
+
       {/* 1. TOP SUMMARY CARD: "สรุปยอดค้างชำระทั้งหมด" */}
       <div className="-mx-4 -mt-4 md:-mx-6 md:-mt-6 mb-6 bg-[#2b64f6] relative overflow-hidden transition-all duration-300">
-        
+
         {/* Decorative Top Banner Header */}
         <div className="px-5 sm:px-8 pt-4 sm:pt-5 pb-6 sm:pb-7 text-white flex items-center justify-between max-w-7xl mx-auto">
           <span className="text-xs sm:text-sm font-black tracking-wide opacity-95">เวลาใช้งานคงเหลือ</span>
@@ -1124,11 +1122,10 @@ const OwnerDashboardContent: React.FC<OwnerDashboardProps> = ({
                   type="button"
                   onClick={() => setRequestFilter('all')}
                   title={`ทั้งหมด (${totalRequestsCount})`}
-                  className={`w-8 h-8 rounded-xl flex items-center justify-center transition-all shrink-0 cursor-pointer ${
-                    requestFilter === 'all'
+                  className={`w-8 h-8 rounded-xl flex items-center justify-center transition-all shrink-0 cursor-pointer ${requestFilter === 'all'
                       ? 'bg-slate-900 text-white shadow-xs'
                       : 'bg-white hover:bg-slate-100 text-slate-500 border border-slate-200/80'
-                  }`}
+                    }`}
                 >
                   <LayoutGrid className="w-4 h-4" />
                 </button>
@@ -1138,11 +1135,10 @@ const OwnerDashboardContent: React.FC<OwnerDashboardProps> = ({
                   type="button"
                   onClick={() => setRequestFilter('move_out')}
                   title={`แจ้งเลิกเช่า (${moveOutCount})`}
-                  className={`w-8 h-8 rounded-xl flex items-center justify-center transition-all shrink-0 cursor-pointer ${
-                    requestFilter === 'move_out'
+                  className={`w-8 h-8 rounded-xl flex items-center justify-center transition-all shrink-0 cursor-pointer ${requestFilter === 'move_out'
                       ? 'bg-orange-500 text-white shadow-xs'
                       : 'bg-white hover:bg-orange-50 text-orange-600 border border-orange-200/80'
-                  }`}
+                    }`}
                 >
                   <LogOut className="w-4 h-4" />
                 </button>
@@ -1152,11 +1148,10 @@ const OwnerDashboardContent: React.FC<OwnerDashboardProps> = ({
                   type="button"
                   onClick={() => setRequestFilter('contract_expired')}
                   title={`สัญญาหมดอายุ (${contractExpiredCount})`}
-                  className={`w-8 h-8 rounded-xl flex items-center justify-center transition-all shrink-0 cursor-pointer ${
-                    requestFilter === 'contract_expired'
+                  className={`w-8 h-8 rounded-xl flex items-center justify-center transition-all shrink-0 cursor-pointer ${requestFilter === 'contract_expired'
                       ? 'bg-rose-600 text-white shadow-xs'
                       : 'bg-white hover:bg-rose-50 text-rose-600 border border-rose-200/80'
-                  }`}
+                    }`}
                 >
                   <Clock className="w-4 h-4" />
                 </button>
@@ -1166,11 +1161,10 @@ const OwnerDashboardContent: React.FC<OwnerDashboardProps> = ({
                   type="button"
                   onClick={() => setRequestFilter('contract_extension')}
                   title={`ขอต่อสัญญา (${contractExtensionCount})`}
-                  className={`w-8 h-8 rounded-xl flex items-center justify-center transition-all shrink-0 cursor-pointer ${
-                    requestFilter === 'contract_extension'
+                  className={`w-8 h-8 rounded-xl flex items-center justify-center transition-all shrink-0 cursor-pointer ${requestFilter === 'contract_extension'
                       ? 'bg-yellow-500 text-white shadow-xs'
                       : 'bg-white hover:bg-yellow-50 text-yellow-600 border border-yellow-200/80'
-                  }`}
+                    }`}
                 >
                   <RotateCw className="w-4 h-4" />
                 </button>
@@ -1180,11 +1174,10 @@ const OwnerDashboardContent: React.FC<OwnerDashboardProps> = ({
                   type="button"
                   onClick={() => setRequestFilter('registration')}
                   title={`ขอลงทะเบียน (${registrationCount})`}
-                  className={`w-8 h-8 rounded-xl flex items-center justify-center transition-all shrink-0 cursor-pointer ${
-                    requestFilter === 'registration'
+                  className={`w-8 h-8 rounded-xl flex items-center justify-center transition-all shrink-0 cursor-pointer ${requestFilter === 'registration'
                       ? 'bg-yellow-500 text-white shadow-xs'
                       : 'bg-white hover:bg-yellow-50 text-yellow-600 border border-yellow-200/80'
-                  }`}
+                    }`}
                 >
                   <UserPlus className="w-4 h-4" />
                 </button>
@@ -1218,65 +1211,61 @@ const OwnerDashboardContent: React.FC<OwnerDashboardProps> = ({
                       type="button"
                       data-testid="tenant-request-item"
                       onClick={() => handleCardClick(req)}
-                      className={`shrink-0 w-[230px] sm:w-[250px] md:w-[260px] p-3.5 rounded-2xl sm:rounded-3xl border text-left flex flex-col justify-between transition-all group active:scale-[0.98] shadow-3xs hover:shadow-md select-none cursor-pointer ${
-                        isApproved
+                      className={`shrink-0 w-[230px] sm:w-[250px] md:w-[260px] p-3.5 rounded-2xl sm:rounded-3xl border text-left flex flex-col justify-between transition-all group active:scale-[0.98] shadow-3xs hover:shadow-md select-none cursor-pointer ${isApproved
                           ? 'bg-white border-emerald-200/90 hover:border-emerald-300'
                           : req.status === 'rejected'
-                          ? 'bg-slate-50/80 border-slate-200 opacity-60'
-                          : req.category === 'move_out'
-                          ? 'bg-white hover:bg-orange-50/40 border-orange-200/90 hover:border-orange-300'
-                          : req.category === 'contract_expired'
-                          ? 'bg-white hover:bg-rose-50/30 border-rose-200/80 hover:border-rose-300'
-                          : req.category === 'contract_extension'
-                          ? 'bg-white hover:bg-yellow-50/40 border-yellow-200/90 hover:border-yellow-300'
-                          : 'bg-white hover:bg-yellow-50/40 border-yellow-200/90 hover:border-yellow-300'
-                      }`}
+                            ? 'bg-slate-50/80 border-slate-200 opacity-60'
+                            : req.category === 'move_out'
+                              ? 'bg-white hover:bg-orange-50/40 border-orange-200/90 hover:border-orange-300'
+                              : req.category === 'contract_expired'
+                                ? 'bg-white hover:bg-rose-50/30 border-rose-200/80 hover:border-rose-300'
+                                : req.category === 'contract_extension'
+                                  ? 'bg-white hover:bg-yellow-50/40 border-yellow-200/90 hover:border-yellow-300'
+                                  : 'bg-white hover:bg-yellow-50/40 border-yellow-200/90 hover:border-yellow-300'
+                        }`}
                     >
                       {/* Button Top: Room Badge (Left) and Category Pill (Right) - 2 items only */}
                       <div className="flex items-center justify-between gap-1.5 mb-2 w-full">
-                        <span className={`px-2 py-0.5 text-white font-black text-[11px] sm:text-xs rounded-lg shadow-2xs shrink-0 transition-colors ${
-                          req.category === 'move_out'
+                        <span className={`px-2 py-0.5 text-white font-black text-[11px] sm:text-xs rounded-lg shadow-2xs shrink-0 transition-colors ${req.category === 'move_out'
                             ? 'bg-orange-500 group-hover:bg-orange-600'
                             : req.category === 'contract_expired'
-                            ? 'bg-rose-600 group-hover:bg-rose-700'
-                            : req.category === 'contract_extension'
-                            ? 'bg-yellow-500 group-hover:bg-yellow-600'
-                            : 'bg-yellow-500 group-hover:bg-yellow-600'
-                        }`}>
+                              ? 'bg-rose-600 group-hover:bg-rose-700'
+                              : req.category === 'contract_extension'
+                                ? 'bg-yellow-500 group-hover:bg-yellow-600'
+                                : 'bg-yellow-500 group-hover:bg-yellow-600'
+                          }`}>
                           ห้อง {req.roomNumber} · {req.buildingName ? req.buildingName.replace(/อาคาร\s*/g, '').trim() : 'A'}
                         </span>
 
-                        <span className={`px-2 py-0.5 text-[9.5px] sm:text-[10px] font-extrabold rounded-md shrink-0 border ${
-                          req.category === 'move_out'
+                        <span className={`px-2 py-0.5 text-[9.5px] sm:text-[10px] font-extrabold rounded-md shrink-0 border ${req.category === 'move_out'
                             ? 'bg-orange-50 text-orange-700 border-orange-200'
                             : req.category === 'contract_expired'
-                            ? 'bg-rose-50 text-rose-800 border-rose-200'
-                            : req.category === 'contract_extension'
-                            ? 'bg-yellow-50 text-yellow-800 border-yellow-200'
-                            : 'bg-yellow-50 text-yellow-800 border-yellow-200'
-                        }`}>
+                              ? 'bg-rose-50 text-rose-800 border-rose-200'
+                              : req.category === 'contract_extension'
+                                ? 'bg-yellow-50 text-yellow-800 border-yellow-200'
+                                : 'bg-yellow-50 text-yellow-800 border-yellow-200'
+                          }`}>
                           {req.category === 'move_out'
                             ? 'แจ้งเลิกเช่า'
                             : req.category === 'contract_expired'
-                            ? 'สัญญาหมดอายุ'
-                            : req.category === 'contract_extension'
-                            ? 'ขอต่อสัญญา'
-                            : 'ขอลงทะเบียน'}
+                              ? 'สัญญาหมดอายุ'
+                              : req.category === 'contract_extension'
+                                ? 'ขอต่อสัญญา'
+                                : 'ขอลงทะเบียน'}
                         </span>
                       </div>
 
                       {/* Button Middle: Tenant Name & Brief Details */}
                       <div className="space-y-1 my-1 w-full">
                         <div className="flex items-center gap-1.5">
-                          <div className={`w-6 h-6 rounded-full font-black text-[10px] flex items-center justify-center shrink-0 ${
-                            req.category === 'move_out'
+                          <div className={`w-6 h-6 rounded-full font-black text-[10px] flex items-center justify-center shrink-0 ${req.category === 'move_out'
                               ? 'bg-orange-100 text-orange-800'
                               : req.category === 'contract_expired'
-                              ? 'bg-rose-100 text-rose-800'
-                              : req.category === 'contract_extension'
-                              ? 'bg-yellow-100 text-yellow-800'
-                              : 'bg-yellow-100 text-yellow-800'
-                          }`}>
+                                ? 'bg-rose-100 text-rose-800'
+                                : req.category === 'contract_extension'
+                                  ? 'bg-yellow-100 text-yellow-800'
+                                  : 'bg-yellow-100 text-yellow-800'
+                            }`}>
                             {(req.tenantName || 'ผ').replace('คุณ', '').trim().charAt(0) || 'ผ'}
                           </div>
                           <p className="text-xs sm:text-sm font-black text-slate-900 truncate group-hover:text-indigo-600 transition-colors">
@@ -1407,12 +1396,11 @@ const OwnerDashboardContent: React.FC<OwnerDashboardProps> = ({
         <div className="relative">
           {/* Background Connecting Line - starts at center of 1st node (10%) and ends at 5th node (90%) */}
           <div className="absolute top-4 sm:top-5 left-[10%] right-[10%] h-0.5 bg-slate-200/90 -z-0" />
-          
+
           {/* Active Progress Line Fill */}
-          <div 
-            className={`absolute top-4 sm:top-5 left-[10%] h-0.5 transition-all duration-500 -z-0 ${
-              isFullyPaid ? 'bg-emerald-500' : 'bg-indigo-600'
-            }`}
+          <div
+            className={`absolute top-4 sm:top-5 left-[10%] h-0.5 transition-all duration-500 -z-0 ${isFullyPaid ? 'bg-emerald-500' : 'bg-indigo-600'
+              }`}
             style={{
               width: `${(currentStepIdx / 4) * 80}%`
             }}
@@ -1507,21 +1495,19 @@ const OwnerDashboardContent: React.FC<OwnerDashboardProps> = ({
                   onClick={step.isPermitted ? step.onClick : undefined}
                   disabled={!step.isPermitted}
                   title={!step.isPermitted ? 'ไม่มีสิทธิ์เข้าถึงขั้นตอนนี้' : ''}
-                  className={`flex flex-col items-center group text-center ${
-                    step.isPermitted ? 'cursor-pointer' : 'cursor-not-allowed opacity-50'
-                  }`}
+                  className={`flex flex-col items-center group text-center ${step.isPermitted ? 'cursor-pointer' : 'cursor-not-allowed opacity-50'
+                    }`}
                 >
                   {/* Circle Node */}
                   <div
-                    className={`w-8 h-8 sm:w-10 sm:h-10 rounded-full flex items-center justify-center transition-all duration-200 ${
-                      isGreen
+                    className={`w-8 h-8 sm:w-10 sm:h-10 rounded-full flex items-center justify-center transition-all duration-200 ${isGreen
                         ? 'bg-emerald-500 text-white shadow-xs ring-2 ring-emerald-100'
                         : step.isCurrent
-                        ? 'bg-indigo-600 text-white shadow-md ring-4 ring-indigo-100 scale-105'
-                        : isPassed
-                        ? 'bg-indigo-600 text-white'
-                        : 'bg-white text-slate-500 border-2 border-slate-300 group-hover:border-indigo-400 group-hover:text-indigo-600'
-                    }`}
+                          ? 'bg-indigo-600 text-white shadow-md ring-4 ring-indigo-100 scale-105'
+                          : isPassed
+                            ? 'bg-indigo-600 text-white'
+                            : 'bg-white text-slate-500 border-2 border-slate-300 group-hover:border-indigo-400 group-hover:text-indigo-600'
+                      }`}
                   >
                     {isGreen ? (
                       <CheckCircle2 className="w-4 h-4 sm:w-5 sm:h-5 stroke-[2.5]" />
@@ -1532,13 +1518,12 @@ const OwnerDashboardContent: React.FC<OwnerDashboardProps> = ({
 
                   {/* Step Label: Mobile view hides numbers */}
                   <span
-                    className={`text-[11px] sm:text-xs font-extrabold mt-2 leading-tight transition-colors ${
-                      isGreen
+                    className={`text-[11px] sm:text-xs font-extrabold mt-2 leading-tight transition-colors ${isGreen
                         ? 'text-emerald-700 font-extrabold'
                         : step.isCurrent
-                        ? 'text-indigo-700 font-black'
-                        : 'text-slate-700 font-bold group-hover:text-indigo-600'
-                    }`}
+                          ? 'text-indigo-700 font-black'
+                          : 'text-slate-700 font-bold group-hover:text-indigo-600'
+                      }`}
                   >
                     <span className="hidden sm:inline">{step.desktopLabel}</span>
                     <span className="inline sm:hidden">{step.mobileLabel}</span>
@@ -1552,7 +1537,7 @@ const OwnerDashboardContent: React.FC<OwnerDashboardProps> = ({
 
       {/* 5. ROOM STATUS GRID SECTION: "สถานะห้องพักจริงในตึก" (Matches Screenshot 2) */}
       <div className="bg-white p-5 sm:p-6 rounded-3xl border border-slate-100 shadow-xs space-y-4">
-        
+
         {/* Header & Status Filter Badges */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-1">
           <div>
@@ -1566,11 +1551,10 @@ const OwnerDashboardContent: React.FC<OwnerDashboardProps> = ({
           <div className="flex flex-wrap items-center gap-1.5 text-[10px] sm:text-xs font-bold">
             <button
               onClick={() => setSortByStatus(sortByStatus === 'vacant' ? null : 'vacant')}
-              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border transition-all cursor-pointer ${
-                sortByStatus === 'vacant' 
-                  ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs' 
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border transition-all cursor-pointer ${sortByStatus === 'vacant'
+                  ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
                   : 'bg-emerald-50/60 text-emerald-700 border-emerald-100 hover:bg-emerald-100'
-              }`}
+                }`}
             >
               <span className={`w-2 h-2 rounded-full ${sortByStatus === 'vacant' ? 'bg-white' : 'bg-emerald-500'}`} />
               <span>ว่าง ({vacantCount})</span>
@@ -1578,11 +1562,10 @@ const OwnerDashboardContent: React.FC<OwnerDashboardProps> = ({
 
             <button
               onClick={() => setSortByStatus(sortByStatus === 'occupied' ? null : 'occupied')}
-              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border transition-all cursor-pointer ${
-                sortByStatus === 'occupied' 
-                  ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs' 
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border transition-all cursor-pointer ${sortByStatus === 'occupied'
+                  ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
                   : 'bg-indigo-50/60 text-indigo-700 border-indigo-100 hover:bg-indigo-100'
-              }`}
+                }`}
             >
               <span className={`w-2 h-2 rounded-full ${sortByStatus === 'occupied' ? 'bg-white' : 'bg-indigo-500'}`} />
               <span>เข้าพักแล้ว ({occupiedCount})</span>
@@ -1590,11 +1573,10 @@ const OwnerDashboardContent: React.FC<OwnerDashboardProps> = ({
 
             <button
               onClick={() => setSortByStatus(sortByStatus === 'maintenance' ? null : 'maintenance')}
-              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border transition-all cursor-pointer ${
-                sortByStatus === 'maintenance' 
-                  ? 'bg-rose-600 text-white border-rose-600 shadow-xs' 
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border transition-all cursor-pointer ${sortByStatus === 'maintenance'
+                  ? 'bg-rose-600 text-white border-rose-600 shadow-xs'
                   : 'bg-rose-50/60 text-rose-700 border-rose-100 hover:bg-rose-100'
-              }`}
+                }`}
             >
               <span className={`w-2 h-2 rounded-full ${sortByStatus === 'maintenance' ? 'bg-white' : 'bg-rose-500'}`} />
               <span>ปิดปรับปรุง ({maintenanceCount})</span>
@@ -1644,7 +1626,7 @@ const OwnerDashboardContent: React.FC<OwnerDashboardProps> = ({
             const buildingObj = (buildings || dormitory?.buildings || []).find((b: any) => b.id === (room.buildingId || (room as any).building));
             let buildingDisplayName = room.buildingName || buildingObj?.name || dormitory?.name || 'อาคารหลัก';
             if (!buildingDisplayName.startsWith('อาคาร') && !buildingDisplayName.startsWith('ตึก')) {
-              buildingDisplayName = `อาคาร${buildingDisplayName}`;
+              buildingDisplayName = `อาคาร ${buildingDisplayName}`;
             }
 
             const handleRoomClick = () => {
@@ -1744,13 +1726,13 @@ const OwnerDashboardContent: React.FC<OwnerDashboardProps> = ({
       {showUnpaidModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in duration-200">
           <div className="bg-white w-full max-w-lg rounded-3xl shadow-xl border border-slate-100 p-6 space-y-4 max-h-[85vh] flex flex-col">
-            
+
             <div className="flex justify-between items-center border-b border-slate-100 pb-3">
               <div className="flex items-center gap-2">
                 <AlertTriangle className="w-5 h-5 text-rose-500" />
                 <h3 className="text-base font-black text-slate-800">รายการห้องที่ค้างชำระ ({unpaidBills.length} ห้อง)</h3>
               </div>
-              <button 
+              <button
                 onClick={() => setShowUnpaidModal(false)}
                 className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 flex items-center justify-center transition-colors cursor-pointer"
               >
@@ -2316,11 +2298,10 @@ const OwnerDashboardContent: React.FC<OwnerDashboardProps> = ({
                       setEditErrorText(null);
                       setEditStatus(editingRoom.status === 'occupied' ? 'occupied' : 'vacant');
                     }}
-                    className={`py-2 px-3 text-xs font-extrabold rounded-xl border transition-all cursor-pointer text-center truncate ${
-                      editStatus !== 'maintenance'
+                    className={`py-2 px-3 text-xs font-extrabold rounded-xl border transition-all cursor-pointer text-center truncate ${editStatus !== 'maintenance'
                         ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
                         : 'bg-white hover:bg-slate-50 text-slate-700 border-gray-200'
-                    }`}
+                      }`}
                   >
                     เปิดใช้งาน
                   </button>
@@ -2337,13 +2318,12 @@ const OwnerDashboardContent: React.FC<OwnerDashboardProps> = ({
                       setEditErrorText(null);
                       setEditStatus('maintenance');
                     }}
-                    className={`py-2 px-3 text-xs font-extrabold rounded-xl border transition-all text-center truncate ${
-                      editStatus === 'maintenance'
+                    className={`py-2 px-3 text-xs font-extrabold rounded-xl border transition-all text-center truncate ${editStatus === 'maintenance'
                         ? 'bg-rose-600 text-white border-rose-600 shadow-xs'
                         : editingRoom.status === 'occupied'
-                        ? 'bg-slate-50 text-slate-400 border-slate-200 cursor-not-allowed opacity-75'
-                        : 'bg-white hover:bg-slate-50 text-slate-700 border-gray-200 cursor-pointer'
-                    }`}
+                          ? 'bg-slate-50 text-slate-400 border-slate-200 cursor-not-allowed opacity-75'
+                          : 'bg-white hover:bg-slate-50 text-slate-700 border-gray-200 cursor-pointer'
+                      }`}
                     title={editingRoom.status === 'occupied' ? 'มีผู้เช่าพักอยู่ ต้องย้ายหรือสิ้นสุดการเช่าก่อน' : undefined}
                   >
                     ปิดปรับปรุง
@@ -2427,11 +2407,10 @@ const OwnerDashboardContent: React.FC<OwnerDashboardProps> = ({
                       });
                       setEditingRoom(null);
                     }}
-                    className={`px-5 py-2 font-extrabold text-xs rounded-xl shadow-xs transition-all flex items-center gap-1.5 ${
-                      isFormModified && !updateRoomMutation.isPending
+                    className={`px-5 py-2 font-extrabold text-xs rounded-xl shadow-xs transition-all flex items-center gap-1.5 ${isFormModified && !updateRoomMutation.isPending
                         ? 'bg-indigo-600 hover:bg-indigo-700 text-white cursor-pointer active:scale-95'
                         : 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-none'
-                    }`}
+                      }`}
                     title={!isFormModified ? 'ไม่มีการเปลี่ยนแปลงข้อมูล' : undefined}
                   >
                     <Check className="w-4 h-4" />
