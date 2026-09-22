@@ -17,12 +17,14 @@ import {
 } from '../utils/thai-identity.util.js';
 import { processAndSecureTenantDocument } from './image-security.service.js';
 import { LocalStorageProvider } from './local-storage.service.js';
+import { DocumentPdfService } from './document-pdf.service.js';
 import crypto from 'crypto';
 
 export interface CreateRegistrationDto {
   dormitoryId?: string;
   inviteToken?: string;
   lineFollowerId?: string;
+  lineDisplayName?: string;
   requestedRoomId: string;
   prefix?: string;
   customPrefix?: string;
@@ -271,6 +273,30 @@ export class TenantRegistrationService {
           throw new AppError('ไม่พบห้องพักที่ระบุในหอพักนี้', 404, 'ROOM_NOT_FOUND');
         }
 
+        // Resolve LINE displayName if lineFollowerId or active LINE friend exists
+        let resolvedLineDisplayName = payload.lineDisplayName?.trim() || null;
+        if (!lineFollowerId) {
+          const matchedFriend = await tx.dormitoryLineFriend.findFirst({
+            where: {
+              dormitoryId: targetDormitoryId,
+              ...(resolvedLineDisplayName ? { displayName: resolvedLineDisplayName } : {}),
+            },
+            orderBy: { updatedAt: 'desc' },
+          });
+          if (matchedFriend) {
+            lineFollowerId = matchedFriend.id;
+            if (!resolvedLineDisplayName) resolvedLineDisplayName = matchedFriend.displayName;
+          }
+        } else if (!resolvedLineDisplayName) {
+          const friendRecord = await tx.dormitoryLineFriend.findUnique({
+            where: { id: lineFollowerId },
+            select: { displayName: true },
+          });
+          if (friendRecord?.displayName) {
+            resolvedLineDisplayName = friendRecord.displayName;
+          }
+        }
+
         // Build Canonical Acceptance Snapshot & Compute SHA-256
         const acceptedAt = new Date();
         const defaultTerms = defaults?.default_terms ?? '';
@@ -291,6 +317,7 @@ export class TenantRegistrationService {
           customPrefix: payload.customPrefix,
           applicantName: `${payload.firstName.trim()} ${payload.lastName.trim()}`,
           applicantPhone: payload.phone.trim(),
+          lineDisplayName: resolvedLineDisplayName || undefined,
           email: payload.email,
           rentalPlan: payload.rentalPlan || 'monthly',
           proposedRent: payload.proposedRent !== undefined ? payload.proposedRent : undefined,
@@ -521,9 +548,42 @@ export class TenantRegistrationService {
 
   public async listRequests(dormitoryId: string) {
     const prisma = getPrismaClient();
-    return prisma.tenantRegistrationRequest.findMany({
+    const requests = await prisma.tenantRegistrationRequest.findMany({
       where: { dormitoryId },
+      include: {
+        lineFollower: {
+          select: {
+            id: true,
+            displayName: true,
+            pictureUrl: true,
+          },
+        },
+      },
       orderBy: [{ submittedAt: 'desc' }, { createdAt: 'desc' }],
+    });
+
+    // Fallback lookup of LINE friends in this dormitory for requests submitted before lineFollowerId was linked
+    const dormFriends = await prisma.dormitoryLineFriend.findMany({
+      where: { dormitoryId },
+      orderBy: { updatedAt: 'desc' },
+      select: { id: true, displayName: true, pictureUrl: true },
+    });
+    const latestTenantFriend = dormFriends[0] || null;
+
+    return requests.map((req) => {
+      const snap = (req.acceptanceSnapshot as any) || {};
+      const resolvedLineName =
+        req.lineFollower?.displayName ||
+        snap.lineDisplayName ||
+        snap.lineName ||
+        latestTenantFriend?.displayName ||
+        `${req.firstName || ''}`.trim() ||
+        'ผู้เช่า LINE';
+      return {
+        ...req,
+        lineDisplayName: resolvedLineName,
+        lineName: resolvedLineName,
+      };
     });
   }
 
@@ -531,10 +591,28 @@ export class TenantRegistrationService {
     const prisma = getPrismaClient();
     let req = await prisma.tenantRegistrationRequest.findFirst({
       where: { id, dormitoryId },
+      include: {
+        lineFollower: {
+          select: {
+            id: true,
+            displayName: true,
+            pictureUrl: true,
+          },
+        },
+      },
     });
     if (!req) {
       req = await prisma.tenantRegistrationRequest.findFirst({
         where: { dormitoryId, approvedTenantId: id },
+        include: {
+          lineFollower: {
+            select: {
+              id: true,
+              displayName: true,
+              pictureUrl: true,
+            },
+          },
+        },
       });
     }
     if (!req) {
@@ -543,7 +621,155 @@ export class TenantRegistrationService {
       (err as any).code = 'REGISTRATION_REQUEST_NOT_FOUND';
       throw err;
     }
-    return req;
+    const snap = (req.acceptanceSnapshot as any) || {};
+    const resolvedLineName =
+      req.lineFollower?.displayName ||
+      snap.lineDisplayName ||
+      snap.lineName ||
+      `${req.firstName || ''}`.trim() ||
+      'ผู้เช่า LINE';
+    return {
+      ...req,
+      lineDisplayName: resolvedLineName,
+      lineName: resolvedLineName,
+    };
+  }
+
+  public async getRegistrationContractPdf(
+    dormitoryId: string,
+    registrationId: string,
+    overrides?: {
+      roomId?: string;
+      startDate?: string;
+      endDate?: string;
+      rentAmount?: string;
+      depositAmount?: string;
+    }
+  ): Promise<{ buffer: Buffer; filename: string }> {
+    const prisma = getPrismaClient();
+    const req = await this.getRequestById(registrationId, dormitoryId);
+    const snap = (req.acceptanceSnapshot as any) || {};
+
+    const dorm = await prisma.dormitory.findUnique({
+      where: { id: dormitoryId },
+      include: {
+        billingSettings: true,
+        propertyDefaults: true,
+      },
+    });
+
+    const targetRoomId = overrides?.roomId || req.approvedRoomId || req.requestedRoomId || snap.requestedRoomId;
+    const room = targetRoomId
+      ? await prisma.room.findFirst({
+          where: { id: targetRoomId, dormitoryId },
+          include: { building: true },
+        })
+      : null;
+
+    const bs = dorm?.billingSettings;
+    const rawBankName = bs?.bankAccountName?.trim() || bs?.promptPayAccountName?.trim() || null;
+    const ownerDisplayName = rawBankName
+      ? `${rawBankName} (${dorm?.name || 'หอพัก'})`
+      : dorm?.name || 'เจ้าของหอพัก';
+
+    let ownerSignatureUrl: string | null = null;
+    let tenantSignatureUrl: string | null = null;
+    const sigStorage = new SignatureStorageService(prisma);
+
+    try {
+      const ownerSigRec = await sigStorage.getLatestSignatureRecord(dormitoryId);
+      if (ownerSigRec) {
+        const stream = await sigStorage.getSignatureStream(ownerSigRec.objectKey);
+        const chunks: Buffer[] = [];
+        for await (const chunk of stream) {
+          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        }
+        ownerSignatureUrl = `data:${ownerSigRec.mimeType || 'image/png'};base64,${Buffer.concat(chunks).toString('base64')}`;
+      }
+    } catch {}
+
+    if (req.tenantSignatureObjectKey) {
+      try {
+        const stream = await sigStorage.getSignatureStream(req.tenantSignatureObjectKey);
+        const chunks: Buffer[] = [];
+        for await (const chunk of stream) {
+          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        }
+        tenantSignatureUrl = `data:${req.tenantSignatureMimeType || 'image/png'};base64,${Buffer.concat(chunks).toString('base64')}`;
+      } catch {}
+    }
+
+    const prefix =
+      snap.prefix === 'ระบุเอง' || snap.prefix === 'กำหนดเอง'
+        ? snap.customPrefix?.trim() || ''
+        : snap.prefix?.trim() || '';
+    const rawFirst = req.firstName?.trim() || '';
+    const rawLast = req.lastName && req.lastName !== '-' ? req.lastName.trim() : '';
+    const fullName = `${rawFirst} ${rawLast}`.trim();
+    const tenantDisplayName = prefix
+      ? fullName.startsWith(prefix)
+        ? fullName
+        : `${prefix} ${fullName}`.trim()
+      : fullName;
+
+    const effectiveRoomNumber = room?.roomNumber || snap.requestedRoomNumber || '101';
+    const effectiveStartDate =
+      overrides?.startDate ||
+      snap.approvedTerms?.startDate ||
+      snap.startDate ||
+      new Date().toISOString().split('T')[0];
+    const effectiveEndDate =
+      overrides?.endDate ||
+      snap.approvedTerms?.endDate ||
+      snap.endDate ||
+      effectiveStartDate;
+    const effectiveRent = String(
+      overrides?.rentAmount ?? snap.approvedTerms?.rentAmount ?? snap.proposedRent ?? room?.monthlyRent ?? '0'
+    );
+    const effectiveDeposit = String(
+      overrides?.depositAmount ?? snap.approvedTerms?.depositAmount ?? snap.proposedDeposit ?? snap.depositAmount ?? room?.monthlyDeposit ?? '0'
+    );
+    const contractNumber = `CTR-${effectiveRoomNumber}-${effectiveStartDate.slice(0, 7).replace('-', '')}`;
+
+    const coTenants = Array.isArray(snap.coOccupants)
+      ? snap.coOccupants.map((c: any) => ({ name: c.name || '-', phone: c.phone || undefined }))
+      : [];
+
+    const pdfService = new DocumentPdfService();
+    const pdfBuffer = await pdfService.generateContractPdf({
+      contractNumber,
+      dormitoryName: dorm?.name || 'Dormitory',
+      dormitoryAddress: dorm?.addressLine1,
+      dormitoryPhone: dorm?.phone,
+      ownerName: ownerDisplayName,
+      ownerSignatureUrl,
+      tenantName: tenantDisplayName || 'ผู้เช่า',
+      tenantPhone: req.phone,
+      coTenants,
+      buildingName: (room as any)?.building?.name || room?.buildingId || null,
+      roomNumber: effectiveRoomNumber,
+      rentBillingType: snap.rentalPlan === 'term' ? 'term' : 'monthly',
+      startDate: effectiveStartDate,
+      endDate: effectiveEndDate,
+      rentAmount: effectiveRent,
+      depositAmount: effectiveDeposit,
+      waterRate: bs?.waterRate ? bs.waterRate.toString() : '18.00',
+      electricityRate: bs?.electricityRate ? bs.electricityRate.toString() : '7.00',
+      commonFee: bs?.commonFee ? bs.commonFee.toString() : '0.00',
+      internetFee: (bs as any)?.internetFee ? (bs as any).internetFee.toString() : '0.00',
+      billingDay: bs?.billingDay || 25,
+      dueDay: bs?.dueDay ? Number(bs.dueDay) : '-',
+      lateFeeMode: (bs as any)?.lateFeeMode || 'fixed',
+      lateFeeAmount: (bs as any)?.lateFeeAmount ? (bs as any).lateFeeAmount.toString() : '0.00',
+      tenantSignature: tenantSignatureUrl,
+      terms: snap.terms || dorm?.propertyDefaults?.defaultTerms || null,
+      createdAt: req.submittedAt ? req.submittedAt.toISOString().split('T')[0] : undefined,
+    });
+
+    return {
+      buffer: pdfBuffer,
+      filename: `${contractNumber}.pdf`,
+    };
   }
 
   public async updateRequestRoom(

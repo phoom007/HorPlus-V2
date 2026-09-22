@@ -369,8 +369,11 @@ export const TenantApprovalModal: React.FC<TenantApprovalModalProps> = ({
   const tenantLineName =
     tenant.lineName ||
     tenant.lineDisplayName ||
+    tenant.lineFollower?.displayName ||
     tenant.acceptanceSnapshot?.lineDisplayName ||
-    'ยังไม่ผูก LINE';
+    tenant.acceptanceSnapshot?.lineName ||
+    tenant.firstName ||
+    tenantName;
   const tenantEmail =
     tenant.email ||
     tenant.acceptanceSnapshot?.email ||
@@ -1009,17 +1012,19 @@ export const TenantApprovalModal: React.FC<TenantApprovalModalProps> = ({
                   </div>
                 </div>
 
-                {attachmentUrl && (
-                  <a
-                    href={attachmentUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="px-3.5 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-black flex items-center gap-1.5 shadow-3xs shrink-0 transition-colors"
-                  >
-                    <Eye className="w-3.5 h-3.5" />
-                    <span>เปิดดู</span>
-                  </a>
-                )}
+                <a
+                  href={
+                    tenant.id
+                      ? `/api/v1/tenant-registrations/${encodeURIComponent(tenant.id)}/contract-pdf?roomId=${encodeURIComponent(selectedRoomId || '')}&startDate=${encodeURIComponent(startDate || '')}&endDate=${encodeURIComponent(endDate || '')}&rentAmount=${encodeURIComponent(rentAmount || '')}&depositAmount=${encodeURIComponent(depositAmount || '')}`
+                      : attachmentUrl || '#'
+                  }
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-3.5 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-black flex items-center gap-1.5 shadow-3xs shrink-0 transition-colors cursor-pointer"
+                >
+                  <Eye className="w-3.5 h-3.5" />
+                  <span>เปิดดู</span>
+                </a>
               </div>
 
               {/* 2-Column Previews: ID Card & Deposit Slip */}
@@ -1153,63 +1158,36 @@ export const TenantApprovalModal: React.FC<TenantApprovalModalProps> = ({
         isSubmitting={isRejecting}
       />
 
-      {/* Lightbox Fullscreen Modal */}
+      {/* Frameless Dark-Backdrop Lightbox matching Screenshot 3 (TenantWorkspace style) */}
       {(activeLightboxImage || (isImageModalOpen && attachmentUrl)) && (
         <div
           data-testid="id-card-lightbox"
-          className="fixed inset-0 z-[600] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-150"
+          className="fixed inset-0 z-[600] bg-black/85 flex items-center justify-center p-4 sm:p-6 animate-in fade-in duration-200"
           onClick={() => {
             setIsImageModalOpen(false);
             setActiveLightboxImage(null);
             setImageRotation(0);
           }}
         >
-          <div
-            className="relative max-w-3xl w-full bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh]"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-800 bg-slate-900/95">
-              <span className="text-xs font-bold text-slate-200">
-                {activeLightboxImage?.title || 'เอกสารแนบ'}
-              </span>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setImageRotation((prev) => (prev + 90) % 360)}
-                  className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold flex items-center gap-1.5 cursor-pointer"
-                >
-                  <RotateCw className="w-3.5 h-3.5" />
-                  <span>หมุนรูป</span>
-                </button>
-                <a
-                  href={activeLightboxImage?.url || attachmentUrl}
-                  download
-                  className="p-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold flex items-center gap-1.5"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  <span>ดาวน์โหลด</span>
-                </a>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsImageModalOpen(false);
-                    setActiveLightboxImage(null);
-                    setImageRotation(0);
-                  }}
-                  className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white cursor-pointer"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-            <div className="p-6 flex-1 overflow-auto flex items-center justify-center bg-slate-950 min-h-[300px]">
-              <img
-                src={activeLightboxImage?.url || attachmentUrl}
-                alt={activeLightboxImage?.title || 'เอกสารแนบ'}
-                style={{ transform: `rotate(${imageRotation}deg)` }}
-                className="max-h-[72vh] w-auto max-w-full object-contain rounded-xl transition-transform duration-200"
-              />
-            </div>
+          <div className="relative max-w-full max-h-full flex flex-col items-center">
+            <button
+              type="button"
+              onClick={() => {
+                setIsImageModalOpen(false);
+                setActiveLightboxImage(null);
+                setImageRotation(0);
+              }}
+              className="absolute -top-10 right-0 text-white/70 hover:text-white p-1.5 transition-colors cursor-pointer"
+              aria-label="ปิดรูปภาพ"
+            >
+              <X className="w-8 h-8 stroke-[1.5]" />
+            </button>
+            <img
+              src={activeLightboxImage?.url || attachmentUrl}
+              alt={activeLightboxImage?.title || 'Expanded view'}
+              className="max-w-[92vw] max-h-[82vh] object-contain rounded-3xl shadow-2xl border border-white/10"
+              onClick={(e) => e.stopPropagation()}
+            />
           </div>
         </div>
       )}

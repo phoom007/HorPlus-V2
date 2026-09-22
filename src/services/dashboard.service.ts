@@ -354,6 +354,15 @@ export function aggregateTenantRequests(params: {
     const rentalType: 'MONTHLY' | 'TERM' | 'DAILY' = rawType === 'DAILY' ? 'DAILY' : rawType === 'TERM' ? 'TERM' : 'MONTHLY';
     const effectiveIdCardPhoto = snap.idCardImageUrl || reg.idCardPhoto || reg.idCardImageUrl || (reg.id ? `/api/v1/tenant-registrations/${reg.id}/identity-document` : undefined);
     const effectiveIdCardFileName = snap.idCardDocument?.filename || (snap.attachments && snap.attachments[0]?.name) || reg.idCardFileName;
+    const effectiveDepositSlipPhoto = snap.depositSlipImageUrl || reg.depositSlipImageUrl || reg.depositSlipUrl;
+    const effectiveLineName =
+      reg.lineDisplayName ||
+      reg.lineName ||
+      reg.lineFollower?.displayName ||
+      snap.lineDisplayName ||
+      snap.lineName ||
+      reg.firstName ||
+      fullName;
 
     const reqItem: TenantRequestItem = {
       id: reg.id || `reg-${Date.now()}`,
@@ -371,7 +380,7 @@ export function aggregateTenantRequests(params: {
       idCard: effectiveCitizenId,
       citizenId: effectiveCitizenId,
       lineId: reg.lineId,
-      lineName: reg.lineDisplayName || reg.lineName,
+      lineName: effectiveLineName,
       email: reg.email,
       requestedAt: reg.submittedAt ? new Date(reg.submittedAt).toISOString() : (reg.createdAt ? new Date(reg.createdAt).toISOString() : new Date().toISOString()),
       moveInDate: reg.startDate || reg.moveInDate || snap.startDate,
@@ -389,6 +398,8 @@ export function aggregateTenantRequests(params: {
       idCardPhoto: effectiveIdCardPhoto,
       idCardUrl: effectiveIdCardPhoto,
       idCardFileName: effectiveIdCardFileName,
+      depositSlipUrl: effectiveDepositSlipPhoto,
+      depositSlipImageUrl: effectiveDepositSlipPhoto,
       acceptanceSnapshot: snap,
     };
 

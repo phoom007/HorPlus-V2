@@ -713,16 +713,22 @@ export const TenantRegisterView: React.FC<TenantRegisterViewProps> = ({
   ]);
 
   const handleAddVehicle = () => {
-    setVehiclesList((prev) => [
-      ...prev,
-      {
-        id: `veh-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-        type: 'motorcycle',
-        brand: 'Honda',
-        customBrand: '',
-        licensePlate: '',
-      },
-    ]);
+    setVehiclesList((prev) => {
+      const normalizedPrev =
+        prev.length === 1 && prev[0].type === 'none'
+          ? [{ ...prev[0], type: 'motorcycle' as const }]
+          : prev;
+      return [
+        ...normalizedPrev,
+        {
+          id: `veh-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+          type: 'motorcycle',
+          brand: 'Honda',
+          customBrand: '',
+          licensePlate: '',
+        },
+      ];
+    });
   };
 
   const handleRemoveVehicle = (id: string) => {
@@ -1145,9 +1151,14 @@ export const TenantRegisterView: React.FC<TenantRegisterViewProps> = ({
     }
   };
 
-  // Revision / Confirmation Pre-population
+  // Revision / Confirmation Pre-population (guarded so background window focus refreshes don't overwrite user input)
+  const initializedRevisionIdRef = useRef<string | null>(null);
+  const initializedProfileKeyRef = useRef<string | null>(null);
+
   useEffect(() => {
-    if (revisionRequest) {
+    const revKey = revisionRequest ? `${revisionRequest.id || 'rev'}:${revisionRequest.status || ''}` : null;
+    if (revisionRequest && revKey && initializedRevisionIdRef.current !== revKey) {
+      initializedRevisionIdRef.current = revKey;
       const snap = revisionRequest.acceptanceSnapshot || {};
       const approved = snap.approvedTerms || revisionRequest.approvedTerms || {};
 
@@ -1240,16 +1251,6 @@ export const TenantRegisterView: React.FC<TenantRegisterViewProps> = ({
         setDueDay(approved.dueDay);
       }
 
-      // Installment restoration
-      if (snap.isInstallmentRequested !== undefined) {
-        setIsInstallment(!!snap.isInstallmentRequested);
-      }
-      if (snap.selectedInstallmentPlan) {
-        const match = String(snap.selectedInstallmentPlan).match(/\d+/);
-        if (match) {
-          setInstallmentMonths(Number(match[0]));
-        }
-      }
 
       // Emergency Contact
       if (snap.emergencyContact) {
@@ -1323,7 +1324,9 @@ export const TenantRegisterView: React.FC<TenantRegisterViewProps> = ({
 
   // Existing Tenant Profile Auto-fill (Round 26)
   useEffect(() => {
-    if (existingTenantProfile && !revisionRequest) {
+    const profileKey = existingTenantProfile ? `${existingTenantProfile.id || 'prof'}` : null;
+    if (existingTenantProfile && !revisionRequest && profileKey && initializedProfileKeyRef.current !== profileKey) {
+      initializedProfileKeyRef.current = profileKey;
       let initialPrefix = '';
       let initialCustomPrefix = '';
       let parsedName = '';
@@ -1710,11 +1713,20 @@ export const TenantRegisterView: React.FC<TenantRegisterViewProps> = ({
         }
       }
 
+      const resolvedLineDisplayName =
+        existingTenantProfile?.lineDisplayName ||
+        existingTenantProfile?.lineName ||
+        revisionRequest?.lineDisplayName ||
+        revisionRequest?.lineName ||
+        revisionRequest?.acceptanceSnapshot?.lineDisplayName ||
+        undefined;
+
       // Scenario Option B: Revision Resubmission
       if (revisionRequest) {
         const res = await resubmitTenantRegistrationRequest(revisionRequest.id, {
           dormitoryId: targetDormId || dormitoryId,
           inviteToken,
+          lineDisplayName: resolvedLineDisplayName,
           requestedRoomId: selectedRoomId,
           prefix: getEffectivePrefix(),
           customPrefix: prefix === 'ระบุเอง' || prefix === 'กำหนดเอง' ? customPrefix.trim() : undefined,
@@ -1792,6 +1804,7 @@ export const TenantRegisterView: React.FC<TenantRegisterViewProps> = ({
       const res = await submitTenantRegistrationRequest({
         dormitoryId: effectiveDormId,
         inviteToken,
+        lineDisplayName: resolvedLineDisplayName,
         requestedRoomId: selectedRoomId,
         prefix: getEffectivePrefix(),
         customPrefix: prefix === 'ระบุเอง' || prefix === 'กำหนดเอง' ? customPrefix.trim() : undefined,

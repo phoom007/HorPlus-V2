@@ -357,7 +357,58 @@ export function createTenantRegistrationRouter(
     }).optional(),
     pets: z.array(z.any()).optional(),
     lineFollowerId: z.string().optional(),
+    lineDisplayName: z.string().optional(),
   });
+
+  const resolveLineContextFromSession = async (req: Request): Promise<{ lineFriendId?: string; lineDisplayName?: string; dormitoryId?: string }> => {
+    let authAccessGrantId = (req as any).auth?.session?.accessGrantId ||
+      ((req as any).auth?.userId?.startsWith('ag_user_') ? (req as any).auth.userId.replace('ag_user_', '') :
+       ((req as any).auth?.userId?.startsWith('ag_') ? (req as any).auth.userId.replace('ag_', '') : null));
+    let actorUserId: string | undefined = (req as any).auth?.userId || (req as any).user?.id;
+
+    if (!authAccessGrantId && !actorUserId && req.cookies?.horplus_session) {
+      try {
+        const env = getEnv();
+        const tokenService = new SessionTokenService(env.SESSION_ENCRYPTION_KEY);
+        const payload = tokenService.decryptToken(req.cookies.horplus_session);
+        if (payload?.sub) {
+          actorUserId = payload.sub;
+          if (payload.sub.startsWith('ag_user_')) {
+            authAccessGrantId = payload.sub.replace('ag_user_', '');
+          } else if (payload.sub.startsWith('ag_')) {
+            authAccessGrantId = payload.sub.replace('ag_', '');
+          }
+        }
+      } catch {}
+    }
+
+    const prisma = getPrismaClient();
+    if (authAccessGrantId) {
+      const grant = await prisma.dormitoryAccessGrant.findUnique({
+        where: { id: authAccessGrantId },
+        include: { lineFriend: true },
+      });
+      if (grant) {
+        return {
+          lineFriendId: grant.lineFriendId || undefined,
+          lineDisplayName: grant.lineFriend?.displayName || undefined,
+          dormitoryId: grant.dormitoryId || undefined,
+        };
+      }
+    }
+
+    if (actorUserId && /^[0-9a-fA-F-]{36}$/.test(actorUserId)) {
+      const user = await prisma.user.findUnique({
+        where: { id: actorUserId },
+        select: { displayName: true },
+      });
+      if (user?.displayName) {
+        return { lineDisplayName: user.displayName };
+      }
+    }
+
+    return {};
+  };
 
   router.post('/', async (req: Request, res: Response) => {
     try {
@@ -392,25 +443,16 @@ export function createTenantRegistrationRouter(
         dormId = getPublicDormitoryId(req);
       }
 
-      let grantLineFriendId: string | undefined;
-      const authAccessGrantId = (req as any).auth?.session?.accessGrantId ||
-        ((req as any).auth?.userId?.startsWith('ag_user_') ? (req as any).auth.userId.replace('ag_user_', '') :
-         ((req as any).auth?.userId?.startsWith('ag_') ? (req as any).auth.userId.replace('ag_', '') : null));
-      if (authAccessGrantId) {
-        const prisma = getPrismaClient();
-        const grant = await prisma.dormitoryAccessGrant.findUnique({
-          where: { id: authAccessGrantId },
-        });
-        if (grant) {
-          grantLineFriendId = grant.lineFriendId || undefined;
-          if (!dormId) dormId = grant.dormitoryId;
-        }
+      const lineCtx = await resolveLineContextFromSession(req);
+      if (!dormId && lineCtx.dormitoryId) {
+        dormId = lineCtx.dormitoryId;
       }
 
       const newReq = await registrationService.createRequest(dormId, {
         dormitoryId: dormId || undefined,
         inviteToken: validData.inviteToken || undefined,
-        lineFollowerId: grantLineFriendId || validData.lineFollowerId,
+        lineFollowerId: lineCtx.lineFriendId || validData.lineFollowerId,
+        lineDisplayName: lineCtx.lineDisplayName || validData.lineDisplayName,
         requestedRoomId: validData.requestedRoomId,
         prefix: validData.prefix,
         customPrefix: validData.customPrefix,
@@ -472,7 +514,15 @@ export function createTenantRegistrationRouter(
       if (!dormId) {
         dormId = getPublicDormitoryId(req);
       }
-      const result = await registrationService.resubmitRequest(req.params.id, dormId, parseResult.data);
+      const lineCtx = await resolveLineContextFromSession(req);
+      if (!dormId && lineCtx.dormitoryId) {
+        dormId = lineCtx.dormitoryId;
+      }
+      const result = await registrationService.resubmitRequest(req.params.id, dormId, {
+        ...parseResult.data,
+        lineFollowerId: lineCtx.lineFriendId || parseResult.data.lineFollowerId,
+        lineDisplayName: lineCtx.lineDisplayName || parseResult.data.lineDisplayName,
+      });
       res.json({ data: result });
     } catch (err) {
       handleServiceError(res, err, req);
@@ -693,6 +743,31 @@ export function createTenantRegistrationRouter(
       }
       const result = await registrationService.reassignRequestRoom(req.params.id, dormId, targetRoomId, req.auth?.userId);
       res.json({ data: result });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  });
+
+  // GET /api/v1/tenant-registrations/:id/contract-pdf
+  privateRouter.get('/:id/contract-pdf', requireDormitoryPermission('tenant:read'), async (req: Request, res: Response) => {
+    try {
+      const dormId = getAuthoritativeDormitoryId(req);
+      const { pdfBuffer, contractNumber } = await registrationService.getRegistrationContractPdf(
+        dormId,
+        req.params.id,
+        {
+          roomId: typeof req.query.roomId === 'string' ? req.query.roomId : undefined,
+          startDate: typeof req.query.startDate === 'string' ? req.query.startDate : undefined,
+          endDate: typeof req.query.endDate === 'string' ? req.query.endDate : undefined,
+          rentAmount: req.query.rentAmount ? Number(req.query.rentAmount) : undefined,
+          depositAmount: req.query.depositAmount ? Number(req.query.depositAmount) : undefined,
+        }
+      );
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('Cache-Control', 'private, no-store, no-cache, must-revalidate');
+      res.setHeader('Content-Disposition', `inline; filename="${contractNumber}.pdf"`);
+      return res.send(pdfBuffer);
     } catch (err) {
       handleServiceError(res, err, req);
     }
