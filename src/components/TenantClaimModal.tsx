@@ -8,6 +8,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ShieldCheck, UserCheck, Phone, AlertCircle, Loader2, CheckCircle2 } from 'lucide-react';
 import { httpRequest } from '../data/httpClient';
+import { sanitizeClaimInput } from '../utils/claim-sanitizer';
+
+export { sanitizeClaimInput };
 
 interface TenantClaimModalProps {
   isOpen: boolean;
@@ -32,7 +35,7 @@ export const TenantClaimModal: React.FC<TenantClaimModalProps> = ({
 }) => {
   const [loadingCandidate, setLoadingCandidate] = useState(false);
   const [candidate, setCandidate] = useState<any | null>(null);
-  const [claimInput, setClaimInput] = useState(initialClaimInput || '');
+  const [claimInput, setClaimInput] = useState(sanitizeClaimInput(initialClaimInput));
   const [submitting, setSubmitting] = useState(false);
   const [errorText, setErrorText] = useState<string | null>(null);
 
@@ -100,7 +103,7 @@ export const TenantClaimModal: React.FC<TenantClaimModalProps> = ({
   // Fetch candidate discovery
   useEffect(() => {
     if (isOpen && (roomNumber || roomId)) {
-      setClaimInput(initialClaimInput || '');
+      setClaimInput(sanitizeClaimInput(initialClaimInput));
       setErrorText(null);
       setCandidate(null);
       setLoadingCandidate(true);

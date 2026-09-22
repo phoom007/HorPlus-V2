@@ -65,6 +65,7 @@ export class TenantClaimService {
         dormitoryId,
         status: 'active',
         linkedUserId: null,
+        lineFriendId: null,
         deletedAt: null,
         OR: [
           {
@@ -297,7 +298,25 @@ export class TenantClaimService {
       throw err;
     }
 
+    const isAccessGrant = userId.startsWith('ag_user_') || userId.startsWith('ag_');
+    const grantId = isAccessGrant ? userId.replace(/^ag_user_|^ag_/, '') : null;
+    const isUuid = (val?: string | null): val is string =>
+      !!val && /^[0-9a-fA-F-]{36}$/.test(val);
+
     return this.prisma.$transaction(async (tx) => {
+      // 0. Set transaction RLS context for target dormitory
+      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
+
+      // 1. Resolve Access Grant lineFriendId if synthetic userId
+      let grantLineFriendId: string | null = null;
+      if (isAccessGrant && grantId && isUuid(grantId)) {
+        const grant = await tx.dormitoryAccessGrant.findUnique({
+          where: { id: grantId },
+          select: { lineFriendId: true },
+        });
+        grantLineFriendId = grant?.lineFriendId || null;
+      }
+
       // 1. User+Dormitory claim advisory lock (Order 1: serializes claims by the same user in this dormitory)
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${'tenant_claim_user:' + userId + ':' + dormitoryId}))`;
 
@@ -309,8 +328,7 @@ export class TenantClaimService {
       };
       if (roomNumber) roomWhere.roomNumber = roomNumber;
       if (roomId) {
-        const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(roomId);
-        if (isUuid) {
+        if (isUuid(roomId)) {
           roomWhere.id = roomId;
         } else if (!roomNumber) {
           const err = new Error('ไม่พบข้อมูลผู้เช่าที่ตรงกับข้อมูลที่ระบุ');
@@ -335,13 +353,26 @@ export class TenantClaimService {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${dormitoryId + ':' + room.id}))`;
 
       // 4. One User / One Tenant per Dormitory Cardinality Check (Locked Product Decision)
-      const existingLinkedTenant = await tx.tenant.findFirst({
-        where: {
-          dormitoryId,
-          linkedUserId: userId,
-          deletedAt: null,
-        },
-      });
+      let existingLinkedTenant = null;
+      if (isAccessGrant) {
+        if (grantLineFriendId) {
+          existingLinkedTenant = await tx.tenant.findFirst({
+            where: {
+              dormitoryId,
+              lineFriendId: grantLineFriendId,
+              deletedAt: null,
+            },
+          });
+        }
+      } else if (isUuid(userId)) {
+        existingLinkedTenant = await tx.tenant.findFirst({
+          where: {
+            dormitoryId,
+            linkedUserId: userId,
+            deletedAt: null,
+          },
+        });
+      }
 
       if (existingLinkedTenant && !data.allowAdditionalRoom) {
         if (this.auditService) {
@@ -406,33 +437,22 @@ export class TenantClaimService {
         throw err;
       }
 
-      // 7. Re-check under lock that candidate tenant.linkedUserId is still null
+      // 7. Re-check under lock that candidate tenant.linkedUserId and lineFriendId are still null
       const freshTenant = await tx.tenant.findUnique({
         where: { id: candidate.id },
       });
 
-      if (!freshTenant || freshTenant.linkedUserId !== null) {
+      if (!freshTenant || freshTenant.linkedUserId !== null || freshTenant.lineFriendId !== null) {
         const err = new Error('ไม่พบข้อมูลผู้เช่าที่ตรงกับข้อมูลที่ระบุ');
         (err as any).statusCode = 400;
         (err as any).code = 'CLAIM_ALREADY_LINKED';
         throw err;
       }
 
-      // 8. Look up target or global TENANT role (Strictly no cross-dorm role leakage, concurrency-safe)
-      let tenantRole = await tx.role.findFirst({
-        where: {
-          code: 'TENANT',
-          OR: [
-            { dormitoryId },
-            { dormitoryId: null },
-          ],
-        },
-      });
-
-      if (!tenantRole) {
-        // Dormitory-level advisory lock to serialize concurrent role creation
-        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${'role_create:' + dormitoryId}))`;
-        tenantRole = await tx.role.findFirst({
+      // 8. Check existing DormitoryMember membership (Only for real UUID users, skip for Access Grant synthetic users)
+      if (!isAccessGrant && isUuid(userId)) {
+        // Look up target or global TENANT role (Strictly no cross-dorm role leakage, concurrency-safe)
+        let tenantRole = await tx.role.findFirst({
           where: {
             code: 'TENANT',
             OR: [
@@ -443,84 +463,103 @@ export class TenantClaimService {
         });
 
         if (!tenantRole) {
-          tenantRole = await tx.role.create({
-            data: {
-              dormitoryId,
+          // Dormitory-level advisory lock to serialize concurrent role creation
+          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${'role_create:' + dormitoryId}))`;
+          tenantRole = await tx.role.findFirst({
+            where: {
               code: 'TENANT',
-              name: 'ผู้เช่า',
-              permissions: ['tenant:read', 'tenant:pay'],
-              isSystem: true,
+              OR: [
+                { dormitoryId },
+                { dormitoryId: null },
+              ],
+            },
+          });
+
+          if (!tenantRole) {
+            tenantRole = await tx.role.create({
+              data: {
+                dormitoryId,
+                code: 'TENANT',
+                name: 'ผู้เช่า',
+                permissions: ['tenant:read', 'tenant:pay'],
+                isSystem: true,
+              },
+            });
+          }
+        }
+
+        const existingMember = await tx.dormitoryMember.findUnique({
+          where: {
+            user_dormitory_unique: {
+              userId,
+              dormitoryId,
+            },
+          },
+          include: { role: true },
+        });
+
+        if (existingMember) {
+          // Existing membership is valid ONLY if role is TENANT and belongs to target dormitory or is global
+          const isTargetOrGlobalTenant =
+            existingMember.role?.code === 'TENANT' &&
+            (existingMember.role?.dormitoryId === dormitoryId || existingMember.role?.dormitoryId === null);
+
+          if (!isTargetOrGlobalTenant) {
+            if (this.auditService) {
+              await this.auditService.logSecurityEvent({
+                action: 'tenant.claim.membership_conflict',
+                dormitoryId,
+                userId,
+                details: {
+                  reason:
+                    existingMember.role?.code !== 'TENANT'
+                      ? 'existing_non_tenant_membership'
+                      : 'existing_foreign_tenant_role',
+                  existingRoleId: existingMember.roleId,
+                  existingRoleCode: existingMember.role?.code,
+                  existingRoleDormitoryId: existingMember.role?.dormitoryId,
+                  roomId: room.id,
+                },
+              });
+            }
+            const err = new Error('ไม่พบข้อมูลผู้เช่าที่ตรงกับข้อมูลที่ระบุ');
+            (err as any).statusCode = 404;
+            (err as any).code = 'CLAIM_MEMBERSHIP_CONFLICT';
+            throw err;
+          }
+
+          if (existingMember.status !== 'active') {
+            await tx.dormitoryMember.update({
+              where: { id: existingMember.id },
+              data: { status: 'active' },
+            });
+          }
+        } else {
+          await tx.dormitoryMember.create({
+            data: {
+              userId,
+              dormitoryId,
+              roleId: tenantRole.id,
+              status: 'active',
+              membershipOrigin: 'MANUAL_GRANT',
+              acceptedAt: new Date(),
             },
           });
         }
       }
 
-      // 7. Check existing DormitoryMember membership
-      const existingMember = await tx.dormitoryMember.findUnique({
-        where: {
-          user_dormitory_unique: {
-            userId,
-            dormitoryId,
-          },
-        },
-        include: { role: true },
-      });
-
-      if (existingMember) {
-        // Existing membership is valid ONLY if role is TENANT and belongs to target dormitory or is global
-        const isTargetOrGlobalTenant =
-          existingMember.role?.code === 'TENANT' &&
-          (existingMember.role?.dormitoryId === dormitoryId || existingMember.role?.dormitoryId === null);
-
-        if (!isTargetOrGlobalTenant) {
-          if (this.auditService) {
-            await this.auditService.logSecurityEvent({
-              action: 'tenant.claim.membership_conflict',
-              dormitoryId,
-              userId,
-              details: {
-                reason:
-                  existingMember.role?.code !== 'TENANT'
-                    ? 'existing_non_tenant_membership'
-                    : 'existing_foreign_tenant_role',
-                existingRoleId: existingMember.roleId,
-                existingRoleCode: existingMember.role?.code,
-                existingRoleDormitoryId: existingMember.role?.dormitoryId,
-                roomId: room.id,
-              },
-            });
-          }
-          const err = new Error('ไม่พบข้อมูลผู้เช่าที่ตรงกับข้อมูลที่ระบุ');
-          (err as any).statusCode = 404;
-          (err as any).code = 'CLAIM_MEMBERSHIP_CONFLICT';
-          throw err;
-        }
-
-        if (existingMember.status !== 'active') {
-          await tx.dormitoryMember.update({
-            where: { id: existingMember.id },
-            data: { status: 'active' },
-          });
-        }
-      } else {
-        await tx.dormitoryMember.create({
-          data: {
-            userId,
-            dormitoryId,
-            roleId: tenantRole.id,
-            status: 'active',
-            membershipOrigin: 'MANUAL_GRANT',
-            acceptedAt: new Date(),
-          },
-        });
+      // 9. Link User / LINE Friend to Tenant (ONLY after membership is verified/created)
+      const tenantUpdateData: { linkedUserId?: string; lineFriendId?: string } = {};
+      if (isUuid(userId)) {
+        tenantUpdateData.linkedUserId = userId;
+      }
+      if (grantLineFriendId) {
+        tenantUpdateData.lineFriendId = grantLineFriendId;
       }
 
-      // 8. Link User to Tenant (ONLY after membership is verified/created)
       const updatedTenant = await tx.tenant.update({
         where: { id: candidate.id },
-        data: {
-          linkedUserId: userId,
-        },
+        data: tenantUpdateData,
       });
 
       // 9. Audit event

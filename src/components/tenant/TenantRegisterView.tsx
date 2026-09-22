@@ -42,6 +42,7 @@ import {
 import { TenantBottomSheet } from '../../pages/tenant/components/TenantBottomSheet';
 import { LineLogo } from '../LineLogo';
 import { TenantClaimModal } from '../TenantClaimModal';
+import { sanitizeClaimInput } from '../../utils/claim-sanitizer';
 import { OwnerDateInput } from '../OwnerDateInput';
 import { Room, Tenant, Contract, CoOccupant } from '../../types';
 import {
@@ -1468,57 +1469,75 @@ export const TenantRegisterView: React.FC<TenantRegisterViewProps> = ({
     setSubmittingRegistration(true);
 
     try {
-      const res = await submitDailyStayRequest({
-        dormitoryId: dormitoryId || dormInfo?.id || 'dorm-1',
-        roomId: selectedRoomId,
-        roomNumber: selectedRoom?.roomNumber,
-        applicantFullName: `${getEffectivePrefix()} ${fullName}`.trim(),
-        applicantPhone: phone.trim() || undefined,
-        startDate: checkInDate,
-        endDate: dailyEndDate,
-        dailyRateAmount: Number(rentAmount).toFixed(2),
-        depositAmount: Number(depositAmount || 0).toFixed(2),
-        depositDeclaredStatus: depositStatus === 'paid' ? 'PAID' : 'UNPAID',
-        depositSlipImageUrl: depositStatus === 'paid' && depositSlipImage ? depositSlipImage : undefined,
-      });
+      const effectivePrefix = getEffectivePrefix();
+      const nameParts = fullName.trim().split(/\s+/);
+      const firstName = nameParts[0] || fullName.trim();
+      const lastName = nameParts.slice(1).join(' ').trim() || '-';
+      const effectiveSignature = signatureDataUrl || (canvasRef.current && isSigned ? canvasRef.current.toDataURL('image/png') : (signatureDataUrl || 'data:image/png;base64,placeholder'));
+      const effectiveDormId = targetDormId || selectedRoom?.dormitoryId || dormitoryId || dormInfo?.id;
 
-      // Dual-sync to tenant registration requests so it appears on owner dashboard
-      try {
-        const effectivePrefix = getEffectivePrefix();
-        const nameParts = fullName.trim().split(/\s+/);
-        const firstName = nameParts[0] || fullName.trim();
-        const lastName = nameParts.slice(1).join(' ').trim();
-
-        await submitTenantRegistrationRequest({
-          dormitoryId: dormitoryId || dormInfo?.id,
-          inviteToken,
-          requestedRoomId: selectedRoomId,
-          firstName,
-          lastName,
-          phone: phone.trim(),
-          agreedTerms: true,
-          signatureBase64: signatureDataUrl || (canvasRef.current ? canvasRef.current.toDataURL('image/png') : 'data:image/png;base64,placeholder'),
-          expectedPolicyVersion: policyData?.version || 1,
-          rentalPlan: 'daily',
-          proposedRent: rentAmount,
-          proposedDeposit: depositAmount,
-          startDate: checkInDate,
-          endDate: dailyEndDate,
-          dailyRateAmount: rentAmount,
-          depositAmount: depositAmount,
-          citizenId: citizenId.trim(),
-          birthDate: birthDate || undefined,
-          address: address || undefined,
-          idCardImageUrl: idCardImage || undefined,
-          depositSlipImageUrl: depositStatus === 'paid' && depositSlipImage ? depositSlipImage : undefined,
-          depositDeclaredStatus: depositStatus === 'paid' ? 'PAID' : 'UNPAID',
-          terms: 'คำขอเข้าพักรายวัน (Daily Stay)',
-        });
-      } catch (syncErr) {
-        console.warn('Daily stay dual-sync registration request warning:', syncErr);
+      // Ensure fresh policy version from authoritative server
+      let effectiveVersion = policyData?.version || 1;
+      if (effectiveDormId && effectiveDormId !== 'dorm-1') {
+        try {
+          const pRes = await getPublicDormitoryPolicy(effectiveDormId);
+          if (pRes.success && pRes.data?.version) {
+            effectiveVersion = pRes.data.version;
+            setPolicyData((prev: any) => ({ ...(prev || {}), ...pRes.data }));
+          }
+        } catch { }
       }
 
+      // 1. Submit authoritative registration request (Public endpoint)
+      const res = await submitTenantRegistrationRequest({
+        dormitoryId: effectiveDormId,
+        inviteToken,
+        requestedRoomId: selectedRoomId,
+        prefix: effectivePrefix,
+        firstName,
+        lastName,
+        phone: phone.trim(),
+        email: email.trim() || undefined,
+        agreedTerms: true,
+        signatureBase64: effectiveSignature,
+        expectedPolicyVersion: effectiveVersion,
+        rentalPlan: 'daily',
+        proposedRent: rentAmount,
+        proposedDeposit: depositAmount,
+        startDate: checkInDate,
+        endDate: dailyEndDate,
+        dailyRateAmount: rentAmount,
+        depositAmount: depositAmount,
+        citizenId: citizenId.trim(),
+        birthDate: birthDate || undefined,
+        address: address || undefined,
+        idCardImageUrl: idCardImage || undefined,
+        depositSlipImageUrl: depositStatus === 'paid' && depositSlipImage ? depositSlipImage : undefined,
+        depositDeclaredStatus: depositStatus === 'paid' ? 'PAID' : 'UNPAID',
+        terms: 'คำขอเข้าพักรายวัน (Daily Stay)',
+      });
+
+      // 2. Best-effort sync to daily-stays if requester has authenticated session
+      try {
+        await submitDailyStayRequest({
+          dormitoryId: effectiveDormId || 'dorm-1',
+          roomId: selectedRoomId,
+          roomNumber: selectedRoom?.roomNumber,
+          applicantFullName: `${effectivePrefix} ${fullName}`.trim(),
+          applicantPhone: phone.trim() || undefined,
+          startDate: checkInDate,
+          endDate: dailyEndDate,
+          dailyRateAmount: Number(rentAmount).toFixed(2),
+          depositAmount: Number(depositAmount || 0).toFixed(2),
+          depositDeclaredStatus: depositStatus === 'paid' ? 'PAID' : 'UNPAID',
+          depositSlipImageUrl: depositStatus === 'paid' && depositSlipImage ? depositSlipImage : undefined,
+        });
+      } catch { }
+
       if (res.success) {
+        try {
+          localStorage.setItem('pending_tenant_registration', JSON.stringify(res.data));
+        } catch { }
         const successObj = {
           status: 'PENDING_DAILY_STAY',
           label: 'รออนุมัติคำขอเข้าพักรายวัน',
@@ -1552,8 +1571,10 @@ export const TenantRegisterView: React.FC<TenantRegisterViewProps> = ({
       if (!isAgreedTerms || !effectiveSignature) {
         setHighlightErrors(true);
         if (!effectiveSignature) {
+          setErrorMsg('กรุณาลงลายมือชื่อเพื่อยืนยันสัญญาเช่า');
           canvasRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
         } else if (!isAgreedTerms) {
+          setErrorMsg('กรุณากดยอมรับกฎระเบียบและเงื่อนไขของหอพัก');
           document.querySelector('[data-testid="tenant-agree-terms-checkbox"]')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
         }
         return;
@@ -1565,11 +1586,16 @@ export const TenantRegisterView: React.FC<TenantRegisterViewProps> = ({
         setHighlightErrors(true);
         if (invalid.includes(5) && activeStep === 5) {
           if (!effectiveSignature) {
+            setErrorMsg('กรุณาลงลายมือชื่อในช่องด้านล่าง');
             canvasRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
           } else if (!isAgreedTerms) {
+            setErrorMsg('กรุณากดยอมรับกฎระเบียบและเงื่อนไขของหอพัก');
             document.querySelector('[data-testid="tenant-agree-terms-checkbox"]')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
           }
         } else {
+          if (invalid.includes(1)) setErrorMsg('กรุณาเลือกห้องพักและระบุวันเข้าพัก (ขั้นตอนที่ 1)');
+          else if (invalid.includes(2)) setErrorMsg('กรุณากรอกข้อมูลผู้เช่าและข้อมูลบัตรประชาชนให้ครบถ้วน (ขั้นตอนที่ 2)');
+          else if (invalid.includes(3)) setErrorMsg('กรุณากรอกข้อมูลผู้ติดต่อฉุกเฉินให้ครบถ้วน (ขั้นตอนที่ 3)');
           goToStep(invalid[0]);
         }
         return;
@@ -1584,7 +1610,7 @@ export const TenantRegisterView: React.FC<TenantRegisterViewProps> = ({
       const nameParts = fullName.trim().split(/\s+/);
       const rawFirstName = nameParts[0] || fullName.trim();
       const firstName = rawFirstName;
-      const lastName = nameParts.slice(1).join(' ').trim();
+      const lastName = nameParts.slice(1).join(' ').trim() || '-';
       const activeVehicles = vehiclesList.filter((v) => v.type !== 'none');
       const serializedVehicles = activeVehicles.map((v) => ({
         type: v.type,
@@ -1684,15 +1710,6 @@ export const TenantRegisterView: React.FC<TenantRegisterViewProps> = ({
         }
       }
 
-      const totalOccupantsCount = 1 + (hasCoOccupants && coOccupants.length > 0 ? coOccupants.length : 0);
-      const fullContractTerms = `ข้อ 1. ทรัพย์สินที่เช่า: ผู้ให้เช่าตกลงให้เช่า และผู้เช่าตกลงเช่าห้องพักหมายเลข ห้อง ${selectedRoom?.roomNumber || '-'} ของอาคาร ${dormInfo.name || 'หอพัก'} พร้อมอุปกรณ์ เฟอร์นิเจอร์ เครื่องใช้ไฟฟ้า และสิ่งอำนวยความสะดวกในสภาพเรียบร้อยสมบูรณ์
-ข้อ 2. อัตราค่าเช่า เงินประกัน และการคืนเงิน: ผู้เช่าตกลงชำระค่าเช่าในอัตรา ฿ ${Number(rentAmount).toLocaleString('th-TH', { minimumFractionDigits: 2 })} บาทต่อ${rentPlan === 'monthly' ? 'เดือน' : rentPlan === 'term' ? 'เทอม' : 'วัน'} กำหนดชำระตามรอบบิลที่หอพักกำหนด พร้อมวางเงินประกันความเสียหายจำนวน ฿ ${Number(depositAmount).toLocaleString('th-TH', { minimumFractionDigits: 2 })} บาท โดยเงินประกันนี้จะได้รับคืนเมื่อสิ้นสุดสัญญาเช่า หลังจากหักค่าใช้จ่ายค้างชำระ หนี้สิน หรือค่าความเสียหายต่อทรัพย์สิน (ถ้ามี) ตามระเบียบและเงื่อนไขที่หอพักกำหนด
-ข้อ 3. ระยะเวลาการเช่า: สัญญานี้มีกำหนดระยะเวลา ${durationValue} ${rentPlan === 'daily' ? 'วัน' : 'เดือน'} โดยเริ่มต้นตั้งแต่วันที่ ${formatThaiFullDate(checkInDate)} ถึงวันที่ ${formatThaiFullDate(endDate) || '-'}
-ข้อ 4. ยานพาหนะ สัตว์เลี้ยง และการใช้พื้นที่ส่วนกลาง: ผู้เช่าตกลงปฏิบัติตามระเบียบการจอดยานพาหนะ การนำสัตว์เลี้ยงเข้าพัก (หากหอพักอนุญาต) และการใช้พื้นที่ส่วนกลาง โดยต้องบันทึกข้อมูลยานพาหนะและสัตว์เลี้ยงลงในระบบของหอพักให้ถูกต้องตรงตามความเป็นจริง
-ข้อ 5. จำนวนผู้พักอาศัยและผู้พักร่วม: ผู้เช่าตกลงแจ้งข้อมูลผู้พักอาศัยในห้องพักตามความเป็นจริง โดยในวันทำสัญญามีผู้เช่าหลักและผู้พักอาศัยร่วม รวมทั้งสิ้น ${totalOccupantsCount} คน หากมีการเปลี่ยนแปลงหรือมีผู้พักอาศัยร่วมเพิ่มเติมในภายหลัง ผู้เช่าจะต้องแจ้งให้ผู้ให้เช่าทราบล่วงหน้าและบันทึกข้อมูลลงในระบบตามระเบียบของหอพัก
-ข้อ 6. ข้อตกลงและระเบียบการอยู่อาศัย:
-${getDormRulesText()}`;
-
       // Scenario Option B: Revision Resubmission
       if (revisionRequest) {
         const res = await resubmitTenantRegistrationRequest(revisionRequest.id, {
@@ -1737,7 +1754,7 @@ ${getDormRulesText()}`;
           vehicles: serializedVehicles,
           pet: primaryPet,
           pets: serializedPets,
-          terms: fullContractTerms,
+          terms: getDormRulesText(),
         });
 
         if (res.success) {
@@ -1760,8 +1777,20 @@ ${getDormRulesText()}`;
       }
 
       // Scenario B: Public Self-Registration (Vacant Room)
+      const effectiveDormId = targetDormId || selectedRoom?.dormitoryId || dormitoryId || dormInfo?.id;
+      let effectiveVersion = policyData?.version || 1;
+      if (effectiveDormId && effectiveDormId !== 'dorm-1') {
+        try {
+          const pRes = await getPublicDormitoryPolicy(effectiveDormId);
+          if (pRes.success && pRes.data?.version) {
+            effectiveVersion = pRes.data.version;
+            setPolicyData((prev: any) => ({ ...(prev || {}), ...pRes.data }));
+          }
+        } catch { }
+      }
+
       const res = await submitTenantRegistrationRequest({
-        dormitoryId: targetDormId || dormitoryId,
+        dormitoryId: effectiveDormId,
         inviteToken,
         requestedRoomId: selectedRoomId,
         prefix: getEffectivePrefix(),
@@ -1772,7 +1801,7 @@ ${getDormRulesText()}`;
         email: email.trim() || undefined,
         agreedTerms: true,
         signatureBase64: effectiveSignature,
-        expectedPolicyVersion: policyData?.version || 1,
+        expectedPolicyVersion: effectiveVersion,
         rentalPlan: rentPlan,
         proposedRent: rentAmount,
         proposedDeposit: depositAmount,
@@ -1801,7 +1830,7 @@ ${getDormRulesText()}`;
         vehicles: serializedVehicles,
         pet: primaryPet,
         pets: serializedPets,
-        terms: fullContractTerms,
+        terms: getDormRulesText(),
       });
 
       if (res.success) {
@@ -2217,11 +2246,13 @@ ${getDormRulesText()}`;
             roomNumber={selectedRoomForClaim.roomNumber}
             roomId={selectedRoomForClaim.id}
             initialClaimInput={
-              existingTenantProfile?.phone && existingTenantProfile?.phone !== '-'
-                ? existingTenantProfile.phone
-                : existingTenantProfile?.name && existingTenantProfile?.name !== '-'
-                  ? existingTenantProfile.name
-                  : undefined
+              sanitizeClaimInput(
+                existingTenantProfile?.phone && existingTenantProfile?.phone !== '-'
+                  ? existingTenantProfile.phone
+                  : existingTenantProfile?.name && existingTenantProfile?.name !== '-'
+                    ? existingTenantProfile.name
+                    : undefined
+              )
             }
             allowAdditionalRoom={!!existingTenantProfile}
             onSuccess={(msg) => {
@@ -2536,10 +2567,6 @@ ${getDormRulesText()}`;
 
               {rentPlan === 'daily' && (
                 <div className="space-y-3.5 pt-1">
-                  <div className="p-3 bg-amber-50 border border-amber-200 rounded-2xl flex items-center gap-2 text-amber-900 text-xs font-bold animate-in fade-in duration-200">
-                    <Clock className="w-4 h-4 text-amber-600 shrink-0" />
-                    <span>การเข้าพักรายวัน (DailyStay Workflow)</span>
-                  </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div className="space-y-1">
                       <label className="block font-bold text-slate-600">วันเริ่มเข้าพัก (Check-in) *</label>
@@ -3222,8 +3249,13 @@ ${getDormRulesText()}`;
                   <div className="border-2 border-dashed border-sky-200 rounded-2xl bg-sky-50/20 overflow-hidden relative touch-none">
                     <canvas
                       ref={canvasRef}
-                      width={340}
-                      height={110}
+                      width={480}
+                      height={200}
+                      data-testid="tenant-daily-signature-canvas"
+                      onPointerDown={startDrawing}
+                      onPointerMove={draw}
+                      onPointerUp={stopDrawing}
+                      onPointerCancel={stopDrawing}
                       onMouseDown={startDrawing}
                       onMouseMove={draw}
                       onMouseUp={stopDrawing}
@@ -3231,7 +3263,8 @@ ${getDormRulesText()}`;
                       onTouchStart={startDrawing}
                       onTouchMove={draw}
                       onTouchEnd={stopDrawing}
-                      className="w-full h-28 cursor-crosshair block"
+                      style={{ touchAction: 'none' }}
+                      className="w-full h-48 cursor-crosshair block touch-none"
                     />
                     {!isSigned && (
                       <div className="absolute inset-0 flex items-center justify-center pointer-events-none text-slate-350 text-[10px] font-bold">
@@ -3974,7 +4007,7 @@ ${getDormRulesText()}`;
               onClick={handleNextStep}
               className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs shadow-md flex items-center gap-1.5 transition-all active:scale-95 cursor-pointer"
             >
-              <span>ถัดไป: {stepsList[activeStep]?.shortLabel || stepsList[activeStep]?.label || ''}</span>
+              <span>ถัดไป</span>
               <ArrowRight className="w-3.5 h-3.5" />
             </button>
           ) : (

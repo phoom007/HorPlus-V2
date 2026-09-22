@@ -25,6 +25,7 @@ import {
 } from '../tenantHelpers';
 import { TenantBottomSheet } from '../components/TenantBottomSheet';
 import { OwnerDateInput } from '../../../components/OwnerDateInput';
+import { sanitizeContractTerms } from '../../../utils/contract-terms-sanitizer';
 
 export interface TenantContractViewProps {
   tenantContracts: Contract[];
@@ -96,6 +97,11 @@ export const TenantContractView: React.FC<TenantContractViewProps> = ({
   const [isCancelConfirmOpen, setIsCancelConfirmOpen] = useState(false);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
+  const initialRenewalPlan = tenantContracts.some(
+    (c) => c.rentBillingType === 'term' || (c as any).rentalType === 'TERM' || (tenant as any)?.rentalType === 'TERM'
+  ) ? 'term' : 'monthly';
+  const [renewalRentPlan, setRenewalRentPlan] = useState<'term' | 'monthly'>(initialRenewalPlan);
+
   const isPendingRenewal =
     renewalEligibility?.reasonCode === 'RENEWAL_REQUEST_ALREADY_PENDING' ||
     renewalEligibility?.pendingRequest ||
@@ -136,6 +142,34 @@ export const TenantContractView: React.FC<TenantContractViewProps> = ({
             requestedDurationMonths
           );
 
+          const effectiveTermMonths = Number(
+            tenantRoom?.building?.termMonths ??
+            tenantRoom?.termMonths ??
+            dormitory?.termMonths ??
+            (con.rentBillingType === 'term' ? con.durationMonths : null) ??
+            6
+          );
+          const monthlyRent = Number(
+            tenantRoom?.monthlyRent ||
+            tenantRoom?.building?.monthlyRent ||
+            con.monthlyRent ||
+            con.rentAmount ||
+            0
+          );
+          const termRent = Number(
+            tenantRoom?.termRent ||
+            tenantRoom?.building?.termRent ||
+            (con as any).termRent ||
+            (con.rentBillingType === 'term' ? con.rentAmount : 0) ||
+            (monthlyRent * effectiveTermMonths) ||
+            0
+          );
+          const totalRent = renewalRentPlan === 'monthly'
+            ? monthlyRent * requestedDurationMonths
+            : (requestedDurationMonths === effectiveTermMonths
+                ? termRent
+                : Math.round((termRent / (effectiveTermMonths || 1)) * requestedDurationMonths));
+
           return (
             <div key={con.id} className="space-y-4">
               {/* Main Contract Spec Card */}
@@ -174,7 +208,20 @@ export const TenantContractView: React.FC<TenantContractViewProps> = ({
                     <button
                       type="button"
                       data-testid="btn-open-renewal-sheet"
-                      onClick={() => setIsRenewalSheetOpen(true)}
+                      onClick={() => {
+                        const isTermCon = con.rentBillingType === 'term' || (con as any).rentalType === 'TERM' || (tenant as any)?.rentalType === 'TERM';
+                        const plan = isTermCon ? 'term' : 'monthly';
+                        setRenewalRentPlan(plan);
+                        const effTerm = Number(
+                          tenantRoom?.building?.termMonths ??
+                          tenantRoom?.termMonths ??
+                          dormitory?.termMonths ??
+                          (con.rentBillingType === 'term' ? con.durationMonths : null) ??
+                          6
+                        );
+                        setRequestedDurationMonths(plan === 'term' ? effTerm : 1);
+                        setIsRenewalSheetOpen(true);
+                      }}
                       className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white rounded-xl text-[10px] font-extrabold transition-all shadow-xs flex items-center gap-1.5 shrink-0 cursor-pointer"
                     >
                       <Calendar className="w-3.5 h-3.5" />
@@ -238,7 +285,7 @@ export const TenantContractView: React.FC<TenantContractViewProps> = ({
 
                 <div className="space-y-3 text-justify">
                   <p>
-                    <span className="font-bold">สัญญาฉบับนี้ทำขึ้นระหว่าง</span> <span className="font-bold text-indigo-900">{dormitory?.ownerName || dormitory?.name || 'ผู้ให้เช่า'}</span> ("ผู้ให้เช่า") ฝ่ายหนึ่ง กับ <span className="font-bold text-indigo-900">คุณ {tenant.name}</span> ถือบัตรประชาชนเลขที่ <span className="font-bold text-indigo-900">{tenant.citizenId || '-'}</span> เบอร์โทรศัพท์ <span className="font-bold text-indigo-900">{tenant.phone || '-'}</span> ("ผู้เช่า") อีกฝ่ายหนึ่ง โดยมีข้อตกลงสำคัญดังต่อไปนี้:
+                    <span className="font-bold">สัญญาฉบับนี้ทำขึ้นระหว่าง</span> <span className="font-bold text-indigo-900">{dormitory?.ownerName || dormitory?.name || 'ผู้ให้เช่า'}</span> ("ผู้ให้เช่า") ฝ่ายหนึ่ง กับ <span className="font-bold text-indigo-900">{tenant.displayName || ((tenant as any).prefix && !tenant.name.startsWith((tenant as any).prefix) ? `${(tenant as any).prefix} ${tenant.name}` : (tenant.name?.startsWith('คุณ') || /^(นาย|นางสาว|นาง|เด็กชาย|เด็กหญิง|ด\.ช\.|ด\.ญ\.)/i.test(tenant.name) ? tenant.name : `คุณ ${tenant.name}`))}</span> ถือบัตรประชาชนเลขที่ <span className="font-bold text-indigo-900">{tenant.citizenId || '-'}</span> เบอร์โทรศัพท์ <span className="font-bold text-indigo-900">{tenant.phone || '-'}</span> ("ผู้เช่า") อีกฝ่ายหนึ่ง โดยมีข้อตกลงสำคัญดังต่อไปนี้:
                   </p>
 
                   <div className="space-y-2 text-slate-700">
@@ -267,7 +314,7 @@ export const TenantContractView: React.FC<TenantContractViewProps> = ({
                         ข้อ 6. ข้อตกลงและระเบียบการอยู่อาศัย:
                       </p>
                       <div className="whitespace-pre-line text-slate-600 text-[11px] leading-relaxed">
-                        {dormitory?.rules || con.terms || 'ปฏิบัติตามกฎระเบียบของหอพักอย่างเคร่งครัด รักษาความสะอาด และห้ามก่อความเดือดร้อนรำคาญต่อผู้อื่น'}
+                        {sanitizeContractTerms(dormitory?.rules || con.terms) || 'ปฏิบัติตามกฎระเบียบของหอพักอย่างเคร่งครัด รักษาความสะอาด และห้ามก่อความเดือดร้อนรำคาญต่อผู้อื่น'}
                       </div>
                     </div>
                   </div>
@@ -340,7 +387,7 @@ export const TenantContractView: React.FC<TenantContractViewProps> = ({
                         docId: con.id,
                         pdfUrl: '/api/v1/tenant-portal/contract/pdf',
                         fileName: `สัญญาเช่า_${con.contractNumber || 'CTR'}.pdf`,
-                        content: `=== เอกสารสัญญาเช่าห้องพัก (ฉบับจริง) ===\nเลขที่สัญญา: ${con.contractNumber || 'CTR'}\nผู้เช่า: คุณ ${tenant.name}\nห้องพัก: ${tenantRoom?.roomNumber || 'ไม่ระบุ'}\nระยะเวลาสัญญา: ${formatToBeFullDate(con.startDate)} ถึง ${formatToBeFullDate(con.endDate)}\nอัตราค่าเช่า: ${(con.monthlyRent || (con as any).rentAmount || 0).toLocaleString('th-TH')} บาท/เดือน\nเงินประกัน: ${(con.depositAmount || 0).toLocaleString('th-TH')} บาท\n\n* ท่านสามารถเปิดดูเอกสาร PDF ฉบับจริง หรือดาวน์โหลดไฟล์สัญญาเช่าทางการได้ที่ปุ่มด้านล่าง`,
+                        content: `=== เอกสารสัญญาเช่าห้องพัก (ฉบับจริง) ===\nเลขที่สัญญา: ${con.contractNumber || 'CTR'}\nผู้เช่า: ${tenant.displayName || ((tenant as any).prefix && !tenant.name.startsWith((tenant as any).prefix) ? `${(tenant as any).prefix} ${tenant.name}` : (tenant.name?.startsWith('คุณ') || /^(นาย|นางสาว|นาง|เด็กชาย|เด็กหญิง|ด\.ช\.|ด\.ญ\.)/i.test(tenant.name) ? tenant.name : `คุณ ${tenant.name}`))}\nห้องพัก: ${tenantRoom?.roomNumber || 'ไม่ระบุ'}\nระยะเวลาสัญญา: ${formatToBeFullDate(con.startDate)} ถึง ${formatToBeFullDate(con.endDate)}\nอัตราค่าเช่า: ${(con.monthlyRent || (con as any).rentAmount || 0).toLocaleString('th-TH')} บาท/เดือน\nเงินประกัน: ${(con.depositAmount || 0).toLocaleString('th-TH')} บาท\n\n* ท่านสามารถเปิดดูเอกสาร PDF ฉบับจริง หรือดาวน์โหลดไฟล์สัญญาเช่าทางการได้ที่ปุ่มด้านล่าง`,
                         badge: null,
                         onClick: () => openTenantContractPrintWindow(con, tenant, tenantRoom, dormitory, { autoPrint: false }),
                         onDownload: () => {
@@ -475,6 +522,42 @@ export const TenantContractView: React.FC<TenantContractViewProps> = ({
                     </div>
                   ) : (
                     <div className="space-y-3.5">
+                      {/* Plan Toggle (รายเทอม / รายเดือน) */}
+                      <div className="flex bg-slate-100 p-1 rounded-xl gap-1">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (renewalRentPlan !== 'term') {
+                              setRenewalRentPlan('term');
+                              setRequestedDurationMonths(effectiveTermMonths);
+                            }
+                          }}
+                          className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-all ${
+                            renewalRentPlan === 'term'
+                              ? 'bg-white text-emerald-700 shadow-xs'
+                              : 'text-slate-500 hover:text-slate-800'
+                          }`}
+                        >
+                          รายเทอม
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (renewalRentPlan !== 'monthly') {
+                              setRenewalRentPlan('monthly');
+                              setRequestedDurationMonths(1);
+                            }
+                          }}
+                          className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-all ${
+                            renewalRentPlan === 'monthly'
+                              ? 'bg-white text-emerald-700 shadow-xs'
+                              : 'text-slate-500 hover:text-slate-800'
+                          }`}
+                        >
+                          รายเดือน
+                        </button>
+                      </div>
+
                       {unpaidBalance > 0 && (
                         <div className="p-2.5 bg-amber-50/90 border border-amber-200 rounded-xl flex items-center gap-2 text-amber-800 text-[10px] font-bold">
                           <AlertCircle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
@@ -485,7 +568,9 @@ export const TenantContractView: React.FC<TenantContractViewProps> = ({
                       <div className="p-3 bg-slate-50 border border-slate-100 rounded-xl flex items-center justify-between text-[11px]">
                         <span className="text-slate-500 font-medium">อัตราค่าเช่าตามประกาศหอพัก:</span>
                         <span className="font-extrabold text-slate-800">
-                          ฿{Number(tenantRoom?.monthlyRent || con.monthlyRent || (con as any).rentAmount || 0).toLocaleString('th-TH')} /เดือน
+                          {renewalRentPlan === 'term'
+                            ? `฿${termRent.toLocaleString('th-TH')} /เทอม`
+                            : `฿${monthlyRent.toLocaleString('th-TH')} /เดือน`}
                         </span>
                       </div>
 
@@ -504,7 +589,7 @@ export const TenantContractView: React.FC<TenantContractViewProps> = ({
 
                       <div>
                         <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                          ระยะเวลาต่อสัญญา (เดือน)
+                          {renewalRentPlan === 'term' ? 'ระยะเวลาตามเทอม (เดือน)' : 'ระยะเวลาต่อสัญญา (เดือน)'}
                         </label>
                         <select
                           id="renewalDurationInput"
@@ -512,15 +597,19 @@ export const TenantContractView: React.FC<TenantContractViewProps> = ({
                           onChange={(e) => setRequestedDurationMonths(Number(e.target.value))}
                           className="w-full px-3 py-2.5 border border-slate-200 rounded-xl bg-white text-slate-800 font-medium text-xs focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none"
                         >
-                          {[1, 2, 3, 4, 5, 6].map((m) => {
-                            const isTerm = tenantRoom?.termMonths ? m === Number(tenantRoom.termMonths) : m === 5;
-                            return (
+                          {renewalRentPlan === 'term' ? (
+                            [1, 2, 3, 4, 5, 6].map((m) => (
                               <option key={m} value={m}>
-                                {m} เดือน{isTerm ? ' (1 เทอม)' : ''}
+                                {m} เดือน{m === effectiveTermMonths ? ' (1 เทอม)' : ''}
                               </option>
-                            );
-                          })}
-                          <option value={12}>12 เดือน (1 ปี)</option>
+                            ))
+                          ) : (
+                            Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
+                              <option key={m} value={m}>
+                                {m} เดือน{m === 12 ? ' (1 ปี)' : ''}
+                              </option>
+                            ))
+                          )}
                         </select>
                       </div>
 
@@ -541,6 +630,18 @@ export const TenantContractView: React.FC<TenantContractViewProps> = ({
                         <p className="text-[8.5px] text-slate-400 mt-1">
                           * คำนวณอัตโนมัติตามวันที่เริ่มสัญญาใหม่และระยะเวลาที่เลือก
                         </p>
+                      </div>
+
+                      {/* Compact Live Total Rent Calculation Summary */}
+                      <div className="p-3 bg-slate-50 border border-slate-100 rounded-xl space-y-1 text-xs">
+                        <div className="flex items-center justify-between">
+                          <span className="text-slate-600 font-medium">สรุปค่าเช่า:</span>
+                          <span className="font-extrabold text-emerald-900" data-testid="tenant-renew-total-summary">
+                            {renewalRentPlan === 'monthly'
+                              ? `ยอดรวมค่าเช่า: ฿${totalRent.toLocaleString('th-TH')} (${requestedDurationMonths} เดือน × ฿${monthlyRent.toLocaleString('th-TH')})`
+                              : `ยอดรวมค่าเช่า: ฿${totalRent.toLocaleString('th-TH')} ${requestedDurationMonths === effectiveTermMonths ? '(1 เทอม)' : `(สัดส่วน ${requestedDurationMonths}/${effectiveTermMonths} เทอม)`}`}
+                          </span>
+                        </div>
                       </div>
 
                       <button

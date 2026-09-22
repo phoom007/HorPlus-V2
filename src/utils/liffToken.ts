@@ -198,6 +198,9 @@ export function extractLiffDestinationPath(): string | null {
           return decoded;
         }
         if (decoded.startsWith('?')) {
+          if (decoded.includes('ticket=')) {
+            return `/owner/direct-entry${decoded}`;
+          }
           return `/tenant${decoded}`;
         }
       } catch {}

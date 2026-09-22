@@ -95,16 +95,27 @@ export const TenantHomeTab: React.FC<TenantHomeTabProps> = ({
     ? ((localTenant as any)?.customPrefix || (localTenant as any)?.prefix || '')
     : ((localTenant as any)?.prefix || '');
 
-  let rawName = localTenant.name || 'ผู้เช่า';
+  const registeredFullName = (localTenant.firstName && localTenant.firstName !== '-')
+    ? `${localTenant.firstName} ${localTenant.lastName && localTenant.lastName !== '-' ? localTenant.lastName : ''}`.trim()
+    : '';
+
+  let rawName = localTenant.displayName || registeredFullName || localTenant.name || 'ผู้เช่า';
   if (rawName.startsWith('คุณ ')) {
     rawName = rawName.slice(4).trim();
   }
   const isUnregistered = !hasRoom || (localTenant as any)?.status === 'unregistered' || rawName === 'ยังไม่ได้ลงทะเบียน';
-  const greetingName = isUnregistered
-    ? 'ยังไม่ได้ลงทะเบียน'
-    : (effectivePrefix
-        ? (rawName.startsWith(effectivePrefix) ? rawName : `${effectivePrefix} ${rawName}`)
-        : `คุณ ${rawName}`);
+  let greetingName = 'ผู้เช่า';
+  if (isUnregistered) {
+    greetingName = 'ยังไม่ได้ลงทะเบียน';
+  } else if (effectivePrefix) {
+    greetingName = rawName.startsWith(effectivePrefix) ? rawName : `${effectivePrefix} ${rawName}`;
+  } else if (/^(นาย|นางสาว|นาง|เด็กชาย|เด็กหญิง|ด\.ช\.|ด\.ญ\.)(?:\s+|$)/i.test(rawName)) {
+    greetingName = rawName;
+  } else if (localTenant.displayName && localTenant.displayName !== localTenant.name) {
+    greetingName = localTenant.displayName;
+  } else {
+    greetingName = rawName.startsWith('คุณ') ? rawName : `คุณ ${rawName}`;
+  }
 
   return (
     <div className="space-y-5 pb-6 animate-in fade-in duration-200">

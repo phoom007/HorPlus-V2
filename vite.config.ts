@@ -21,6 +21,7 @@ export default defineConfig(() => {
         '/api': {
           target: process.env.VITE_API_TARGET || 'http://127.0.0.1:3001',
           changeOrigin: true,
+          xfwd: true,
         }
       },
       // HMR is disabled in AI Studio via DISABLE_HMR env var.

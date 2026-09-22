@@ -354,7 +354,7 @@ describe('Tenant Phase 3 Step 3C.5A: Type-Aware Renewal, C2-9 Room Labels & Term
     expect(screen.getByText(/อัตราค่าเช่า \(บาท\/เทอม\) \*/i)).toBeDefined();
 
     // Verify duration is preserved from contract (5 months, NOT hardcoded 4)
-    const durationInput = screen.getByDisplayValue('5');
+    const durationInput = screen.getByDisplayValue(/5 เดือน/);
     expect(durationInput).toBeDefined();
 
     // Verify term rent is preserved (22500)

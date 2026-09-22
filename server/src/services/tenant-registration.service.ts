@@ -175,7 +175,8 @@ export class TenantRegistrationService {
     if (typeof payload.expectedPolicyVersion !== 'number' || payload.expectedPolicyVersion < 1 || !Number.isInteger(payload.expectedPolicyVersion)) {
       throw new AppError('กรุณาระบุเวอร์ชันของกฎระเบียบที่ถูกต้อง', 400, 'INVALID_POLICY_VERSION');
     }
-    if (!payload.requestedRoomId || !payload.firstName?.trim() || !payload.lastName?.trim() || !payload.phone?.trim()) {
+    payload.lastName = payload.lastName?.trim() || '-';
+    if (!payload.requestedRoomId || !payload.firstName?.trim() || !payload.phone?.trim()) {
       throw new AppError('กรุณากรอกข้อมูลที่จำเป็น (*) ให้ครบถ้วน', 400, 'VALIDATION_ERROR');
     }
 
@@ -615,7 +616,7 @@ export class TenantRegistrationService {
       throw err;
     }
 
-    if (!isDaily && payload.rentAmount === undefined && !reqSnap.rentAmount && !reqSnap.proposedRent) {
+    if (!isDaily && payload.rentAmount === undefined && (reqSnap.rentAmount === undefined || reqSnap.rentAmount === null) && (reqSnap.proposedRent === undefined || reqSnap.proposedRent === null)) {
       const err = new Error('MISSING_CONTRACT_TERMS');
       (err as any).statusCode = 400;
       (err as any).code = 'MISSING_CONTRACT_TERMS';
@@ -988,7 +989,16 @@ export class TenantRegistrationService {
       }
 
       const tenantNumber = await generateNextTenantNumber(dormitoryId, tx);
-      const displayName = `${req.firstName} ${req.lastName}`.trim();
+      const snap = (req.acceptanceSnapshot as any) || {};
+      let prefix = snap.prefix === 'ระบุเอง' || snap.prefix === 'กำหนดเอง'
+        ? (snap.customPrefix?.trim() || '')
+        : (snap.prefix?.trim() || '');
+      const rawFirst = req.firstName?.trim() || '';
+      const rawLast = req.lastName && req.lastName !== '-' ? req.lastName.trim() : '';
+      const fullName = `${rawFirst} ${rawLast}`.trim();
+      const displayName = prefix
+        ? (fullName.startsWith(prefix) ? fullName : `${prefix} ${fullName}`.trim())
+        : fullName;
 
       let tenant = null;
       if (req.approvedTenantId) {
@@ -1008,6 +1018,8 @@ export class TenantRegistrationService {
       }
       const targetFriendId = req.lineFollowerId || tenant?.lineFriendId;
 
+      const emailToSave = req.email || snap.email || undefined;
+
       if (tenant) {
         tenant = await tx.tenant.update({
           where: { id: tenant.id },
@@ -1017,6 +1029,7 @@ export class TenantRegistrationService {
             lastName: req.lastName,
             displayName,
             phone: req.phone,
+            ...(emailToSave ? { email: emailToSave } : {}),
             lineFriendId: targetFriendId || null,
             linkedUserId: linkedUserId || tenant.linkedUserId,
           },
@@ -1030,6 +1043,7 @@ export class TenantRegistrationService {
             lastName: req.lastName,
             displayName,
             phone: req.phone,
+            email: emailToSave || null,
             lineFriendId: targetFriendId || null,
             linkedUserId,
             status: 'active',
@@ -1049,8 +1063,10 @@ export class TenantRegistrationService {
       }
 
       // Sync profile from registration snapshot onto tenant
-      const snap = (req.acceptanceSnapshot as any) || {};
       const tenantUpdateData: Prisma.TenantUpdateInput = {};
+      if (emailToSave && !tenant.email) {
+        tenantUpdateData.email = emailToSave;
+      }
       if (snap.pet || snap.pets) {
         const petsList = Array.isArray(snap.pets) && snap.pets.length > 0
           ? snap.pets
@@ -1076,17 +1092,18 @@ export class TenantRegistrationService {
 
       // Promote/adopt ID document from pending registration acceptanceSnapshot onto canonical Tenant record
       const snapDoc = snap.idCardDocument || (Array.isArray(snap.attachments) ? snap.attachments.find((a: any) => a.isIdCard || a.name?.includes('บัตรประชาชน') || a.type?.includes('pdf') || a.type?.includes('image')) : null);
-      if (snapDoc && snapDoc.objectKey && !tenant.idCardObjectKey) {
-        tenantUpdateData.idCardObjectKey = snapDoc.objectKey;
-        tenantUpdateData.idCardSha256 = snapDoc.sha256 || null;
-        tenantUpdateData.idCardMimeType = snapDoc.mimeType || (snapDoc.objectKey.endsWith('.pdf') ? 'application/pdf' : 'image/webp');
-        tenantUpdateData.idCardByteSize = snapDoc.byteSize ? Number(snapDoc.byteSize) : null;
-        tenantUpdateData.idCardUploadedAt = snapDoc.uploadedAt ? new Date(snapDoc.uploadedAt) : new Date();
+      const promotedObjectKey = snapDoc?.objectKey || snap.idCardImageUrl || snap.idCardImage || snap.idCardPhoto || null;
+      if (promotedObjectKey && !tenant.idCardObjectKey) {
+        tenantUpdateData.idCardObjectKey = promotedObjectKey;
+        tenantUpdateData.idCardSha256 = snapDoc?.sha256 || null;
+        tenantUpdateData.idCardMimeType = snapDoc?.mimeType || (promotedObjectKey.endsWith('.pdf') ? 'application/pdf' : 'image/webp');
+        tenantUpdateData.idCardByteSize = snapDoc?.byteSize ? Number(snapDoc.byteSize) : null;
+        tenantUpdateData.idCardUploadedAt = snapDoc?.uploadedAt ? new Date(snapDoc.uploadedAt) : new Date();
         tenantUpdateData.idCardUploadedByUserId = safeActorId;
       }
 
       if (Object.keys(tenantUpdateData).length > 0) {
-        await tx.tenant.update({
+        tenant = await tx.tenant.update({
           where: { id: tenant.id },
           data: tenantUpdateData,
         });
@@ -1119,17 +1136,25 @@ export class TenantRegistrationService {
           }
         }
       }
-      if (snap.vehicle?.licensePlate) {
-        await tx.tenantVehicle.create({
-          data: {
-            dormitoryId,
-            tenantId: tenant.id,
-            type: snap.vehicle.type || 'car',
-            brand: snap.vehicle.brand || null,
-            licensePlate: snap.vehicle.licensePlate,
-            status: 'active',
-          },
-        });
+      const vehiclesList = Array.isArray(snap.vehicles) && snap.vehicles.length > 0
+        ? snap.vehicles
+        : (snap.vehicle?.licensePlate ? [snap.vehicle] : []);
+      for (const veh of vehiclesList) {
+        if (veh.licensePlate) {
+          await tx.tenantVehicle.create({
+            data: {
+              dormitoryId,
+              tenantId: tenant.id,
+              type: veh.type || 'car',
+              brand: veh.brand || null,
+              model: veh.model || null,
+              color: veh.color || null,
+              province: veh.province || null,
+              licensePlate: veh.licensePlate,
+              status: 'active',
+            },
+          });
+        }
       }
 
       const now = new Date();
@@ -1260,9 +1285,9 @@ export class TenantRegistrationService {
           endDate: new Date(payload.endDate || payload.startDate),
           durationMonths: payload.durationMonths || (isTerm ? 4 : 12),
           rentBillingType: isTerm ? 'term' : 'monthly',
-          rentAmount: String(payload.rentAmount || 0),
-          depositAmount: String(payload.depositAmount || 0),
-          advancePaymentAmount: String(payload.advancePaymentAmount || 0),
+          rentAmount: String(payload.rentAmount !== undefined && payload.rentAmount !== null ? payload.rentAmount : (snap.proposedRent ?? 0)),
+          depositAmount: String(payload.depositAmount !== undefined && payload.depositAmount !== null ? payload.depositAmount : (snap.proposedDeposit ?? 0)),
+          advancePaymentAmount: String(payload.advancePaymentAmount !== undefined && payload.advancePaymentAmount !== null ? payload.advancePaymentAmount : 0),
           terms: payload.terms || (snap.terms as string) || (snap.defaultTerms as string) || null,
           tenantSignature: req.tenantSignatureObjectKey || req.tenantSignatureSha256 || 'SIGNED',
           ownerSignature: frozenOwnerSignature,
@@ -1554,12 +1579,16 @@ export class TenantRegistrationService {
           lastName: req.lastName,
           displayName,
           phone: req.phone,
+          email: req.email || snap.email || null,
           lineFriendId: req.lineFollowerId || null,
           status: 'active',
         },
       });
 
       const tenantUpdateData: Prisma.TenantUpdateInput = {};
+      if ((req.email || snap.email) && !tenant.email) {
+        tenantUpdateData.email = req.email || snap.email;
+      }
       if (snap.pet || snap.pets) {
         const petsList = Array.isArray(snap.pets) && snap.pets.length > 0
           ? snap.pets
@@ -1584,12 +1613,13 @@ export class TenantRegistrationService {
       }
       // Promote/adopt ID document from pending registration acceptanceSnapshot onto canonical Tenant record
       const snapDoc = snap.idCardDocument || (Array.isArray(snap.attachments) ? snap.attachments.find((a: any) => a.isIdCard || a.name?.includes('บัตรประชาชน') || a.type?.includes('pdf') || a.type?.includes('image')) : null);
-      if (snapDoc && snapDoc.objectKey && !tenant.idCardObjectKey) {
-        tenantUpdateData.idCardObjectKey = snapDoc.objectKey;
-        tenantUpdateData.idCardSha256 = snapDoc.sha256 || null;
-        tenantUpdateData.idCardMimeType = snapDoc.mimeType || (snapDoc.objectKey.endsWith('.pdf') ? 'application/pdf' : 'image/webp');
-        tenantUpdateData.idCardByteSize = snapDoc.byteSize ? Number(snapDoc.byteSize) : null;
-        tenantUpdateData.idCardUploadedAt = snapDoc.uploadedAt ? new Date(snapDoc.uploadedAt) : new Date();
+      const promotedObjectKey = snapDoc?.objectKey || snap.idCardImageUrl || snap.idCardImage || snap.idCardPhoto || null;
+      if (promotedObjectKey && !tenant.idCardObjectKey) {
+        tenantUpdateData.idCardObjectKey = promotedObjectKey;
+        tenantUpdateData.idCardSha256 = snapDoc?.sha256 || null;
+        tenantUpdateData.idCardMimeType = snapDoc?.mimeType || (promotedObjectKey.endsWith('.pdf') ? 'application/pdf' : 'image/webp');
+        tenantUpdateData.idCardByteSize = snapDoc?.byteSize ? Number(snapDoc.byteSize) : null;
+        tenantUpdateData.idCardUploadedAt = snapDoc?.uploadedAt ? new Date(snapDoc.uploadedAt) : new Date();
       }
 
       if (Object.keys(tenantUpdateData).length > 0) {
@@ -1627,17 +1657,25 @@ export class TenantRegistrationService {
           }
         }
       }
-      if (snap.vehicle?.licensePlate) {
-        await tx.tenantVehicle.create({
-          data: {
-            dormitoryId,
-            tenantId: tenant.id,
-            type: snap.vehicle.type || 'car',
-            brand: snap.vehicle.brand || null,
-            licensePlate: snap.vehicle.licensePlate,
-            status: 'active',
-          },
-        });
+      const vehiclesList = Array.isArray(snap.vehicles) && snap.vehicles.length > 0
+        ? snap.vehicles
+        : (snap.vehicle?.licensePlate ? [snap.vehicle] : []);
+      for (const veh of vehiclesList) {
+        if (veh.licensePlate) {
+          await tx.tenantVehicle.create({
+            data: {
+              dormitoryId,
+              tenantId: tenant.id,
+              type: veh.type || 'car',
+              brand: veh.brand || null,
+              model: veh.model || null,
+              color: veh.color || null,
+              province: veh.province || null,
+              licensePlate: veh.licensePlate,
+              status: 'active',
+            },
+          });
+        }
       }
 
       const contractCount = await tx.contract.count({ where: { dormitoryId } });

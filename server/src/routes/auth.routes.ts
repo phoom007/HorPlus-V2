@@ -36,6 +36,22 @@ export function createAuthRouter(authService: AuthenticationService): Router {
   const sameSite = env.COOKIE_SAME_SITE;
 
   const resolveAppUrl = (req: Request) => {
+    // 1. Check referer or origin header from browser request (accurately captures public tunnel / mobile origin)
+    const referer = req.get('referer');
+    if (referer) {
+      try {
+        const refUrl = new URL(referer);
+        if (refUrl.origin && !refUrl.origin.includes('localhost') && !refUrl.origin.includes('127.0.0.1')) {
+          return refUrl.origin;
+        }
+      } catch {}
+    }
+    const origin = req.get('origin');
+    if (origin && !origin.includes('localhost') && !origin.includes('127.0.0.1')) {
+      return origin;
+    }
+
+    // 2. Check forwarded host or request host
     const host = req.get('x-forwarded-host') || req.get('host');
     if (host && (host.includes('.trycloudflare.com') || host.includes('ngrok') || (!host.includes('localhost') && !host.includes('127.0.0.1')))) {
       const proto =
@@ -48,7 +64,7 @@ export function createAuthRouter(authService: AuthenticationService): Router {
       return `${proto}://${host}`;
     }
 
-    // Configured public URL takes precedence over dynamic memory cache
+    // 3. Configured public URL takes precedence over dynamic memory cache
     const configuredPublicUrl = (process.env.PUBLIC_APP_URL || process.env.PUBLIC_APP_ORIGIN || '').trim().replace(/\/+$/, '');
     if (configuredPublicUrl && !configuredPublicUrl.includes('localhost') && !configuredPublicUrl.includes('127.0.0.1')) {
       return configuredPublicUrl;
@@ -57,6 +73,14 @@ export function createAuthRouter(authService: AuthenticationService): Router {
     const dynamicOrigin = getActiveAppOrigin();
     if (dynamicOrigin && !dynamicOrigin.includes('localhost') && !dynamicOrigin.includes('127.0.0.1')) {
       return dynamicOrigin;
+    }
+
+    // 4. If referer exists even on localhost (preserves active dev port e.g. 5173 / 5174), use its origin
+    if (referer) {
+      try {
+        const refUrl = new URL(referer);
+        if (refUrl.origin) return refUrl.origin;
+      } catch {}
     }
 
     return configuredPublicUrl || 'http://127.0.0.1:5173';
@@ -631,7 +655,30 @@ export function createAuthRouter(authService: AuthenticationService): Router {
     try {
       const ticket = req.query.ticket as string;
       if (!ticket) {
-        return res.status(400).json({ error: 'Ticket is required' });
+        return res.status(400).send(`
+          <!DOCTYPE html>
+          <html lang="th">
+            <head>
+              <meta charset="utf-8" />
+              <title>ไม่พบรหัสเข้าสู่ระบบ - HorPlus</title>
+              <meta name="viewport" content="width=device-width, initial-scale=1" />
+              <style>
+                body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f8fafc; color: #1e293b; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 16px; }
+                .card { max-width: 400px; width: 100%; background: white; padding: 32px; border-radius: 16px; box-shadow: 0 10px 25px rgba(0,0,0,0.06); text-align: center; }
+                .icon { font-size: 56px; margin-bottom: 16px; }
+                h2 { font-size: 20px; font-weight: 700; margin-bottom: 12px; color: #0f172a; }
+                p { font-size: 14px; line-height: 1.6; color: #64748b; margin-bottom: 24px; }
+              </style>
+            </head>
+            <body>
+              <div class="card">
+                <div class="icon">🔑</div>
+                <h2>ไม่พบรหัสเข้าสู่ระบบ</h2>
+                <p>กรุณากดปุ่ม <strong>"จัดการหอพัก"</strong> ใน LINE OA อีกครั้งเพื่อเข้าสู่ระบบ</p>
+              </div>
+            </body>
+          </html>
+        `);
       }
 
       const ticketData = consumeDirectEntryTicket(ticket);
@@ -941,6 +988,40 @@ export function createAuthRouter(authService: AuthenticationService): Router {
       });
 
       const appUrl = resolveAppUrl(req);
+
+      // Check if this tenant is already registered, active, or pending approval
+      const targetFriendId = invite.lineFriendId || grant.lineFriendId;
+      let isRegistered = false;
+
+      if (targetFriendId) {
+        const existingTenant = await prisma.tenant.findFirst({
+          where: {
+            dormitoryId: invite.dormitoryId,
+            lineFriendId: targetFriendId,
+            deletedAt: null,
+            status: 'active',
+          },
+        });
+        if (existingTenant) {
+          isRegistered = true;
+        } else {
+          const existingReq = await prisma.tenantRegistrationRequest.findFirst({
+            where: {
+              dormitoryId: invite.dormitoryId,
+              lineFollowerId: targetFriendId,
+              status: { in: ['pending_owner_approval', 'awaiting_tenant_confirmation', 'approved'] },
+            },
+          });
+          if (existingReq) {
+            isRegistered = true;
+          }
+        }
+      }
+
+      if (isRegistered) {
+        return res.redirect(`${appUrl}/tenant`);
+      }
+
       return res.redirect(`${appUrl}/tenant?sub=register`);
     } catch (err: any) {
       next(err);

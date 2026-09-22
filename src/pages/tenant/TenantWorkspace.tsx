@@ -47,6 +47,7 @@ import { TenantCoOccupantsModal } from './modals/TenantCoOccupantsModal';
 import { TenantNotificationModal } from './modals/TenantNotificationModal';
 import { TenantDocumentModal } from './modals/TenantDocumentModal';
 import { TenantClaimModal } from '../../components/TenantClaimModal';
+import { sanitizeClaimInput } from '../../utils/claim-sanitizer';
 import { compressImage, openTenantContractPrintWindow, openTenantIdCardPrintWindow } from './tenantHelpers';
 
 export interface TenantWorkspaceProps {
@@ -99,8 +100,12 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
       return { tab: 'home' as const, sub: 'contract' as const };
     if (seg === 'utilities' || querySub === 'utilities')
       return { tab: 'home' as const, sub: 'utilities' as const };
-    if (seg === 'register' || seg === 'registration' || querySub === 'register')
+    if (seg === 'register' || seg === 'registration' || querySub === 'register') {
+      if (tenant?.hasRoom || tenant?.status === 'active') {
+        return { tab: 'home' as const, sub: null };
+      }
       return { tab: 'home' as const, sub: 'register' as const };
+    }
 
     return { tab: 'home' as const, sub: null };
   };
@@ -356,6 +361,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
           }
         }
         if (profile.room || profile.hasRoom || profile.status === 'active' || profile.pendingRequest?.status === 'approved') {
+          setSubView((prev) => (prev === 'register' ? null : prev));
           if (profile.room) {
             setRooms([
               {
@@ -1833,7 +1839,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
           onClose={() => setIsClaimModalActive(false)}
           dormitoryId={tenantRoom?.dormitoryId || ''}
           roomNumber={claimRoomNumberInput.trim()}
-          initialClaimInput={localTenant.phone !== '-' ? localTenant.phone : localTenant.name}
+          initialClaimInput={sanitizeClaimInput(localTenant.phone !== '-' ? localTenant.phone : localTenant.name)}
           allowAdditionalRoom={true}
           onSuccess={(msg) => {
             showToast('success', 'สำเร็จ', msg);

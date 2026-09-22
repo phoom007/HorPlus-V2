@@ -99,6 +99,11 @@ export default function App() {
   useEffect(() => {
     initLiff().catch(() => {});
 
+    // Allow OwnerDirectEntryPage to manage its own ticket extraction and handshake without race conditions
+    if (window.location.pathname === '/owner/direct-entry') {
+      return;
+    }
+
     // 1. LIFF deep-link destination handling (when LINE passes liff.state to Endpoint URL)
     const destinationPath = extractLiffDestinationPath();
     if (destinationPath) {

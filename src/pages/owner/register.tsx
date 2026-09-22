@@ -909,34 +909,44 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
     }
   }, [currentStep, formData.ownerSignatureUrl]);
 
-  const startDrawing = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
+  const startDrawing = (e: React.PointerEvent<HTMLCanvasElement> | React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
+    if ('pointerId' in e && e.currentTarget && typeof e.currentTarget.setPointerCapture === 'function') {
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch { }
+    } else if ('touches' in e && e.cancelable) {
+      e.preventDefault();
+    }
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     setIsDrawing(true);
     const rect = canvas.getBoundingClientRect();
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
-    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
-    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
+    const scaleX = canvas.width / (rect.width || 1);
+    const scaleY = canvas.height / (rect.height || 1);
+    const clientX = 'touches' in e ? e.touches[0]?.clientX ?? 0 : e.clientX;
+    const clientY = 'touches' in e ? e.touches[0]?.clientY ?? 0 : e.clientY;
     const x = (clientX - rect.left) * scaleX;
     const y = (clientY - rect.top) * scaleY;
     ctx.beginPath();
     ctx.moveTo(x, y);
   };
 
-  const draw = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
+  const draw = (e: React.PointerEvent<HTMLCanvasElement> | React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
     if (!isDrawing) return;
+    if ('touches' in e && e.cancelable) {
+      e.preventDefault();
+    }
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     const rect = canvas.getBoundingClientRect();
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
-    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
-    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
+    const scaleX = canvas.width / (rect.width || 1);
+    const scaleY = canvas.height / (rect.height || 1);
+    const clientX = 'touches' in e ? e.touches[0]?.clientX ?? 0 : e.clientX;
+    const clientY = 'touches' in e ? e.touches[0]?.clientY ?? 0 : e.clientY;
     const x = (clientX - rect.left) * scaleX;
     const y = (clientY - rect.top) * scaleY;
     ctx.lineWidth = 3;
@@ -946,7 +956,14 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
     ctx.stroke();
   };
 
-  const stopDrawing = () => {
+  const stopDrawing = (e?: React.PointerEvent<HTMLCanvasElement> | React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
+    if (e && 'pointerId' in e && e.currentTarget && typeof e.currentTarget.releasePointerCapture === 'function') {
+      try {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      } catch { }
+    } else if (e && 'touches' in e && e.cancelable) {
+      e.preventDefault();
+    }
     if (!isDrawing) return;
     setIsDrawing(false);
     const canvas = canvasRef.current;
@@ -3206,8 +3223,12 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                 <div className="bg-white border border-slate-200 rounded-2xl p-2.5 space-y-2 relative overflow-hidden shadow-3xs">
                   <canvas
                     ref={canvasRef}
-                    width={320}
-                    height={110}
+                    width={480}
+                    height={200}
+                    onPointerDown={startDrawing}
+                    onPointerMove={draw}
+                    onPointerUp={stopDrawing}
+                    onPointerCancel={stopDrawing}
                     onMouseDown={startDrawing}
                     onMouseMove={draw}
                     onMouseUp={stopDrawing}
@@ -3215,7 +3236,8 @@ export const OwnerRegister: React.FC<RegisterProps> = ({ onAddLog, onNavigate, m
                     onTouchStart={startDrawing}
                     onTouchMove={draw}
                     onTouchEnd={stopDrawing}
-                    className="w-full h-28 touch-none bg-slate-50/50 rounded-xl border border-dashed border-slate-200 cursor-crosshair"
+                    style={{ touchAction: 'none' }}
+                    className="w-full h-48 touch-none bg-slate-50/50 rounded-xl border border-dashed border-slate-200 cursor-crosshair"
                   />
 
                   <div className="flex items-center justify-between gap-2 pt-1 border-t border-slate-100 flex-wrap">

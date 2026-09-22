@@ -80,21 +80,90 @@ async function resolveTenantContext(req: Request): Promise<TenantContextResult> 
         include: { lineFriend: true },
       });
 
-      if (grant?.lineFriendId) {
-        const approvedTenant = await tx.tenant.findFirst({
+      const targetFriendId = grant?.lineFriendId || grant?.lineFriend?.id;
+      if (targetFriendId) {
+        let approvedTenant = await tx.tenant.findFirst({
           where: {
             dormitoryId: membership.dormitoryId,
-            lineFriendId: grant.lineFriendId,
+            lineFriendId: targetFriendId,
             deletedAt: null,
             status: 'active',
           },
         });
 
+        // Fallback 1: Check via TenantRegistrationRequest with approvedTenantId
+        if (!approvedTenant) {
+          const regReq = await tx.tenantRegistrationRequest.findFirst({
+            where: {
+              dormitoryId: membership.dormitoryId,
+              status: 'approved',
+              approvedTenantId: { not: null },
+              lineFollowerId: targetFriendId,
+            },
+            orderBy: { createdAt: 'desc' },
+          });
+          if (regReq?.approvedTenantId) {
+            approvedTenant = await tx.tenant.findFirst({
+              where: {
+                id: regReq.approvedTenantId,
+                dormitoryId: membership.dormitoryId,
+                deletedAt: null,
+                status: 'active',
+              },
+            });
+          }
+        }
+
+        // Fallback 2: Check by phone if available
+        if (!approvedTenant) {
+          const phone = req.auth?.user?.phone || (req as any).user?.phone;
+          if (phone) {
+            approvedTenant = await tx.tenant.findFirst({
+              where: {
+                dormitoryId: membership.dormitoryId,
+                phone,
+                deletedAt: null,
+                status: 'active',
+              },
+            });
+          }
+        }
+
+        // Fallback 3: Check by registrationId from headers/query
+        const registrationId = (req.headers['x-registration-id'] as string) || (req.query.registrationId as string);
+        if (!approvedTenant && registrationId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(registrationId)) {
+          const regReq = await tx.tenantRegistrationRequest.findFirst({
+            where: {
+              id: registrationId,
+              dormitoryId: membership.dormitoryId,
+              status: 'approved',
+              approvedTenantId: { not: null },
+            },
+          });
+          if (regReq?.approvedTenantId) {
+            approvedTenant = await tx.tenant.findFirst({
+              where: {
+                id: regReq.approvedTenantId,
+                dormitoryId: membership.dormitoryId,
+                deletedAt: null,
+                status: 'active',
+              },
+            });
+          }
+        }
+
         if (approvedTenant) {
+          const updateData: any = {};
+          if (!approvedTenant.lineFriendId && grant.lineFriendId) {
+            updateData.lineFriendId = grant.lineFriendId;
+          }
           if (isUuid && !approvedTenant.linkedUserId) {
+            updateData.linkedUserId = userId;
+          }
+          if (Object.keys(updateData).length > 0) {
             await tx.tenant.update({
               where: { id: approvedTenant.id },
-              data: { linkedUserId: userId },
+              data: updateData,
             });
           }
           tenants.push(approvedTenant);
@@ -146,6 +215,29 @@ async function resolveTenantContext(req: Request): Promise<TenantContextResult> 
           },
           orderBy: { createdAt: 'desc' },
         });
+      }
+
+      if (pendingRequest?.approvedTenantId && pendingRequest.status === 'approved') {
+        const approvedFromPending = await tx.tenant.findFirst({
+          where: {
+            id: pendingRequest.approvedTenantId,
+            dormitoryId: membership.dormitoryId,
+            deletedAt: null,
+            status: 'active',
+          },
+        });
+        if (approvedFromPending) {
+          if (candidateGrantId && !approvedFromPending.lineFriendId) {
+            const grant = await tx.dormitoryAccessGrant.findUnique({ where: { id: candidateGrantId } });
+            if (grant?.lineFriendId) {
+              await tx.tenant.update({
+                where: { id: approvedFromPending.id },
+                data: { lineFriendId: grant.lineFriendId },
+              });
+            }
+          }
+          tenants.push(approvedFromPending);
+        }
       }
 
       if (tenants.length === 0) {
@@ -202,7 +294,10 @@ async function resolveTenantContext(req: Request): Promise<TenantContextResult> 
     const tenantIds = tenants.map(t => t.id);
 
     const contracts = await tx.contract.findMany({
-      where: { tenantId: { in: tenantIds }, status: 'active' }
+      where: {
+        tenantId: { in: tenantIds },
+        status: { in: ['active', 'approved_scheduled', 'expiring_soon', 'waiting_extension'] }
+      }
     });
 
     let contract = requestedRoomId
@@ -260,11 +355,9 @@ async function getTenantBillWhere(prisma: any, ctx: { dormitoryId: string; tenan
   const contractIds = contracts.map((c: any) => c.id);
   const cutoffDate = getTenantRentCutoffDate(asOfDate);
 
-  const orConditions: any[] = [];
+  const orConditions: any[] = [{ tenantId: ctx.tenant.id }];
   if (ctx.roomId) {
     orConditions.push({ roomId: ctx.roomId });
-  } else {
-    orConditions.push({ tenantId: ctx.tenant.id });
   }
   if (contractIds.length > 0) {
     orConditions.push({ contractId: { in: contractIds } });

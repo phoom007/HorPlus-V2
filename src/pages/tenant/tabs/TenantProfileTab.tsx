@@ -204,12 +204,16 @@ export const TenantProfileTab: React.FC<TenantProfileTabProps> = ({
           <div className="flex justify-between items-center">
             <div className="flex gap-3.5 items-center">
               <div className="w-12 h-12 rounded-2xl bg-indigo-50 text-indigo-700 flex items-center justify-center font-black text-base border border-indigo-100/60 shadow-2xs">
-                {(hasRoom && localTenant?.name && localTenant.name !== 'ยังไม่ได้ลงทะเบียน' ? localTenant.name : 'ผ').charAt(0)}
+                {(() => {
+                  const rawFirst = localTenant?.firstName && localTenant.firstName !== '-' ? localTenant.firstName : '';
+                  const initialChar = rawFirst ? rawFirst.charAt(0) : (localTenant?.displayName || localTenant?.name || 'ผ').charAt(0);
+                  return initialChar;
+                })()}
               </div>
               <div>
                 <h4 className="font-black text-slate-800 text-sm">
                   {hasRoom && localTenant?.name && localTenant.name !== 'ยังไม่ได้ลงทะเบียน'
-                    ? (localTenant.name.startsWith('คุณ') ? localTenant.name : `คุณ${localTenant.name}`)
+                    ? (localTenant.displayName || (localTenant.prefix && !localTenant.name.startsWith(localTenant.prefix) ? `${localTenant.prefix} ${localTenant.name}` : localTenant.name))
                     : 'ยังไม่ได้ลงทะเบียน'}
                 </h4>
                 <p className="text-[10px] text-slate-400 mt-0.5">อีเมล: {localTenant?.email || '-'}</p>

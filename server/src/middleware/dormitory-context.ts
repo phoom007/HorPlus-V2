@@ -59,22 +59,24 @@ export async function resolveAuthoritativeDormitoryContext(req: Request): Promis
   const rawHeader = req.headers['x-dormitory-id'];
   const headerDormId = Array.isArray(rawHeader) ? rawHeader.join(',') : (rawHeader as string | undefined);
 
-  const rawRequested =
-    urlDormId ||
-    (req.params?.dormitoryId as string) ||
-    headerDormId ||
-    (req.query?.dormitoryId as string);
+  const UUID_REGEX = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+  const explicitRouteDormId = urlDormId || (req.params?.dormitoryId as string);
+  const optionalDormId = headerDormId || (req.query?.dormitoryId as string);
 
   let requestedDormId: string | undefined;
 
-  if (rawRequested !== undefined && rawRequested !== '') {
-    const trimmed = String(rawRequested).trim();
-    // Strict UUID format verification: rejects malformed strings, comma-separated duplicates, and non-UUID input
-    const UUID_REGEX = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+  if (explicitRouteDormId !== undefined && explicitRouteDormId !== '') {
+    const trimmed = String(explicitRouteDormId).trim();
     if (!UUID_REGEX.test(trimmed)) {
       throw new AppError('รหัสระบุตัวตน (ID) ไม่ถูกต้องตามรูปแบบ UUID', 400, 'INVALID_ID_FORMAT');
     }
     requestedDormId = trimmed;
+  } else if (optionalDormId !== undefined && optionalDormId !== '') {
+    const trimmed = String(optionalDormId).trim();
+    if (UUID_REGEX.test(trimmed)) {
+      requestedDormId = trimmed;
+    }
+    // If optional header/query is not a valid UUID (e.g. legacy 'dorm-1' or 'undefined'), safely ignore and fall back
   }
 
   const activeMemberships = auth.memberships.filter((m) => (m.status || '').toLowerCase() === 'active');

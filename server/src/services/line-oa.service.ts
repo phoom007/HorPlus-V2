@@ -351,6 +351,11 @@ export function buildTenantApprovalOutcomeFlexMessage(
 }
 
 export function buildOwnerDirectEntryFlexMessage(dormitoryName: string, directEntryUrl: string) {
+  let targetUrl = directEntryUrl;
+  if (!targetUrl.includes('openExternalBrowser=1')) {
+    targetUrl += targetUrl.includes('?') ? '&openExternalBrowser=1' : '?openExternalBrowser=1';
+  }
+
   return {
     type: 'flex',
     altText: `เข้าสู่ระบบจัดการหอพัก - ${dormitoryName}`,
@@ -406,7 +411,7 @@ export function buildOwnerDirectEntryFlexMessage(dormitoryName: string, directEn
             action: {
               type: 'uri',
               label: 'เปิด Dashboard จัดการหอพัก',
-              uri: directEntryUrl,
+              uri: targetUrl,
             },
           },
         ],
@@ -2379,11 +2384,8 @@ export class LineOaService {
 
         if (action.type === 'manage_dormitory') {
           if (action.authorized && action.ticket) {
-            const ownerLiffId = getOwnerLiffId();
-            const directEntryPath = `/api/v1/auth/line-direct-entry?ticket=${action.ticket}`;
-            const directEntryUrl = (ownerLiffId && ownerLiffId.trim())
-              ? `https://liff.line.me/${ownerLiffId.trim()}?ticket=${action.ticket}`
-              : `${appOrigin}${directEntryPath}`;
+            const directEntryPath = `/api/v1/auth/line-direct-entry?ticket=${action.ticket}&openExternalBrowser=1`;
+            const directEntryUrl = `${appOrigin}${directEntryPath}`;
             const flex = buildOwnerDirectEntryFlexMessage(action.dormitoryName, directEntryUrl);
             await this.lineAdapter.replyMessage(action.replyToken, [flex], action.accessToken);
           } else {

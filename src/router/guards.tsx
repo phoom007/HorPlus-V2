@@ -78,8 +78,12 @@ export const OwnerAuthGuard: React.FC<{ children?: React.ReactNode }> = ({ child
       return <Navigate to={`/auth/owner${location.search}`} replace />;
     }
 
+    const cookieMatch = typeof document !== 'undefined' ? document.cookie.match(/(?:^|;\s*)active_dormitory_id=([^;]+)/) : null;
+    const cookieDormId = cookieMatch ? decodeURIComponent(cookieMatch[1].trim()) : null;
+
     const storedDormId = sessionStorage.getItem('active_dormitory_selected_for_session') 
-      || localStorage.getItem('selected_dormitory_id');
+      || localStorage.getItem('selected_dormitory_id')
+      || (cookieDormId && userMemberships.some((m: any) => m.dormitoryId === cookieDormId) ? cookieDormId : null);
 
     // Confirm storedDormId belongs to current active memberships (validate & reject stale/foreign values)
     const isStoredValid = storedDormId && userMemberships.some((m: any) => m.dormitoryId === storedDormId);

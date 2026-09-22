@@ -239,6 +239,8 @@ export interface Tenant {
   requestedAttachments?: Array<{ name: string; type?: string; size?: number; url?: string }> | null;
   acceptanceSnapshot?: any | null;
   lineFriendId?: string | null;
+  lineFriend?: { id: string; displayName: string; pictureUrl?: string | null } | null;
+  lineDisplayName?: string | null;
   createdAt: string;
   updatedAt: string;
   // Presentation-only view-model aggregate extensions (UI baseline compatibility):
@@ -319,6 +321,11 @@ export interface Contract {
   endDate: string; // ISO date
   durationMonths: number;
   rentAmount: number;
+  rentBillingType?: 'monthly' | 'term' | 'daily' | string;
+  rentalType?: string;
+  rentalPlan?: string;
+  monthlyRent?: number;
+  termRent?: number;
   depositAmount: number;
   advancePaymentAmount?: string | number; // Canonical field; backend may expose Decimal as string or number
   depositStatus?: 'paid' | 'unpaid';

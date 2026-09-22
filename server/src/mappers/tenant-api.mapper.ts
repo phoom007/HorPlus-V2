@@ -21,6 +21,8 @@ export interface SafeCoOccupantApiDTO {
   nationalIdMasked: string | null;
   dateOfBirth: string | Date | null;
   status: string;
+  action?: string;
+  timestamp?: string | Date;
   createdAt: string | Date;
   updatedAt: string | Date;
   deletedAt: string | Date | null;
@@ -61,6 +63,7 @@ export interface SafeTenantApiDTO {
   tenantNumber: string;
   firstName: string;
   lastName: string | null;
+  prefix?: string | null;
   displayName: string;
   name: string;
   phone: string;
@@ -78,6 +81,8 @@ export interface SafeTenantApiDTO {
   updatedAt: string | Date;
   deletedAt?: string | Date | null;
   lineFriendId?: string | null;
+  lineFriend?: { id: string; displayName: string; pictureUrl?: string | null } | null;
+  lineDisplayName?: string | null;
   requestedRoomId?: string | null;
   roomId?: string | null;
   registrationRequestId?: string | null;
@@ -314,6 +319,8 @@ export function toCoOccupantApiDTO(raw: any): SafeCoOccupantApiDTO | null {
     nationalIdMasked: raw.nationalIdMasked ?? null,
     dateOfBirth: raw.dateOfBirth ?? null,
     status: raw.status || 'active',
+    action: raw.action || (raw.status === 'removed' || raw.deletedAt ? 'removed' : 'added'),
+    timestamp: raw.timestamp || raw.deletedAt || raw.createdAt,
     createdAt: raw.createdAt,
     updatedAt: raw.updatedAt,
     deletedAt: raw.deletedAt ?? null,
@@ -371,7 +378,22 @@ export function toVehicleApiDTO(raw: any): SafeVehicleApiDTO | null {
 export function toTenantApiDTO(raw: any): SafeTenantApiDTO | null {
   if (!raw || typeof raw !== 'object') return null;
 
-  const displayName = raw.displayName || raw.name || `${raw.firstName || ''} ${raw.lastName || ''}`.trim();
+  const snap = (raw.acceptanceSnapshot as any) || {};
+  let prefix = raw.prefix ?? snap?.prefix ?? null;
+  if (prefix === 'ระบุเอง' || prefix === 'กำหนดเอง') {
+    prefix = raw.customPrefix ?? snap?.customPrefix ?? prefix;
+  }
+  const rawDisplayName = raw.displayName || raw.name || '';
+  if (!prefix && rawDisplayName) {
+    const candidate = String(rawDisplayName).trim();
+    const match = candidate.match(/^(นาย|นางสาว|นาง|เด็กชาย|เด็กหญิง|ด\.ช\.|ด\.ญ\.)(?:\s+|$)/i);
+    if (match) {
+      prefix = match[1];
+    }
+  }
+
+  const baseFullName = `${raw.firstName || ''} ${raw.lastName && raw.lastName !== '-' ? raw.lastName : ''}`.trim();
+  const displayName = raw.displayName || (prefix && baseFullName ? (baseFullName.startsWith(prefix) ? baseFullName : `${prefix} ${baseFullName}`) : (raw.name || baseFullName));
   const name = raw.name || displayName;
 
   const dto: SafeTenantApiDTO = {
@@ -380,6 +402,7 @@ export function toTenantApiDTO(raw: any): SafeTenantApiDTO | null {
     tenantNumber: raw.tenantNumber || '',
     firstName: raw.firstName || '',
     lastName: raw.lastName ?? null,
+    prefix: prefix ?? null,
     displayName,
     name,
     phone: raw.phone || '',
@@ -397,6 +420,12 @@ export function toTenantApiDTO(raw: any): SafeTenantApiDTO | null {
     updatedAt: raw.updatedAt,
     deletedAt: raw.deletedAt ?? null,
     lineFriendId: raw.lineFriendId ?? null,
+    lineFriend: raw.lineFriend ? {
+      id: raw.lineFriend.id,
+      displayName: raw.lineFriend.displayName,
+      pictureUrl: raw.lineFriend.pictureUrl ?? null,
+    } : null,
+    lineDisplayName: raw.lineFriend?.displayName ?? raw.lineDisplayName ?? null,
 
     hasIdentityDocument: Boolean(raw.idCardObjectKey || raw.hasIdentityDocument),
     idCardUploadedAt: raw.idCardUploadedAt ?? null,

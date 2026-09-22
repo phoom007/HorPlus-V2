@@ -51,13 +51,16 @@ import {
   Receipt,
   Coins,
   Paperclip,
-  Image as ImageIcon
+  Image as ImageIcon,
+  ChevronRight,
+  LayoutGrid
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { LineLogo as LineIcon } from '../../components/LineLogo';
 import { QuickAddTenantModal, QuickAddSuccessResult } from '../../components/QuickAddTenantModal';
 import { TenantRejectSheet } from '../../components/TenantRejectSheet';
 import { httpRequest } from '../../data/httpClient';
+import { sanitizeContractTerms } from '../../utils/contract-terms-sanitizer';
 import { approveTenantRegistrationRequest, rejectTenantRegistrationRequest, terminateContract, fetchTenantProfile, TenantBasicProfileUpdateInput } from '../../data/adapters/api';
 import { UpdateTenantProfilePayload } from '../../data/contracts';
 import { useQuery, QueryClientContext } from '@tanstack/react-query';
@@ -366,7 +369,13 @@ export const isDailyTenant = (tenant: Tenant, contracts: Contract[] = []): boole
 };
 
 export const isTenantLineBound = (tenant: Tenant): boolean => {
-  return !!(tenant.lineFriendId || (tenant as any).lineUserId || (tenant as any).isLineRegistered);
+  return !!(
+    tenant.lineFriendId ||
+    tenant.lineFriend?.displayName ||
+    tenant.lineDisplayName ||
+    (tenant as any).lineUserId ||
+    (tenant as any).isLineRegistered
+  );
 };
 
 interface OwnerTenantsProps {
@@ -780,6 +789,50 @@ const AuthoritativeTenantDetailsFetcher: React.FC<TenantDetailsFetcherProps> = (
   return null;
 };
 
+export interface TenantRequestItem {
+  id: string;
+  category: 'move_out' | 'contract_expired' | 'contract_extension' | 'registration';
+  status?: string;
+  roomNumber: string;
+  buildingName?: string;
+  tenantName: string;
+  moveOutDate?: string;
+  deposit?: number;
+  contractEndDate?: string;
+  requestedAt?: string;
+  monthlyRent?: number;
+  durationMonths?: number;
+  renewalType?: 'month' | 'term';
+  termMonths?: number;
+  moveInDate?: string;
+  rawTenant?: Tenant;
+  rawContract?: Contract;
+}
+
+const formatRequestBaht = (amount?: number | null): string => {
+  const val = Number(amount) || 0;
+  return `฿${val.toLocaleString('th-TH')}`;
+};
+
+const formatToThaiFullDate = (isoOrDateStr?: string): string => {
+  if (!isoOrDateStr) return '-';
+  const d = new Date(isoOrDateStr);
+  if (isNaN(d.getTime())) return String(isoOrDateStr);
+  const thaiMonths = [
+    'ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.',
+    'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'
+  ];
+  return `${d.getDate()} ${thaiMonths[d.getMonth()]} ${d.getFullYear() + 543}`;
+};
+
+const getExtensionRequestSummary = (req: TenantRequestItem): string => {
+  if (req.renewalType === 'term') {
+    const termMonths = req.termMonths || req.durationMonths || 4;
+    return `ขอต่อ 1 เทอม (${termMonths} เดือน)`;
+  }
+  return `ขอต่อ ${req.durationMonths || 6} เดือน`;
+};
+
 export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
   dormitoryId,
   tenants,
@@ -985,7 +1038,9 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
             phone: serverTenant.phone || prev.phone,
             email: serverTenant.email ?? '',
             citizenId: serverTenant.nationalIdMasked ?? serverTenant.citizenId ?? '',
-            lineFriendId: serverTenant.lineFriendId ?? null,
+            lineFriendId: serverTenant.lineFriendId ?? prev.lineFriendId ?? null,
+            lineFriend: serverTenant.lineFriend ?? prev.lineFriend ?? null,
+            lineDisplayName: serverTenant.lineFriend?.displayName ?? serverTenant.lineDisplayName ?? prev.lineDisplayName ?? null,
             emergencyContact: (emergencyContacts && emergencyContacts.length > 0)
               ? {
                 name: emergencyContacts[0].name || '',
@@ -1045,6 +1100,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
   const [renewContractDepositAmount, setRenewContractDepositAmount] = useState(0);
   const [renewContractDepositOption, setRenewContractDepositOption] = useState<'rollover' | 'custom'>('rollover');
   const [renewContractNote, setRenewContractNote] = useState('');
+  const [renewRentBillingType, setRenewRentBillingType] = useState<'term' | 'monthly'>('monthly');
 
   // Pending Review Sub Tab: 'all' | 'expired' | 'new_tenant'
   const [pendingSubTab, setPendingSubTab] = useState<'all' | 'expired' | 'new_tenant'>('all');
@@ -1282,7 +1338,12 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
   const getEffectiveCoOccupantHistory = (tenant: Tenant): CoOccupantHistoryItem[] => {
     const historyList = tenant.coOccupantHistory || [];
     if (historyList.length > 0) {
-      return [...historyList].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+      return [...historyList].map((h: any, idx) => ({
+        ...h,
+        id: h.id || `coh-${idx}`,
+        action: h.action || (h.status === 'removed' || h.deletedAt ? 'removed' : 'added'),
+        timestamp: h.timestamp || h.deletedAt || h.createdAt || tenant.createdAt,
+      })).sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
     }
 
     // If no history records stored, generate initial records from current coOccupants
@@ -1293,7 +1354,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
       phone: co.phone,
       citizenId: co.citizenId,
       action: 'added',
-      timestamp: co.addedAt || tenant.createdAt,
+      timestamp: co.addedAt || (co as any).createdAt || tenant.createdAt,
       note: 'ลงทะเบียนเข้าพักพร้อมผู้เช่าหลัก'
     }));
 
@@ -2378,6 +2439,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
   };
 
   const handleOpenApprove = (tenant: Tenant) => {
+    setSelectedTenant(tenant);
     const rawType = String(tenant.rentalType || tenant.rentalPlan || 'MONTHLY').toUpperCase();
     const rType: 'MONTHLY' | 'TERM' | 'DAILY' = rawType === 'DAILY' ? 'DAILY' : rawType === 'TERM' ? 'TERM' : 'MONTHLY';
     setApproveRentalType(rType);
@@ -2396,7 +2458,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
     if (rType === 'DAILY') {
       const days = tenant.requestedDays || (tenant.requestedStartDate && tenant.requestedEndDate ? Math.max(1, Math.round((new Date(tenant.requestedEndDate).getTime() - new Date(tenant.requestedStartDate).getTime()) / (24 * 3600 * 1000))) : 5);
       const rate = tenant.requestedDailyRate || targetRoom?.dailyRent || 550;
-      const computedRent = tenant.requestedRent || (Number(rate) * days);
+      const computedRent = tenant.requestedRent !== undefined && tenant.requestedRent !== null ? tenant.requestedRent : (Number(rate) * days);
       const computedDeposit = tenant.requestedDeposit !== undefined && tenant.requestedDeposit !== null ? tenant.requestedDeposit : 500;
       setApproveDays(days);
       setApproveDailyRate(String(rate));
@@ -2417,7 +2479,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
           : (targetRoom?.termDurationMonths || (tenant.rentalPlanDetails as any)?.durationMonths || 4)
       );
       setApproveDurationMonths(derivedDuration);
-      const rent = tenant.requestedRent || targetRoom?.termRent || 22000;
+      const rent = tenant.requestedRent !== undefined && tenant.requestedRent !== null ? tenant.requestedRent : (targetRoom?.termRent || 22000);
       const dep = tenant.requestedDeposit !== undefined && tenant.requestedDeposit !== null ? tenant.requestedDeposit : (targetRoom?.termDeposit || 5500);
       setApproveRent(String(rent));
       setApproveDeposit(String(dep));
@@ -2430,7 +2492,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
       // MONTHLY
       const duration = tenant.requestedDurationMonths || 12;
       setApproveDurationMonths(duration);
-      const rent = tenant.requestedRent || targetRoom?.monthlyRent || targetRoom?.price || 5000;
+      const rent = tenant.requestedRent !== undefined && tenant.requestedRent !== null ? tenant.requestedRent : (targetRoom?.monthlyRent || targetRoom?.price || 5000);
       const dep = tenant.requestedDeposit !== undefined && tenant.requestedDeposit !== null ? tenant.requestedDeposit : (targetRoom?.deposit || targetRoom?.monthlyDeposit || (Number(rent) * 2));
       setApproveRent(String(rent));
       setApproveDeposit(String(dep));
@@ -2473,16 +2535,16 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
           endDate: approveEndDate || (approveRentalType === 'DAILY'
             ? calculateContractEndDate(approveStartDate, 1)
             : calculateContractEndDate(approveStartDate, approveDurationMonths)),
-          rentAmount: Number(approveRent) || 0,
-          depositAmount: Number(approveDeposit) || 0,
+          rentAmount: approveRent !== undefined && approveRent !== '' ? Number(approveRent) : 0,
+          depositAmount: approveDeposit !== undefined && approveDeposit !== '' ? Number(approveDeposit) : 0,
           depositDeclaredStatus: approveDepositDeclaredStatus,
-          advancePaymentAmount: approveRentalType === 'DAILY' ? 0 : (Number(approveRent) || 0),
+          advancePaymentAmount: approveRentalType === 'DAILY' ? 0 : (approveRent !== undefined && approveRent !== '' ? Number(approveRent) : 0),
           requireTenantConfirmation: false,
         };
 
         if (approveRentalType === 'DAILY') {
           payload.totalDays = Number(approveDays) || 1;
-          payload.dailyRate = Number(approveDailyRate) || Number(approveRent);
+          payload.dailyRate = Number(approveDailyRate) || (approveRent !== undefined && approveRent !== '' ? Number(approveRent) : 0);
         } else {
           payload.durationMonths = Number(approveDurationMonths) || (approveRentalType === 'TERM' ? 4 : 12);
         }
@@ -2533,8 +2595,8 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
       roomId: approveRoomId,
       rentalType: approveRentalType,
       rentalPlan: approveRentalType.toLowerCase(),
-      requestedRent: Number(approveRent) || selectedTenant.requestedRent,
-      requestedDeposit: Number(approveDeposit) || selectedTenant.requestedDeposit,
+      requestedRent: approveRent !== undefined && approveRent !== '' ? Number(approveRent) : (selectedTenant.requestedRent ?? 0),
+      requestedDeposit: approveDeposit !== undefined && approveDeposit !== '' ? Number(approveDeposit) : (selectedTenant.requestedDeposit ?? 0),
       requestedStartDate: approveStartDate,
       requestedEndDate: approveEndDate,
       requestedDays: approveRentalType === 'DAILY' ? approveDays : undefined,
@@ -2557,8 +2619,8 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
             ...r,
             status: isFuture ? (r.status === 'vacant' ? ('reserved' as const) : r.status) : ('occupied' as const),
             currentTenantId: isFuture ? (r.currentTenantId || null) : effectiveTenantId,
-            deposit: Number(approveDeposit) || r.deposit,
-            price: Number(approveRent) || r.price,
+            deposit: approveDeposit !== undefined && approveDeposit !== '' ? Number(approveDeposit) : r.deposit,
+            price: approveRent !== undefined && approveRent !== '' ? Number(approveRent) : r.price,
             updatedAt: new Date().toISOString()
           };
         }
@@ -2824,6 +2886,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
     if (targetTenant) {
       setSelectedTenant(targetTenant);
     }
+    const targetRoom = rooms.find(r => r.id === contract.roomId);
 
     const currentEnd = (contract.endDate ? String(contract.endDate).split('T')[0] : '') || (contract.startDate ? String(contract.startDate).split('T')[0] : '') || new Date().toISOString().split('T')[0];
     let nextStartStr = '';
@@ -2844,13 +2907,29 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
       String((contract as any).rentalType).toLowerCase() === 'term' ||
       String(targetTenant?.rentalType).toLowerCase() === 'term';
 
-    const defaultDuration = contract.durationMonths || (isTerm ? 4 : 12);
+    const effectiveTermMonths = Number(
+      (targetRoom as any)?.building?.termMonths ??
+      (targetRoom as any)?.termMonths ??
+      (dormitory as any)?.termMonths ??
+      (isTerm && contract.durationMonths ? contract.durationMonths : null) ??
+      6
+    );
+
+    const initialPlan: 'term' | 'monthly' = isTerm ? 'term' : 'monthly';
+    setRenewRentBillingType(initialPlan);
+
+    const defaultDuration = initialPlan === 'term' ? effectiveTermMonths : 1;
     setRenewContractUnit('month');
     setRenewContractMonths(defaultDuration);
     setRenewContractDays(0);
     setRenewContractStartDate(nextStartStr);
     setRenewContractEndDate(calculateContractEndDate(nextStartStr, defaultDuration));
-    setRenewContractRentAmount(contract.rentAmount || 0);
+
+    const initialRent = initialPlan === 'term'
+      ? (contract.rentAmount || (targetRoom as any)?.termRent || (targetRoom as any)?.monthlyRent || 0)
+      : (contract.rentAmount || (targetRoom as any)?.monthlyRent || 0);
+
+    setRenewContractRentAmount(initialRent);
     setRenewContractDepositAmount(contract.depositAmount || 0);
     setRenewContractDepositOption('rollover');
     setRenewContractNote(
@@ -2870,7 +2949,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
     const finalEndDate = renewContractEndDate || calculateContractEndDate(finalStartDate, renewContractMonths || 6);
 
     const nextDuration = renewContractUnit === 'month'
-      ? (renewContractMonths > 0 ? renewContractMonths : 6)
+      ? (renewContractMonths > 0 ? renewContractMonths : 1)
       : (renewContractDays > 0 ? Math.max(1, Math.round(renewContractDays / 30)) : 1);
 
     const finalRent = renewContractRentAmount > 0
@@ -2895,7 +2974,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
       startDate: finalStartDate,
       endDate: finalEndDate,
       durationMonths: nextDuration,
-      rentBillingType: selectedContractForRenew.rentBillingType || 'monthly',
+      rentBillingType: renewRentBillingType === 'term' ? 'term' : 'monthly',
       rentAmount: finalRent,
       depositAmount: finalDeposit,
       depositStatus: selectedContractForRenew.depositStatus || 'paid',
@@ -3387,6 +3466,180 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
     return 0;
   });
 
+  const [requestFilter, setRequestFilter] = useState<'all' | 'move_out' | 'contract_expired' | 'contract_extension' | 'registration'>('all');
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const isDraggingRef = useRef(false);
+  const startXRef = useRef(0);
+  const scrollLeftRef = useRef(0);
+  const hasMovedRef = useRef(false);
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (!scrollContainerRef.current) return;
+    isDraggingRef.current = true;
+    hasMovedRef.current = false;
+    const pageX = e.clientX ?? e.pageX ?? 0;
+    const offsetLeft = scrollContainerRef.current.offsetLeft ?? 0;
+    startXRef.current = pageX - offsetLeft;
+    scrollLeftRef.current = scrollContainerRef.current.scrollLeft ?? 0;
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (!isDraggingRef.current || !scrollContainerRef.current) return;
+    e.preventDefault();
+    const pageX = e.clientX ?? e.pageX ?? 0;
+    const offsetLeft = scrollContainerRef.current.offsetLeft ?? 0;
+    const x = pageX - offsetLeft;
+    const walk = x - startXRef.current;
+    if (Math.abs(walk) > 5) {
+      hasMovedRef.current = true;
+    }
+    scrollContainerRef.current.scrollLeft = (scrollLeftRef.current ?? 0) - walk;
+  };
+
+  const handleMouseUpOrLeave = () => {
+    isDraggingRef.current = false;
+  };
+
+  const handleCardClick = (req: TenantRequestItem) => {
+    if (hasMovedRef.current) {
+      hasMovedRef.current = false;
+      return;
+    }
+    if (req.category === 'registration' && req.rawTenant) {
+      setSelectedTenant(req.rawTenant);
+      handleOpenApprove(req.rawTenant);
+    } else if (req.category === 'move_out' && req.rawTenant) {
+      setSelectedTenant(req.rawTenant);
+      handleOpenTerminate(req.rawTenant);
+    } else if (req.category === 'contract_extension' && req.rawContract) {
+      if (req.rawTenant) setSelectedTenant(req.rawTenant);
+      handleOpenRenewContract(req.rawContract, req.rawTenant);
+    } else if (req.category === 'contract_expired') {
+      if (req.rawTenant) setSelectedTenant(req.rawTenant);
+      if (req.rawContract) setSelectedContractForReview(req.rawContract);
+      setProfileTab('contract');
+    }
+  };
+
+  const tenantRequests = React.useMemo(() => {
+    const list: TenantRequestItem[] = [];
+
+    // 1. แจ้งเลิกเช่า (move_out)
+    (contracts || [])
+      .filter(c => c.status === 'checking_out' && !c.deletedAt)
+      .forEach(c => {
+        const t = tenants.find(item => item.id === c.tenantId);
+        if (!t) return;
+        const r = rooms.find(room => room.id === c.roomId || room.currentTenantId === t.id);
+        const bld = localBuildings.find(b => b.id === r?.buildingId);
+        const roomNum = r?.roomNumber || getRoomNumber(t.id);
+        const moveOutStr = (c as any).terminatedAt
+          ? formatToThaiFullDate((c as any).terminatedAt)
+          : (c.endDate ? formatToThaiFullDate(c.endDate) : 'สิ้นเดือนนี้');
+
+        list.push({
+          id: c.id,
+          category: 'move_out',
+          status: c.status,
+          roomNumber: roomNum,
+          buildingName: bld?.name || 'A',
+          tenantName: t.name || (t as any).displayName || 'ผู้เช่า',
+          moveOutDate: moveOutStr,
+          deposit: Number(c.depositAmount) || 0,
+          monthlyRent: Number(c.rentAmount) || 0,
+          rawTenant: t,
+          rawContract: c,
+        });
+      });
+
+    // 2. ขอต่อสัญญา (contract_extension)
+    (contracts || [])
+      .filter(c => c.status === 'waiting_extension' && !c.deletedAt)
+      .forEach(c => {
+        const t = tenants.find(item => item.id === c.tenantId);
+        if (!t) return;
+        const r = rooms.find(room => room.id === c.roomId || room.currentTenantId === t.id);
+        const bld = localBuildings.find(b => b.id === r?.buildingId);
+        const roomNum = r?.roomNumber || getRoomNumber(t.id);
+        const isTerm = String((c as any).rentBillingType).toLowerCase() === 'term' ||
+          String((c as any).rentalType).toLowerCase() === 'term' ||
+          String((t as any).rentalType).toLowerCase() === 'term';
+        const bldTermMonths = bld?.termMonths || (r as any)?.termMonths || (dormitory as any)?.termMonths || 4;
+
+        list.push({
+          id: c.id,
+          category: 'contract_extension',
+          status: c.status,
+          roomNumber: roomNum,
+          buildingName: bld?.name || 'A',
+          tenantName: t.name || (t as any).displayName || 'ผู้เช่า',
+          monthlyRent: Number(c.rentAmount) || 0,
+          durationMonths: c.durationMonths || 6,
+          renewalType: isTerm ? 'term' : 'month',
+          termMonths: bldTermMonths,
+          rawTenant: t,
+          rawContract: c,
+        });
+      });
+
+    // 3. สัญญาหมดอายุ (contract_expired)
+    expiredContractEntries
+      .filter(entry => entry.statusType === 'expired' || entry.statusType === 'expiring_soon')
+      .forEach(entry => {
+        const bld = localBuildings.find(b => b.id === entry.room?.buildingId);
+        const roomNum = entry.room?.roomNumber || getRoomNumber(entry.tenant.id);
+
+        list.push({
+          id: entry.contract.id,
+          category: 'contract_expired',
+          status: entry.contract.status,
+          roomNumber: roomNum,
+          buildingName: bld?.name || 'A',
+          tenantName: entry.tenant.name || (entry.tenant as any).displayName || 'ผู้เช่า',
+          contractEndDate: entry.contract.endDate,
+          requestedAt: entry.contract.endDate,
+          monthlyRent: Number(entry.contract.rentAmount) || 0,
+          rawTenant: entry.tenant,
+          rawContract: entry.contract,
+        });
+      });
+
+    // 4. ขอลงทะเบียน (registration)
+    tenants
+      .filter(t => t.status === 'pending')
+      .forEach(t => {
+        const rId = (t as any).requestedRoomId || (t as any).roomId || (t.rentalHistory && t.rentalHistory.length > 0 ? t.rentalHistory[0] : null);
+        const r = rooms.find(room => room.id === rId || room.roomNumber === rId);
+        const roomNum = (t as any).requestedRoomNumber || r?.roomNumber || getRoomNumber(t.id);
+        const bld = localBuildings.find(b => b.id === r?.buildingId);
+        const rent = (t as any).requestedRent !== undefined && (t as any).requestedRent !== null
+          ? Number((t as any).requestedRent)
+          : (r?.monthlyRent || (r as any)?.price || 0);
+
+        list.push({
+          id: t.id,
+          category: 'registration',
+          status: t.status,
+          roomNumber: roomNum,
+          buildingName: bld?.name || 'A',
+          tenantName: t.name || (t as any).displayName || 'ผู้ขอลงทะเบียน',
+          monthlyRent: rent,
+          moveInDate: (t as any).requestedStartDate || t.createdAt,
+          requestedAt: t.createdAt,
+          rawTenant: t,
+        });
+      });
+
+    return list;
+  }, [contracts, tenants, rooms, localBuildings, expiredContractEntries, getRoomNumber, dormitory]);
+
+  const moveOutCount = tenantRequests.filter(r => r.category === 'move_out').length;
+  const contractExpiredCount = tenantRequests.filter(r => r.category === 'contract_expired').length;
+  const contractExtensionCount = tenantRequests.filter(r => r.category === 'contract_extension').length;
+  const registrationCount = tenantRequests.filter(r => r.category === 'registration').length;
+  const totalRequestsCount = tenantRequests.length;
+  const pendingRequestsCount = totalRequestsCount;
+
   return (
     <div className="space-y-6">
       {queryClient && (
@@ -3459,6 +3712,259 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
             />
           </div>
         </div>
+      </div>
+
+      {/* 1.5 TENANT REQUESTS SECTION: "คำขอจากผู้เช่า" */}
+      <div>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 mb-3">
+          <div className="flex items-center gap-2">
+            <h3 className="text-base sm:text-lg font-black text-slate-800">
+              คำขอจากผู้เช่า
+            </h3>
+            {pendingRequestsCount > 0 ? (
+              <span className="px-2.5 py-0.5 bg-amber-50/90 text-amber-700 border border-amber-200/70 text-[11px] font-bold rounded-full">
+                {pendingRequestsCount} รายการ
+              </span>
+            ) : (
+              <span className="px-2.5 py-0.5 bg-slate-100 text-slate-500 border border-slate-200 text-[11px] font-bold rounded-full">
+                0 รายการ
+              </span>
+            )}
+          </div>
+
+            {/* Category Filter Tabs - Minimal Icon Only (แสดงเฉพาะหมวดหมู่ที่มีรายการ) */}
+            <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0 scrollbar-none">
+              {totalRequestsCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setRequestFilter('all')}
+                  title={`ทั้งหมด (${totalRequestsCount})`}
+                  className={`w-8 h-8 rounded-xl flex items-center justify-center transition-all shrink-0 cursor-pointer ${
+                    requestFilter === 'all'
+                      ? 'bg-slate-900 text-white shadow-xs'
+                      : 'bg-white hover:bg-slate-100 text-slate-500 border border-slate-200/80'
+                  }`}
+                >
+                  <LayoutGrid className="w-4 h-4" />
+                </button>
+              )}
+              {moveOutCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setRequestFilter('move_out')}
+                  title={`แจ้งเลิกเช่า (${moveOutCount})`}
+                  className={`w-8 h-8 rounded-xl flex items-center justify-center transition-all shrink-0 cursor-pointer ${
+                    requestFilter === 'move_out'
+                      ? 'bg-orange-500 text-white shadow-xs'
+                      : 'bg-white hover:bg-orange-50 text-orange-600 border border-orange-200/80'
+                  }`}
+                >
+                  <LogOut className="w-4 h-4" />
+                </button>
+              )}
+              {contractExpiredCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setRequestFilter('contract_expired')}
+                  title={`สัญญาหมดอายุ (${contractExpiredCount})`}
+                  className={`w-8 h-8 rounded-xl flex items-center justify-center transition-all shrink-0 cursor-pointer ${
+                    requestFilter === 'contract_expired'
+                      ? 'bg-rose-600 text-white shadow-xs'
+                      : 'bg-white hover:bg-rose-50 text-rose-600 border border-rose-200/80'
+                  }`}
+                >
+                  <Clock className="w-4 h-4" />
+                </button>
+              )}
+              {contractExtensionCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setRequestFilter('contract_extension')}
+                  title={`ขอต่อสัญญา (${contractExtensionCount})`}
+                  className={`w-8 h-8 rounded-xl flex items-center justify-center transition-all shrink-0 cursor-pointer ${
+                    requestFilter === 'contract_extension'
+                      ? 'bg-yellow-500 text-white shadow-xs'
+                      : 'bg-white hover:bg-yellow-50 text-yellow-600 border border-yellow-200/80'
+                  }`}
+                >
+                  <RotateCw className="w-4 h-4" />
+                </button>
+              )}
+              {registrationCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setRequestFilter('registration')}
+                  title={`ขอลงทะเบียน (${registrationCount})`}
+                  className={`w-8 h-8 rounded-xl flex items-center justify-center transition-all shrink-0 cursor-pointer ${
+                    requestFilter === 'registration'
+                      ? 'bg-yellow-500 text-white shadow-xs'
+                      : 'bg-white hover:bg-yellow-50 text-yellow-600 border border-yellow-200/80'
+                  }`}
+                >
+                  <UserPlus className="w-4 h-4" />
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Horizontal Scrollable Row of Buttons with Click & Drag to Scroll */}
+        {totalRequestsCount === 0 ? (
+          <div className="p-4 sm:p-5 bg-slate-50/80 border border-dashed border-slate-200 rounded-2xl sm:rounded-3xl flex items-center justify-center text-xs font-semibold text-slate-400 select-none">
+            ไม่มีคำขอจากผู้เช่าในขณะนี้
+          </div>
+        ) : (
+          <div
+            ref={scrollContainerRef}
+            onMouseDown={handleMouseDown}
+            onMouseMove={handleMouseMove}
+            onMouseUp={handleMouseUpOrLeave}
+            onMouseLeave={handleMouseUpOrLeave}
+            className="flex items-stretch gap-3 overflow-x-auto pb-2 -mx-1 px-1 scrollbar-none focus:outline-hidden cursor-grab active:cursor-grabbing select-none"
+            style={{ WebkitOverflowScrolling: 'touch' }}
+          >
+            {tenantRequests
+              .filter(req => requestFilter === 'all' || req.category === requestFilter)
+              .map((req) => {
+                const isApproved = req.status === 'approved';
+
+                return (
+                  <button
+                    key={`${req.category}-${req.id}`}
+                    type="button"
+                    onClick={() => handleCardClick(req)}
+                    className={`shrink-0 w-[230px] sm:w-[250px] md:w-[260px] p-3.5 rounded-2xl sm:rounded-3xl border text-left flex flex-col justify-between transition-all group active:scale-[0.98] shadow-3xs hover:shadow-md select-none cursor-pointer ${
+                      isApproved
+                        ? 'bg-white border-emerald-200/90 hover:border-emerald-300'
+                        : req.status === 'rejected'
+                        ? 'bg-slate-50/80 border-slate-200 opacity-60'
+                        : req.category === 'move_out'
+                        ? 'bg-white hover:bg-orange-50/40 border-orange-200/90 hover:border-orange-300'
+                        : req.category === 'contract_expired'
+                        ? 'bg-white hover:bg-rose-50/30 border-rose-200/80 hover:border-rose-300'
+                        : req.category === 'contract_extension'
+                        ? 'bg-white hover:bg-yellow-50/40 border-yellow-200/90 hover:border-yellow-300'
+                        : 'bg-white hover:bg-yellow-50/40 border-yellow-200/90 hover:border-yellow-300'
+                    }`}
+                  >
+                    {/* Button Top: Room Badge (Left) and Category Pill (Right) - 2 items only */}
+                    <div className="flex items-center justify-between gap-1.5 mb-2 w-full">
+                      <span className={`px-2 py-0.5 text-white font-black text-[11px] sm:text-xs rounded-lg shadow-2xs shrink-0 transition-colors ${
+                        req.category === 'move_out'
+                          ? 'bg-orange-500 group-hover:bg-orange-600'
+                          : req.category === 'contract_expired'
+                          ? 'bg-rose-600 group-hover:bg-rose-700'
+                          : req.category === 'contract_extension'
+                          ? 'bg-yellow-500 group-hover:bg-yellow-600'
+                          : 'bg-yellow-500 group-hover:bg-yellow-600'
+                      }`}>
+                        ห้อง {req.roomNumber ? req.roomNumber.replace(/^ห้อง\s*/, '') : '-'} · {req.buildingName ? req.buildingName.replace(/อาคาร\s*/g, '').trim() : 'A'}
+                      </span>
+
+                      <span className={`px-2 py-0.5 text-[9.5px] sm:text-[10px] font-extrabold rounded-md shrink-0 border ${
+                        req.category === 'move_out'
+                          ? 'bg-orange-50 text-orange-700 border-orange-200'
+                          : req.category === 'contract_expired'
+                          ? 'bg-rose-50 text-rose-800 border-rose-200'
+                          : req.category === 'contract_extension'
+                          ? 'bg-yellow-50 text-yellow-800 border-yellow-200'
+                          : 'bg-yellow-50 text-yellow-800 border-yellow-200'
+                      }`}>
+                        {req.category === 'move_out'
+                          ? 'แจ้งเลิกเช่า'
+                          : req.category === 'contract_expired'
+                          ? 'สัญญาหมดอายุ'
+                          : req.category === 'contract_extension'
+                          ? 'ขอต่อสัญญา'
+                          : 'ขอลงทะเบียน'}
+                      </span>
+                    </div>
+
+                    {/* Button Middle: Tenant Name & Brief Details */}
+                    <div className="space-y-1 my-1 w-full">
+                      <div className="flex items-center gap-1.5">
+                        <div className={`w-6 h-6 rounded-full font-black text-[10px] flex items-center justify-center shrink-0 ${
+                          req.category === 'move_out'
+                            ? 'bg-orange-100 text-orange-800'
+                            : req.category === 'contract_expired'
+                            ? 'bg-rose-100 text-rose-800'
+                            : req.category === 'contract_extension'
+                            ? 'bg-yellow-100 text-yellow-800'
+                            : 'bg-yellow-100 text-yellow-800'
+                        }`}>
+                          {(req.tenantName || 'ผ').replace(/^คุณ\s*/, '').trim().charAt(0) || 'ผ'}
+                        </div>
+                        <p className="text-xs sm:text-sm font-black text-slate-900 truncate group-hover:text-indigo-600 transition-colors">
+                          {req.tenantName}
+                        </p>
+                      </div>
+
+                      <div className="text-[11px] text-slate-500 font-medium space-y-0.5 pt-1.5 border-t border-gray-100">
+                        {req.category === 'move_out' ? (
+                          <>
+                            <div className="flex items-center justify-between">
+                              <span className="text-slate-400">ขอย้ายออก:</span>
+                              <span className="font-bold text-orange-700">{req.moveOutDate || 'สิ้นเดือนนี้'}</span>
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <span className="text-slate-400">เงินประกัน:</span>
+                              <span className="font-extrabold text-slate-800">{formatRequestBaht(req.deposit)}</span>
+                            </div>
+                          </>
+                        ) : req.category === 'contract_expired' ? (
+                          <>
+                            <div className="flex items-center justify-between">
+                              <span className="text-slate-400">หมดอายุ:</span>
+                              <span className="font-bold text-rose-600">{formatToThaiFullDate(req.contractEndDate || req.requestedAt)}</span>
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <span className="text-slate-400">ค่าเช่า:</span>
+                              <span className="font-extrabold text-slate-800">{formatRequestBaht(req.monthlyRent)}/เดือน</span>
+                            </div>
+                          </>
+                        ) : req.category === 'contract_extension' ? (
+                          <>
+                            <div className="flex items-center justify-between gap-1.5 min-w-0">
+                              <span className="text-slate-400 shrink-0">ต่อสัญญา:</span>
+                              <span
+                                className="font-bold text-yellow-700 truncate min-w-0 text-right"
+                                title={getExtensionRequestSummary(req)}
+                              >
+                                {getExtensionRequestSummary(req)}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <span className="text-slate-400">ค่าเช่า:</span>
+                              <span className="font-extrabold text-slate-800">{formatRequestBaht(req.monthlyRent)}/เดือน</span>
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <div className="flex items-center justify-between">
+                              <span className="text-slate-400">ค่าเช่า:</span>
+                              <span className="font-extrabold text-slate-800">{formatRequestBaht(req.monthlyRent)}/เดือน</span>
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <span className="text-slate-400">ย้ายเข้า:</span>
+                              <span className="font-bold text-yellow-700">{formatToThaiFullDate(req.moveInDate)}</span>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Button Footer: Action Prompt Hint */}
+                    <div className="pt-2 mt-1 border-t border-gray-100 flex items-center justify-between text-[10px] sm:text-[11px] font-bold text-indigo-600 w-full group-hover:translate-x-0.5 transition-transform">
+                      <span className="flex items-center gap-1 text-slate-500 group-hover:text-indigo-600">
+                        <Eye className="w-3 h-3 text-slate-400 group-hover:text-indigo-600" />
+                        <span>ดูรายละเอียด</span>
+                      </span>
+                      <ChevronRight className="w-3.5 h-3.5 text-slate-300 group-hover:text-indigo-600 transition-colors" />
+                    </div>
+                  </button>
+                );
+              })}
+          </div>
+        )}
       </div>
 
       {/* Main Grid: Left List & Right Detail Profile */}
@@ -3654,10 +4160,18 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                       <div className="min-w-0">
                         <div className="flex items-center gap-1.5 flex-wrap">
                           <h4 className="font-bold text-slate-800 text-xs truncate leading-none">{tenant.name}</h4>
-                          {category === 'active' && !isTenantLineBound(tenant) && (
+                          {isTenantLineBound(tenant) ? (
+                            <span
+                              data-testid="badge-bound-line"
+                              className="bg-emerald-50 border border-emerald-200 text-emerald-800 font-extrabold text-[9px] px-1.5 py-0.5 rounded-md shrink-0 flex items-center gap-1"
+                            >
+                              <LineIcon className="w-2.5 h-2.5 text-[#06C755]" />
+                              <span>{tenant.lineFriend?.displayName || tenant.lineDisplayName || 'ผูก LINE แล้ว'}</span>
+                            </span>
+                          ) : (
                             <span
                               data-testid="badge-unbound-line"
-                              className="bg-amber-50 border border-amber-200 text-amber-700 font-extrabold text-[9px] px-1.5 py-0.5 rounded-md shrink-0 flex items-center gap-1"
+                              className="bg-slate-100 border border-slate-200 text-slate-500 font-extrabold text-[9px] px-1.5 py-0.5 rounded-md shrink-0 flex items-center gap-1"
                             >
                               <LineIcon className="w-2.5 h-2.5 shrink-0 opacity-60 grayscale" />
                               <span>ยังไม่ผูก LINE</span>
@@ -3899,18 +4413,18 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                                   })()}
                                 </>
                               )}
-                              {!isExpiredContractReview && getTenantCategory(selectedTenant) === 'inactive' && (
-                                <span className="bg-slate-100 text-slate-600 text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1">
-                                  <XCircle className="w-3 h-3 text-rose-500" />
-                                  เลิกเช่าแล้ว
-                                </span>
-                              )}
-                              {!isExpiredContractReview && getTenantCategory(selectedTenant) === 'active' && (
+                              {!isExpiredContractReview && (
                                 <>
+                                  {getTenantCategory(selectedTenant) === 'inactive' && (
+                                    <span className="bg-slate-100 text-slate-600 text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1">
+                                      <XCircle className="w-3 h-3 text-rose-500" />
+                                      เลิกเช่าแล้ว
+                                    </span>
+                                  )}
                                   {!isTenantLineBound(selectedTenant) ? (
                                     <span
                                       data-testid="header-badge-unbound-line"
-                                      className="bg-amber-50 text-amber-800 border border-amber-200 text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1"
+                                      className="bg-slate-100 text-slate-600 border border-slate-200 text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1"
                                     >
                                       <LineIcon className="w-3 h-3 shrink-0 opacity-60 grayscale" />
                                       ยังไม่ผูก LINE
@@ -3921,7 +4435,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                                       className="bg-emerald-50 text-emerald-800 border border-emerald-200 text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1"
                                     >
                                       <LineIcon className="w-3 h-3 text-[#06C755]" />
-                                      ผูก LINE แล้ว
+                                      <span>{selectedTenant.lineFriend?.displayName || selectedTenant.lineDisplayName || 'ผูก LINE แล้ว'}</span>
                                     </span>
                                   )}
                                   {getRentalTypeLabel(selectedTenant, contracts) && (
@@ -4142,7 +4656,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                           <span className="text-gray-400 font-bold text-[10px] uppercase tracking-wider">อีเมลติดต่อ</span>
                           <p className="font-extrabold text-slate-800 flex items-center gap-1.5 text-xs sm:text-sm min-w-0">
                             <Mail className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
-                            <span className="break-all truncate" title={selectedTenant.email}>{selectedTenant.email || '-'}</span>
+                            <span className="break-all truncate" title={selectedTenant.email || (selectedTenant as any).acceptanceSnapshot?.email || ''}>{selectedTenant.email || (selectedTenant as any).acceptanceSnapshot?.email || '-'}</span>
                           </p>
                         </div>
                       </div>
@@ -4172,13 +4686,23 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                       {/* Vehicles and Pets */}
                       <div className="pt-4 border-t border-gray-100">
                         {(() => {
-                          const allVehicles: VehicleItem[] = selectedTenant.vehicles && selectedTenant.vehicles.length > 0
-                            ? selectedTenant.vehicles.filter(v => v.type !== 'none')
-                            : (selectedTenant.vehicle && selectedTenant.vehicle.type !== 'none' ? [selectedTenant.vehicle] : []);
+                          const vehCandidates: any[] = Array.isArray(selectedTenant.vehicles) && selectedTenant.vehicles.length > 0
+                            ? selectedTenant.vehicles
+                            : Array.isArray(selectedTenant.acceptanceSnapshot?.vehicles) && selectedTenant.acceptanceSnapshot.vehicles.length > 0
+                            ? selectedTenant.acceptanceSnapshot.vehicles
+                            : (selectedTenant.vehicle && selectedTenant.vehicle.type !== 'none' ? [selectedTenant.vehicle] : (selectedTenant.acceptanceSnapshot?.vehicle ? [selectedTenant.acceptanceSnapshot.vehicle] : []));
 
-                          const allPets: PetItem[] = selectedTenant.pets && selectedTenant.pets.length > 0
-                            ? selectedTenant.pets.filter(p => (p.type && p.type.trim() !== '') || (p.name && p.name.trim() !== ''))
-                            : (selectedTenant.pet && selectedTenant.pet.hasPet ? [selectedTenant.pet] : []);
+                          const allVehicles: VehicleItem[] = vehCandidates.filter(v => v && v.type !== 'none');
+
+                          const petCandidates: any[] = Array.isArray(selectedTenant.pets) && selectedTenant.pets.length > 0
+                            ? selectedTenant.pets
+                            : Array.isArray((selectedTenant as any).petInfo?.pets) && (selectedTenant as any).petInfo.pets.length > 0
+                            ? (selectedTenant as any).petInfo.pets
+                            : Array.isArray(selectedTenant.acceptanceSnapshot?.pets) && selectedTenant.acceptanceSnapshot.pets.length > 0
+                            ? selectedTenant.acceptanceSnapshot.pets
+                            : (selectedTenant.pet && selectedTenant.pet.hasPet ? [selectedTenant.pet] : ((selectedTenant as any).petInfo?.hasPet ? [(selectedTenant as any).petInfo] : (selectedTenant.acceptanceSnapshot?.pet?.hasPet ? [selectedTenant.acceptanceSnapshot.pet] : [])));
+
+                          const allPets: PetItem[] = petCandidates.filter(p => p && ((p.type && String(p.type).trim() !== '') || (p.name && String(p.name).trim() !== '')));
 
                           const maxRows = Math.max(allVehicles.length, allPets.length, 1);
 
@@ -4207,6 +4731,17 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                             </div>
                           );
 
+                          const formatPetType = (p: PetItem) => {
+                            const raw = (p.type || '').trim().toLowerCase();
+                            if (raw === 'dog') return 'สุนัข';
+                            if (raw === 'cat') return 'แมว';
+                            if (raw === 'bird') return 'นก';
+                            if (raw === 'fish') return 'ปลา';
+                            if (raw === 'rabbit') return 'กระต่าย';
+                            if (p.customType && p.customType.trim()) return p.customType.trim();
+                            return p.type || p.customType || '-';
+                          };
+
                           const renderPetItem = (petItem: PetItem, pIdx: number) => (
                             <div key={petItem.id || pIdx} className="space-y-1 text-[11px]">
                               {allPets.length > 1 && (
@@ -4219,9 +4754,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                                 <div className="flex items-center justify-between">
                                   <span className="text-gray-400 text-[10px]">ประเภทสัตว์:</span>
                                   <span className="font-bold text-slate-700">
-                                    {((petItem.type === 'อื่นๆ' || petItem.type === 'Other' || !petItem.type) && petItem.customType?.trim())
-                                      ? petItem.customType.trim()
-                                      : (petItem.type || petItem.customType || '-')}
+                                    {formatPetType(petItem)}
                                   </span>
                                 </div>
                                 <div className="flex items-center justify-between">
@@ -4357,10 +4890,13 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                       <div className="pt-4 border-t border-gray-100 text-xs space-y-3">
                         <h4 className="font-bold text-slate-800">ประวัติเอกสารสำคัญ</h4>
                         {(() => {
-                          const hasIdCard = !!(
-                            selectedTenant.idCardPhotoMock &&
-                            selectedTenant.idCardPhotoMock.trim() !== '' &&
-                            selectedTenant.idCardPhotoMock !== 'MOCK_ID_CARD_BASE64'
+                          const hasIdCard = Boolean(
+                            (selectedTenant as any).hasIdentityDocument ||
+                            (selectedTenant as any).idCardObjectKey ||
+                            (selectedTenant.idCardPhotoMock &&
+                              selectedTenant.idCardPhotoMock.trim() !== '' &&
+                              selectedTenant.idCardPhotoMock !== 'MOCK_ID_CARD_BASE64') ||
+                            (selectedTenant as any).acceptanceSnapshot?.idCardImageUrl
                           );
                           return (
                             <div
@@ -4571,6 +5107,15 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                                       <span className="px-2 py-0.5 text-[10px] font-bold rounded-lg border bg-amber-50 text-amber-700 border-amber-200">
                                         รออนุมัติ
                                       </span>
+                                      {isTenantLineBound(selectedTenant) && (
+                                        <span
+                                          data-testid="contract-badge-bound-line"
+                                          className="bg-emerald-50 border border-emerald-200 text-emerald-800 font-extrabold text-[9px] px-1.5 py-0.5 rounded-md shrink-0 flex items-center gap-1"
+                                        >
+                                          <LineIcon className="w-2.5 h-2.5 text-[#06C755]" />
+                                          <span>{selectedTenant.lineFriend?.displayName || selectedTenant.lineDisplayName || 'ผูก LINE แล้ว'}</span>
+                                        </span>
+                                      )}
                                     </div>
                                     <p className="text-[11px] text-gray-500 font-medium">
                                       ห้อง {roomNum} &bull; {isTerm ? 'สัญญาเช่ารายเทอม' : 'สัญญาเช่ารายเดือน'}
@@ -4612,7 +5157,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                                   <div className="pt-2 text-xs">
                                     <p className="font-bold text-slate-700 text-[11px] mb-1">ข้อกำหนดสำคัญในสัญญา:</p>
                                     <p className="text-gray-600 text-[11px] leading-relaxed whitespace-pre-line bg-slate-50/70 p-3 rounded-xl">
-                                      {agreedTerms}
+                                      {sanitizeContractTerms(agreedTerms)}
                                     </p>
                                   </div>
                                 )}
@@ -4724,6 +5269,15 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                                         <span className={`px-2 py-0.5 text-[10px] font-bold rounded-lg border ${statusInfo.bg} ${statusInfo.text} ${statusInfo.border}`}>
                                           {statusInfo.label}
                                         </span>
+                                        {isTenantLineBound(selectedTenant) && (
+                                          <span
+                                            data-testid="contract-badge-bound-line"
+                                            className="bg-emerald-50 border border-emerald-200 text-emerald-800 font-extrabold text-[9px] px-1.5 py-0.5 rounded-md shrink-0 flex items-center gap-1"
+                                          >
+                                            <LineIcon className="w-2.5 h-2.5 text-[#06C755]" />
+                                            <span>{selectedTenant.lineFriend?.displayName || selectedTenant.lineDisplayName || 'ผูก LINE แล้ว'}</span>
+                                          </span>
+                                        )}
                                       </div>
                                       <p className="text-[11px] text-gray-500 font-medium">
                                         {headerSubtitle}
@@ -4786,7 +5340,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                                     <div className="pt-2 text-xs">
                                       <p className="font-bold text-slate-700 text-[11px] mb-1">ข้อกำหนดสำคัญในสัญญา:</p>
                                       <p className="text-gray-600 text-[11px] leading-relaxed whitespace-pre-line bg-slate-50/70 p-3 rounded-xl">
-                                        {agreementTerms}
+                                        {sanitizeContractTerms(agreementTerms)}
                                       </p>
                                     </div>
                                   )}
@@ -4809,12 +5363,12 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                             {/* Active Co-occupants Section */}
                             <div className="space-y-3">
                               <div className="flex items-center justify-between">
-                                <div className="flex items-center gap-2">
+                                <div className="flex items-center gap-2 flex-wrap">
                                   <h4 className="text-xs font-bold text-slate-800">
                                     {isTenantInactive ? 'ข้อมูลผู้พักร่วม' : 'ผู้พักร่วมปัจจุบัน'}
                                   </h4>
                                   <span className="text-[10px] font-bold px-2 py-0.5 bg-indigo-50 text-indigo-700 rounded-full border border-indigo-100">
-                                    {(selectedTenant.coOccupants || []).length} คน
+                                    ผู้เช่า 1 คน, ผู้พักร่วม {(selectedTenant.coOccupants || []).length} คน (รวมเป็น {1 + (selectedTenant.coOccupants || []).length} คน)
                                   </span>
                                 </div>
                                 {!isTenantInactive && (
@@ -5060,18 +5614,22 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
           <div className="flex flex-col items-center justify-center p-1 sm:p-4 space-y-4">
 
             {(() => {
-              const hasPhoto = !!(
-                selectedTenant.idCardPhotoMock &&
+              const photoSrc = (selectedTenant.idCardPhotoMock &&
                 selectedTenant.idCardPhotoMock.trim() !== '' &&
-                selectedTenant.idCardPhotoMock !== 'MOCK_ID_CARD_BASE64'
-              );
+                selectedTenant.idCardPhotoMock !== 'MOCK_ID_CARD_BASE64')
+                ? selectedTenant.idCardPhotoMock
+                : ((selectedTenant as any).hasIdentityDocument || (selectedTenant as any).idCardObjectKey)
+                ? `/api/v1/tenants/${encodeURIComponent(selectedTenant.id)}/identity-document`
+                : ((selectedTenant as any).acceptanceSnapshot?.idCardImageUrl || null);
+
+              const hasPhoto = !!photoSrc;
 
               return (
                 <>
                   {hasPhoto ? (
                     <div className="w-full max-w-[420px] bg-slate-50 border border-gray-200 rounded-2xl overflow-hidden p-2 relative shadow-md group">
                       <img
-                        src={selectedTenant.idCardPhotoMock}
+                        src={photoSrc!}
                         alt="เอกสารประจำตัวผู้เช่า"
                         className="w-full h-auto max-h-[280px] object-contain rounded-lg mx-auto bg-white"
                       />
@@ -7511,7 +8069,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
             setIsRenewContractModalOpen(false);
             setSelectedContractForRenew(null);
           }}
-          title={`ต่ออายุสัญญาเช่า (${selectedContractForRenew.rentBillingType === 'term' || (selectedContractForRenew as any).rentalType === 'TERM' || selectedTenant?.rentalType === 'TERM' ? 'รายเทอม' : 'รายเดือน'})`}
+          title={`ต่ออายุสัญญาเช่า (${renewRentBillingType === 'term' ? 'รายเทอม' : 'รายเดือน'})`}
           size="md"
         >
           {(() => {
@@ -7542,13 +8100,71 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
               );
             }
 
+            const targetRoom = rooms.find(r => r.id === selectedContractForRenew.roomId);
             const targetRoomNum = getRoomNumber(selectedContractForRenew.tenantId);
-            const isTerm = selectedContractForRenew.rentBillingType === 'term' ||
-              (selectedContractForRenew as any).rentalType === 'TERM' ||
-              selectedTenant?.rentalType === 'TERM';
+            const isTerm = renewRentBillingType === 'term';
+            const effectiveTermMonths = Number(
+              (targetRoom as any)?.building?.termMonths ??
+              (targetRoom as any)?.termMonths ??
+              (dormitory as any)?.termMonths ??
+              (selectedContractForRenew.rentBillingType === 'term' ? selectedContractForRenew.durationMonths : null) ??
+              6
+            );
+
+            const handleSwitchPlan = (newPlan: 'term' | 'monthly') => {
+              if (newPlan === renewRentBillingType) return;
+              setRenewRentBillingType(newPlan);
+              if (newPlan === 'term') {
+                const dur = effectiveTermMonths;
+                setRenewContractMonths(dur);
+                setRenewContractEndDate(calculateContractEndDate(renewContractStartDate, dur));
+                if ((targetRoom as any)?.termRent) {
+                  setRenewContractRentAmount((targetRoom as any).termRent);
+                }
+              } else {
+                const dur = 1;
+                setRenewContractMonths(dur);
+                setRenewContractEndDate(calculateContractEndDate(renewContractStartDate, dur));
+                if ((targetRoom as any)?.monthlyRent) {
+                  setRenewContractRentAmount((targetRoom as any).monthlyRent);
+                }
+              }
+            };
+
+            const totalRent = renewRentBillingType === 'monthly'
+              ? renewContractRentAmount * renewContractMonths
+              : (renewContractMonths === effectiveTermMonths
+                  ? renewContractRentAmount
+                  : Math.round((renewContractRentAmount / (effectiveTermMonths || 1)) * renewContractMonths));
 
             return (
               <div className="space-y-4">
+                {/* Plan Toggle (รายเทอม / รายเดือน) */}
+                <div className="flex bg-slate-100 p-1 rounded-xl gap-1">
+                  <button
+                    type="button"
+                    onClick={() => handleSwitchPlan('term')}
+                    className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-all ${
+                      renewRentBillingType === 'term'
+                        ? 'bg-white text-indigo-700 shadow-xs'
+                        : 'text-slate-500 hover:text-slate-800'
+                    }`}
+                  >
+                    รายเทอม
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleSwitchPlan('monthly')}
+                    className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-all ${
+                      renewRentBillingType === 'monthly'
+                        ? 'bg-white text-indigo-700 shadow-xs'
+                        : 'text-slate-500 hover:text-slate-800'
+                    }`}
+                  >
+                    รายเดือน
+                  </button>
+                </div>
+
                 <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200/80 flex items-center justify-between text-xs">
                   <div>
                     <span className="text-slate-500 font-medium">ห้อง:</span> <strong className="text-slate-800 font-bold">{targetRoomNum}</strong>
@@ -7578,9 +8194,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                     <label className="block text-slate-700 font-bold mb-1">
                       {isTerm ? 'ระยะเวลาตามเทอม (เดือน)' : 'ระยะเวลาสัญญา (เดือน)'} *
                     </label>
-                    <input
-                      type="number"
-                      min={1}
+                    <select
                       value={renewContractMonths}
                       onChange={(e) => {
                         const dur = Number(e.target.value) || 1;
@@ -7588,7 +8202,21 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                         setRenewContractEndDate(calculateContractEndDate(renewContractStartDate, dur));
                       }}
                       className="w-full px-3 py-2 border border-slate-200 rounded-xl bg-white text-xs font-semibold focus:outline-none focus:border-indigo-600"
-                    />
+                    >
+                      {isTerm ? (
+                        [1, 2, 3, 4, 5, 6].map((m) => (
+                          <option key={m} value={m}>
+                            {m} เดือน{m === effectiveTermMonths ? ' (1 เทอม)' : ''}
+                          </option>
+                        ))
+                      ) : (
+                        Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
+                          <option key={m} value={m}>
+                            {m} เดือน{m === 12 ? ' (1 ปี)' : ''}
+                          </option>
+                        ))
+                      )}
+                    </select>
                   </div>
 
                   <div>
@@ -7608,6 +8236,18 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                       placeholder="เช่น 4500"
                       className="w-full"
                     />
+                  </div>
+                </div>
+
+                {/* Compact Live Total Rent Calculation Summary */}
+                <div className="p-3 bg-slate-50 border border-slate-200/80 rounded-xl space-y-1 text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-600 font-medium">สรุปค่าเช่า:</span>
+                    <span className="font-extrabold text-indigo-900" data-testid="renew-total-summary">
+                      {renewRentBillingType === 'monthly'
+                        ? `ยอดรวมค่าเช่า: ฿${totalRent.toLocaleString('th-TH')} (${renewContractMonths} เดือน × ฿${renewContractRentAmount.toLocaleString('th-TH')})`
+                        : `ยอดรวมค่าเช่า: ฿${totalRent.toLocaleString('th-TH')} ${renewContractMonths === effectiveTermMonths ? '(1 เทอม)' : `(สัดส่วน ${renewContractMonths}/${effectiveTermMonths} เทอม)`}`}
+                    </span>
                   </div>
                 </div>
 
@@ -7635,6 +8275,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
             );
           })()}
         </Modal>
+
       )}
 
       {/* Modal: Create New Contract */}

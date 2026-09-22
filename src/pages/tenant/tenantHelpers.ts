@@ -3,6 +3,7 @@
  * HorPlus Tenant Portal — Shared Helper Utilities
  */
 import { formatCanonicalLineItemDescription } from '../../utils/billPresentation';
+import { sanitizeContractTerms } from '../../utils/contract-terms-sanitizer';
 import { BillItem } from '../../types';
 
 export const getBankBadgeInfo = (bankName: string) => {
@@ -709,7 +710,7 @@ export function openTenantContractPrintWindow(
 
         <div class="content-section">
           <strong>ข้อ 6. ข้อตกลงและระเบียบการอยู่อาศัย:</strong>
-          <div class="terms-box">${contract.terms || '1. ผู้เช่าตกลงชำระค่าเช่าและค่าสาธารณูปโภคตามกำหนดเวลา\n2. รักษาความสงบเรียบร้อยและไม่สร้างความเดือดร้อนรำคาญแก่ผู้อื่น\n3. ปฏิบัติตามระเบียบข้อบังคับของหอพักอย่างเคร่งครัด'}</div>
+          <div class="terms-box">${sanitizeContractTerms(contract.terms) || '1. ผู้เช่าตกลงชำระค่าเช่าและค่าสาธารณูปโภคตามกำหนดเวลา\n2. รักษาความสงบเรียบร้อยและไม่สร้างความเดือดร้อนรำคาญแก่ผู้อื่น\n3. ปฏิบัติตามระเบียบข้อบังคับของหอพักอย่างเคร่งครัด'}</div>
         </div>
 
         <div class="content-section" style="margin-top: 14px;">

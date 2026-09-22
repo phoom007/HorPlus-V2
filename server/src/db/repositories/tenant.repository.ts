@@ -43,6 +43,9 @@ export interface TenantEntity {
   acceptanceSnapshot?: any | null;
   coOccupants?: TenantCoOccupantEntity[];
   vehicles?: TenantVehicleEntity[];
+  lineFriendId?: string | null;
+  lineFriend?: { id: string; displayName: string; pictureUrl?: string | null } | null;
+  lineDisplayName?: string | null;
   version: number;
   createdAt: Date;
   updatedAt: Date;
@@ -513,6 +516,9 @@ export class PrismaTenantRepository implements ITenantRepository {
       requestedDailyRate: t.requestedDailyRate !== undefined ? t.requestedDailyRate : null,
       requestedAttachments: t.requestedAttachments ?? null,
       acceptanceSnapshot: t.acceptanceSnapshot ?? null,
+      lineFriendId: t.lineFriendId ?? null,
+      lineFriend: t.lineFriend ? { id: t.lineFriend.id, displayName: t.lineFriend.displayName, pictureUrl: t.lineFriend.pictureUrl } : null,
+      lineDisplayName: t.lineFriend?.displayName ?? null,
       coOccupants: Array.isArray(t.coOccupants) ? t.coOccupants.map((c: any) => ({
         id: c.id,
         dormitoryId: c.dormitoryId,
@@ -556,7 +562,11 @@ export class PrismaTenantRepository implements ITenantRepository {
     if (dormitoryId) where.dormitoryId = dormitoryId;
     const t = await this.prisma.tenant.findFirst({
       where,
-      include: { coOccupants: { where: { deletedAt: null, status: 'active' } }, vehicles: { where: { deletedAt: null } } },
+      include: {
+        coOccupants: { where: { deletedAt: null, status: 'active' } },
+        vehicles: { where: { deletedAt: null } },
+        lineFriend: { select: { id: true, displayName: true, pictureUrl: true } },
+      },
     });
     if (!t) {
       const regWhere: any = { id, status: { in: ['pending', 'pending_owner_approval'] } };
@@ -734,7 +744,11 @@ export class PrismaTenantRepository implements ITenantRepository {
   public async findByTenantNumber(dormitoryId: string, tenantNumber: string): Promise<TenantEntity | null> {
     const t = await this.prisma.tenant.findFirst({
       where: { dormitoryId, tenantNumber },
-      include: { coOccupants: { where: { deletedAt: null, status: 'active' } }, vehicles: { where: { deletedAt: null } } },
+      include: {
+        coOccupants: { where: { deletedAt: null, status: 'active' } },
+        vehicles: { where: { deletedAt: null } },
+        lineFriend: { select: { id: true, displayName: true, pictureUrl: true } },
+      },
     });
     return t ? this.mapTenantToEntity(t) : null;
   }
@@ -749,7 +763,11 @@ export class PrismaTenantRepository implements ITenantRepository {
     const [items, total] = await Promise.all([
       this.prisma.tenant.findMany({
         where,
-        include: { coOccupants: { where: { deletedAt: null, status: 'active' } }, vehicles: { where: { deletedAt: null } } },
+        include: {
+          coOccupants: { where: { deletedAt: null, status: 'active' } },
+          vehicles: { where: { deletedAt: null } },
+          lineFriend: { select: { id: true, displayName: true, pictureUrl: true } },
+        },
         skip,
         take: pageSize,
         orderBy: { createdAt: 'desc' },
@@ -1046,7 +1064,10 @@ export class PrismaTenantRepository implements ITenantRepository {
         throw new AppError('Tenant profile has been modified by another process', 409, 'RESOURCE_VERSION_CONFLICT');
       }
 
-      const t = await this.prisma.tenant.findUnique({ where: { id } });
+      const t = await this.prisma.tenant.findUnique({
+        where: { id },
+        include: { lineFriend: { select: { id: true, displayName: true, pictureUrl: true } } },
+      });
       return t ? this.mapTenantToEntity(t) : null;
     }
 
@@ -1056,6 +1077,7 @@ export class PrismaTenantRepository implements ITenantRepository {
     const t = await this.prisma.tenant.update({
       where: { id },
       data: updatePayload,
+      include: { lineFriend: { select: { id: true, displayName: true, pictureUrl: true } } },
     });
 
     return this.mapTenantToEntity(t);
@@ -1159,6 +1181,8 @@ export class PrismaTenantRepository implements ITenantRepository {
       nationalIdMasked: c.nationalIdMasked || null,
       dateOfBirth: c.dateOfBirth || null,
       status: c.status || (c.deletedAt ? 'removed' : 'active'),
+      action: c.status === 'removed' || c.deletedAt ? 'removed' : 'added',
+      timestamp: c.deletedAt || c.createdAt,
       createdAt: c.createdAt,
       updatedAt: c.updatedAt,
       deletedAt: c.deletedAt || null,

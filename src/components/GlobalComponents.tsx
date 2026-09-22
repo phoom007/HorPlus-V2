@@ -631,28 +631,29 @@ export const SignaturePad: React.FC<SignaturePadProps> = ({
     }
   }, []);
 
-  const getCoordinates = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
+  const getCoordinates = (e: React.PointerEvent<HTMLCanvasElement> | React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
     if (!canvas) return { x: 0, y: 0 };
     const rect = canvas.getBoundingClientRect();
+    const clientX = 'touches' in e ? e.touches[0]?.clientX ?? 0 : e.clientX;
+    const clientY = 'touches' in e ? e.touches[0]?.clientY ?? 0 : e.clientY;
+    const scaleX = canvas.width / (rect.width || 1);
+    const scaleY = canvas.height / (rect.height || 1);
 
-    // Support Touch & Mouse coordinates correctly inside iframe
-    if ('touches' in e) {
-      if (e.touches.length === 0) return { x: 0, y: 0 };
-      return {
-        x: e.touches[0].clientX - rect.left,
-        y: e.touches[0].clientY - rect.top
-      };
-    } else {
-      return {
-        x: e.clientX - rect.left,
-        y: e.clientY - rect.top
-      };
-    }
+    return {
+      x: (clientX - rect.left) * scaleX,
+      y: (clientY - rect.top) * scaleY,
+    };
   };
 
-  const startDrawing = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
-    e.preventDefault();
+  const startDrawing = (e: React.PointerEvent<HTMLCanvasElement> | React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
+    if ('pointerId' in e && e.currentTarget && typeof e.currentTarget.setPointerCapture === 'function') {
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch { }
+    } else if ('touches' in e && e.cancelable) {
+      e.preventDefault();
+    }
     const { x, y } = getCoordinates(e);
     const ctx = canvasRef.current?.getContext('2d');
     if (ctx) {
@@ -663,9 +664,11 @@ export const SignaturePad: React.FC<SignaturePadProps> = ({
     }
   };
 
-  const draw = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
+  const draw = (e: React.PointerEvent<HTMLCanvasElement> | React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
     if (!isDrawing) return;
-    e.preventDefault();
+    if ('touches' in e && e.cancelable) {
+      e.preventDefault();
+    }
     const { x, y } = getCoordinates(e);
     const ctx = canvasRef.current?.getContext('2d');
     if (ctx) {
@@ -674,7 +677,14 @@ export const SignaturePad: React.FC<SignaturePadProps> = ({
     }
   };
 
-  const stopDrawing = () => {
+  const stopDrawing = (e?: React.PointerEvent<HTMLCanvasElement> | React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
+    if (e && 'pointerId' in e && e.currentTarget && typeof e.currentTarget.releasePointerCapture === 'function') {
+      try {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      } catch { }
+    } else if (e && 'touches' in e && e.cancelable) {
+      e.preventDefault();
+    }
     if (isDrawing) {
       setIsDrawing(false);
     }
@@ -704,10 +714,15 @@ export const SignaturePad: React.FC<SignaturePadProps> = ({
       <div className="relative border border-dashed border-gray-300 rounded-2xl overflow-hidden bg-slate-50">
         <canvas
           ref={canvasRef}
-          width={400}
-          height={160}
+          width={480}
+          height={200}
+          data-testid="global-signature-canvas"
           style={{ touchAction: 'none' }}
-          className="w-full h-40 cursor-crosshair touch-none"
+          className="w-full h-48 cursor-crosshair touch-none"
+          onPointerDown={startDrawing}
+          onPointerMove={draw}
+          onPointerUp={stopDrawing}
+          onPointerCancel={stopDrawing}
           onMouseDown={startDrawing}
           onMouseMove={draw}
           onMouseUp={stopDrawing}
