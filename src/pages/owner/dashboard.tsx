@@ -51,7 +51,11 @@ import {
   Edit3,
   DoorOpen,
   Trash2,
-  ArrowRightLeft
+  ArrowRightLeft,
+  LayoutGrid,
+  RotateCw,
+  ChevronRight,
+  Coins
 } from 'lucide-react';
 import { formatBaht, ConfirmDialog } from '../../components/GlobalComponents';
 import { LineLogo } from '../../components/LineLogo';
@@ -84,6 +88,25 @@ import {
   TenantRequestItem,
   TenantRequestCategory
 } from '../../services/dashboard.service';
+
+const formatToThaiFullDate = (isoOrDateStr?: string): string => {
+  if (!isoOrDateStr) return '-';
+  const d = new Date(isoOrDateStr);
+  if (isNaN(d.getTime())) return String(isoOrDateStr);
+  const thaiMonths = [
+    'ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.',
+    'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'
+  ];
+  return `${d.getDate()} ${thaiMonths[d.getMonth()]} ${d.getFullYear() + 543}`;
+};
+
+const getExtensionRequestSummary = (req: TenantRequestItem): string => {
+  if ((req as any).renewalType === 'term') {
+    const termMonths = (req as any).termMonths || (req as any).durationMonths || 4;
+    return `ขอต่อ 1 เทอม (${termMonths} เดือน)`;
+  }
+  return `ขอต่อ ${(req as any).durationMonths || req.stayDurationText || '6 เดือน'}`;
+};
 
 export interface OwnerDashboardProps {
   dormitoryId?: string;
@@ -483,6 +506,66 @@ const OwnerDashboardContent: React.FC<OwnerDashboardProps> = ({
   const pendingRequests = useMemo(() => {
     return aggregatedRequests.filter(req => req.status === 'pending' || (req.status as string) === 'pending_owner_approval');
   }, [aggregatedRequests]);
+
+  // Tenant Requests Horizontal Feed State & Counts
+  const tenantRequests = pendingRequests;
+  const [requestFilter, setRequestFilter] = useState<'all' | 'move_out' | 'contract_expired' | 'contract_extension' | 'registration'>('all');
+  const scrollContainerRef = React.useRef<HTMLDivElement>(null);
+  const isDraggingRef = React.useRef(false);
+  const startXRef = React.useRef(0);
+  const scrollLeftRef = React.useRef(0);
+  const dragDistanceRef = React.useRef(0);
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (!scrollContainerRef.current) return;
+    isDraggingRef.current = true;
+    startXRef.current = e.pageX - scrollContainerRef.current.offsetLeft;
+    scrollLeftRef.current = scrollContainerRef.current.scrollLeft;
+    dragDistanceRef.current = 0;
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (!isDraggingRef.current || !scrollContainerRef.current) return;
+    e.preventDefault();
+    const x = e.pageX - scrollContainerRef.current.offsetLeft;
+    const walk = (x - startXRef.current) * 1.5;
+    dragDistanceRef.current = Math.abs(x - startXRef.current);
+    scrollContainerRef.current.scrollLeft = scrollLeftRef.current - walk;
+  };
+
+  const handleMouseUpOrLeave = () => {
+    isDraggingRef.current = false;
+  };
+
+  const handleCardClick = (req: TenantRequestItem) => {
+    if (dragDistanceRef.current > 5) return;
+    if (req.category === 'registration') {
+      setInspectingReq(req);
+    } else if (req.category === 'move_out') {
+      setTerminateModalReq(req);
+      setTerminateDate(req.moveOutDate || new Date().toISOString().split('T')[0]);
+      setTerminateReason(req.reason || 'ผู้เช่าย้ายออกตามกำหนด');
+    } else if (req.category === 'contract_extension') {
+      if (req.contractId) {
+        onNavigate('contracts', req.contractId);
+      } else {
+        onNavigate('contracts');
+      }
+    } else if (req.category === 'contract_expired') {
+      if (req.contractId) {
+        onNavigate('contracts', req.contractId);
+      } else {
+        onNavigate('contracts');
+      }
+    }
+  };
+
+  const moveOutCount = tenantRequests.filter(r => r.category === 'move_out').length;
+  const contractExpiredCount = tenantRequests.filter(r => r.category === 'contract_expired').length;
+  const contractExtensionCount = tenantRequests.filter(r => r.category === 'contract_extension').length;
+  const registrationCount = tenantRequests.filter(r => r.category === 'registration').length;
+  const totalRequestsCount = tenantRequests.length;
+  const pendingRequestsCount = tenantRequests.length;
 
   useEffect(() => {
     if (activeDormitoryId) {
@@ -1017,221 +1100,265 @@ const OwnerDashboardContent: React.FC<OwnerDashboardProps> = ({
 
       {/* 2. TENANT REQUESTS SECTION: "คำขอจากผู้เช่า" (Hidden completely for Staff) */}
       {!isStaff && (
-        <div className="bg-white p-5 sm:p-6 rounded-3xl border border-slate-100 shadow-xs space-y-4" data-testid="tenant-requests-section">
-        <div className="flex items-center justify-between pb-1">
-          <div className="flex items-center gap-2.5">
-            <h3 className="text-base sm:text-lg font-black text-slate-800">คำขอจากผู้เช่า</h3>
-            {pendingRequests.length > 0 && (
-              <span data-testid="pending-requests-badge" className="px-2.5 py-0.5 bg-rose-500 text-white font-black text-xs rounded-full shadow-xs animate-pulse">
-                {pendingRequests.length}
-              </span>
-            )}
+        <div data-testid="tenant-requests-section">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 mb-3">
+            <div className="flex items-center gap-2">
+              <h3 className="text-base sm:text-lg font-black text-slate-800">
+                คำขอจากผู้เช่า
+              </h3>
+              {pendingRequestsCount > 0 ? (
+                <span data-testid="pending-requests-badge" className="px-2.5 py-0.5 bg-amber-50/90 text-amber-700 border border-amber-200/70 text-[11px] font-bold rounded-full">
+                  {pendingRequestsCount} รายการ
+                </span>
+              ) : (
+                <span className="px-2.5 py-0.5 bg-slate-100 text-slate-500 border border-slate-200 text-[11px] font-bold rounded-full">
+                  0 รายการ
+                </span>
+              )}
+            </div>
+
+            {/* Category Filter Tabs - Minimal Icon Only (แสดงเฉพาะหมวดหมู่ที่มีรายการ) */}
+            <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0 scrollbar-none">
+              {totalRequestsCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setRequestFilter('all')}
+                  title={`ทั้งหมด (${totalRequestsCount})`}
+                  className={`w-8 h-8 rounded-xl flex items-center justify-center transition-all shrink-0 cursor-pointer ${
+                    requestFilter === 'all'
+                      ? 'bg-slate-900 text-white shadow-xs'
+                      : 'bg-white hover:bg-slate-100 text-slate-500 border border-slate-200/80'
+                  }`}
+                >
+                  <LayoutGrid className="w-4 h-4" />
+                </button>
+              )}
+              {moveOutCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setRequestFilter('move_out')}
+                  title={`แจ้งเลิกเช่า (${moveOutCount})`}
+                  className={`w-8 h-8 rounded-xl flex items-center justify-center transition-all shrink-0 cursor-pointer ${
+                    requestFilter === 'move_out'
+                      ? 'bg-orange-500 text-white shadow-xs'
+                      : 'bg-white hover:bg-orange-50 text-orange-600 border border-orange-200/80'
+                  }`}
+                >
+                  <LogOut className="w-4 h-4" />
+                </button>
+              )}
+              {contractExpiredCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setRequestFilter('contract_expired')}
+                  title={`สัญญาหมดอายุ (${contractExpiredCount})`}
+                  className={`w-8 h-8 rounded-xl flex items-center justify-center transition-all shrink-0 cursor-pointer ${
+                    requestFilter === 'contract_expired'
+                      ? 'bg-rose-600 text-white shadow-xs'
+                      : 'bg-white hover:bg-rose-50 text-rose-600 border border-rose-200/80'
+                  }`}
+                >
+                  <Clock className="w-4 h-4" />
+                </button>
+              )}
+              {contractExtensionCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setRequestFilter('contract_extension')}
+                  title={`ขอต่อสัญญา (${contractExtensionCount})`}
+                  className={`w-8 h-8 rounded-xl flex items-center justify-center transition-all shrink-0 cursor-pointer ${
+                    requestFilter === 'contract_extension'
+                      ? 'bg-yellow-500 text-white shadow-xs'
+                      : 'bg-white hover:bg-yellow-50 text-yellow-600 border border-yellow-200/80'
+                  }`}
+                >
+                  <RotateCw className="w-4 h-4" />
+                </button>
+              )}
+              {registrationCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setRequestFilter('registration')}
+                  title={`ขอลงทะเบียน (${registrationCount})`}
+                  className={`w-8 h-8 rounded-xl flex items-center justify-center transition-all shrink-0 cursor-pointer ${
+                    requestFilter === 'registration'
+                      ? 'bg-yellow-500 text-white shadow-xs'
+                      : 'bg-white hover:bg-yellow-50 text-yellow-600 border border-yellow-200/80'
+                  }`}
+                >
+                  <UserPlus className="w-4 h-4" />
+                </button>
+              )}
+            </div>
           </div>
-          <span className="text-xs text-slate-400 font-medium hidden sm:inline">
-            คำขอลงทะเบียนเข้าพัก แจ้งย้ายออก และต่อสัญญาเช่า
-          </span>
-        </div>
 
-        {pendingRequests.length === 0 ? (
-          <div data-testid="empty-tenant-requests" className="p-8 sm:p-10 text-center bg-slate-50/60 border border-dashed border-slate-200 rounded-2xl flex flex-col items-center justify-center">
-            <CheckCircle2 className="w-10 h-10 text-emerald-500 mb-2 stroke-[2]" />
-            <p className="text-sm font-extrabold text-slate-700">ไม่มีคำขอที่รอดำเนินการ</p>
-            <p className="text-xs text-slate-400 font-medium mt-1">
-              คำขอเช่าห้องใหม่ แจ้งย้ายออก หรือต่อสัญญาจากผู้เช่าจะปรากฏที่นี่
-            </p>
-          </div>
-        ) : (() => {
-          const collidingRoomNumbers = new Set<string>();
-          const roomCounts: Record<string, number> = {};
-          pendingRequests.forEach((r) => {
-            if (r.roomNumber) {
-              roomCounts[r.roomNumber] = (roomCounts[r.roomNumber] || 0) + 1;
-            }
-          });
-          Object.keys(roomCounts).forEach((rn) => {
-            if (roomCounts[rn] > 1) collidingRoomNumbers.add(rn);
-          });
+          {/* Horizontal Scrollable Row of Buttons with Click & Drag to Scroll */}
+          {totalRequestsCount === 0 ? (
+            <div data-testid="empty-tenant-requests" className="p-4 sm:p-5 bg-slate-50/80 border border-dashed border-slate-200 rounded-2xl sm:rounded-3xl flex items-center justify-center text-xs font-semibold text-slate-400 select-none">
+              ไม่มีคำขอที่รอดำเนินการ
+            </div>
+          ) : (
+            <div
+              ref={scrollContainerRef}
+              onMouseDown={handleMouseDown}
+              onMouseMove={handleMouseMove}
+              onMouseUp={handleMouseUpOrLeave}
+              onMouseLeave={handleMouseUpOrLeave}
+              className="flex items-stretch gap-3 overflow-x-auto pb-2 -mx-1 px-1 scrollbar-none focus:outline-hidden cursor-grab active:cursor-grabbing select-none"
+              style={{ WebkitOverflowScrolling: 'touch' }}
+            >
+              {tenantRequests
+                .filter(req => requestFilter === 'all' || req.category === requestFilter)
+                .map((req) => {
+                  const isApproved = req.status === 'approved';
 
-          return (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
-              {pendingRequests.map((req) => {
-                const isReg = req.category === 'registration';
-                const isMoveOut = req.category === 'move_out';
-                const isRenewal = req.category === 'contract_extension';
-                const isExpired = req.category === 'contract_expired';
+                  return (
+                    <button
+                      key={`${req.category}-${req.id}`}
+                      type="button"
+                      data-testid="tenant-request-item"
+                      onClick={() => handleCardClick(req)}
+                      className={`shrink-0 w-[230px] sm:w-[250px] md:w-[260px] p-3.5 rounded-2xl sm:rounded-3xl border text-left flex flex-col justify-between transition-all group active:scale-[0.98] shadow-3xs hover:shadow-md select-none cursor-pointer ${
+                        isApproved
+                          ? 'bg-white border-emerald-200/90 hover:border-emerald-300'
+                          : req.status === 'rejected'
+                          ? 'bg-slate-50/80 border-slate-200 opacity-60'
+                          : req.category === 'move_out'
+                          ? 'bg-white hover:bg-orange-50/40 border-orange-200/90 hover:border-orange-300'
+                          : req.category === 'contract_expired'
+                          ? 'bg-white hover:bg-rose-50/30 border-rose-200/80 hover:border-rose-300'
+                          : req.category === 'contract_extension'
+                          ? 'bg-white hover:bg-yellow-50/40 border-yellow-200/90 hover:border-yellow-300'
+                          : 'bg-white hover:bg-yellow-50/40 border-yellow-200/90 hover:border-yellow-300'
+                      }`}
+                    >
+                      {/* Button Top: Room Badge (Left) and Category Pill (Right) - 2 items only */}
+                      <div className="flex items-center justify-between gap-1.5 mb-2 w-full">
+                        <span className={`px-2 py-0.5 text-white font-black text-[11px] sm:text-xs rounded-lg shadow-2xs shrink-0 transition-colors ${
+                          req.category === 'move_out'
+                            ? 'bg-orange-500 group-hover:bg-orange-600'
+                            : req.category === 'contract_expired'
+                            ? 'bg-rose-600 group-hover:bg-rose-700'
+                            : req.category === 'contract_extension'
+                            ? 'bg-yellow-500 group-hover:bg-yellow-600'
+                            : 'bg-yellow-500 group-hover:bg-yellow-600'
+                        }`}>
+                          ห้อง {req.roomNumber} · {req.buildingName ? req.buildingName.replace(/อาคาร\s*/g, '').trim() : 'A'}
+                        </span>
 
-                let badgeText = 'คำขอเช่าห้องใหม่';
-                let badgeColor = 'bg-emerald-50 text-emerald-700 border-emerald-200';
-                if (isMoveOut) {
-                  badgeText = 'แจ้งย้ายออก';
-                  badgeColor = 'bg-rose-50 text-rose-700 border-rose-200';
-                } else if (isRenewal) {
-                  badgeText = 'ขอต่อสัญญาเช่า';
-                  badgeColor = 'bg-indigo-50 text-indigo-700 border-indigo-200';
-                } else if (isExpired) {
-                  badgeText = 'สัญญาหมดอายุ';
-                  badgeColor = 'bg-amber-50 text-amber-700 border-amber-200';
-                }
-
-                return (
-                  <div
-                    key={req.id}
-                    data-testid={`tenant-request-item`}
-                    className="p-4 rounded-2xl border border-slate-100 bg-slate-50/40 hover:bg-slate-50 transition-all flex flex-col justify-between gap-3 shadow-3xs"
-                  >
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-1.5 min-w-0">
-                          <span className="text-sm font-black text-slate-800">
-                            ห้อง {req.roomNumber}
-                          </span>
-                          {collidingRoomNumbers.has(req.roomNumber) && (
-                            <span
-                              data-testid="collision-chip"
-                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-50 border border-amber-200 text-amber-800 text-[10px] font-bold shrink-0"
-                            >
-                              <AlertTriangle className="w-3.5 h-3.5 text-amber-500 shrink-0" />
-                              <span>คำขอซ้อนทับ: ห้อง {req.roomNumber}</span>
-                            </span>
-                          )}
-                        </div>
-                        <span className={`text-[10px] font-black px-2.5 py-0.5 rounded-full border shrink-0 ${badgeColor}`}>
-                          {badgeText}
+                        <span className={`px-2 py-0.5 text-[9.5px] sm:text-[10px] font-extrabold rounded-md shrink-0 border ${
+                          req.category === 'move_out'
+                            ? 'bg-orange-50 text-orange-700 border-orange-200'
+                            : req.category === 'contract_expired'
+                            ? 'bg-rose-50 text-rose-800 border-rose-200'
+                            : req.category === 'contract_extension'
+                            ? 'bg-yellow-50 text-yellow-800 border-yellow-200'
+                            : 'bg-yellow-50 text-yellow-800 border-yellow-200'
+                        }`}>
+                          {req.category === 'move_out'
+                            ? 'แจ้งเลิกเช่า'
+                            : req.category === 'contract_expired'
+                            ? 'สัญญาหมดอายุ'
+                            : req.category === 'contract_extension'
+                            ? 'ขอต่อสัญญา'
+                            : 'ขอลงทะเบียน'}
                         </span>
                       </div>
 
-                      <div className="space-y-1 text-xs">
-                        <div className="flex items-center gap-1.5 font-bold text-slate-700">
-                          <User className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                          <span className="truncate">{req.tenantName}</span>
-                        </div>
-                        <div className="flex items-center gap-1.5 text-slate-500 font-medium">
-                          <Phone className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                          <span>{req.phone || '-'}</span>
-                        </div>
-                        {req.monthlyRent > 0 && (
-                          <div className="flex items-center gap-1.5 text-slate-600 font-medium">
-                            <DollarSign className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                            <span>ค่าเช่า ฿{formatBaht(req.monthlyRent)}/ด. {req.deposit > 0 ? `(ประกัน ฿${formatBaht(req.deposit)})` : ''}</span>
+                      {/* Button Middle: Tenant Name & Brief Details */}
+                      <div className="space-y-1 my-1 w-full">
+                        <div className="flex items-center gap-1.5">
+                          <div className={`w-6 h-6 rounded-full font-black text-[10px] flex items-center justify-center shrink-0 ${
+                            req.category === 'move_out'
+                              ? 'bg-orange-100 text-orange-800'
+                              : req.category === 'contract_expired'
+                              ? 'bg-rose-100 text-rose-800'
+                              : req.category === 'contract_extension'
+                              ? 'bg-yellow-100 text-yellow-800'
+                              : 'bg-yellow-100 text-yellow-800'
+                          }`}>
+                            {(req.tenantName || 'ผ').replace('คุณ', '').trim().charAt(0) || 'ผ'}
                           </div>
-                        )}
-                        {req.moveInDate && (
-                          <div className="flex items-center gap-1.5 text-slate-500 font-medium">
-                            <Calendar className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                            <span>เข้าพัก: {req.moveInDate}</span>
-                          </div>
-                        )}
-                        {req.moveOutDate && (
-                          <div className="flex items-center gap-1.5 text-rose-600 font-medium">
-                            <Calendar className="w-3.5 h-3.5 text-rose-400 shrink-0" />
-                            <span>กำหนดย้ายออก: {req.moveOutDate}</span>
-                          </div>
-                        )}
-                        {req.stayDurationText && (
-                          <div className="flex items-center gap-1.5 text-indigo-600 font-medium">
-                            <Clock className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
-                            <span>ระยะเวลาที่ขอต่อ: {req.stayDurationText}</span>
-                          </div>
-                        )}
-                        {req.reason && (
-                          <p className="text-[11px] text-slate-500 bg-white/70 p-2 rounded-xl border border-slate-100 mt-1 line-clamp-2">
-                            {req.reason}
+                          <p className="text-xs sm:text-sm font-black text-slate-900 truncate group-hover:text-indigo-600 transition-colors">
+                            {req.tenantName}
                           </p>
-                        )}
+                        </div>
+
+                        <div className="text-[11px] text-slate-500 font-medium space-y-0.5 pt-1.5 border-t border-gray-100">
+                          {req.category === 'move_out' ? (
+                            <>
+                              <div className="flex items-center justify-between">
+                                <span className="text-slate-400">ขอย้ายออก:</span>
+                                <span className="font-bold text-orange-700">{req.moveOutDate || 'สิ้นเดือนนี้'}</span>
+                              </div>
+                              <div className="flex items-center justify-between">
+                                <span className="text-slate-400">เงินประกัน:</span>
+                                <span className="font-extrabold text-slate-800">{formatBaht(req.deposit)}</span>
+                              </div>
+                            </>
+                          ) : req.category === 'contract_expired' ? (
+                            <>
+                              <div className="flex items-center justify-between">
+                                <span className="text-slate-400">หมดอายุ:</span>
+                                <span className="font-bold text-rose-600">{formatToThaiFullDate(req.contractEndDate || req.requestedAt)}</span>
+                              </div>
+                              <div className="flex items-center justify-between">
+                                <span className="text-slate-400">ค่าเช่า:</span>
+                                <span className="font-extrabold text-slate-800">{formatBaht(req.monthlyRent)}/เดือน</span>
+                              </div>
+                            </>
+                          ) : req.category === 'contract_extension' ? (
+                            <>
+                              <div className="flex items-center justify-between gap-1.5 min-w-0">
+                                <span className="text-slate-400 shrink-0">ต่อสัญญา:</span>
+                                <span
+                                  className="font-bold text-yellow-700 truncate min-w-0 text-right"
+                                  title={getExtensionRequestSummary(req)}
+                                >
+                                  {getExtensionRequestSummary(req)}
+                                </span>
+                              </div>
+                              <div className="flex items-center justify-between">
+                                <span className="text-slate-400">ค่าเช่า:</span>
+                                <span className="font-extrabold text-slate-800">{formatBaht(req.monthlyRent)}/เดือน</span>
+                              </div>
+                            </>
+                          ) : (
+                            <>
+                              <div className="flex items-center justify-between">
+                                <span className="text-slate-400">ค่าเช่า:</span>
+                                <span className="font-extrabold text-slate-800">{formatBaht(req.monthlyRent)}/เดือน</span>
+                              </div>
+                              <div className="flex items-center justify-between">
+                                <span className="text-slate-400">ย้ายเข้า:</span>
+                                <span className="font-bold text-yellow-700">{formatToThaiFullDate(req.moveInDate)}</span>
+                              </div>
+                            </>
+                          )}
+                        </div>
                       </div>
-                    </div>
 
-                    {/* Actions depending on category */}
-                    {!isStaff && (
-                      <div className="pt-2 border-t border-slate-100 flex items-center justify-end gap-2">
-                        {isReg && (
-                          <>
-                            <button
-                              type="button"
-                              data-testid="reassign-room-btn"
-                              onClick={() => {
-                                setReassignModalReq(req);
-                                setSelectedReassignRoomId('');
-                              }}
-                              className="px-3 py-1.5 text-xs font-bold bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-xl transition-all cursor-pointer flex items-center gap-1 shadow-xs active:scale-98"
-                            >
-                              <ArrowRightLeft className="w-3.5 h-3.5" />
-                              <span>เปลี่ยนห้องพัก</span>
-                            </button>
-                            <button
-                              type="button"
-                              data-testid="inspect-registration-btn"
-                              onClick={() => setInspectingReq(req)}
-                              className="px-4 py-1.5 text-xs font-black bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl transition-all cursor-pointer shadow-xs flex items-center gap-1.5 active:scale-98"
-                            >
-                              <Eye className="w-3.5 h-3.5" />
-                              <span>ตรวจสอบ</span>
-                            </button>
-                          </>
-                        )}
-
-                      {isMoveOut && (
-                        <button
-                          type="button"
-                          data-testid="terminate-move-out-btn"
-                          onClick={() => {
-                            setTerminateModalReq(req);
-                            setTerminateDate(req.moveOutDate || new Date().toISOString().split('T')[0]);
-                            setTerminateReason(req.reason || 'ผู้เช่าย้ายออกตามกำหนด');
-                          }}
-                          className="w-full px-3.5 py-1.5 text-xs font-black bg-rose-600 hover:bg-rose-700 text-white rounded-xl transition-all cursor-pointer shadow-xs flex items-center justify-center gap-1.5"
+                      {/* Button Footer: Action Prompt Hint */}
+                      <div className="pt-2 mt-1 border-t border-gray-100 flex items-center justify-between text-[10px] sm:text-[11px] font-bold text-indigo-600 w-full group-hover:translate-x-0.5 transition-transform">
+                        <span
+                          {...(req.category === 'registration' ? { 'data-testid': 'inspect-registration-btn' } : {})}
+                          {...(req.category === 'move_out' ? { 'data-testid': 'terminate-move-out-btn' } : {})}
+                          {...(req.category === 'contract_extension' ? { 'data-testid': 'approve-renewal-btn' } : {})}
+                          {...(req.category === 'contract_expired' ? { 'data-testid': 'manage-expired-contract-btn' } : {})}
+                          className="flex items-center gap-1 text-slate-500 group-hover:text-indigo-600"
                         >
-                          <LogOut className="w-3.5 h-3.5" />
-                          <span>ดำเนินการคืนห้อง/เลิกเช่า</span>
-                        </button>
-                      )}
-
-                      {isRenewal && (
-                        <>
-                          <button
-                            type="button"
-                            data-testid="reject-renewal-btn"
-                            onClick={() => {
-                              setRejectModalReq(req);
-                              setRejectReason('');
-                            }}
-                            className="px-3 py-1.5 text-xs font-bold text-slate-600 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-all cursor-pointer"
-                          >
-                            ปฏิเสธ
-                          </button>
-                          <button
-                            type="button"
-                            data-testid="approve-renewal-btn"
-                            disabled={approveRenewalMutation.isPending}
-                            onClick={() => approveRenewalMutation.mutate(req)}
-                            className="px-3.5 py-1.5 text-xs font-black bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl transition-all cursor-pointer shadow-xs"
-                          >
-                            {approveRenewalMutation.isPending ? 'กำลังอนุมัติ...' : 'อนุมัติต่อสัญญา'}
-                          </button>
-                        </>
-                      )}
-
-                      {isExpired && (
-                        <button
-                          type="button"
-                          data-testid="manage-expired-contract-btn"
-                          onClick={() => onNavigate('contracts', req.contractId)}
-                          className="w-full px-3.5 py-1.5 text-xs font-black bg-slate-800 hover:bg-slate-900 text-white rounded-xl transition-all cursor-pointer shadow-xs flex items-center justify-center gap-1.5"
-                        >
-                          <span>จัดการสัญญาเช่า</span>
-                          <ArrowRight className="w-3.5 h-3.5" />
-                        </button>
-                      )}
-                    </div>
-                  )}
-                  </div>
-                );
-              })}
+                          <Eye className="w-3 h-3 text-slate-400 group-hover:text-indigo-600" />
+                          <span>ดูรายละเอียด</span>
+                        </span>
+                        <ChevronRight className="w-3.5 h-3.5 text-slate-300 group-hover:text-indigo-600 transition-colors" />
+                      </div>
+                    </button>
+                  );
+                })}
             </div>
-          );
-        })()}
-      </div>
-    )}
+          )}
+        </div>
+      )}
 
       {/* 4. MAIN MENU SECTION: "เมนูหลัก" */}
       <div>

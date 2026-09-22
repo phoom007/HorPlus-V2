@@ -354,16 +354,16 @@ describe('Owner Dashboard End-to-End Integration & Operational Workflow (SPEC-OD
 
       await waitFor(() => {
         const badge = screen.getByTestId('pending-requests-badge');
-        expect(badge.textContent).toBe('3');
+        expect(badge.textContent).toBe('3 รายการ');
       });
 
       // Verify all 3 requests are rendered
       const items = screen.getAllByTestId('tenant-request-item');
       expect(items.length).toBe(3);
 
-      expect(screen.getByText('คำขอเช่าห้องใหม่')).toBeDefined();
-      expect(screen.getByText('แจ้งย้ายออก')).toBeDefined();
-      expect(screen.getByText('ขอต่อสัญญาเช่า')).toBeDefined();
+      expect(screen.getByText('ขอลงทะเบียน')).toBeDefined();
+      expect(screen.getByText('แจ้งเลิกเช่า')).toBeDefined();
+      expect(screen.getByText('ขอต่อสัญญา')).toBeDefined();
       expect(screen.getByText('สมศักดิ์ มั่นคง')).toBeDefined();
       expect(screen.getAllByText('วันเพ็ญ เดือนเด่น').length).toBeGreaterThanOrEqual(1);
     });

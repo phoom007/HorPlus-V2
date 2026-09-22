@@ -471,12 +471,16 @@ export function aggregateTenantRequests(params: {
 
   // 4. Contracts nearing expiration or waiting extension in database
   contracts.forEach((c) => {
-    if (c.status === 'expired' || c.status === 'checking_out' || c.status === 'waiting_extension') {
+    const isEnded = Boolean(c.endDate && new Date(c.endDate).getTime() < Date.now());
+    const hasMoveOutNotice = Boolean((c as any).moveOutNoticeDate || (c as any).hasMoveOutNotice);
+    const hasExtensionReq = Boolean((c as any).extensionRequested || (c as any).extensionRequestStatus === 'pending');
+
+    if (c.status === 'expired' || c.status === 'checking_out' || c.status === 'waiting_extension' || isEnded || hasMoveOutNotice || hasExtensionReq) {
       const room = rooms.find((r) => r.id === c.roomId);
       const tenant = tenants.find((t) => t.id === c.tenantId);
       const roomNumber = room?.roomNumber || '101';
-      const isExpired = c.status === 'expired';
-      const isExtension = c.status === 'waiting_extension';
+      const isExpired = c.status === 'expired' || (isEnded && c.status !== 'terminated' && c.status !== 'cancelled');
+      const isExtension = c.status === 'waiting_extension' || hasExtensionReq;
       const cat: TenantRequestCategory = isExtension ? 'contract_extension' : (isExpired ? 'contract_expired' : 'move_out');
 
       if (!processedRoomCategories.has(`${cat}-${roomNumber}`)) {
@@ -495,7 +499,7 @@ export function aggregateTenantRequests(params: {
           requestedAt: c.endDate || new Date().toISOString(),
           contractStartDate: c.startDate,
           contractEndDate: c.endDate,
-          moveOutDate: isExpired ? c.endDate : undefined,
+          moveOutDate: isExpired ? c.endDate : (c as any).moveOutNoticeDate,
           deposit: Number(c.depositAmount ?? room?.depositAmount ?? 0),
           monthlyRent: Number(c.monthlyRent ?? room?.monthlyRent ?? 0),
           status: 'pending',
@@ -505,6 +509,39 @@ export function aggregateTenantRequests(params: {
           tenantId: tenant?.id,
         });
         processedRoomCategories.add(`${cat}-${roomNumber}`);
+      }
+    }
+  });
+
+  // 5. Tenants with status === 'pending'
+  tenants.forEach((t) => {
+    if (t.status === 'pending') {
+      const rId = (t as any).requestedRoomId || (t as any).roomId || (t.rentalHistory && t.rentalHistory.length > 0 ? t.rentalHistory[0] : null);
+      const room = rooms.find((r) => r.id === rId || r.roomNumber === rId);
+      const roomNumber = (t as any).requestedRoomNumber || room?.roomNumber || '101';
+      if (!processedRoomCategories.has(`registration-${roomNumber}`)) {
+        results.push({
+          id: t.id,
+          category: 'registration',
+          rentType: 'monthly',
+          rentalType: 'MONTHLY',
+          roomId: room?.id || rId,
+          roomNumber,
+          roomType: room?.roomType || room?.type || 'Standard',
+          floor: room?.floor || 1,
+          buildingName: room?.buildingName || room?.building || 'อาคาร A',
+          tenantName: t.name || (t as any).displayName || 'ผู้ขอลงทะเบียน',
+          phone: t.phone || '-',
+          idCard: t.citizenId,
+          requestedAt: t.createdAt ? new Date(t.createdAt).toISOString() : new Date().toISOString(),
+          moveInDate: (t as any).requestedStartDate || (t as any).moveInDate || t.createdAt,
+          deposit: Number((t as any).requestedDeposit ?? room?.depositAmount ?? 0),
+          monthlyRent: Number((t as any).requestedRent ?? room?.monthlyRent ?? 0),
+          status: 'pending',
+          reason: 'คำขอลงทะเบียนเข้าพักจากผู้เช่า',
+          tenantId: t.id,
+        });
+        processedRoomCategories.add(`registration-${roomNumber}`);
       }
     }
   });
