@@ -414,10 +414,10 @@ export function createTenantRegistrationRouter(
     if (actorUserId && /^[0-9a-fA-F-]{36}$/.test(actorUserId)) {
       const user = await prisma.user.findUnique({
         where: { id: actorUserId },
-        select: { displayName: true },
+        select: { name: true },
       });
-      if (user?.displayName) {
-        return { lineDisplayName: user.displayName };
+      if (user?.name) {
+        return { lineDisplayName: user.name };
       }
     }
 
@@ -766,22 +766,22 @@ export function createTenantRegistrationRouter(
   privateRouter.get('/:id/contract-pdf', requireDormitoryPermission('tenant:read'), async (req: Request, res: Response) => {
     try {
       const dormId = getAuthoritativeDormitoryId(req);
-      const { pdfBuffer, contractNumber } = await registrationService.getRegistrationContractPdf(
+      const { buffer, filename } = await registrationService.getRegistrationContractPdf(
         dormId,
         req.params.id,
         {
           roomId: typeof req.query.roomId === 'string' ? req.query.roomId : undefined,
           startDate: typeof req.query.startDate === 'string' ? req.query.startDate : undefined,
           endDate: typeof req.query.endDate === 'string' ? req.query.endDate : undefined,
-          rentAmount: req.query.rentAmount ? Number(req.query.rentAmount) : undefined,
-          depositAmount: req.query.depositAmount ? Number(req.query.depositAmount) : undefined,
+          rentAmount: typeof req.query.rentAmount === 'string' ? req.query.rentAmount : undefined,
+          depositAmount: typeof req.query.depositAmount === 'string' ? req.query.depositAmount : undefined,
         }
       );
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('X-Content-Type-Options', 'nosniff');
       res.setHeader('Cache-Control', 'private, no-store, no-cache, must-revalidate');
-      res.setHeader('Content-Disposition', `inline; filename="${contractNumber}.pdf"`);
-      return res.send(pdfBuffer);
+      res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+      return res.send(buffer);
     } catch (err) {
       handleServiceError(res, err, req);
     }

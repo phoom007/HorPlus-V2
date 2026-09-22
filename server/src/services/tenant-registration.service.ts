@@ -546,7 +546,7 @@ export class TenantRegistrationService {
     return count > 0;
   }
 
-  public async listRequests(dormitoryId: string) {
+  public async listRequests(dormitoryId: string): Promise<any[]> {
     const prisma = getPrismaClient();
     const requests = await prisma.tenantRegistrationRequest.findMany({
       where: { dormitoryId },
@@ -579,7 +579,7 @@ export class TenantRegistrationService {
     });
   }
 
-  public async getRequestById(id: string, dormitoryId: string) {
+  public async getRequestById(id: string, dormitoryId: string): Promise<any> {
     const prisma = getPrismaClient();
     let req = await prisma.tenantRegistrationRequest.findFirst({
       where: { id, dormitoryId },
@@ -1235,7 +1235,7 @@ export class TenantRegistrationService {
       }
       const targetFriendId = req.lineFollowerId || tenant?.lineFriendId;
 
-      const emailToSave = req.email || snap.email || undefined;
+      const emailToSave = (req as any).email || snap.email || undefined;
 
       if (tenant) {
         tenant = await tx.tenant.update({
@@ -1796,15 +1796,15 @@ export class TenantRegistrationService {
           lastName: req.lastName,
           displayName,
           phone: req.phone,
-          email: req.email || snap.email || null,
+          email: (req as any).email || snap.email || null,
           lineFriendId: req.lineFollowerId || null,
           status: 'active',
         },
       });
 
       const tenantUpdateData: Prisma.TenantUpdateInput = {};
-      if ((req.email || snap.email) && !tenant.email) {
-        tenantUpdateData.email = req.email || snap.email;
+      if (((req as any).email || snap.email) && !tenant.email) {
+        tenantUpdateData.email = (req as any).email || snap.email;
       }
       if (snap.pet || snap.pets) {
         const petsList = Array.isArray(snap.pets) && snap.pets.length > 0
