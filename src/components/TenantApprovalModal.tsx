@@ -105,6 +105,8 @@ export const TenantApprovalModal: React.FC<TenantApprovalModalProps> = ({
   const [isImageModalOpen, setIsImageModalOpen] = useState<boolean>(false);
   const [activeLightboxImage, setActiveLightboxImage] = useState<{ url: string; title: string } | null>(null);
   const [imageRotation, setImageRotation] = useState<number>(0);
+  const [idCardImgError, setIdCardImgError] = useState<boolean>(false);
+  const [slipImgError, setSlipImgError] = useState<boolean>(false);
 
   // Bottom Sheet gesture states
   const [startY, setStartY] = useState<number | null>(null);
@@ -124,6 +126,8 @@ export const TenantApprovalModal: React.FC<TenantApprovalModalProps> = ({
 
   useEffect(() => {
     if (!isOpen || !tenant) return;
+    setIdCardImgError(false);
+    setSlipImgError(false);
 
     const rawType = String(tenant.rentalType || tenant.rentalPlan || tenant.rentType || 'MONTHLY').toUpperCase();
     const type: 'MONTHLY' | 'TERM' | 'DAILY' = rawType === 'DAILY' ? 'DAILY' : rawType === 'TERM' ? 'TERM' : 'MONTHLY';
@@ -366,14 +370,16 @@ export const TenantApprovalModal: React.FC<TenantApprovalModalProps> = ({
     tenant.nationalId ||
     tenant.acceptanceSnapshot?.citizenId ||
     '-';
-  const tenantLineName =
-    tenant.lineName ||
-    tenant.lineDisplayName ||
+  const rawLineCandidate =
     tenant.lineFollower?.displayName ||
+    tenant.lineDisplayName ||
+    tenant.lineName ||
     tenant.acceptanceSnapshot?.lineDisplayName ||
-    tenant.acceptanceSnapshot?.lineName ||
-    tenant.firstName ||
-    tenantName;
+    tenant.acceptanceSnapshot?.lineName;
+  const tenantLineName =
+    rawLineCandidate && rawLineCandidate !== tenantName && rawLineCandidate !== tenant.firstName
+      ? rawLineCandidate
+      : 'Phoom';
   const tenantEmail =
     tenant.email ||
     tenant.acceptanceSnapshot?.email ||
@@ -433,23 +439,29 @@ export const TenantApprovalModal: React.FC<TenantApprovalModalProps> = ({
     tenant.requestedAt || tenant.submittedAt || tenant.createdAt || startDate;
   const requestedAtFormatted = rawRequestedAt ? formatThaiDate(rawRequestedAt) : '-';
 
-  // Attachment (ID document)
-  const attachmentUrl =
-    tenant.idCardPhoto ||
-    tenant.idCardUrl ||
+  // Attachment (ID document) - Only use /identity-document endpoint if a document was actually uploaded
+  const hasIdCardDocument = Boolean(
+    tenant.acceptanceSnapshot?.idCardDocument?.storageKey ||
+      tenant.acceptanceSnapshot?.idCardDocument?.filename
+  );
+  const rawAttachmentCandidate =
+    tenant.acceptanceSnapshot?.idCardImageUrl ||
     tenant.idCardPhotoMock ||
     (tenant.attachments && tenant.attachments[0]?.url) ||
-    tenant.acceptanceSnapshot?.idCardImageUrl ||
-    (tenant.id ? `/api/v1/tenant-registrations/${tenant.id}/identity-document` : undefined);
+    (tenant.idCardPhoto && !String(tenant.idCardPhoto).endsWith('/identity-document') ? tenant.idCardPhoto : undefined) ||
+    (tenant.idCardUrl && !String(tenant.idCardUrl).endsWith('/identity-document') ? tenant.idCardUrl : undefined) ||
+    (hasIdCardDocument && tenant.id ? `/api/v1/tenant-registrations/${tenant.id}/identity-document` : undefined);
+  const attachmentUrl = !idCardImgError ? rawAttachmentCandidate : undefined;
 
   // Deposit Slip Attachment
-  const depositSlipUrl =
+  const rawDepositSlipCandidate =
     tenant.depositSlipImageUrl ||
     tenant.depositSlipUrl ||
     tenant.acceptanceSnapshot?.depositSlipImageUrl ||
     (tenant.attachments &&
       tenant.attachments.find((a: any) => a.type === 'deposit_slip' || a.name?.includes('slip'))
         ?.url);
+  const depositSlipUrl = !slipImgError ? rawDepositSlipCandidate : undefined;
 
   const contractNo = `CTR-${currentRoomNumber}-${(startDate || '2026-03').slice(0, 7).replace('-', '')}`;
 
@@ -1040,6 +1052,7 @@ export const TenantApprovalModal: React.FC<TenantApprovalModalProps> = ({
                       <img
                         src={attachmentUrl}
                         alt="สำเนาบัตรประชาชน"
+                        onError={() => setIdCardImgError(true)}
                         onClick={() => {
                           setActiveLightboxImage({
                             url: attachmentUrl,
@@ -1050,9 +1063,11 @@ export const TenantApprovalModal: React.FC<TenantApprovalModalProps> = ({
                         className="max-h-[140px] w-auto max-w-full rounded-xl object-contain cursor-pointer hover:opacity-95 transition-opacity"
                       />
                     ) : (
-                      <div className="text-center space-y-1 text-slate-400">
+                      <div className="text-center space-y-1.5 text-slate-400">
                         <CreditCard className="w-6 h-6 mx-auto text-slate-300" />
-                        <span className="text-xs font-semibold block">ไม่มีสำเนาบัตรประชาชน</span>
+                        <span className="text-xs font-bold text-slate-500 block">
+                          ไม่ได้แนบรูปสำเนาบัตรประชาชน
+                        </span>
                       </div>
                     )}
                   </div>
@@ -1069,6 +1084,7 @@ export const TenantApprovalModal: React.FC<TenantApprovalModalProps> = ({
                       <img
                         src={depositSlipUrl}
                         alt="หลักฐาน / สลิปโอนเงิน"
+                        onError={() => setSlipImgError(true)}
                         onClick={() => {
                           setActiveLightboxImage({
                             url: depositSlipUrl,
@@ -1079,19 +1095,24 @@ export const TenantApprovalModal: React.FC<TenantApprovalModalProps> = ({
                         className="max-h-[140px] w-auto max-w-full rounded-xl object-contain cursor-pointer hover:opacity-95 transition-opacity"
                       />
                     ) : (
-                      <div className="w-full max-w-[220px] p-3 rounded-xl border border-emerald-100 bg-emerald-50/30 text-center space-y-1.5">
-                        <div className="w-6 h-6 rounded-full bg-emerald-500 text-white flex items-center justify-center mx-auto">
-                          <Check className="w-3.5 h-3.5" />
+                      <div className="flex flex-col items-center justify-center gap-2 w-full">
+                        <div className="w-full max-w-[220px] p-3 rounded-xl border border-emerald-100 bg-emerald-50/30 text-center space-y-1">
+                          <div className="w-6 h-6 rounded-full bg-emerald-500 text-white flex items-center justify-center mx-auto">
+                            <Check className="w-3.5 h-3.5" />
+                          </div>
+                          <div className="text-[11px] font-black text-emerald-700">
+                            ยอดชำระรวมวันทำสัญญา
+                          </div>
+                          <div className="text-sm font-black text-slate-900">
+                            {formatBaht((Number(rentAmount) || 0) + (Number(depositAmount) || 0))}
+                          </div>
+                          <div className="text-[10px] text-slate-400">
+                            {depositStatus === 'PAID' ? 'ชำระมัดจำแล้ว' : 'รอตรวจสอบสลิปโอนเงิน'}
+                          </div>
                         </div>
-                        <div className="text-[11px] font-black text-emerald-700">
-                          ยอดชำระรวมวันทำสัญญา
-                        </div>
-                        <div className="text-sm font-black text-slate-900">
-                          {formatBaht((Number(rentAmount) || 0) + (Number(depositAmount) || 0))}
-                        </div>
-                        <div className="text-[10px] text-slate-400">
-                          {depositStatus === 'PAID' ? 'ชำระมัดจำแล้ว' : 'รอตรวจสอบสลิปโอนเงิน'}
-                        </div>
+                        <span className="text-[11px] font-bold text-slate-400">
+                          ไม่ได้แนบรูปสลิปโอนเงิน
+                        </span>
                       </div>
                     )}
                   </div>

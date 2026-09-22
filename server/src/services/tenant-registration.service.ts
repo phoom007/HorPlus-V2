@@ -550,37 +550,29 @@ export class TenantRegistrationService {
     const prisma = getPrismaClient();
     const requests = await prisma.tenantRegistrationRequest.findMany({
       where: { dormitoryId },
-      include: {
-        lineFollower: {
-          select: {
-            id: true,
-            displayName: true,
-            pictureUrl: true,
-          },
-        },
-      },
       orderBy: [{ submittedAt: 'desc' }, { createdAt: 'desc' }],
     });
 
-    // Fallback lookup of LINE friends in this dormitory for requests submitted before lineFollowerId was linked
     const dormFriends = await prisma.dormitoryLineFriend.findMany({
       where: { dormitoryId },
       orderBy: { updatedAt: 'desc' },
       select: { id: true, displayName: true, pictureUrl: true },
     });
+    const friendById = new Map(dormFriends.map((f) => [f.id, f]));
     const latestTenantFriend = dormFriends[0] || null;
 
     return requests.map((req) => {
       const snap = (req.acceptanceSnapshot as any) || {};
+      const matchedFriend = (req.lineFollowerId ? friendById.get(req.lineFollowerId) : null) || latestTenantFriend;
       const resolvedLineName =
-        req.lineFollower?.displayName ||
+        matchedFriend?.displayName ||
         snap.lineDisplayName ||
         snap.lineName ||
-        latestTenantFriend?.displayName ||
-        `${req.firstName || ''}`.trim() ||
-        'ผู้เช่า LINE';
+        'ผู้ใช้งาน LINE';
       return {
         ...req,
+        lineFollowerId: req.lineFollowerId || matchedFriend?.id || null,
+        lineFollower: matchedFriend || null,
         lineDisplayName: resolvedLineName,
         lineName: resolvedLineName,
       };
@@ -591,28 +583,10 @@ export class TenantRegistrationService {
     const prisma = getPrismaClient();
     let req = await prisma.tenantRegistrationRequest.findFirst({
       where: { id, dormitoryId },
-      include: {
-        lineFollower: {
-          select: {
-            id: true,
-            displayName: true,
-            pictureUrl: true,
-          },
-        },
-      },
     });
     if (!req) {
       req = await prisma.tenantRegistrationRequest.findFirst({
         where: { dormitoryId, approvedTenantId: id },
-        include: {
-          lineFollower: {
-            select: {
-              id: true,
-              displayName: true,
-              pictureUrl: true,
-            },
-          },
-        },
       });
     }
     if (!req) {
@@ -621,15 +595,32 @@ export class TenantRegistrationService {
       (err as any).code = 'REGISTRATION_REQUEST_NOT_FOUND';
       throw err;
     }
+
+    let matchedFriend: { id: string; displayName: string; pictureUrl: string | null } | null = null;
+    if (req.lineFollowerId) {
+      matchedFriend = await prisma.dormitoryLineFriend.findFirst({
+        where: { id: req.lineFollowerId },
+        select: { id: true, displayName: true, pictureUrl: true },
+      });
+    }
+    if (!matchedFriend) {
+      matchedFriend = await prisma.dormitoryLineFriend.findFirst({
+        where: { dormitoryId },
+        orderBy: { updatedAt: 'desc' },
+        select: { id: true, displayName: true, pictureUrl: true },
+      });
+    }
+
     const snap = (req.acceptanceSnapshot as any) || {};
     const resolvedLineName =
-      req.lineFollower?.displayName ||
+      matchedFriend?.displayName ||
       snap.lineDisplayName ||
       snap.lineName ||
-      `${req.firstName || ''}`.trim() ||
-      'ผู้เช่า LINE';
+      'ผู้ใช้งาน LINE';
     return {
       ...req,
+      lineFollowerId: req.lineFollowerId || matchedFriend?.id || null,
+      lineFollower: matchedFriend || null,
       lineDisplayName: resolvedLineName,
       lineName: resolvedLineName,
     };

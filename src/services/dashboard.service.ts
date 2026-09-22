@@ -352,17 +352,21 @@ export function aggregateTenantRequests(params: {
     const rawType = String(snap.rentalPlan || reg.rentalPlan || room?.rentCycle || 'monthly').toUpperCase();
     const rentType: 'monthly' | 'daily' | 'term' = rawType === 'DAILY' ? 'daily' : rawType === 'TERM' ? 'term' : 'monthly';
     const rentalType: 'MONTHLY' | 'TERM' | 'DAILY' = rawType === 'DAILY' ? 'DAILY' : rawType === 'TERM' ? 'TERM' : 'MONTHLY';
-    const effectiveIdCardPhoto = snap.idCardImageUrl || reg.idCardPhoto || reg.idCardImageUrl || (reg.id ? `/api/v1/tenant-registrations/${reg.id}/identity-document` : undefined);
+    const hasUploadedIdCardDoc = Boolean(snap.idCardDocument?.storageKey || snap.idCardDocument?.filename);
+    const effectiveIdCardPhoto =
+      snap.idCardImageUrl ||
+      reg.idCardPhoto ||
+      reg.idCardImageUrl ||
+      (hasUploadedIdCardDoc && reg.id ? `/api/v1/tenant-registrations/${reg.id}/identity-document` : undefined);
     const effectiveIdCardFileName = snap.idCardDocument?.filename || (snap.attachments && snap.attachments[0]?.name) || reg.idCardFileName;
     const effectiveDepositSlipPhoto = snap.depositSlipImageUrl || reg.depositSlipImageUrl || reg.depositSlipUrl;
     const effectiveLineName =
+      reg.lineFollower?.displayName ||
       reg.lineDisplayName ||
       reg.lineName ||
-      reg.lineFollower?.displayName ||
       snap.lineDisplayName ||
       snap.lineName ||
-      reg.firstName ||
-      fullName;
+      undefined;
 
     const reqItem: TenantRequestItem = {
       id: reg.id || `reg-${Date.now()}`,
