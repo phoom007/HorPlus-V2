@@ -32,6 +32,7 @@ scripts/*
 !scripts/verify-local06-acceptance-matrix.mjs
 !scripts/generate-route-menu-evidence.mjs
 !scripts/generate-direct-grant.mjs
+!scripts/reset-tenant-test-data.ts
 !server/src/scripts/
 .local07-sessions/
 docs/execution-reports/
@@ -69,3 +70,6 @@ server/storage/
 storage/
 uploads/
 .vscode/
+
+.agents/local/
+.agents/tasks/
