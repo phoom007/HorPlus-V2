@@ -29,6 +29,8 @@ scratch/
 scripts/*
 !scripts/local07/
 !scripts/local07/*
+!scripts/agent/
+!scripts/agent/*
 !scripts/verify-local06-acceptance-matrix.mjs
 !scripts/generate-route-menu-evidence.mjs
 !scripts/generate-direct-grant.mjs
