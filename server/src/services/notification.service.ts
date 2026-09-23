@@ -1,5 +1,6 @@
 import { PrismaNotificationRepository, InAppNotificationEntity } from '../db/repositories/prisma-notification.repository.js';
 import { InMemoryNotificationRepository } from '../db/repositories/notification.repository.js';
+import { getPrismaClient } from '../db/prisma.js';
 
 export interface NotificationPreferenceInput {
   notifyRoleAssignment?: boolean;
@@ -56,16 +57,41 @@ export class NotificationService {
           message: data.body,
           type: data.category,
         });
-      } else if (data.targetType === 'staff' && data.targetUserId) {
-        return this.repo.createStaffNotice({
-          dormitoryId: data.dormitoryId,
-          userId: data.targetUserId,
-          roleCode: data.targetRoleCode || null,
-          category: data.category,
-          title: data.title,
-          message: data.body,
-          metadata: data.metadata,
-        });
+      } else if (data.targetType === 'staff') {
+        if (data.targetUserId) {
+          return this.repo.createStaffNotice({
+            dormitoryId: data.dormitoryId,
+            userId: data.targetUserId,
+            roleCode: data.targetRoleCode || null,
+            category: data.category,
+            title: data.title,
+            message: data.body,
+            metadata: data.metadata,
+          });
+        } else {
+          try {
+            const client = (this.repo as any).client || getPrismaClient();
+            if (client?.dormitoryMember) {
+              const members = await client.dormitoryMember.findMany({
+                where: { dormitoryId: data.dormitoryId, status: 'active' },
+                select: { userId: true, role: { select: { code: true } } },
+              });
+              for (const m of members) {
+                await this.repo.createStaffNotice({
+                  dormitoryId: data.dormitoryId,
+                  userId: m.userId,
+                  roleCode: m.role?.code || null,
+                  category: data.category,
+                  title: data.title,
+                  message: data.body,
+                  metadata: data.metadata,
+                }).catch(() => {});
+              }
+            }
+          } catch {
+            // ignore non-blocking broadcast error
+          }
+        }
       }
     }
     if (this.repo instanceof InMemoryNotificationRepository) {

@@ -203,7 +203,7 @@ export const LineQuotaBadge: React.FC<LineQuotaBadgeProps> = ({
         <div className="flex items-center gap-1 text-[10px] sm:text-xs shrink-0 whitespace-nowrap">
           {!hideLabelText && (
             <span className="font-bold hidden xs:inline text-slate-700 whitespace-nowrap">
-              {isConfigured ? 'โควตา LINE:' : 'LINE OA:'}
+              {isConfigured ? 'จำนวนการส่งข้อความ:' : 'LINE OA:'}
             </span>
           )}
           {isConfigured ? (
@@ -267,7 +267,7 @@ export const LineQuotaBadge: React.FC<LineQuotaBadgeProps> = ({
                 </div>
                 <div>
                   <h3 className="text-base font-black tracking-tight text-white leading-tight">
-                    {isConfigured ? 'โควตาการส่งข้อความ LINE' : isPendingWebhook ? 'รอเชื่อมต่อ Webhook' : 'LINE ยังไม่พร้อมใช้งาน'}
+                    {isConfigured ? 'จำนวนการส่งข้อความ LINE' : isPendingWebhook ? 'รอเชื่อมต่อ Webhook' : 'LINE ยังไม่พร้อมใช้งาน'}
                   </h3>
                   <span className="text-[11px] font-bold text-white/90 block mt-0.5">
                     {isConfigured
@@ -287,7 +287,7 @@ export const LineQuotaBadge: React.FC<LineQuotaBadgeProps> = ({
                 <>
                   <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100 space-y-3">
                     <div className="flex items-center justify-between">
-                      <span className="text-xs font-bold text-slate-500">โควตาคงเหลือเดือนนี้</span>
+                      <span className="text-xs font-bold text-slate-500">จำนวนการส่งข้อความคงเหลือเดือนนี้</span>
                       <span
                         className={`text-xs font-black px-2 py-0.5 rounded-full ${isExhausted
                             ? 'bg-rose-100 text-rose-700'

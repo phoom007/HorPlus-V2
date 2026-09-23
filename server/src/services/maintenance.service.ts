@@ -62,6 +62,18 @@ export class MaintenanceService {
     return this.maintenanceRepo;
   }
 
+  public setRepository(repo: IMaintenanceRepository): void {
+    this.maintenanceRepo = repo;
+  }
+
+  public getMembershipRepository(): IMembershipRepository {
+    return this.membershipRepo;
+  }
+
+  public setMembershipRepository(repo: IMembershipRepository): void {
+    this.membershipRepo = repo;
+  }
+
   // State Machine transition rules
   private validateStatusTransition(current: MaintenanceStatus, next: MaintenanceStatus, actorType: string, roleCode?: string) {
     if (current === 'cancelled' && actorType !== 'owner' && actorType !== 'manager') {

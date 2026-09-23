@@ -22,7 +22,7 @@ export function createAnnouncementRouter(announcementService: AnnouncementServic
 
   const getContext = (req: Request) => {
     const actor = req.actor;
-    const dormitoryId = req.headers['x-dormitory-id'] as string || actor?.dormitoryId;
+    const dormitoryId = actor?.dormitoryId || (req.headers['x-dormitory-id'] as string);
     if (!dormitoryId) {
       throw new Error('BAD_REQUEST: Missing dormitory ID in headers or actor context');
     }
@@ -84,6 +84,7 @@ export function createAnnouncementRouter(announcementService: AnnouncementServic
         return res.status(400).json({ error: { code: 'INVALID_INPUT', message: 'Title and content are required' } });
       }
 
+      const targetStatus = status || 'published';
       const announcement = await announcementService.createDraft({
         dormitoryId,
         title: title.trim(),
@@ -100,14 +101,28 @@ export function createAnnouncementRouter(announcementService: AnnouncementServic
         priority: priority || 'normal',
         isPinned: isPinned !== undefined ? isPinned : true,
         createdByUserId: actor?.userId || undefined,
-        status: status || 'published',
+        status: targetStatus === 'published' ? 'draft' : targetStatus,
         publishDate: publishDate ? new Date(publishDate) : new Date(),
         audiences: audiences || [{ targetType: 'all_tenants' }]
       });
 
+      if (targetStatus === 'published') {
+        const sendLinePush = req.body?.sendLinePush !== undefined ? Boolean(req.body.sendLinePush) : true;
+        const published = await announcementService.publishAnnouncement({
+          dormitoryId,
+          announcementId: announcement.id,
+          publishedByUserId: actor?.userId || undefined,
+          sendLinePush,
+        });
+        return res.status(201).json(published);
+      }
+
       res.status(201).json(announcement);
     } catch (err: any) {
-      res.status(err.statusCode || 500).json({ error: { code: err.errorCode || 'INTERNAL_ERROR', message: safeErrorMessage(err) } });
+      const isQuotaError = err.errorCode === 'LINE_MESSAGE_QUOTA_INSUFFICIENT' || err.code === 'LINE_MESSAGE_QUOTA_INSUFFICIENT' || err.message?.includes('LINE_MESSAGE_QUOTA_INSUFFICIENT');
+      const status = isQuotaError ? 400 : (err.statusCode || 500);
+      const code = isQuotaError ? 'LINE_MESSAGE_QUOTA_INSUFFICIENT' : (err.errorCode || err.code || 'INTERNAL_ERROR');
+      res.status(status).json({ error: { code, message: isQuotaError ? err.message : (status >= 500 ? safeErrorMessage(err) : err.message) } });
     }
   });
 
@@ -179,16 +194,20 @@ export function createAnnouncementRouter(announcementService: AnnouncementServic
   router.post('/:id/publish', mutationGuard('announcement:write'), async (req: Request, res: Response) => {
     try {
       const { actor, dormitoryId } = getContext(req);
+      const sendLinePush = req.body?.sendLinePush !== undefined ? Boolean(req.body.sendLinePush) : true;
       const published = await announcementService.publishAnnouncement({
         dormitoryId,
         announcementId: req.params.id,
-        publishedByUserId: actor?.userId || undefined
+        publishedByUserId: actor?.userId || undefined,
+        sendLinePush,
       });
 
       res.json(published);
     } catch (err: any) {
-      const status = err.statusCode || (err.message?.includes('ANNOUNCEMENT_ALREADY_PUBLISHED') ? 400 : 500);
-      res.status(status).json({ error: { code: err.errorCode || 'INTERNAL_ERROR', message: status >= 500 ? safeErrorMessage(err) : err.message } });
+      const isQuotaError = err.errorCode === 'LINE_MESSAGE_QUOTA_INSUFFICIENT' || err.code === 'LINE_MESSAGE_QUOTA_INSUFFICIENT' || err.message?.includes('LINE_MESSAGE_QUOTA_INSUFFICIENT');
+      const status = isQuotaError ? 400 : (err.statusCode || (err.message?.includes('ANNOUNCEMENT_ALREADY_PUBLISHED') ? 400 : 500));
+      const code = isQuotaError ? 'LINE_MESSAGE_QUOTA_INSUFFICIENT' : (err.errorCode || err.code || 'INTERNAL_ERROR');
+      res.status(status).json({ error: { code, message: isQuotaError ? err.message : (status >= 500 ? safeErrorMessage(err) : err.message) } });
     }
   });
 

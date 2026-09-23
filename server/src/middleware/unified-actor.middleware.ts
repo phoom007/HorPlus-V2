@@ -47,11 +47,13 @@ export function extractUnifiedActor(req?: any, _res?: any, next?: any): any {
       dormId = req.auth.memberships?.[0]?.dormitoryId || '';
     }
 
+    const matchingMembership = req.auth.memberships?.find((m: any) => m.dormitoryId === dormId);
     req.actor = {
       actorType: 'google_owner',
       sessionId: req.auth.sessionId,
       userId: req.auth.userId,
       dormitoryId: dormId,
+      dormitoryMemberId: matchingMembership?.id || req.auth.memberships?.[0]?.id,
       roleCode: ['OWNER', 'MANAGER', 'STAFF'].includes(normalizedRole) ? normalizedRole as any : 'OWNER',
       displayName: req.auth.user?.name
     };

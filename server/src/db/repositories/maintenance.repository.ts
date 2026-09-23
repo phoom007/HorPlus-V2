@@ -222,6 +222,10 @@ export class InMemoryMaintenanceRepository {
     return this.requests.find(r => r.dormitoryId === dormitoryId && r.id === id && !r.deletedAt) || null;
   }
 
+  public async findAnywhere(id: string): Promise<MaintenanceRequestEntity | null> {
+    return this.requests.find(r => r.id === id && !r.deletedAt) || null;
+  }
+
   public async findByTenantId(dormitoryId: string, tenantId: string): Promise<MaintenanceRequestEntity[]> {
     return this.requests.filter(r => r.dormitoryId === dormitoryId && r.tenantId === tenantId && !r.deletedAt)
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
@@ -250,7 +254,7 @@ export class InMemoryMaintenanceRepository {
         this.assignments.filter(a => a.dormitoryId === dormitoryId && a.assignedMemberId === filters.assignedMemberId && a.status !== 'revoked')
           .map(a => a.maintenanceRequestId)
       );
-      result = result.filter(r => assignedReqIds.has(r.id));
+      result = result.filter(r => assignedReqIds.has(r.id) || r.assignedStaff === filters.assignedMemberId);
     }
     if (filters.search) {
       const q = filters.search.toLowerCase();
@@ -309,6 +313,12 @@ export class InMemoryMaintenanceRepository {
 
   public async getActiveAssignment(dormitoryId: string, requestId: string): Promise<MaintenanceAssignmentEntity | null> {
     return this.assignments.find(a => a.dormitoryId === dormitoryId && a.maintenanceRequestId === requestId && a.status !== 'revoked') || null;
+  }
+
+  public getAssignedRequestIds(dormitoryId: string, memberId: string): string[] {
+    return this.assignments
+      .filter(a => a.dormitoryId === dormitoryId && a.assignedMemberId === memberId && a.status !== 'revoked')
+      .map(a => a.maintenanceRequestId);
   }
 
   public async createUpdate(data: Omit<MaintenanceUpdateEntity, 'id' | 'createdAt' | 'updatedAt'>): Promise<MaintenanceUpdateEntity> {
@@ -469,6 +479,7 @@ export class InMemoryMaintenanceRepository {
 export interface IMaintenanceRepository {
   createRequest(data: any): Promise<MaintenanceRequestEntity>;
   findById(dormitoryId: string, id: string): Promise<MaintenanceRequestEntity | null>;
+  findAnywhere?(id: string): Promise<MaintenanceRequestEntity | null>;
   findByTenantId(dormitoryId: string, tenantId: string): Promise<MaintenanceRequestEntity[]>;
   findAll(dormitoryId: string, filters?: MaintenanceFilterQuery): Promise<{ items: MaintenanceRequestEntity[]; total: number }>;
   updateRequest(dormitoryId: string, id: string, updates: Partial<MaintenanceRequestEntity>): Promise<MaintenanceRequestEntity | null>;
@@ -574,6 +585,13 @@ export class PrismaMaintenanceRepository implements IMaintenanceRepository {
     return found ? mapPrismaToEntity(found) : null;
   }
 
+  public async findAnywhere(id: string): Promise<MaintenanceRequestEntity | null> {
+    const found = await this.prisma.maintenanceRequest.findFirst({
+      where: { id, deletedAt: null }
+    });
+    return found ? mapPrismaToEntity(found) : this.fallbackMemory.findAnywhere(id);
+  }
+
   public async findByTenantId(dormitoryId: string, tenantId: string): Promise<MaintenanceRequestEntity[]> {
     const found = await this.prisma.maintenanceRequest.findMany({
       where: {
@@ -606,6 +624,18 @@ export class PrismaMaintenanceRepository implements IMaintenanceRepository {
     }
     if (filters.tenantId) {
       where.tenantId = filters.tenantId;
+    }
+    if (filters.assignedMemberId) {
+      const assignedReqIds = this.fallbackMemory.getAssignedRequestIds(dormitoryId, filters.assignedMemberId);
+      where.AND = [
+        ...(where.AND || []),
+        {
+          OR: [
+            { assignedStaff: filters.assignedMemberId },
+            { id: { in: assignedReqIds } }
+          ]
+        }
+      ];
     }
     if (filters.search) {
       const q = filters.search.trim();

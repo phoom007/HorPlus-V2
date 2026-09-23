@@ -23,7 +23,7 @@ export function createMaintenanceRouter(maintenanceService: MaintenanceService =
   // Helper to extract actor & dormitoryId
   const getContext = (req: Request) => {
     const actor = req.actor;
-    const dormitoryId = req.headers['x-dormitory-id'] as string || actor?.dormitoryId;
+    const dormitoryId = actor?.dormitoryId || (req.headers['x-dormitory-id'] as string);
     if (!dormitoryId) {
       throw new Error('BAD_REQUEST: Missing dormitory ID in headers or actor context');
     }
@@ -33,18 +33,27 @@ export function createMaintenanceRouter(maintenanceService: MaintenanceService =
   // GET /api/v1/maintenance-requests
   router.get('/', async (req: Request, res: Response) => {
     try {
-      const { dormitoryId } = getContext(req);
+      const { actor, dormitoryId } = getContext(req);
       const rawPage = parseInt(req.query.page as string, 10);
       const rawPageSize = parseInt(req.query.pageSize as string, 10);
       const page = Number.isFinite(rawPage) && rawPage > 0 ? rawPage : 1;
       const pageSize = Math.min(Math.max(Number.isFinite(rawPageSize) ? rawPageSize : 20, 1), 200);
+
+      let assignedMemberId = req.query.assignedMemberId as string;
+      if (actor?.roleCode === 'STAFF') {
+        const membership = actor.dormitoryMemberId
+          ? { id: actor.dormitoryMemberId }
+          : await maintenanceService.getMembershipRepository().findByUserAndDormitory(actor.userId || '', dormitoryId);
+        assignedMemberId = membership?.id || 'unassigned-none';
+      }
+
       const query = {
         status: req.query.status as any,
         priority: req.query.priority as any,
         category: req.query.category as any,
         buildingId: req.query.buildingId as string,
         roomId: req.query.roomId as string,
-        assignedMemberId: req.query.assignedMemberId as string,
+        assignedMemberId,
         tenantId: req.query.tenantId as string,
         search: req.query.search as string,
         page,
@@ -125,11 +134,38 @@ export function createMaintenanceRouter(maintenanceService: MaintenanceService =
   // GET /api/v1/maintenance-requests/:requestId
   router.get('/:requestId', async (req: Request, res: Response) => {
     try {
-      const { dormitoryId } = getContext(req);
+      const { actor, dormitoryId } = getContext(req);
       const detail = await maintenanceService.getStaffRequestById(dormitoryId, req.params.requestId);
 
       if (!detail) {
+        const anywhere = await (maintenanceService.getRepository() as any).findAnywhere?.(req.params.requestId);
+        if (anywhere && anywhere.dormitoryId !== dormitoryId) {
+          return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'ไม่มีสิทธิ์เข้าถึงงานแจ้งซ่อมนอกหอพัก' } });
+        }
         return res.status(404).json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Maintenance request not found' } });
+      }
+
+      if (detail.request.dormitoryId !== dormitoryId) {
+        return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'ไม่มีสิทธิ์เข้าถึงงานแจ้งซ่อมนอกหอพัก' } });
+      }
+
+      if (actor?.roleCode === 'STAFF') {
+        const currentMember = actor.dormitoryMemberId
+          ? { id: actor.dormitoryMemberId, userId: actor.userId }
+          : await maintenanceService.getMembershipRepository().findByUserAndDormitory(actor.userId || '', dormitoryId);
+
+        const isAssigned =
+          (detail.assignment && detail.assignment.assignedMemberId === currentMember?.id) ||
+          (detail.request.assignedStaff && (detail.request.assignedStaff === currentMember?.id || detail.request.assignedStaff === actor.userId));
+
+        if (!isAssigned) {
+          return res.status(403).json({
+            error: {
+              code: 'FORBIDDEN',
+              message: 'เจ้าหน้าที่สามารถเข้าถึงได้เฉพาะงานแจ้งซ่อมที่ได้รับมอบหมายเท่านั้น'
+            }
+          });
+        }
       }
 
       res.json(detail);
@@ -153,6 +189,9 @@ export function createMaintenanceRouter(maintenanceService: MaintenanceService =
   router.post('/:requestId/assign', mutationGuard('maintenance:write'), async (req: Request, res: Response) => {
     try {
       const { actor, dormitoryId } = getContext(req);
+      if (actor?.roleCode === 'STAFF') {
+        return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'เฉพาะเจ้าของหรือผู้จัดการเท่านั้นที่สามารถมอบหมายงานได้' } });
+      }
       const { assignedMemberId } = req.body;
 
       if (!assignedMemberId) {
@@ -181,6 +220,35 @@ export function createMaintenanceRouter(maintenanceService: MaintenanceService =
         return res.status(400).json({ error: { code: 'INVALID_INPUT', message: 'Missing status' } });
       }
 
+      const request = await maintenanceService.getRepository().findById(dormitoryId, req.params.requestId);
+      if (!request) {
+        return res.status(404).json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Maintenance request not found' } });
+      }
+
+      if (request.dormitoryId !== dormitoryId) {
+        return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'ไม่มีสิทธิ์เข้าถึงงานแจ้งซ่อมนอกหอพัก' } });
+      }
+
+      if (actor?.roleCode === 'STAFF') {
+        const currentMember = actor.dormitoryMemberId
+          ? { id: actor.dormitoryMemberId, userId: actor.userId }
+          : await maintenanceService.getMembershipRepository().findByUserAndDormitory(actor.userId || '', dormitoryId);
+
+        const activeAssignment = await maintenanceService.getRepository().getActiveAssignment(dormitoryId, req.params.requestId);
+        const isAssigned =
+          (activeAssignment && activeAssignment.assignedMemberId === currentMember?.id) ||
+          (request.assignedStaff && (request.assignedStaff === currentMember?.id || request.assignedStaff === actor.userId));
+
+        if (!isAssigned) {
+          return res.status(403).json({
+            error: {
+              code: 'FORBIDDEN',
+              message: 'เจ้าหน้าที่สามารถจัดการได้เฉพาะงานแจ้งซ่อมที่ได้รับมอบหมายเท่านั้น'
+            }
+          });
+        }
+      }
+
       const extraUpdates: any = {};
       if (assignedStaff !== undefined) extraUpdates.assignedStaff = assignedStaff;
       if (cost !== undefined) extraUpdates.cost = Number(cost);
@@ -205,7 +273,10 @@ export function createMaintenanceRouter(maintenanceService: MaintenanceService =
 
       res.json(updated);
     } catch (err: any) {
-      res.status(err.message.includes('INVALID_MAINTENANCE') || err.message.includes('FORBIDDEN') ? 400 : 500).json({ error: { message: err.message } });
+      const isForbidden = err.message?.includes('FORBIDDEN');
+      const isInvalid = err.message?.includes('INVALID_MAINTENANCE') || err.message?.includes('MAINTENANCE_REQUEST_');
+      const statusCode = isForbidden ? 403 : (isInvalid ? 400 : (err.statusCode || 500));
+      res.status(statusCode).json({ error: { code: isForbidden ? 'FORBIDDEN' : (isInvalid ? 'BAD_REQUEST' : 'INTERNAL_ERROR'), message: err.message } });
     }
   };
 
@@ -217,7 +288,10 @@ export function createMaintenanceRouter(maintenanceService: MaintenanceService =
   // DELETE /api/v1/maintenance-requests/:requestId
   router.delete('/:requestId', mutationGuard('maintenance:write'), async (req: Request, res: Response) => {
     try {
-      const { dormitoryId } = getContext(req);
+      const { actor, dormitoryId } = getContext(req);
+      if (actor?.roleCode === 'STAFF') {
+        return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'เจ้าหน้าที่ไม่มีสิทธิ์ลบรายการแจ้งซ่อม' } });
+      }
       const deleted = await maintenanceService.getRepository().deleteRequest(dormitoryId, req.params.requestId);
       if (!deleted) {
         return res.status(404).json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Maintenance request not found' } });
@@ -234,6 +308,35 @@ export function createMaintenanceRouter(maintenanceService: MaintenanceService =
       const { actor, dormitoryId } = getContext(req);
       const { note } = req.body;
 
+      const request = await maintenanceService.getRepository().findById(dormitoryId, req.params.requestId);
+      if (!request) {
+        return res.status(404).json({ error: { code: 'RESOURCE_NOT_FOUND', message: 'Maintenance request not found' } });
+      }
+
+      if (request.dormitoryId !== dormitoryId) {
+        return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'ไม่มีสิทธิ์เข้าถึงงานแจ้งซ่อมนอกหอพัก' } });
+      }
+
+      if (actor?.roleCode === 'STAFF') {
+        const currentMember = actor.dormitoryMemberId
+          ? { id: actor.dormitoryMemberId, userId: actor.userId }
+          : await maintenanceService.getMembershipRepository().findByUserAndDormitory(actor.userId || '', dormitoryId);
+
+        const activeAssignment = await maintenanceService.getRepository().getActiveAssignment(dormitoryId, req.params.requestId);
+        const isAssigned =
+          (activeAssignment && activeAssignment.assignedMemberId === currentMember?.id) ||
+          (request.assignedStaff && (request.assignedStaff === currentMember?.id || request.assignedStaff === actor.userId));
+
+        if (!isAssigned) {
+          return res.status(403).json({
+            error: {
+              code: 'FORBIDDEN',
+              message: 'เจ้าหน้าที่สามารถจัดการได้เฉพาะงานแจ้งซ่อมที่ได้รับมอบหมายเท่านั้น'
+            }
+          });
+        }
+      }
+
       const actorType = actor?.roleCode === 'STAFF' ? 'staff' : (actor?.roleCode === 'MANAGER' ? 'manager' : 'owner');
 
       const updated = await maintenanceService.updateStatus({
@@ -248,7 +351,8 @@ export function createMaintenanceRouter(maintenanceService: MaintenanceService =
 
       res.json(updated);
     } catch (err: any) {
-      res.status(400).json({ error: { message: err.message } });
+      const isForbidden = err.message?.includes('FORBIDDEN');
+      res.status(isForbidden ? 403 : 400).json({ error: { code: isForbidden ? 'FORBIDDEN' : 'BAD_REQUEST', message: err.message } });
     }
   });
 
@@ -256,6 +360,9 @@ export function createMaintenanceRouter(maintenanceService: MaintenanceService =
   router.post('/:requestId/reopen', mutationGuard('maintenance:write'), async (req: Request, res: Response) => {
     try {
       const { actor, dormitoryId } = getContext(req);
+      if (actor?.roleCode === 'STAFF') {
+        return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'เจ้าหน้าที่ไม่มีสิทธิ์เปิดงานใหม่' } });
+      }
       const { reason } = req.body;
 
       if (!reason) {
@@ -283,6 +390,9 @@ export function createMaintenanceRouter(maintenanceService: MaintenanceService =
   router.post('/:requestId/cancel', mutationGuard('maintenance:write'), async (req: Request, res: Response) => {
     try {
       const { actor, dormitoryId } = getContext(req);
+      if (actor?.roleCode === 'STAFF') {
+        return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'เจ้าหน้าที่ไม่มีสิทธิ์ยกเลิกรายการแจ้งซ่อม' } });
+      }
       const { reason } = req.body;
 
       const updated = await maintenanceService.updateStatus({
@@ -300,6 +410,7 @@ export function createMaintenanceRouter(maintenanceService: MaintenanceService =
       res.status(400).json({ error: { message: err.message } });
     }
   });
+
 
   // POST /api/v1/maintenance-requests/:requestId/comments
   router.post('/:requestId/comments', mutationGuard('maintenance:write'), async (req: Request, res: Response) => {

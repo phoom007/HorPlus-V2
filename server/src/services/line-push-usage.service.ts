@@ -386,4 +386,138 @@ export class LinePushUsageService {
       });
     });
   }
+
+  /**
+   * Consume push quota atomically for an operation (e.g. broadcasting announcement to N recipients).
+   * Validates available quota limit and emits warning notification if remaining <= threshold.
+   */
+  async consumeQuota(
+    dormitoryId: string,
+    recipientCount: number,
+    options?: { tx?: any; reason?: string; notificationService?: any }
+  ): Promise<{ remaining: number; quotaLimit: number; periodKey: string }> {
+    if (recipientCount <= 0) {
+      const status = await this.getQuotaStatus(dormitoryId, options?.tx);
+      return { remaining: status.remaining, quotaLimit: status.quotaLimit, periodKey: status.periodKey };
+    }
+
+    const run = async (tx: any) => {
+      await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
+
+      const dorm = await tx.dormitory.findUnique({
+        where: { id: dormitoryId },
+        select: { timezone: true },
+      });
+      const timezone = dorm?.timezone || 'Asia/Bangkok';
+      const periodKey = this.getCurrentPeriodKey(timezone);
+      const quotaLimit = await this.getQuotaLimit(dormitoryId, tx);
+
+      // 1. Upsert usage row
+      await tx.$executeRaw`
+        INSERT INTO "line_push_usage" ("id", "dormitory_id", "period_key", "success_count", "reserved_count", "created_at", "updated_at")
+        VALUES (gen_random_uuid(), ${dormitoryId}::uuid, ${periodKey}, 0, 0, NOW(), NOW())
+        ON CONFLICT ("dormitory_id", "period_key") DO NOTHING
+      `;
+
+      // 2. Lock usage row FOR UPDATE
+      const rows = await tx.$queryRaw<any[]>`
+        SELECT "id", "success_count", "reserved_count"
+        FROM "line_push_usage"
+        WHERE "dormitory_id" = ${dormitoryId}::uuid AND "period_key" = ${periodKey}
+        FOR UPDATE
+      `;
+
+      if (!rows || rows.length === 0) {
+        throw new AppError('Failed to acquire push usage row', 500, 'PUSH_USAGE_LOCK_FAILED');
+      }
+
+      const row = rows[0];
+      const used = (row.success_count || 0) + (row.reserved_count || 0);
+      const remainingBefore = Math.max(0, quotaLimit - used);
+
+      if (remainingBefore < recipientCount) {
+        throw new AppError(
+          `จำนวนโควตาข้อความ LINE ไม่เพียงพอสำหรับการส่งข้อความนี้ (ต้องการ ${recipientCount} ข้อความ, คงเหลือ ${remainingBefore} ข้อความ)`,
+          400,
+          'LINE_MESSAGE_QUOTA_INSUFFICIENT'
+        );
+      }
+
+      // 3. Atomically increment successCount for the successfully published broadcast
+      await tx.$executeRaw`
+        UPDATE "line_push_usage"
+        SET "success_count" = "success_count" + ${recipientCount},
+            "updated_at" = NOW()
+        WHERE "id" = ${row.id}::uuid
+      `;
+
+      const remainingAfter = Math.max(0, remainingBefore - recipientCount);
+      const threshold = quotaLimit > 50 ? 50 : 5;
+
+      // 4. Trigger warning notification if remaining <= threshold
+      if (remainingAfter <= threshold && options?.notificationService) {
+        try {
+          await options.notificationService.createInAppNotification({
+            dormitoryId,
+            targetType: 'staff',
+            category: 'LINE_QUOTA_WARNING',
+            title: 'แจ้งเตือน: จำนวนการส่งข้อความ LINE ใกล้หมด',
+            body: `จำนวนการส่งข้อความ LINE ประจำรอบนี้คงเหลือเพียง ${remainingAfter} / ${quotaLimit} ข้อความ`,
+            metadata: {
+              remaining: remainingAfter,
+              quotaLimit,
+              periodKey,
+            },
+          });
+        } catch {
+          // Non-blocking warning notification failure
+        }
+      }
+
+      return {
+        remaining: remainingAfter,
+        quotaLimit,
+        periodKey,
+      };
+    };
+
+    if (options?.tx) {
+      return await run(options.tx);
+    }
+    return await this.prisma.$transaction(run);
+  }
+
+  /**
+   * Explicitly reset or ensure monthly quota row exists for period.
+   */
+  async resetMonthlyQuota(
+    dormitoryId: string,
+    customPeriodKey?: string,
+    tx?: any
+  ): Promise<{ periodKey: string; quotaLimit: number; remaining: number }> {
+    const run = async (db: any) => {
+      await db.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
+
+      const dorm = await db.dormitory.findUnique({
+        where: { id: dormitoryId },
+        select: { timezone: true },
+      });
+      const timezone = dorm?.timezone || 'Asia/Bangkok';
+      const periodKey = customPeriodKey || this.getCurrentPeriodKey(timezone);
+      const quotaLimit = await this.getQuotaLimit(dormitoryId, db);
+
+      await db.$executeRaw`
+        INSERT INTO "line_push_usage" ("id", "dormitory_id", "period_key", "success_count", "reserved_count", "created_at", "updated_at")
+        VALUES (gen_random_uuid(), ${dormitoryId}::uuid, ${periodKey}, 0, 0, NOW(), NOW())
+        ON CONFLICT ("dormitory_id", "period_key") DO NOTHING
+      `;
+
+      return { periodKey, quotaLimit, remaining: quotaLimit };
+    };
+
+    if (tx) {
+      return await run(tx);
+    }
+    return await this.prisma.$transaction(run);
+  }
 }
