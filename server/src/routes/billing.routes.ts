@@ -115,7 +115,8 @@ export function createBillingRouter(
         });
       }
 
-      const preview = await billingService.generateBillPreview(dormId, billingCycleId, roomId);
+      const billKind = req.query.billKind as string | undefined;
+      const preview = await billingService.generateBillPreview(dormId, billingCycleId, roomId, undefined, billKind);
       res.json({ data: preview });
     } catch (err) {
       handleServiceError(res, err, req);
@@ -282,6 +283,31 @@ export function createBillingRouter(
 
       const cancelled = await billingService.cancelBill(req.params.id, dormId, parsed.data.reason, req.auth?.userId);
       res.json({ data: cancelled });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  });
+
+  // POST /api/v1/bills/:id/void (alias for cancel / void unpaid bill per TASK-011)
+  router.post('/:id/void', mutationGuard('billing:write'), async (req: Request, res: Response) => {
+    if (!verifyCsrf(req, res)) return;
+    try {
+      const dormId = getDormitoryId(req);
+      const parsed = CancelBillSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'ข้อมูลการยกเลิก/ทำให้เป็นโมฆะใบแจ้งหนี้ไม่ถูกต้อง',
+            fieldErrors: parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+
+      const voided = await billingService.cancelBill(req.params.id, dormId, parsed.data.reason, req.auth?.userId);
+      res.json({ data: voided });
     } catch (err) {
       handleServiceError(res, err, req);
     }

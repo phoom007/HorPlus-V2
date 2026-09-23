@@ -1120,10 +1120,13 @@ export class BillingService {
       throw err;
     }
 
-    if (bill.status === 'paid' || bill.status === 'cancelled') {
+    if (['paid', 'cancelled', 'void', 'voided'].includes(bill.status)) {
       const err = new Error('BILL_CANNOT_BE_CANCELLED');
       (err as any).statusCode = 400;
       (err as any).code = 'BILL_CANNOT_BE_CANCELLED';
+      (err as any).message = bill.status === 'paid'
+        ? 'ไม่สามารถยกเลิกบิลที่ชำระแล้วได้ ต้องใช้กระบวนการปรับปรุงยอด (Adjustment/Refund)'
+        : 'บิลนี้ถูกยกเลิกแล้ว';
       throw err;
     }
 

@@ -216,7 +216,7 @@ export function getTargetQueriesForTab(targetTab: string, dormId: string, cycleI
           queries.push({
             queryKey: queryKeys.meterReadings(dormId, cycleId),
             queryFn: async () => {
-              const res = await fetch(`/api/v1/meters/readings?billingCycleId=${cycleId}&pageSize=200`, {
+              const res = await fetch(`/api/v1/meters/readings?billingCycleId=${cycleId}&pageSize=500`, {
                 headers: dormHeader,
                 credentials: 'include',
               });
@@ -284,7 +284,7 @@ export function getTargetQueriesForTab(targetTab: string, dormId: string, cycleI
         queries.push({
           queryKey: queryKeys.meterReadings(dormId, cycleId),
           queryFn: async () => {
-            const res = await fetch(`/api/v1/meters/readings?billingCycleId=${cycleId}&pageSize=200`, {
+            const res = await fetch(`/api/v1/meters/readings?billingCycleId=${cycleId}&pageSize=500`, {
               headers: dormHeader,
               credentials: 'include',
             });

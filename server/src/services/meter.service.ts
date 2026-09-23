@@ -371,22 +371,13 @@ export class MeterService {
           }
           authPrev = suppliedPrev;
         }
-        const prevVal = Number(authPrev);
-        const currVal = Number(item.currentReading);
-
-        if (isNaN(prevVal) || isNaN(currVal) || prevVal < 0 || currVal < 0) {
-          const err = new Error(`INVALID_METER_READING_VALUE`);
+        const usageRes = calculateMeterUsageUnits(authPrev, item.currentReading);
+        if (!usageRes.isValid) {
+          const typeThai = item.meterType === 'water' ? 'น้ำ' : 'ไฟฟ้า';
+          const err = new Error(usageRes.errorMessage || `ค่ามิเตอร์${typeThai}ปัจจุบัน (${item.currentReading}) ต้องไม่น้อยกว่าค่ามิเตอร์เดิม (${authPrev})`);
           (err as any).statusCode = 400;
-          (err as any).code = 'INVALID_METER_READING';
-          (err as any).message = `ค่ามิเตอร์ต้องเป็นตัวเลขที่มากกว่าหรือเท่ากับ 0`;
-          throw err;
-        }
-
-        if (currVal < prevVal) {
-          const err = new Error(`CURRENT_READING_LESS_THAN_PREVIOUS`);
-          (err as any).statusCode = 400;
-          (err as any).code = 'INVALID_METER_READING';
-          (err as any).message = `ค่ามิเตอร์ปัจจุบัน (${currVal}) ต้องไม่น้อยกว่าค่ามิเตอร์เดิม (${prevVal})`;
+          (err as any).code = usageRes.errorCode || 'INVALID_METER_READING';
+          (err as any).message = usageRes.errorMessage || `ค่ามิเตอร์${typeThai}ปัจจุบัน (${item.currentReading}) ต้องไม่น้อยกว่าค่ามิเตอร์เดิม (${authPrev})`;
           throw err;
         }
 
@@ -408,7 +399,7 @@ export class MeterService {
           );
         }
 
-        const usageUnits = (currVal - prevVal).toFixed(2);
+        const usageUnits = usageRes.usageUnits.toFixed(2);
 
         const existingReading = await this.meterRepo.findReadingByCycleRoomAndType(
           dormitoryId,

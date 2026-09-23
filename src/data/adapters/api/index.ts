@@ -1219,7 +1219,7 @@ export async function terminateContract(id: string, payload: TerminateContractPa
 export class ApiMeterAdapter implements MeterDataSource {
   async getByCycle(cycleId: string): Promise<MeterReading[]> {
     try {
-      const res = await httpRequest<{ data: any[] }>('GET', `/meters/readings?billingCycleId=${cycleId}&pageSize=200`);
+      const res = await httpRequest<{ data: any[] }>('GET', `/meters/readings?billingCycleId=${cycleId}&pageSize=500`);
       return (res.data || []).map((r: any) => ({
         id: r.id,
         cycleId: r.billingCycleId,

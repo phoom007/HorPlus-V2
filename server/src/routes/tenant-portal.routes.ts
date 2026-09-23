@@ -350,7 +350,7 @@ async function getTenantBillWhere(prisma: any, ctx: { dormitoryId: string; tenan
 
   return {
     dormitoryId: ctx.dormitoryId,
-    status: { not: 'cancelled' },
+    status: { notIn: ['cancelled', 'void', 'voided', 'draft', 'DRAFT'] },
     OR: orConditions,
     // Future RENT Bill Visibility Gate: hide RENT bills before their billing cycle periodStart in Asia/Bangkok
     NOT: {
@@ -379,7 +379,7 @@ async function checkBillOwnership(prisma: any, billId: string, ctx: { dormitoryI
     }
   });
 
-  if (!bill || bill.dormitoryId !== ctx.dormitoryId || bill.status === 'cancelled') {
+  if (!bill || bill.dormitoryId !== ctx.dormitoryId || ['cancelled', 'void', 'voided', 'draft', 'DRAFT'].includes(bill.status)) {
     return null;
   }
 

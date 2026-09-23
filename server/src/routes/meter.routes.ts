@@ -174,7 +174,7 @@ export function createMeterRouter(
       const rawPage = Number(req.query.page || 1);
       const rawPageSize = Number(req.query.pageSize || 50);
       const page = Number.isFinite(rawPage) && rawPage > 0 ? rawPage : 1;
-      const pageSize = Math.min(Math.max(Number.isFinite(rawPageSize) ? rawPageSize : 50, 1), 200);
+      const pageSize = Math.min(Math.max(Number.isFinite(rawPageSize) ? rawPageSize : 50, 1), 500);
       const query = {
         billingCycleId: req.query.billingCycleId as string,
         roomId: req.query.roomId as string,
