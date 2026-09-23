@@ -50,6 +50,7 @@ import {
   MOTO_BRANDS,
   CANONICAL_PET_GROUP_OPTIONS,
   resolveAllowedPetOptions,
+  compressImage,
 } from '../../pages/tenant/tenantHelpers';
 
 export interface RegistrationVehicleItem {
@@ -289,6 +290,7 @@ export const TenantRegisterView: React.FC<TenantRegisterViewProps> = ({
   const [isClaimVerifying, setIsClaimVerifying] = useState(false);
   const [claimVerificationError, setClaimVerificationError] = useState<string | null>(null);
   const [isClaimVerified, setIsClaimVerified] = useState(false);
+  const [claimVerificationToken, setClaimVerificationToken] = useState<string | null>(null);
   const [claimedTenantId, setClaimedTenantId] = useState<string | null>(null);
   const [lockedFinancials, setLockedFinancials] = useState<any | null>(null);
   const [submittingRegistration, setSubmittingRegistration] = useState(false);
@@ -298,7 +300,7 @@ export const TenantRegisterView: React.FC<TenantRegisterViewProps> = ({
   useEffect(() => {
     if (propRooms && propRooms.length > 0) {
       setInternalRooms(propRooms);
-      if (!selectedRoomId) {
+      if (!selectedRoomId || !propRooms.some((r: any) => r.id === selectedRoomId)) {
         const init = initialRoomId ? propRooms.find(r => r.id === initialRoomId || r.roomNumber === initialRoomId) : propRooms[0];
         if (init) setSelectedRoomId(init.id);
       }
@@ -306,7 +308,7 @@ export const TenantRegisterView: React.FC<TenantRegisterViewProps> = ({
       getPublicRooms(dormitoryId, inviteToken).then((res) => {
         if (res.success && res.data && res.data.length > 0) {
           setInternalRooms(res.data);
-          if (!selectedRoomId) {
+          if (!selectedRoomId || !res.data.some((r: any) => r.id === selectedRoomId)) {
             const init = initialRoomId ? res.data.find((r: any) => r.id === initialRoomId || r.roomNumber === initialRoomId) : res.data[0];
             if (init) setSelectedRoomId(init.id);
           }
@@ -423,7 +425,10 @@ export const TenantRegisterView: React.FC<TenantRegisterViewProps> = ({
     if (file) {
       const reader = new FileReader();
       reader.onloadend = () => {
-        setIdCardImage(reader.result as string);
+        const raw = reader.result as string;
+        compressImage(raw, 1280, 1280, 0.8)
+          .then((compressed) => setIdCardImage(compressed && compressed.length > 32 ? compressed : raw))
+          .catch(() => setIdCardImage(raw));
       };
       reader.readAsDataURL(file);
     }
@@ -435,7 +440,10 @@ export const TenantRegisterView: React.FC<TenantRegisterViewProps> = ({
     if (file) {
       const reader = new FileReader();
       reader.onloadend = () => {
-        setDepositSlipImage(reader.result as string);
+        const raw = reader.result as string;
+        compressImage(raw, 1280, 1280, 0.8)
+          .then((compressed) => setDepositSlipImage(compressed && compressed.length > 32 ? compressed : raw))
+          .catch(() => setDepositSlipImage(raw));
       };
       reader.readAsDataURL(file);
     }
@@ -493,18 +501,19 @@ export const TenantRegisterView: React.FC<TenantRegisterViewProps> = ({
       setIsInstallment(false);
     }
     if (plan === 'monthly') {
-      setRentAmount(room.monthlyRent || 4500);
-      setDepositAmount(room.monthlyDeposit || room.depositAmount || 5000);
+      setRentAmount(room.monthlyRent ?? 4500);
+      setDepositAmount(room.monthlyDeposit ?? room.depositAmount ?? 5000);
     } else if (plan === 'term') {
       const effTerm = Number(room?.building?.termMonths ?? room?.termMonths ?? policyData?.termMonths ?? 6);
       setDurationValue(effTerm);
-      setRentAmount(room.termRent || (room.monthlyRent ? room.monthlyRent * 4 : 18000));
-      setDepositAmount(room.termDeposit || room.depositAmount || 5000);
+      setRentAmount(room.termRent ?? (room.monthlyRent ? room.monthlyRent * 4 : 18000));
+      setDepositAmount(room.termDeposit ?? room.depositAmount ?? 5000);
     } else if (plan === 'daily') {
-      setRentAmount(room.dailyRent || 500);
-      setDepositAmount(room.dailyDeposit || 0);
+      setRentAmount(room.dailyRent ?? 500);
+      setDepositAmount(room.dailyDeposit ?? 0);
     }
     setIsClaimVerified(false);
+    setClaimVerificationToken(null);
     setClaimedTenantId(null);
     setLockedFinancials(null);
     setSelectedRoomForPlan(null);
@@ -553,8 +562,13 @@ export const TenantRegisterView: React.FC<TenantRegisterViewProps> = ({
     }
   }, [checkInDate]);
 
-  // Auto adjust duration default when rent plan changes
+  // Auto adjust duration default when rent plan changes (preserve revisionRequest durationMonths if present)
   useEffect(() => {
+    const revDuration = Number(revisionRequest?.acceptanceSnapshot?.durationMonths);
+    if (revDuration > 0 && (rentPlan === 'monthly' || rentPlan === 'term')) {
+      setDurationValue(revDuration);
+      return;
+    }
     if (rentPlan === 'daily') {
       setDurationValue(1);
     } else if (rentPlan === 'term') {
@@ -562,7 +576,7 @@ export const TenantRegisterView: React.FC<TenantRegisterViewProps> = ({
     } else if (rentPlan === 'monthly') {
       setDurationValue(1);
     }
-  }, [rentPlan, effectiveTermMonths]);
+  }, [rentPlan, effectiveTermMonths, revisionRequest]);
 
   useEffect(() => {
     if (initialRentPlan) {
@@ -1102,6 +1116,7 @@ export const TenantRegisterView: React.FC<TenantRegisterViewProps> = ({
       });
       if (res.success && res.data?.verified) {
         setIsClaimVerified(true);
+        if (res.data.claimVerificationToken) setClaimVerificationToken(res.data.claimVerificationToken);
         setClaimedTenantId(res.data.tenantId);
         setLockedFinancials(res.data.lockedFinancials);
 
@@ -1219,13 +1234,13 @@ export const TenantRegisterView: React.FC<TenantRegisterViewProps> = ({
       // Financials
       if (approved.rentAmount !== undefined && approved.rentAmount !== null) {
         setRentAmount(Number(approved.rentAmount));
-      } else if (snap.proposedRent) {
+      } else if (snap.proposedRent !== undefined && snap.proposedRent !== null) {
         setRentAmount(Number(snap.proposedRent));
       }
 
       if (approved.depositAmount !== undefined && approved.depositAmount !== null) {
         setDepositAmount(Number(approved.depositAmount));
-      } else if (snap.proposedDeposit) {
+      } else if (snap.proposedDeposit !== undefined && snap.proposedDeposit !== null) {
         setDepositAmount(Number(snap.proposedDeposit));
       }
 
@@ -1245,6 +1260,16 @@ export const TenantRegisterView: React.FC<TenantRegisterViewProps> = ({
         setCheckInDate(approved.startDate);
       } else if (snap.startDate) {
         setCheckInDate(snap.startDate);
+      }
+
+      if (approved.endDate || snap.endDate) {
+        setDailyEndDate(approved.endDate || snap.endDate);
+      }
+      setIsInstallment(snap.isInstallmentRequested === true);
+      const restoredInstallmentCount = Number.parseInt(snap.selectedInstallmentPlan || '', 10);
+      if (restoredInstallmentCount >= 2) setInstallmentMonths(restoredInstallmentCount);
+      if (Array.isArray(snap.installments) && snap.installments.length > 1) {
+        setInstallmentAllocation(snap.installments.slice(1).some((item: any) => Number(item.depositAmount) > 0) ? 'equal' : 'first_period');
       }
 
       if (approved.dueDay) {
@@ -1492,19 +1517,19 @@ export const TenantRegisterView: React.FC<TenantRegisterViewProps> = ({
       }
 
       // 1. Submit authoritative registration request (Public endpoint)
-      const res = await submitTenantRegistrationRequest({
+      const dailyPayload = {
         dormitoryId: effectiveDormId,
         inviteToken,
-        requestedRoomId: selectedRoomId,
+        requestedRoomId: selectedRoom?.id || selectedRoomId,
         prefix: effectivePrefix,
         firstName,
         lastName,
         phone: phone.trim(),
-        email: email.trim() || undefined,
+        email: email.trim(),
         agreedTerms: true,
         signatureBase64: effectiveSignature,
         expectedPolicyVersion: effectiveVersion,
-        rentalPlan: 'daily',
+        rentalPlan: 'daily' as const,
         proposedRent: rentAmount,
         proposedDeposit: depositAmount,
         startDate: checkInDate,
@@ -1514,28 +1539,19 @@ export const TenantRegisterView: React.FC<TenantRegisterViewProps> = ({
         citizenId: citizenId.trim(),
         birthDate: birthDate || undefined,
         address: address || undefined,
-        idCardImageUrl: idCardImage || undefined,
-        depositSlipImageUrl: depositStatus === 'paid' && depositSlipImage ? depositSlipImage : undefined,
+        idCardImageUrl: idCardImage || '',
+        depositSlipImageUrl: depositStatus === 'paid' && depositSlipImage ? depositSlipImage : '',
         depositDeclaredStatus: depositStatus === 'paid' ? 'PAID' : 'UNPAID',
         terms: 'คำขอเข้าพักรายวัน (Daily Stay)',
-      });
-
-      // 2. Best-effort sync to daily-stays if requester has authenticated session
-      try {
-        await submitDailyStayRequest({
-          dormitoryId: effectiveDormId || 'dorm-1',
-          roomId: selectedRoomId,
-          roomNumber: selectedRoom?.roomNumber,
-          applicantFullName: `${effectivePrefix} ${fullName}`.trim(),
-          applicantPhone: phone.trim() || undefined,
-          startDate: checkInDate,
-          endDate: dailyEndDate,
-          dailyRateAmount: Number(rentAmount).toFixed(2),
-          depositAmount: Number(depositAmount || 0).toFixed(2),
-          depositDeclaredStatus: depositStatus === 'paid' ? 'PAID' : 'UNPAID',
-          depositSlipImageUrl: depositStatus === 'paid' && depositSlipImage ? depositSlipImage : undefined,
-        });
-      } catch { }
+      };
+      // Approval creates the DailyStay from this same registration; a second
+      // daily-stay request would create a duplicate owner approval workflow.
+      let res = revisionRequest
+        ? await resubmitTenantRegistrationRequest(revisionRequest.id, dailyPayload)
+        : await submitTenantRegistrationRequest(dailyPayload);
+      if (!res.success && revisionRequest && (res.error?.code === 'REGISTRATION_REQUEST_NOT_FOUND' || res.error?.code === 'INVALID_REQUEST_STATUS' || res.error?.message?.includes('ไม่พบคำขอลงทะเบียน'))) {
+        res = await submitTenantRegistrationRequest(dailyPayload);
+      }
 
       if (res.success) {
         try {
@@ -1647,6 +1663,7 @@ export const TenantRegisterView: React.FC<TenantRegisterViewProps> = ({
           inviteToken,
           roomId: selectedRoomId,
           tenantId: claimedTenantId,
+          claimVerificationToken: claimVerificationToken || undefined,
           signatureBase64: effectiveSignature,
           displayName,
           firstName,
@@ -1727,13 +1744,13 @@ export const TenantRegisterView: React.FC<TenantRegisterViewProps> = ({
           dormitoryId: targetDormId || dormitoryId,
           inviteToken,
           lineDisplayName: resolvedLineDisplayName,
-          requestedRoomId: selectedRoomId,
+          requestedRoomId: selectedRoom?.id || selectedRoomId,
           prefix: getEffectivePrefix(),
           customPrefix: prefix === 'ระบุเอง' || prefix === 'กำหนดเอง' ? customPrefix.trim() : undefined,
           firstName,
           lastName,
           phone: phone.trim(),
-          email: email.trim() || undefined,
+          email: email.trim(),
           note: `แก้ไขคำขอตามที่เจ้าของหอพักร้องขอ: ${revisionRequest.rejectedReason || ''}`,
           agreedTerms: true,
           signatureBase64: effectiveSignature,
@@ -1743,15 +1760,16 @@ export const TenantRegisterView: React.FC<TenantRegisterViewProps> = ({
           proposedDeposit: depositAmount,
           durationMonths: durationValue,
           startDate: checkInDate,
+          endDate,
           citizenId: citizenId.trim(),
           birthDate,
           address,
-          idCardImageUrl: idCardImage || undefined,
-          depositSlipImageUrl: depositSlipImage || undefined,
+          idCardImageUrl: idCardImage || '',
+          depositSlipImageUrl: depositStatus === 'paid' ? depositSlipImage || '' : '',
           depositDeclaredStatus: depositStatus === 'paid' ? 'PAID' : 'UNPAID',
           isInstallmentRequested: isInstallment,
-          selectedInstallmentPlan: isInstallment ? (installmentMonths === 2 ? '2_terms' : installmentMonths === 3 ? '3_terms' : `${installmentMonths}_terms`) : undefined,
-          installments: isInstallment ? installmentSchedule.map(s => ({ installmentNumber: s.period, amount: s.totalAmount, rentAmount: s.rentAmount, depositAmount: s.depositAmount, dueDate: s.dueDate, note: s.depositNote })) : undefined,
+          selectedInstallmentPlan: isInstallment ? `${installmentMonths}_terms` : null,
+          installments: isInstallment ? installmentSchedule.map(s => ({ installmentNumber: s.period, amount: s.totalAmount, rentAmount: s.rentAmount, depositAmount: s.depositAmount, dueDate: s.dueDate, note: s.depositNote })) : [],
           emergencyContact: emergencyName.trim() ? {
             name: emergencyName.trim(),
             relationship: getEffectiveEmergencyRel(),
@@ -1761,7 +1779,7 @@ export const TenantRegisterView: React.FC<TenantRegisterViewProps> = ({
             name: c.name,
             phone: c.phone,
             citizenId: c.citizenId
-          })) : undefined,
+          })) : [],
           vehicle: primaryVehicle,
           vehicles: serializedVehicles,
           pet: primaryPet,
@@ -1782,7 +1800,7 @@ export const TenantRegisterView: React.FC<TenantRegisterViewProps> = ({
           setSubmissionSuccess(successObj);
           if (onSuccess) onSuccess(res.data);
           return;
-        } else {
+        } else if (res.error?.code !== 'REGISTRATION_REQUEST_NOT_FOUND' && res.error?.code !== 'INVALID_REQUEST_STATUS' && !res.error?.message?.includes('ไม่พบคำขอลงทะเบียน')) {
           setErrorMsg(res.error?.message || 'ไม่สามารถส่งข้อมูลแก้ไขได้ กรุณาลองใหม่อีกครั้ง');
           return;
         }
@@ -1805,7 +1823,7 @@ export const TenantRegisterView: React.FC<TenantRegisterViewProps> = ({
         dormitoryId: effectiveDormId,
         inviteToken,
         lineDisplayName: resolvedLineDisplayName,
-        requestedRoomId: selectedRoomId,
+        requestedRoomId: selectedRoom?.id || selectedRoomId,
         prefix: getEffectivePrefix(),
         customPrefix: prefix === 'ระบุเอง' || prefix === 'กำหนดเอง' ? customPrefix.trim() : undefined,
         firstName,
@@ -1964,6 +1982,70 @@ export const TenantRegisterView: React.FC<TenantRegisterViewProps> = ({
       </span>
     );
   };
+
+  // Dedicated Pending Owner Approval Status View (If user enters registration while their request is pending)
+  const isPendingApproval =
+    revisionRequest?.status === 'pending_owner_approval' ||
+    existingTenantProfile?.status === 'pending_owner_approval' ||
+    existingTenantProfile?.pendingRequest?.status === 'pending_owner_approval';
+
+  if (isPendingApproval) {
+    const pendingRoomNum =
+      revisionRequest?.requestedRoomNumber ||
+      revisionRequest?.roomNumber ||
+      existingTenantProfile?.pendingRequest?.requestedRoomNumber ||
+      existingTenantProfile?.pendingRequest?.roomNumber ||
+      '';
+
+    return (
+      <div className="h-full max-h-full flex-1 flex flex-col bg-slate-50 relative overflow-hidden" data-testid="tenant-register-pending-screen">
+        <div className="shrink-0 z-30 bg-white border-b border-slate-100 shadow-2xs">
+          <div className="px-4 py-3 flex items-center justify-between">
+            <div className="flex items-center gap-2.5">
+              {onBack && (
+                <button
+                  type="button"
+                  onClick={onBack}
+                  className="p-1.5 rounded-full hover:bg-slate-100 text-slate-500 transition-colors cursor-pointer"
+                  aria-label="ย้อนกลับ"
+                >
+                  <ChevronLeft className="w-5 h-5 stroke-[2.5]" />
+                </button>
+              )}
+              <h3 className="font-black text-slate-900 text-xs flex items-center gap-1.5">
+                <Clock className="w-4 h-4 text-amber-500 shrink-0" />
+                <span>สถานะคำขอลงทะเบียน</span>
+              </h3>
+            </div>
+            <span className="px-2.5 py-0.5 rounded-full text-[9px] font-black bg-amber-50 border border-amber-200 text-amber-800">
+              รอการอนุมัติ
+            </span>
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-6 flex flex-col items-center justify-center text-center space-y-4">
+          <div className="w-16 h-16 rounded-full bg-amber-50 border border-amber-200 flex items-center justify-center text-amber-600 shadow-sm animate-pulse">
+            <Clock className="w-8 h-8" />
+          </div>
+          <div className="space-y-1.5 max-w-xs">
+            <h4 className="text-base font-black text-slate-900">คำขอของคุณอยู่ระหว่างการตรวจสอบ</h4>
+            <p className="text-xs text-slate-500 leading-relaxed">
+              คำขอลงทะเบียน{pendingRoomNum ? `ห้อง ${pendingRoomNum}` : 'ห้องพัก'} ถูกส่งถึงเจ้าของหอพักเรียบร้อยแล้ว เมื่อได้รับการอนุมัติระบบจะเปิดใช้งานห้องพักให้คุณทันที
+            </p>
+          </div>
+          <div className="w-full max-w-xs pt-3">
+            <button
+              type="button"
+              onClick={onBack}
+              className="w-full py-3 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-black rounded-xl text-xs shadow-md shadow-indigo-600/20 cursor-pointer transition-all active:scale-98"
+            >
+              กลับสู่หน้าหลัก (แดชบอร์ด)
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // 2. Dedicated Room Picker View (Search + Room Cards + Plan Bottom Sheet)
   if (viewState === 'room_picker') {
@@ -2398,8 +2480,8 @@ export const TenantRegisterView: React.FC<TenantRegisterViewProps> = ({
           )}
 
           {/* Option B: Revision Reason Notice */}
-          {revisionRequest && !isAwaitingTenantConfirmation && (
-            <div className="p-4 bg-rose-50 border border-rose-200 rounded-3xl flex items-start gap-3 text-rose-900 text-xs">
+          {revisionRequest && revisionRequest.status !== 'pending_owner_approval' && !isAwaitingTenantConfirmation && (
+            <div className="p-4 bg-rose-50 border border-rose-200 rounded-3xl flex items-start gap-3 text-rose-900 text-xs animate-in fade-in duration-200">
               <AlertCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
               <div className="space-y-1">
                 <h5 className="font-extrabold text-rose-950 text-xs flex items-center gap-1.5">
@@ -2478,6 +2560,7 @@ export const TenantRegisterView: React.FC<TenantRegisterViewProps> = ({
               onChange={(e) => {
                 setSelectedRoomId(e.target.value);
                 setIsClaimVerified(false);
+                setClaimVerificationToken(null);
                 setClaimedTenantId(null);
                 setLockedFinancials(null);
                 setClaimVerificationError(null);
@@ -3925,7 +4008,7 @@ export const TenantRegisterView: React.FC<TenantRegisterViewProps> = ({
                       <input
                         type="checkbox"
                         data-testid="tenant-agree-terms-checkbox"
-                        required
+
                         checked={isAgreedTerms}
                         onChange={(e) => setIsAgreedTerms(e.target.checked)}
                         className="w-4 h-4 mt-0.5 rounded text-indigo-600 focus:ring-indigo-500 border-slate-300 shrink-0"
@@ -3937,6 +4020,15 @@ export const TenantRegisterView: React.FC<TenantRegisterViewProps> = ({
                   </div>
                   {/* IN-STEP SUBMIT BUTTON (ONLY IN STEP 5) */}
                   <div className="pt-4 mt-4 border-t border-slate-200/60">
+                    {errorMsg && (
+                      <div
+                        data-testid="tenant-registration-error-banner"
+                        className="mb-3 p-3 rounded-xl bg-rose-50 border border-rose-300 text-rose-700 text-xs font-bold flex items-start gap-2 shadow-2xs"
+                      >
+                        <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                        <span>{errorMsg}</span>
+                      </div>
+                    )}
                     <button
                       type="submit"
                       data-testid="tenant-registration-submit-btn"
@@ -3961,7 +4053,7 @@ export const TenantRegisterView: React.FC<TenantRegisterViewProps> = ({
                           <CheckCircle2 className="w-4 h-4 text-emerald-300" />
                           <span>ลงนามและยืนยันสัญญาเช่า (เปิดใช้งานห้องพัก)</span>
                         </>
-                      ) : revisionRequest ? (
+                      ) : revisionRequest && revisionRequest.status !== 'pending_owner_approval' ? (
                         <>
                           <CheckCircle2 className="w-4 h-4 text-emerald-300" />
                           <span>ส่งข้อมูลที่แก้ไขอีกครั้ง (รอเจ้าของหอพักตรวจสอบ)</span>
@@ -3986,6 +4078,12 @@ export const TenantRegisterView: React.FC<TenantRegisterViewProps> = ({
         </div>
 
         {/* LOCKED BOTTOM NAVIGATION BAR */}
+        {errorMsg && activeStep !== 5 && (
+          <div className="mx-4 mb-2 p-3 rounded-xl bg-rose-50 border border-rose-300 text-rose-700 text-xs font-bold flex items-start gap-2 shadow-2xs">
+            <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+            <span>{errorMsg}</span>
+          </div>
+        )}
         <div className="shrink-0 mt-auto sticky bottom-0 left-0 right-0 z-30 bg-white/95 backdrop-blur-md border-t border-slate-200/80 px-4 py-3 shadow-[0_-4px_20px_rgba(0,0,0,0.08)] flex items-center justify-between gap-3 sm:rounded-b-2xl">
           {activeStep === 1 ? (
             <button

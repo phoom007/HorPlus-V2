@@ -19,6 +19,64 @@ import { processAndSecureTenantDocument } from './image-security.service.js';
 import { LocalStorageProvider } from './local-storage.service.js';
 import { DocumentPdfService } from './document-pdf.service.js';
 import crypto from 'crypto';
+import { getEnv } from '../config/env.js';
+
+export interface ClaimVerificationTokenPayload {
+  dormitoryId: string;
+  roomId: string;
+  tenantId: string;
+  exp: number;
+}
+
+export function generateClaimVerificationToken(payload: {
+  dormitoryId: string;
+  roomId: string;
+  tenantId: string;
+}): string {
+  const env = getEnv();
+  const secret = env.SESSION_ENCRYPTION_KEY || 'claim-verification-secret';
+  const data: ClaimVerificationTokenPayload = {
+    ...payload,
+    exp: Date.now() + 30 * 60 * 1000, // 30 minutes validity
+  };
+  const jsonStr = JSON.stringify(data);
+  const b64Data = Buffer.from(jsonStr, 'utf8').toString('base64url');
+  const signature = crypto.createHmac('sha256', secret).update(b64Data).digest('base64url');
+  return `${b64Data}.${signature}`;
+}
+
+export function verifyClaimVerificationToken(token: string): ClaimVerificationTokenPayload {
+  if (!token || typeof token !== 'string' || !token.trim()) {
+    throw new AppError('ไม่พบรหัสยืนยันการรับสิทธิ์ กรุณายืนยันตัวตนใหม่อีกครั้ง', 400, 'CLAIM_VERIFICATION_REQUIRED');
+  }
+  const parts = token.trim().split('.');
+  if (parts.length !== 2) {
+    throw new AppError('รหัสยืนยันการรับสิทธิ์ไม่ถูกต้อง', 400, 'CLAIM_VERIFICATION_INVALID');
+  }
+  const [b64Data, signature] = parts;
+  const env = getEnv();
+  const secret = env.SESSION_ENCRYPTION_KEY || 'claim-verification-secret';
+  const expectedSig = crypto.createHmac('sha256', secret).update(b64Data).digest('base64url');
+
+  const sigBuf = Buffer.from(signature);
+  const expBuf = Buffer.from(expectedSig);
+  if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
+    throw new AppError('รหัสยืนยันการรับสิทธิ์ไม่ถูกต้องหรือถูกแก้ไข', 403, 'CLAIM_VERIFICATION_INVALID');
+  }
+
+  let payload: ClaimVerificationTokenPayload;
+  try {
+    payload = JSON.parse(Buffer.from(b64Data, 'base64url').toString('utf8'));
+  } catch {
+    throw new AppError('รูปแบบรหัสยืนยันการรับสิทธิ์ไม่ถูกต้อง', 400, 'CLAIM_VERIFICATION_INVALID');
+  }
+
+  if (!payload.exp || Date.now() > payload.exp) {
+    throw new AppError('รหัสยืนยันการรับสิทธิ์หมดอายุแล้ว กรุณายืนยันตัวตนใหม่อีกครั้ง', 400, 'CLAIM_VERIFICATION_EXPIRED');
+  }
+
+  return payload;
+}
 
 export interface CreateRegistrationDto {
   dormitoryId?: string;
@@ -105,6 +163,17 @@ export interface ApproveRegistrationDto {
 }
 
 export class TenantRegistrationService {
+  private async storeInlineIdentityDocument(dormitoryId: string, dataUrl?: string) {
+    if (!dataUrl?.startsWith('data:')) return undefined;
+    const match = /^data:image\/[\w.+-]+;base64,([\s\S]+)$/.exec(dataUrl);
+    if (!match) throw new AppError('เอกสารรูปภาพไม่ถูกต้อง', 400, 'INVALID_IMAGE_DATA');
+    const secured = await processAndSecureTenantDocument(Buffer.from(match[1], 'base64'));
+    const objectKey = `registrations/${dormitoryId}/identity-documents/${crypto.randomUUID()}${secured.extension}`;
+    await new LocalStorageProvider().saveFile(objectKey, secured.buffer);
+    return { objectKey, sha256: secured.sha256, mimeType: secured.mimeType,
+      byteSize: secured.byteSize, uploadedAt: new Date().toISOString() };
+  }
+
   public async getPublicDormitoryPolicy(dormitoryId: string) {
     const prisma = getPrismaClient();
     const dorm = await prisma.dormitory.findUnique({
@@ -201,8 +270,11 @@ export class TenantRegistrationService {
       throw new AppError('ลายเซ็นไม่ถูกต้องหรือไม่สามารถประมวลผลได้', 400, 'INVALID_SIGNATURE_DATA');
     }
 
+    let savedDocumentKey: string | undefined;
     // 3. Authoritative DB Transaction with FOR UPDATE lock on policy defaults to prevent TOCTOU race
     try {
+      const identityDocument = await this.storeInlineIdentityDocument(dormitoryId, payload.idCardImageUrl);
+      savedDocumentKey = identityDocument?.objectKey;
       const createdReq = await prisma.$transaction(async (tx) => {
         let targetDormitoryId = dormitoryId;
         let lineFollowerId: string | null = payload.lineFollowerId || null;
@@ -218,6 +290,10 @@ export class TenantRegistrationService {
 
         if (!targetDormitoryId) {
           throw new AppError('ไม่พบข้อมูลหอพัก', 400, 'DORMITORY_REQUIRED');
+        }
+
+        if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(targetDormitoryId)) {
+          await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${targetDormitoryId}, true)`;
         }
 
         // Lock property defaults row
@@ -331,6 +407,7 @@ export class TenantRegistrationService {
           birthDate: payload.birthDate,
           address: payload.address,
           idCardImageUrl: payload.idCardImageUrl,
+          idCardDocument: identityDocument,
           emergencyContact: payload.emergencyContact,
           coOccupants: payload.coOccupants || [],
           vehicle: payload.vehicle,
@@ -472,6 +549,7 @@ export class TenantRegistrationService {
 
       return createdReq;
     } catch (txErr: any) {
+      if (savedDocumentKey) await new LocalStorageProvider().deleteFile(savedDocumentKey).catch(() => {});
       // Clean up orphan signature binary if request creation or TOCTOU lock failed
       if (savedObjectKey) {
         try {
@@ -1280,7 +1358,11 @@ export class TenantRegistrationService {
       }
 
       // Sync profile from registration snapshot onto tenant
-      const tenantUpdateData: Prisma.TenantUpdateInput = {};
+      const tenantUpdateData: Prisma.TenantUpdateInput = {
+        address: snap.address ?? null,
+        dateOfBirth: snap.birthDate ? new Date(snap.birthDate) : null,
+        notes: req.note ?? null,
+      };
       if (emailToSave && !tenant.email) {
         tenantUpdateData.email = emailToSave;
       }
@@ -1383,8 +1465,9 @@ export class TenantRegistrationService {
       const startStr = `${startYear}-${startMonth}-${startDay}`;
       const isFutureStartDate = Boolean(startStr && startStr > todayStr);
 
-      const isDaily = payload.rentalType?.toUpperCase() === 'DAILY' || snap.rentalType === 'DAILY';
-      const isTerm = payload.rentalType?.toUpperCase() === 'TERM' || snap.rentalType === 'TERM';
+      const rentalPlan = (payload.rentalType || payload.rentalPlan || snap.rentalType || snap.rentalPlan || 'monthly').toLowerCase();
+      const isDaily = rentalPlan === 'daily';
+      const isTerm = rentalPlan === 'term';
 
       let contractId: string | null = null;
       let dailyStayRecord: any = null;
@@ -1408,7 +1491,7 @@ export class TenantRegistrationService {
             dailyRateAmount: payload.dailyRate ? new Prisma.Decimal(payload.dailyRate) : new Prisma.Decimal(payload.rentAmount || 0),
             totalRentAmount: new Prisma.Decimal(payload.rentAmount || (Number(payload.dailyRate || 0) * Number(payload.totalDays || 1))),
             depositAmount: new Prisma.Decimal(payload.depositAmount || 0),
-            depositDeclaredStatus: (payload as any).depositDeclaredStatus || 'PAID',
+            depositDeclaredStatus: (payload as any).depositDeclaredStatus || snap.depositDeclaredStatus || 'UNPAID',
             status: isFutureStartDate ? 'RESERVED' : 'ACTIVE',
             approvedAt: new Date(),
             approvedByUserId: safeActorId,
@@ -1802,7 +1885,11 @@ export class TenantRegistrationService {
         },
       });
 
-      const tenantUpdateData: Prisma.TenantUpdateInput = {};
+      const tenantUpdateData: Prisma.TenantUpdateInput = {
+        address: snap.address ?? null,
+        dateOfBirth: snap.birthDate ? new Date(snap.birthDate) : null,
+        notes: req.note ?? null,
+      };
       if (((req as any).email || snap.email) && !tenant.email) {
         tenantUpdateData.email = (req as any).email || snap.email;
       }
@@ -2123,7 +2210,11 @@ export class TenantRegistrationService {
       where: { id, dormitoryId },
     });
     if (!req) {
-      throw new AppError('ไม่พบคำขอลงทะเบียน', 404, 'REGISTRATION_REQUEST_NOT_FOUND');
+      return this.createRequest(dormitoryId || payload?.dormitoryId, {
+        ...payload,
+        agreedTerms: payload?.agreedTerms ?? true,
+        expectedPolicyVersion: payload?.expectedPolicyVersion ?? 1,
+      });
     }
     if (req.status !== 'revision_requested' && req.status !== 'pending_owner_approval' && req.status !== 'rejected') {
       throw new AppError('คำขอนี้ไม่สามารถแก้ไขและส่งซ้ำได้ในขณะนี้', 400, 'INVALID_REQUEST_STATUS');
@@ -2158,12 +2249,19 @@ export class TenantRegistrationService {
         newSigSha = savedSig.sha256;
         newSigMime = savedSig.mimeType;
         newSigByte = savedSig.byteSize;
-      } catch {}
+      } catch (err) {
+        if (err instanceof AppError) throw err;
+        throw new AppError('ลายเซ็นไม่ถูกต้องหรือไม่สามารถประมวลผลได้', 400, 'INVALID_SIGNATURE_DATA');
+      }
     }
 
+    const identityDocument = await this.storeInlineIdentityDocument(dormitoryId, payload.idCardImageUrl);
     const updatedSnapshot = {
       ...currentSnapshot,
       ...payload,
+      ...(identityDocument ? { idCardDocument: identityDocument } : payload.idCardImageUrl === '' ? { idCardDocument: null } : {}),
+      applicantName: `${payload.firstName?.trim() || req.firstName} ${payload.lastName !== undefined ? payload.lastName.trim() : req.lastName}`.trim(),
+      applicantPhone: payload.phone?.trim() || req.phone,
       revisionHistory,
       currentOwnerComment: null,
       resubmittedAt: new Date().toISOString(),
@@ -2188,6 +2286,10 @@ export class TenantRegistrationService {
         tenantSignatureMimeType: newSigMime,
         tenantSignatureByteSize: newSigByte,
       },
+    }).catch(async err => {
+      if (identityDocument) await new LocalStorageProvider().deleteFile(identityDocument.objectKey).catch(() => {});
+      if (newSigKey && newSigKey !== req.tenantSignatureObjectKey) await new SignatureStorageService(prisma).deleteSignature(newSigKey).catch(() => {});
+      throw err;
     });
 
     // 1. In-app notification for owner(s) on resubmit
@@ -2554,7 +2656,7 @@ export class TenantRegistrationService {
     const inputPhone = normalizeThaiPhone(trimmedInput);
     if (inputPhone && candidateTenant.phone) {
       const storedPhone = normalizeThaiPhone(candidateTenant.phone);
-      if (storedPhone && (storedPhone === inputPhone || storedPhone.endsWith(inputPhone) || inputPhone.endsWith(storedPhone))) {
+      if (storedPhone && storedPhone === inputPhone) {
         isMatched = true;
       }
     }
@@ -2563,15 +2665,15 @@ export class TenantRegistrationService {
       const rawStoredName = candidateTenant.displayName || `${candidateTenant.firstName || ''} ${candidateTenant.lastName || ''}`.trim();
       if (rawStoredName) {
         const similarity = calculateNameSimilarity(rawStoredName, trimmedInput);
-        const cleanInput = trimmedInput.toLowerCase().replace(/\s+/g, '');
-        const cleanStored = rawStoredName.toLowerCase().replace(/\s+/g, '');
-        const cleanFirst = (candidateTenant.firstName || '').toLowerCase().replace(/\s+/g, '');
 
-        if (
-          similarity >= 0.85 ||
-          (cleanFirst.length >= 2 && (cleanInput.includes(cleanFirst) || cleanFirst.includes(cleanInput))) ||
-          (cleanStored.length >= 2 && (cleanInput.includes(cleanStored) || cleanStored.includes(cleanInput)))
-        ) {
+
+
+
+        if (similarity >= 0.90) {
+
+
+
+
           isMatched = true;
         }
       }
@@ -2584,6 +2686,11 @@ export class TenantRegistrationService {
 
     // Match successful! Clear failed attempts
     claimActorAttempts.delete(actorKey);
+    const claimVerificationToken = generateClaimVerificationToken({
+      dormitoryId,
+      roomId: room.id,
+      tenantId: candidateTenant.id,
+    });
 
     const activeContract = candidateTenant.contracts[0] || null;
     const activeProvisional = candidateTenant.provisionalRentalTerms?.[0] || null;
@@ -2595,6 +2702,7 @@ export class TenantRegistrationService {
 
     return {
       verified: true,
+      claimVerificationToken,
       tenantId: candidateTenant.id,
       displayName: candidateTenant.displayName,
       firstName: candidateTenant.firstName,
@@ -2666,6 +2774,7 @@ export class TenantRegistrationService {
     vehicle?: { type: string; licensePlate: string; brand?: string };
     pet?: { hasPet: boolean; type?: string; name?: string; count?: number };
     signatureBase64: string;
+    claimVerificationToken?: string;
     actorUserId?: string;
   }) {
     const {
@@ -2684,10 +2793,21 @@ export class TenantRegistrationService {
       pet,
       signatureBase64,
       actorUserId,
+      claimVerificationToken,
     } = params;
 
     if (!signatureBase64 || typeof signatureBase64 !== 'string' || !signatureBase64.trim()) {
       throw new AppError('กรุณาลงลายมือชื่อก่อนยืนยันการลงทะเบียน', 400, 'SIGNATURE_REQUIRED');
+    }
+
+    // 0. Verify claim verification token proof
+    const verifiedProof = verifyClaimVerificationToken(claimVerificationToken || '');
+    if (
+      verifiedProof.tenantId !== tenantId ||
+      verifiedProof.roomId !== roomId ||
+      verifiedProof.dormitoryId !== dormitoryId
+    ) {
+      throw new AppError('รหัสยืนยันการรับสิทธิ์ไม่ตรงกับข้อมูลห้องพักหรือผู้เช่า', 403, 'CLAIM_VERIFICATION_MISMATCH');
     }
 
     const prisma = getPrismaClient();
@@ -2717,9 +2837,35 @@ export class TenantRegistrationService {
 
       const tenant = await tx.tenant.findFirst({
         where: { id: tenantId, dormitoryId },
+        include: {
+          occupancies: { where: { roomId, status: 'ACTIVE' } },
+          contracts: { where: { roomId, status: 'active', deletedAt: null } },
+          provisionalRentalTerms: { where: { roomId, status: { in: ['ACTIVE', 'RESERVED'] }, deletedAt: null } },
+        },
       });
       if (!tenant) {
         throw new AppError('ไม่พบข้อมูลผู้เช่า', 404, 'TENANT_NOT_FOUND');
+      }
+
+      if (tenant.lineFriendId !== null || tenant.linkedUserId !== null) {
+        throw new AppError('ผู้เช่าท่านนี้ได้รับการผูกสิทธิ์บัญชีหรือ LINE เรียบร้อยแล้ว', 409, 'TENANT_ALREADY_CLAIMED');
+      }
+
+      const room = await tx.room.findFirst({
+        where: { id: roomId, dormitoryId, deletedAt: null },
+      });
+      if (!room) {
+        throw new AppError('ไม่พบข้อมูลห้องพักที่ระบุ', 404, 'ROOM_NOT_FOUND');
+      }
+
+      const isRoomAssociated =
+        room.currentTenantId === tenant.id ||
+        (tenant.occupancies && tenant.occupancies.length > 0) ||
+        (tenant.contracts && tenant.contracts.length > 0) ||
+        (tenant.provisionalRentalTerms && tenant.provisionalRentalTerms.length > 0);
+
+      if (!isRoomAssociated) {
+        throw new AppError('ผู้เช่าไม่ได้อยู่ในห้องพักที่ระบุ', 400, 'ROOM_TENANT_MISMATCH');
       }
 
       const finalDisplayName = displayName || (firstName ? `${firstName.trim()} ${(lastName || '').trim()}`.trim() : tenant.displayName);

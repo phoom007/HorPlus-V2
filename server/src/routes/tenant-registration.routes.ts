@@ -46,7 +46,17 @@ export function createTenantRegistrationRouter(
   const verifyCsrf = (req: Request, res: Response): boolean => {
     const csrfHeader = req.headers['x-csrf-token'] as string | undefined;
     const csrfCookie = req.cookies?.['horplus_csrf'];
-    const sessionId = req.auth?.sessionId;
+    let sessionId = req.auth?.sessionId;
+    if (!sessionId && req.cookies?.horplus_session) {
+      try {
+        const env = getEnv();
+        const tokenService = new SessionTokenService(env.SESSION_ENCRYPTION_KEY);
+        const payload = tokenService.decryptToken(req.cookies.horplus_session);
+        if (payload?.sid) {
+          sessionId = payload.sid;
+        }
+      } catch {}
+    }
 
     if (!csrfHeader || !sessionId || !authService.verifyCsrf(csrfHeader, sessionId) || (csrfCookie && csrfCookie !== csrfHeader)) {
       res.status(403).json({
@@ -195,6 +205,7 @@ export function createTenantRegistrationRouter(
     inviteToken: z.string().optional(),
     roomId: z.string().min(1, 'กรุณาระบุห้องพัก'),
     tenantId: z.string().uuid('รหัสผู้เช่าไม่ถูกต้อง'),
+    claimVerificationToken: z.string().optional(),
     signatureBase64: z.string().min(1, 'กรุณาเซ็นชื่อยืนยันการรับสิทธิ์'),
     displayName: z.string().optional(),
     firstName: z.string().optional(),
@@ -270,6 +281,12 @@ export function createTenantRegistrationRouter(
         } catch {}
       }
 
+      // AC-5: Check CSRF if request carries a cookie session
+      if (req.cookies?.horplus_session || req.auth?.sessionId) {
+        if (!verifyCsrf(req, res)) return;
+      }
+
+
       const resolvedVehicle = parsed.data.vehicle || (parsed.data.vehicles && parsed.data.vehicles[0]) || undefined;
       const result = await registrationService.completeTenantClaim({
         dormitoryId: dormId,
@@ -291,6 +308,7 @@ export function createTenantRegistrationRouter(
         pet: parsed.data.pet,
         inviteToken: parsed.data.inviteToken,
         actorUserId,
+        claimVerificationToken: parsed.data.claimVerificationToken,
       });
       res.status(200).json({ data: result });
     } catch (err) {
@@ -654,7 +672,33 @@ export function createTenantRegistrationRouter(
   });
 
   // GET /api/v1/tenant-registrations/:id
-  privateRouter.get('/:id', requireDormitoryPermission('tenant:read'), async (req: Request, res: Response) => {
+  privateRouter.get('/:id', async (req: Request, res: Response, next) => {
+    // Applicants need their own snapshot to correct a rejected registration.
+    // A tenant role never grants access to the dormitory's other applications.
+    if ((req as any).dormitoryContext?.roleCode !== 'TENANT') {
+      return requireDormitoryPermission('tenant:read')(req, res, next);
+    }
+    try {
+      const dormId = getAuthoritativeDormitoryId(req);
+      const grantId = req.auth?.session?.accessGrantId;
+      const ownsRequest = grantId && await getPrismaClient().$transaction(async tx => {
+        await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormId}, true)`;
+        const grant = await tx.dormitoryAccessGrant.findFirst({
+          where: { id: grantId, dormitoryId: dormId, roleCode: 'TENANT', status: 'ACTIVE' },
+          select: { lineFriendId: true },
+        });
+        if (!grant?.lineFriendId) return false;
+        return Boolean(await tx.tenantRegistrationRequest.findFirst({
+          where: { id: req.params.id, dormitoryId: dormId, lineFollowerId: grant.lineFriendId },
+          select: { id: true },
+        }));
+      });
+      if (!ownsRequest) return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'ไม่สามารถเข้าถึงคำขอลงทะเบียนนี้ได้' } });
+      next();
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  }, async (req: Request, res: Response) => {
     try {
       const dormId = getAuthoritativeDormitoryId(req);
       const request = await registrationService.getRequestById(req.params.id, dormId);

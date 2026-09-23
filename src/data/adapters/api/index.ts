@@ -214,14 +214,57 @@ export interface TenantBasicProfileUpdateInput {
 }
 
 export class ApiTenantAdapter implements TenantDataSource {
+  private normalizeTenantItem(t: any): Tenant {
+    const snap = t.acceptanceSnapshot || {};
+    const primaryEmergency = Array.isArray(t.emergencyContacts) && t.emergencyContacts.length > 0
+      ? t.emergencyContacts[0]
+      : (t.emergencyContact || snap.emergencyContact);
+    const rawBirthDate = t.birthDate ?? t.dateOfBirth ?? snap.birthDate;
+    const formattedBirthDate = rawBirthDate
+      ? (typeof rawBirthDate === 'string' && /^\d{4}-\d{2}-\d{2}/.test(rawBirthDate)
+          ? rawBirthDate.slice(0, 10)
+          : new Date(rawBirthDate).toISOString().slice(0, 10))
+      : undefined;
+    const petInfo = t.petInfo || (Array.isArray(snap.pets) && snap.pets.length > 0 ? { hasPet: true, pets: snap.pets, type: snap.pets[0]?.type, details: snap.pets[0]?.details } : snap.pet);
+    const petsList = Array.isArray(t.pets) && t.pets.length > 0
+      ? t.pets
+      : Array.isArray(petInfo?.pets) && petInfo.pets.length > 0
+      ? petInfo.pets
+      : Array.isArray(snap.pets) && snap.pets.length > 0
+      ? snap.pets
+      : (petInfo?.hasPet ? [{ type: petInfo.type || 'other', details: petInfo.details || '' }] : []);
+    const hasIdDoc = Boolean(
+      t.hasIdentityDocument ||
+      t.idCardObjectKey ||
+      t.idCardPhotoMock ||
+      snap.idCardDocument?.objectKey ||
+      snap.idCardImageUrl ||
+      snap.idCardImage
+    );
+
+    return {
+      ...t,
+      name: t.name || t.displayName || '',
+      citizenId: t.nationalIdMasked ?? t.citizenId ?? snap.citizenId ?? '',
+      birthDate: formattedBirthDate,
+      emergencyContact: primaryEmergency
+        ? {
+            name: primaryEmergency.name || '',
+            relationship: primaryEmergency.relationship || primaryEmergency.relation || '',
+            phone: primaryEmergency.phone || '',
+          }
+        : undefined,
+      pets: petsList.map((p: any) => ({ ...p, name: p?.name || p?.details || '', details: p?.details || p?.name || '' })),
+      pet: petInfo || (petsList.length > 0 ? { hasPet: true, type: petsList[0]?.type || 'other', details: petsList[0]?.details || '' } : undefined),
+      idCardPhotoMock: t.idCardPhotoMock || (hasIdDoc ? 'SERVER_IDENTITY_DOCUMENT' : undefined),
+      hasIdentityDocument: hasIdDoc,
+    } as Tenant;
+  }
+
   async getAll(): Promise<Tenant[]> {
     const rawData = await httpRequest<any>('GET', '/tenants');
     const items = Array.isArray(rawData) ? rawData : (rawData?.data || []);
-    return items.map((t: any) => ({
-      ...t,
-      name: t.name || t.displayName || '',
-      citizenId: t.nationalIdMasked ?? t.citizenId ?? '',
-    }));
+    return items.map((t: any) => this.normalizeTenantItem(t));
   }
 
   async getById(id: string): Promise<Tenant | null> {
@@ -229,11 +272,7 @@ export class ApiTenantAdapter implements TenantDataSource {
       const res = await httpRequest<any>('GET', `/tenants/${encodeURIComponent(id)}`);
       const raw = res?.data?.tenant || res?.data || res;
       if (!raw) return null;
-      return {
-        ...raw,
-        name: raw.name || raw.displayName || '',
-        citizenId: raw.nationalIdMasked ?? raw.citizenId ?? '',
-      } as Tenant;
+      return this.normalizeTenantItem(raw);
     } catch (err: any) {
       if (err instanceof HttpClientError && err.domainError.code === 'RESOURCE_NOT_FOUND') return null;
       throw err;
@@ -601,6 +640,7 @@ export async function getTenantRegistrationRequests(): Promise<DataResult<any[]>
 }
 
 export interface SubmitRegistrationPayload {
+  lineDisplayName?: string;
   dormitoryId?: string;
   requestedRoomId: string;
   prefix?: string;
@@ -635,7 +675,7 @@ export interface SubmitRegistrationPayload {
   depositSlipImageUrl?: string;
   depositDeclaredStatus?: string;
   isInstallmentRequested?: boolean;
-  selectedInstallmentPlan?: string;
+  selectedInstallmentPlan?: string | null;
   installments?: any[];
   terms?: string;
 }
@@ -705,6 +745,7 @@ export async function verifyTenantClaim(payload: {
   vehicles?: any[];
   coOccupants?: any[];
   pet?: any;
+  claimVerificationToken?: string;
 }>> {
   try {
     const res = await httpRequest<any>('POST', '/tenant-registrations/verify-claim', payload);
@@ -724,6 +765,7 @@ export async function completeTenantClaim(payload: {
   roomId: string;
   tenantId: string;
   signatureBase64: string;
+  claimVerificationToken?: string;
   displayName?: string;
   firstName?: string;
   lastName?: string;
