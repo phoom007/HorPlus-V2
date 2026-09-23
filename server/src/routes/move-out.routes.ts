@@ -44,10 +44,10 @@ moveOutRouter.post(
   mutationGuard('moveout:write'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const dormId = req.dormitoryId || req.body?.dormitoryId || (req.headers['x-dormitory-id'] as string);
+      const dormId = req.dormitoryContext?.dormitoryId || req.dormitoryId || (req.headers['x-dormitory-id'] as string);
       const requestId = req.params.requestId;
-      const reviewedByUserId = req.user?.id || req.auth?.userId || req.body?.reviewedByUserId;
-      const actorRole = req.dormitoryContext?.roleCode || req.auth?.role || req.body?.actorRole;
+      const reviewedByUserId = req.auth?.userId || req.user?.id;
+      const actorRole = req.dormitoryContext?.roleCode || (req.auth as any)?.roleCode || req.auth?.role;
       const { actualEndedAt, emergencyReason } = req.body;
 
       if (!dormId || !reviewedByUserId || !actorRole || !emergencyReason) {

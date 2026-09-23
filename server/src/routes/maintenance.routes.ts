@@ -224,16 +224,14 @@ export function createMaintenanceRouter(maintenanceService: MaintenanceService =
       const { actor, dormitoryId } = getContext(req);
       const { note } = req.body;
 
-      if (actor?.roleCode === 'STAFF') {
-        return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'STAFF role is not permitted to close maintenance requests' } });
-      }
+      const actorType = actor?.roleCode === 'STAFF' ? 'staff' : (actor?.roleCode === 'MANAGER' ? 'manager' : 'owner');
 
       const updated = await maintenanceService.updateStatus({
         dormitoryId,
         requestId: req.params.requestId,
         status: 'closed',
         note,
-        actorType: actor?.roleCode === 'MANAGER' ? 'manager' : 'owner',
+        actorType,
         actorUserId: actor?.userId || undefined,
         actorRoleCode: actor?.roleCode || undefined
       });

@@ -549,7 +549,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
         navigate('/owner/home', { replace: true });
       }
     } else if (userRole === 'manager' && !isRegistrationMode) {
-      const allowedTabs = ['home', 'dashboard', 'meters', 'payments', 'rooms', 'tenants', 'maintenance', 'announcements', 'reports', 'line-oa', 'subscription'];
+      const allowedTabs = ['home', 'dashboard', 'meters', 'payments', 'rooms', 'tenants', 'maintenance', 'announcements', 'reports', 'line-oa'];
       if (!allowedTabs.includes(activeTab)) {
         navigate('/owner/home', { replace: true });
       }
@@ -1087,7 +1087,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
     { id: 'announcements', label: 'ประชาสัมพันธ์', icon: Megaphone, roles: ['owner', 'manager'] },
     { id: 'reports', label: 'รายงานสถิติ', icon: BarChart4, roles: ['owner', 'manager'] },
     { id: 'users', label: 'จัดการผู้ใช้งาน', icon: ShieldCheck, roles: ['owner'] },
-    { id: 'subscription', label: 'ต่อแพ็กเกจ', icon: Crown, roles: ['owner', 'manager'] },
+    { id: 'subscription', label: 'ต่อแพ็กเกจ', icon: Crown, roles: ['owner'] },
     { id: 'settings', label: 'ตั้งค่าระบบ', icon: Settings, roles: ['owner'] }
   ];
 
@@ -1445,6 +1445,22 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
       case 'users':
         return <OwnerUsers onAddLog={handleAddLog} dormitoryId={activeDormitoryId} />;
       case 'subscription':
+        if (userRole !== 'owner') {
+          return (
+            <div data-testid="subscription-denied" className="bg-white border border-rose-100 rounded-3xl p-8 text-center space-y-3 shadow-xs max-w-xl mx-auto my-12">
+              <AlertTriangle className="w-8 h-8 text-rose-500 mx-auto" />
+              <h3 className="text-sm font-bold text-slate-800">ไม่มีสิทธิ์เข้าถึง</h3>
+              <p className="text-xs text-slate-500">เมนูต่ออายุและการจัดการแพ็กเกจอนุญาตเฉพาะเจ้าของหอพักเท่านั้น</p>
+              <button
+                type="button"
+                onClick={() => changeTab('home')}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl transition-all cursor-pointer shadow-md"
+              >
+                กลับสู่หน้าหลัก
+              </button>
+            </div>
+          );
+        }
         return (
           <SubscriptionPage
             dormitoryId={validDormId}

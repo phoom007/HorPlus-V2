@@ -110,13 +110,7 @@ describe('Manager Role Permissions Policy (MGR-01 - MGR-03)', () => {
     expect(perms).toContain('line_oa:write');
     expect(perms).toContain('line_oa:manage');
 
-    // 10. Subscription Management Domain (SPEC-SUB-MR-01)
-    expect(perms).toContain('subscription:view');
-    expect(perms).toContain('subscription:read');
-    expect(perms).toContain('subscription:write');
-    expect(perms).toContain('subscription:manage');
-
-    // 11. Negative Assertions: Owner-Only Boundaries (MGR-02)
+    // 10. Negative Assertions: Owner-Only Boundaries (MGR-02, SEC-02)
     expect(perms).not.toContain('*');
     expect(perms).not.toContain('payment_settings:view');
     expect(perms).not.toContain('payment_settings:read');
@@ -126,6 +120,10 @@ describe('Manager Role Permissions Policy (MGR-01 - MGR-03)', () => {
     expect(perms).not.toContain('users:manage');
     expect(perms).not.toContain('access_grants:manage');
     expect(perms).not.toContain('subscription:*');
+    expect(perms).not.toContain('subscription:view');
+    expect(perms).not.toContain('subscription:read');
+    expect(perms).not.toContain('subscription:write');
+    expect(perms).not.toContain('subscription:manage');
     expect(perms).not.toContain('dormitory:delete');
     expect(perms).not.toContain('dormitory:transfer');
   });

@@ -31,12 +31,20 @@ export function extractUnifiedActor(req?: any, _res?: any, next?: any): any {
     return (r: Request, s: Response, n: NextFunction) => extractUnifiedActor(r, s, n);
   }
   if (req && req.auth && req.auth.userId) {
+    const rawRole =
+      (req as any).dormitoryContext?.roleCode ||
+      req.auth.roleCode ||
+      req.auth.role ||
+      req.auth.memberships?.[0]?.roleCode ||
+      'OWNER';
+    const normalizedRole = String(rawRole).toUpperCase();
+
     req.actor = {
       actorType: 'google_owner',
       sessionId: req.auth.sessionId,
       userId: req.auth.userId,
       dormitoryId: (req as any).dormitoryContext?.dormitoryId || req.dormitoryId || (req.headers && (req.headers['x-dormitory-id'] as string)) || 'dorm-001',
-      roleCode: 'OWNER',
+      roleCode: ['OWNER', 'MANAGER', 'STAFF'].includes(normalizedRole) ? normalizedRole as any : 'OWNER',
       displayName: req.auth.user?.name
     };
   }

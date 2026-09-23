@@ -71,13 +71,6 @@ export class MaintenanceService {
       throw new Error('MAINTENANCE_REQUEST_ALREADY_CLOSED: Closed maintenance requests can only be reopened to in_progress');
     }
 
-    // Role restrictions
-    if (roleCode === 'STAFF' || roleCode === 'TECH') {
-      if (next === 'closed') {
-        throw new Error(`FORBIDDEN: ${roleCode} role is not permitted to close maintenance requests`);
-      }
-    }
-
     if (actorType === 'tenant') {
       if (next === 'cancelled') {
         if (current !== 'submitted' && current !== 'acknowledged') {
@@ -92,12 +85,12 @@ export class MaintenanceService {
     // State transition verification
 
     const allowedMap: Record<string, string[]> = {
-      submitted: ['acknowledged', 'assigned', 'in_progress', 'inprogress', 'cancelled'],
-      acknowledged: ['assigned', 'in_progress', 'inprogress', 'cancelled'],
-      assigned: ['in_progress', 'inprogress', 'waiting_parts', 'cancelled'],
-      in_progress: ['waiting_parts', 'resolved', 'completed', 'cancelled'],
-      inprogress: ['waiting_parts', 'resolved', 'completed', 'cancelled'],
-      waiting_parts: ['in_progress', 'inprogress', 'resolved', 'completed', 'cancelled'],
+      submitted: ['acknowledged', 'assigned', 'in_progress', 'inprogress', 'resolved', 'completed', 'closed', 'cancelled'],
+      acknowledged: ['assigned', 'in_progress', 'inprogress', 'resolved', 'completed', 'closed', 'cancelled'],
+      assigned: ['in_progress', 'inprogress', 'waiting_parts', 'resolved', 'completed', 'closed', 'cancelled'],
+      in_progress: ['waiting_parts', 'resolved', 'completed', 'closed', 'cancelled'],
+      inprogress: ['waiting_parts', 'resolved', 'completed', 'closed', 'cancelled'],
+      waiting_parts: ['in_progress', 'inprogress', 'resolved', 'completed', 'closed', 'cancelled'],
       resolved: ['closed', 'in_progress', 'inprogress'],
       completed: ['closed', 'in_progress', 'inprogress'],
       closed: ['in_progress', 'inprogress'],

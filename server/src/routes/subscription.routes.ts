@@ -66,8 +66,45 @@ export function createSubscriptionRouter(authService?: AuthenticationService): R
     : (_req: Request, _res: Response, next: NextFunction) => next();
   const slipUploadRateLimiter = createSlipUploadRateLimiter();
 
+  const requireOwnerRole = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      let context = (req as any).dormitoryContext;
+      if (!context) {
+        try {
+          context = await resolveAuthoritativeDormitoryContext(req);
+          (req as any).dormitoryContext = context;
+        } catch {
+          // Fall back to req.auth if context resolution throws
+        }
+      }
+      const rawRole =
+        context?.roleCode ||
+        (req as any).auth?.roleCode ||
+        (req as any).auth?.role ||
+        (req as any).auth?.memberships?.[0]?.roleCode;
+
+      const roleCode = String(rawRole || (context?.dormitoryId ? 'OWNER' : '')).toUpperCase();
+
+      if (roleCode && roleCode !== 'OWNER') {
+        return res.status(403).json({
+          error: {
+            code: 'FORBIDDEN',
+            message: 'เมนูต่ออายุและการจัดการแพ็กเกจ อนุญาตเฉพาะเจ้าของหอพักเท่านั้น (OWNER role required)',
+            fieldErrors: null,
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+      next();
+    } catch (err) {
+      next(err);
+    }
+  };
+
   if (authService) {
     router.use(authService.requireAuth());
+    router.use(requireOwnerRole);
   }
 
   // GET /api/v1/subscription/config/payment

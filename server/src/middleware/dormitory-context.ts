@@ -330,18 +330,12 @@ export async function resolveAuthoritativeDormitoryContext(req: Request): Promis
       'line_oa:read',
       'line_oa:write',
       'line_oa:manage',
-
-      // 11. Subscription Domain (SPEC-SUB-MR-01)
-      'subscription:view',
-      'subscription:read',
-      'subscription:write',
-      'subscription:manage',
     ];
     const permSet = new Set(permissions);
     for (const p of managerOperationalPermissions) {
       permSet.add(p);
     }
-    // Strictly preserve owner-only security exclusions (MGR-02)
+    // Strictly preserve owner-only security exclusions (MGR-02, SEC-02)
     for (const p of Array.from(permSet)) {
       if (
         p === '*' ||
@@ -349,6 +343,7 @@ export async function resolveAuthoritativeDormitoryContext(req: Request): Promis
         p.startsWith('staff:') ||
         p.startsWith('users:') ||
         p.startsWith('access_grants:') ||
+        p.startsWith('subscription:') ||
         p === 'dormitory:delete' ||
         p === 'dormitory:transfer'
       ) {

@@ -4,6 +4,8 @@ import { ContractService } from '../services/contract.service.js';
 import { createRequireSessionMiddleware } from '../middleware/require-session.js';
 import { requireDormitoryPermission } from '../middleware/permission.js';
 import { requireDormitoryWriteEntitlement } from '../middleware/entitlement.js';
+import { resolveAuthoritativeDormitoryContext } from '../middleware/dormitory-context.js';
+import { getPrismaClient } from '../db/prisma.js';
 import {
   CreateContractSchema,
   ActivateContractSchema,
@@ -24,7 +26,10 @@ export function createContractRouter(
   ];
 
   const getDormitoryId = (req: Request): string => {
-    return (req.headers['x-dormitory-id'] as string) || req.auth?.dormitoryId || 'dorm-001';
+    const context = (req as any).dormitoryContext;
+    if (context?.dormitoryId) return context.dormitoryId;
+    if (req.auth?.dormitoryId) return req.auth.dormitoryId;
+    return (req.headers['x-dormitory-id'] as string) || 'dorm-001';
   };
 
   const verifyCsrf = (req: Request, res: Response): boolean => {
@@ -61,7 +66,7 @@ export function createContractRouter(
   };
 
   // GET /api/v1/contracts
-  router.get('/', async (req: Request, res: Response) => {
+  router.get('/', requireDormitoryPermission('contracts:view'), async (req: Request, res: Response) => {
     try {
       const dormId = getDormitoryId(req);
       const query = {
@@ -83,7 +88,7 @@ export function createContractRouter(
   });
 
   // GET /api/v1/contracts/:id
-  router.get('/:id', async (req: Request, res: Response) => {
+  router.get('/:id', requireDormitoryPermission('contracts:view'), async (req: Request, res: Response) => {
     try {
       const dormId = getDormitoryId(req);
       const contract = await contractService.getContractById(req.params.id, dormId);
@@ -97,6 +102,64 @@ export function createContractRouter(
   router.get('/:id/pdf', async (req: Request, res: Response) => {
     try {
       const dormId = getDormitoryId(req);
+      const contract = await contractService.getContractById(req.params.id, dormId);
+      if (!contract) {
+        return res.status(404).json({
+          error: {
+            code: 'CONTRACT_NOT_FOUND',
+            message: 'ไม่พบสัญญาเช่าที่ระบุ',
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+
+      let context = (req as any).dormitoryContext;
+      if (!context) {
+        try {
+          context = await resolveAuthoritativeDormitoryContext(req);
+          (req as any).dormitoryContext = context;
+        } catch {
+          // Context resolution fallback
+        }
+      }
+
+      const roleCode = String(
+        context?.roleCode ||
+        (req as any).auth?.roleCode ||
+        (req as any).auth?.role ||
+        (req as any).auth?.memberships?.[0]?.roleCode ||
+        ''
+      ).toUpperCase();
+
+      let authorized = false;
+      if (roleCode === 'OWNER' || roleCode === 'MANAGER') {
+        authorized = true;
+      } else if (roleCode === 'TENANT') {
+        const prisma = getPrismaClient();
+        const tenant = await prisma.tenant.findFirst({
+          where: {
+            dormitoryId: dormId,
+            linkedUserId: req.auth?.userId,
+          },
+          select: { id: true },
+        });
+        if (tenant && (contract.tenantId === tenant.id || (contract as any).tenantId === tenant.id)) {
+          authorized = true;
+        }
+      }
+
+      if (!authorized) {
+        return res.status(403).json({
+          error: {
+            code: 'FORBIDDEN',
+            message: 'คุณไม่มีสิทธิ์ดาวน์โหลดหรือเปิดดูเอกสารสัญญาเช่านี้ (อนุญาตเฉพาะเจ้าของหอพัก, ผู้จัดการ, หรือผู้เช่าเจ้าของสัญญา)',
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+
       const pdfBuffer = await contractService.getContractPdf(req.params.id, dormId);
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', `attachment; filename="Contract-${req.params.id}.pdf"`);

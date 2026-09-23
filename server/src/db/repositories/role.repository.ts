@@ -80,7 +80,7 @@ export class InMemoryRoleRepository implements IRoleRepository {
           rooms: ['view'],
           tenants: ['view'],
           meters: ['view', 'record'],
-          maintenance: ['view', 'update'],
+          maintenance: ['view', 'update', 'close'],
         },
         isSystem: true,
         createdAt: new Date(),

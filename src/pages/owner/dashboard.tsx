@@ -278,7 +278,7 @@ const OwnerDashboardContent: React.FC<OwnerDashboardProps> = ({
   const subscriptionQuery = useQuery({
     queryKey: ['subscription', activeDormitoryId],
     queryFn: () => fetchCurrentSubscription(activeDormitoryId),
-    enabled: Boolean(activeDormitoryId),
+    enabled: Boolean(activeDormitoryId && effectiveUserRole === 'owner'),
     staleTime: 60 * 1000,
     refetchOnMount: 'always',
   });
@@ -568,7 +568,7 @@ const OwnerDashboardContent: React.FC<OwnerDashboardProps> = ({
   const pendingRequestsCount = tenantRequests.length;
 
   useEffect(() => {
-    if (activeDormitoryId) {
+    if (activeDormitoryId && effectiveUserRole === 'owner') {
       setRemainingDaysLoading(true);
       fetch('/api/v1/subscription/entitlements', {
         headers: { 'x-dormitory-id': activeDormitoryId }
@@ -591,12 +591,14 @@ const OwnerDashboardContent: React.FC<OwnerDashboardProps> = ({
           setRemainingDays(null);
         })
         .finally(() => setRemainingDaysLoading(false));
+    } else {
+      setRemainingDaysLoading(false);
     }
-  }, [activeDormitoryId]);
+  }, [activeDormitoryId, effectiveUserRole]);
 
   useEffect(() => {
     if (isPackageModalOpen) {
-      if (activeDormitoryId) {
+      if (activeDormitoryId && effectiveUserRole === 'owner') {
         setEntitlementsLoading(true);
         setEntitlementsError(null);
         fetch('/api/v1/subscription/entitlements', {
@@ -970,7 +972,7 @@ const OwnerDashboardContent: React.FC<OwnerDashboardProps> = ({
         return ['meters', 'maintenance'].includes(menu.target);
       }
       if (effectiveUserRole === 'manager') {
-        return !['users', 'settings'].includes(menu.target);
+        return !['users', 'settings', 'subscription'].includes(menu.target);
       }
       return true;
     });
@@ -1019,9 +1021,14 @@ const OwnerDashboardContent: React.FC<OwnerDashboardProps> = ({
           <button
             type="button"
             data-testid="subscription-remaining-badge"
-            onClick={() => onNavigate('subscription')}
-            className={`text-[11px] sm:text-xs font-black px-3.5 py-1.5 rounded-full flex items-center gap-1.5 transition-all cursor-pointer shadow-2xs hover:scale-105 active:scale-95 ${effectiveRemainingDays !== null ? getRemainingDaysBadgeStyle(effectiveRemainingDays) : 'bg-white/20 text-white font-black border border-white/20'}`}
-            title="คลิกเพื่อดูหรือเลือกแพ็กเกจการใช้งาน"
+            onClick={() => {
+              if (effectiveUserRole === 'owner') {
+                onNavigate('subscription');
+              }
+            }}
+            disabled={effectiveUserRole !== 'owner'}
+            className={`text-[11px] sm:text-xs font-black px-3.5 py-1.5 rounded-full flex items-center gap-1.5 transition-all ${effectiveUserRole === 'owner' ? 'cursor-pointer shadow-2xs hover:scale-105 active:scale-95' : 'cursor-default opacity-90'} ${effectiveRemainingDays !== null ? getRemainingDaysBadgeStyle(effectiveRemainingDays) : 'bg-white/20 text-white font-black border border-white/20'}`}
+            title={effectiveUserRole === 'owner' ? 'คลิกเพื่อดูหรือเลือกแพ็กเกจการใช้งาน' : 'เวลาใช้งานคงเหลือของหอพัก'}
           >
             <span>{isSubscriptionLoading ? '--' : entitlements?.plan?.code === 'FREE' || subscriptionQuery.data?.plan?.code === 'FREE' || effectiveRemainingDays === null ? 'FREE (ถาวร)' : `${effectiveRemainingDays} วัน`}</span>
           </button>
