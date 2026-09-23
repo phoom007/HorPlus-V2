@@ -157,7 +157,7 @@ export function createRateLimiterMiddleware(options: RateLimiterOptions = {}) {
   const maxRequests = options.maxRequests || 30;
 
   return (req: Request, res: Response, next: NextFunction) => {
-    const ip = req.ip || req.headers['x-forwarded-for'] || '127.0.0.1';
+    const ip = (req.ip || req.socket?.remoteAddress || '127.0.0.1').toString().trim();
     const key = `rate_limit:${req.path}:${ip}`;
 
     const allowed = defaultStore.isAllowed(key, maxRequests, windowMs);
@@ -187,7 +187,7 @@ export function createRateLimiterMiddleware(options: RateLimiterOptions = {}) {
  */
 export function createSlipUploadRateLimiter(store: DistributedRateLimiterStore = distributedRateLimiterStore) {
   return async (req: Request, res: Response, next: NextFunction) => {
-    const ip = (req.ip || req.headers['x-forwarded-for'] || '127.0.0.1').toString().split(',')[0].trim();
+    const ip = (req.ip || req.socket?.remoteAddress || '127.0.0.1').toString().trim();
     const requestId = (req.headers['x-request-id'] as string) || (req as any).id || 'req-unknown';
 
     let userId = (req as any).auth?.userId || (req as any).user?.id;
@@ -244,6 +244,64 @@ export function createSlipUploadRateLimiter(store: DistributedRateLimiterStore =
         error: {
           code: 'RATE_LIMIT_EXCEEDED',
           message: 'IP ของคุณส่งคำขอตรวจสอบสลิปถี่เกินไป (จำกัด 15 ครั้งต่อ 5 นาที) กรุณารอสักครู่แล้วลองใหม่อีกครั้ง',
+          fieldErrors: null,
+          requestId,
+          timestamp: new Date().toISOString(),
+        },
+      });
+    }
+
+    next();
+  };
+}
+
+/**
+ * Rate Limiter Middleware for Public Tenant Registration and Claim Endpoints:
+ * - 15 requests per 15 minutes per IP address
+ * - Protects /verify-claim, /complete-claim, and POST /tenant-registrations
+ */
+export function createTenantRegistrationRateLimiter(store: DistributedRateLimiterStore = distributedRateLimiterStore) {
+  return async (req: Request, res: Response, next: NextFunction) => {
+    const ip = (req.ip || req.socket?.remoteAddress || '127.0.0.1').toString().trim();
+    const requestId = (req.headers['x-request-id'] as string) || (req as any).id || 'req-unknown';
+
+    const key = `rate_limit:registration:ip:${ip}`;
+    const allowed = await store.isAllowed(key, 15, 15 * 60 * 1000);
+
+    if (!allowed) {
+      return res.status(429).json({
+        error: {
+          code: 'RATE_LIMIT_EXCEEDED',
+          message: 'คำขอลงทะเบียนหรือยืนยันสิทธิ์ถี่เกินไป กรุณารอ 15 นาทีแล้วลองใหม่อีกครั้ง',
+          fieldErrors: null,
+          requestId,
+          timestamp: new Date().toISOString(),
+        },
+      });
+    }
+
+    next();
+  };
+}
+
+/**
+ * Rate Limiter Middleware for LINE OA Webhook:
+ * - 120 requests per 1 minute per IP address
+ * - High threshold to handle burst traffic from LINE messaging without dropping events or blocking legitimate retries
+ */
+export function createLineWebhookRateLimiter(store: DistributedRateLimiterStore = distributedRateLimiterStore) {
+  return async (req: Request, res: Response, next: NextFunction) => {
+    const ip = (req.ip || req.socket?.remoteAddress || '127.0.0.1').toString().trim();
+    const requestId = (req.headers['x-request-id'] as string) || (req as any).id || 'req-unknown';
+
+    const key = `rate_limit:webhook:line:ip:${ip}`;
+    const allowed = await store.isAllowed(key, 120, 60 * 1000);
+
+    if (!allowed) {
+      return res.status(429).json({
+        error: {
+          code: 'RATE_LIMIT_EXCEEDED',
+          message: 'Webhook request limit exceeded. Please retry after a brief delay.',
           fieldErrors: null,
           requestId,
           timestamp: new Date().toISOString(),

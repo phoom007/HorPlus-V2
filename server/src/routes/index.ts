@@ -1,4 +1,5 @@
 import { Router, Request, Response } from 'express';
+import { createCsrfMiddleware } from '../middleware/csrf.js';
 import { AuthenticationService } from '../services/auth.service.js';
 import { OnboardingService } from '../services/onboarding.service.js';
 import { PlanService } from '../services/plan.service.js';
@@ -158,6 +159,7 @@ export function createApiRouter(deps: AppApiDependencies | AuthenticationService
     protectedRouter.use(requireSession);
     protectedRouter.use(resolveDormitoryContextMiddleware);
     protectedRouter.use(requireActiveDormitory);
+    protectedRouter.use(createCsrfMiddleware(fullDeps.authService));
 
     if (fullDeps.buildingService && fullDeps.roomService) {
       protectedRouter.use('/properties', createPropertyRouter(fullDeps.authService, fullDeps.buildingService, fullDeps.roomService));

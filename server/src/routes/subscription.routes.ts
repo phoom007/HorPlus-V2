@@ -297,6 +297,7 @@ export function createSubscriptionRouter(authService?: AuthenticationService): R
 
   router.post(
     '/payment/slip',
+    csrfMiddleware,
     slipUploadRateLimiter,
     handleUploadSingle,
     async (req: Request, res: Response, next: NextFunction) => {

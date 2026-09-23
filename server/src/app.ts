@@ -75,7 +75,8 @@ export function createApp(optionsOrAuth?: CreateAppOptions | AuthenticationServi
   app.disable('etag');
 
   if (env.TRUST_PROXY) {
-    app.set('trust proxy', true);
+    // SEC-12: Trust 1 hop (reverse proxy / Cloudflare tunnel) to prevent client-spoofed X-Forwarded-For headers
+    app.set('trust proxy', 1);
   }
 
   const isTestEnv = env.NODE_ENV === 'test' || process.env.VITEST === 'true';
@@ -199,20 +200,56 @@ export function createApp(optionsOrAuth?: CreateAppOptions | AuthenticationServi
       },
     })
   );
+  const isProduction = env.NODE_ENV === 'production';
+
   app.use(
     cors({
       origin: (origin, callback) => {
+        // Allow requests with no origin (e.g. mobile apps, curl, same-origin without Origin header)
         if (!origin) return callback(null, true);
-        if (env.CORS_ORIGINS.includes('*') || env.CORS_ORIGINS.includes(origin)) {
+
+        const normalizedOrigin = origin.trim();
+
+        // 1. Explicitly configured CORS_ORIGINS
+        if (env.CORS_ORIGINS.includes(normalizedOrigin)) {
           return callback(null, true);
         }
-        const publicOrigin = process.env.PUBLIC_APP_ORIGIN || process.env.PUBLIC_APP_URL || process.env.PUBLIC_WEBHOOK_ORIGIN;
-        if (publicOrigin && origin.startsWith(publicOrigin)) {
+
+        // Wildcard: allowed ONLY in non-production environments
+        if (!isProduction && env.CORS_ORIGINS.includes('*')) {
           return callback(null, true);
         }
-        if (origin.endsWith('.trycloudflare.com') || origin.includes('localhost:3001') || origin.includes('127.0.0.1:3001')) {
-          return callback(null, true);
+
+        // 2. Canonical Public App Origins (Exact Match only — prevent subdomain takeover / prefix bypass)
+        const publicCandidates = [
+          process.env.PUBLIC_APP_ORIGIN,
+          process.env.PUBLIC_APP_URL,
+          process.env.PUBLIC_WEBHOOK_ORIGIN,
+        ].filter(Boolean) as string[];
+
+        for (const candidate of publicCandidates) {
+          try {
+            const candidateUrl = new URL(candidate.trim());
+            if (candidateUrl.origin === normalizedOrigin) {
+              return callback(null, true);
+            }
+          } catch {
+            if (candidate.trim() === normalizedOrigin) {
+              return callback(null, true);
+            }
+          }
         }
+
+        // 3. Localhost and Cloudflare Tunnel origins: permitted ONLY in non-production environments
+        if (!isProduction) {
+          if (
+            normalizedOrigin.endsWith('.trycloudflare.com') ||
+            /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(normalizedOrigin)
+          ) {
+            return callback(null, true);
+          }
+        }
+
         return callback(new Error(`CORS policy blocked access from origin: ${origin}`));
       },
       credentials: true,

@@ -13,6 +13,7 @@ import { ApproveRegistrationSchema } from '../schemas/property-tenant-contract.s
 import { SignatureStorageService } from '../services/signature-storage.service.js';
 import { SessionTokenService } from '../services/session-token.service.js';
 import { getEnv } from '../config/env.js';
+import { createTenantRegistrationRateLimiter } from '../middleware/rate-limiter.js';
 
 export function createTenantRegistrationRouter(
   authService: AuthenticationService,
@@ -20,6 +21,7 @@ export function createTenantRegistrationRouter(
 ): Router {
   const router = Router();
   const requireSession = createRequireSessionMiddleware(authService);
+  const registrationRateLimiter = createTenantRegistrationRateLimiter();
 
   const getAuthoritativeDormitoryId = (req: Request): string => {
     const dormId = (req as any).dormitoryContext?.dormitoryId || req.auth?.dormitoryId;
@@ -164,7 +166,7 @@ export function createTenantRegistrationRouter(
     claimInput: z.string().trim().min(1, 'กรุณากรอกชื่อ-นามสกุล หรือ เบอร์โทรศัพท์'),
   });
 
-  router.post('/verify-claim', async (req: Request, res: Response) => {
+  router.post('/verify-claim', registrationRateLimiter, async (req: Request, res: Response) => {
     try {
       const parsed = VerifyClaimSchema.safeParse(req.body);
       if (!parsed.success) {
@@ -246,7 +248,7 @@ export function createTenantRegistrationRouter(
     lineFollowerId: z.string().optional(),
   });
 
-  router.post('/complete-claim', async (req: Request, res: Response) => {
+  router.post('/complete-claim', registrationRateLimiter, async (req: Request, res: Response) => {
     try {
       const parsed = CompleteClaimSchema.safeParse(req.body);
       if (!parsed.success) {
@@ -442,7 +444,7 @@ export function createTenantRegistrationRouter(
     return {};
   };
 
-  router.post('/', async (req: Request, res: Response) => {
+  router.post('/', registrationRateLimiter, async (req: Request, res: Response) => {
     try {
       const parseResult = CreateTenantRegistrationSchema.safeParse(req.body);
       if (!parseResult.success) {

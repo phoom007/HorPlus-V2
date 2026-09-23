@@ -15,6 +15,7 @@ import { requireDormitoryPermission } from '../middleware/permission.js';
 import { requireDormitoryWriteEntitlement } from '../middleware/entitlement.js';
 import { resolveAuthoritativeDormitoryContext } from '../middleware/dormitory-context.js';
 import { createCsrfMiddleware } from '../middleware/csrf.js';
+import { createLineWebhookRateLimiter } from '../middleware/rate-limiter.js';
 
 export function resolveWebhookBaseUrl(req: Request): string {
   const host = req.get('x-forwarded-host') || req.get('host');
@@ -48,6 +49,7 @@ export function createLineOaRoutes(
 
   const requireSession = authService.requireAuth();
   const csrfMiddleware = createCsrfMiddleware(authService);
+  const webhookRateLimiter = createLineWebhookRateLimiter();
 
   const getDormitoryId = async (req: Request): Promise<string> => {
     const context = (req as any).dormitoryContext || (await resolveAuthoritativeDormitoryContext(req));
@@ -125,6 +127,7 @@ export function createLineOaRoutes(
 
   publicRouter.post(
     '/line/webhook/:opaqueWebhookKey',
+    webhookRateLimiter,
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const opaqueKey = req.params.opaqueWebhookKey;

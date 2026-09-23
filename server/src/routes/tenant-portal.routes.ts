@@ -13,6 +13,7 @@ import { CreateCoOccupantSchema } from '../schemas/property-tenant-contract.sche
 import { isBillVisibleToTenant, getTenantRentCutoffDate } from '../utils/tenant-visibility.util.js';
 import { LocalStorageProvider } from '../services/local-storage.service.js';
 import { SignatureStorageService } from '../services/signature-storage.service.js';
+import { createCsrfMiddleware } from '../middleware/csrf.js';
 
 type TenantContextResult = {
   error?: undefined;
@@ -415,6 +416,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
 
   if (authService) {
     router.use(authService.requireAuth());
+    router.use(createCsrfMiddleware(authService));
   }
 
   // 0. Tenant Active Rooms & Available Rooms for Renting Additional Room

@@ -5,6 +5,7 @@ import { paymentService } from '../services/payment.service.js';
 import { localStorageProvider } from '../services/local-storage.service.js';
 import { AuthenticationService } from '../services/auth.service.js';
 import { createCsrfMiddleware } from '../middleware/csrf.js';
+import { createSlipUploadRateLimiter } from '../middleware/rate-limiter.js';
 import { requireDormitoryPermission } from '../middleware/permission.js';
 import { requireDormitoryWriteEntitlement } from '../middleware/entitlement.js';
 import { resolveAuthoritativeDormitoryContext } from '../middleware/dormitory-context.js';
@@ -100,6 +101,7 @@ export function createPaymentRouter(authService: AuthenticationService) {
   const router = Router();
   const requireAuth = authService.requireAuth();
   const requireCsrf = createCsrfMiddleware(authService);
+  const slipRateLimiter = createSlipUploadRateLimiter();
 
   const ensureTenant = async (req: Request, res: Response, dormitoryId: string) => {
     const auth = (req as any).auth;
@@ -397,7 +399,7 @@ export function createPaymentRouter(authService: AuthenticationService) {
   };
 
   // Tenant: create upload intent
-  router.post('/slip/intent', requireAuth, requireDormitoryWriteEntitlement, requireCsrf, async (req, res) => {
+  router.post('/slip/intent', slipRateLimiter, requireAuth, requireDormitoryWriteEntitlement, requireCsrf, async (req, res) => {
     try {
       const auth = (req as any).auth;
       const context = (req as any).dormitoryContext || (await resolveAuthoritativeDormitoryContext(req));
@@ -456,7 +458,7 @@ export function createPaymentRouter(authService: AuthenticationService) {
   });
 
   // Secure multipart upload
-  router.post('/slip/upload/:intentId', requireAuth, requireDormitoryWriteEntitlement, requireCsrf, upload.single('file'), async (req, res) => {
+  router.post('/slip/upload/:intentId', slipRateLimiter, requireAuth, requireDormitoryWriteEntitlement, requireCsrf, upload.single('file'), async (req, res) => {
     let objectKey: string | null = null;
     try {
       if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
@@ -522,7 +524,7 @@ export function createPaymentRouter(authService: AuthenticationService) {
   });
 
   // Tenant: Submit slip referencing intent
-  router.post('/slip/submit', requireAuth, requireDormitoryWriteEntitlement, requireCsrf, async (req, res) => {
+  router.post('/slip/submit', slipRateLimiter, requireAuth, requireDormitoryWriteEntitlement, requireCsrf, async (req, res) => {
     try {
       const auth = (req as any).auth;
       const context = (req as any).dormitoryContext || (await resolveAuthoritativeDormitoryContext(req));
@@ -861,7 +863,7 @@ export function createPaymentRouter(authService: AuthenticationService) {
   });
 
   // Tenant: Create upload intent for multiple bills combined with 1 slip
-  router.post('/combined-slip-intent', requireAuth, requireDormitoryWriteEntitlement, requireCsrf, async (req, res) => {
+  router.post('/combined-slip-intent', slipRateLimiter, requireAuth, requireDormitoryWriteEntitlement, requireCsrf, async (req, res) => {
     try {
       const auth = (req as any).auth;
       const context = (req as any).dormitoryContext || (await resolveAuthoritativeDormitoryContext(req));
@@ -893,7 +895,7 @@ export function createPaymentRouter(authService: AuthenticationService) {
   });
 
   // Tenant: Submit combined slip payment referencing intent
-  router.post('/submit-combined-slip', requireAuth, requireDormitoryWriteEntitlement, requireCsrf, async (req, res) => {
+  router.post('/submit-combined-slip', slipRateLimiter, requireAuth, requireDormitoryWriteEntitlement, requireCsrf, async (req, res) => {
     try {
       const auth = (req as any).auth;
       const context = (req as any).dormitoryContext || (await resolveAuthoritativeDormitoryContext(req));
