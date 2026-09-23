@@ -3,6 +3,7 @@ import { receiptService } from '../services/receipt.service.js';
 import { AuthenticationService } from '../services/auth.service.js';
 import { getPrismaClient } from '../db/prisma.js';
 import { renderReceiptHtml } from '../utils/receipt-html.util.js';
+import { AppError } from '../types/index.js';
 
 const prisma = getPrismaClient();
 
@@ -90,7 +91,12 @@ export function createReceiptRouter(authService: AuthenticationService) {
       const receipt = await receiptService.getReceipt(dormitoryId, receiptId);
       res.json(receipt);
     } catch (err: any) {
-      res.status(404).json({ error: err.message });
+      res.status(err.statusCode || 404).json({
+        error: {
+          code: err.errorCode || 'RECEIPT_NOT_FOUND',
+          message: err instanceof AppError ? err.message : 'ไม่พบข้อมูลใบเสร็จรับเงิน',
+        },
+      });
     }
   });
 
@@ -158,7 +164,7 @@ export function createReceiptRouter(authService: AuthenticationService) {
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
       res.send(html);
     } catch (err: any) {
-      res.status(400).send(err?.message || 'Error generating receipt HTML');
+      res.status(err.statusCode || 500).send('เกิดข้อผิดพลาดในการแสดงใบเสร็จรับเงิน');
     }
   };
 
@@ -185,7 +191,12 @@ export function createReceiptRouter(authService: AuthenticationService) {
       
       res.json(receipt);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      res.status(err.statusCode || 500).json({
+        error: {
+          code: err.errorCode || 'RECEIPT_NOT_FOUND',
+          message: err instanceof AppError ? err.message : 'เกิดข้อผิดพลาดในการดึงข้อมูลใบเสร็จรับเงิน',
+        },
+      });
     }
   });
 
@@ -212,7 +223,12 @@ export function createReceiptRouter(authService: AuthenticationService) {
       
       res.json(receipt);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      res.status(err.statusCode || 500).json({
+        error: {
+          code: err.errorCode || 'RECEIPT_NOT_FOUND',
+          message: err instanceof AppError ? err.message : 'เกิดข้อผิดพลาดในการดึงข้อมูลใบเสร็จรับเงิน',
+        },
+      });
     }
   });
 

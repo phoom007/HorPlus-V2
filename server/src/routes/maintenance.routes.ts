@@ -3,6 +3,12 @@ import { MaintenanceService } from '../services/maintenance.service.js';
 import { extractUnifiedActor } from '../middleware/unified-actor.middleware.js';
 import { requireDormitoryPermission } from '../middleware/permission.js';
 import { requireDormitoryWriteEntitlement } from '../middleware/entitlement.js';
+import { AppError } from '../types/index.js';
+
+function safeErrorMessage(err: any): string {
+  if (err instanceof AppError) return err.message;
+  return 'ระบบไม่สามารถดำเนินการได้ กรุณาลองใหม่อีกครั้ง';
+}
 
 export function createMaintenanceRouter(maintenanceService: MaintenanceService = new MaintenanceService()): Router {
   const router = Router();
@@ -108,7 +114,7 @@ export function createMaintenanceRouter(maintenanceService: MaintenanceService =
 
       res.status(201).json(request);
     } catch (err: any) {
-      res.status(500).json({ error: { message: err.message } });
+      res.status(err.statusCode || 500).json({ error: { code: err.errorCode || 'INTERNAL_ERROR', message: safeErrorMessage(err) } });
     }
   });
 
@@ -124,7 +130,7 @@ export function createMaintenanceRouter(maintenanceService: MaintenanceService =
 
       res.json(detail);
     } catch (err: any) {
-      res.status(500).json({ error: { message: err.message } });
+      res.status(err.statusCode || 500).json({ error: { code: err.errorCode || 'INTERNAL_ERROR', message: safeErrorMessage(err) } });
     }
   });
 
@@ -214,7 +220,7 @@ export function createMaintenanceRouter(maintenanceService: MaintenanceService =
       }
       res.status(204).send();
     } catch (err: any) {
-      res.status(500).json({ error: { message: err.message } });
+      res.status(err.statusCode || 500).json({ error: { code: err.errorCode || 'INTERNAL_ERROR', message: safeErrorMessage(err) } });
     }
   });
 
@@ -311,7 +317,7 @@ export function createMaintenanceRouter(maintenanceService: MaintenanceService =
 
       res.status(201).json(comment);
     } catch (err: any) {
-      res.status(500).json({ error: { message: err.message } });
+      res.status(err.statusCode || 500).json({ error: { code: err.errorCode || 'INTERNAL_ERROR', message: safeErrorMessage(err) } });
     }
   });
 
@@ -322,7 +328,7 @@ export function createMaintenanceRouter(maintenanceService: MaintenanceService =
       const cost = await maintenanceService.getCost(dormitoryId, req.params.requestId);
       res.json(cost || { laborCost: '0.00', materialCost: '0.00', otherCost: '0.00', totalCost: '0.00' });
     } catch (err: any) {
-      res.status(500).json({ error: { message: err.message } });
+      res.status(err.statusCode || 500).json({ error: { code: err.errorCode || 'INTERNAL_ERROR', message: safeErrorMessage(err) } });
     }
   });
 
@@ -342,7 +348,7 @@ export function createMaintenanceRouter(maintenanceService: MaintenanceService =
 
       res.json(updated);
     } catch (err: any) {
-      res.status(500).json({ error: { message: err.message } });
+      res.status(err.statusCode || 500).json({ error: { code: err.errorCode || 'INTERNAL_ERROR', message: safeErrorMessage(err) } });
     }
   });
 

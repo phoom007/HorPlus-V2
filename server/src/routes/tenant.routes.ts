@@ -188,7 +188,7 @@ export function createTenantRouter(
     logger.error(
       {
         err,
-        path: req.originalUrl,
+        path: (req.originalUrl || req.url || '').split('?')[0],
         method: req.method,
         code: err.code,
         message: err.message,

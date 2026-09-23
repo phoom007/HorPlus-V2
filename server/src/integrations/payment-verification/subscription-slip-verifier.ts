@@ -234,8 +234,18 @@ export class SubscriptionSlipVerifier implements ISubscriptionSlipVerifier {
     }
 
     // 7. Dimension 2: Receiver PromptPay / Account Validation
-    const promptPayId = process.env.PROMPTPAY_ID || '0935098808';
-    const accountName = process.env.PROMPTPAY_ACCOUNT_NAME || 'นายภูวนาท ทานาลาด';
+    const promptPayId = (
+      process.env.HORPLUS_PLATFORM_PROMPTPAY_ID ||
+      process.env.HORPLUS_PROMPTPAY_ID ||
+      process.env.PROMPTPAY_ID ||
+      '0935098808'
+    ).trim();
+    const accountName = (
+      process.env.HORPLUS_PLATFORM_ACCOUNT_NAME ||
+      process.env.HORPLUS_PROMPTPAY_NAME ||
+      process.env.PROMPTPAY_ACCOUNT_NAME ||
+      'นายภูวนาท ทานาลาด'
+    ).trim();
     const cleanPromptPay = cleanDigits(promptPayId);
 
     const receiverObj = slipData.receiver || {};

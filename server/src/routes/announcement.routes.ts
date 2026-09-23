@@ -3,6 +3,12 @@ import { AnnouncementService } from '../services/announcement.service.js';
 import { extractUnifiedActor } from '../middleware/unified-actor.middleware.js';
 import { requireDormitoryPermission } from '../middleware/permission.js';
 import { requireDormitoryWriteEntitlement } from '../middleware/entitlement.js';
+import { AppError } from '../types/index.js';
+
+function safeErrorMessage(err: any): string {
+  if (err instanceof AppError) return err.message;
+  return 'ระบบไม่สามารถดำเนินการได้ กรุณาลองใหม่อีกครั้ง';
+}
 
 export function createAnnouncementRouter(announcementService: AnnouncementService = new AnnouncementService()): Router {
   const router = Router();
@@ -43,7 +49,7 @@ export function createAnnouncementRouter(announcementService: AnnouncementServic
         total: result.total
       });
     } catch (err: any) {
-      res.status(500).json({ error: { message: err.message } });
+      res.status(err.statusCode || 500).json({ error: { code: err.errorCode || 'INTERNAL_ERROR', message: safeErrorMessage(err) } });
     }
   });
 
@@ -97,7 +103,7 @@ export function createAnnouncementRouter(announcementService: AnnouncementServic
 
       res.status(201).json(announcement);
     } catch (err: any) {
-      res.status(500).json({ error: { message: err.message } });
+      res.status(err.statusCode || 500).json({ error: { code: err.errorCode || 'INTERNAL_ERROR', message: safeErrorMessage(err) } });
     }
   });
 
@@ -114,7 +120,7 @@ export function createAnnouncementRouter(announcementService: AnnouncementServic
       const audiences = await announcementService.getRepository().getAudiences(dormitoryId, req.params.id);
       res.json({ announcement, audiences });
     } catch (err: any) {
-      res.status(500).json({ error: { message: err.message } });
+      res.status(err.statusCode || 500).json({ error: { code: err.errorCode || 'INTERNAL_ERROR', message: safeErrorMessage(err) } });
     }
   });
 
@@ -133,7 +139,8 @@ export function createAnnouncementRouter(announcementService: AnnouncementServic
 
       res.json(updated);
     } catch (err: any) {
-      res.status(err.message.includes('CANNOT_MODIFY') ? 400 : 500).json({ error: { message: err.message } });
+      const status = err.statusCode || (err.message?.includes('CANNOT_MODIFY') ? 400 : 500);
+      res.status(status).json({ error: { code: err.errorCode || 'INTERNAL_ERROR', message: status >= 500 ? safeErrorMessage(err) : err.message } });
     }
   });
 
@@ -149,7 +156,7 @@ export function createAnnouncementRouter(announcementService: AnnouncementServic
 
       res.status(204).send();
     } catch (err: any) {
-      res.status(500).json({ error: { message: err.message } });
+      res.status(err.statusCode || 500).json({ error: { code: err.errorCode || 'INTERNAL_ERROR', message: safeErrorMessage(err) } });
     }
   });
 
@@ -160,7 +167,7 @@ export function createAnnouncementRouter(announcementService: AnnouncementServic
       const preview = await announcementService.previewRecipients(dormitoryId, req.params.id);
       res.json(preview);
     } catch (err: any) {
-      res.status(500).json({ error: { message: err.message } });
+      res.status(err.statusCode || 500).json({ error: { code: err.errorCode || 'INTERNAL_ERROR', message: safeErrorMessage(err) } });
     }
   });
 
@@ -176,8 +183,8 @@ export function createAnnouncementRouter(announcementService: AnnouncementServic
 
       res.json(published);
     } catch (err: any) {
-      res.status(err.message.includes('ANNOUNCEMENT_ALREADY_PUBLISHED') ? 400 : 500)
-        .json({ error: { message: err.message } });
+      const status = err.statusCode || (err.message?.includes('ANNOUNCEMENT_ALREADY_PUBLISHED') ? 400 : 500);
+      res.status(status).json({ error: { code: err.errorCode || 'INTERNAL_ERROR', message: status >= 500 ? safeErrorMessage(err) : err.message } });
     }
   });
 
@@ -200,7 +207,7 @@ export function createAnnouncementRouter(announcementService: AnnouncementServic
 
       res.json(scheduled);
     } catch (err: any) {
-      res.status(400).json({ error: { message: err.message } });
+      res.status(err.statusCode || 400).json({ error: { code: err.errorCode || 'BAD_REQUEST', message: err instanceof AppError ? err.message : (err.message || 'เกิดข้อผิดพลาด') } });
     }
   });
 
@@ -211,7 +218,7 @@ export function createAnnouncementRouter(announcementService: AnnouncementServic
       const cancelled = await announcementService.cancelSchedule(dormitoryId, req.params.id);
       res.json(cancelled);
     } catch (err: any) {
-      res.status(400).json({ error: { message: err.message } });
+      res.status(err.statusCode || 400).json({ error: { code: err.errorCode || 'BAD_REQUEST', message: err instanceof AppError ? err.message : (err.message || 'เกิดข้อผิดพลาด') } });
     }
   });
 
@@ -222,7 +229,7 @@ export function createAnnouncementRouter(announcementService: AnnouncementServic
       const archived = await announcementService.archiveAnnouncement(dormitoryId, req.params.id);
       res.json(archived);
     } catch (err: any) {
-      res.status(500).json({ error: { message: err.message } });
+      res.status(err.statusCode || 500).json({ error: { code: err.errorCode || 'INTERNAL_ERROR', message: safeErrorMessage(err) } });
     }
   });
 

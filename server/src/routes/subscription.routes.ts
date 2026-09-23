@@ -112,8 +112,8 @@ export function createSubscriptionRouter(authService?: AuthenticationService): R
     return res.json({
       success: true,
       data: {
-        promptPayId: process.env.HORPLUS_PROMPTPAY_ID || '0935098808',
-        accountName: process.env.HORPLUS_PROMPTPAY_NAME || 'นายภูวนาท ทานาลาด',
+        promptPayId: (process.env.HORPLUS_PLATFORM_PROMPTPAY_ID || process.env.HORPLUS_PROMPTPAY_ID || process.env.PROMPTPAY_ID || '0935098808').trim(),
+        accountName: (process.env.HORPLUS_PLATFORM_ACCOUNT_NAME || process.env.HORPLUS_PROMPTPAY_NAME || process.env.PROMPTPAY_ACCOUNT_NAME || 'นายภูวนาท ทานาลาด').trim(),
       },
     });
   });

@@ -14,6 +14,13 @@ import { isBillVisibleToTenant, getTenantRentCutoffDate } from '../utils/tenant-
 import { LocalStorageProvider } from '../services/local-storage.service.js';
 import { SignatureStorageService } from '../services/signature-storage.service.js';
 import { createCsrfMiddleware } from '../middleware/csrf.js';
+import { processAndSecureTenantIdCardImage } from '../services/image-security.service.js';
+import { AppError } from '../types/index.js';
+
+function safeTenantPortalErrorMessage(err: any): string {
+  if (err instanceof AppError) return err.message;
+  return 'ระบบไม่สามารถดำเนินการได้ กรุณาลองใหม่อีกครั้ง';
+}
 
 type TenantContextResult = {
   error?: undefined;
@@ -638,7 +645,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
         rooms: roomList
       });
     } catch (err: any) {
-      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message, requestId: req.requestId } });
+      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: safeTenantPortalErrorMessage(err), requestId: req.requestId } });
     }
   });
 
@@ -691,7 +698,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
         }))
       });
     } catch (err: any) {
-      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message, requestId: req.requestId } });
+      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: safeTenantPortalErrorMessage(err), requestId: req.requestId } });
     }
   });
 
@@ -793,7 +800,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
         }
       });
     } catch (err: any) {
-      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message, requestId: req.requestId } });
+      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: safeTenantPortalErrorMessage(err), requestId: req.requestId } });
     }
   });
 
@@ -980,7 +987,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
       });
     } catch (err: any) {
       return res.status(500).json({
-        error: { code: 'INTERNAL_ERROR', message: err.message, requestId: req.requestId }
+        error: { code: 'INTERNAL_ERROR', message: safeTenantPortalErrorMessage(err), requestId: req.requestId }
       });
     }
   });
@@ -1148,7 +1155,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
       });
     } catch (err: any) {
       return res.status(500).json({
-        error: { code: 'INTERNAL_ERROR', message: err.message, requestId: req.requestId }
+        error: { code: 'INTERNAL_ERROR', message: safeTenantPortalErrorMessage(err), requestId: req.requestId }
       });
     }
   });
@@ -1187,7 +1194,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
       });
     } catch (err: any) {
       return res.status(500).json({
-        error: { code: 'INTERNAL_ERROR', message: err.message, requestId: req.requestId }
+        error: { code: 'INTERNAL_ERROR', message: safeTenantPortalErrorMessage(err), requestId: req.requestId }
       });
     }
   });
@@ -1271,7 +1278,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
       return res.status(200).json({ data: formatted });
     } catch (err: any) {
       return res.status(500).json({
-        error: { code: 'INTERNAL_ERROR', message: err.message, requestId: req.requestId }
+        error: { code: 'INTERNAL_ERROR', message: safeTenantPortalErrorMessage(err), requestId: req.requestId }
       });
     }
   });
@@ -1346,7 +1353,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
       });
     } catch (err: any) {
       return res.status(500).json({
-        error: { code: 'INTERNAL_ERROR', message: err.message, requestId: req.requestId }
+        error: { code: 'INTERNAL_ERROR', message: safeTenantPortalErrorMessage(err), requestId: req.requestId }
       });
     }
   });
@@ -1400,7 +1407,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
       return res.status(200).send(svg);
     } catch (err: any) {
       return res.status(500).json({
-        error: { code: 'INTERNAL_ERROR', message: err.message, requestId: req.requestId }
+        error: { code: 'INTERNAL_ERROR', message: safeTenantPortalErrorMessage(err), requestId: req.requestId }
       });
     }
   });
@@ -1522,7 +1529,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
       });
     } catch (err: any) {
       return res.status(500).json({
-        error: { code: 'INTERNAL_ERROR', message: err.message, requestId: req.requestId }
+        error: { code: 'INTERNAL_ERROR', message: safeTenantPortalErrorMessage(err), requestId: req.requestId }
       });
     }
   });
@@ -1574,7 +1581,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
       return res.json({ success: true, data: formatted });
     } catch (err: any) {
       return res.status(500).json({
-        error: { code: 'INTERNAL_ERROR', message: err.message, requestId: req.requestId }
+        error: { code: 'INTERNAL_ERROR', message: safeTenantPortalErrorMessage(err), requestId: req.requestId }
       });
     }
   });
@@ -1614,7 +1621,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
       return res.json({ success: true, data: formatted });
     } catch (err: any) {
       return res.status(500).json({
-        error: { code: 'INTERNAL_ERROR', message: err.message, requestId: req.requestId }
+        error: { code: 'INTERNAL_ERROR', message: safeTenantPortalErrorMessage(err), requestId: req.requestId }
       });
     }
   });
@@ -1658,7 +1665,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
       });
     } catch (err: any) {
       return res.status(500).json({
-        error: { code: 'INTERNAL_ERROR', message: err.message, requestId: req.requestId }
+        error: { code: 'INTERNAL_ERROR', message: safeTenantPortalErrorMessage(err), requestId: req.requestId }
       });
     }
   });
@@ -1679,7 +1686,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
       const filtered = ctx.roomId ? requests.filter((r: any) => !r.roomId || r.roomId === ctx.roomId) : requests;
       return res.json({ success: true, data: filtered });
     } catch (err: any) {
-      return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message, requestId: req.requestId } });
+      return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: safeTenantPortalErrorMessage(err), requestId: req.requestId } });
     }
   });
 
@@ -1717,7 +1724,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
 
       return res.status(201).json({ success: true, data: request });
     } catch (err: any) {
-      return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message, requestId: req.requestId } });
+      return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: safeTenantPortalErrorMessage(err), requestId: req.requestId } });
     }
   });
 
@@ -1736,7 +1743,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
 
       return res.json({ success: true, data: detail });
     } catch (err: any) {
-      return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message, requestId: req.requestId } });
+      return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: safeTenantPortalErrorMessage(err), requestId: req.requestId } });
     }
   });
 
@@ -1764,7 +1771,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
 
       return res.status(201).json({ success: true, data: comment });
     } catch (err: any) {
-      return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message, requestId: req.requestId } });
+      return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: safeTenantPortalErrorMessage(err), requestId: req.requestId } });
     }
   });
 
@@ -1794,7 +1801,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
       const list = await announcementService.getTenantAnnouncements(ctx.dormitoryId, ctx.tenant.id);
       return res.json({ success: true, data: list });
     } catch (err: any) {
-      return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message, requestId: req.requestId } });
+      return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: safeTenantPortalErrorMessage(err), requestId: req.requestId } });
     }
   });
 
@@ -1813,7 +1820,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
 
       return res.json({ success: true, data: announcement });
     } catch (err: any) {
-      return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message, requestId: req.requestId } });
+      return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: safeTenantPortalErrorMessage(err), requestId: req.requestId } });
     }
   });
 
@@ -1827,7 +1834,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
       const result = await announcementService.markAsReadByTenant(ctx.dormitoryId, req.params.id, ctx.tenant.id);
       return res.json({ success: true, data: result });
     } catch (err: any) {
-      return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message, requestId: req.requestId } });
+      return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: safeTenantPortalErrorMessage(err), requestId: req.requestId } });
     }
   });
 
@@ -1841,7 +1848,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
       const count = await announcementService.markAllAsReadByTenant(ctx.dormitoryId, ctx.tenant.id);
       return res.json({ success: true, data: { markedCount: count } });
     } catch (err: any) {
-      return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message, requestId: req.requestId } });
+      return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: safeTenantPortalErrorMessage(err), requestId: req.requestId } });
     }
   });
 
@@ -2042,7 +2049,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
       return res.send(pdfBuffer);
     } catch (err: any) {
       return res.status(500).json({
-        error: { code: 'INTERNAL_ERROR', message: err.message, requestId: req.requestId }
+        error: { code: 'INTERNAL_ERROR', message: safeTenantPortalErrorMessage(err), requestId: req.requestId }
       });
     }
   });
@@ -2078,7 +2085,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
       res.setHeader('Content-Disposition', `${dispositionType}; filename="IDCard-${safeId}.pdf"`);
       return res.send(pdfBuffer);
     } catch (err: any) {
-      return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message, requestId: req.requestId } });
+      return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: safeTenantPortalErrorMessage(err), requestId: req.requestId } });
     }
   });
 
@@ -2115,7 +2122,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
       }
       return res.status(404).json({ error: { code: 'NO_ID_CARD', message: 'ผู้เช่ายังไม่ได้อัปโหลดเอกสารสำเนาบัตรประชาชน' } });
     } catch (err: any) {
-      return res.status(404).json({ error: { code: 'ID_CARD_NOT_FOUND', message: err.message || 'ไม่พบรูปถ่ายสำเนาบัตรประชาชน' } });
+      return res.status(404).json({ error: { code: 'ID_CARD_NOT_FOUND', message: err instanceof AppError ? err.message : 'ไม่พบรูปถ่ายสำเนาบัตรประชาชน' } });
     }
   });
 
@@ -2133,21 +2140,25 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
         buffer = Buffer.from(base64Data, 'base64');
       }
 
-      if (!buffer) {
+      if (!buffer || buffer.length === 0) {
         return res.status(400).json({ error: { code: 'INVALID_IMAGE', message: 'กรุณาเลือกไฟล์ภาพสำเนาบัตรประชาชน' } });
       }
 
+      // Process and secure tenant ID card image (magic bytes check, decompression bomb protection, EXIF stripping, WebP normalization)
+      const secured = await processAndSecureTenantIdCardImage(buffer);
+
       const storage = new LocalStorageProvider();
-      const objectKey = `tenants/${ctx.dormitoryId}/${ctx.tenant.id}/id-card-${Date.now()}.jpg`;
-      await storage.saveFile(objectKey, buffer);
+      const objectKey = `private/${ctx.dormitoryId}/tenants/${ctx.tenant.id}/id-card-${Date.now()}${secured.extension}`;
+      await storage.saveFile(objectKey, secured.buffer);
 
       const uploadedAt = new Date();
       await prisma.tenant.update({
         where: { id: ctx.tenant.id },
         data: {
           idCardObjectKey: objectKey,
-          idCardMimeType: 'image/jpeg',
-          idCardByteSize: buffer.length,
+          idCardMimeType: secured.mimeType,
+          idCardByteSize: secured.byteSize,
+          idCardSha256: secured.sha256,
           idCardUploadedAt: uploadedAt,
         }
       });
@@ -2161,7 +2172,15 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
         }
       });
     } catch (err: any) {
-      return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message } });
+      const status = err.statusCode || (err instanceof AppError ? err.statusCode : 500);
+      const code = err.errorCode || (err instanceof AppError ? err.errorCode : 'INTERNAL_ERROR');
+      return res.status(status).json({
+        error: {
+          code,
+          message: err instanceof AppError ? err.message : 'ระบบไม่สามารถดำเนินการได้ กรุณาลองใหม่อีกครั้ง',
+          requestId: req.requestId
+        }
+      });
     }
   });
 
@@ -2305,7 +2324,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
 
       return res.json({ data: notices });
     } catch (err: any) {
-      return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message, requestId: req.requestId } });
+      return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: safeTenantPortalErrorMessage(err), requestId: req.requestId } });
     }
   });
 
@@ -2332,7 +2351,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
 
       return res.json({ data: updated });
     } catch (err: any) {
-      return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message, requestId: req.requestId } });
+      return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: safeTenantPortalErrorMessage(err), requestId: req.requestId } });
     }
   });
 
@@ -2351,7 +2370,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
 
       return res.json({ data: { markedCount: resUpdate.count } });
     } catch (err: any) {
-      return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message, requestId: req.requestId } });
+      return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: safeTenantPortalErrorMessage(err), requestId: req.requestId } });
     }
   });
 
@@ -2382,7 +2401,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
         peopleCount: householdCount,
       });
     } catch (err: any) {
-      return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: err.message, requestId: req.requestId } });
+      return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: safeTenantPortalErrorMessage(err), requestId: req.requestId } });
     }
   });
 

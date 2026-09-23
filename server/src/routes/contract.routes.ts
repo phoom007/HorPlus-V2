@@ -53,13 +53,40 @@ export function createContractRouter(
   };
 
   const handleServiceError = (res: Response, err: any, req: Request) => {
-    const statusCode = err.statusCode || err.status || 500;
+    let statusCode = err.statusCode || err.status || 500;
+    let code = err.code || 'CONTRACT_OPERATION_FAILED';
+    let message = err.message || 'เกิดข้อผิดพลาดในการจัดการสัญญาเช่า';
+
+    if (err.code === 'P2023' || (err.message && (err.message.includes('Malformed UUID') || err.message.includes('invalid input syntax for type uuid')))) {
+      statusCode = 400;
+      code = 'INVALID_ID_FORMAT';
+      message = 'รหัสระบุตัวตน (ID) ไม่ถูกต้องตามรูปแบบ UUID';
+    } else if (err.code === 'P2025') {
+      statusCode = 404;
+      code = 'NOT_FOUND';
+      message = 'ไม่พบข้อมูลที่ต้องการในระบบ';
+    } else if (err.code === 'P2003') {
+      statusCode = 400;
+      code = 'FOREIGN_KEY_VIOLATION';
+      message = 'ข้อมูลอ้างอิงไม่ถูกต้องหรือไม่พบในระบบ';
+    } else if (
+      statusCode >= 500 ||
+      err.message?.includes('Prisma') ||
+      err.message?.includes('SELECT ') ||
+      err.message?.includes('database') ||
+      err.message?.includes('connection')
+    ) {
+      statusCode = 500;
+      code = 'INTERNAL_ERROR';
+      message = 'ระบบไม่สามารถดำเนินการได้ กรุณาลองใหม่อีกครั้ง';
+    }
+
     res.status(statusCode).json({
       error: {
-        code: err.code || 'CONTRACT_OPERATION_FAILED',
-        message: err.message || 'เกิดข้อผิดพลาดในการจัดการสัญญาเช่า',
+        code,
+        message,
         fieldErrors: err.fieldErrors || null,
-        requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+        requestId: (req.headers['x-request-id'] as string) || (req as any).id || 'req-unknown',
         timestamp: new Date().toISOString(),
       },
     });

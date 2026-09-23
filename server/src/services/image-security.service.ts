@@ -124,7 +124,7 @@ export async function processAndSecureTenantDocument(rawBuffer: Buffer): Promise
     header.startsWith('\x7fELF') ||
     header.startsWith('PK\x03\x04')
   ) {
-    throw new AppError('Unsupported or invalid file format. Only JPEG, PNG, WebP, and PDF are allowed.', 400, 'INVALID_DOCUMENT_FORMAT');
+    throw new AppError('รูปแบบไฟล์ไม่ถูกต้อง รองรับเฉพาะ JPEG, PNG, WebP หรือ PDF เท่านั้น', 400, 'INVALID_DOCUMENT_FORMAT');
   }
 
   // Verify raster image magic bytes
@@ -135,7 +135,7 @@ export async function processAndSecureTenantDocument(rawBuffer: Buffer): Promise
     rawBuffer.subarray(8, 12).toString('ascii') === 'WEBP';
 
   if (!isJpeg && !isPng && !isWebp) {
-    throw new AppError('Unsupported or invalid image format. Only JPEG, PNG, WebP, and PDF are allowed.', 400, 'INVALID_IMAGE_FORMAT');
+    throw new AppError('รูปแบบไฟล์รูปภาพไม่ถูกต้อง รองรับเฉพาะ JPEG, PNG หรือ WebP เท่านั้น', 400, 'INVALID_IMAGE_FORMAT');
   }
 
   let image: sharp.Sharp;
@@ -150,27 +150,27 @@ export async function processAndSecureTenantDocument(rawBuffer: Buffer): Promise
     metadata = await image.metadata();
   } catch (err: any) {
     if (err?.message?.includes('Input image exceeds pixel limit') || err?.message?.includes('pixel limit')) {
-      throw new AppError('Image pixel count exceeds maximum allowable limit (Decompression Bomb Protection)', 400, 'PIXEL_LIMIT_EXCEEDED');
+      throw new AppError('ขนาดพิกเซลของรูปภาพเกินกำหนด (ป้องกัน Decompression Bomb)', 400, 'PIXEL_LIMIT_EXCEEDED');
     }
-    throw new AppError('Failed to decode image. Corrupted or invalid format.', 400, 'INVALID_IMAGE_FORMAT');
+    throw new AppError('ไม่สามารถอ่านไฟล์รูปภาพได้ ไฟล์อาจเสียหายหรือไม่ถูกต้อง', 400, 'INVALID_IMAGE_FORMAT');
   }
 
   const format = metadata.format;
   if (!format || !['jpeg', 'png', 'webp'].includes(format)) {
-    throw new AppError(`Unsupported image format: ${format || 'unknown'}. Only JPEG, PNG, and WebP are allowed.`, 400, 'INVALID_IMAGE_FORMAT');
+    throw new AppError('รูปแบบไฟล์รูปภาพไม่ถูกต้อง รองรับเฉพาะ JPEG, PNG หรือ WebP เท่านั้น', 400, 'INVALID_IMAGE_FORMAT');
   }
 
   const { width, height } = metadata;
   if (!width || !height || width < 1 || height < 1) {
-    throw new AppError('Invalid image dimensions', 400, 'INVALID_IMAGE_DIMENSIONS');
+    throw new AppError('ขนาดมิติของรูปภาพไม่ถูกต้อง', 400, 'INVALID_IMAGE_DIMENSIONS');
   }
 
   if (width > MAX_SOURCE_DIMENSION || height > MAX_SOURCE_DIMENSION) {
-    throw new AppError(`Image dimensions (${width}x${height}) exceed maximum allowed ${MAX_SOURCE_DIMENSION}x${MAX_SOURCE_DIMENSION}`, 400, 'DIMENSIONS_EXCEEDED');
+    throw new AppError(`ขนาดมิติของรูปภาพ (${width}x${height}) เกินขีดจำกัดสูงสุด ${MAX_SOURCE_DIMENSION}x${MAX_SOURCE_DIMENSION}`, 400, 'DIMENSIONS_EXCEEDED');
   }
 
   if (width * height > MAX_INPUT_PIXELS) {
-    throw new AppError(`Total image pixels (${width * height}) exceed maximum allowed limit of ${MAX_INPUT_PIXELS}`, 400, 'PIXEL_LIMIT_EXCEEDED');
+    throw new AppError('จำนวนพิกเซลของรูปภาพเกินขีดจำกัดความปลอดภัยสูงสุด', 400, 'PIXEL_LIMIT_EXCEEDED');
   }
 
   // Re-encode & Strip all EXIF / GPS / metadata into clean WebP

@@ -152,7 +152,7 @@ export async function resolveDormitoryContextMiddleware(req: Request, res: Respo
     (req as any).dormitoryContext = context;
     next();
   } catch (err: any) {
-    console.error('[RESOLVE DORM CONTEXT ERROR]', { path: req.originalUrl, code: err.code, message: err.message });
+    console.error('[RESOLVE DORM CONTEXT ERROR]', { path: (req.originalUrl || req.url || '').split('?')[0], code: err.code, message: err.message });
     next(err);
   }
 }
