@@ -8,6 +8,7 @@ import { Decimal } from 'decimal.js';
 import { AppError } from '../types/index.js';
 import { computeCanonicalAllocationPlan } from './allocation.util.js';
 import { calculateCategoryStrictVat } from './monthly-utility-calculator.util.js';
+import { auditService } from '../services/audit.service.js';
 
 export interface RecordCashPaymentInTxInput {
   dormitoryId: string;
@@ -283,6 +284,30 @@ export async function recordCashPaymentInTx(
     });
   }
 
+  await auditService.recordMutation({
+    dormitoryId: input.dormitoryId,
+    actorUserId: safeUserId,
+    action: 'PAYMENT_CASH_RECORDED',
+    entityType: 'PAYMENT',
+    entityId: payment.id,
+    beforeValues: {
+      billId: bill.id,
+      status: prePaymentStatus,
+      paidAmount: existingPaidAmount.toFixed(2),
+      outstandingAmount: currentOutstanding.toFixed(2),
+    },
+    afterValues: {
+      billId: bill.id,
+      paymentId: payment.id,
+      receiptId: receipt?.id || null,
+      status: newStatus,
+      amount: submitAmount.toFixed(2),
+      paidAmount: newPaidAmount.toFixed(2),
+      outstandingAmount: newOutstandingAmount.toFixed(2),
+    },
+    tx,
+  });
+
   return {
     ...payment,
     group,
@@ -553,6 +578,25 @@ export async function recordCombinedCashPaymentInTx(
       });
     }
   }
+
+  await auditService.recordMutation({
+    dormitoryId: input.dormitoryId,
+    actorUserId: safeUserId,
+    action: 'COMBINED_CASH_PAYMENT_RECORDED',
+    entityType: 'CombinedPaymentGroup',
+    entityId: group.id,
+    afterValues: {
+      groupId: group.id,
+      receiptId: receipt?.id || null,
+      totalAmount: submitAmount.toFixed(2),
+      affectedBills: plan.affectedBills.map((b) => ({
+        id: b.id,
+        status: b.newStatus,
+        allocatedAmount: b.allocatedAmount.toFixed(2),
+      })),
+    },
+    tx,
+  });
 
   return {
     group,

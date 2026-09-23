@@ -724,7 +724,7 @@ model AuditLog {
   idempotencyKey String?  @map("idempotency_key") @db.VarChar(255)
   createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz()
 
-  dormitory Dormitory @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
+  dormitory Dormitory @relation(fields: [dormitoryId], references: [id], onDelete: Restrict)
 
   @@index([dormitoryId])
   @@index([entityType, entityId])

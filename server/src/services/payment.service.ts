@@ -27,6 +27,7 @@ import {
   GroupReceiptBillSnapshot,
 } from '../utils/payment-transaction.util.js';
 import { paymentVerificationService } from './payment-verification.service.js';
+import { auditService } from './audit.service.js';
 
 export class PaymentService {
   private client: ReturnType<typeof getPrismaClient>;
@@ -947,6 +948,25 @@ export class PaymentService {
             }
           }
 
+          await auditService.recordMutation({
+            dormitoryId: input.dormitoryId,
+            actorUserId: safeUserId,
+            action: 'PAYMENT_GROUP_APPROVED',
+            entityType: 'CombinedPaymentGroup',
+            entityId: group.id,
+            beforeValues: {
+              status: group.status,
+              totalAmount: group.totalAmount ? group.totalAmount.toString() : null,
+            },
+            afterValues: {
+              status: 'APPROVED',
+              receiptId: receipt?.id || null,
+              totalAmount: groupTotal.toFixed(2),
+              notes: input.notes || null,
+            },
+            tx,
+          });
+
           return {
             group: updatedGroup,
             receipt,
@@ -1043,6 +1063,24 @@ export class PaymentService {
 
           // DECISION C: Bill balances/status were never mutated during review,
           // so rejection leaves Bill financial state untouched.
+
+          await auditService.recordMutation({
+            dormitoryId: input.dormitoryId,
+            actorUserId: safeUserId,
+            action: 'PAYMENT_GROUP_REJECTED',
+            entityType: 'CombinedPaymentGroup',
+            entityId: group.id,
+            reason: input.reason,
+            beforeValues: {
+              status: group.status,
+            },
+            afterValues: {
+              status: 'REJECTED',
+              reason: input.reason,
+              notes: input.notes || null,
+            },
+            tx,
+          });
 
           return { success: true, groupId: group.id };
         });
@@ -1207,6 +1245,23 @@ export class PaymentService {
               },
             });
           }
+
+          await auditService.recordMutation({
+            dormitoryId: input.dormitoryId,
+            actorUserId: safeUserId,
+            action: 'PAYMENT_GROUP_REVERSED',
+            entityType: 'CombinedPaymentGroup',
+            entityId: group.id,
+            reason: input.reason,
+            beforeValues: {
+              status: group.status,
+            },
+            afterValues: {
+              status: 'REVERSED',
+              reason: input.reason,
+            },
+            tx,
+          });
 
           return { success: true, groupId: group.id };
         });
@@ -1393,6 +1448,26 @@ export class PaymentService {
             });
           }
 
+          await auditService.recordMutation({
+            dormitoryId: input.dormitoryId,
+            actorUserId: safeUserId,
+            action: 'PAYMENT_APPROVED',
+            entityType: 'PAYMENT',
+            entityId: payment.id,
+            beforeValues: {
+              status: payment.status,
+              amount: payment.amount ? payment.amount.toString() : null,
+              billId: payment.billId,
+            },
+            afterValues: {
+              status: 'APPROVED',
+              amount: payment.amount ? payment.amount.toString() : null,
+              billId: payment.billId,
+              notes: input.notes || null,
+            },
+            tx,
+          });
+
           return updatedPayment;
         });
       },
@@ -1463,6 +1538,25 @@ export class PaymentService {
 
           // DECISION C: Bill balances/status were never mutated during review,
           // so single rejection leaves Bill financial state untouched.
+
+          await auditService.recordMutation({
+            dormitoryId: input.dormitoryId,
+            actorUserId: safeUserId,
+            action: 'PAYMENT_REJECTED',
+            entityType: 'PAYMENT',
+            entityId: payment.id,
+            reason: input.reason,
+            beforeValues: {
+              status: payment.status,
+              amount: payment.amount ? payment.amount.toString() : null,
+              billId: payment.billId,
+            },
+            afterValues: {
+              status: 'REJECTED',
+              reason: input.reason,
+            },
+            tx,
+          });
 
           return updatedPayment;
         });
@@ -1602,6 +1696,25 @@ export class PaymentService {
               outstandingAmount: new Prisma.Decimal(newOutstanding.toFixed(2)),
               paidAt: newStatus === 'PAID' ? bill.paidAt : null,
             },
+          });
+
+          await auditService.recordMutation({
+            dormitoryId: input.dormitoryId,
+            actorUserId: safeUserId,
+            action: 'PAYMENT_REVERSED',
+            entityType: 'PAYMENT',
+            entityId: payment.id,
+            reason: input.reason,
+            beforeValues: {
+              status: payment.status,
+              amount: payment.amount ? payment.amount.toString() : null,
+              billId: payment.billId,
+            },
+            afterValues: {
+              status: 'REVERSED',
+              reason: input.reason,
+            },
+            tx,
           });
 
           return updatedPayment;

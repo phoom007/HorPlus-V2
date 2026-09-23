@@ -20,6 +20,7 @@ import { LocalStorageProvider } from './local-storage.service.js';
 import { DocumentPdfService } from './document-pdf.service.js';
 import crypto from 'crypto';
 import { getEnv } from '../config/env.js';
+import { auditService } from './audit.service.js';
 
 export interface ClaimVerificationTokenPayload {
   dormitoryId: string;
@@ -1746,6 +1747,46 @@ export class TenantRegistrationService {
         });
       }
 
+      await auditService.recordMutation({
+        dormitoryId,
+        actorUserId: safeActorId,
+        action: 'TENANT_REGISTRATION_APPROVED',
+        entityType: 'TenantRegistrationRequest',
+        entityId: req.id,
+        beforeValues: {
+          status: req.status,
+          requestedRoomId: req.requestedRoomId,
+        },
+        afterValues: {
+          status: 'approved',
+          tenantId: tenant.id,
+          contractId,
+          roomId: effectiveRoomId,
+        },
+        tx,
+      });
+
+      if (contractId) {
+        await auditService.recordMutation({
+          dormitoryId,
+          actorUserId: safeActorId,
+          action: 'CONTRACT_CREATED',
+          entityType: 'Contract',
+          entityId: contractId,
+          afterValues: {
+            contractId,
+            tenantId: tenant.id,
+            roomId: effectiveRoomId,
+            status: isFutureStartDate ? 'approved_scheduled' : 'active',
+            startDate: payload.startDate,
+            endDate: payload.endDate,
+            rentAmount: payload.rentAmount,
+            depositAmount: payload.depositAmount,
+          },
+          tx,
+        });
+      }
+
       return {
         request: updatedReq,
         tenant,
@@ -2076,6 +2117,43 @@ export class TenantRegistrationService {
         });
       }
 
+      await auditService.recordMutation({
+        dormitoryId,
+        actorUserId: req.reviewedByUserId || null,
+        action: 'TENANT_REGISTRATION_CONFIRMED',
+        entityType: 'TenantRegistrationRequest',
+        entityId: req.id,
+        beforeValues: {
+          status: req.status,
+        },
+        afterValues: {
+          status: 'approved',
+          tenantId: tenant.id,
+          contractId: contract.id,
+          roomId,
+        },
+        tx,
+      });
+
+      await auditService.recordMutation({
+        dormitoryId,
+        actorUserId: req.reviewedByUserId || null,
+        action: 'CONTRACT_CREATED',
+        entityType: 'Contract',
+        entityId: contract.id,
+        afterValues: {
+          contractId: contract.id,
+          tenantId: tenant.id,
+          roomId,
+          status: 'active',
+          startDate: approvedTerms.startDate,
+          endDate: approvedTerms.endDate,
+          rentAmount: approvedTerms.rentAmount,
+          depositAmount: approvedTerms.depositAmount,
+        },
+        tx,
+      });
+
       return {
         success: true,
         request: updatedReq,
@@ -2165,6 +2243,22 @@ export class TenantRegistrationService {
         reviewedAt: new Date(),
         reviewedByUserId: safeActorId,
         acceptanceSnapshot: updatedSnapshot,
+      },
+    });
+
+    await auditService.recordMutation({
+      dormitoryId,
+      actorUserId: safeActorId,
+      action: 'TENANT_REGISTRATION_REJECTED',
+      entityType: 'TenantRegistrationRequest',
+      entityId: req.id,
+      reason: reasonText,
+      beforeValues: {
+        status: req.status,
+      },
+      afterValues: {
+        status: 'rejected',
+        reason: reasonText,
       },
     });
 

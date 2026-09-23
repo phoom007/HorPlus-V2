@@ -1,5 +1,6 @@
 import { getPrismaClient } from '../db/prisma.js';
 import { logger } from '../config/logger.js';
+import { auditService } from './audit.service.js';
 
 export interface SubmitMoveOutRequestInput {
   dormitoryId: string;
@@ -402,6 +403,43 @@ export class MoveOutService {
           completedByUserId: reviewedByUserId,
           actualEndedAt: actualDate
         }
+      });
+
+      if (contractToClose) {
+        await auditService.recordMutation({
+          dormitoryId,
+          actorUserId: reviewedByUserId,
+          action: 'CONTRACT_TERMINATED',
+          entityType: 'Contract',
+          entityId: contractToClose.id,
+          reason: input.emergencyReason || reqRecord.reason || 'สิ้นสุดการเช่าพักอาศัย',
+          beforeValues: {
+            status: contractToClose.status,
+          },
+          afterValues: {
+            status: 'checked_out',
+            terminatedAt: actualDate.toISOString(),
+            reason: input.emergencyReason || reqRecord.reason || 'สิ้นสุดการเช่าพักอาศัย',
+          },
+          tx,
+        });
+      }
+
+      await auditService.recordMutation({
+        dormitoryId,
+        actorUserId: reviewedByUserId,
+        action: 'TENANT_MOVE_OUT_COMPLETED',
+        entityType: 'TenantMoveOutRequest',
+        entityId: reqRecord.id,
+        reason: input.emergencyReason || reqRecord.reason || null,
+        beforeValues: {
+          status: reqRecord.status,
+        },
+        afterValues: {
+          status: 'COMPLETED',
+          actualEndedAt: actualDate.toISOString(),
+        },
+        tx,
       });
 
       return { request: updatedRequest, occupancy: updatedOccupancy };
