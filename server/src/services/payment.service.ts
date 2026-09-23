@@ -28,6 +28,7 @@ import {
 } from '../utils/payment-transaction.util.js';
 import { paymentVerificationService } from './payment-verification.service.js';
 import { auditService } from './audit.service.js';
+import { PaymentEvidenceVerificationResult } from '../integrations/payment-verification/types.js';
 
 export class PaymentService {
   private client: ReturnType<typeof getPrismaClient>;
@@ -206,19 +207,35 @@ export class PaymentService {
             },
           });
 
-          // 3. Record untrusted verification metadata (Decision C)
+          // 3. Record verification metadata with SlipOK adapter
+          let verificationResult: PaymentEvidenceVerificationResult = {
+            provider: 'SLIPOK',
+            status: 'UNVERIFIED',
+            claimedTransferAt: input.paymentDate,
+            verifiedTransferAt: null,
+            verifiedAmount: null,
+            providerReference: null,
+            payloadHash: intent.sha256,
+            errorReason: null,
+          };
+          if (intent.objectKey) {
+            try {
+              verificationResult = await paymentVerificationService.verifyEvidence({
+                dormitoryId: input.dormitoryId,
+                evidenceObjectKey: intent.objectKey,
+                expectedAmount: new Decimal(submitAmount.toFixed(2)),
+                claimedTransferAt: input.paymentDate,
+                payloadHash: intent.sha256,
+              });
+            } catch (err: any) {
+              // Gracefully fallback to UNVERIFIED on external error
+            }
+          }
+
           await paymentVerificationService.recordVerificationInTx(tx, {
             dormitoryId: input.dormitoryId,
             paymentId: payment.id,
-            result: {
-              provider: 'NONE',
-              status: 'UNVERIFIED',
-              claimedTransferAt: input.paymentDate,
-              verifiedTransferAt: null,
-              verifiedAmount: null,
-              providerReference: null,
-              payloadHash: intent.sha256,
-            },
+            result: verificationResult,
           });
 
           // CRITICAL DECISION C: DO NOT MUTATE Bill.status TO UNDER_REVIEW
@@ -586,19 +603,35 @@ export class PaymentService {
             }
           }
 
-          // 4. Record untrusted verification metadata for group (Decision C)
+          // 4. Record verification metadata for group with SlipOK adapter
+          let groupVerificationResult: PaymentEvidenceVerificationResult = {
+            provider: 'SLIPOK',
+            status: 'UNVERIFIED',
+            claimedTransferAt: input.paymentDate,
+            verifiedTransferAt: null,
+            verifiedAmount: null,
+            providerReference: null,
+            payloadHash: intent.sha256,
+            errorReason: null,
+          };
+          if (intent.objectKey) {
+            try {
+              groupVerificationResult = await paymentVerificationService.verifyEvidence({
+                dormitoryId: input.dormitoryId,
+                evidenceObjectKey: intent.objectKey,
+                expectedAmount: submitAmount,
+                claimedTransferAt: input.paymentDate,
+                payloadHash: intent.sha256,
+              });
+            } catch (err: any) {
+              // Gracefully fallback to UNVERIFIED on external error
+            }
+          }
+
           await paymentVerificationService.recordVerificationInTx(tx, {
             dormitoryId: input.dormitoryId,
             paymentGroupId: group.id,
-            result: {
-              provider: 'NONE',
-              status: 'UNVERIFIED',
-              claimedTransferAt: input.paymentDate,
-              verifiedTransferAt: null,
-              verifiedAmount: null,
-              providerReference: null,
-              payloadHash: intent.sha256,
-            },
+            result: groupVerificationResult,
           });
 
           // CRITICAL DECISION C: DO NOT MUTATE Bill.status TO UNDER_REVIEW
@@ -627,6 +660,7 @@ export class PaymentService {
     groupId: string;
     userId: string;
     notes?: string;
+    overrideReason?: string;
     idempotencyKey?: string | null;
   }) {
     return await idempotencyService.runWithIdempotency({
@@ -659,6 +693,21 @@ export class PaymentService {
           }
           if (group.status !== 'PENDING' && group.status !== 'UNDER_REVIEW') {
             throw new AppError('สถานะกลุ่มรายการไม่ถูกต้องสำหรับการอนุมัติ', 400, 'INVALID_GROUP_STATE');
+          }
+
+          // SlipOK Override enforcement (REQUIREMENTS-LOCK §7)
+          let isOverride = false;
+          let verification: any = null;
+          if (group.method === 'BANK_TRANSFER' || group.method === 'PROMPTPAY') {
+            verification = await tx.paymentEvidenceVerification.findFirst({
+              where: { paymentGroupId: group.id },
+            });
+            if (!verification || verification.status !== 'VERIFIED') {
+              isOverride = true;
+              if (!input.overrideReason || !input.overrideReason.trim()) {
+                throw new AppError('ต้องระบุเหตุผลในการอนุมัติสลิปที่ไม่ผ่านการตรวจสอบ', 400, 'OVERRIDE_REASON_REQUIRED');
+              }
+            }
           }
 
           // 2. Deterministically lock all target Bills
@@ -813,12 +862,16 @@ export class PaymentService {
             : null;
 
           // 6. Update CombinedPaymentGroup
+          const existingGroupMeta = (group.metadata && typeof group.metadata === 'object') ? (group.metadata as any) : {};
+          const updatedGroupMeta = isOverride ? { ...existingGroupMeta, overrideReason: input.overrideReason?.trim() } : existingGroupMeta;
+
           const updatedGroup = await tx.combinedPaymentGroup.update({
             where: { id: group.id },
             data: {
               status: 'APPROVED',
               recordedByUserId: safeUserId,
               notes: input.notes || group.notes,
+              metadata: updatedGroupMeta,
             },
           });
 
@@ -828,12 +881,15 @@ export class PaymentService {
             let payment = group.payments.find((p: any) => p.billId === aff.id);
 
             if (payment) {
+              const existingChildMeta = (payment.metadata && typeof payment.metadata === 'object') ? (payment.metadata as any) : {};
+              const updatedChildMeta = isOverride ? { ...existingChildMeta, overrideReason: input.overrideReason?.trim() } : existingChildMeta;
               await tx.payment.update({
                 where: { id: payment.id },
                 data: {
                   status: 'APPROVED',
                   reviewedByUserId: safeUserId,
                   reviewedAt: now,
+                  metadata: updatedChildMeta,
                 },
               });
               await tx.paymentStatusHistory.create({
@@ -842,6 +898,7 @@ export class PaymentService {
                   paymentId: payment.id,
                   fromStatus: payment.status,
                   toStatus: 'APPROVED',
+                  reason: isOverride ? `SlipOK Override: ${input.overrideReason?.trim()}` : (input.notes || null),
                   changedByUserId: safeUserId,
                   effectiveAt: now,
                 },
@@ -859,6 +916,7 @@ export class PaymentService {
                   paymentDate: group.paymentDate || now,
                   reviewedByUserId: safeUserId,
                   reviewedAt: now,
+                  metadata: isOverride ? { overrideReason: input.overrideReason?.trim() } : undefined,
                 },
               });
               await tx.paymentStatusHistory.create({
@@ -867,6 +925,7 @@ export class PaymentService {
                   paymentId: payment.id,
                   fromStatus: null,
                   toStatus: 'APPROVED',
+                  reason: isOverride ? `SlipOK Override: ${input.overrideReason?.trim()}` : null,
                   changedByUserId: safeUserId,
                   effectiveAt: now,
                 },
@@ -951,18 +1010,21 @@ export class PaymentService {
           await auditService.recordMutation({
             dormitoryId: input.dormitoryId,
             actorUserId: safeUserId,
-            action: 'PAYMENT_GROUP_APPROVED',
+            action: isOverride ? 'PAYMENT_SLIPOK_OVERRIDE_APPROVED' : 'PAYMENT_GROUP_APPROVED',
             entityType: 'CombinedPaymentGroup',
             entityId: group.id,
             beforeValues: {
               status: group.status,
               totalAmount: group.totalAmount ? group.totalAmount.toString() : null,
+              verificationStatus: verification?.status || 'UNVERIFIED',
             },
             afterValues: {
               status: 'APPROVED',
               receiptId: receipt?.id || null,
               totalAmount: groupTotal.toFixed(2),
               notes: input.notes || null,
+              overrideReason: isOverride ? input.overrideReason?.trim() : null,
+              verificationStatus: verification?.status || 'UNVERIFIED',
             },
             tx,
           });
@@ -1277,6 +1339,7 @@ export class PaymentService {
     paymentId: string;
     userId: string;
     notes?: string;
+    overrideReason?: string;
     idempotencyKey?: string | null;
   }) {
     return await idempotencyService.runWithIdempotency({
@@ -1302,6 +1365,21 @@ export class PaymentService {
           if (payment.status === 'APPROVED') return payment;
           if (payment.status !== 'PENDING' && payment.status !== 'UNDER_REVIEW') {
             throw new AppError('สถานะรายการไม่ถูกต้อง', 400, 'INVALID_STATE');
+          }
+
+          // SlipOK Override enforcement (REQUIREMENTS-LOCK §7)
+          let isOverride = false;
+          let verification: any = null;
+          if (payment.method === 'BANK_TRANSFER' || payment.method === 'PROMPTPAY') {
+            verification = await tx.paymentEvidenceVerification.findFirst({
+              where: { paymentId: payment.id },
+            });
+            if (!verification || verification.status !== 'VERIFIED') {
+              isOverride = true;
+              if (!input.overrideReason || !input.overrideReason.trim()) {
+                throw new AppError('ต้องระบุเหตุผลในการอนุมัติสลิปที่ไม่ผ่านการตรวจสอบ', 400, 'OVERRIDE_REASON_REQUIRED');
+              }
+            }
           }
 
           if (!payment.billId) {
@@ -1373,12 +1451,16 @@ export class PaymentService {
             ],
           });
 
+          const existingMeta = (payment.metadata && typeof payment.metadata === 'object') ? (payment.metadata as any) : {};
+          const updatedMeta = isOverride ? { ...existingMeta, overrideReason: input.overrideReason?.trim() } : existingMeta;
+
           const updatedPayment = await tx.payment.update({
             where: { id: payment.id },
             data: {
               status: 'APPROVED',
               reviewedByUserId: safeUserId,
               reviewedAt: now,
+              metadata: updatedMeta,
             },
           });
 
@@ -1388,6 +1470,7 @@ export class PaymentService {
               paymentId: payment.id,
               fromStatus: payment.status,
               toStatus: 'APPROVED',
+              reason: isOverride ? `SlipOK Override: ${input.overrideReason?.trim()}` : (input.notes || null),
               changedByUserId: safeUserId,
               effectiveAt: now,
             },
@@ -1451,19 +1534,22 @@ export class PaymentService {
           await auditService.recordMutation({
             dormitoryId: input.dormitoryId,
             actorUserId: safeUserId,
-            action: 'PAYMENT_APPROVED',
+            action: isOverride ? 'PAYMENT_SLIPOK_OVERRIDE_APPROVED' : 'PAYMENT_APPROVED',
             entityType: 'PAYMENT',
             entityId: payment.id,
             beforeValues: {
               status: payment.status,
               amount: payment.amount ? payment.amount.toString() : null,
               billId: payment.billId,
+              verificationStatus: verification?.status || 'UNVERIFIED',
             },
             afterValues: {
               status: 'APPROVED',
               amount: payment.amount ? payment.amount.toString() : null,
               billId: payment.billId,
               notes: input.notes || null,
+              overrideReason: isOverride ? input.overrideReason?.trim() : null,
+              verificationStatus: verification?.status || 'UNVERIFIED',
             },
             tx,
           });

@@ -181,6 +181,16 @@ export function createPaymentRouter(authService: AuthenticationService) {
     const rawCode = err.code || (typeof err.message === 'string' ? err.message : '');
 
     switch (rawCode) {
+      case 'OVERRIDE_REASON_REQUIRED':
+        return res.status(400).json({
+          error: {
+            code: 'OVERRIDE_REASON_REQUIRED',
+            message: 'ต้องระบุเหตุผลในการอนุมัติสลิปที่ไม่ผ่านการตรวจสอบ',
+            fieldErrors: null,
+            requestId,
+            timestamp,
+          },
+        });
       case 'GROUP_REVERSAL_REQUIRED':
         return res.status(400).json({
           error: {
@@ -672,6 +682,8 @@ export function createPaymentRouter(authService: AuthenticationService) {
         dormitoryId,
         paymentId: req.params.paymentId,
         userId: auth.userId,
+        overrideReason: req.body?.overrideReason,
+        notes: req.body?.notes,
         idempotencyKey,
       });
 
@@ -948,6 +960,7 @@ export function createPaymentRouter(authService: AuthenticationService) {
           dormitoryId,
           groupId: req.params.id,
           userId: auth.userId,
+          overrideReason: req.body?.overrideReason,
           notes: req.body?.notes,
           idempotencyKey: (req.headers['x-idempotency-key'] || req.headers['idempotency-key']) as string | undefined,
         });

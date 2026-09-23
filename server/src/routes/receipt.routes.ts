@@ -80,6 +80,13 @@ export function createReceiptRouter(authService: AuthenticationService) {
             if (dinv?.dailyStay?.tenantId === tenant.id) {
               authorized = true;
             }
+          } else if (receiptRecord.paymentId) {
+            const p = await prisma.payment.findUnique({
+              where: { id: receiptRecord.paymentId },
+            });
+            if (p?.tenantId === tenant.id) {
+              authorized = true;
+            }
           }
         }
       }
@@ -140,6 +147,13 @@ export function createReceiptRouter(authService: AuthenticationService) {
               include: { dailyStay: true },
             });
             if (dinv?.dailyStay?.tenantId === tenant.id) {
+              authorized = true;
+            }
+          } else if (receiptRecord.paymentId) {
+            const p = await prisma.payment.findUnique({
+              where: { id: receiptRecord.paymentId },
+            });
+            if (p?.tenantId === tenant.id) {
               authorized = true;
             }
           }

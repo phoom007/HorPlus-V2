@@ -5,6 +5,7 @@
 
 import { getPrismaClient } from '../db/prisma.js';
 import { PaymentEvidenceVerifier, UnconfiguredPaymentEvidenceVerifier } from '../integrations/payment-verification/payment-evidence-verifier.js';
+import { SlipOkPaymentEvidenceVerifier } from '../integrations/payment-verification/slipok-adapter.js';
 import { PaymentEvidenceVerificationResult, VerifyEvidenceInput } from '../integrations/payment-verification/types.js';
 
 const prisma = getPrismaClient();
@@ -13,7 +14,7 @@ export class PaymentVerificationService {
   private verifier: PaymentEvidenceVerifier;
 
   constructor(verifier?: PaymentEvidenceVerifier) {
-    this.verifier = verifier ?? new UnconfiguredPaymentEvidenceVerifier();
+    this.verifier = verifier ?? new SlipOkPaymentEvidenceVerifier();
   }
 
   /**

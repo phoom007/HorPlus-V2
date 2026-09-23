@@ -700,6 +700,16 @@ export async function generateReceiptInTx(
   paymentGroupId?: string | null,
   customTotalAmount?: Decimal
 ) {
+  // Idempotency: prevent duplicate receipt creation for the same payment
+  if (paymentId && tx.receipt?.findFirst) {
+    const existingReceipt = await tx.receipt.findFirst({
+      where: { paymentId, dormitoryId },
+    });
+    if (existingReceipt) {
+      return existingReceipt;
+    }
+  }
+
   const today = new Date();
   const yearMonth = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, '0')}`;
 
@@ -889,6 +899,17 @@ export async function generateGroupReceiptInTx(params: {
   isHistoricalImport?: boolean;
 }) {
   const { tx, dormitoryId, paymentGroupId, totalAmount, userId } = params;
+
+  // Idempotency: prevent duplicate group receipt creation for the same payment group
+  if (paymentGroupId && tx.receipt?.findFirst) {
+    const existingReceipt = await tx.receipt.findFirst({
+      where: { paymentGroupId, dormitoryId },
+    });
+    if (existingReceipt) {
+      return existingReceipt;
+    }
+  }
+
   const today = new Date();
   const yearMonth = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, '0')}`;
 

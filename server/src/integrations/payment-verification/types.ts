@@ -21,7 +21,9 @@ export interface PaymentEvidenceVerificationResult {
 
 export interface VerifyEvidenceInput {
   dormitoryId: string;
-  evidenceObjectKey: string;
+  evidenceObjectKey?: string;
+  evidenceBuffer?: Buffer;
   expectedAmount?: Decimal;
   claimedTransferAt?: Date | null;
+  payloadHash?: string | null;
 }
