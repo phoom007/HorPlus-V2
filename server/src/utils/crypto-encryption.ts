@@ -5,13 +5,26 @@
 
 import crypto from 'crypto';
 
-const MASTER_ENCRYPTION_KEY_STRING =
-  process.env.APP_ENCRYPTION_KEY ||
-  process.env.LINE_ENCRYPTION_KEY ||
-  'horplus-default-secure-32byte-master-key-2026';
+export const DEFAULT_INSECURE_MASTER_KEY = 'horplus-default-secure-32byte-master-key-2026';
 
-function getMasterKey(): Buffer {
-  return crypto.createHash('sha256').update(MASTER_ENCRYPTION_KEY_STRING).digest();
+export function getMasterKeyString(): string {
+  const envKey = (process.env.APP_ENCRYPTION_KEY || process.env.LINE_ENCRYPTION_KEY || '').trim();
+  const isProduction = process.env.NODE_ENV === 'production';
+
+  if (isProduction) {
+    if (!envKey || envKey === DEFAULT_INSECURE_MASTER_KEY || envKey.length < 32) {
+      throw new Error(
+        'Production security violation: APP_ENCRYPTION_KEY or LINE_ENCRYPTION_KEY must not use default or weak value (min 32 characters).'
+      );
+    }
+    return envKey;
+  }
+
+  return envKey || DEFAULT_INSECURE_MASTER_KEY;
+}
+
+export function getMasterKey(): Buffer {
+  return crypto.createHash('sha256').update(getMasterKeyString()).digest();
 }
 
 /**

@@ -236,20 +236,11 @@ export const OwnerLoginPage: React.FC<OwnerLoginPageProps> = ({ onLoginSuccess }
             </div>
           )}
 
-          {/* Configuration Missing Banner (Fail-Closed) with Direct Entry Option */}
+          {/* Configuration Missing Banner (Fail-Closed) */}
           {!isGoogleConfigured && !errorMessage && (
-            <div className="space-y-3">
-              <div className="p-3 bg-amber-50 border border-amber-200/80 rounded-2xl text-xs text-amber-900 flex items-center gap-2 font-medium">
-                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
-                <span>Google Login ยังไม่ได้ตั้งค่า Client ID ในระบบ</span>
-              </div>
-              <a
-                href="/api/v1/auth/owner-direct-entry?grantId=423b38a0-596a-49aa-86ee-162f548411d0"
-                className="w-full py-3 px-4 bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white font-bold rounded-2xl text-center shadow-sm transition-all flex items-center justify-center gap-2 text-sm"
-              >
-                <Building2 className="w-4 h-4" />
-                <span>เข้าสู่ระบบจัดการหอพัก (TheRiCH Apartment)</span>
-              </a>
+            <div className="p-3 bg-amber-50 border border-amber-200/80 rounded-2xl text-xs text-amber-900 flex items-center gap-2 font-medium">
+              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+              <span>Google Login ยังไม่ได้ตั้งค่า Client ID ในระบบ กรุณาติดต่อผู้ดูแลระบบ</span>
             </div>
           )}
 

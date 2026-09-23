@@ -21,6 +21,26 @@ const googleAuthSchema = z.object({
   referralCode: z.string().optional(),
 });
 
+/**
+ * Sanitizes redirect target URLs to prevent open redirects.
+ * Only allows safe relative paths (e.g. '/owner/home') and rejects
+ * absolute URLs (http:, https:, protocol-relative //, javascript:, data:).
+ */
+export function sanitizeRedirectUrl(target: unknown, fallback: string): string {
+  if (typeof target !== 'string') return fallback;
+  const trimmed = target.trim();
+  if (!trimmed) return fallback;
+
+  // Must begin with a single '/' and not followed by another '/' or '\'
+  // Also forbid control characters and newlines
+  if (/^\/[^\/\\]/.test(trimmed) || trimmed === '/') {
+    if (/[\r\n\t]/.test(trimmed)) return fallback;
+    return trimmed;
+  }
+
+  return fallback;
+}
+
 export function createAuthRouter(authService: AuthenticationService): Router {
   const router = Router();
   const env = getEnv();
@@ -234,10 +254,10 @@ export function createAuthRouter(authService: AuthenticationService): Router {
     }
   });
 
-  // GET /api/v1/auth/dev-login or /owner-direct-entry (One-Click Direct Login for Dormitory Owner)
-  router.get(['/dev-login', '/owner-direct-entry'], async (req: Request, res: Response, next) => {
+  // GET /api/v1/auth/dev-login (One-Click Direct Login for Dormitory Owner - Dev/Test only)
+  router.get('/dev-login', async (req: Request, res: Response, next) => {
     try {
-      if (isProduction) {
+      if (process.env.NODE_ENV === 'production' || isProduction || env.NODE_ENV === 'production') {
         return res.status(404).json({ error: 'Not Found' });
       }
 
@@ -312,7 +332,7 @@ export function createAuthRouter(authService: AuthenticationService): Router {
             });
 
             const appUrl = resolveAppUrl(req);
-            const redirectUrl = (req.query.redirect as string) || `${appUrl}/owner/home`;
+            const redirectUrl = sanitizeRedirectUrl(req.query.redirect, `${appUrl}/owner/home`);
             return res.redirect(redirectUrl);
           }
         }
@@ -348,7 +368,7 @@ export function createAuthRouter(authService: AuthenticationService): Router {
       }
 
       const appUrl = resolveAppUrl(req);
-      const redirectUrl = (req.query.redirect as string) || `${appUrl}/owner/home`;
+      const redirectUrl = sanitizeRedirectUrl(req.query.redirect, `${appUrl}/owner/home`);
       return res.redirect(redirectUrl);
     } catch (err: any) {
       next(err);
@@ -358,7 +378,7 @@ export function createAuthRouter(authService: AuthenticationService): Router {
   // GET /api/v1/auth/dev-tenant-login (DEV ONLY: One-Click Local Login for Tenant Portal)
   router.get('/dev-tenant-login', async (req: Request, res: Response, next) => {
     try {
-      if (isProduction) {
+      if (process.env.NODE_ENV === 'production' || isProduction || env.NODE_ENV === 'production') {
         return res.status(404).json({ error: 'Not Found' });
       }
 
@@ -591,7 +611,7 @@ export function createAuthRouter(authService: AuthenticationService): Router {
       });
 
       const appUrl = resolveAppUrl(req);
-      const redirectUrl = (req.query.redirect as string) || `${appUrl}/tenant/dashboard`;
+      const redirectUrl = sanitizeRedirectUrl(req.query.redirect, `${appUrl}/tenant/dashboard`);
       return res.redirect(redirectUrl);
     } catch (err: any) {
       next(err);
@@ -601,7 +621,12 @@ export function createAuthRouter(authService: AuthenticationService): Router {
   // POST /api/v1/auth/e2e-login (TEST ONLY)
   router.post('/e2e-login', async (req: Request, res: Response, next) => {
     try {
-      if (isProd) {
+      if (
+        process.env.NODE_ENV === 'production' ||
+        isProduction ||
+        env.NODE_ENV === 'production' ||
+        (!env.E2E_TEST_MODE && process.env.NODE_ENV !== 'test' && env.NODE_ENV !== 'test')
+      ) {
         return res.status(404).json({ error: 'Not Found' });
       }
 
@@ -1007,7 +1032,7 @@ export function createAuthRouter(authService: AuthenticationService): Router {
       let isRegistered = false;
 
       if (targetFriendId) {
-        const existingTenant = await prisma.tenant.findFirst({
+        let existingTenant = await prisma.tenant.findFirst({
           where: {
             dormitoryId: invite.dormitoryId,
             lineFriendId: targetFriendId,
@@ -1015,6 +1040,35 @@ export function createAuthRouter(authService: AuthenticationService): Router {
             status: 'active',
           },
         });
+
+        if (!existingTenant) {
+          const reqWithApproved = await prisma.tenantRegistrationRequest.findFirst({
+            where: {
+              dormitoryId: invite.dormitoryId,
+              lineFollowerId: targetFriendId,
+              status: 'approved',
+              approvedTenantId: { not: null },
+            },
+            orderBy: { createdAt: 'desc' },
+          });
+          if (reqWithApproved?.approvedTenantId) {
+            existingTenant = await prisma.tenant.findFirst({
+              where: {
+                id: reqWithApproved.approvedTenantId,
+                dormitoryId: invite.dormitoryId,
+                deletedAt: null,
+                status: 'active',
+              },
+            });
+            if (existingTenant && !existingTenant.lineFriendId) {
+              await prisma.tenant.update({
+                where: { id: existingTenant.id },
+                data: { lineFriendId: targetFriendId },
+              });
+            }
+          }
+        }
+
         if (existingTenant) {
           isRegistered = true;
         } else {
@@ -1022,7 +1076,7 @@ export function createAuthRouter(authService: AuthenticationService): Router {
             where: {
               dormitoryId: invite.dormitoryId,
               lineFollowerId: targetFriendId,
-              status: { in: ['pending_owner_approval', 'awaiting_tenant_confirmation', 'approved'] },
+              status: { in: ['pending_owner_approval', 'awaiting_tenant_confirmation', 'approved', 'rejected'] },
             },
           });
           if (existingReq) {

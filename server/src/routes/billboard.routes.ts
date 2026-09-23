@@ -7,6 +7,9 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { getPrismaClient } from '../db/prisma.js';
+import { AuthenticationService } from '../services/auth.service.js';
+import { createRequireSessionMiddleware } from '../middleware/require-session.js';
+import { createCsrfMiddleware } from '../middleware/csrf.js';
 import { AppError } from '../types/index.js';
 
 const createBillboardSchema = z.object({
@@ -16,7 +19,7 @@ const createBillboardSchema = z.object({
   tag: z.string().optional().default('ป้ายประชาสัมพันธ์'),
 });
 
-const DEFAULT_BILLBOARD_ITEMS = [
+export const DEFAULT_BILLBOARD_ITEMS = [
   {
     imageUrl: '/billboards/1.jpg',
     title: 'หอพลัส+ เปิดทดลองฟรี 3 เดือน',
@@ -47,56 +50,76 @@ const DEFAULT_BILLBOARD_ITEMS = [
   },
 ];
 
-export function createBillboardRouter(): Router {
+/**
+ * Ensure default billboards exist in the database (Bootstrap utility)
+ */
+export async function ensureDefaultBillboards() {
+  const prisma = getPrismaClient();
+  const count = await prisma.platformBillboard.count({ where: { isActive: true } });
+  if (count === 0) {
+    for (const item of DEFAULT_BILLBOARD_ITEMS) {
+      await prisma.platformBillboard.create({
+        data: {
+          ...item,
+          isActive: true,
+        },
+      });
+    }
+  }
+}
+
+export function createBillboardRouter(authService?: AuthenticationService): Router {
   const router = Router();
   const prisma = getPrismaClient();
 
-  /**
-   * Ensure default billboards exist
-   */
-  async function ensureDefaultBillboards() {
-    const count = await prisma.platformBillboard.count({ where: { isActive: true } });
-    if (count === 0) {
-      for (const item of DEFAULT_BILLBOARD_ITEMS) {
-        await prisma.platformBillboard.create({
-          data: {
-            ...item,
-            isActive: true,
+  const requireSession = authService ? createRequireSessionMiddleware(authService) : null;
+  const csrfMiddleware = authService ? createCsrfMiddleware(authService) : null;
+
+  const requireMutationAuth = async (req: Request, res: Response, next: NextFunction) => {
+    if (!requireSession || !csrfMiddleware) {
+      return res.status(401).json({
+        error: { code: 'UNAUTHORIZED', message: 'กรุณาเข้าสู่ระบบ' },
+      });
+    }
+
+    return requireSession(req, res, () => {
+      return csrfMiddleware(req, res, () => {
+        // HorPlus platform billboards are global promotional announcements across all dormitories.
+        // There is currently no platform admin role in the system.
+        // As per audit SEC-06 and PO instructions, deny modification routes until platform role is introduced.
+        return res.status(403).json({
+          error: {
+            code: 'FORBIDDEN',
+            message: 'ไม่มีสิทธิ์จัดการป้ายประชาสัมพันธ์ของแพลตฟอร์ม',
           },
         });
-      }
-    } else {
-      // Auto-migrate legacy Unsplash billboards to local assets if present
-      const legacy = await prisma.platformBillboard.findMany({
-        where: { imageUrl: { contains: 'unsplash' } },
       });
-      if (legacy.length > 0) {
-        await prisma.platformBillboard.deleteMany({
-          where: { imageUrl: { contains: 'unsplash' } },
-        });
-        for (const item of DEFAULT_BILLBOARD_ITEMS) {
-          await prisma.platformBillboard.create({
-            data: {
-              ...item,
-              isActive: true,
-            },
-          });
-        }
-      }
-    }
-  }
+    });
+  };
 
   /**
    * GET /api/v1/billboard
-   * Returns all active billboards
+   * Returns all active billboards (Strictly read-only, no write/delete side-effects)
    */
   router.get('/', async (_req: Request, res: Response, next: NextFunction) => {
     try {
-      await ensureDefaultBillboards();
       const billboards = await prisma.platformBillboard.findMany({
         where: { isActive: true },
         orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
       });
+
+      if (billboards.length === 0) {
+        return res.json({
+          success: true,
+          data: DEFAULT_BILLBOARD_ITEMS.map((b, idx) => ({
+            id: `default-${idx + 1}`,
+            imageUrl: b.imageUrl,
+            title: b.title,
+            description: b.description || '',
+            tag: b.tag || 'ป้ายประชาสัมพันธ์',
+          })),
+        });
+      }
 
       res.json({
         success: true,
@@ -115,9 +138,9 @@ export function createBillboardRouter(): Router {
 
   /**
    * POST /api/v1/billboard
-   * Add a new 16:9 billboard
+   * Add a new 16:9 billboard (Protected: requires session + CSRF + admin)
    */
-  router.post('/', async (req: Request, res: Response, next: NextFunction) => {
+  router.post('/', requireMutationAuth, async (req: Request, res: Response, next: NextFunction) => {
     try {
       const body = createBillboardSchema.parse(req.body);
       const maxSortOrder = await prisma.platformBillboard.aggregate({
@@ -154,9 +177,9 @@ export function createBillboardRouter(): Router {
 
   /**
    * DELETE /api/v1/billboard/:id
-   * Delete a billboard (enforcing at least 1 remains)
+   * Delete a billboard (Protected: requires session + CSRF + admin)
    */
-  router.delete('/:id', async (req: Request, res: Response, next: NextFunction) => {
+  router.delete('/:id', requireMutationAuth, async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { id } = req.params;
       const count = await prisma.platformBillboard.count({ where: { isActive: true } });
@@ -179,9 +202,9 @@ export function createBillboardRouter(): Router {
 
   /**
    * POST /api/v1/billboard/reset
-   * Reset billboards to standard default items
+   * Reset billboards to standard default items (Protected: requires session + CSRF + admin)
    */
-  router.post('/reset', async (_req: Request, res: Response, next: NextFunction) => {
+  router.post('/reset', requireMutationAuth, async (_req: Request, res: Response, next: NextFunction) => {
     try {
       await prisma.platformBillboard.deleteMany({});
       for (const item of DEFAULT_BILLBOARD_ITEMS) {

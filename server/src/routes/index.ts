@@ -101,7 +101,7 @@ export function createApiRouter(deps: AppApiDependencies | AuthenticationService
   router.use('/subscription', createSubscriptionQuoteRouter(authService));
   router.use('/subscriptions', createSubscriptionQuoteRouter(authService));
   router.use('/referral', createReferralRouter(authService));
-  router.use('/billboard', createBillboardRouter());
+  router.use('/billboard', createBillboardRouter(authService));
   router.use('/', createUserRouter(authService));
 
   const prisma = getPrismaClient();

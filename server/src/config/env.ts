@@ -8,7 +8,7 @@ const envSchema = z.object({
   REDIS_URL: z.string().default('redis://localhost:6379'),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
   CORS_ORIGINS: z.string().default('http://localhost:5173,http://127.0.0.1:5173'),
-  BODY_LIMIT: z.string().default('1mb'),
+  BODY_LIMIT: z.string().default('25mb'),
   SHUTDOWN_TIMEOUT_MS: z.coerce.number().int().default(10000),
 
   // Auth & Session Configuration
@@ -26,7 +26,21 @@ const envSchema = z.object({
   // Sensitive Field Encryption Key
   FIELD_ENCRYPTION_KEY: z.string().min(32, 'FIELD_ENCRYPTION_KEY must be at least 32 characters').default('fedcba9876543210fedcba9876543210'),
   FIELD_ENCRYPTION_KEY_VERSION: z.coerce.number().int().default(1),
+
+  // Master Application / LINE Encryption Key
+  APP_ENCRYPTION_KEY: z.string().optional(),
+  LINE_ENCRYPTION_KEY: z.string().optional(),
 });
+
+export const INSECURE_DEFAULT_SECRETS = new Set([
+  '0123456789abcdef0123456789abcdef',
+  'csrf-secret-key-0123456789abcdef',
+  'fedcba9876543210fedcba9876543210',
+  'horplus-default-secure-32byte-master-key-2026',
+  'YOUR_SESSION_ENCRYPTION_KEY',
+  'YOUR_CSRF_SIGNING_KEY',
+  'YOUR_FIELD_ENCRYPTION_KEY',
+]);
 
 export type EnvConfig = {
   NODE_ENV: 'development' | 'test' | 'production';
@@ -52,6 +66,8 @@ export type EnvConfig = {
 
   FIELD_ENCRYPTION_KEY: string;
   FIELD_ENCRYPTION_KEY_VERSION: number;
+  APP_ENCRYPTION_KEY?: string;
+  LINE_ENCRYPTION_KEY?: string;
 };
 
 export function validateEnv(rawEnv: Record<string, string | undefined> = process.env): EnvConfig {
@@ -66,8 +82,27 @@ export function validateEnv(rawEnv: Record<string, string | undefined> = process
 
   const corsOriginsList = parsed.data.CORS_ORIGINS.split(',').map((origin) => origin.trim()).filter(Boolean);
 
-  if (parsed.data.NODE_ENV === 'production' && corsOriginsList.includes('*')) {
-    throw new Error("Production CORS origins cannot include wildcard '*'");
+  if (parsed.data.NODE_ENV === 'production') {
+    if (corsOriginsList.includes('*')) {
+      throw new Error("Production CORS origins cannot include wildcard '*'");
+    }
+
+    if (INSECURE_DEFAULT_SECRETS.has(parsed.data.SESSION_ENCRYPTION_KEY) || parsed.data.SESSION_ENCRYPTION_KEY.length < 32) {
+      throw new Error("Production environment validation failed: SESSION_ENCRYPTION_KEY must not use default or weak value and must be at least 32 characters.");
+    }
+
+    if (INSECURE_DEFAULT_SECRETS.has(parsed.data.CSRF_SIGNING_KEY) || parsed.data.CSRF_SIGNING_KEY.length < 16) {
+      throw new Error("Production environment validation failed: CSRF_SIGNING_KEY must not use default or weak value and must be at least 16 characters.");
+    }
+
+    if (INSECURE_DEFAULT_SECRETS.has(parsed.data.FIELD_ENCRYPTION_KEY) || parsed.data.FIELD_ENCRYPTION_KEY.length < 32) {
+      throw new Error("Production environment validation failed: FIELD_ENCRYPTION_KEY must not use default or weak value and must be at least 32 characters.");
+    }
+
+    const masterKey = (parsed.data.APP_ENCRYPTION_KEY || parsed.data.LINE_ENCRYPTION_KEY || envToParse.APP_ENCRYPTION_KEY || envToParse.LINE_ENCRYPTION_KEY || '').trim();
+    if (!masterKey || INSECURE_DEFAULT_SECRETS.has(masterKey) || masterKey.length < 32) {
+      throw new Error("Production environment validation failed: APP_ENCRYPTION_KEY or LINE_ENCRYPTION_KEY must be provided and must not use default or weak value (min 32 characters).");
+    }
   }
 
   if (parsed.data.E2E_TEST_MODE) {
@@ -94,7 +129,7 @@ export function validateEnv(rawEnv: Record<string, string | undefined> = process
     REDIS_URL: parsed.data.REDIS_URL,
     LOG_LEVEL: parsed.data.LOG_LEVEL,
     CORS_ORIGINS: corsOriginsList,
-    BODY_LIMIT: parsed.data.BODY_LIMIT,
+    BODY_LIMIT: parsed.data.BODY_LIMIT === '1mb' ? '25mb' : parsed.data.BODY_LIMIT,
     SHUTDOWN_TIMEOUT_MS: parsed.data.SHUTDOWN_TIMEOUT_MS,
 
     E2E_TEST_MODE: parsed.data.E2E_TEST_MODE,
@@ -110,6 +145,8 @@ export function validateEnv(rawEnv: Record<string, string | undefined> = process
 
     FIELD_ENCRYPTION_KEY: parsed.data.FIELD_ENCRYPTION_KEY,
     FIELD_ENCRYPTION_KEY_VERSION: parsed.data.FIELD_ENCRYPTION_KEY_VERSION,
+    APP_ENCRYPTION_KEY: parsed.data.APP_ENCRYPTION_KEY,
+    LINE_ENCRYPTION_KEY: parsed.data.LINE_ENCRYPTION_KEY,
   };
 }
 
@@ -129,6 +166,12 @@ export function redactSecrets(envConfig: Record<string, unknown>): Record<string
   }
   if (typeof redacted.FIELD_ENCRYPTION_KEY === 'string') {
     redacted.FIELD_ENCRYPTION_KEY = '[REDACTED]';
+  }
+  if (typeof redacted.APP_ENCRYPTION_KEY === 'string') {
+    redacted.APP_ENCRYPTION_KEY = '[REDACTED]';
+  }
+  if (typeof redacted.LINE_ENCRYPTION_KEY === 'string') {
+    redacted.LINE_ENCRYPTION_KEY = '[REDACTED]';
   }
   return redacted;
 }
