@@ -38,25 +38,23 @@ async function resolveTenantContext(req: Request): Promise<TenantContextResult> 
   }
 
   // Check req.auth.memberships first (includes synthetic memberships for ACCESS_GRANT sessions)
-  const authMemberships = req.auth?.memberships || [];
+  // Strictly filter for active status to prevent revoked/inactive users from accessing portal
+  const authMemberships = (req.auth?.memberships || []).filter(
+    (m: any) => (m.status || '').toLowerCase() === 'active'
+  );
   const activeMemberships = authMemberships.length > 0
     ? authMemberships
     : await prisma.dormitoryMember.findMany({
         where: { userId, status: 'active' },
-        include: { role: true }
+        include: { role: true },
       });
 
-  const allMemberships = activeMemberships.length > 0 ? activeMemberships : await prisma.dormitoryMember.findMany({
-    where: { userId },
-    include: { role: true }
-  });
-
-  const membership = allMemberships.find((m: any) => 
+  const membership = activeMemberships.find((m: any) => 
     !m.role || ['TENANT', 'OWNER', 'MANAGER', 'STAFF'].includes((m.role?.code || m.roleCode || '').toUpperCase())
   );
 
   if (!membership) {
-    return { error: { code: 'FORBIDDEN', message: 'Not a tenant', statusCode: 403 } };
+    return { error: { code: 'FORBIDDEN', message: 'คุณไม่มีสิทธิ์เข้าถึงพอร์ทัลผู้เช่า (ไม่มีสถานะสมาชิกที่ใช้งานอยู่)', statusCode: 403 } };
   }
 
   return await prisma.$transaction(async (tx) => {
@@ -129,28 +127,6 @@ async function resolveTenantContext(req: Request): Promise<TenantContextResult> 
           }
         }
 
-        // Fallback 3: Check by registrationId from headers/query
-        const registrationId = (req.headers['x-registration-id'] as string) || (req.query.registrationId as string);
-        if (!approvedTenant && registrationId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(registrationId)) {
-          const regReq = await tx.tenantRegistrationRequest.findFirst({
-            where: {
-              id: registrationId,
-              dormitoryId: membership.dormitoryId,
-              status: 'approved',
-              approvedTenantId: { not: null },
-            },
-          });
-          if (regReq?.approvedTenantId) {
-            approvedTenant = await tx.tenant.findFirst({
-              where: {
-                id: regReq.approvedTenantId,
-                dormitoryId: membership.dormitoryId,
-                deletedAt: null,
-                status: 'active',
-              },
-            });
-          }
-        }
 
         if (approvedTenant) {
           const updateData: any = {};
@@ -194,16 +170,6 @@ async function resolveTenantContext(req: Request): Promise<TenantContextResult> 
         }
       }
 
-      const registrationId = (req.headers['x-registration-id'] as string) || (req.query.registrationId as string);
-      if (!pendingRequest && registrationId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(registrationId)) {
-        pendingRequest = await tx.tenantRegistrationRequest.findFirst({
-          where: {
-            id: registrationId,
-            dormitoryId: membership.dormitoryId,
-            status: { in: ['pending_owner_approval', 'awaiting_tenant_confirmation', 'approved', 'rejected'] },
-          },
-        });
-      }
 
       if (!pendingRequest && (req.auth?.user?.phone || (req as any).user?.phone)) {
         const phone = req.auth?.user?.phone || (req as any).user?.phone;
@@ -241,6 +207,11 @@ async function resolveTenantContext(req: Request): Promise<TenantContextResult> 
       }
 
       if (tenants.length === 0) {
+        const roleCode = ((membership as any).role?.code || (membership as any).roleCode || '').toUpperCase();
+        if (!candidateGrantId && !pendingRequest && roleCode !== 'TENANT') {
+          return { error: { code: 'FORBIDDEN', message: 'คุณไม่มีสิทธิ์เข้าถึงพอร์ทัลผู้เช่า (ไม่มีสถานะผู้เช่าในระบบ)', statusCode: 403 } };
+        }
+
         const userFirst = pendingRequest?.firstName || '';
         const userLast = pendingRequest?.lastName && pendingRequest.lastName !== '-' ? pendingRequest.lastName : '';
         const userFullName = userFirst ? `${userFirst} ${userLast}`.trim() : '';
@@ -308,18 +279,24 @@ async function resolveTenantContext(req: Request): Promise<TenantContextResult> 
       contract = contracts[0];
     }
 
-    // Validate room ownership / tenancy strictly: contract takes priority, followed by active occupancy (e.g. daily stay)
+    // Validate room ownership / tenancy strictly: contract takes priority, followed by active occupancy or active daily stay
     const occupancies = await tx.occupancy.findMany({
       where: { tenantId: { in: tenantIds }, status: 'ACTIVE' }
+    });
+
+    const dailyStays = await tx.dailyStay.findMany({
+      where: { tenantId: { in: tenantIds }, dormitoryId: membership.dormitoryId, status: { in: ['ACTIVE', 'RESERVED'] }, deletedAt: null }
     });
 
     let validRoomId: string | undefined = undefined;
     if (contract?.roomId) {
       validRoomId = contract.roomId;
-    } else if (requestedRoomId && occupancies.some(o => o.roomId === requestedRoomId)) {
+    } else if (requestedRoomId && (occupancies.some(o => o.roomId === requestedRoomId) || dailyStays.some(d => d.roomId === requestedRoomId))) {
       validRoomId = requestedRoomId;
     } else if (occupancies.length > 0 && occupancies[0].roomId) {
       validRoomId = occupancies[0].roomId;
+    } else if (dailyStays.length > 0 && dailyStays[0].roomId) {
+      validRoomId = dailyStays[0].roomId;
     }
 
     const tenant = (contract ? tenants.find(t => t.id === contract.tenantId) : null) || tenants[0];
@@ -437,94 +414,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
   const sensitiveFieldService = injectedSensitiveFieldService || new SensitiveFieldService(process.env.FIELD_ENCRYPTION_KEY);
 
   if (authService) {
-    const baseRequireAuth = authService.requireAuth();
-    router.use(async (req: Request, res: Response, next) => {
-      const isTestEnv = process.env.NODE_ENV === 'test' || Boolean(process.env.VITEST);
-      if (isTestEnv) {
-        return baseRequireAuth(req, res, next);
-      }
-
-      const sessionCookie = req.cookies?.['horplus_session'];
-      if (sessionCookie) {
-        try {
-          const validated = await authService.validateSession(sessionCookie, req.requestId || 'req-tenant');
-          if (validated) {
-            req.auth = {
-              userId: validated.user.id,
-              sessionId: validated.rawSessionId,
-              tokenVersion: validated.session.tokenVersion,
-              user: validated.user,
-              session: validated.session,
-              memberships: validated.memberships,
-              dormitoryId: validated.memberships[0]?.dormitoryId,
-            };
-            return next();
-          }
-        } catch {}
-      }
-
-      // Fallback candidate session for LINE / browser devices where cookie was stripped or cleared
-      try {
-        const fallbackDormId =
-          req.cookies?.['active_dormitory_id'] ||
-          (req.headers['x-dormitory-id'] as string) ||
-          (req.query?.dormitoryId as string) ||
-          'd99948ec-49d4-4629-9fea-567241e5049d';
-        const grant = await prisma.$transaction(async (tx) => {
-          await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${fallbackDormId}, true)`;
-          return await tx.dormitoryAccessGrant.findFirst({
-            where: { dormitoryId: fallbackDormId, status: 'ACTIVE' },
-            include: { lineFriend: true, dormitory: true },
-            orderBy: { updatedAt: 'desc' },
-          });
-        });
-
-        if (grant) {
-          const mockUserId = `ag_user_${grant.id}`;
-          req.auth = {
-            userId: mockUserId,
-            sessionId: `fallback_${grant.id}`,
-            tokenVersion: 1,
-            user: {
-              id: mockUserId,
-              email: `grant.${grant.tokenPrefix || grant.id}@horplus.local`,
-              emailNormalized: `grant.${grant.tokenPrefix || grant.id}@horplus.local`,
-              name: grant.lineFriend?.displayName || 'Phoom',
-              avatarUrl: grant.lineFriend?.pictureUrl || null,
-              status: 'active',
-              googleSubject: `ag_sub_${grant.id}`,
-              createdAt: grant.createdAt,
-              updatedAt: grant.updatedAt,
-            } as any,
-            session: {
-              id: `fallback_${grant.id}`,
-              accessGrantId: grant.id,
-              principalType: 'ACCESS_GRANT',
-              tokenVersion: 1,
-              status: 'active',
-            } as any,
-            memberships: [
-              {
-                id: `mem_${grant.id}`,
-                dormitoryId: grant.dormitoryId,
-                dormitoryName: grant.dormitory?.name || 'TheRICH Apartment',
-                userId: mockUserId,
-                roleId: 'role-tenant',
-                roleCode: 'TENANT',
-                rolePermissions: [],
-                status: 'active',
-                createdAt: grant.createdAt,
-                updatedAt: grant.updatedAt,
-              } as any,
-            ],
-            dormitoryId: grant.dormitoryId,
-          };
-          return next();
-        }
-      } catch {}
-
-      return baseRequireAuth(req, res, next);
-    });
+    router.use(authService.requireAuth());
   }
 
   // 0. Tenant Active Rooms & Available Rooms for Renting Additional Room
@@ -560,6 +450,16 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
                     }
                   }
                 }
+              },
+              dailyStays: {
+                where: { status: { in: ['ACTIVE', 'RESERVED'] }, deletedAt: null },
+                include: {
+                  room: {
+                    include: {
+                      building: true
+                    }
+                  }
+                }
               }
             }
           })
@@ -576,27 +476,11 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
           targetLineFriendId = grant?.lineFriendId || null;
         }
 
-        const registrationId = (req.headers['x-registration-id'] as string) || (req.query.registrationId as string);
-        let approvedTenantId: string | null = null;
-        if (registrationId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(registrationId)) {
-          const regReq = await prisma.tenantRegistrationRequest.findUnique({
-            where: { id: registrationId },
-            select: { approvedTenantId: true, lineFollowerId: true },
-          });
-          approvedTenantId = regReq?.approvedTenantId || null;
-          if (!targetLineFriendId && regReq?.lineFollowerId) {
-            targetLineFriendId = regReq.lineFollowerId;
-          }
-        }
-
         const phone = req.auth?.user?.phone || (req as any).user?.phone;
 
         const orFilters: any[] = [];
         if (targetLineFriendId) {
           orFilters.push({ lineFriendId: targetLineFriendId });
-        }
-        if (approvedTenantId) {
-          orFilters.push({ id: approvedTenantId });
         }
         if (phone) {
           orFilters.push({ phone });
@@ -623,6 +507,16 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
               },
               occupancies: {
                 where: { status: 'ACTIVE' },
+                include: {
+                  room: {
+                    include: {
+                      building: true,
+                    },
+                  },
+                },
+              },
+              dailyStays: {
+                where: { status: { in: ['ACTIVE', 'RESERVED'] }, deletedAt: null },
                 include: {
                   room: {
                     include: {
@@ -678,6 +572,28 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
               contractNumber: null,
               monthlyRent: Number(occ.room.monthlyRent || 0),
               status: occ.status,
+              tenantId: t.id,
+              tenantName: `${t.firstName || ''} ${t.lastName || ''}`.trim() || t.displayName
+            });
+          }
+        }
+
+        for (const ds of ((t as any).dailyStays || [])) {
+          if (ds.room && !seenRoomIds.has(ds.room.id)) {
+            seenRoomIds.add(ds.room.id);
+            roomList.push({
+              roomId: ds.room.id,
+              roomNumber: ds.room.roomNumber,
+              floor: ds.room.floor,
+              buildingId: ds.room.buildingId,
+              buildingName: ds.room.building?.name || 'อาคารหลัก',
+              termMonths: Number(ds.room.building?.termMonths || ds.room.termMonths || 1),
+              dormitoryId: t.dormitoryId,
+              dormitoryName: t.dormitory.name,
+              contractId: null,
+              contractNumber: null,
+              monthlyRent: Number(ds.totalRentAmount || ds.dailyRateAmount || 0),
+              status: ds.status,
               tenantId: t.id,
               tenantName: `${t.firstName || ''} ${t.lastName || ''}`.trim() || t.displayName
             });
@@ -889,7 +805,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
 
       const tenant = ctx.tenant;
       const contract = ctx.contract;
-      const room = ctx.roomId ? await prisma.room.findUnique({ where: { id: ctx.roomId } }) : null;
+      const room = ctx.roomId ? await prisma.room.findUnique({ where: { id: ctx.roomId }, include: { building: true } }) : null;
       const dorm = await prisma.dormitory.findUnique({ where: { id: ctx.dormitoryId } });
       const propDefaults = await prisma.dormitoryPropertyDefaults.findUnique({
         where: { dormitoryId: ctx.dormitoryId },
@@ -984,6 +900,9 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
         email: tenant.email,
         status: tenant.status,
         pictureUrl: tenant.photoUrl || null,
+        birthDate: tenant.dateOfBirth ? new Date(tenant.dateOfBirth).toISOString().slice(0, 10) : null,
+        dateOfBirth: tenant.dateOfBirth || null,
+        address: tenant.address || null,
         nationalIdMasked: tenant.nationalIdMasked || null,
         citizenId: rawCitizenId,
         hasIdentityDocument: !!(tenant.idCardObjectKey || tenant.photoUrl),
@@ -1012,7 +931,8 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
           id: room.id,
           roomNumber: room.roomNumber,
           roomType: room.roomType,
-          buildingId: room.buildingId
+          buildingId: room.buildingId,
+          buildingName: room.building?.name || 'อาคารหลัก'
         } : null,
         roomMembers: [],
         vehicle: primaryVehicle ? {
