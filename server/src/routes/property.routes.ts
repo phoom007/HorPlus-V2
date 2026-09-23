@@ -88,11 +88,15 @@ export function createPropertyRouter(
   router.get('/buildings', async (req: Request, res: Response) => {
     try {
       const dormId = getDormitoryId(req);
+      const rawPage = Number(req.query.page || 1);
+      const rawPageSize = Number(req.query.pageSize || 20);
+      const page = Number.isFinite(rawPage) && rawPage > 0 ? rawPage : 1;
+      const pageSize = Math.min(Math.max(Number.isFinite(rawPageSize) ? rawPageSize : 20, 1), 200);
       const query = {
         status: req.query.status as string,
         search: req.query.search as string,
-        page: req.query.page ? Number(req.query.page) : 1,
-        pageSize: req.query.pageSize ? Number(req.query.pageSize) : 20,
+        page,
+        pageSize,
         sortBy: req.query.sortBy as string,
         sortDirection: req.query.sortDirection as 'asc' | 'desc',
       };
@@ -101,7 +105,7 @@ export function createPropertyRouter(
       const enrichedItems = await Promise.all(
         result.items.map((b) => defaultsService.buildAuthoritativeBuildingResponse(dormId, b))
       );
-      res.json({ data: enrichedItems, pagination: { total: result.total, page: query.page, pageSize: query.pageSize } });
+      res.json({ data: enrichedItems, pagination: { total: result.total, page, pageSize } });
     } catch (err) {
       handleServiceError(res, err, req);
     }
@@ -246,21 +250,25 @@ export function createPropertyRouter(
   router.get('/rooms', async (req: Request, res: Response) => {
     try {
       const dormId = getDormitoryId(req);
+      const rawPage = Number(req.query.page || 1);
+      const rawPageSize = Number(req.query.pageSize || 50);
+      const page = Number.isFinite(rawPage) && rawPage > 0 ? rawPage : 1;
+      const pageSize = Math.min(Math.max(Number.isFinite(rawPageSize) ? rawPageSize : 50, 1), 200);
       const query = {
         buildingId: req.query.buildingId as string,
         floor: req.query.floor ? Number(req.query.floor) : undefined,
         status: req.query.status as string,
         roomType: req.query.roomType as string,
         search: req.query.search as string,
-        page: req.query.page ? Number(req.query.page) : 1,
-        pageSize: req.query.pageSize ? Number(req.query.pageSize) : 50,
+        page,
+        pageSize,
         sortBy: req.query.sortBy as string,
         sortDirection: req.query.sortDirection as 'asc' | 'desc',
       };
       const result = await roomService.getRooms(dormId, query);
       const { defaultsService } = await import('../services/defaults.service.js');
       const enrichedItems = await defaultsService.buildAuthoritativeRoomsResponseBatch(dormId, result.items);
-      res.json({ data: enrichedItems, pagination: { total: result.total, page: query.page, pageSize: query.pageSize } });
+      res.json({ data: enrichedItems, pagination: { total: result.total, page, pageSize } });
     } catch (err) {
       handleServiceError(res, err, req);
     }

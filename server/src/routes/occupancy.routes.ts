@@ -4,6 +4,7 @@ import { OccupancyService } from '../services/occupancy.service.js';
 import { createRequireSessionMiddleware } from '../middleware/require-session.js';
 import { requireDormitoryPermission } from '../middleware/permission.js';
 import { requireDormitoryWriteEntitlement } from '../middleware/entitlement.js';
+import { AppError } from '../types/index.js';
 
 export function createOccupancyRouter(
   authService: AuthenticationService,
@@ -18,7 +19,16 @@ export function createOccupancyRouter(
   ];
 
   const getDormitoryId = (req: Request): string => {
-    return (req.headers['x-dormitory-id'] as string) || req.auth?.dormitoryId || 'dorm-001';
+    const context = (req as any).dormitoryContext;
+    if (context?.dormitoryId) return context.dormitoryId;
+    if (req.auth?.dormitoryId) return req.auth.dormitoryId;
+    const requestedDorm = ((req.headers['x-dormitory-id'] as string) || (req.query?.dormitoryId as string))?.trim();
+    if (requestedDorm && req.auth?.memberships?.some((m: any) => m.dormitoryId === requestedDorm)) {
+      return requestedDorm;
+    }
+    const defaultDorm = req.auth?.memberships?.[0]?.dormitoryId;
+    if (defaultDorm) return defaultDorm;
+    throw new AppError('ไม่พบข้อมูลหอพักในบริบทคำขอ', 400, 'DORMITORY_CONTEXT_REQUIRED');
   };
 
   const handleServiceError = (res: Response, err: any, req: Request) => {

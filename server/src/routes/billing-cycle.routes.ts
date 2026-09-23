@@ -92,17 +92,19 @@ export function createBillingCycleRouter(
   ];
 
   const getDormitoryId = (req: Request): string => {
-    const dormId =
-      req.params.dormitoryId ||
-      (req.headers['x-dormitory-id'] as string) ||
-      req.auth?.dormitoryId;
-    if (!dormId) {
-      const err = new Error('DORMITORY_ID_REQUIRED');
-      (err as any).statusCode = 400;
-      (err as any).code = 'DORMITORY_ID_REQUIRED';
-      throw err;
+    const context = (req as any).dormitoryContext;
+    if (context?.dormitoryId) return context.dormitoryId;
+    if (req.auth?.dormitoryId) return req.auth.dormitoryId;
+    const requestedDorm = (req.params.dormitoryId || (req.headers['x-dormitory-id'] as string) || (req.query?.dormitoryId as string))?.trim();
+    if (requestedDorm && req.auth?.memberships?.some((m: any) => m.dormitoryId === requestedDorm)) {
+      return requestedDorm;
     }
-    return dormId;
+    const defaultDorm = req.auth?.memberships?.[0]?.dormitoryId;
+    if (defaultDorm) return defaultDorm;
+    const err = new Error('DORMITORY_ID_REQUIRED');
+    (err as any).statusCode = 400;
+    (err as any).code = 'DORMITORY_ID_REQUIRED';
+    throw err;
   };
 
   const verifyCsrf = (req: Request, res: Response): boolean => {
@@ -148,11 +150,15 @@ export function createBillingCycleRouter(
   router.get('/', async (req: Request, res: Response) => {
     try {
       const dormId = getDormitoryId(req);
+      const rawPage = Number(req.query.page || 1);
+      const rawPageSize = Number(req.query.pageSize || 20);
+      const page = Number.isFinite(rawPage) && rawPage > 0 ? rawPage : 1;
+      const pageSize = Math.min(Math.max(Number.isFinite(rawPageSize) ? rawPageSize : 20, 1), 200);
       const query = {
         status: req.query.status as string,
         search: req.query.search as string,
-        page: req.query.page ? Number(req.query.page) : 1,
-        pageSize: req.query.pageSize ? Number(req.query.pageSize) : 20,
+        page,
+        pageSize,
         sortBy: req.query.sortBy as string,
         sortDirection: req.query.sortDirection as 'asc' | 'desc',
       };

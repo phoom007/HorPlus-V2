@@ -13,10 +13,8 @@ export function getRedisClient(): Redis {
       enableOfflineQueue: false,
       connectTimeout: 5000,
       retryStrategy(times) {
-        if (times > 3) {
-          return null; // Stop retrying
-        }
-        return Math.min(times * 100, 2000);
+        // Continuous exponential backoff with cap, allowing auto-recovery (PERF-10)
+        return Math.min(times * 200, 3000);
       },
     });
 

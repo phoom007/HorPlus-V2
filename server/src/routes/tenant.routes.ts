@@ -26,6 +26,7 @@ import {
   toEmergencyContactApiDTO,
   toVehicleApiDTO,
 } from '../mappers/tenant-api.mapper.js';
+import { AppError } from '../types/index.js';
 
 export function createTenantRouter(
   authService: AuthenticationService,
@@ -121,7 +122,16 @@ export function createTenantRouter(
   ];
 
   const getDormitoryId = (req: Request): string => {
-    return (req as any).dormitoryContext?.dormitoryId || (req.headers['x-dormitory-id'] as string) || req.auth?.dormitoryId || 'dorm-001';
+    const context = (req as any).dormitoryContext;
+    if (context?.dormitoryId) return context.dormitoryId;
+    if (req.auth?.dormitoryId) return req.auth.dormitoryId;
+    const requestedDorm = ((req.headers['x-dormitory-id'] as string) || (req.query?.dormitoryId as string))?.trim();
+    if (requestedDorm && req.auth?.memberships?.some((m: any) => m.dormitoryId === requestedDorm)) {
+      return requestedDorm;
+    }
+    const defaultDorm = req.auth?.memberships?.[0]?.dormitoryId;
+    if (defaultDorm) return defaultDorm;
+    throw new AppError('ไม่พบข้อมูลหอพักในบริบทคำขอ', 400, 'DORMITORY_CONTEXT_REQUIRED');
   };
 
   const verifyCsrf = (req: Request, res: Response): boolean => {
@@ -210,17 +220,21 @@ export function createTenantRouter(
   router.get('/', requireDormitoryPermission('tenants:view'), async (req: Request, res: Response) => {
     try {
       const dormId = getDormitoryId(req);
+      const rawPage = Number(req.query.page || 1);
+      const rawPageSize = Number(req.query.pageSize || 20);
+      const page = Number.isFinite(rawPage) && rawPage > 0 ? rawPage : 1;
+      const pageSize = Math.min(Math.max(Number.isFinite(rawPageSize) ? rawPageSize : 20, 1), 200);
       const query = {
         status: req.query.status as string,
         roomId: req.query.roomId as string,
         search: req.query.search as string,
-        page: req.query.page ? Number(req.query.page) : 1,
-        pageSize: req.query.pageSize ? Number(req.query.pageSize) : 20,
+        page,
+        pageSize,
         sortBy: req.query.sortBy as string,
         sortDirection: req.query.sortDirection as 'asc' | 'desc',
       };
       const result = await tenantService.getTenants(dormId, query);
-      res.json({ data: result.items.map(toTenantApiDTO), pagination: { total: result.total, page: query.page, pageSize: query.pageSize } });
+      res.json({ data: result.items.map(toTenantApiDTO), pagination: { total: result.total, page, pageSize } });
     } catch (err) {
       handleServiceError(res, err, req);
     }

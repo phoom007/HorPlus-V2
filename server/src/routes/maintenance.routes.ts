@@ -34,6 +34,10 @@ export function createMaintenanceRouter(maintenanceService: MaintenanceService =
   router.get('/', async (req: Request, res: Response) => {
     try {
       const { dormitoryId } = getContext(req);
+      const rawPage = parseInt(req.query.page as string, 10);
+      const rawPageSize = parseInt(req.query.pageSize as string, 10);
+      const page = Number.isFinite(rawPage) && rawPage > 0 ? rawPage : 1;
+      const pageSize = Math.min(Math.max(Number.isFinite(rawPageSize) ? rawPageSize : 20, 1), 200);
       const query = {
         status: req.query.status as any,
         priority: req.query.priority as any,
@@ -43,14 +47,14 @@ export function createMaintenanceRouter(maintenanceService: MaintenanceService =
         assignedMemberId: req.query.assignedMemberId as string,
         tenantId: req.query.tenantId as string,
         search: req.query.search as string,
-        page: req.query.page ? parseInt(req.query.page as string, 10) : 1,
-        pageSize: req.query.pageSize ? parseInt(req.query.pageSize as string, 10) : 20
+        page,
+        pageSize
       };
 
       const result = await maintenanceService.getStaffRequests(dormitoryId, query);
       res.json({
         data: result.items,
-        pagination: { total: result.total, page: query.page, pageSize: query.pageSize },
+        pagination: { total: result.total, page, pageSize },
         items: result.items,
         total: result.total
       });

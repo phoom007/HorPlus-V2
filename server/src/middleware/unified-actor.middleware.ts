@@ -38,12 +38,20 @@ export function extractUnifiedActor(req?: any, _res?: any, next?: any): any {
       req.auth.memberships?.[0]?.roleCode ||
       'OWNER';
     const normalizedRole = String(rawRole).toUpperCase();
+    const requestedDorm = ((req.headers && (req.headers['x-dormitory-id'] as string)) || (req.query && (req.query.dormitoryId as string)))?.trim();
+    let dormId = (req as any).dormitoryContext?.dormitoryId || req.dormitoryId || req.auth?.dormitoryId;
+    if (!dormId && requestedDorm && req.auth.memberships?.some((m: any) => m.dormitoryId === requestedDorm)) {
+      dormId = requestedDorm;
+    }
+    if (!dormId) {
+      dormId = req.auth.memberships?.[0]?.dormitoryId || '';
+    }
 
     req.actor = {
       actorType: 'google_owner',
       sessionId: req.auth.sessionId,
       userId: req.auth.userId,
-      dormitoryId: (req as any).dormitoryContext?.dormitoryId || req.dormitoryId || (req.headers && (req.headers['x-dormitory-id'] as string)) || 'dorm-001',
+      dormitoryId: dormId,
       roleCode: ['OWNER', 'MANAGER', 'STAFF'].includes(normalizedRole) ? normalizedRole as any : 'OWNER',
       displayName: req.auth.user?.name
     };

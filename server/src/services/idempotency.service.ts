@@ -1,8 +1,7 @@
 import { PrismaClient } from '@prisma/client';
 import crypto from 'crypto';
 import { AppError } from '../types/index.js';
-
-const prisma = new PrismaClient();
+import { getPrismaClient } from '../db/prisma.js';
 
 export interface RunWithIdempotencyOptions<T> {
   actorUserId: string;
@@ -34,7 +33,7 @@ export function sanitizeActorUserIdToUuid(actorUserId: string): string {
 }
 
 export class IdempotencyService {
-  constructor(private client: PrismaClient = prisma) {}
+  constructor(private client: PrismaClient = getPrismaClient()) {}
 
   /**
    * Generates a deterministic SHA-256 hash of the request payload

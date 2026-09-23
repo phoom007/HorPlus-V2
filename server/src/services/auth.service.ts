@@ -324,7 +324,12 @@ export class AuthenticationService {
         updatedAt: grant.updatedAt
       };
 
-      this.sessionRepo.updateLastSeen(session.id).catch(() => {});
+      // Non-blocking lastSeenAt update throttled to at most once per 60 seconds (PERF-02)
+      const lastSeenTime = session.lastSeenAt ? new Date(session.lastSeenAt).getTime() : 0;
+      if (Date.now() - lastSeenTime > 60_000) {
+        session.lastSeenAt = new Date();
+        this.sessionRepo.updateLastSeen(session.id).catch(() => {});
+      }
 
       return {
         user: mockUser,
@@ -338,8 +343,12 @@ export class AuthenticationService {
     if (!user) { return null; }
     if (user.status !== 'active') { return null; }
 
-    // Non-blocking lastSeenAt update
-    this.sessionRepo.updateLastSeen(session.id).catch(() => {});
+    // Non-blocking lastSeenAt update throttled to at most once per 60 seconds (PERF-02)
+    const lastSeenTime = session.lastSeenAt ? new Date(session.lastSeenAt).getTime() : 0;
+    if (Date.now() - lastSeenTime > 60_000) {
+      session.lastSeenAt = new Date();
+      this.sessionRepo.updateLastSeen(session.id).catch(() => {});
+    }
 
     const memberships = await this.membershipRepo.findByUserId(user.id);
 

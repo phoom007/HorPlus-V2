@@ -1,11 +1,12 @@
 import { PrismaClient } from '@prisma/client';
+import { getPrismaClient } from '../db/prisma.js';
 
 import {
   generateFinalSettlementReceiptForBillInTx,
   generateFinalSettlementReceiptForDailyInvoiceInTx,
 } from '../utils/payment-transaction.util.js';
 
-const prisma = new PrismaClient();
+const prisma = getPrismaClient();
 
 export class ReceiptService {
   async getReceipt(dormitoryId: string, receiptId: string) {

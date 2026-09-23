@@ -1,13 +1,12 @@
 import { PrismaClient } from '@prisma/client';
+import { getPrismaClient } from '../db/prisma.js';
 import { localStorageProvider, LocalStorageProvider } from './local-storage.service.js';
-
-const prisma = new PrismaClient();
 
 export class CleanupService {
   private isRunning = false;
 
   constructor(
-    private client: PrismaClient = prisma,
+    private client: PrismaClient = getPrismaClient(),
     private storage: LocalStorageProvider = localStorageProvider
   ) {}
 

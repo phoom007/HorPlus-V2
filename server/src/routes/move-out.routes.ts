@@ -3,6 +3,7 @@ import { moveOutService } from '../services/move-out.service.js';
 import { requirePermission } from '../middleware/permission.middleware.js';
 import { requireDormitoryPermission } from '../middleware/permission.js';
 import { requireDormitoryWriteEntitlement } from '../middleware/entitlement.js';
+import { AppError } from '../types/index.js';
 
 export const moveOutRouter = Router();
 
@@ -10,6 +11,20 @@ const mutationGuard = (permission: string) => [
   requireDormitoryPermission(permission),
   requireDormitoryWriteEntitlement,
 ];
+
+const getDormitoryId = (req: Request): string => {
+  const context = (req as any).dormitoryContext;
+  if (context?.dormitoryId) return context.dormitoryId;
+  if ((req as any).dormitoryId) return (req as any).dormitoryId;
+  if (req.auth?.dormitoryId) return req.auth.dormitoryId;
+  const requestedDorm = ((req.headers['x-dormitory-id'] as string) || (req.query?.dormitoryId as string))?.trim();
+  if (requestedDorm && req.auth?.memberships?.some((m: any) => m.dormitoryId === requestedDorm)) {
+    return requestedDorm;
+  }
+  const defaultDorm = req.auth?.memberships?.[0]?.dormitoryId;
+  if (defaultDorm) return defaultDorm;
+  throw new AppError('ไม่พบข้อมูลหอพักในบริบทคำขอ', 400, 'DORMITORY_CONTEXT_REQUIRED');
+};
 
 // POST /api/v1/tenant-move-out-requests (Tenant Submission Endpoint)
 moveOutRouter.post(
@@ -28,7 +43,7 @@ moveOutRouter.get(
   '/tenant-move-out-requests',
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const dormId = req.dormitoryContext?.dormitoryId || req.dormitoryId || (req.query.dormitoryId as string) || (req.headers['x-dormitory-id'] as string) || 'dorm-001';
+      const dormId = getDormitoryId(req);
       const status = req.query.status as string;
       const requests = await moveOutService.listMoveOutRequestsForOwner(dormId, status);
       res.json({ success: true, data: requests });
@@ -44,7 +59,7 @@ moveOutRouter.post(
   mutationGuard('moveout:write'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const dormId = req.dormitoryContext?.dormitoryId || req.dormitoryId || (req.headers['x-dormitory-id'] as string);
+      const dormId = getDormitoryId(req);
       const requestId = req.params.requestId;
       const reviewedByUserId = req.auth?.userId || req.user?.id;
       const actorRole = req.dormitoryContext?.roleCode || (req.auth as any)?.roleCode || req.auth?.role;

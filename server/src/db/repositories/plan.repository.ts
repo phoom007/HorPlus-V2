@@ -29,7 +29,7 @@ export const SYSTEM_PLANS_SEED: Omit<PlatformPlanEntity, 'id' | 'createdAt' | 'u
     currency: 'THB',
     vatIncluded: true,
     roomLimit: 10,
-    messageQuotaMonthly: 300,
+    messageQuotaMonthly: 30,
     isActive: true,
     displayOrder: 1,
   },

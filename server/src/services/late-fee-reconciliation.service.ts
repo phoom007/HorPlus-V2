@@ -18,6 +18,7 @@
  */
 
 import { PrismaClient, Prisma } from '@prisma/client';
+import { getPrismaClient } from '../db/prisma.js';
 import { logger } from '../config/logger.js';
 import { AuditService } from './audit.service.js';
 import { BillingService, BillPreviewResult } from './billing.service.js';
@@ -123,7 +124,7 @@ export class LateFeeReconciliationService {
   private billingService: BillingService;
 
   constructor(
-    private prisma: PrismaClient = new PrismaClient(),
+    private prisma: PrismaClient = getPrismaClient(),
     billingService?: BillingService,
     private auditService: AuditService = new AuditService()
   ) {

@@ -105,6 +105,7 @@ async function startServer() {
     server.close(async () => {
       logger.info('HTTP server closed. Cleaning up dependencies...');
       try {
+        await cleanupService.stop();
         await disconnectPrisma();
         await disconnectRedis();
         logger.info('All connections closed cleanly. Process exiting.');
@@ -121,5 +122,14 @@ async function startServer() {
   process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
   process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 }
+
+process.on('unhandledRejection', (reason: unknown) => {
+  logger.error({ err: reason }, 'Unhandled Promise rejection');
+});
+
+process.on('uncaughtException', (err: Error) => {
+  logger.error({ err: err.message, stack: err.stack }, 'Uncaught exception encountered');
+  process.exit(1);
+});
 
 startServer();
