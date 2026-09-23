@@ -138,9 +138,6 @@ export function createLineOaRoutes(
           : Buffer.from(typeof req.body === 'string' ? req.body : JSON.stringify(req.body || {}));
 
         const detectedOrigin = resolveWebhookBaseUrl(req);
-        if (detectedOrigin) {
-          setActiveAppOrigin(detectedOrigin);
-        }
 
         const result = await lineOaService.processWebhookEvent(
           opaqueKey, bodyBuffer, signatureHeader, detectedOrigin

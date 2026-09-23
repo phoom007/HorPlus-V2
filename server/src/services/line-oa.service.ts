@@ -70,6 +70,10 @@ let dynamicPublicAppOrigin: string | null = null;
 
 export function setActiveAppOrigin(origin: string | null | undefined): void {
   if (!origin || typeof origin !== 'string') return;
+  // If in production and PUBLIC_APP_ORIGIN is explicitly configured, do not override with dynamic request header (SEC-04)
+  if (process.env.NODE_ENV === 'production' && process.env.PUBLIC_APP_ORIGIN) {
+    return;
+  }
   const trimmed = origin.trim().replace(/\/+$/, '');
   if (trimmed && (trimmed.startsWith('https://') || trimmed.startsWith('http://'))) {
     dynamicPublicAppOrigin = trimmed;
@@ -88,9 +92,9 @@ export function getPublicAppOrigin(): string {
   const isE2E = process.env.NODE_ENV === 'test' || process.env.HORPLUS_E2E === 'true';
   const isProd = process.env.NODE_ENV === 'production';
 
-  const rawOrigin = dynamicPublicAppOrigin || (isProd
-    ? (process.env.PUBLIC_APP_ORIGIN || '')
-    : (process.env.PUBLIC_APP_ORIGIN || (isE2E ? 'https://app.horplus.com' : 'http://localhost:5173')));
+  // In production, configured PUBLIC_APP_ORIGIN has absolute priority over dynamic headers (SEC-04)
+  const configuredProdOrigin = isProd ? (process.env.PUBLIC_APP_ORIGIN || '').trim().replace(/\/+$/, '') : '';
+  const rawOrigin = configuredProdOrigin || dynamicPublicAppOrigin || (process.env.PUBLIC_APP_ORIGIN || (isE2E ? 'https://app.horplus.com' : 'http://localhost:5173'));
 
   const origin = rawOrigin.trim().replace(/\/+$/, '');
 
@@ -1985,9 +1989,6 @@ export class LineOaService {
    * Process raw LINE Webhook payload.
    */
   async processWebhookEvent(rawKey: string, bodyBuffer: Buffer, signatureHeader: string, detectedOrigin?: string) {
-    if (detectedOrigin) {
-      setActiveAppOrigin(detectedOrigin);
-    }
     const keyHash = hashToken(rawKey);
 
     const configs = await this.prisma.$queryRaw<any[]>`
@@ -2000,6 +2001,69 @@ export class LineOaService {
     }
 
     const resolvedDormitoryId = configs[0].dormitory_id as string;
+
+    const fullConfig = await this.prisma.dormitoryLineConfig.findUnique({
+      where: { dormitoryId: resolvedDormitoryId },
+      select: {
+        channelSecretEncrypted: true,
+        channelAccessTokenEncrypted: true,
+        accessTokenVerifiedAt: true,
+        webhookEndpointSetAt: true,
+        isConnected: true,
+        webhookVerifiedAt: true,
+        id: true
+      }
+    });
+
+    if (!fullConfig || !fullConfig.channelSecretEncrypted) {
+      throw new AppError('LINE webhook config credentials not found', 404, 'WEBHOOK_CONFIG_NOT_FOUND');
+    }
+
+    const channelSecret = decryptText(fullConfig.channelSecretEncrypted);
+    const isValid = verifyLineSignature(bodyBuffer, channelSecret, signatureHeader);
+    if (!isValid) {
+      throw new AppError('Invalid x-line-signature header', 401, 'INVALID_SIGNATURE');
+    }
+
+    // Origin activation is ONLY trusted AFTER HMAC-SHA256 signature verification passes (SEC-04)
+    if (detectedOrigin) {
+      setActiveAppOrigin(detectedOrigin);
+    }
+
+    let accessToken: string | null = null;
+    if (fullConfig.channelAccessTokenEncrypted) {
+      try {
+        accessToken = decryptText(fullConfig.channelAccessTokenEncrypted);
+      } catch {
+        accessToken = null;
+      }
+    }
+    if (!accessToken) {
+      accessToken = await this.resolveAccessToken(resolvedDormitoryId).catch(() => null);
+    }
+
+    let payload: any = {};
+    try {
+      payload = JSON.parse(bodyBuffer.toString('utf8'));
+    } catch {
+      throw new AppError('Failed to parse webhook JSON body', 400, 'INVALID_JSON_BODY');
+    }
+
+    const events = payload.events || [];
+
+    // Pre-fetch LINE user profiles outside $transaction to prevent DB table locks during external network latency (PERF-04)
+    const userProfiles = new Map<string, { displayName: string; pictureUrl: string | null }>();
+    if (accessToken) {
+      const uniqueUserIds = [...new Set(events.map((e: any) => e.source?.userId).filter(Boolean))] as string[];
+      await Promise.all(
+        uniqueUserIds.map(async (uid: string) => {
+          const profile = await this.lineAdapter.getProfile(uid, accessToken!).catch(() => null);
+          const displayName = profile?.displayName || `LINE User (${uid.slice(-4)})`;
+          const pictureUrl = profile?.pictureUrl || null;
+          userProfiles.set(uid, { displayName, pictureUrl });
+        })
+      );
+    }
 
     const replyActions: Array<{
       replyToken: string;
@@ -2028,29 +2092,6 @@ export class LineOaService {
     const result = await this.prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${resolvedDormitoryId}, true)`;
 
-      const fullConfig = await tx.dormitoryLineConfig.findUnique({
-        where: { dormitoryId: resolvedDormitoryId },
-        select: {
-          channelSecretEncrypted: true,
-          channelAccessTokenEncrypted: true,
-          accessTokenVerifiedAt: true,
-          webhookEndpointSetAt: true,
-          isConnected: true,
-          webhookVerifiedAt: true,
-          id: true
-        }
-      });
-
-      if (!fullConfig || !fullConfig.channelSecretEncrypted) {
-        throw new AppError('LINE webhook config credentials not found', 404, 'WEBHOOK_CONFIG_NOT_FOUND');
-      }
-
-      const channelSecret = decryptText(fullConfig.channelSecretEncrypted);
-      const isValid = verifyLineSignature(bodyBuffer, channelSecret, signatureHeader);
-      if (!isValid) {
-        throw new AppError('Invalid x-line-signature header', 401, 'INVALID_SIGNATURE');
-      }
-
       const now = new Date();
       await tx.dormitoryLineConfig.update({
         where: { dormitoryId: resolvedDormitoryId },
@@ -2063,23 +2104,6 @@ export class LineOaService {
         }
       });
 
-      let accessToken: string | null = null;
-      if (fullConfig.channelAccessTokenEncrypted) {
-        try {
-          accessToken = decryptText(fullConfig.channelAccessTokenEncrypted);
-        } catch {
-          accessToken = null;
-        }
-      }
-
-      let payload: any = {};
-      try {
-        payload = JSON.parse(bodyBuffer.toString('utf8'));
-      } catch {
-        throw new AppError('Failed to parse webhook JSON body', 400, 'INVALID_JSON_BODY');
-      }
-
-      const events = payload.events || [];
       let processedCount = 0;
       let deduplicatedCount = 0;
 
@@ -2100,12 +2124,9 @@ export class LineOaService {
 
           const lineUserId = event.source?.userId;
           if (lineUserId) {
-            if (!accessToken) {
-              accessToken = await this.resolveAccessToken(resolvedDormitoryId).catch(() => null);
-            }
-            let profile = accessToken ? await this.lineAdapter.getProfile(lineUserId, accessToken).catch(() => null) : null;
-            const displayName = profile?.displayName || `LINE User (${lineUserId.slice(-4)})`;
-            const pictureUrl = profile?.pictureUrl || null;
+            const cachedProfile = userProfiles.get(lineUserId);
+            const displayName = cachedProfile?.displayName || `LINE User (${lineUserId.slice(-4)})`;
+            const pictureUrl = cachedProfile?.pictureUrl || null;
 
             if (event.type === 'follow') {
               const friend = await this.friendService.upsertFriendFromWebhook(

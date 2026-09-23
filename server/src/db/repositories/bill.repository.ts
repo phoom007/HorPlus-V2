@@ -132,7 +132,7 @@ export interface BillFilterQuery {
 }
 
 export interface IBillRepository {
-  findById(id: string, dormitoryId?: string): Promise<BillEntity | null>;
+  findById(id: string, dormitoryId?: string, tx?: any): Promise<BillEntity | null>;
   findByNumber(dormitoryId: string, billNumber: string, tx?: any): Promise<BillEntity | null>;
   findByCycleAndContract(dormitoryId: string, billingCycleId: string, contractId: string, billKind?: string, tx?: any): Promise<BillEntity | null>;
   findByCycleAndRoom(dormitoryId: string, billingCycleId: string, roomId: string, billKind?: string, tx?: any): Promise<BillEntity | null>;
@@ -153,7 +153,7 @@ export class InMemoryBillRepository implements IBillRepository {
   private items: Map<string, BillItemEntity[]> = new Map();
   private histories: Map<string, BillStatusHistoryEntity[]> = new Map();
 
-  public async findById(id: string, dormitoryId?: string): Promise<BillEntity | null> {
+  public async findById(id: string, dormitoryId?: string, _tx?: any): Promise<BillEntity | null> {
     const bill = this.bills.get(id);
     if (!bill) return null;
     if (dormitoryId && bill.dormitoryId !== dormitoryId) return null;
@@ -610,10 +610,11 @@ export class PrismaBillRepository implements IBillRepository {
     return { bill: this.mapBillToEntity(createdBill), items: createdItems };
   }
 
-  public async findById(id: string, dormitoryId: string): Promise<BillEntity | null> {
+  public async findById(id: string, dormitoryId: string, tx?: any): Promise<BillEntity | null> {
     const isUuid = (str?: string | null) => !!str && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
     if (!isUuid(id)) return null;
-    const bill = await this.prisma.bill.findFirst({
+    const client = this.getClient(tx);
+    const bill = await client.bill.findFirst({
       where: { id, dormitoryId },
       include: {
         items: true,
@@ -770,13 +771,6 @@ export class PrismaBillRepository implements IBillRepository {
     tx?: any
   ): Promise<BillEntity | null> {
     const client = this.getClient(tx);
-    const existing = await this.findById(id, dormitoryId);
-    if (!existing) return null;
-    if (expectedVersion !== undefined && existing.version !== expectedVersion) {
-      const err = new Error('RESOURCE_VERSION_CONFLICT');
-      (err as any).code = 'RESOURCE_VERSION_CONFLICT';
-      throw err;
-    }
 
     const updateData: any = {};
     if (data.status !== undefined) updateData.status = data.status;
@@ -789,6 +783,28 @@ export class PrismaBillRepository implements IBillRepository {
     if (data.cancelledAt !== undefined) updateData.cancelledAt = data.cancelledAt;
     if (data.cancelledByUserId !== undefined) updateData.cancelledByUserId = isUuid(data.cancelledByUserId) ? data.cancelledByUserId : null;
     if (data.cancellationReason !== undefined) updateData.cancellationReason = data.cancellationReason;
+
+    if (expectedVersion !== undefined) {
+      // Atomic compare-and-swap at database level to prevent concurrent overwrite race conditions (PERF-13)
+      const res = await client.bill.updateMany({
+        where: { id, dormitoryId, version: expectedVersion },
+        data: { ...updateData, version: { increment: 1 } },
+      });
+
+      if (res.count === 0) {
+        const existing = await this.findById(id, dormitoryId, tx);
+        if (!existing) return null;
+        const err = new Error('RESOURCE_VERSION_CONFLICT');
+        (err as any).code = 'RESOURCE_VERSION_CONFLICT';
+        (err as any).statusCode = 409;
+        throw err;
+      }
+
+      return await this.findById(id, dormitoryId, tx);
+    }
+
+    const existing = await this.findById(id, dormitoryId, tx);
+    if (!existing) return null;
 
     const updated = await client.bill.update({
       where: { id },

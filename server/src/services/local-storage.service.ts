@@ -15,6 +15,12 @@ if (!fs.existsSync(UPLOAD_DIR)) {
 }
 
 export class LocalStorageProvider {
+  constructor() {
+    if (process.env.NODE_ENV === 'production' && process.env.STORAGE_PROVIDER && process.env.STORAGE_PROVIDER !== 'local') {
+      console.warn(`STORAGE_PROVIDER is configured as ${process.env.STORAGE_PROVIDER} in production. LocalStorageProvider should not be used as primary storage.`);
+    }
+  }
+
   /**
    * Safely resolves and validates candidate path against upload root directory
    */

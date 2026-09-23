@@ -11,9 +11,39 @@ export class InMemoryRateLimiterStore {
   private hits: Map<string, { count: number; resetTime: number }> = new Map();
   private cooldowns: Map<string, number> = new Map();
   private locks: Map<string, { value: string; expiresAt: number }> = new Map();
+  private lastPruneTime: number = Date.now();
+
+  /**
+   * Prunes expired keys across hits, cooldowns, and locks to prevent memory leaks (RES-04).
+   */
+  public pruneExpired(now: number = Date.now()): void {
+    for (const [k, v] of this.hits.entries()) {
+      if (v.resetTime <= now) {
+        this.hits.delete(k);
+      }
+    }
+    for (const [k, expiresAt] of this.cooldowns.entries()) {
+      if (expiresAt <= now) {
+        this.cooldowns.delete(k);
+      }
+    }
+    for (const [k, v] of this.locks.entries()) {
+      if (v.expiresAt <= now) {
+        this.locks.delete(k);
+      }
+    }
+    this.lastPruneTime = now;
+  }
+
+  private autoPruneIfNeeded(now: number): void {
+    if (now - this.lastPruneTime > 30000 || this.hits.size > 100 || this.cooldowns.size > 100 || this.locks.size > 100) {
+      this.pruneExpired(now);
+    }
+  }
 
   public isAllowed(key: string, maxRequests: number, windowMs: number): boolean {
     const now = Date.now();
+    this.autoPruneIfNeeded(now);
     const entry = this.hits.get(key);
 
     if (!entry || entry.resetTime <= now) {
@@ -31,6 +61,7 @@ export class InMemoryRateLimiterStore {
 
   public checkCooldown(key: string, cooldownMs: number): boolean {
     const now = Date.now();
+    this.autoPruneIfNeeded(now);
     const expiresAt = this.cooldowns.get(key);
     if (expiresAt && now < expiresAt) {
       return false; // In cooldown, blocked
@@ -41,6 +72,7 @@ export class InMemoryRateLimiterStore {
 
   public acquireLock(key: string, value: string, ttlSeconds: number = 30): boolean {
     const now = Date.now();
+    this.autoPruneIfNeeded(now);
     const lock = this.locks.get(key);
     if (lock && now < lock.expiresAt) {
       return false; // Already locked
@@ -60,6 +92,14 @@ export class InMemoryRateLimiterStore {
     this.hits.delete(key);
     this.cooldowns.delete(key);
     this.locks.delete(key);
+  }
+
+  public getStoreSizes(): { hits: number; cooldowns: number; locks: number } {
+    return {
+      hits: this.hits.size,
+      cooldowns: this.cooldowns.size,
+      locks: this.locks.size,
+    };
   }
 
   public clear(): void {

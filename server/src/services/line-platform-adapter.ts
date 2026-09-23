@@ -115,9 +115,20 @@ export class HttpLinePlatformAdapter implements LinePlatformAdapter {
     return this.baseUrl;
   }
 
+  /**
+   * Safe fetch with mandatory timeout (default 10s) to prevent hanging sockets (PERF-04).
+   */
+  private async safeFetch(url: string, init?: RequestInit, timeoutMs: number = 10000): Promise<Response> {
+    const signal = init?.signal || AbortSignal.timeout(timeoutMs);
+    return await fetch(url, {
+      ...init,
+      signal,
+    });
+  }
+
   async verifyAccessToken(channelAccessToken: string): Promise<{ verified: boolean; botInfo?: LineBotInfo }> {
     try {
-      const res = await fetch(`${this.baseUrl}/v2/bot/info`, {
+      const res = await this.safeFetch(`${this.baseUrl}/v2/bot/info`, {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${channelAccessToken}`,
@@ -149,7 +160,7 @@ export class HttpLinePlatformAdapter implements LinePlatformAdapter {
 
   async getProfile(lineUserId: string, accessToken: string): Promise<LineUserProfile | null> {
     try {
-      const res = await fetch(`${this.baseUrl}/v2/bot/profile/${lineUserId}`, {
+      const res = await this.safeFetch(`${this.baseUrl}/v2/bot/profile/${lineUserId}`, {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${accessToken}`,
@@ -179,7 +190,7 @@ export class HttpLinePlatformAdapter implements LinePlatformAdapter {
     retryKey: string
   ): Promise<LinePushResult> {
     try {
-      const res = await fetch(`${this.baseUrl}/v2/bot/message/push`, {
+      const res = await this.safeFetch(`${this.baseUrl}/v2/bot/message/push`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -237,7 +248,7 @@ export class HttpLinePlatformAdapter implements LinePlatformAdapter {
 
   async replyMessage(replyToken: string, messages: any[], accessToken: string): Promise<LineReplyDeliveryResult> {
     try {
-      const res = await fetch(`${this.baseUrl}/v2/bot/message/reply`, {
+      const res = await this.safeFetch(`${this.baseUrl}/v2/bot/message/reply`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -290,7 +301,7 @@ export class HttpLinePlatformAdapter implements LinePlatformAdapter {
 
   async setWebhookEndpoint(endpointUrl: string, accessToken: string): Promise<{ success: boolean }> {
     try {
-      const res = await fetch(`${this.baseUrl}/v2/bot/channel/webhook/endpoint`, {
+      const res = await this.safeFetch(`${this.baseUrl}/v2/bot/channel/webhook/endpoint`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -306,7 +317,7 @@ export class HttpLinePlatformAdapter implements LinePlatformAdapter {
 
   async testWebhookEndpoint(endpointUrl: string, accessToken: string): Promise<LineWebhookTestResult> {
     try {
-      const res = await fetch(`${this.baseUrl}/v2/bot/channel/webhook/test`, {
+      const res = await this.safeFetch(`${this.baseUrl}/v2/bot/channel/webhook/test`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -344,7 +355,7 @@ export class HttpLinePlatformAdapter implements LinePlatformAdapter {
 
   async getWebhookEndpoint(accessToken: string): Promise<LineWebhookEndpointInfo | null> {
     try {
-      const res = await fetch(`${this.baseUrl}/v2/bot/channel/webhook/endpoint`, {
+      const res = await this.safeFetch(`${this.baseUrl}/v2/bot/channel/webhook/endpoint`, {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${accessToken}`,
@@ -363,7 +374,7 @@ export class HttpLinePlatformAdapter implements LinePlatformAdapter {
 
   async getQuota(accessToken: string): Promise<{ type: 'limited' | 'none'; value?: number } | null> {
     try {
-      const res = await fetch(`${this.baseUrl}/v2/bot/message/quota`, {
+      const res = await this.safeFetch(`${this.baseUrl}/v2/bot/message/quota`, {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${accessToken}`,
@@ -386,7 +397,7 @@ export class HttpLinePlatformAdapter implements LinePlatformAdapter {
 
   async getQuotaConsumption(accessToken: string): Promise<{ totalUsage: number } | null> {
     try {
-      const res = await fetch(`${this.baseUrl}/v2/bot/message/quota/consumption`, {
+      const res = await this.safeFetch(`${this.baseUrl}/v2/bot/message/quota/consumption`, {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${accessToken}`,
@@ -408,7 +419,7 @@ export class HttpLinePlatformAdapter implements LinePlatformAdapter {
 
   async displayLoadingAnimation(chatId: string, accessToken: string, loadingSeconds: number = 5): Promise<boolean> {
     try {
-      const res = await fetch(`${this.baseUrl}/v2/bot/chat/loading/start`, {
+      const res = await this.safeFetch(`${this.baseUrl}/v2/bot/chat/loading/start`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -428,7 +439,7 @@ export class HttpLinePlatformAdapter implements LinePlatformAdapter {
 
   async getFollowers(accessToken: string): Promise<{ userIds: string[]; next?: string } | null> {
     try {
-      const res = await fetch(`${this.baseUrl}/v2/bot/followers/ids?limit=10`, {
+      const res = await this.safeFetch(`${this.baseUrl}/v2/bot/followers/ids?limit=10`, {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${accessToken}`,
@@ -451,7 +462,7 @@ export class HttpLinePlatformAdapter implements LinePlatformAdapter {
 
   async createRichMenu(richMenu: any, accessToken: string): Promise<string | null> {
     try {
-      const res = await fetch(`${this.baseUrl}/v2/bot/richmenu`, {
+      const res = await this.safeFetch(`${this.baseUrl}/v2/bot/richmenu`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -479,7 +490,7 @@ export class HttpLinePlatformAdapter implements LinePlatformAdapter {
   ): Promise<boolean> {
     try {
       const uploadBaseUrl = this.baseUrl.includes('api.line.me') ? 'https://api-data.line.me' : this.baseUrl;
-      const res = await fetch(`${uploadBaseUrl}/v2/bot/richmenu/${richMenuId}/content`, {
+      const res = await this.safeFetch(`${uploadBaseUrl}/v2/bot/richmenu/${richMenuId}/content`, {
         method: 'POST',
         headers: {
           'Content-Type': contentType,
@@ -496,7 +507,7 @@ export class HttpLinePlatformAdapter implements LinePlatformAdapter {
 
   async setDefaultRichMenu(richMenuId: string, accessToken: string): Promise<boolean> {
     try {
-      const res = await fetch(`${this.baseUrl}/v2/bot/user/all/richmenu/${richMenuId}`, {
+      const res = await this.safeFetch(`${this.baseUrl}/v2/bot/user/all/richmenu/${richMenuId}`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${accessToken}`,
@@ -511,7 +522,7 @@ export class HttpLinePlatformAdapter implements LinePlatformAdapter {
 
   async linkRichMenuToUser(lineUserId: string, richMenuId: string, accessToken: string): Promise<boolean> {
     try {
-      const res = await fetch(`${this.baseUrl}/v2/bot/user/${lineUserId}/richmenu/${richMenuId}`, {
+      const res = await this.safeFetch(`${this.baseUrl}/v2/bot/user/${lineUserId}/richmenu/${richMenuId}`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${accessToken}`,
@@ -531,7 +542,7 @@ export class HttpLinePlatformAdapter implements LinePlatformAdapter {
 
   async unlinkRichMenuFromUser(lineUserId: string, accessToken: string): Promise<boolean> {
     try {
-      const res = await fetch(`${this.baseUrl}/v2/bot/user/${lineUserId}/richmenu`, {
+      const res = await this.safeFetch(`${this.baseUrl}/v2/bot/user/${lineUserId}/richmenu`, {
         method: 'DELETE',
         headers: {
           'Authorization': `Bearer ${accessToken}`,
@@ -551,7 +562,7 @@ export class HttpLinePlatformAdapter implements LinePlatformAdapter {
 
   async getRichMenuList(accessToken: string): Promise<any[]> {
     try {
-      const res = await fetch(`${this.baseUrl}/v2/bot/richmenu/list`, {
+      const res = await this.safeFetch(`${this.baseUrl}/v2/bot/richmenu/list`, {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${accessToken}`,
@@ -568,7 +579,7 @@ export class HttpLinePlatformAdapter implements LinePlatformAdapter {
 
   async deleteRichMenu(richMenuId: string, accessToken: string): Promise<boolean> {
     try {
-      const res = await fetch(`${this.baseUrl}/v2/bot/richmenu/${richMenuId}`, {
+      const res = await this.safeFetch(`${this.baseUrl}/v2/bot/richmenu/${richMenuId}`, {
         method: 'DELETE',
         headers: {
           'Authorization': `Bearer ${accessToken}`,
