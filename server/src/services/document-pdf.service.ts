@@ -43,59 +43,206 @@ export interface ContractPdfData {
   createdAt?: string;
 }
 
+/**
+ * Escapes characters for safe interpolation into HTML.
+ */
+export function escapeHtml(str?: string | number | null, fallback = ''): string {
+  if (str === undefined || str === null) return fallback;
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/**
+ * Validates that a signature URL is strictly a base64 encoded image data URL.
+ * Rejects any http:, https:, file:, javascript:, or arbitrary payloads to prevent SSRF.
+ */
+export function isValidSignatureDataUrl(url?: string | null): boolean {
+  if (!url || typeof url !== 'string') return false;
+  const trimmed = url.trim();
+  return /^data:image\/(png|jpeg|jpg|webp);base64,[A-Za-z0-9+/=]+$/.test(trimmed);
+}
+
+/**
+ * Asynchronous semaphore to bound concurrent PDF generation requests.
+ */
+export class AsyncPdfSemaphore {
+  private current = 0;
+  private queue: Array<() => void> = [];
+
+  constructor(public readonly max: number = 2) {}
+
+  async acquire(timeoutMs = 30000): Promise<() => void> {
+    if (this.current < this.max) {
+      this.current++;
+      let released = false;
+      return () => {
+        if (!released) {
+          released = true;
+          this.release();
+        }
+      };
+    }
+
+    return new Promise<() => void>((resolve, reject) => {
+      let timer: NodeJS.Timeout | null = null;
+      const callback = () => {
+        if (timer) clearTimeout(timer);
+        this.current++;
+        let released = false;
+        resolve(() => {
+          if (!released) {
+            released = true;
+            this.release();
+          }
+        });
+      };
+
+      timer = setTimeout(() => {
+        const idx = this.queue.indexOf(callback);
+        if (idx !== -1) {
+          this.queue.splice(idx, 1);
+        }
+        reject(new Error('PDF generation queue timeout: server busy, please try again'));
+      }, timeoutMs);
+
+      this.queue.push(callback);
+    });
+  }
+
+  private release(): void {
+    this.current--;
+    if (this.queue.length > 0 && this.current < this.max) {
+      const next = this.queue.shift();
+      if (next) next();
+    }
+  }
+
+  getActiveCount(): number {
+    return this.current;
+  }
+
+  getQueueLength(): number {
+    return this.queue.length;
+  }
+}
+
+/**
+ * Managed reusable Playwright Chromium browser singleton with automatic restart on disconnection.
+ */
+export class SharedChromiumManager {
+  private static browserInstance: Browser | null = null;
+  private static launchPromise: Promise<Browser> | null = null;
+  private static semaphore = new AsyncPdfSemaphore(2);
+
+  static getSemaphore(): AsyncPdfSemaphore {
+    return this.semaphore;
+  }
+
+  static async getBrowser(): Promise<Browser> {
+    if (this.browserInstance && this.browserInstance.isConnected()) {
+      return this.browserInstance;
+    }
+
+    if (this.launchPromise) {
+      return this.launchPromise;
+    }
+
+    this.launchPromise = (async () => {
+      try {
+        const browser = await chromium.launch({
+          headless: true,
+          args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu'],
+        });
+
+        browser.on('disconnected', () => {
+          SharedChromiumManager.browserInstance = null;
+        });
+
+        SharedChromiumManager.browserInstance = browser;
+        return browser;
+      } finally {
+        SharedChromiumManager.launchPromise = null;
+      }
+    })();
+
+    return this.launchPromise;
+  }
+
+  static async closeBrowser(): Promise<void> {
+    if (this.browserInstance) {
+      try {
+        await this.browserInstance.close();
+      } catch {}
+      this.browserInstance = null;
+    }
+  }
+
+  static isBrowserActive(): boolean {
+    return !!(this.browserInstance && this.browserInstance.isConnected());
+  }
+}
+
 export class DocumentPdfService {
   /**
    * Generates authentic HTML for the Official Thai Lease Agreement (matching PO Image 3).
    * Formatted with Sarabun font, Clauses 1-6, BE dates, two-party signatures, and clean layout.
    */
   public generateContractHtml(data: ContractPdfData): string {
-    const safeDormName = this.safeText(data.dormitoryName, 'หอพัก');
-    const safeOwnerName = this.safeText(data.ownerName, 'เจ้าของหอพัก');
-    const safeTenantName = this.safeText(data.tenantName, 'ผู้เช่า');
-    const hasTitlePrefix = /^(นาย|นาง|นางสาว|ด\.ช\.|ด\.ญ\.|เด็กชาย|เด็กหญิง|ดร\.|ดร\s|ผศ\.|ผศ\s|รศ\.|รศ\s|ศ\.|ศ\s|อาจารย์|ว่าที่ร้อยตรี|คุณ)/i.test(safeTenantName.trim());
-    const formattedTenantName = hasTitlePrefix ? safeTenantName : `คุณ${safeTenantName}`;
-    const safeAddress = this.safeText(data.dormitoryAddress, 'อาคารพักอาศัยส่วนบุคคล');
-    const tenantCitizenId = this.safeText(data.tenantCitizenId, '-');
-    const tenantPhone = this.safeText(data.tenantPhone, '-');
-    const roomNum = this.safeText(data.roomNumber, '101');
-    const roomFloor = data.floor ? ` (ชั้น ${data.floor})` : '';
+    const safeDormName = escapeHtml(this.safeText(data.dormitoryName, 'หอพัก'));
+    const safeOwnerName = escapeHtml(this.safeText(data.ownerName, 'เจ้าของหอพัก'));
+    const rawTenantName = this.safeText(data.tenantName, 'ผู้เช่า');
+    const hasTitlePrefix = /^(นาย|นาง|นางสาว|ด\.ช\.|ด\.ญ\.|เด็กชาย|เด็กหญิง|ดร\.|ดร\s|ผศ\.|ผศ\s|รศ\.|รศ\s|ศ\.|ศ\s|อาจารย์|ว่าที่ร้อยตรี|คุณ)/i.test(rawTenantName.trim());
+    const formattedTenantName = escapeHtml(hasTitlePrefix ? rawTenantName : `คุณ${rawTenantName}`);
+    const safeAddress = escapeHtml(this.safeText(data.dormitoryAddress, 'อาคารพักอาศัยส่วนบุคคล'));
+    const tenantCitizenId = escapeHtml(this.safeText(data.tenantCitizenId, '-'));
+    const tenantPhone = escapeHtml(this.safeText(data.tenantPhone, '-'));
+    const roomNum = escapeHtml(this.safeText(data.roomNumber, '101'));
+    const roomFloor = data.floor ? ` (ชั้น ${escapeHtml(String(data.floor))})` : '';
 
     const createdDateStr = data.createdAt ? data.createdAt.split('T')[0] : data.startDate;
-    const createdDateThai = this.formatThaiDate(createdDateStr);
-    const startDateThai = this.formatThaiDate(data.startDate);
-    const endDateThai = this.formatThaiDate(data.endDate);
+    const createdDateThai = escapeHtml(this.formatThaiDate(createdDateStr));
+    const startDateThai = escapeHtml(this.formatThaiDate(data.startDate));
+    const endDateThai = escapeHtml(this.formatThaiDate(data.endDate));
     const duration = data.durationMonths ? Number(data.durationMonths) : this.calculateDurationMonths(data.startDate, data.endDate);
 
     const isTermContract = data.rentBillingType === 'term';
     const contractTypeLabel = isTermContract ? 'สัญญาเช่ารายเทอม' : 'สัญญาเช่ารายเดือน';
-    const rentFormatted = this.formatBaht(data.rentAmount);
-    const depositFormatted = this.formatBaht(data.depositAmount);
-    const advanceFormatted = data.advancePaymentAmount && Number(data.advancePaymentAmount) > 0 ? this.formatBaht(data.advancePaymentAmount) : null;
+    const rentFormatted = escapeHtml(this.formatBaht(data.rentAmount));
+    const depositFormatted = escapeHtml(this.formatBaht(data.depositAmount));
+    const advanceFormatted = data.advancePaymentAmount && Number(data.advancePaymentAmount) > 0 ? escapeHtml(this.formatBaht(data.advancePaymentAmount)) : null;
     const depositTypeText = data.depositType === 'deduct_rent'
       ? 'นำไปหักชำระกับค่าเช่างวดสุดท้าย'
       : 'คืนให้เต็มจำนวนเมื่อสิ้นสุดสัญญาโดยไม่มีสิ่งของชำรุดเสียหาย';
 
-    const totalOccupants = 1 + (data.coTenants && Array.isArray(data.coTenants) ? data.coTenants.length : 0);
+    const coTenants = Array.isArray(data.coTenants) ? data.coTenants : [];
+    const totalOccupants = 1 + coTenants.length;
 
-    const waterRateStr = data.waterRate !== undefined && data.waterRate !== null ? `${data.waterRate} บาท/หน่วย` : 'ไม่ระบุ';
-    const elecRateStr = data.electricityRate !== undefined && data.electricityRate !== null ? `${data.electricityRate} บาท/หน่วย` : 'ไม่ระบุ';
-    const commonFeeStr = data.commonFee !== undefined && data.commonFee !== null ? `${data.commonFee} บาท/เดือน` : 'ไม่ระบุ';
-    const internetFeeStr = data.internetFee && data.internetFee !== '0.00' && data.internetFee !== 'ไม่ระบุ' ? `, ค่าอินเทอร์เน็ต ${data.internetFee} บาท/เดือน` : '';
-    const parkingFeeStr = data.parkingFee && data.parkingFee !== '0.00' && data.parkingFee !== 'ไม่ระบุ' ? `, ค่าที่จอดรถ ${data.parkingFee} บาท/เดือน` : '';
-    const billingDayStr = data.billingDay !== undefined && data.billingDay !== null ? String(data.billingDay) : 'ไม่ระบุ';
-    const dueDayStr = data.dueDay !== undefined && data.dueDay !== null ? String(data.dueDay) : 'ไม่ระบุ';
+    const waterRateStr = data.waterRate !== undefined && data.waterRate !== null ? `${escapeHtml(String(data.waterRate))} บาท/หน่วย` : 'ไม่ระบุ';
+    const elecRateStr = data.electricityRate !== undefined && data.electricityRate !== null ? `${escapeHtml(String(data.electricityRate))} บาท/หน่วย` : 'ไม่ระบุ';
+    const commonFeeStr = data.commonFee !== undefined && data.commonFee !== null ? `${escapeHtml(String(data.commonFee))} บาท/เดือน` : 'ไม่ระบุ';
+    const internetFeeStr = data.internetFee && data.internetFee !== '0.00' && data.internetFee !== 'ไม่ระบุ' ? `, ค่าอินเทอร์เน็ต ${escapeHtml(data.internetFee)} บาท/เดือน` : '';
+    const parkingFeeStr = data.parkingFee && data.parkingFee !== '0.00' && data.parkingFee !== 'ไม่ระบุ' ? `, ค่าที่จอดรถ ${escapeHtml(data.parkingFee)} บาท/เดือน` : '';
+    const billingDayStr = data.billingDay !== undefined && data.billingDay !== null ? escapeHtml(String(data.billingDay)) : 'ไม่ระบุ';
+    const dueDayStr = data.dueDay !== undefined && data.dueDay !== null ? escapeHtml(String(data.dueDay)) : 'ไม่ระบุ';
 
-    const termsText = this.safeText(
+    const rawTerms = this.safeText(
       data.terms,
       '1. ห้ามสูบบุหรี่ภายในห้องพักและพื้นที่ส่วนกลาง\n2. ห้ามส่งเสียงดังรบกวนผู้อื่นหลังเวลา 22:00 น.\n3. ชำระค่าเช่าและค่าน้ำไฟตรงตามกำหนดเวลา ภายในวันที่ 5 ของทุกเดือน\n4. ห้ามนำบุคคลภายนอกมาพักค้างคืนโดยไม่แจ้งเจ้าหน้าที่\n5. รักษาความสะอาดและดูแลรักษาทรัพย์สินของหอพักอย่างเคร่งครัด'
     );
+    const termsText = escapeHtml(rawTerms);
 
-    const tenantSigHtml = data.tenantSignature && (data.tenantSignature.startsWith('data:') || data.tenantSignature.startsWith('http'))
-      ? `<img src="${data.tenantSignature}" alt="ลายเซ็นผู้เช่า" style="max-height: 48px; max-width: 150px; object-fit: contain;" />`
+    const isTenantSigValid = isValidSignatureDataUrl(data.tenantSignature);
+    const tenantSigHtml = isTenantSigValid
+      ? `<img src="${data.tenantSignature!.trim()}" alt="ลายเซ็นผู้เช่า" style="max-height: 48px; max-width: 150px; object-fit: contain;" />`
       : `<div style="height: 44px; border-bottom: 1px dotted #94a3b8; width: 140px; margin: 0 auto;"></div>`;
 
-    const ownerSigHtml = data.ownerSignatureUrl && (data.ownerSignatureUrl.startsWith('data:') || data.ownerSignatureUrl.startsWith('http'))
-      ? `<img src="${data.ownerSignatureUrl}" alt="ลายเซ็นผู้ให้เช่า" style="max-height: 48px; max-width: 150px; object-fit: contain;" />`
+    const isOwnerSigValid = isValidSignatureDataUrl(data.ownerSignatureUrl);
+    const ownerSigHtml = isOwnerSigValid
+      ? `<img src="${data.ownerSignatureUrl!.trim()}" alt="ลายเซ็นผู้ให้เช่า" style="max-height: 48px; max-width: 150px; object-fit: contain;" />`
       : `<div style="height: 44px; border-bottom: 1px dotted #94a3b8; width: 140px; margin: 0 auto;"></div>`;
 
     let installmentsHtml = '';
@@ -106,7 +253,7 @@ export class DocumentPdfService {
           <table style="width: 100%; font-size: 11.5px; border-collapse: collapse;">
             ${data.installmentSchedule.map(s => `
               <tr>
-                <td style="padding: 4px 6px; color: #475569;">งวดที่ #${s.installmentNo} (${s.cycleName})</td>
+                <td style="padding: 4px 6px; color: #475569;">งวดที่ #${escapeHtml(String(s.installmentNo))} (${escapeHtml(s.cycleName)})</td>
                 <td style="padding: 4px 6px; text-align: right; font-weight: 700; color: #0f172a;">฿ ${this.formatBaht(s.amount)} บาท</td>
               </tr>
             `).join('')}
@@ -115,12 +262,14 @@ export class DocumentPdfService {
       `;
     }
 
+    const safeContractNumber = escapeHtml(this.safeText(data.contractNumber, 'CTR'));
+
     return `
       <!DOCTYPE html>
       <html lang="th">
       <head>
         <meta charset="UTF-8">
-        <title>สัญญาเช่าห้องพักเลขที่ ${data.contractNumber || 'CTR'} - ห้อง ${roomNum}</title>
+        <title>สัญญาเช่าห้องพักเลขที่ ${safeContractNumber} - ห้อง ${roomNum}${roomFloor}</title>
         <link rel="preconnect" href="https://fonts.googleapis.com">
         <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
         <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
@@ -235,7 +384,7 @@ export class DocumentPdfService {
         <div class="contract-container">
           <div class="header-box">
             <div class="title">หนังสือสัญญาเช่าห้องพักอาศัย</div>
-            <div class="contract-no">สัญญาเลขที่: <strong>${data.contractNumber || 'CTR'}</strong> | วันที่ทำสัญญา: <strong>${createdDateThai}</strong></div>
+            <div class="contract-no">สัญญาเลขที่: <strong>${safeContractNumber}</strong> | วันที่ทำสัญญา: <strong>${createdDateThai}</strong></div>
             <div style="font-size: 12.5px; color: #64748b; margin-top: 4px;">ทำที่: ${safeDormName} (${safeAddress})</div>
           </div>
 
@@ -247,7 +396,7 @@ export class DocumentPdfService {
 
           <div class="highlight-box">
             <ul>
-              <li><strong>ข้อ 1. ทรัพย์สินที่เช่า:</strong> ผู้ให้เช่าตกลงให้เช่า และผู้เช่าตกลงเช่าห้องพักหมายเลข <strong>ห้อง ${roomNum}</strong> ของอาคาร <strong>${safeDormName}</strong> พร้อมอุปกรณ์ เฟอร์นิเจอร์ เครื่องใช้ไฟฟ้า และสิ่งอำนวยความสะดวกในสภาพเรียบร้อยสมบูรณ์</li>
+              <li><strong>ข้อ 1. ทรัพย์สินที่เช่า:</strong> ผู้ให้เช่าตกลงให้เช่า และผู้เช่าตกลงเช่าห้องพักหมายเลข <strong>ห้อง ${roomNum}${roomFloor}</strong> ของอาคาร <strong>${safeDormName}</strong> พร้อมอุปกรณ์ เฟอร์นิเจอร์ เครื่องใช้ไฟฟ้า และสิ่งอำนวยความสะดวกในสภาพเรียบร้อยสมบูรณ์</li>
               <li><strong>ข้อ 2. อัตราค่าเช่า เงินประกัน และการคืนเงิน:</strong> ผู้เช่าตกลงชำระค่าเช่าประเภท <strong>${contractTypeLabel}</strong> ในอัตรา <strong>฿ ${rentFormatted} บาทต่อ${isTermContract ? 'เทอม' : 'เดือน'}</strong> กำหนดชำระตามรอบบิลที่หอพักกำหนด (ตัดรอบบิลวันที่ ${billingDayStr} | ครบกำหนดชำระวันที่ ${dueDayStr} ของทุกเดือน) พร้อมวางเงินประกันความเสียหายจำนวน <strong>฿ ${depositFormatted} บาท</strong> โดยเงินประกันนี้จะได้รับคืนเมื่อสิ้นสุดสัญญาเช่า หลังจากหักค่าใช้จ่ายค้างชำระ หนี้สิน หรือค่าความเสียหายต่อทรัพย์สิน (ถ้ามี) ตามระเบียบและเงื่อนไขที่หอพักกำหนด</li>
               <li><strong>ข้อ 3. ระยะเวลาการเช่า:</strong> สัญญานี้มีกำหนดระยะเวลา <strong>${duration} เดือน</strong> โดยเริ่มต้นตั้งแต่วันที่ <strong>${startDateThai}</strong> ถึงวันที่ <strong>${endDateThai}</strong></li>
               <li><strong>ข้อ 4. ยานพาหนะ สัตว์เลี้ยง และการใช้พื้นที่ส่วนกลาง:</strong> ผู้เช่าตกลงปฏิบัติตามระเบียบการจอดยานพาหนะ การนำสัตว์เลี้ยงเข้าพัก (หากหอพักอนุญาต) และการใช้พื้นที่ส่วนกลาง โดยต้องบันทึกข้อมูลยานพาหนะและสัตว์เลี้ยงลงในระบบของหอพักให้ถูกต้องตรงตามความเป็นจริง</li>
@@ -287,20 +436,41 @@ export class DocumentPdfService {
   }
 
   /**
-   * Generates a server-authoritative Lease Contract PDF document using Headless Chromium.
+   * Generates a server-authoritative Lease Contract PDF document using Managed Headless Chromium.
    * Renders the authentic official Thai agreement template (matching PO Image 3) with Sarabun font.
+   * Bounded concurrency (semaphore max 2) and SSRF-safe network routing (SEC-07 & PERF-01).
    */
   public async generateContractPdf(data: ContractPdfData): Promise<Buffer> {
     const html = this.generateContractHtml(data);
+    const release = await SharedChromiumManager.getSemaphore().acquire();
 
-    let browser: Browser | null = null;
+    let context: any = null;
+    let page: any = null;
     try {
-      browser = await chromium.launch({
-        headless: true,
-        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu']
+      const browser = await SharedChromiumManager.getBrowser();
+      context = await browser.newContext();
+      page = await context.newPage();
+
+      // SEC-07: Restrict network requests - allow only Google Fonts & data URLs, abort all others
+      await page.route('**/*', (route: any) => {
+        const reqUrl = route.request().url();
+        if (reqUrl.startsWith('data:')) {
+          return route.continue();
+        }
+        try {
+          const parsed = new URL(reqUrl);
+          if (
+            (parsed.hostname === 'fonts.googleapis.com' || parsed.hostname === 'fonts.gstatic.com') &&
+            (parsed.protocol === 'https:' || parsed.protocol === 'http:')
+          ) {
+            return route.continue();
+          }
+        } catch {}
+
+        return route.abort();
       });
-      const page = await browser.newPage();
-      await page.setContent(html, { waitUntil: 'networkidle' });
+
+      await page.setContent(html, { waitUntil: 'networkidle', timeout: 20000 });
       const rawPdfBytes = await page.pdf({
         format: 'A4',
         printBackground: true,
@@ -309,10 +479,8 @@ export class DocumentPdfService {
           bottom: '15mm',
           left: '15mm',
           right: '15mm',
-        }
+        },
       });
-      await browser.close();
-      browser = null;
 
       // Ensure creationDate and modificationDate metadata match contractual timestamps
       const pdfDoc = await PDFDocument.load(rawPdfBytes);
@@ -326,10 +494,21 @@ export class DocumentPdfService {
       const finalPdfBytes = await pdfDoc.save();
       return Buffer.from(finalPdfBytes);
     } finally {
-      if (browser) {
-        await (browser as Browser).close().catch(() => {});
+      if (page) {
+        await page.close().catch(() => {});
       }
+      if (context) {
+        await context.close().catch(() => {});
+      }
+      release();
     }
+  }
+
+  /**
+   * Closes the shared Playwright Chromium browser instance if active.
+   */
+  public static async closeSharedBrowser(): Promise<void> {
+    await SharedChromiumManager.closeBrowser();
   }
 
   /**
