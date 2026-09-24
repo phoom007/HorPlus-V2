@@ -220,6 +220,9 @@ export const TenantContractView: React.FC<TenantContractViewProps> = ({
                           6
                         );
                         setRequestedDurationMonths(plan === 'term' ? effTerm : 1);
+                        if (minRenewalDate) {
+                          setRequestedStartDate(minRenewalDate);
+                        }
                         setIsRenewalSheetOpen(true);
                       }}
                       className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white rounded-xl text-[10px] font-extrabold transition-all shadow-xs flex items-center gap-1.5 shrink-0 cursor-pointer"
@@ -229,6 +232,24 @@ export const TenantContractView: React.FC<TenantContractViewProps> = ({
                     </button>
                   )}
                 </div>
+
+                {!isPendingRenewal && renewalEligibility?.latestRejectedRequest && (
+                  <div
+                    data-testid="renewal-rejected-banner"
+                    className="p-3 bg-rose-50 border border-rose-200/80 rounded-2xl flex items-start gap-2.5 text-rose-800"
+                  >
+                    <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                    <div className="space-y-0.5 text-[10px] leading-relaxed">
+                      <p className="font-extrabold text-rose-900">คำขอต่อสัญญาล่าสุดไม่ผ่านการอนุมัติ</p>
+                      {renewalEligibility.latestRejectedRequest.rejectionReason && (
+                        <p className="text-rose-700 font-semibold" data-testid="renewal-rejected-reason">
+                          เหตุผล: {renewalEligibility.latestRejectedRequest.rejectionReason}
+                        </p>
+                      )}
+                      <p className="text-rose-600/90 text-[9px]">คุณสามารถกดปุ่ม &quot;ส่งคำขอต่อสัญญา&quot; เพื่อยื่นคำขอใหม่ได้ทันที</p>
+                    </div>
+                  </div>
+                )}
 
                 {/* Details grid list */}
                 <div className="border-t border-slate-100 pt-4 space-y-3 text-[10px] leading-none text-slate-600">

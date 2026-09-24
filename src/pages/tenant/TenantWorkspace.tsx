@@ -446,13 +446,20 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
 
           httpRequest<any>(
             'GET',
-            `/api/v1/contract-renewals/eligibility?contractId=${activeContract.id}&tenantId=${tenant.id}`
+            `/api/v1/contract-renewals/eligibility?contractId=${activeContract.id}`
           )
             .then((res) => {
               const elig = res?.data || res;
               setRenewalEligibility(elig);
-              if (elig?.eligibleContract?.endDate) {
-                setRequestedStartDate(String(elig.eligibleContract.endDate).split('T')[0]);
+              const rawEnd = elig?.eligibleContract?.endDate || elig?.contract?.endDate || activeContract.endDate;
+              if (rawEnd) {
+                const str = String(rawEnd).split('T')[0];
+                const [y, m, d] = str.split('-').map(Number);
+                if (y && m && d) {
+                  setRequestedStartDate(new Date(Date.UTC(y, m - 1, d + 1)).toISOString().split('T')[0]);
+                } else {
+                  setRequestedStartDate(str);
+                }
               }
             })
             .catch(() => setRenewalEligibility(null));
@@ -810,15 +817,25 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
       showToast('error', 'ไม่พบข้อมูลสัญญา', 'ไม่พบข้อมูลสัญญาเช่าเดิมสำหรับการต่อสัญญา');
       return;
     }
+    const minNextDate = activeCtr.endDate
+      ? (() => {
+          const str = String(activeCtr.endDate).split('T')[0];
+          const [y, m, d] = str.split('-').map(Number);
+          return y && m && d
+            ? new Date(Date.UTC(y, m - 1, d + 1)).toISOString().split('T')[0]
+            : str;
+        })()
+      : '';
     const effectiveStartDate =
-      requestedStartDate || (activeCtr.endDate ? String(activeCtr.endDate).split('T')[0] : '');
+      requestedStartDate && (!minNextDate || requestedStartDate >= minNextDate)
+        ? requestedStartDate
+        : minNextDate || requestedStartDate;
     if (!effectiveStartDate) return;
 
     setIsSubmittingRenewal(true);
     try {
       await httpRequest('POST', '/api/v1/contract-renewals/request', {
-        dormitoryId: activeCtr.dormitoryId || tenant.dormitoryId,
-        tenantId: tenant.id,
+        dormitoryId: activeCtr.dormitoryId || localTenant?.dormitoryId || tenant.dormitoryId,
         contractId: activeCtr.id,
         requestedStartDate: effectiveStartDate,
         requestedDurationMonths: Number(requestedDurationMonths || 6),
@@ -830,7 +847,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
       );
       const updatedElig: any = await httpRequest(
         'GET',
-        `/api/v1/contract-renewals/eligibility?contractId=${activeCtr.id}&tenantId=${tenant.id}`
+        `/api/v1/contract-renewals/eligibility?contractId=${activeCtr.id}`
       );
       setRenewalEligibility(updatedElig?.data || updatedElig);
     } catch (err: any) {
@@ -852,9 +869,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
     }
     setIsCancellingRenewal(true);
     try {
-      await httpRequest('POST', `/api/v1/contract-renewals/requests/${pendingId}/cancel`, {
-        tenantId: tenant.id,
-      });
+      await httpRequest('POST', `/api/v1/contract-renewals/requests/${pendingId}/cancel`, {});
       showToast('success', 'ยกเลิกคำขอสำเร็จ', 'ยกเลิกคำขอต่อสัญญาเรียบร้อยแล้ว');
       const activeCtr =
         tenantContracts.find(
@@ -863,7 +878,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
       if (activeCtr) {
         const updatedElig: any = await httpRequest(
           'GET',
-          `/api/v1/contract-renewals/eligibility?contractId=${activeCtr.id}&tenantId=${tenant.id}`
+          `/api/v1/contract-renewals/eligibility?contractId=${activeCtr.id}`
         );
         setRenewalEligibility(updatedElig?.data || updatedElig);
       }

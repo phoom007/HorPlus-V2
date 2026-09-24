@@ -26,6 +26,12 @@ export async function findAuthoritativeActiveTenant(options: AuthoritativeTenant
     return null;
   }
 
+  if (typeof prisma.$executeRaw === 'function') {
+    try {
+      await prisma.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, false)`;
+    } catch {}
+  }
+
   const isUuid = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(userId);
 
   // 1. Direct lookup by linkedUserId if userId is a valid UUID
@@ -135,3 +141,114 @@ export async function findAuthoritativeActiveTenantForRequest(req: any, dormitor
     client,
   });
 }
+
+export async function resolveAuthoritativeTenantContext(req: any, client?: any) {
+  const basePrisma = client || getPrismaClient();
+  const auth = req.auth;
+  if (!auth?.userId) {
+    return { error: { code: 'SESSION_REQUIRED', message: 'กรุณาเข้าสู่ระบบก่อนดำเนินการ', statusCode: 401 } };
+  }
+
+  const runWithClient = async (prisma: any) => {
+    let dormId =
+      req.dormitoryContext?.dormitoryId ||
+      req.activeDormitoryId ||
+      req.auth?.memberships?.find((m: any) => (m.status || '').toLowerCase() === 'active')?.dormitoryId;
+
+    const userId = String(auth.userId);
+    const isUuid = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(userId);
+    const accessGrantId =
+      auth.session?.accessGrantId || (userId.startsWith('ag_user_') ? userId.replace('ag_user_', '') : null);
+
+    if (!dormId && accessGrantId && prisma.dormitoryAccessGrant?.findUnique) {
+      const grant = await prisma.dormitoryAccessGrant.findUnique({
+        where: { id: accessGrantId },
+      });
+      if (grant && grant.status === 'ACTIVE') {
+        dormId = grant.dormitoryId;
+      }
+    }
+
+    if (!dormId && isUuid && prisma.dormitoryMember?.findMany) {
+      const members = await prisma.dormitoryMember.findMany({
+        where: { userId, status: 'active' },
+      });
+      if (members.length > 0) {
+        dormId = members[0].dormitoryId;
+      }
+    }
+
+    if (!dormId) {
+      return { error: { code: 'FORBIDDEN', message: 'ไม่พบข้อมูลหอพักของผู้เช่า', statusCode: 403 } };
+    }
+
+    if (typeof prisma.$executeRaw === 'function') {
+      try {
+        await prisma.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormId}, true)`;
+      } catch {}
+    }
+
+    let primaryTenant = await findAuthoritativeActiveTenant({
+      dormitoryId: dormId,
+      auth,
+      client: prisma,
+    });
+
+    if (!primaryTenant && auth.user?.phone && prisma.tenant?.findFirst) {
+      primaryTenant = await prisma.tenant.findFirst({
+        where: {
+          dormitoryId: dormId,
+          phone: auth.user.phone,
+          deletedAt: null,
+          status: 'active',
+        },
+      });
+    }
+
+    if (!primaryTenant) {
+      return { error: { code: 'FORBIDDEN', message: 'ไม่พบข้อมูลผู้เช่าที่ใช้งานอยู่ในหอพักนี้', statusCode: 403 } };
+    }
+
+    let tenants = [primaryTenant];
+    if (prisma.tenant?.findMany) {
+      const orFilters: any[] = [];
+      if (isUuid) orFilters.push({ linkedUserId: userId });
+      if (primaryTenant.lineFriendId) orFilters.push({ lineFriendId: primaryTenant.lineFriendId });
+      if (orFilters.length > 0) {
+        const allTenants = await prisma.tenant.findMany({
+          where: {
+            dormitoryId: dormId,
+            deletedAt: null,
+            status: 'active',
+            OR: orFilters,
+          },
+        });
+        if (Array.isArray(allTenants) && allTenants.length > 0) {
+          tenants = allTenants;
+        }
+      }
+    }
+
+    return {
+      tenant: primaryTenant,
+      tenants,
+      dormitoryId: dormId,
+    };
+  };
+
+  if (!client && typeof basePrisma.$transaction === 'function') {
+    return basePrisma.$transaction(async (tx: any) => runWithClient(tx));
+  }
+  return runWithClient(basePrisma);
+}
+
+export function getTenantIdsForPortalContext(ctx: any): string[] {
+  if (Array.isArray(ctx?.tenants) && ctx.tenants.length > 0) {
+    return ctx.tenants.map((t: any) => String(t.id));
+  }
+  if (ctx?.tenant?.id) {
+    return [String(ctx.tenant.id)];
+  }
+  return [];
+}
+

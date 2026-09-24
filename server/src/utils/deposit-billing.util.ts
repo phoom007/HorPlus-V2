@@ -59,7 +59,7 @@ export async function createDepositBillForAgreementInTx(
     throw new Error('createDepositBillForAgreementInTx requires exactly one agreement identity (contractId XOR provisionalRentalTermId)');
   }
 
-  // 2. Idempotency Check: search existing DEPOSIT bill on this agreement
+  // 2. Idempotency Check: search existing DEPOSIT bill on this agreement OR for this tenant in the dormitory (PO-10: one deposit bill per tenant)
   const existingBill = await tx.bill.findFirst({
     where: {
       dormitoryId: input.dormitoryId,
@@ -71,6 +71,21 @@ export async function createDepositBillForAgreementInTx(
 
   if (existingBill) {
     return existingBill;
+  }
+
+  if (input.tenantId && tx.bill?.findFirst) {
+    const existingTenantDepositBill = await tx.bill.findFirst({
+      where: {
+        dormitoryId: input.dormitoryId,
+        tenantId: input.tenantId,
+        billKind: 'DEPOSIT',
+        status: { notIn: ['CANCELLED', 'cancelled', 'VOIDED', 'voided'] },
+      },
+      include: { items: true },
+    });
+    if (existingTenantDepositBill) {
+      return existingTenantDepositBill;
+    }
   }
 
   // 3. Strict Start-Cycle Authority (with Go-Live Boundary fallback)

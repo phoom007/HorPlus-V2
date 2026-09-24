@@ -52,6 +52,11 @@ export class ContractRenewalService {
     }
 
     const prisma = getPrismaClient();
+    if (typeof (prisma as any).$executeRaw === 'function') {
+      try {
+        await prisma.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, false)`;
+      } catch {}
+    }
 
     const contract = await prisma.contract.findFirst({
       where: { id: contractId, dormitoryId, tenantId, deletedAt: null },
@@ -139,11 +144,24 @@ export class ContractRenewalService {
       };
     }
 
+    const latestRejectedRequest = await prisma.tenantRenewalRequest.findFirst({
+      where: {
+        dormitoryId,
+        contractId,
+        status: 'REJECTED',
+      },
+      orderBy: [
+        { reviewedAt: 'desc' },
+        { createdAt: 'desc' },
+      ],
+    });
+
     return {
       eligible: true,
       reasonCode: 'ELIGIBLE',
       message: 'สามารถส่งคำขอต่อสัญญาได้',
       contract,
+      latestRejectedRequest: latestRejectedRequest || null,
     };
   }
 
@@ -167,7 +185,7 @@ export class ContractRenewalService {
 
     const prevContract = eligibility.contract!;
 
-    const startDate = new Date(requestedStartDate);
+    let startDate = new Date(requestedStartDate);
     if (isNaN(startDate.getTime())) {
       throw new AppError('วันเริ่มต้นสัญญาที่ขอไม่ถูกต้อง', 400, 'INVALID_DATE');
     }
@@ -176,6 +194,16 @@ export class ContractRenewalService {
     const startDateStr = toBangkokDateString(startDate);
     if (prevEndDateStr && startDateStr < prevEndDateStr) {
       throw new AppError('วันที่เริ่มต้นต่อสัญญาต้องอยู่หลังจากวันสิ้นสุดสัญญาเดิม', 400, 'START_DATE_BEFORE_PREV_END_DATE');
+    }
+
+    // OQ-3: When renewing an active contract with an endDate, enforce continuous startDate = endDate + 1 calendar day in Asia/Bangkok
+    if (prevEndDateStr && ['active', 'expiring_soon', 'waiting_extension'].includes((prevContract.status || '').toLowerCase())) {
+      const [y, m, d] = prevEndDateStr.split('-').map(Number);
+      const nextDayUtc = new Date(Date.UTC(y, m - 1, d + 1, 0, 0, 0));
+      const nextDayStr = nextDayUtc.toISOString().slice(0, 10);
+      if (startDateStr <= prevEndDateStr || startDateStr === nextDayStr) {
+        startDate = new Date(`${nextDayStr}T00:00:00.000Z`);
+      }
     }
 
     // Strict single renewal check (Case 7: only 1 renewal at a time)
@@ -402,25 +430,26 @@ export class ContractRenewalService {
         ? currentDefaultTerms
         : (prevContract.terms ?? null);
 
-      // Check if requested start date is in the future relative to current execution date in Asia/Bangkok
       const now = new Date();
-      const startDate = new Date(reqRecord.requestedStartDate);
-      
-      const startDateStr = toBangkokDateString(startDate);
-      const todayStr = currentBusinessDateInBangkok(now);
-      const isFutureStartDate = startDateStr > todayStr;
-
       const contractNumber = `CTR-RNW-${Date.now().toString().slice(-6)}`;
       const safeActorId = actorUserId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(actorUserId) ? actorUserId : null;
 
-      // Create NEW linked Contract (Old contract remains IMMUTABLE!)
+      // Close predecessor contract (C2-2: สัญญาเดิมปิด)
+      await tx.contract.update({
+        where: { id: prevContract.id },
+        data: {
+          status: 'expired',
+        },
+      });
+
+      // Create NEW linked Contract inheriting digital signatures from initial contract (OQ-18, C2-2)
       const newContract = await tx.contract.create({
         data: {
           dormitoryId,
           contractNumber,
           roomId: reqRecord.roomId,
           tenantId: reqRecord.tenantId,
-          status: isFutureStartDate ? 'approved_scheduled' : 'active',
+          status: 'active',
           startDate: reqRecord.requestedStartDate,
           endDate: reqRecord.requestedEndDate,
           durationMonths: reqRecord.requestedDurationMonths,
@@ -431,7 +460,11 @@ export class ContractRenewalService {
           terms: finalTerms,
           previousContractId: prevContract.id,
           createdByUserId: safeActorId,
-          activatedAt: isFutureStartDate ? null : now,
+          activatedAt: now,
+          tenantSignature: prevContract.tenantSignature || null,
+          ownerSignature: prevContract.ownerSignature || null,
+          signedByTenantAt: prevContract.signedByTenantAt || now,
+          signedByOwnerAt: now,
         },
       });
 
@@ -446,34 +479,49 @@ export class ContractRenewalService {
         },
       });
 
-      if (!isFutureStartDate) {
-        // Current-date renewal: activate immediately & update Room pointers
-        await tx.room.update({
-          where: { id: reqRecord.roomId },
+      // Update Room pointers to newContract
+      await tx.room.update({
+        where: { id: reqRecord.roomId },
+        data: {
+          status: 'occupied',
+          currentTenantId: reqRecord.tenantId,
+          currentContractId: newContract.id,
+        },
+      });
+
+      // Close any prior ACTIVE occupancies for this room/tenant so strictly 1 ACTIVE occupancy exists (C2-2)
+      await tx.occupancy.updateMany({
+        where: {
+          dormitoryId,
+          OR: [
+            { roomId: reqRecord.roomId },
+            { tenantId: reqRecord.tenantId },
+          ],
+          status: 'ACTIVE',
+          contractId: { not: newContract.id },
+        },
+        data: {
+          status: 'ENDED',
+          endedAt: now,
+        },
+      });
+
+      // Ensure single ACTIVE occupancy exists for newContract
+      const existingOccupancy = await tx.occupancy.findFirst({
+        where: { dormitoryId, contractId: newContract.id },
+      });
+
+      if (!existingOccupancy) {
+        await tx.occupancy.create({
           data: {
-            status: 'occupied',
-            currentTenantId: reqRecord.tenantId,
-            currentContractId: newContract.id,
+            dormitoryId,
+            roomId: reqRecord.roomId,
+            tenantId: reqRecord.tenantId,
+            contractId: newContract.id,
+            status: 'ACTIVE',
+            startedAt: reqRecord.requestedStartDate,
           },
         });
-
-        // Ensure active occupancy exists
-        const existingOccupancy = await tx.occupancy.findFirst({
-          where: { dormitoryId, contractId: newContract.id },
-        });
-
-        if (!existingOccupancy) {
-          await tx.occupancy.create({
-            data: {
-              dormitoryId,
-              roomId: reqRecord.roomId,
-              tenantId: reqRecord.tenantId,
-              contractId: newContract.id,
-              status: 'ACTIVE',
-              startedAt: reqRecord.requestedStartDate,
-            },
-          });
-        }
       }
 
       await outboxService.createOutboxEvent(tx, {
@@ -739,6 +787,11 @@ export class ContractRenewalService {
   public async cancelRenewalRequest(input: { dormitoryId: string; requestId: string; tenantId?: string }) {
     const { dormitoryId, requestId, tenantId } = input;
     const prisma = getPrismaClient();
+    if (typeof (prisma as any).$executeRaw === 'function') {
+      try {
+        await prisma.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, false)`;
+      } catch {}
+    }
 
     const reqRecord = await prisma.tenantRenewalRequest.findUnique({
       where: { id: requestId },
@@ -775,6 +828,11 @@ export class ContractRenewalService {
       return [];
     }
     const prisma = getPrismaClient();
+    if (typeof (prisma as any).$executeRaw === 'function') {
+      try {
+        await prisma.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, false)`;
+      } catch {}
+    }
     const where: any = { dormitoryId };
     if (status) {
       where.status = status;

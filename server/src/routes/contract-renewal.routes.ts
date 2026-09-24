@@ -1,13 +1,19 @@
 import { Router, Request, Response } from 'express';
+import { getPrismaClient } from '../db/prisma.js';
 import { AuthenticationService } from '../services/auth.service.js';
 import { contractRenewalService } from '../services/contract-renewal.service.js';
 import { createRequireSessionMiddleware } from '../middleware/require-session.js';
-import { requireDormitoryPermission, resolveDormitoryContextMiddleware } from '../middleware/permission.js';
+import { requireDormitoryPermission } from '../middleware/permission.js';
 import { requireDormitoryWriteEntitlement } from '../middleware/entitlement.js';
+import {
+  resolveAuthoritativeTenantContext,
+  getTenantIdsForPortalContext,
+} from '../utils/tenant-resolution.util.js';
 
 export function createContractRenewalRouter(authService: AuthenticationService): Router {
   const router = Router();
   const requireSession = createRequireSessionMiddleware(authService);
+  const prisma = getPrismaClient();
 
   const getAuthoritativeDormitoryId = (req: Request): string => {
     const dormId = (req as any).dormitoryContext?.dormitoryId || req.auth?.dormitoryId;
@@ -18,6 +24,129 @@ export function createContractRenewalRouter(authService: AuthenticationService):
       throw err;
     }
     return dormId;
+  };
+
+  /**
+   * Resolves renewal actor strictly from session.
+   * - For TENANT sessions: derives dormitoryId & tenantId from resolveAuthoritativeTenantContext(req)
+   *   and rejects any mismatched tenantId or contractId with 403 FORBIDDEN (Card C2 / REQ §10).
+   * - For Owner/Manager/Staff sessions with contract:read: uses dormitoryContext.
+   */
+  const resolveRenewalActorContext = async (
+    req: Request,
+    res: Response
+  ): Promise<{
+    isTenantActor: boolean;
+    dormitoryId: string;
+    tenantId: string;
+    contractId?: string;
+  } | null> => {
+    const requestId = (req.headers['x-request-id'] as string) || 'req-unknown';
+    if (!req.auth?.userId) {
+      res.status(401).json({
+        error: {
+          code: 'SESSION_REQUIRED',
+          message: 'กรุณาเข้าสู่ระบบก่อนดำเนินการ',
+          requestId,
+          timestamp: new Date().toISOString(),
+        },
+      });
+      return null;
+    }
+
+    const passedTenantId =
+      (req.body?.tenantId as string | undefined) ||
+      (req.query?.tenantId as string | undefined);
+    const passedContractId =
+      (req.body?.contractId as string | undefined) ||
+      (req.query?.contractId as string | undefined);
+
+    // Check if the caller is an Owner/Manager/Staff member with contract:read
+    const roleCode = String(
+      (req as any).dormitoryContext?.role?.code || req.auth?.role || ''
+    ).toUpperCase();
+    const authPermissions = (req.auth as any)?.permissions;
+    const hasStaffContractRead =
+      ['OWNER', 'MANAGER', 'STAFF', 'PLATFORM_ADMIN', 'SUPER_ADMIN'].includes(roleCode) &&
+      (!Array.isArray(authPermissions) ||
+        authPermissions.length === 0 ||
+        authPermissions.includes('contract:read'));
+
+    const tenantCtx = await resolveAuthoritativeTenantContext(req);
+    if (!tenantCtx.error && tenantCtx.tenant) {
+      const allowedTenantIds = getTenantIdsForPortalContext(tenantCtx);
+
+      if (passedTenantId && !allowedTenantIds.includes(passedTenantId)) {
+        res.status(403).json({
+          error: {
+            code: 'FORBIDDEN',
+            message: 'คุณไม่มีสิทธิ์ดำเนินการต่อสัญญาของผู้เช่ารายอื่น',
+            requestId,
+            timestamp: new Date().toISOString(),
+          },
+        });
+        return null;
+      }
+
+      if (passedContractId) {
+        if (typeof (prisma as any).$executeRaw === 'function') {
+          try {
+            await prisma.$executeRaw`SELECT set_config('app.current_dormitory_id', ${tenantCtx.dormitoryId}, false)`;
+          } catch {}
+        }
+        const targetContract = await prisma.contract.findFirst({
+          where: {
+            id: passedContractId,
+            dormitoryId: tenantCtx.dormitoryId,
+            deletedAt: null,
+          },
+          select: { id: true, tenantId: true },
+        });
+        if (targetContract && !allowedTenantIds.includes(targetContract.tenantId)) {
+          res.status(403).json({
+            error: {
+              code: 'FORBIDDEN',
+              message: 'คุณไม่มีสิทธิ์ดำเนินการต่อสัญญาของผู้เช่ารายอื่น',
+              requestId,
+              timestamp: new Date().toISOString(),
+            },
+          });
+          return null;
+        }
+      }
+
+      const effectiveTenantId =
+        passedTenantId && allowedTenantIds.includes(passedTenantId)
+          ? passedTenantId
+          : tenantCtx.tenant.id;
+
+      return {
+        isTenantActor: true,
+        dormitoryId: tenantCtx.dormitoryId,
+        tenantId: effectiveTenantId,
+        contractId: passedContractId || (tenantCtx as any).contract?.id,
+      };
+    }
+
+    if (hasStaffContractRead) {
+      const dormId = getAuthoritativeDormitoryId(req);
+      return {
+        isTenantActor: false,
+        dormitoryId: dormId,
+        tenantId: passedTenantId || '',
+        contractId: passedContractId,
+      };
+    }
+
+    res.status(403).json({
+      error: {
+        code: 'FORBIDDEN',
+        message: 'คุณไม่มีสิทธิ์เข้าถึงการต่อสัญญานี้',
+        requestId,
+        timestamp: new Date().toISOString(),
+      },
+    });
+    return null;
   };
 
   const verifyCsrf = (req: Request, res: Response): boolean => {
@@ -59,10 +188,13 @@ export function createContractRenewalRouter(authService: AuthenticationService):
   ];
 
   // GET /api/v1/contract-renewals/eligibility
-  router.get('/eligibility', requireDormitoryPermission('contract:read'), async (req: Request, res: Response) => {
+  router.get('/eligibility', requireSession, async (req: Request, res: Response) => {
     try {
-      const dormId = getAuthoritativeDormitoryId(req);
-      const { contractId, tenantId } = req.query as { contractId: string; tenantId: string };
+      const actor = await resolveRenewalActorContext(req, res);
+      if (!actor) return;
+
+      const contractId = actor.contractId;
+      const tenantId = actor.tenantId;
       if (!contractId || !tenantId) {
         return res.status(400).json({
           error: {
@@ -73,7 +205,11 @@ export function createContractRenewalRouter(authService: AuthenticationService):
           },
         });
       }
-      const eligibility = await contractRenewalService.getRenewalEligibility(dormId, tenantId, contractId);
+      const eligibility = await contractRenewalService.getRenewalEligibility(
+        actor.dormitoryId,
+        tenantId,
+        contractId
+      );
       res.json({ data: eligibility });
     } catch (err) {
       handleServiceError(res, err, req);
@@ -81,11 +217,15 @@ export function createContractRenewalRouter(authService: AuthenticationService):
   });
 
   // POST /api/v1/contract-renewals/request (Tenant submits renewal request with duration, NOT financial terms)
-  router.post('/request', requireDormitoryPermission('contract:read'), async (req: Request, res: Response) => {
+  router.post('/request', requireSession, async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
     try {
-      const dormId = getAuthoritativeDormitoryId(req);
-      const { tenantId, contractId, requestedStartDate, requestedDurationMonths } = req.body || {};
+      const actor = await resolveRenewalActorContext(req, res);
+      if (!actor) return;
+
+      const { requestedStartDate, requestedDurationMonths } = req.body || {};
+      const contractId = actor.contractId;
+      const tenantId = actor.tenantId;
 
       // Security check: Reject client-supplied financial fields (Rule 20)
       if (req.body.rentAmount !== undefined || req.body.depositAmount !== undefined) {
@@ -99,7 +239,7 @@ export function createContractRenewalRouter(authService: AuthenticationService):
         });
       }
 
-      if (!tenantId || !contractId || !requestedStartDate || !requestedDurationMonths) {
+      if (!tenantId || !contractId || !requestedDurationMonths) {
         return res.status(400).json({
           error: {
             code: 'VALIDATION_ERROR',
@@ -111,7 +251,7 @@ export function createContractRenewalRouter(authService: AuthenticationService):
       }
 
       const request = await contractRenewalService.submitRenewalRequest({
-        dormitoryId: dormId,
+        dormitoryId: actor.dormitoryId,
         tenantId,
         contractId,
         requestedStartDate,
@@ -192,13 +332,24 @@ export function createContractRenewalRouter(authService: AuthenticationService):
   const cancelRequestHandler = async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
     try {
-      const dormId = getAuthoritativeDormitoryId(req);
-      const tenantId = req.body?.tenantId;
+      const actor = await resolveRenewalActorContext(req, res);
+      if (!actor) return;
+
+      if (actor.isTenantActor) {
+        if (req.body?.tenantId && String(req.body.tenantId) !== actor.tenantId) {
+          return res.status(403).json({
+            error: {
+              code: 'FORBIDDEN',
+              message: 'ไม่มีสิทธิ์ยกเลิกคำขอต่อสัญญาของผู้เช่ารายอื่น',
+            },
+          });
+        }
+      }
 
       const result = await contractRenewalService.cancelRenewalRequest({
-        dormitoryId: dormId,
+        dormitoryId: actor.dormitoryId,
         requestId: req.params.id,
-        tenantId,
+        tenantId: actor.isTenantActor ? actor.tenantId : req.body?.tenantId,
       });
 
       res.json({ data: result });
@@ -206,8 +357,8 @@ export function createContractRenewalRouter(authService: AuthenticationService):
       handleServiceError(res, err, req);
     }
   };
-  router.post('/requests/:id/cancel', requireDormitoryPermission('contract:read'), cancelRequestHandler);
-  router.post('/:id/cancel', requireDormitoryPermission('contract:read'), cancelRequestHandler);
+  router.post('/requests/:id/cancel', requireSession, cancelRequestHandler);
+  router.post('/:id/cancel', requireSession, cancelRequestHandler);
 
   // POST /api/v1/contract-renewals/activate-scheduled (Owner/Manager or System triggers scheduled contract activation)
   router.post('/activate-scheduled', ...mutationGuard('contract:write'), async (req: Request, res: Response) => {
