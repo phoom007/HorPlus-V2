@@ -818,18 +818,20 @@ export class ContractService {
         });
 
         if (tenantRec?.lineFriendId) {
-          await prisma.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true);`;
-          await prisma.dormitoryAccessGrant.updateMany({
-            where: {
-              dormitoryId,
-              lineFriendId: tenantRec.lineFriendId,
-              status: 'ACTIVE',
-            },
-            data: {
-              status: 'REVOKED',
-              revokedAt: new Date(),
-              revokedByPrincipal: actorUserId,
-            },
+          await prisma.$transaction(async (tx) => {
+            await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true);`;
+            await tx.dormitoryAccessGrant.updateMany({
+              where: {
+                dormitoryId,
+                lineFriendId: tenantRec.lineFriendId,
+                status: 'ACTIVE',
+              },
+              data: {
+                status: 'REVOKED',
+                revokedAt: new Date(),
+                revokedByPrincipal: actorUserId,
+              },
+            });
           });
         }
       }
