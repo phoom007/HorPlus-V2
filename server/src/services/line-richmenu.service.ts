@@ -205,9 +205,10 @@ export class LineRichMenuService {
   }
 
   /**
-   * Generate 2500x843 PNG image for Active Tenant Rich Menu (2 buttons)
-   * 1. เข้าสู่ระบบผู้เช่า (0 - 1250)
-   * 2. วิธีการใช้งาน (1250 - 2500)
+   * Generate 2500x843 PNG image for Active Tenant Rich Menu (3 buttons)
+   * 1. เข้าพอร์ทัล / ห้องพัก (0 - 833)
+   * 2. บิลและชำระเงิน (833 - 1667)
+   * 3. แจ้งซ่อม (1667 - 2500)
    */
   async generateActiveTenantRichMenuImage(): Promise<Buffer> {
     const svg = `
@@ -221,24 +222,38 @@ export class LineRichMenuService {
             <stop offset="0%" stop-color="#0284C7"/>
             <stop offset="100%" stop-color="#0369A1"/>
           </linearGradient>
+          <linearGradient id="atbg3" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#D97706"/>
+            <stop offset="100%" stop-color="#B45309"/>
+          </linearGradient>
         </defs>
 
-        <!-- Button 1: เข้าสู่ระบบผู้เช่า -->
-        <rect x="0" y="0" width="1250" height="843" fill="url(#atbg1)"/>
-        <circle cx="625" cy="300" r="120" fill="#FFFFFF" opacity="0.15"/>
-        <text x="625" y="345" font-family="sans-serif" font-size="120" font-weight="900" fill="#FFFFFF" text-anchor="middle">🔑</text>
-        <text x="625" y="550" font-family="sans-serif" font-size="92" font-weight="bold" fill="#FFFFFF" text-anchor="middle">เข้าสู่ระบบผู้เช่า</text>
-        <text x="625" y="645" font-family="sans-serif" font-size="48" fill="#C7D2FE" text-anchor="middle">ตรวจสอบห้องพัก สัญญา และบิล</text>
+        <!-- Button 1: เข้าพอร์ทัล -->
+        <rect x="0" y="0" width="833" height="843" fill="url(#atbg1)"/>
+        <circle cx="416" cy="290" r="110" fill="#FFFFFF" opacity="0.15"/>
+        <text x="416" y="335" font-family="sans-serif" font-size="110" font-weight="900" fill="#FFFFFF" text-anchor="middle">🏠</text>
+        <text x="416" y="540" font-family="sans-serif" font-size="76" font-weight="bold" fill="#FFFFFF" text-anchor="middle">เข้าพอร์ทัล</text>
+        <text x="416" y="630" font-family="sans-serif" font-size="40" fill="#C7D2FE" text-anchor="middle">ห้องพักและสัญญา</text>
 
-        <!-- Divider -->
-        <line x1="1250" y1="60" x2="1250" y2="783" stroke="#FFFFFF" stroke-opacity="0.25" stroke-width="5"/>
+        <!-- Divider 1 -->
+        <line x1="833" y1="50" x2="833" y2="793" stroke="#FFFFFF" stroke-opacity="0.25" stroke-width="4"/>
 
-        <!-- Button 2: วิธีการใช้งาน -->
-        <rect x="1250" y="0" width="1250" height="843" fill="url(#atbg2)"/>
-        <circle cx="1875" cy="300" r="120" fill="#FFFFFF" opacity="0.15"/>
-        <text x="1875" y="345" font-family="sans-serif" font-size="120" font-weight="900" fill="#FFFFFF" text-anchor="middle">📖</text>
-        <text x="1875" y="550" font-family="sans-serif" font-size="92" font-weight="bold" fill="#FFFFFF" text-anchor="middle">วิธีการใช้งาน</text>
-        <text x="1875" y="645" font-family="sans-serif" font-size="48" fill="#BAE6FD" text-anchor="middle">คู่มือแนะนำสำหรับผู้เช่า</text>
+        <!-- Button 2: บิล & ชำระเงิน -->
+        <rect x="833" y="0" width="834" height="843" fill="url(#atbg2)"/>
+        <circle cx="1250" cy="290" r="110" fill="#FFFFFF" opacity="0.15"/>
+        <text x="1250" y="335" font-family="sans-serif" font-size="110" font-weight="900" fill="#FFFFFF" text-anchor="middle">💳</text>
+        <text x="1250" y="540" font-family="sans-serif" font-size="76" font-weight="bold" fill="#FFFFFF" text-anchor="middle">บิล &amp; ชำระเงิน</text>
+        <text x="1250" y="630" font-family="sans-serif" font-size="40" fill="#BAE6FD" text-anchor="middle">ดูบิลและส่งสลิป</text>
+
+        <!-- Divider 2 -->
+        <line x1="1667" y1="50" x2="1667" y2="793" stroke="#FFFFFF" stroke-opacity="0.25" stroke-width="4"/>
+
+        <!-- Button 3: แจ้งซ่อม -->
+        <rect x="1667" y="0" width="833" height="843" fill="url(#atbg3)"/>
+        <circle cx="2083" cy="290" r="110" fill="#FFFFFF" opacity="0.15"/>
+        <text x="2083" y="335" font-family="sans-serif" font-size="110" font-weight="900" fill="#FFFFFF" text-anchor="middle">🔧</text>
+        <text x="2083" y="540" font-family="sans-serif" font-size="76" font-weight="bold" fill="#FFFFFF" text-anchor="middle">แจ้งซ่อม</text>
+        <text x="2083" y="630" font-family="sans-serif" font-size="40" fill="#FDE68A" text-anchor="middle">แจ้งปัญหาห้องพัก</text>
       </svg>
     `;
 
@@ -246,30 +261,42 @@ export class LineRichMenuService {
   }
 
   /**
-   * Build Active Tenant Rich Menu Payload (2 Buttons)
+   * Build Active Tenant Rich Menu Payload (3 Buttons)
+   * 1) เข้าพอร์ทัล
+   * 2) ดูบิล/การชำระเงิน (?sub=invoice)
+   * 3) แจ้งซ่อม (?sub=repairs)
    */
   buildActiveTenantRichMenuPayload(dormitoryName: string, liffId?: string) {
     const tenantLiffId = liffId || process.env.LINE_TENANT_LIFF_ID || process.env.VITE_LINE_TENANT_LIFF_ID || process.env.VITE_LINE_LIFF_ID || process.env.LINE_LIFF_ID || '2011672957-pIlWUt9e';
+    const cleanLiffId = tenantLiffId.trim();
     return {
       size: { width: 2500, height: 843 },
       selected: true,
-      name: `HorPlus Active Tenant Menu - ${dormitoryName}`,
-      chatBarText: 'เมนูผู้เช่าห้องพัก',
+      name: `HorPlus Active Tenant Menu v2 - ${dormitoryName}`,
+      chatBarText: 'เมนูผู้เช่า',
       areas: [
         {
-          bounds: { x: 0, y: 0, width: 1250, height: 843 },
+          bounds: { x: 0, y: 0, width: 833, height: 843 },
           action: {
             type: 'uri',
-            uri: `https://liff.line.me/${tenantLiffId.trim()}`,
-            label: 'เข้าสู่ระบบผู้เช่า',
+            uri: `https://liff.line.me/${cleanLiffId}`,
+            label: 'เข้าพอร์ทัล',
           },
         },
         {
-          bounds: { x: 1250, y: 0, width: 1250, height: 843 },
+          bounds: { x: 833, y: 0, width: 834, height: 843 },
           action: {
-            type: 'postback',
-            data: 'action=tenant_user_guide',
-            displayText: 'วิธีการใช้งาน',
+            type: 'uri',
+            uri: `https://liff.line.me/${cleanLiffId}?sub=invoice`,
+            label: 'บิลและชำระเงิน',
+          },
+        },
+        {
+          bounds: { x: 1667, y: 0, width: 833, height: 843 },
+          action: {
+            type: 'uri',
+            uri: `https://liff.line.me/${cleanLiffId}?sub=repairs`,
+            label: 'แจ้งซ่อม',
           },
         },
       ],
@@ -436,15 +463,27 @@ export class LineRichMenuService {
       select: { name: true },
     });
     const dormName = dorm?.name || 'HorPlus';
-    const activeTenantMenuName = `HorPlus Active Tenant Menu - ${dormName}`;
+    const activeTenantMenuName = `HorPlus Active Tenant Menu v2 - ${dormName}`;
+    const legacyMenuName = `HorPlus Active Tenant Menu - ${dormName}`;
 
     let activeTenantMenuId: string | null = null;
     try {
       const existingMenus = await this.lineAdapter.getRichMenuList(accessToken);
       if (Array.isArray(existingMenus)) {
+        // Clean legacy v1 menu if present
+        const legacy = existingMenus.find((m: any) => m.name === legacyMenuName);
+        if (legacy?.richMenuId) {
+          await this.lineAdapter.deleteRichMenu(legacy.richMenuId, accessToken).catch(() => {});
+        }
+
         const found = existingMenus.find((m: any) => m.name === activeTenantMenuName);
         if (found?.richMenuId) {
-          activeTenantMenuId = found.richMenuId;
+          if (Array.isArray(found.areas) && found.areas.length === 3) {
+            activeTenantMenuId = found.richMenuId;
+          } else {
+            // Outdated structure, delete and recreate
+            await this.lineAdapter.deleteRichMenu(found.richMenuId, accessToken).catch(() => {});
+          }
         }
       }
     } catch {}

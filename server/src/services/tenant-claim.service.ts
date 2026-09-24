@@ -303,7 +303,7 @@ export class TenantClaimService {
     const isUuid = (val?: string | null): val is string =>
       !!val && /^[0-9a-fA-F-]{36}$/.test(val);
 
-    return this.prisma.$transaction(async (tx) => {
+    const claimResult = await this.prisma.$transaction(async (tx) => {
       // 0. Set transaction RLS context for target dormitory
       await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
 
@@ -581,8 +581,28 @@ export class TenantClaimService {
         success: true,
         tenantId: updatedTenant.id,
         tenantNumber: updatedTenant.tenantNumber,
+        targetLineFriendId: grantLineFriendId || updatedTenant.lineFriendId,
       };
     });
+
+    if ((claimResult as any)?.targetLineFriendId) {
+      try {
+        const lineFriend = await this.prisma.dormitoryLineFriend.findUnique({
+          where: { id: (claimResult as any).targetLineFriendId },
+        });
+        if (lineFriend && lineFriend.lineUserIdEncrypted) {
+          const { decryptText } = await import('../utils/crypto-encryption.js');
+          const lineUserId = decryptText(lineFriend.lineUserIdEncrypted);
+          const { LineRichMenuService } = await import('./line-richmenu.service.js');
+          const richMenuService = new LineRichMenuService(this.prisma);
+          await richMenuService.linkActiveTenantRichMenu(dormitoryId, lineUserId);
+        }
+      } catch (rmErr: any) {
+        // Non-blocking rich menu link
+      }
+    }
+
+    return claimResult;
   }
 }
 

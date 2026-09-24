@@ -1841,6 +1841,15 @@ export class TenantRegistrationService {
               getPublicAppOrigin()
             );
             await lineOaService.pushOutcomeNotification(dormitoryId, lineUserId, flexMsg);
+
+            // R1: Link Active Tenant Rich Menu upon approval
+            try {
+              const { LineRichMenuService } = await import('./line-richmenu.service.js');
+              const richMenuService = new LineRichMenuService(prisma);
+              await richMenuService.linkActiveTenantRichMenu(dormitoryId, lineUserId);
+            } catch (rmErr: any) {
+              logger.warn({ event: 'LINE_ACTIVE_TENANT_RICHMENU_LINK_SKIPPED', error: rmErr.message });
+            }
           }
         }
       }
@@ -2922,7 +2931,7 @@ export class TenantRegistrationService {
     }
 
     // 2. Transaction: complete claim directly to REGISTERED (Bypasses Owner Approval)
-    return await prisma.$transaction(async (tx) => {
+    const claimResult = await prisma.$transaction(async (tx) => {
       let lineFollowerId: string | null = null;
       if (inviteToken) {
         const inviteResult = await tenantRegistrationInviteService.consumeInviteInTransaction(inviteToken, tx);
@@ -3179,8 +3188,28 @@ export class TenantRegistrationService {
         contractId: effectiveContractId,
         lifecycleStage: 'REGISTERED',
         message: 'ยืนยันสิทธิ์ผู้เช่าและบันทึกสัญญาเรียบร้อยแล้ว',
+        targetLineFriendId: lineFollowerId || updatedTenant.lineFriendId,
       };
     });
+
+    if ((claimResult as any)?.targetLineFriendId) {
+      try {
+        const lineFriend = await prisma.dormitoryLineFriend.findUnique({
+          where: { id: (claimResult as any).targetLineFriendId },
+        });
+        if (lineFriend && lineFriend.lineUserIdEncrypted) {
+          const { decryptText } = await import('../utils/crypto-encryption.js');
+          const lineUserId = decryptText(lineFriend.lineUserIdEncrypted);
+          const { LineRichMenuService } = await import('./line-richmenu.service.js');
+          const richMenuService = new LineRichMenuService(prisma);
+          await richMenuService.linkActiveTenantRichMenu(dormitoryId, lineUserId);
+        }
+      } catch (rmErr: any) {
+        logger.warn({ event: 'LINE_CLAIM_RICHMENU_LINK_SKIPPED', error: rmErr.message });
+      }
+    }
+
+    return claimResult;
   }
 
   public async saveRegistrationIdentityDocument(

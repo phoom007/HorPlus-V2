@@ -1073,6 +1073,21 @@ export function createAuthRouter(authService: AuthenticationService): Router {
 
         if (existingTenant) {
           isRegistered = true;
+          // R1: Self-healing / Sync Active Tenant Rich Menu for active tenants
+          if (targetFriendId) {
+            try {
+              const lineFriend = await prisma.dormitoryLineFriend.findUnique({
+                where: { id: targetFriendId },
+              });
+              if (lineFriend && lineFriend.lineUserIdEncrypted) {
+                const { decryptText } = await import('../utils/crypto-encryption.js');
+                const lineUserId = decryptText(lineFriend.lineUserIdEncrypted);
+                const { LineRichMenuService } = await import('../services/line-richmenu.service.js');
+                const richMenuService = new LineRichMenuService(prisma);
+                richMenuService.linkActiveTenantRichMenu(invite.dormitoryId, lineUserId).catch(() => {});
+              }
+            } catch {}
+          }
         } else {
           const existingReq = await prisma.tenantRegistrationRequest.findFirst({
             where: {
