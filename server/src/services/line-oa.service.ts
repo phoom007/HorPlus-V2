@@ -114,7 +114,6 @@ export function getPublicAppOrigin(): string {
 }
 
 export const CANONICAL_OWNER_LIFF_ID = '2011672957-NOfBsIcJ';
-export const CANONICAL_TENANT_LIFF_ID = '2011672957-pIlWUt9e';
 
 export function getOwnerLiffId(): string {
   const envVal = process.env.LINE_OWNER_LIFF_ID || process.env.VITE_LINE_OWNER_LIFF_ID;
@@ -123,7 +122,17 @@ export function getOwnerLiffId(): string {
 
 export function getTenantLiffId(): string {
   const envVal = process.env.LINE_TENANT_LIFF_ID || process.env.VITE_LINE_TENANT_LIFF_ID || process.env.VITE_LINE_LIFF_ID || process.env.LINE_LIFF_ID;
-  return (envVal && envVal.trim()) ? envVal.trim() : CANONICAL_TENANT_LIFF_ID;
+  return (envVal && envVal.trim()) ? envVal.trim() : '';
+}
+
+export function getTenantLiffChannelId(): string {
+  const explicit = process.env.LINE_TENANT_LIFF_CHANNEL_ID || process.env.LINE_LIFF_CHANNEL_ID;
+  if (explicit && explicit.trim()) return explicit.trim();
+  const liffId = getTenantLiffId();
+  if (liffId && liffId.includes('-')) {
+    return liffId.split('-')[0].trim();
+  }
+  return liffId;
 }
 
 export function getTenantRegistrationUrl(rawToken: string, appOrigin?: string): string {

@@ -11,6 +11,7 @@ import crypto from 'crypto';
 import { LinePlatformAdapter, HttpLinePlatformAdapter } from './line-platform-adapter.js';
 import { ILineChannelTokenProvider, LineChannelTokenProvider, FakeLineTokenProvider } from './line-channel-token-provider.js';
 import { decryptText } from '../utils/crypto-encryption.js';
+import { getTenantLiffId } from './line-oa.service.js';
 
 export interface DirectEntryTicket {
   ticket: string;
@@ -267,7 +268,7 @@ export class LineRichMenuService {
    * 3) แจ้งซ่อม (?sub=repairs)
    */
   buildActiveTenantRichMenuPayload(dormitoryName: string, liffId?: string) {
-    const tenantLiffId = liffId || process.env.LINE_TENANT_LIFF_ID || process.env.VITE_LINE_TENANT_LIFF_ID || process.env.VITE_LINE_LIFF_ID || process.env.LINE_LIFF_ID || '2011672957-pIlWUt9e';
+    const tenantLiffId = liffId || getTenantLiffId();
     const cleanLiffId = tenantLiffId.trim();
     return {
       size: { width: 2500, height: 843 },

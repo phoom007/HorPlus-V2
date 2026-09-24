@@ -11,6 +11,8 @@ import {
   isTokenConsumed,
   markTokenConsumed
 } from '../utils/liffToken';
+import { initLiff, getLiffIdToken, loginWithLiff } from '../utils/liff';
+import { LineLogo } from '../components/LineLogo';
 
 export const AuthContext = React.createContext<any>(null);
 
@@ -124,6 +126,8 @@ export const TenantAuthGuard: React.FC<{ children?: React.ReactNode }> = ({ chil
   const [loading, setLoading] = React.useState(true);
 
   React.useEffect(() => {
+    let isMounted = true;
+
     // 1. Direct Entry Token Bridge: always honor ?t= or ?token= or liff.state when present in URL
     const token = extractTenantTokenFromUrl({ ignoreConsumed: true });
     if (token) {
@@ -134,33 +138,89 @@ export const TenantAuthGuard: React.FC<{ children?: React.ReactNode }> = ({ chil
     }
     cleanLiffStateFromUrl();
 
-    fetch('/api/v1/tenant-portal/profile', { credentials: 'include' })
-      .then(res => res.ok ? res.json() : null)
-      .then(json => {
-        const rawTenant = json?.data?.tenant || (json?.id ? json : null);
-        if (rawTenant) {
-          const realFullName = (rawTenant.firstName && rawTenant.firstName !== '-')
-            ? `${rawTenant.firstName} ${rawTenant.lastName && rawTenant.lastName !== '-' ? rawTenant.lastName : ''}`.trim()
-            : '';
-          const effectiveName =
-            realFullName ||
-            (rawTenant.displayName !== 'ยังไม่ได้ลงทะเบียน' ? rawTenant.displayName : null) ||
-            rawTenant.lineDisplayName ||
-            (rawTenant.name !== 'ยังไม่ได้ลงทะเบียน' ? rawTenant.name : null) ||
-            'ผู้เช่า';
-          const tenantData = {
-            ...rawTenant,
-            name: effectiveName,
-          };
-          setSession({ userType: 'tenant', tenant: tenantData, user: tenantData });
-        } else {
-          setSession(null);
+    async function checkTenantAuth() {
+      try {
+        // Step A: Check if existing session cookie works
+        const profileRes = await fetch('/api/v1/tenant-portal/profile', { credentials: 'include' });
+        if (profileRes.ok) {
+          const json = await profileRes.json();
+          const rawTenant = json?.data?.tenant || (json?.id ? json : null);
+          if (rawTenant && isMounted) {
+            const realFullName = (rawTenant.firstName && rawTenant.firstName !== '-')
+              ? `${rawTenant.firstName} ${rawTenant.lastName && rawTenant.lastName !== '-' ? rawTenant.lastName : ''}`.trim()
+              : '';
+            const effectiveName =
+              realFullName ||
+              (rawTenant.displayName !== 'ยังไม่ได้ลงทะเบียน' ? rawTenant.displayName : null) ||
+              rawTenant.lineDisplayName ||
+              (rawTenant.name !== 'ยังไม่ได้ลงทะเบียน' ? rawTenant.name : null) ||
+              'ผู้เช่า';
+            const tenantData = {
+              ...rawTenant,
+              name: effectiveName,
+            };
+            setSession({ userType: 'tenant', tenant: tenantData, user: tenantData });
+            setLoading(false);
+            return;
+          }
         }
-      })
-      .catch(() => {
-        setSession(null);
-      })
-      .finally(() => setLoading(false));
+
+        // Step B: No session. Try acquiring LIFF ID token if in LIFF SDK context
+        const liffReady = await initLiff();
+        if (liffReady) {
+          const idToken = await getLiffIdToken();
+          if (idToken) {
+            const liffSessionRes = await fetch('/api/v1/auth/line-liff-session', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              credentials: 'include',
+              body: JSON.stringify({ idToken }),
+            });
+            if (liffSessionRes.ok) {
+              const retryRes = await fetch('/api/v1/tenant-portal/profile', { credentials: 'include' });
+              if (retryRes.ok) {
+                const json = await retryRes.json();
+                const rawTenant = json?.data?.tenant || (json?.id ? json : null);
+                if (rawTenant && isMounted) {
+                  const realFullName = (rawTenant.firstName && rawTenant.firstName !== '-')
+                    ? `${rawTenant.firstName} ${rawTenant.lastName && rawTenant.lastName !== '-' ? rawTenant.lastName : ''}`.trim()
+                    : '';
+                  const effectiveName =
+                    realFullName ||
+                    (rawTenant.displayName !== 'ยังไม่ได้ลงทะเบียน' ? rawTenant.displayName : null) ||
+                    rawTenant.lineDisplayName ||
+                    (rawTenant.name !== 'ยังไม่ได้ลงทะเบียน' ? rawTenant.name : null) ||
+                    'ผู้เช่า';
+                  const tenantData = {
+                    ...rawTenant,
+                    name: effectiveName,
+                  };
+                  setSession({ userType: 'tenant', tenant: tenantData, user: tenantData });
+                  setLoading(false);
+                  return;
+                }
+              }
+            }
+          }
+        }
+
+        if (isMounted) {
+          setSession(null);
+          setLoading(false);
+        }
+      } catch {
+        if (isMounted) {
+          setSession(null);
+          setLoading(false);
+        }
+      }
+    }
+
+    checkTenantAuth();
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   if (loading) {
@@ -177,9 +237,18 @@ export const TenantAuthGuard: React.FC<{ children?: React.ReactNode }> = ({ chil
         </div>
         <h2 className="text-lg font-black text-slate-800 mb-2">ยินดีต้อนรับสู่ระบบผู้เช่า HorPlus</h2>
         <p className="text-slate-500 text-xs max-w-sm mb-6 leading-relaxed">
-          ไม่พบข้อมูลเซสชันผู้เช่าในอุปกรณ์นี้ กรุณากดปุ่มเมนูใน LINE OA ของหอพักเพื่อเข้าสู่ระบบ หรือลงทะเบียนเช่าห้องพักใหม่
+          ไม่พบข้อมูลเซสชันผู้เช่าในอุปกรณ์นี้ กรุณากดปุ่มเมนูใน LINE OA ของหอพักเพื่อเข้าสู่ระบบ หรือเข้าสู่ระบบด้วยบัญชี LINE
         </p>
         <div className="flex flex-col w-full max-w-xs gap-2.5">
+          <button
+            type="button"
+            data-testid="tenant-liff-login-btn"
+            onClick={() => loginWithLiff()}
+            className="w-full py-3 bg-[#06C755] hover:bg-[#05b34c] text-white rounded-2xl text-xs font-black shadow-md shadow-emerald-200 text-center transition-all cursor-pointer flex items-center justify-center gap-2"
+          >
+            <LineLogo className="w-4 h-4 fill-white" />
+            เข้าสู่ระบบด้วยบัญชี LINE
+          </button>
           <a
             href="/tenant/register"
             className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl text-xs font-black shadow-md shadow-indigo-200 text-center transition-all cursor-pointer"

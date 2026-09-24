@@ -19,7 +19,7 @@ export function getLiffId(): string {
   if (typeof window !== 'undefined' && window.location.pathname.startsWith('/owner')) {
     return (import.meta as any).env?.VITE_LINE_OWNER_LIFF_ID || '2011672957-NOfBsIcJ';
   }
-  return (import.meta as any).env?.VITE_LINE_TENANT_LIFF_ID || (import.meta as any).env?.VITE_LINE_LIFF_ID || '2011672957-pIlWUt9e';
+  return (import.meta as any).env?.VITE_LINE_TENANT_LIFF_ID || (import.meta as any).env?.VITE_LINE_LIFF_ID || '';
 }
 
 /**
@@ -88,4 +88,45 @@ export function closeLiffWindow(): void {
       liff.closeWindow();
     }
   } catch {}
+}
+
+/**
+ * Retrieve the verified ID token from LIFF SDK.
+ */
+export async function getLiffIdToken(): Promise<string | null> {
+  try {
+    const ready = await initLiff();
+    if (!ready || !liff.isLoggedIn()) return null;
+    return liff.getIDToken() || null;
+  } catch (err: any) {
+    console.warn('[LIFF] Failed to get ID token:', err.message);
+    return null;
+  }
+}
+
+/**
+ * Trigger LINE Login via LIFF SDK (for external browsers or desktop).
+ */
+export async function loginWithLiff(redirectUri?: string): Promise<void> {
+  const ready = await initLiff();
+  if (!ready) {
+    console.warn('[LIFF] Cannot login: LIFF SDK not initialized.');
+    return;
+  }
+  if (!liff.isLoggedIn()) {
+    liff.login({
+      redirectUri: redirectUri || (typeof window !== 'undefined' ? window.location.href : undefined),
+    });
+  }
+}
+
+/**
+ * Check if the user is logged into LINE via LIFF.
+ */
+export function isLiffLoggedIn(): boolean {
+  try {
+    return liffInitialized && liff.isLoggedIn();
+  } catch {
+    return false;
+  }
 }
