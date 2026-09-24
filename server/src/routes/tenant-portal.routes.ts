@@ -875,7 +875,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
       const dorm = await prisma.dormitory.findUnique({ where: { id: ctx.dormitoryId } });
       const propDefaults = await prisma.dormitoryPropertyDefaults.findUnique({
         where: { dormitoryId: ctx.dormitoryId },
-        select: { petPolicy: true }
+        select: { petPolicy: true, defaultTerms: true }
       });
 
       if (ctx.isCandidate) {
@@ -955,6 +955,16 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
         : '';
       const effectiveTenantDisplayName = realLegalName || tenant.displayName || 'ผู้เช่า';
 
+      const contractSnapshot = contract
+        ? await prisma.contractSnapshot.findFirst({
+            where: { contractId: contract.id, dormitoryId: ctx.dormitoryId },
+          })
+        : null;
+      const signatureService = new SignatureStorageService(prisma);
+      const latestOwnerSigRecord = await signatureService.getLatestSignatureRecord(ctx.dormitoryId).catch(() => null);
+      const hasOwnerSignature = Boolean(contract?.ownerSignature || latestOwnerSigRecord);
+      const hasTenantSignature = Boolean(contract?.tenantSignature);
+
       res.json({
         id: tenant.id,
         tenantNumber: tenant.tenantNumber,
@@ -974,6 +984,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
         hasIdentityDocument: !!(tenant.idCardObjectKey || tenant.photoUrl),
         idCardPhotoMock: tenant.idCardObjectKey ? '/api/v1/tenant-portal/id-card-photo' : (tenant.photoUrl || null),
         idCardPhotoUrl: tenant.idCardObjectKey ? '/api/v1/tenant-portal/id-card-photo' : (tenant.photoUrl || null),
+        signatureUrl: hasTenantSignature ? '/api/v1/tenant-portal/contract/signatures/tenant' : null,
         emergencyContact: primaryEmergency,
         emergencyContacts: emergencyContacts.map((ec: any) => ({
           name: ec.name,
@@ -991,11 +1002,12 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
           postalCode: dorm.postalCode,
           phone: dorm.phone,
           logoUrl: (dorm as any).logoUrl || null,
+          ownerSignature: hasOwnerSignature ? '/api/v1/tenant-portal/contract/signatures/owner' : null,
           petPolicy: propDefaults?.petPolicy || (dorm as any).petPolicy || null
         } : null,
         room: room ? {
           id: room.id,
-          roomNumber: room.roomNumber,
+          roomNumber: contractSnapshot?.exactRoomNumber || room.roomNumber,
           roomType: room.roomType,
           buildingId: room.buildingId,
           buildingName: room.building?.name || 'อาคารหลัก'
@@ -1034,11 +1046,15 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
           status: contract.status,
           startDate: contract.startDate.toISOString(),
           endDate: contract.endDate.toISOString(),
-          roomNumber: room?.roomNumber || 'ไม่ระบุ',
+          durationMonths: contract.durationMonths || 1,
+          roomNumber: contractSnapshot?.exactRoomNumber || room?.roomNumber || 'ไม่ระบุ',
           rentBillingType: contract.rentBillingType,
-          rentAmount: contract.rentAmount.toString(),
-          depositAmount: contract.depositAmount.toString(),
+          rentAmount: (contractSnapshot?.resolvedRent ?? contract.rentAmount).toString(),
+          depositAmount: (contractSnapshot?.resolvedDeposit ?? contract.depositAmount).toString(),
           advancePaymentAmount: contract.advancePaymentAmount.toString(),
+          terms: contract.terms || propDefaults?.defaultTerms || null,
+          tenantSignature: hasTenantSignature ? '/api/v1/tenant-portal/contract/signatures/tenant' : null,
+          ownerSignature: hasOwnerSignature ? '/api/v1/tenant-portal/contract/signatures/owner' : null,
           coOccupantsCount: coOccupants.length
         } : null
       });
@@ -1231,22 +1247,58 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
         });
       }
 
+      const requestedContractId = typeof req.query.contractId === 'string' ? req.query.contractId.trim() : '';
+      const requestedTenantId = typeof req.query.tenantId === 'string' ? req.query.tenantId.trim() : '';
+      if (
+        (requestedContractId && requestedContractId !== ctx.contract.id) ||
+        (requestedTenantId && requestedTenantId !== ctx.tenant.id)
+      ) {
+        return res.status(403).json({
+          error: { code: 'FORBIDDEN', message: 'คุณไม่มีสิทธิ์เข้าถึงสัญญาเช่าของผู้อื่น', requestId: req.requestId }
+        });
+      }
+
       const room = ctx.roomId ? await prisma.room.findUnique({ where: { id: ctx.roomId } }) : null;
+      const snapshot = await prisma.contractSnapshot.findFirst({
+        where: { contractId: ctx.contract.id, dormitoryId: ctx.dormitoryId },
+      });
+      const propDefaults = await prisma.dormitoryPropertyDefaults.findUnique({
+        where: { dormitoryId: ctx.dormitoryId },
+        select: { defaultTerms: true },
+      });
+      const signatureService = new SignatureStorageService(prisma);
+      const latestOwnerSigRecord = await signatureService.getLatestSignatureRecord(ctx.dormitoryId).catch(() => null);
+      const coOccupantsCount = await prisma.tenantCoOccupant.count({
+        where: { tenantId: ctx.tenant.id, dormitoryId: ctx.dormitoryId, deletedAt: null },
+      });
+
+      const hasOwnerSignature = Boolean(ctx.contract.ownerSignature || latestOwnerSigRecord);
+      const hasTenantSignature = Boolean(ctx.contract.tenantSignature);
 
       return res.json({
         success: true,
         data: {
           id: ctx.contract.id,
+          dormitoryId: ctx.dormitoryId,
+          roomId: ctx.roomId || ctx.contract.roomId,
           contractNumber: ctx.contract.contractNumber,
           status: ctx.contract.status,
           startDate: ctx.contract.startDate.toISOString(),
           endDate: ctx.contract.endDate.toISOString(),
-          roomNumber: room?.roomNumber || 'ไม่ระบุ',
+          durationMonths: ctx.contract.durationMonths || 1,
+          roomNumber: snapshot?.exactRoomNumber || room?.roomNumber || 'ไม่ระบุ',
           rentBillingType: ctx.contract.rentBillingType,
-          rentAmount: ctx.contract.rentAmount.toString(),
-          depositAmount: ctx.contract.depositAmount.toString(),
+          rentAmount: (snapshot?.resolvedRent ?? ctx.contract.rentAmount).toString(),
+          depositAmount: (snapshot?.resolvedDeposit ?? ctx.contract.depositAmount).toString(),
           advancePaymentAmount: ctx.contract.advancePaymentAmount.toString(),
-          coOccupantsCount: 0
+          waterRate: snapshot?.resolvedWaterRate !== undefined && snapshot?.resolvedWaterRate !== null ? snapshot.resolvedWaterRate.toString() : null,
+          electricityRate: snapshot?.resolvedElectricityRate !== undefined && snapshot?.resolvedElectricityRate !== null ? snapshot.resolvedElectricityRate.toString() : null,
+          terms: ctx.contract.terms || propDefaults?.defaultTerms || null,
+          tenantSignature: hasTenantSignature ? '/api/v1/tenant-portal/contract/signatures/tenant' : null,
+          ownerSignature: hasOwnerSignature ? '/api/v1/tenant-portal/contract/signatures/owner' : null,
+          signedByTenantAt: ctx.contract.signedByTenantAt ? ctx.contract.signedByTenantAt.toISOString() : null,
+          signedByOwnerAt: ctx.contract.signedByOwnerAt ? ctx.contract.signedByOwnerAt.toISOString() : null,
+          coOccupantsCount
         }
       });
     } catch (err: any) {
@@ -1923,6 +1975,17 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
         });
       }
 
+      const requestedContractId = typeof req.query.contractId === 'string' ? req.query.contractId.trim() : '';
+      const requestedTenantId = typeof req.query.tenantId === 'string' ? req.query.tenantId.trim() : '';
+      if (
+        (requestedContractId && requestedContractId !== ctx.contract.id) ||
+        (requestedTenantId && requestedTenantId !== ctx.tenant.id)
+      ) {
+        return res.status(403).json({
+          error: { code: 'FORBIDDEN', message: 'คุณไม่มีสิทธิ์ดาวน์โหลดสัญญาเช่าของผู้อื่น', requestId: req.requestId }
+        });
+      }
+
       const dorm = await prisma.dormitory.findUnique({
         where: { id: ctx.dormitoryId },
         include: {
@@ -2251,7 +2314,15 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
       if (!ctx.contract || !ctx.contract.tenantSignature) {
         return res.status(404).json({ error: { message: 'Tenant signature not found' } });
       }
-      if (ctx.contract.tenantSignature.startsWith('data:') || ctx.contract.tenantSignature.startsWith('http')) {
+      if (ctx.contract.tenantSignature.startsWith('data:')) {
+        const match = ctx.contract.tenantSignature.match(/^data:([^;]+);base64,(.+)$/);
+        if (match) {
+          res.setHeader('Content-Type', match[1] || 'image/png');
+          res.setHeader('Cache-Control', 'private, max-age=3600');
+          return res.send(Buffer.from(match[2], 'base64'));
+        }
+      }
+      if (ctx.contract.tenantSignature.startsWith('http')) {
         return res.redirect(ctx.contract.tenantSignature);
       }
       const signatureService = new SignatureStorageService(prisma);
@@ -2283,7 +2354,15 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
       if (!objectKey) {
         return res.status(404).json({ error: { message: 'Owner signature not found' } });
       }
-      if (objectKey.startsWith('data:') || objectKey.startsWith('http')) {
+      if (objectKey.startsWith('data:')) {
+        const match = objectKey.match(/^data:([^;]+);base64,(.+)$/);
+        if (match) {
+          res.setHeader('Content-Type', match[1] || 'image/png');
+          res.setHeader('Cache-Control', 'private, max-age=3600');
+          return res.send(Buffer.from(match[2], 'base64'));
+        }
+      }
+      if (objectKey.startsWith('http')) {
         return res.redirect(objectKey);
       }
       const stream = await signatureService.getSignatureStream(objectKey);

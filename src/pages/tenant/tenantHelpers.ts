@@ -498,7 +498,7 @@ export function openTenantContractPrintWindow(
     ? contract.ownerSignature
     : (dorm?.ownerSignature && (dorm.ownerSignature.startsWith('http') || dorm.ownerSignature.startsWith('data:'))
       ? dorm.ownerSignature
-      : (dorm?.id ? `/api/v1/dormitories/${dorm.id}/signature` : '/api/v1/tenant-portal/contract/signatures/owner'));
+      : '/api/v1/tenant-portal/contract/signatures/owner');
 
   const tenantSig = tenantSigUrl
     ? `<img src="${tenantSigUrl}" style="max-height: 44px; max-width: 140px; object-fit: contain;" alt="ลายเซ็นผู้เช่า" onerror="this.style.display='none';" />`

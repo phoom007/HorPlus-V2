@@ -182,7 +182,7 @@ export const TenantContractView: React.FC<TenantContractViewProps> = ({
                     <div className="min-w-0">
                       <h4 className="font-black text-slate-900 text-xs truncate">สัญญาเช่าห้อง</h4>
                       <p className="text-[9px] text-slate-400 mt-0.5 truncate">
-                        ห้อง {tenantRoom?.roomNumber || 'A-005'}
+                        ห้อง {con.roomNumber || tenantRoom?.roomNumber || '-'} • {con.contractNumber}
                       </p>
                     </div>
                   </div>
@@ -232,6 +232,12 @@ export const TenantContractView: React.FC<TenantContractViewProps> = ({
 
                 {/* Details grid list */}
                 <div className="border-t border-slate-100 pt-4 space-y-3 text-[10px] leading-none text-slate-600">
+                  <div className="flex justify-between items-center">
+                    <span>เลขที่สัญญา</span>
+                    <span className="font-extrabold text-slate-800" data-testid="contract-number">
+                      {con.contractNumber}
+                    </span>
+                  </div>
                   <div className="flex justify-between items-center">
                     <span>วันที่เริ่มสัญญา</span>
                     <span className="font-extrabold text-slate-800">
@@ -290,7 +296,7 @@ export const TenantContractView: React.FC<TenantContractViewProps> = ({
 
                   <div className="space-y-2 text-slate-700">
                     <p>
-                      <span className="font-bold text-slate-900">ข้อ 1. ทรัพย์สินที่เช่า:</span> ผู้ให้เช่าตกลงให้เช่า และผู้เช่าตกลงเช่าห้องพักหมายเลข <span className="font-bold text-indigo-900">ห้อง {tenantRoom?.roomNumber || con.roomNumber || '-'}</span> ของอาคาร <span className="font-bold text-indigo-900">{dormitory?.name || 'หอพัก'}</span> พร้อมอุปกรณ์ เฟอร์นิเจอร์ เครื่องใช้ไฟฟ้า และสิ่งอำนวยความสะดวกในสภาพเรียบร้อยสมบูรณ์
+                      <span className="font-bold text-slate-900">ข้อ 1. ทรัพย์สินที่เช่า:</span> ผู้ให้เช่าตกลงให้เช่า และผู้เช่าตกลงเช่าห้องพักหมายเลข <span className="font-bold text-indigo-900">ห้อง {con.roomNumber || tenantRoom?.roomNumber || '-'}</span> ของอาคาร <span className="font-bold text-indigo-900">{dormitory?.name || 'หอพัก'}</span> พร้อมอุปกรณ์ เฟอร์นิเจอร์ เครื่องใช้ไฟฟ้า และสิ่งอำนวยความสะดวกในสภาพเรียบร้อยสมบูรณ์
                     </p>
 
                     <p>
@@ -325,8 +331,12 @@ export const TenantContractView: React.FC<TenantContractViewProps> = ({
                   <div className="space-y-1">
                     <p className="text-[10px] text-slate-500 font-bold">ลงชื่อ (ผู้ให้เช่า)</p>
                     <div className="h-12 flex items-center justify-center overflow-hidden">
-                      {dormitory?.ownerSignature ? (
-                        <img src={dormitory.ownerSignature} alt="ลายเซ็นผู้ให้เช่า" className="h-10 object-contain mx-auto" />
+                      {((con as any)?.ownerSignature || dormitory?.ownerSignature) ? (
+                        <img
+                          src={(con as any)?.ownerSignature || dormitory?.ownerSignature}
+                          alt="ลายเซ็นผู้ให้เช่า"
+                          className="h-10 object-contain mx-auto"
+                        />
                       ) : (
                         <span className="text-[10px] text-slate-400 select-none">ผู้ให้เช่าลงนามแล้ว</span>
                       )}
@@ -337,8 +347,12 @@ export const TenantContractView: React.FC<TenantContractViewProps> = ({
                   <div className="space-y-1">
                     <p className="text-[10px] text-slate-500 font-bold">ลงชื่อ (ผู้เช่า)</p>
                     <div className="h-12 flex items-center justify-center overflow-hidden">
-                      {(tenant as any)?.signatureUrl || (tenant as any)?.signatureMock ? (
-                        <img src={(tenant as any)?.signatureUrl || (tenant as any)?.signatureMock} alt="ลายเซ็นผู้เช่า" className="h-10 object-contain mx-auto" />
+                      {((con as any)?.tenantSignature || (tenant as any)?.signatureUrl || (tenant as any)?.signatureMock) ? (
+                        <img
+                          src={(con as any)?.tenantSignature || (tenant as any)?.signatureUrl || (tenant as any)?.signatureMock}
+                          alt="ลายเซ็นผู้เช่า"
+                          className="h-10 object-contain mx-auto"
+                        />
                       ) : (
                         <span className="text-[10px] text-slate-500 font-medium">ลงนามดิจิทัลแล้ว</span>
                       )}
