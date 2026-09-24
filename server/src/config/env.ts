@@ -156,7 +156,7 @@ export function redactSecrets(envConfig: Record<string, unknown>): Record<string
     redacted.DATABASE_URL = redacted.DATABASE_URL.replace(/:\/\/[^:]+:[^@]+@/, '://***:***@');
   }
   if (typeof redacted.REDIS_URL === 'string') {
-    redacted.REDIS_URL = redacted.REDIS_URL.replace(/:\/\/[^:]+:[^@]+@/, '://***:***@');
+    redacted.REDIS_URL = redacted.REDIS_URL.replace(/:\/\/[^:]*:[^@]+@/, '://***:***@');
   }
   if (typeof redacted.SESSION_ENCRYPTION_KEY === 'string') {
     redacted.SESSION_ENCRYPTION_KEY = '[REDACTED]';
