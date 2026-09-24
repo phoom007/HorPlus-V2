@@ -810,6 +810,29 @@ export class ContractService {
       await this.tenantRepo.update(contract.tenantId, dormitoryId, {
         status: 'former',
       });
+
+      if (prisma) {
+        const tenantRec = await prisma.tenant.findUnique({
+          where: { id: contract.tenantId },
+          select: { lineFriendId: true },
+        });
+
+        if (tenantRec?.lineFriendId) {
+          await prisma.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true);`;
+          await prisma.dormitoryAccessGrant.updateMany({
+            where: {
+              dormitoryId,
+              lineFriendId: tenantRec.lineFriendId,
+              status: 'ACTIVE',
+            },
+            data: {
+              status: 'REVOKED',
+              revokedAt: new Date(),
+              revokedByPrincipal: actorUserId,
+            },
+          });
+        }
+      }
     }
 
     await this.contractRepo.addStatusHistory(

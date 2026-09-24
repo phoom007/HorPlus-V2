@@ -103,17 +103,62 @@ moveOutRouter.post(
   }
 );
 
-// POST /api/v1/tenant-move-out-requests/:requestId/complete-end-tenancy (Deprecated — 410 Gone)
+// POST /api/v1/tenant-move-out-requests/:requestId/complete-end-tenancy (Owner/Manager Confirmation)
+// POST /api/v1/tenant-move-out-requests/:requestId/confirm (Alias)
+const handleCompleteMoveOut = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const dormId = getDormitoryId(req);
+    const requestId = req.params.requestId;
+    const reviewedByUserId = req.auth?.userId || req.user?.id;
+    const actorRole = req.dormitoryContext?.roleCode || (req.auth as any)?.roleCode || req.auth?.role;
+    const actualEndedAt = req.body?.actualEndedAt || new Date().toISOString().split('T')[0];
+    const emergencyReason = req.body?.emergencyReason || req.body?.reason || 'ยืนยันการย้ายออกโดยเจ้าของ/ผู้จัดการ';
+
+    if (!dormId || !reviewedByUserId || !actorRole) {
+      res.status(400).json({
+        success: false,
+        error: { code: 'INVALID_INPUT', message: 'Missing required parameters for move-out completion (dormitoryId, reviewedByUserId, actorRole)' }
+      });
+      return;
+    }
+
+    const normalizedRole = String(actorRole).toUpperCase();
+    if (!['OWNER', 'MANAGER'].includes(normalizedRole)) {
+      res.status(403).json({
+        success: false,
+        error: { code: 'FORBIDDEN', message: 'เฉพาะเจ้าของหอพักหรือผู้จัดการเท่านั้นที่สามารถยืนยันสิ้นสุดการเช่าได้' }
+      });
+      return;
+    }
+
+    const result = await moveOutService.completeEndTenancy({
+      dormitoryId: dormId,
+      requestId,
+      actualEndedAt,
+      reviewedByUserId,
+      actorRole: normalizedRole,
+      emergencyReason
+    });
+
+    res.json({ success: true, data: result });
+  } catch (err: any) {
+    if (err.code) {
+      res.status(err.status || 400).json({ success: false, error: { code: err.code, message: err.message } });
+      return;
+    }
+    next(err);
+  }
+};
+
 moveOutRouter.post(
   '/tenant-move-out-requests/:requestId/complete-end-tenancy',
   mutationGuard('moveout:write'),
-  async (req: Request, res: Response) => {
-    res.status(410).json({
-      success: false,
-      error: {
-        code: 'ROUTE_DEPRECATED',
-        message: 'DEPRECATED: The normal move-out flow completes automatically upon arrival of the scheduled date. Use /emergency-terminate for exceptional administrative overrides.'
-      }
-    });
-  }
+  handleCompleteMoveOut
 );
+
+moveOutRouter.post(
+  '/tenant-move-out-requests/:requestId/confirm',
+  mutationGuard('moveout:write'),
+  handleCompleteMoveOut
+);
+

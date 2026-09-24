@@ -78,6 +78,8 @@ async function resolveTenantContext(req: Request): Promise<TenantContextResult> 
         })
       : [];
 
+    let targetFriendId: string | null = (req.auth as any)?.lineFriendId || null;
+
     // If no registered tenant record exists yet: check if active access grant is linked to an approved tenant
     const candidateGrantId = req.auth?.session?.accessGrantId || (req.auth?.userId?.startsWith('ag_user_') ? req.auth.userId.replace('ag_user_', '') : null);
     if (tenants.length === 0 && candidateGrantId) {
@@ -86,7 +88,7 @@ async function resolveTenantContext(req: Request): Promise<TenantContextResult> 
         include: { lineFriend: true },
       });
 
-      const targetFriendId = grant?.lineFriendId || grant?.lineFriend?.id;
+      targetFriendId = grant?.lineFriendId || grant?.lineFriend?.id || targetFriendId;
       if (targetFriendId) {
         let approvedTenant = await tx.tenant.findFirst({
           where: {
@@ -138,7 +140,7 @@ async function resolveTenantContext(req: Request): Promise<TenantContextResult> 
 
         if (approvedTenant) {
           const updateData: any = {};
-          if (!approvedTenant.lineFriendId && grant.lineFriendId) {
+          if (!approvedTenant.lineFriendId && grant?.lineFriendId) {
             updateData.lineFriendId = grant.lineFriendId;
           }
           if (isUuid && !approvedTenant.linkedUserId) {
@@ -165,6 +167,15 @@ async function resolveTenantContext(req: Request): Promise<TenantContextResult> 
           where: { id: candidateGrantId },
           include: { lineFriend: true },
         });
+        if (grant && grant.status === 'REVOKED') {
+          return {
+            error: {
+              code: 'FORBIDDEN',
+              message: 'สิทธิ์การเข้าถึงหอพักนี้ถูกยกเลิกแล้ว (การเช่าสิ้นสุดลงแล้ว)',
+              statusCode: 403,
+            },
+          };
+        }
         lineFriend = grant?.lineFriend;
         if (grant?.lineFriendId) {
           pendingRequest = await tx.tenantRegistrationRequest.findFirst({
@@ -175,6 +186,40 @@ async function resolveTenantContext(req: Request): Promise<TenantContextResult> 
             },
             orderBy: { createdAt: 'desc' },
           });
+        }
+      }
+
+      // Check if user is a former tenant whose tenancy has ended (REQUIREMENTS-LOCK §8:156)
+      const userPhone = req.auth?.user?.phone || (req as any).user?.phone;
+      const formerConditions: any[] = [
+        ...(isUuid ? [{ linkedUserId: userId }] : []),
+        ...(targetFriendId ? [{ lineFriendId: targetFriendId }] : []),
+        ...(userPhone ? [{ phone: userPhone }] : []),
+      ];
+      const formerTenant = formerConditions.length > 0 ? await tx.tenant.findFirst({
+        where: {
+          dormitoryId: membership.dormitoryId,
+          deletedAt: null,
+          status: 'former',
+          OR: formerConditions,
+        },
+      }) : null;
+
+      if (formerTenant && tenants.length === 0) {
+        const hasActiveOccupancy = await tx.occupancy.findFirst({
+          where: { dormitoryId: membership.dormitoryId, tenantId: formerTenant.id, status: 'ACTIVE' },
+        });
+        const hasActiveContract = await tx.contract.findFirst({
+          where: { dormitoryId: membership.dormitoryId, tenantId: formerTenant.id, status: { in: ['active', 'expiring_soon', 'waiting_extension'] } },
+        });
+        if (!hasActiveOccupancy && !hasActiveContract) {
+          return {
+            error: {
+              code: 'TENANCY_ENDED',
+              message: 'การเช่าพักอาศัยของคุณสิ้นสุดลงแล้ว ไม่สามารถเข้าถึงพอร์ทัลผู้เช่าได้',
+              statusCode: 403,
+            },
+          };
         }
       }
 
@@ -308,6 +353,17 @@ async function resolveTenantContext(req: Request): Promise<TenantContextResult> 
     }
 
     const tenant = (contract ? tenants.find(t => t.id === contract.tenantId) : null) || tenants[0];
+
+    // If tenant status is former and has no active contract or occupancy, deny fail-closed (REQUIREMENTS-LOCK §8:156)
+    if (tenant && tenant.status === 'former' && !contract && occupancies.length === 0 && dailyStays.length === 0) {
+      return {
+        error: {
+          code: 'TENANCY_ENDED',
+          message: 'การเช่าพักอาศัยของคุณสิ้นสุดลงแล้ว ไม่สามารถเข้าถึงพอร์ทัลผู้เช่าได้',
+          statusCode: 403,
+        },
+      };
+    }
 
     return {
       tenant,

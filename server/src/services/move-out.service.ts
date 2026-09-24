@@ -373,10 +373,31 @@ export class MoveOutService {
         },
       });
       if (otherActiveOccupancies === 0) {
-        await tx.tenant.update({
+        const tenant = await tx.tenant.update({
           where: { id: reqRecord.tenantId },
           data: { status: 'former' },
+          select: { lineFriendId: true },
         });
+
+        // Revoke active DormitoryAccessGrant for this tenant in this dormitory (REQUIREMENTS-LOCK §8:154)
+        if (tenant?.lineFriendId) {
+          await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${reqRecord.dormitoryId}, true);`;
+          const grantUpdate = await tx.dormitoryAccessGrant.updateMany({
+            where: {
+              dormitoryId: reqRecord.dormitoryId,
+              lineFriendId: tenant.lineFriendId,
+              status: 'ACTIVE',
+            },
+            data: {
+              status: 'REVOKED',
+              revokedAt: new Date(),
+              revokedByPrincipal: reviewedByUserId,
+            },
+          });
+          logger.info(`[MoveOutService] Revoked grants for tenant ${reqRecord.tenantId} (friend ${tenant.lineFriendId}): count=${grantUpdate.count}`);
+        } else {
+          logger.info(`[MoveOutService] Tenant ${reqRecord.tenantId} has no lineFriendId!`);
+        }
       }
 
       // 6. In-app notice for tenant
@@ -573,10 +594,28 @@ export class MoveOutService {
             },
           });
           if (otherActiveOccupancies === 0) {
-            await tx.tenant.update({
+            const tenant = await tx.tenant.update({
               where: { id: reqRecord.tenantId },
               data: { status: 'former' },
+              select: { lineFriendId: true },
             });
+
+            // Revoke active DormitoryAccessGrant for this tenant in this dormitory (REQUIREMENTS-LOCK §8:154)
+            if (tenant?.lineFriendId) {
+              await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${reqRecord.dormitoryId}, true);`;
+              await tx.dormitoryAccessGrant.updateMany({
+                where: {
+                  dormitoryId: reqRecord.dormitoryId,
+                  lineFriendId: tenant.lineFriendId,
+                  status: 'ACTIVE',
+                },
+                data: {
+                  status: 'REVOKED',
+                  revokedAt: new Date(),
+                  revokedByPrincipal: 'SYSTEM_SCHEDULER',
+                },
+              });
+            }
           }
 
           const room = await tx.room.findUnique({

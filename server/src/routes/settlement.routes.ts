@@ -118,7 +118,7 @@ export function createSettlementRouter(authService: AuthenticationService): Rout
   });
 
   // DELETE /api/v1/settlements/damage-items/:itemId (Soft-Remove ONLY, hard delete forbidden)
-  router.delete('/damage-items/:itemId', ...mutationGuard('contract:write'), async (req: Request, res: Response) => {
+  const handleSoftRemoveDamageItem = async (req: Request, res: Response) => {
     if (!verifyCsrf(req, res)) return;
     try {
       const dormId = getAuthoritativeDormitoryId(req);
@@ -135,7 +135,10 @@ export function createSettlementRouter(authService: AuthenticationService): Rout
     } catch (err) {
       handleServiceError(res, err, req);
     }
-  });
+  };
+
+  router.delete('/damage-items/:itemId', ...mutationGuard('contract:write'), handleSoftRemoveDamageItem);
+  router.delete('/:settlementId/damage-items/:itemId', ...mutationGuard('contract:write'), handleSoftRemoveDamageItem);
 
   // POST /api/v1/settlements/:settlementId/confirm (Locks settlement status)
   router.post('/:settlementId/confirm', ...mutationGuard('contract:write'), async (req: Request, res: Response) => {
