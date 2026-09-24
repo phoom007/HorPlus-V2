@@ -12,6 +12,7 @@ import {
   ExtendContractSchema,
   TerminateContractSchema,
 } from '../schemas/property-tenant-contract.schemas.js';
+import { resolveAuthoritativeTenantContext, getTenantIdsForPortalContext } from '../utils/tenant-resolution.util.js';
 import { AppError } from '../types/index.js';
 
 export function createContractRouter(
@@ -174,16 +175,12 @@ export function createContractRouter(
       if (roleCode === 'OWNER' || roleCode === 'MANAGER') {
         authorized = true;
       } else if (roleCode === 'TENANT') {
-        const prisma = getPrismaClient();
-        const tenant = await prisma.tenant.findFirst({
-          where: {
-            dormitoryId: dormId,
-            linkedUserId: req.auth?.userId,
-          },
-          select: { id: true },
-        });
-        if (tenant && (contract.tenantId === tenant.id || (contract as any).tenantId === tenant.id)) {
-          authorized = true;
+        const tenantCtx = await resolveAuthoritativeTenantContext(req);
+        if (!tenantCtx.error && tenantCtx.tenant) {
+          const allowedTenantIds = getTenantIdsForPortalContext(tenantCtx);
+          if (allowedTenantIds.includes(contract.tenantId)) {
+            authorized = true;
+          }
         }
       }
 

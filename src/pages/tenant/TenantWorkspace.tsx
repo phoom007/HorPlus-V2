@@ -23,7 +23,7 @@ import {
   Announcement,
   Building
 } from '../../types';
-import { httpRequest } from '../../data/httpClient';
+import { httpRequest, getCsrfTokenFromCookie } from '../../data/httpClient';
 
 // Modular Tabs & SubViews
 import { TenantHomeTab } from './tabs/TenantHomeTab';
@@ -961,11 +961,13 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
         localTenant.dormitoryId ||
         (typeof localStorage !== 'undefined' ? localStorage.getItem('selected_dormitory_id') || '' : '');
       const activeRoom = selectedRoomId || tenantRoom?.id || '';
+      const csrf = getCsrfTokenFromCookie() || '';
       const res = await fetch('/api/v1/tenant-portal/profile', {
         method: 'PATCH',
         credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
+          ...(csrf ? { 'x-csrf-token': csrf } : {}),
           ...(dormId ? { 'x-dormitory-id': dormId } : {}),
           ...(activeRoom ? { 'x-room-id': activeRoom } : {}),
         },
@@ -1230,11 +1232,13 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
     try {
       const dormId = tenantRoom?.dormitoryId || tenant.dormitoryId || (typeof localStorage !== 'undefined' ? localStorage.getItem('selected_dormitory_id') || '' : '');
       const targetRoomId = tenantRoom?.id || selectedRoomId || '';
+      const csrf = getCsrfTokenFromCookie() || '';
       const response = await fetch('/api/v1/tenant-move-out-requests', {
         method: 'POST',
         credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
+          ...(csrf ? { 'x-csrf-token': csrf } : {}),
           ...(dormId ? { 'x-dormitory-id': dormId } : {}),
           ...(targetRoomId ? { 'x-room-id': targetRoomId } : {}),
         },
@@ -1368,11 +1372,13 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
     setIsSubmittingRepair(true);
     try {
       const activeRoomId = selectedRoomId || tenantRoom?.id || '';
+      const csrf = getCsrfTokenFromCookie() || '';
       const res = await fetch('/api/v1/tenant-portal/maintenance', {
         method: 'POST',
         credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
+          ...(csrf ? { 'x-csrf-token': csrf } : {}),
           ...(activeRoomId ? { 'x-room-id': activeRoomId } : {}),
         },
         body: JSON.stringify({

@@ -41,6 +41,7 @@ moveOutRouter.post(
 // GET /api/v1/tenant-move-out-requests (Owner / Staff View)
 moveOutRouter.get(
   '/tenant-move-out-requests',
+  requireDormitoryPermission('moveout:view'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const dormId = getDormitoryId(req);

@@ -85,7 +85,7 @@ export function createPropertyRouter(
   // --- BUILDINGS ---
 
   // GET /api/v1/properties/buildings
-  router.get('/buildings', async (req: Request, res: Response) => {
+  router.get('/buildings', requireDormitoryPermission('buildings:view'), async (req: Request, res: Response) => {
     try {
       const dormId = getDormitoryId(req);
       const rawPage = Number(req.query.page || 1);
@@ -112,7 +112,7 @@ export function createPropertyRouter(
   });
 
   // GET /api/v1/properties/buildings/:id
-  router.get('/buildings/:id', async (req: Request, res: Response) => {
+  router.get('/buildings/:id', requireDormitoryPermission('buildings:view'), async (req: Request, res: Response) => {
     try {
       const dormId = getDormitoryId(req);
       const building = await buildingService.getBuildingById(req.params.id, dormId);
@@ -216,7 +216,7 @@ export function createPropertyRouter(
   // --- ROOMS ---
 
   // GET /api/v1/properties/rooms/available
-  router.get('/rooms/available', async (req: Request, res: Response) => {
+  router.get('/rooms/available', requireDormitoryPermission('rooms:view'), async (req: Request, res: Response) => {
     try {
       const dormId = getDormitoryId(req);
       const { startDate, endDate, buildingId } = req.query;
@@ -247,7 +247,7 @@ export function createPropertyRouter(
   });
 
   // GET /api/v1/properties/rooms
-  router.get('/rooms', async (req: Request, res: Response) => {
+  router.get('/rooms', requireDormitoryPermission('rooms:view'), async (req: Request, res: Response) => {
     try {
       const dormId = getDormitoryId(req);
       const rawPage = Number(req.query.page || 1);
@@ -275,7 +275,7 @@ export function createPropertyRouter(
   });
 
   // GET /api/v1/properties/rooms/:id/effective-defaults
-  router.get('/rooms/:id/effective-defaults', async (req: Request, res: Response) => {
+  router.get('/rooms/:id/effective-defaults', requireDormitoryPermission('rooms:view'), async (req: Request, res: Response) => {
     try {
       const dormId = getDormitoryId(req);
       const room = await roomService.getRoomById(req.params.id, dormId);
@@ -292,7 +292,7 @@ export function createPropertyRouter(
   });
 
   // GET /api/v1/properties/rooms/:id/quick-add-context
-  router.get('/rooms/:id/quick-add-context', async (req: Request, res: Response) => {
+  router.get('/rooms/:id/quick-add-context', requireDormitoryPermission('rooms:view'), async (req: Request, res: Response) => {
     try {
       const dormId = getDormitoryId(req);
       const roomId = req.params.id;
@@ -375,7 +375,7 @@ export function createPropertyRouter(
   });
 
   // GET /api/v1/properties/rooms/:id
-  router.get('/rooms/:id', async (req: Request, res: Response) => {
+  router.get('/rooms/:id', requireDormitoryPermission('rooms:view'), async (req: Request, res: Response) => {
     try {
       const dormId = getDormitoryId(req);
       const room = await roomService.getRoomById(req.params.id, dormId);

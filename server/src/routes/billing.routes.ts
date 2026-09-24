@@ -97,7 +97,7 @@ export function createBillingRouter(
   };
 
   // GET /api/v1/bills/preview?billingCycleId=...&roomId=...
-  router.get('/preview', async (req: Request, res: Response) => {
+  router.get('/preview', requireDormitoryPermission('billing:view'), async (req: Request, res: Response) => {
     try {
       const dormId = getDormitoryId(req);
       const billingCycleId = req.query.billingCycleId as string;
@@ -211,7 +211,7 @@ export function createBillingRouter(
   });
 
   // GET /api/v1/bills/summary
-  router.get('/summary', async (req: Request, res: Response) => {
+  router.get('/summary', requireDormitoryPermission('billing:view'), async (req: Request, res: Response) => {
     try {
       const dormId = getDormitoryId(req);
       const billingCycleId = req.query.billingCycleId as string;
@@ -223,7 +223,7 @@ export function createBillingRouter(
   });
 
   // GET /api/v1/bills
-  router.get('/', async (req: Request, res: Response) => {
+  router.get('/', requireDormitoryPermission('billing:view'), async (req: Request, res: Response) => {
     try {
       const dormId = getDormitoryId(req);
       const rawPage = Number(req.query.page || 1);
@@ -253,7 +253,7 @@ export function createBillingRouter(
   });
 
   // GET /api/v1/bills/:id
-  router.get('/:id', async (req: Request, res: Response) => {
+  router.get('/:id', requireDormitoryPermission('billing:view'), async (req: Request, res: Response) => {
     try {
       const dormId = getDormitoryId(req);
       const result = await billingService.getBillById(req.params.id, dormId);

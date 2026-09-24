@@ -819,8 +819,16 @@ export function createDormitoryRouter(
     }
   };
 
-  router.get('/:dormitoryId/signature', requireSession, requireDormitory, requireDormitoryView, handleGetSignature);
-  router.get('/:dormitoryId/signatures', requireSession, requireDormitory, requireDormitoryView, handleGetSignature);
+  const requireDormitoryOrTenantView = (req: Request, res: Response, next: any) => {
+    const roleCode = String((req as any).dormitoryContext?.roleCode || req.auth?.role || '').toUpperCase();
+    if (roleCode === 'TENANT') {
+      return next();
+    }
+    return requireDormitoryView(req, res, next);
+  };
+
+  router.get('/:dormitoryId/signature', requireSession, requireDormitory, requireDormitoryOrTenantView, handleGetSignature);
+  router.get('/:dormitoryId/signatures', requireSession, requireDormitory, requireDormitoryOrTenantView, handleGetSignature);
 
   // DELETE /api/v1/dormitories/:dormitoryId/signature (Task-009 Signature Deactivation)
   const handleDeleteSignature = async (req: Request, res: Response) => {

@@ -372,10 +372,8 @@ export async function resolveAuthoritativeDormitoryContext(req: Request): Promis
     permSet.add('maintenance:create');
     permissions = Array.from(permSet);
   } else if (roleCode === 'TENANT') {
-    // Remove ALL Owner Tenant-domain permissions
-    permissions = permissions.filter(
-      (p) => !p.startsWith('tenants:') && !p.startsWith('tenant:')
-    );
+    // Strictly isolate TENANT role: TENANT has zero owner/staff operational permissions (REQ §3)
+    permissions = [];
   }
 
   const context: AuthoritativeDormitoryContext = {
