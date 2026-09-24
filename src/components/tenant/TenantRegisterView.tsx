@@ -1120,12 +1120,18 @@ export const TenantRegisterView: React.FC<TenantRegisterViewProps> = ({
         setClaimedTenantId(res.data.tenantId);
         setLockedFinancials(res.data.lockedFinancials);
 
-        if (res.data.displayName) {
+        if (res.data.maskedName) {
+          setFullName(res.data.maskedName);
+        } else if (res.data.displayName) {
           setFullName(res.data.displayName);
         } else if (res.data.firstName) {
           setFullName(`${res.data.firstName} ${res.data.lastName || ''}`.trim());
         }
-        if (res.data.phone) setPhone(res.data.phone);
+        if (res.data.phone) {
+          setPhone(res.data.phone);
+        } else if (/^0\d{8,9}$/.test(claimInput.replace(/\D/g, ''))) {
+          setPhone(claimInput.trim());
+        }
         if (res.data.citizenId) setCitizenId(res.data.citizenId);
         if (res.data.birthDate) setBirthDate(res.data.birthDate);
         if (res.data.address) setAddress(res.data.address);

@@ -14,7 +14,7 @@ import { AuditService } from './audit.service.js';
 import {
   normalizeThaiPhone,
   calculateNameSimilarity,
-  maskFullName,
+  maskThaiCandidateName,
   maskPhone,
 } from '../utils/thai-identity.util.js';
 
@@ -264,8 +264,7 @@ export class TenantClaimService {
       hasCandidate: true,
       roomId: room.id,
       roomNumber: room.roomNumber,
-      maskedName: maskFullName(rawName),
-      maskedPhone: maskPhone(tenant.phone),
+      maskedName: maskThaiCandidateName(rawName),
     };
   }
 
@@ -291,8 +290,8 @@ export class TenantClaimService {
     const { dormitoryId, roomId, roomNumber, claimInput } = data;
 
     const trimmedInput = claimInput?.trim();
-    if (!trimmedInput) {
-      const err = new Error('กรุณาระบุชื่อ-นามสกุล หรือ เบอร์โทรศัพท์สำหรับยืนยันสิทธิ์');
+    if (!trimmedInput || trimmedInput.length < 2) {
+      const err = new Error('กรุณากรอกชื่อ-นามสกุล หรือเบอร์โทรศัพท์อย่างน้อย 2 ตัวอักษร');
       (err as any).statusCode = 400;
       (err as any).code = 'VALIDATION_ERROR';
       throw err;

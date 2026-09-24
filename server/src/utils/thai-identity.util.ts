@@ -265,3 +265,24 @@ export function parseAndNormalizeName(rawName?: string | null): {
   };
 }
 
+/**
+ * Masks Thai full name for public candidate presentation (Decision A2).
+ * Masks each word keeping up to first 2 characters followed by ***:
+ * e.g. "สมชาย ใจดี" -> "สม*** ใจ***"
+ * e.g. "สมชาย" -> "สม***"
+ */
+export function maskThaiCandidateName(rawName?: string | null): string {
+  if (!rawName) return '';
+  const trimmed = rawName.trim();
+  if (!trimmed) return '';
+  const parts = trimmed.split(/\s+/);
+  return parts
+    .map((part) => {
+      if (part.length <= 2) {
+        return part + '***';
+      }
+      return part.slice(0, 2) + '***';
+    })
+    .join(' ');
+}
+

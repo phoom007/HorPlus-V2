@@ -207,7 +207,7 @@ export function createTenantRegistrationRouter(
     inviteToken: z.string().optional(),
     roomId: z.string().min(1, 'กรุณาระบุห้องพัก'),
     tenantId: z.string().uuid('รหัสผู้เช่าไม่ถูกต้อง'),
-    claimVerificationToken: z.string().optional(),
+    claimVerificationToken: z.string().min(1, 'ต้องระบุรหัสยืนยันการรับสิทธิ์ (claimVerificationToken)'),
     signatureBase64: z.string().min(1, 'กรุณาเซ็นชื่อยืนยันการรับสิทธิ์'),
     displayName: z.string().optional(),
     firstName: z.string().optional(),

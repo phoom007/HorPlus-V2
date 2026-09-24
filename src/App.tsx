@@ -151,8 +151,13 @@ export default function App() {
     }
 
     // 3. Direct tenant token check: ?t= or ?token= on ANY path
-    const token = extractTenantTokenFromUrl({ ignoreConsumed: true });
-    if (token) {
+    // If user is already on /tenant with sub=register, let TenantWorkspace and TenantRegisterView consume the token.
+    const isRegisteringSubView =
+      window.location.pathname.startsWith('/tenant') &&
+      new URLSearchParams(window.location.search).get('sub') === 'register';
+
+    const token = extractTenantTokenFromUrl({ ignoreConsumed: false });
+    if (token && !isRegisteringSubView) {
       markTokenConsumed(token);
       cleanLiffStateFromUrl();
       window.location.replace(`/api/v1/auth/line-tenant-entry?t=${encodeURIComponent(token)}`);

@@ -14,6 +14,7 @@ import {
   normalizeThaiPhone,
   calculateNameSimilarity,
   maskFullName,
+  maskThaiCandidateName,
 } from '../utils/thai-identity.util.js';
 import { processAndSecureTenantDocument } from './image-security.service.js';
 import { LocalStorageProvider } from './local-storage.service.js';
@@ -2664,7 +2665,7 @@ export class TenantRegistrationService {
               : 'monthly');
 
         claimCandidate = {
-          maskedName: maskFullName(t.displayName || t.firstName),
+          maskedName: maskThaiCandidateName(t.displayName || `${t.firstName || ''} ${t.lastName || ''}`.trim()),
           rentalType,
           monthlyRent: prov ? Number(prov.unitRentAmount) : (ct ? Number(ct.rentAmount) : Number(r.monthlyRent)),
           depositAmount: prov ? Number(prov.depositAmount || 0) : (ct ? Number(ct.depositAmount || 0) : Number(r.depositAmount || 0)),
@@ -2724,8 +2725,8 @@ export class TenantRegistrationService {
   }) {
     const { dormitoryId, roomId, claimInput, actorId = 'anonymous' } = params;
     const trimmedInput = (claimInput || '').trim();
-    if (!trimmedInput) {
-      throw new AppError('กรุณากรอกชื่อ-นามสกุล หรือ เบอร์โทรศัพท์', 400, 'CLAIM_INPUT_REQUIRED');
+    if (!trimmedInput || trimmedInput.length < 2) {
+      throw new AppError('กรุณากรอกชื่อ-นามสกุล หรือเบอร์โทรศัพท์อย่างน้อย 2 ตัวอักษร', 400, 'CLAIM_INPUT_TOO_SHORT');
     }
 
     // 1. Anti-bruteforce: Claim-scoped 5-minute lockout (Does NOT lock the room globally)
@@ -2839,11 +2840,8 @@ export class TenantRegistrationService {
       verified: true,
       claimVerificationToken,
       tenantId: candidateTenant.id,
-      displayName: candidateTenant.displayName,
-      firstName: candidateTenant.firstName,
-      lastName: candidateTenant.lastName,
-      phone: candidateTenant.phone,
-      citizenId: candidateTenant.nationalIdMasked || null,
+      maskedName: maskThaiCandidateName(candidateTenant.displayName || `${candidateTenant.firstName || ''} ${candidateTenant.lastName || ''}`.trim()),
+      displayName: maskThaiCandidateName(candidateTenant.displayName || `${candidateTenant.firstName || ''} ${candidateTenant.lastName || ''}`.trim()),
       room: {
         id: room.id,
         roomNumber: room.roomNumber,
@@ -2868,10 +2866,6 @@ export class TenantRegistrationService {
               ? (activeProvisional.rentalType === 'TERM' ? 'สัญญาเช่าแบบเทอม' : 'สัญญาเช่ารายเดือน')
               : ''),
       },
-      emergencyContact: candidateTenant.emergencyContacts[0] || null,
-      vehicles: candidateTenant.vehicles || [],
-      coOccupants: candidateTenant.coOccupants || [],
-      pet: candidateTenant.petInfo || null,
     };
   }
 
@@ -2936,7 +2930,10 @@ export class TenantRegistrationService {
     }
 
     // 0. Verify claim verification token proof
-    const verifiedProof = verifyClaimVerificationToken(claimVerificationToken || '');
+    if (!claimVerificationToken || typeof claimVerificationToken !== 'string' || !claimVerificationToken.trim()) {
+      throw new AppError('ต้องระบุรหัสยืนยันการรับสิทธิ์ (claimVerificationToken)', 400, 'CLAIM_TOKEN_REQUIRED');
+    }
+    const verifiedProof = verifyClaimVerificationToken(claimVerificationToken);
     if (
       verifiedProof.tenantId !== tenantId ||
       verifiedProof.roomId !== roomId ||
@@ -2964,10 +2961,27 @@ export class TenantRegistrationService {
 
     // 2. Transaction: complete claim directly to REGISTERED (Bypasses Owner Approval)
     const claimResult = await prisma.$transaction(async (tx) => {
+      const isValidUuid = (val?: string | null): boolean => {
+        if (!val || typeof val !== 'string') return false;
+        return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val);
+      };
+
       let lineFollowerId: string | null = null;
       if (inviteToken) {
         const inviteResult = await tenantRegistrationInviteService.consumeInviteInTransaction(inviteToken, tx);
         lineFollowerId = inviteResult.lineFriendId;
+      }
+      if (!lineFollowerId && actorUserId && actorUserId.startsWith('ag_user_')) {
+        const grantId = actorUserId.replace('ag_user_', '');
+        if (isValidUuid(grantId)) {
+          const grant = await tx.dormitoryAccessGrant.findUnique({
+            where: { id: grantId },
+            select: { lineFriendId: true },
+          });
+          if (grant?.lineFriendId) {
+            lineFollowerId = grant.lineFriendId;
+          }
+        }
       }
 
       const tenant = await tx.tenant.findFirst({
@@ -3011,7 +3025,7 @@ export class TenantRegistrationService {
         lastName: lastName ? lastName.trim() : tenant.lastName,
         phone: phone ? phone.trim() : tenant.phone,
         status: 'active',
-        ...(actorUserId ? { linkedUserId: actorUserId } : {}),
+        ...(isValidUuid(actorUserId) ? { linkedUserId: actorUserId } : {}),
       };
       if (pet) {
         updateData.petInfo = pet as Prisma.InputJsonValue;
@@ -3027,8 +3041,8 @@ export class TenantRegistrationService {
         data: updateData,
       });
 
-      // If actorUserId provided, ensure DormitoryMember exists with TENANT role
-      if (actorUserId) {
+      // If actorUserId provided and is a valid UUID, ensure DormitoryMember exists with TENANT role
+      if (actorUserId && isValidUuid(actorUserId)) {
         let tenantRole = await tx.role.findFirst({ where: { code: 'TENANT' } });
         if (!tenantRole) {
           tenantRole = await tx.role.create({

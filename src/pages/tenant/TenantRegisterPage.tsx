@@ -84,6 +84,7 @@ export const TenantRegisterPage: React.FC = () => {
           setPolicyData(inviteRes.data.policy);
           if (inviteRes.data.rooms && inviteRes.data.rooms.length > 0) {
             setRooms(inviteRes.data.rooms.map(r => ({
+              ...r,
               id: r.id,
               roomNumber: r.roomNumber,
               floor: r.floor,

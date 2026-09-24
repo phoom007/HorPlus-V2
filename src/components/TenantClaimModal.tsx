@@ -138,6 +138,10 @@ export const TenantClaimModal: React.FC<TenantClaimModalProps> = ({
       setErrorText('กรุณากรอกชื่อ-นามสกุล หรือ เบอร์โทรศัพท์');
       return;
     }
+    if (claimInput.trim().length < 2) {
+      setErrorText('กรุณากรอกชื่อ-นามสกุล หรือเบอร์โทรศัพท์อย่างน้อย 2 ตัวอักษร');
+      return;
+    }
 
     setSubmitting(true);
     setErrorText(null);

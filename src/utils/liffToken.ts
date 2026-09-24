@@ -94,7 +94,7 @@ export function extractTenantTokenFromUrl(options: { ignoreConsumed?: boolean } 
     const directToken = params.get('t') || params.get('token');
     if (directToken && directToken.trim()) {
       const t = directToken.trim();
-      if (!ignoreConsumed || !isTokenConsumed(t)) {
+      if (ignoreConsumed || !isTokenConsumed(t)) {
         return t;
       }
     }
@@ -128,7 +128,7 @@ export function extractTenantTokenFromUrl(options: { ignoreConsumed?: boolean } 
         const innerToken = innerParams.get('t') || innerParams.get('token');
         if (innerToken && innerToken.trim()) {
           const t = innerToken.trim();
-          if (!ignoreConsumed || !isTokenConsumed(t)) {
+          if (ignoreConsumed || !isTokenConsumed(t)) {
             return t;
           }
         }

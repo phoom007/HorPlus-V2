@@ -1107,7 +1107,7 @@ export function createAuthRouter(authService: AuthenticationService): Router {
         return res.redirect(`${appUrl}/tenant`);
       }
 
-      return res.redirect(`${appUrl}/tenant?sub=register`);
+      return res.redirect(`${appUrl}/tenant?sub=register${rawToken ? `&t=${encodeURIComponent(rawToken)}` : ''}`);
     } catch (err: any) {
       next(err);
     }

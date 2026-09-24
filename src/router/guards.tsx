@@ -128,15 +128,21 @@ export const TenantAuthGuard: React.FC<{ children?: React.ReactNode }> = ({ chil
   React.useEffect(() => {
     let isMounted = true;
 
-    // 1. Direct Entry Token Bridge: always honor ?t= or ?token= or liff.state when present in URL
-    const token = extractTenantTokenFromUrl({ ignoreConsumed: true });
-    if (token) {
+    // 1. Direct Entry Token Bridge: check if entry token is present and not currently on sub=register
+    const isRegisteringSubView =
+      window.location.pathname.startsWith('/tenant') &&
+      new URLSearchParams(window.location.search).get('sub') === 'register';
+
+    const token = extractTenantTokenFromUrl({ ignoreConsumed: false });
+    if (token && !isRegisteringSubView) {
       markTokenConsumed(token);
       cleanLiffStateFromUrl();
       window.location.replace(`/api/v1/auth/line-tenant-entry?t=${encodeURIComponent(token)}`);
       return;
     }
-    cleanLiffStateFromUrl();
+    if (!isRegisteringSubView) {
+      cleanLiffStateFromUrl();
+    }
 
     async function checkTenantAuth() {
       try {
