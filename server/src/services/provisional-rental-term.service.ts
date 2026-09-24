@@ -397,6 +397,9 @@ export class ProvisionalRentalTermService {
               }
 
               const isPaid = Array.isArray(data.migratedPaidPeriods) && data.migratedPaidPeriods.includes(pStr);
+              if (!isPaid) {
+                continue;
+              }
               const pLabel = formatThaiPeriodLabel(pStr);
               const billNumber = await generateNextBillNumberInTx(tx, dormitoryId, earliestCycle.cycleCode);
 
@@ -528,6 +531,9 @@ export class ProvisionalRentalTermService {
               const pStr = instDate.toISOString().slice(0, 7);
               const pLabel = `งวดที่ ${instNo} (${formatThaiPeriodLabel(pStr)})`;
               const isPaid = Array.isArray(data.migratedPaidInstallments) && data.migratedPaidInstallments.includes(instNo);
+              if (!isPaid) {
+                continue;
+              }
               const billNumber = await generateNextBillNumberInTx(tx, dormitoryId, earliestCycle.cycleCode);
 
               const isZeroRent = unitRentDec.equals(new Prisma.Decimal('0.00'));

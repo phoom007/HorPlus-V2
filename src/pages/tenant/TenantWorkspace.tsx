@@ -1091,12 +1091,26 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
 
   // Active Unpaid Bills & Total Aggregate Unpaid Amount
   const allUnpaidBills = tenantBills.filter((b) =>
-    ['unpaid', 'pending', 'overdue', 'rejected', 'issued', 'UNPAID', 'PENDING', 'OVERDUE', 'REJECTED', 'ISSUED'].includes(
-      b.status
-    )
+    [
+      'unpaid',
+      'pending',
+      'overdue',
+      'rejected',
+      'issued',
+      'partially_paid',
+      'UNPAID',
+      'PENDING',
+      'OVERDUE',
+      'REJECTED',
+      'ISSUED',
+      'PARTIALLY_PAID',
+    ].includes(b.status)
   );
   const activeUnpaidBill = allUnpaidBills[0] || null;
-  const totalUnpaidAmount = allUnpaidBills.reduce((sum, b) => sum + Number(b.totalAmount || 0), 0);
+  const totalUnpaidAmount = allUnpaidBills.reduce(
+    (sum, b) => sum + Number(b.outstandingAmount ?? b.totalAmount ?? 0),
+    0
+  );
 
   useEffect(() => {
     const fetchHeaders: HeadersInit = selectedRoomId ? { 'x-room-id': selectedRoomId } : {};

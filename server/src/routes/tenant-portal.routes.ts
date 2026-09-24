@@ -398,7 +398,7 @@ async function getTenantBillWhere(prisma: any, ctx: { dormitoryId: string; tenan
 
   const orConditions: any[] = [{ tenantId: ctx.tenant.id }];
   if (ctx.roomId) {
-    orConditions.push({ roomId: ctx.roomId });
+    orConditions.push({ roomId: ctx.roomId, OR: [{ tenantId: ctx.tenant.id }, { tenantId: null }] });
   }
   if (contractIds.length > 0) {
     orConditions.push({ contractId: { in: contractIds } });
@@ -412,6 +412,7 @@ async function getTenantBillWhere(prisma: any, ctx: { dormitoryId: string; tenan
     NOT: {
       AND: [
         { billKind: 'RENT' },
+        { billingDate: { gt: cutoffDate } },
         {
           billingCycle: {
             periodStart: { gt: cutoffDate }

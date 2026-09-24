@@ -230,6 +230,13 @@ export async function createImmediateRentBillForAgreementInTx(
   const startD = new Date(input.startDate);
   const safeActorId = input.actorUserId && /^[0-9a-fA-F-]{36}$/.test(input.actorUserId) ? input.actorUserId : null;
   const now = new Date();
+  const nowBkkStr = toBangkokDateString(now);
+  const currentMonthStartStr = `${nowBkkStr.slice(0, 7)}-01`;
+  const startBkkStr = toBangkokDateString(startD);
+  // OQ-2: Do not generate retroactive unpaid rent bills for months prior to the current onboarding month
+  const effectiveAgreementStartStr = startBkkStr > currentMonthStartStr ? startBkkStr : currentMonthStartStr;
+  const effectiveStartDate = new Date(`${effectiveAgreementStartStr}T00:00:00.000Z`);
+
   const createdBills: any[] = [];
 
   const installments = input.agreementType === 'TERM' ? Math.max(1, input.termInstallmentCount || 1) : 1;
@@ -240,17 +247,27 @@ export async function createImmediateRentBillForAgreementInTx(
     ? calculateInstallmentSchedule(totalRent.toNumber(), installments)
     : [];
 
-  for (const cycle of existingCycles) {
-    const isEligible = isAgreementEligibleForBillingCycle({
-      agreementStartDate: input.startDate,
+  let eligibleCycles = existingCycles.filter((cycle: any) =>
+    isAgreementEligibleForBillingCycle({
+      agreementStartDate: effectiveStartDate,
       agreementEndDate: input.endDate,
       cyclePeriodStart: cycle.periodStart,
       cyclePeriodEnd: cycle.periodEnd,
-    });
+    })
+  );
 
-    if (!isEligible) {
-      continue;
+  // Go-live boundary fallback: if onboarding happens before the earliest billing cycle in DB (e.g. pilot cycle 2027-01),
+  // attach the initial Round 1 rent bill to the earliest active cycle so the tenant sees it immediately upon approval.
+  if (eligibleCycles.length === 0 && existingCycles.length > 0) {
+    const earliestCycle = existingCycles[0];
+    if (effectiveStartDate < new Date(earliestCycle.periodStart)) {
+      eligibleCycles = [earliestCycle];
     }
+  }
+
+  for (let cycleIdx = 0; cycleIdx < eligibleCycles.length; cycleIdx++) {
+    const cycle = eligibleCycles[cycleIdx];
+    const isFirstRound = cycleIdx === 0;
 
     // 3. Idempotency Check: search existing RENT bill on this agreement in this cycle
     const existingBill = await tx.bill.findFirst({
@@ -275,19 +292,21 @@ export async function createImmediateRentBillForAgreementInTx(
     if (input.agreementType === 'TERM') {
       const cycleStart = new Date(cycle.periodStart);
       const cycleOffset = (cycleStart.getUTCFullYear() - startD.getUTCFullYear()) * 12 + (cycleStart.getUTCMonth() - startD.getUTCMonth());
-      if (cycleOffset < 0 || cycleOffset >= installments) {
+      const effectiveOffset = cycleOffset < 0 ? cycleIdx : cycleOffset;
+      if (effectiveOffset < 0 || effectiveOffset >= installments) {
         continue;
       }
-      const item = schedule[cycleOffset];
+      const item = schedule[effectiveOffset];
       if (!item) continue;
       billAmountDec = new Prisma.Decimal(item.formattedAmount);
-      description = `ค่าเช่าห้องพัก (งวดที่ ${cycleOffset + 1}/${installments})`;
+      description = `ค่าเช่าห้องพัก (งวดที่ ${effectiveOffset + 1}/${installments})`;
     }
 
-    // 5. Generate bill number
+    // 5. Generate bill number & set visibility billingDate
+    // PO-10: Round 1 (initial rent bill at registration/approval) is visible immediately (billingDate = now).
+    // Round 2+ (subsequent monthly rent bills) become visible on the 1st of their billing cycle month (billingDate = cycle.periodStart).
     const billNumber = await generateNextBillNumberInTx(tx, input.dormitoryId, cycle.cycleCode);
-    const isPreGoLive = startD < new Date(cycle.periodStart);
-    const billingDate = isPreGoLive ? new Date(cycle.periodStart) : (startD > new Date(cycle.periodStart) ? startD : new Date(cycle.periodStart));
+    const billingDate = isFirstRound ? now : new Date(cycle.periodStart);
     const dueDate = cycle.dueDate ? new Date(cycle.dueDate) : billingDate;
 
     // 6. Create issued Rent Bill in unpaid status
@@ -320,6 +339,10 @@ export async function createImmediateRentBillForAgreementInTx(
               amount: billAmountDec,
               unitPrice: billAmountDec,
               quantity: new Prisma.Decimal('1.00'),
+              metadata: {
+                isInitialRentBill: isFirstRound,
+                rentRound: cycleIdx + 1,
+              },
             },
           ],
         },

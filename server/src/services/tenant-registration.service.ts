@@ -1,5 +1,5 @@
 import { acquireRoomAvailabilityLock } from '../utils/occupancy-interval.util.js';
-import { createDepositBillForAgreementInTx } from '../utils/deposit-billing.util.js';
+import { createDepositBillForAgreementInTx, createImmediateRentBillForAgreementInTx } from '../utils/deposit-billing.util.js';
 import { getPrismaClient } from '../db/prisma.js';
 import { logger } from '../config/logger.js';
 import { AppError } from '../types/index.js';
@@ -1632,7 +1632,7 @@ export class TenantRegistrationService {
       }
 
       // 5.5. Create one-time Deposit Bill for approved registration contract
-      if (Number(payload.depositAmount) > 0) {
+      if (Number(payload.depositAmount) > 0 || Number(payload.rentAmount) > 0) {
         // Ensure billing cycle covering startDate exists for future start dates
         const startD = new Date(payload.startDate);
         const cycleExists = await tx.billingCycle.findFirst({
@@ -1714,6 +1714,21 @@ export class TenantRegistrationService {
           startDate: new Date(payload.startDate),
           depositAmount: payload.depositAmount || 0,
           depositDeclaredStatus: (payload as any).depositDeclaredStatus || 'UNPAID',
+          actorUserId: safeActorId,
+        });
+        await createImmediateRentBillForAgreementInTx(tx, {
+          dormitoryId,
+          roomId: effectiveRoomId,
+          tenantId: tenant.id,
+          contractId: contractId,
+          agreementType: isTerm ? 'TERM' : 'MONTHLY',
+          startDate: new Date(payload.startDate),
+          endDate: payload.endDate ? new Date(payload.endDate) : null,
+          unitRentAmount: payload.rentAmount || 0,
+          totalRentAmount: isTerm
+            ? (Number(payload.rentAmount || 0) * Number(payload.durationMonths || 1))
+            : (payload.rentAmount || 0),
+          termInstallmentCount: isTerm ? Number((payload as any).termInstallmentCount || 1) : 1,
           actorUserId: safeActorId,
         });
       }
@@ -2096,6 +2111,23 @@ export class TenantRegistrationService {
           depositDeclaredStatus: 'UNPAID',
           actorUserId: req.reviewedByUserId || undefined,
         });
+      }
+
+      if (Number(approvedTerms.rentAmount) > 0) {
+        await createImmediateRentBillForAgreementInTx(tx, {
+          dormitoryId,
+          roomId,
+          tenantId: tenant.id,
+          contractId: contract.id,
+          agreementType: 'MONTHLY',
+          startDate: new Date(approvedTerms.startDate),
+          endDate: new Date(approvedTerms.endDate),
+          unitRentAmount: approvedTerms.rentAmount,
+          totalRentAmount: approvedTerms.rentAmount,
+          termInstallmentCount: 1,
+          actorUserId: req.reviewedByUserId || undefined,
+        });
+
       }
 
       const updatedReq = await tx.tenantRegistrationRequest.update({
