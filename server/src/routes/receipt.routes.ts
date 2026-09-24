@@ -3,6 +3,7 @@ import { receiptService } from '../services/receipt.service.js';
 import { AuthenticationService } from '../services/auth.service.js';
 import { getPrismaClient } from '../db/prisma.js';
 import { renderReceiptHtml } from '../utils/receipt-html.util.js';
+import { findAuthoritativeActiveTenant } from '../utils/tenant-resolution.util.js';
 import { AppError } from '../types/index.js';
 
 const prisma = getPrismaClient();
@@ -20,7 +21,11 @@ export function createReceiptRouter(authService: AuthenticationService) {
       )
     );
     if (!membership) return null;
-    const tenant = await prisma.tenant.findFirst({ where: { linkedUserId: auth.userId, dormitoryId } });
+    const tenant = await findAuthoritativeActiveTenant({
+      dormitoryId,
+      auth,
+      client: prisma,
+    });
     return tenant;
   };
 

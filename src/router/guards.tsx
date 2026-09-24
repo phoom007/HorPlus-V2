@@ -134,34 +134,6 @@ export const TenantAuthGuard: React.FC<{ children?: React.ReactNode }> = ({ chil
     }
     cleanLiffStateFromUrl();
 
-    const buildFallbackCandidateSession = () => {
-      const cookieMatch = typeof document !== 'undefined' ? document.cookie.match(/(?:^|;\s*)active_dormitory_id=([^;]+)/) : null;
-      const cookieDormId = cookieMatch ? decodeURIComponent(cookieMatch[1].trim()) : null;
-      const fallbackDormId =
-        cookieDormId ||
-        (typeof localStorage !== 'undefined' ? localStorage.getItem('selected_dormitory_id') : null) ||
-        'd99948ec-49d4-4629-9fea-567241e5049d';
-      const candidateTenant = {
-        id: 'candidate_tenant_fallback',
-        tenantNumber: 'PENDING',
-        firstName: '',
-        lastName: '',
-        displayName: 'ยังไม่ได้ลงทะเบียน',
-        name: 'ยังไม่ได้ลงทะเบียน',
-        lineDisplayName: 'Phoom',
-        status: 'unregistered',
-        hasRoom: false,
-        dormitoryId: fallbackDormId,
-        dormitory: {
-          id: fallbackDormId,
-          name: 'TheRICH Apartment',
-        },
-        room: null,
-        contract: null,
-      };
-      return { userType: 'tenant', tenant: candidateTenant, user: candidateTenant };
-    };
-
     fetch('/api/v1/tenant-portal/profile', { credentials: 'include' })
       .then(res => res.ok ? res.json() : null)
       .then(json => {
@@ -170,18 +142,23 @@ export const TenantAuthGuard: React.FC<{ children?: React.ReactNode }> = ({ chil
           const realFullName = (rawTenant.firstName && rawTenant.firstName !== '-')
             ? `${rawTenant.firstName} ${rawTenant.lastName && rawTenant.lastName !== '-' ? rawTenant.lastName : ''}`.trim()
             : '';
-          const effectiveName = realFullName || rawTenant.displayName || rawTenant.name || 'ผู้เช่า';
+          const effectiveName =
+            realFullName ||
+            (rawTenant.displayName !== 'ยังไม่ได้ลงทะเบียน' ? rawTenant.displayName : null) ||
+            rawTenant.lineDisplayName ||
+            (rawTenant.name !== 'ยังไม่ได้ลงทะเบียน' ? rawTenant.name : null) ||
+            'ผู้เช่า';
           const tenantData = {
             ...rawTenant,
             name: effectiveName,
           };
           setSession({ userType: 'tenant', tenant: tenantData, user: tenantData });
         } else {
-          setSession(buildFallbackCandidateSession());
+          setSession(null);
         }
       })
       .catch(() => {
-        setSession(buildFallbackCandidateSession());
+        setSession(null);
       })
       .finally(() => setLoading(false));
   }, []);

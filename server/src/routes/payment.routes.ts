@@ -12,6 +12,7 @@ import { resolveAuthoritativeDormitoryContext } from '../middleware/dormitory-co
 import { logger } from '../config/logger.js';
 import { AppError } from '../types/index.js';
 import { getPrismaClient } from '../db/prisma.js';
+import { findAuthoritativeActiveTenant } from '../utils/tenant-resolution.util.js';
 import multer from 'multer';
 
 const upload = multer({
@@ -110,7 +111,11 @@ export function createPaymentRouter(authService: AuthenticationService) {
       return m.dormitoryId === dormitoryId && code.includes('tenant');
     });
     if (!membership) return null;
-    const tenant = await prisma.tenant.findFirst({ where: { linkedUserId: auth.userId, dormitoryId } });
+    const tenant = await findAuthoritativeActiveTenant({
+      dormitoryId,
+      auth,
+      client: prisma,
+    });
     return tenant;
   };
 
@@ -886,8 +891,10 @@ export function createPaymentRouter(authService: AuthenticationService) {
         return res.status(400).json({ error: 'billIds array is required' });
       }
 
-      const tenant = await prisma.tenant.findFirst({
-        where: { dormitoryId, linkedUserId: auth.userId, status: 'active' }
+      const tenant = await findAuthoritativeActiveTenant({
+        dormitoryId,
+        auth,
+        client: prisma,
       });
       if (!tenant) return res.status(403).json({ error: 'Tenant profile not found' });
 
@@ -918,8 +925,10 @@ export function createPaymentRouter(authService: AuthenticationService) {
         return res.status(400).json({ error: 'intentId and amount are required' });
       }
 
-      const tenant = await prisma.tenant.findFirst({
-        where: { dormitoryId, linkedUserId: auth.userId, status: 'active' }
+      const tenant = await findAuthoritativeActiveTenant({
+        dormitoryId,
+        auth,
+        client: prisma,
       });
       if (!tenant) return res.status(403).json({ error: 'Tenant profile not found' });
 

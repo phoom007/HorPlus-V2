@@ -33,8 +33,8 @@ export const TenantRegisterPage: React.FC = () => {
   const initialDormId =
     urlParams?.get('dormitoryId') ||
     cookieDormId ||
-    (typeof localStorage !== 'undefined' ? localStorage.getItem('selected_dormitory_id') || undefined : undefined) ||
-    'd99948ec-49d4-4629-9fea-567241e5049d';
+    (typeof localStorage !== 'undefined' ? localStorage.getItem('selected_dormitory_id') || '' : '') ||
+    '';
 
   const [policyData, setPolicyData] = useState<{
     dormitoryId: string;
@@ -47,7 +47,7 @@ export const TenantRegisterPage: React.FC = () => {
     promptPayAccountName?: string;
   }>({
     dormitoryId: initialDormId,
-    dormitoryName: 'TheRICH Apartment',
+    dormitoryName: '',
     defaultTerms: '',
     petPolicy: { allowed: 'none', allowedTypes: [] },
     version: 1,
@@ -101,14 +101,20 @@ export const TenantRegisterPage: React.FC = () => {
         }
       } else {
         const urlDormId = urlParams?.get('dormitoryId') || undefined;
-        const defaultDormId =
+        const targetDormId =
           urlDormId ||
           cookieDormId ||
-          (typeof localStorage !== 'undefined' ? localStorage.getItem('selected_dormitory_id') || undefined : undefined) ||
-          'd99948ec-49d4-4629-9fea-567241e5049d';
-        const policyRes = await getPublicDormitoryPolicy(defaultDormId);
+          (typeof localStorage !== 'undefined' ? localStorage.getItem('selected_dormitory_id') || undefined : undefined);
+        if (!targetDormId) {
+          setErrorText('ไม่พบรหัสหอพัก กรุณาเปิดลิงก์ลงทะเบียนจาก LINE OA ของหอพัก');
+          setLoading(false);
+          return;
+        }
+        const policyRes = await getPublicDormitoryPolicy(targetDormId);
         if (policyRes.success && policyRes.data) {
           setPolicyData(policyRes.data);
+        } else {
+          setErrorText(policyRes.error?.message || 'ไม่สามารถโหลดข้อมูลหอพักได้ กรุณาลองใหม่อีกครั้ง');
         }
       }
 

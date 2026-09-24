@@ -934,6 +934,7 @@ export function createAuthRouter(authService: AuthenticationService): Router {
               where: {
                 dormitoryId: invite.dormitoryId,
                 lineFriendId: invite.lineFriendId,
+                roleCode: 'TENANT',
                 status: 'ACTIVE',
               },
             })
@@ -962,6 +963,7 @@ export function createAuthRouter(authService: AuthenticationService): Router {
                 where: {
                   dormitoryId: invite.dormitoryId,
                   lineFriendId: invite.lineFriendId,
+                  roleCode: 'TENANT',
                   status: 'ACTIVE',
                 },
               });

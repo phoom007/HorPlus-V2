@@ -101,7 +101,15 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
     if (seg === 'utilities' || querySub === 'utilities')
       return { tab: 'home' as const, sub: 'utilities' as const };
     if (seg === 'register' || seg === 'registration' || querySub === 'register') {
-      if (tenant?.hasRoom || tenant?.status === 'active') {
+      const isPendingOrActive =
+        tenant?.hasRoom ||
+        tenant?.status === 'active' ||
+        tenant?.status === 'pending_owner_approval' ||
+        (tenant as any)?.pendingRequest?.status === 'pending_owner_approval' ||
+        tenant?.status === 'approved' ||
+        (tenant as any)?.pendingRequest?.status === 'approved';
+
+      if (isPendingOrActive) {
         return { tab: 'home' as const, sub: null };
       }
       return { tab: 'home' as const, sub: 'register' as const };
@@ -274,18 +282,6 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
       reqHeaders['x-room-id'] = activeRoomId;
     }
 
-    if (typeof window !== 'undefined' && window.localStorage) {
-      try {
-        const pendingRaw = window.localStorage.getItem('pending_tenant_registration');
-        if (pendingRaw) {
-          const parsed = JSON.parse(pendingRaw);
-          if (parsed?.id) {
-            reqHeaders['x-registration-id'] = parsed.id;
-          }
-        }
-      } catch {}
-    }
-
     try {
       // 1. Fetch all tenant active rooms
       const roomsRes = await fetch('/api/v1/tenant-portal/rooms', { credentials: 'include', headers: reqHeaders });
@@ -335,8 +331,8 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
             dormitoryId: profile.dormitory?.id || profile.dormitoryId || prev?.dormitoryId,
             dormitory: profile.dormitory || prev?.dormitory,
             status: profile.status || prev?.status,
-            pendingRequest: profile.pendingRequest || prev?.pendingRequest,
-            registrationRequestStatus: profile.pendingRequest?.status || profile.status || prev?.registrationRequestStatus,
+            pendingRequest: profile.pendingRequest ?? null,
+            registrationRequestStatus: profile.pendingRequest?.status || profile.status || null,
             phone: profile.phone || prev?.phone || '-',
             citizenId: profile.citizenId || profile.nationalIdMasked || prev?.citizenId || '-',
             email: profile.email || prev?.email || '-',
@@ -360,7 +356,14 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
             }
           }
         }
-        if (profile.room || profile.hasRoom || profile.status === 'active' || profile.pendingRequest?.status === 'approved') {
+        if (
+          profile.room ||
+          profile.hasRoom ||
+          profile.status === 'active' ||
+          profile.pendingRequest?.status === 'approved' ||
+          profile.pendingRequest?.status === 'pending_owner_approval' ||
+          profile.status === 'pending_owner_approval'
+        ) {
           setSubView((prev) => (prev === 'register' ? null : prev));
           if (profile.room) {
             setRooms([
@@ -372,11 +375,25 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
               } as any,
             ]);
           }
-          try {
-            localStorage.removeItem('pending_tenant_registration');
-          } catch {}
+          if (profile.status === 'active' || profile.hasRoom || profile.pendingRequest?.status === 'approved') {
+            try {
+              localStorage.removeItem('pending_tenant_registration');
+            } catch {}
+          }
+          // Clean query params (?sub=register, t, token) if present
+          if (typeof window !== 'undefined') {
+            const sp = new URLSearchParams(window.location.search);
+            if (sp.get('sub') === 'register' || sp.has('t') || sp.has('token')) {
+              navigate('/tenant', { replace: true });
+            }
+          }
         } else {
           setRooms([]);
+          if (!profile.pendingRequest && (profile.status === 'unregistered' || !profile.status)) {
+            try {
+              localStorage.removeItem('pending_tenant_registration');
+            } catch {}
+          }
         }
       } else {
         setRooms([]);
@@ -750,6 +767,22 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
       window.removeEventListener('focus', handleVisibilityChange);
     };
   }, [localTenant?.status, (localTenant as any)?.pendingRequest?.status]);
+
+  // Guard against pending registration staying in subView register
+  useEffect(() => {
+    const isPending =
+      localTenant?.status === 'pending_owner_approval' ||
+      (localTenant as any)?.pendingRequest?.status === 'pending_owner_approval';
+    if (isPending && subView === 'register') {
+      setSubView(null);
+      if (typeof window !== 'undefined') {
+        const sp = new URLSearchParams(window.location.search);
+        if (sp.get('sub') === 'register' || sp.has('t') || sp.has('token')) {
+          navigate('/tenant', { replace: true });
+        }
+      }
+    }
+  }, [localTenant?.status, (localTenant as any)?.pendingRequest?.status, subView, navigate]);
 
   const handleMarkNoticeAsRead = async (noticeId: string) => {
     try {
@@ -1737,6 +1770,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                     if (registeredTenant) setLocalTenant((prev: any) => ({ ...prev, ...registeredTenant }));
                     refreshData();
                     setSubView(null);
+                    navigate('/tenant', { replace: true });
                     const tenantDisplayName = registeredTenant?.name || registeredTenant?.displayName || localTenant?.name || 'ผู้เช่า';
                     showToast(
                       'success',
