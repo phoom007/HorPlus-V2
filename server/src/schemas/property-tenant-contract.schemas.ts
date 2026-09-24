@@ -155,7 +155,13 @@ export const UpdateTenantProfileAggregateSchema = z.object({
 
 export const CreateCoOccupantSchema = z.object({
   name: z.string().min(1, 'ชื่อผู้พักร่วมจำเป็นต้องระบุ').max(255),
-  phone: z.string().optional().nullable(),
+  phone: z
+    .string()
+    .refine((val) => !val || /^0\d{8,9}$/.test(val.replace(/[-\s]/g, '')), {
+      message: 'เบอร์โทรศัพท์ต้องเป็นตัวเลข 9-10 หลัก (ขึ้นต้นด้วย 0)',
+    })
+    .optional()
+    .nullable(),
   relationship: z.string().optional().nullable(),
   nationalId: z.string().optional().nullable(),
   dateOfBirth: z.string().optional().nullable(),

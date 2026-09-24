@@ -903,6 +903,11 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
       setCoOccupantsError('กรุณากรอกชื่อ-นามสกุล หรือชื่อเล่นของผู้พักร่วม');
       return;
     }
+    const cleanPhone = newCoPhone.trim().replace(/[-\s]/g, '');
+    if (cleanPhone && !/^0\d{8,9}$/.test(cleanPhone)) {
+      setCoOccupantsError('เบอร์โทรศัพท์ต้องเป็นตัวเลข 9-10 หลัก (ขึ้นต้นด้วย 0)');
+      return;
+    }
     setCoOccupantsError('');
     setIsAddingCo(true);
     try {
@@ -921,8 +926,10 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
       showToast('success', 'เพิ่มผู้พักร่วมสำเร็จ', `เพิ่มคุณ ${newCo.name} เรียบร้อยแล้ว`);
       refreshData();
     } catch (err: any) {
-      setCoOccupantsError(err.message || 'เกิดข้อผิดพลาดในการเพิ่มผู้พักร่วม');
-      showToast('error', 'ไม่สามารถเพิ่มผู้พักร่วมได้', err.message || 'เกิดข้อผิดพลาดในการเพิ่มผู้พักร่วม');
+      const fieldMsg = err?.fieldErrors?.[0]?.message;
+      const errMsg = fieldMsg || err?.error?.message || err?.message || 'เกิดข้อผิดพลาดในการเพิ่มผู้พักร่วม';
+      setCoOccupantsError(errMsg);
+      showToast('error', 'ไม่สามารถเพิ่มผู้พักร่วมได้', errMsg);
     } finally {
       setIsAddingCo(false);
     }

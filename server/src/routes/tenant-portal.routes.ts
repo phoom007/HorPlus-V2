@@ -16,6 +16,7 @@ import { SignatureStorageService } from '../services/signature-storage.service.j
 import { createCsrfMiddleware } from '../middleware/csrf.js';
 import { processAndSecureTenantIdCardImage } from '../services/image-security.service.js';
 import { AppError } from '../types/index.js';
+import { NotificationService } from '../services/notification.service.js';
 
 function safeTenantPortalErrorMessage(err: any): string {
   if (err instanceof AppError) return err.message;
@@ -476,6 +477,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
   const auditService = new AuditService();
   const maintenanceService = new MaintenanceService();
   const announcementService = new AnnouncementService();
+  const notificationService = new NotificationService();
   const sensitiveFieldService = injectedSensitiveFieldService || new SensitiveFieldService(process.env.FIELD_ENCRYPTION_KEY);
 
   if (authService) {
@@ -1072,6 +1074,16 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
         return res.status(ctx.error.statusCode).json({ error: { code: ctx.error.code, message: ctx.error.message, requestId: req.requestId } });
       }
 
+      if (req.body.tenantId && req.body.tenantId !== ctx.tenant.id) {
+        return res.status(403).json({
+          error: {
+            code: 'FORBIDDEN',
+            message: 'คุณไม่มีสิทธิ์แก้ไขข้อมูลของผู้เช่าท่านอื่น',
+            requestId: req.requestId,
+          },
+        });
+      }
+
       const { vehicle, vehicles, pet, pets } = req.body;
       const tenantId = ctx.tenant.id;
       const dormitoryId = ctx.dormitoryId;
@@ -1203,6 +1215,24 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
       const updatedPetInfo = updatedTenant?.petInfo
         ? (typeof updatedTenant.petInfo === 'string' ? JSON.parse(updatedTenant.petInfo) : updatedTenant.petInfo)
         : null;
+
+      if (notificationService && (vehicles !== undefined || vehicle !== undefined || pets !== undefined || pet !== undefined)) {
+        try {
+          const tenantName = ctx.tenant.displayName || ctx.tenant.name || `${ctx.tenant.firstName || ''} ${ctx.tenant.lastName || ''}`.trim() || 'ผู้เช่า';
+          const roomNumber = ctx.contract?.room?.roomNumber || '';
+          const roomPrefix = roomNumber ? `ห้อง ${roomNumber} ` : '';
+          await notificationService.createInAppNotification({
+            dormitoryId,
+            targetType: 'staff',
+            category: 'TENANT_PROFILE_UPDATED',
+            title: 'ผู้เช่าอัปเดตข้อมูล',
+            body: `${roomPrefix}ผู้เช่า ${tenantName} มีการอัปเดตข้อมูลยานพาหนะ/สัตว์เลี้ยง`,
+            metadata: { tenantId, roomId: ctx.roomId },
+          });
+        } catch {
+          // non-blocking
+        }
+      }
 
       res.json({
         success: true,
@@ -2601,6 +2631,16 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
         return res.status(ctx.error.statusCode).json({ error: { code: ctx.error.code, message: ctx.error.message, requestId } });
       }
 
+      if (req.body.tenantId && req.body.tenantId !== ctx.tenant.id) {
+        return res.status(403).json({
+          error: {
+            code: 'FORBIDDEN',
+            message: 'คุณไม่มีสิทธิ์จัดการผู้พักร่วมของผู้เช่าท่านอื่น',
+            requestId,
+          },
+        });
+      }
+
       const parsed = CreateCoOccupantSchema.safeParse(req.body);
       if (!parsed.success) {
         return res.status(400).json({
@@ -2619,6 +2659,24 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
         parsed.data,
         { userId: actorUserId, isTenant: true }
       );
+
+      if (notificationService) {
+        try {
+          const tenantName = ctx.tenant.displayName || ctx.tenant.name || `${ctx.tenant.firstName || ''} ${ctx.tenant.lastName || ''}`.trim() || 'ผู้เช่า';
+          const roomNumber = ctx.contract?.room?.roomNumber || '';
+          const roomPrefix = roomNumber ? `ห้อง ${roomNumber} ` : '';
+          await notificationService.createInAppNotification({
+            dormitoryId: ctx.dormitoryId,
+            targetType: 'staff',
+            category: 'TENANT_CO_OCCUPANT_UPDATED',
+            title: 'ผู้เช่าอัปเดตข้อมูลผู้พักร่วม',
+            body: `${roomPrefix}ผู้เช่า ${tenantName} เพิ่มผู้พักร่วม: ${result.coOccupant.name}`,
+            metadata: { tenantId: ctx.tenant.id, roomId: ctx.roomId, coOccupantId: result.coOccupant.id },
+          });
+        } catch {
+          // non-blocking
+        }
+      }
 
       return res.status(201).json({
         success: true,
@@ -2729,6 +2787,24 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
         req.params.id,
         { userId: actorUserId, isTenant: true }
       );
+
+      if (notificationService) {
+        try {
+          const tenantName = ctx.tenant.displayName || ctx.tenant.name || `${ctx.tenant.firstName || ''} ${ctx.tenant.lastName || ''}`.trim() || 'ผู้เช่า';
+          const roomNumber = ctx.contract?.room?.roomNumber || '';
+          const roomPrefix = roomNumber ? `ห้อง ${roomNumber} ` : '';
+          await notificationService.createInAppNotification({
+            dormitoryId: ctx.dormitoryId,
+            targetType: 'staff',
+            category: 'TENANT_CO_OCCUPANT_UPDATED',
+            title: 'ผู้เช่าอัปเดตข้อมูลผู้พักร่วม',
+            body: `${roomPrefix}ผู้เช่า ${tenantName} ลบผู้พักร่วม: ${coOccupant.name}`,
+            metadata: { tenantId: ctx.tenant.id, roomId: ctx.roomId, coOccupantId: req.params.id },
+          });
+        } catch {
+          // non-blocking
+        }
+      }
 
       return res.json({
         success: true,
