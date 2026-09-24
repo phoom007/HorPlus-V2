@@ -1375,6 +1375,41 @@ export function clearLineQuotaCache(dormitoryId?: string) {
   }
 }
 
+export interface SendTenantLineNotificationOptions {
+  dormitoryId: string;
+  tenantId?: string;
+  accessGrantId?: string;
+  lineUserId?: string;
+  eventId?: string;
+  eventType?: 'INVOICE' | 'PAYMENT_RECEIPT' | 'PAYMENT_REJECTED' | 'OUTCOME' | 'MAINTENANCE' | 'ANNOUNCEMENT' | 'GENERAL';
+  flexMessage?: any;
+  textMessage?: string;
+  messages?: any[];
+}
+
+export interface SendTenantLineNotificationResult {
+  sent: boolean;
+  reason?: 'QUOTA_EXHAUSTED' | 'NO_LINE_BINDING' | 'CONFIG_NOT_READY' | 'DUPLICATE_EVENT' | 'PUSH_FAILED' | 'REJECTED' | 'PREFERENCE_DISABLED' | 'TOKEN_ERROR';
+  messageId?: string;
+  remainingQuota?: number;
+  deliveryStatus?: string;
+  warningMessage?: string | null;
+}
+
+const PROCESSED_NOTIFICATION_EVENTS = new Set<string>();
+
+export function clearProcessedNotificationEvents(keyPrefix?: string) {
+  if (keyPrefix) {
+    for (const key of PROCESSED_NOTIFICATION_EVENTS) {
+      if (key.startsWith(keyPrefix)) {
+        PROCESSED_NOTIFICATION_EVENTS.delete(key);
+      }
+    }
+  } else {
+    PROCESSED_NOTIFICATION_EVENTS.clear();
+  }
+}
+
 export class LineOaService {
   private friendService: LineFriendService;
   private inviteService: TenantRegistrationInviteService;
@@ -1419,8 +1454,9 @@ export class LineOaService {
   /**
    * Get LINE OA connection status (Secrets REDACTED)
    */
-  async getDormitoryLineConfig(dormitoryId: string, baseUrl = getPublicWebhookOrigin()) {
+  async getDormitoryLineConfig(dormitoryId: string, baseUrl = getPublicWebhookOrigin(), options: { forceRefresh?: boolean } = {}) {
     const originStatus = validatePublicWebhookOrigin(baseUrl);
+    const platformQuota = await this.getLinePlatformQuotaStatus(dormitoryId, options.forceRefresh ?? false);
 
     return await this.prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
@@ -1444,8 +1480,15 @@ export class LineOaService {
           },
         },
       });
-      const usedQuota = usage?.successCount || 0;
+      const linePlatformUsage = platformQuota?.totalUsage ?? 0;
+      const dbSuccessCount = usage?.successCount || 0;
+      const usedQuota = Math.max(dbSuccessCount, linePlatformUsage);
       const remainingQuota = Math.max(0, monthlyQuota - usedQuota);
+      const isQuotaExhausted = remainingQuota === 0;
+      const isQuotaWarning = remainingQuota > 0 && remainingQuota <= 5;
+      const quotaWarningMessage = isQuotaExhausted
+        ? 'จำนวนการส่งข้อความเดือนนี้หมดแล้ว'
+        : (isQuotaWarning ? 'จำนวนการส่งข้อความใกล้หมดแล้ว (เหลือ ≤ 5 ข้อความ)' : null);
 
       const config = await tx.dormitoryLineConfig.findUnique({
         where: { dormitoryId }
@@ -1485,6 +1528,10 @@ export class LineOaService {
           monthlyQuota,
           usedQuota,
           remainingQuota,
+          isQuotaExhausted,
+          isQuotaWarning,
+          quotaWarningMessage,
+          quotaLabel: 'จำนวนการส่งข้อความ',
         };
       }
 
@@ -1565,6 +1612,10 @@ export class LineOaService {
         monthlyQuota,
         usedQuota,
         remainingQuota,
+        isQuotaExhausted,
+        isQuotaWarning,
+        quotaWarningMessage,
+        quotaLabel: 'จำนวนการส่งข้อความ',
       };
     });
   }
@@ -2441,7 +2492,7 @@ export class LineOaService {
   /**
    * Get cached LINE Platform quota status with 15-minute TTL.
    */
-  async getLinePlatformQuotaStatus(dormitoryId: string): Promise<{
+  async getLinePlatformQuotaStatus(dormitoryId: string, forceRefresh: boolean = false): Promise<{
     available: boolean;
     remaining: number;
     type: 'limited' | 'none';
@@ -2450,7 +2501,7 @@ export class LineOaService {
   }> {
     const cached = LINE_QUOTA_CACHE.get(dormitoryId);
     const now = Date.now();
-    if (cached && now - cached.cachedAt < CACHE_TTL_MS) {
+    if (!forceRefresh && cached && now - cached.cachedAt < CACHE_TTL_MS) {
       return {
         available: cached.type === 'none' || cached.remaining > 0,
         remaining: cached.remaining,
@@ -2475,12 +2526,17 @@ export class LineOaService {
     }
 
     if (quota.type === 'none') {
+      const consumption = this.lineAdapter.getQuotaConsumption
+        ? await this.lineAdapter.getQuotaConsumption(accessToken)
+        : null;
+      const totalUsage = consumption?.totalUsage ?? 0;
       LINE_QUOTA_CACHE.set(dormitoryId, {
         remaining: Infinity,
         type: 'none',
+        totalUsage,
         cachedAt: now,
       });
-      return { available: true, remaining: Infinity, type: 'none' };
+      return { available: true, remaining: Infinity, type: 'none', totalUsage };
     }
 
     const consumption = this.lineAdapter.getQuotaConsumption
@@ -2507,86 +2563,207 @@ export class LineOaService {
     };
   }
 
+  /**
+   * Central unified LINE sender for tenant-facing events (Card L1).
+   * Guarantees:
+   * 1. Sends ONLY to tenants with active LINE bindings in the target dormitory.
+   * 2. Atomic quota reservation before dispatch.
+   * 3. Successful push increments quota, failed push rolls back reservation without deducting quota (REQ §9 line 166).
+   * 4. Deduplication guard prevents sending duplicate messages for the same eventId.
+   * 5. Non-throwing when quota exhausted; caller operation continues normally (PO Decision A1).
+   */
+  async sendTenantLineNotification(
+    options: SendTenantLineNotificationOptions
+  ): Promise<SendTenantLineNotificationResult> {
+    const { dormitoryId, eventId, eventType } = options;
+
+    try {
+      // 1. Idempotency Check
+      if (eventId) {
+        const dedupKey = `${dormitoryId}:${eventId}`;
+        if (PROCESSED_NOTIFICATION_EVENTS.has(dedupKey)) {
+          console.info(`[LineOaService] sendTenantLineNotification deduplicated: ${dedupKey} already processed`);
+          return { sent: false, reason: 'DUPLICATE_EVENT' };
+        }
+      }
+
+      // 2. Resolve target recipient LINE User ID
+      let targetLineUserId = options.lineUserId;
+      if (!targetLineUserId && options.tenantId) {
+        try {
+          const tenant = await this.prisma.tenant.findUnique({
+            where: { id: options.tenantId },
+            include: { lineFriend: true },
+          });
+          if (tenant?.lineFriend?.lineUserIdEncrypted && tenant.lineFriend.friendStatus !== 'UNFOLLOWED') {
+            const { decryptText } = await import('../utils/crypto-encryption.js');
+            targetLineUserId = decryptText(tenant.lineFriend.lineUserIdEncrypted);
+          }
+        } catch (err: any) {
+          console.warn(`[LineOaService] Failed to resolve lineUserId for tenant ${options.tenantId}:`, err.message);
+        }
+      }
+
+      if (!targetLineUserId && options.accessGrantId) {
+        try {
+          const grant = await this.prisma.dormitoryAccessGrant.findUnique({
+            where: { id: options.accessGrantId },
+            include: { lineFriend: true },
+          });
+          if (grant?.lineFriend?.lineUserIdEncrypted && grant.lineFriend.friendStatus !== 'UNFOLLOWED') {
+            const { decryptText } = await import('../utils/crypto-encryption.js');
+            targetLineUserId = decryptText(grant.lineFriend.lineUserIdEncrypted);
+          }
+        } catch (err: any) {
+          console.warn(`[LineOaService] Failed to resolve lineUserId for grant ${options.accessGrantId}:`, err.message);
+        }
+      }
+
+      if (!targetLineUserId) {
+        console.info(`[LineOaService] Push skipped: tenant ${options.tenantId || options.accessGrantId || 'unknown'} has no active LINE binding in dormitory ${dormitoryId}`);
+        return { sent: false, reason: 'NO_LINE_BINDING' };
+      }
+
+      // 3. Check Dormitory Preferences & Connection Status
+      if (this.prisma && typeof (this.prisma as any).$transaction === 'function') {
+        const config = await this.prisma.dormitoryLineConfig?.findUnique?.({
+          where: { dormitoryId },
+          select: {
+            isConnected: true,
+            notifyPaymentReceived: true,
+            notifyTenantApproved: true,
+            notifyRepairRequest: true,
+            notifyRepairCompleted: true,
+            notifyTenantRegister: true,
+          },
+        }).catch(() => null);
+
+        if (config && !config.isConnected) {
+          console.info(`[LineOaService] Push skipped: dormitory ${dormitoryId} LINE OA is not connected`);
+          return { sent: false, reason: 'CONFIG_NOT_READY' };
+        }
+
+        if (config && eventType === 'OUTCOME' && config.notifyTenantApproved === false) {
+          console.info(`[LineOaService] Push skipped: notifyTenantApproved disabled for dormitory ${dormitoryId}`);
+          return { sent: false, reason: 'PREFERENCE_DISABLED' };
+        }
+
+        if (config && eventType === 'PAYMENT_RECEIPT' && config.notifyPaymentReceived === false) {
+          return { sent: false, reason: 'PREFERENCE_DISABLED' };
+        }
+      }
+
+      // 4. Guard: Check Quota Availability (HorPlus DB + Platform)
+      const pushUsageService = new LinePushUsageService(this.prisma);
+      const quotaStatus = await pushUsageService.getQuotaStatus(dormitoryId);
+      const platformQuota = await this.getLinePlatformQuotaStatus(dormitoryId);
+
+      const hasHorplusQuota = quotaStatus.isAvailable && quotaStatus.remaining > 0;
+      const hasPlatformQuota = platformQuota.available;
+
+      if (!hasHorplusQuota || !hasPlatformQuota) {
+        console.warn(`[LineOaService] sendTenantLineNotification blocked: quota exhausted for dormitory ${dormitoryId}. HorPlus remaining: ${quotaStatus.remaining}, Platform available: ${platformQuota.available}`);
+        return {
+          sent: false,
+          reason: 'QUOTA_EXHAUSTED',
+          warningMessage: 'จำนวนการส่งข้อความเดือนนี้หมดแล้ว',
+          remainingQuota: 0,
+        };
+      }
+
+      // 5. Atomic Reservation: increment reserved_count
+      const dorm = await this.prisma.dormitory?.findUnique?.({
+        where: { id: dormitoryId },
+        select: { timezone: true },
+      }).catch(() => null);
+      const timezone = dorm?.timezone || 'Asia/Bangkok';
+      const periodKey = pushUsageService.getCurrentPeriodKey(timezone);
+
+      await this.prisma.$executeRaw`
+        INSERT INTO "line_push_usage" ("id", "dormitory_id", "period_key", "success_count", "reserved_count", "created_at", "updated_at")
+        VALUES (gen_random_uuid(), ${dormitoryId}::uuid, ${periodKey}, 0, 1, NOW(), NOW())
+        ON CONFLICT ("dormitory_id", "period_key")
+        DO UPDATE SET "reserved_count" = "line_push_usage"."reserved_count" + 1, "updated_at" = NOW()
+      `;
+
+      // 6. Resolve Token and Dispatch
+      const accessToken = await this.resolveAccessToken(dormitoryId);
+      if (!accessToken) {
+        await this.prisma.$executeRaw`
+          UPDATE "line_push_usage"
+          SET "reserved_count" = GREATEST("reserved_count" - 1, 0), "updated_at" = NOW()
+          WHERE "dormitory_id" = ${dormitoryId}::uuid AND "period_key" = ${periodKey}
+        `;
+        return { sent: false, reason: 'TOKEN_ERROR' };
+      }
+
+      const payload = options.flexMessage || (options.textMessage ? { type: 'text', text: options.textMessage } : (options.messages || []));
+      const retryKey = crypto.randomUUID();
+      const res = await this.lineAdapter.pushMessage(targetLineUserId, payload, accessToken, retryKey);
+      const isAccepted = res.outcome === 'ACCEPTED' || res.outcome === 'ALREADY_ACCEPTED';
+
+      if (isAccepted) {
+        // Success: success_count + 1, reserved_count - 1
+        await this.prisma.$executeRaw`
+          UPDATE "line_push_usage"
+          SET "success_count" = "line_push_usage"."success_count" + 1,
+              "reserved_count" = GREATEST("line_push_usage"."reserved_count" - 1, 0),
+              "updated_at" = NOW()
+          WHERE "dormitory_id" = ${dormitoryId}::uuid AND "period_key" = ${periodKey}
+        `;
+
+        if (eventId) {
+          PROCESSED_NOTIFICATION_EVENTS.add(`${dormitoryId}:${eventId}`);
+        }
+
+        const cached = LINE_QUOTA_CACHE.get(dormitoryId);
+        if (cached && cached.type === 'limited' && cached.remaining > 0) {
+          cached.remaining -= 1;
+          if (cached.totalUsage !== undefined) cached.totalUsage += 1;
+        }
+
+        return {
+          sent: true,
+          messageId: (res as any).messageId,
+          remainingQuota: Math.max(0, quotaStatus.remaining - 1),
+          deliveryStatus: 'sent',
+        };
+      } else {
+        // Failed: reserved_count - 1, success_count NOT incremented
+        await this.prisma.$executeRaw`
+          UPDATE "line_push_usage"
+          SET "reserved_count" = GREATEST("line_push_usage"."reserved_count" - 1, 0),
+              "updated_at" = NOW()
+          WHERE "dormitory_id" = ${dormitoryId}::uuid AND "period_key" = ${periodKey}
+        `;
+
+        return {
+          sent: false,
+          reason: 'PUSH_FAILED',
+          deliveryStatus: res.outcome,
+        };
+      }
+    } catch (err: any) {
+      console.warn('[LineOaService] sendTenantLineNotification error:', err.message);
+      return {
+        sent: false,
+        reason: 'PUSH_FAILED',
+        deliveryStatus: 'error',
+      };
+    }
+  }
+
   async pushOutcomeNotification(
     dormitoryId: string,
     toLineUserId: string,
     flexMessage: any
   ): Promise<boolean> {
-    try {
-      // 1. Check Dormitory Preferences & Connection Status
-      if (this.prisma && typeof (this.prisma as any).$transaction === 'function') {
-        const config = await this.prisma.dormitoryLineConfig?.findUnique?.({
-          where: { dormitoryId },
-          select: { isConnected: true, notifyTenantApproved: true },
-        }).catch(() => null);
-
-        if (config && (!config.isConnected || config.notifyTenantApproved === false)) {
-          console.info(`[LineOaService] Push skipped: config isConnected=${config?.isConnected}, notifyTenantApproved=${config?.notifyTenantApproved}`);
-          return false;
-        }
-      }
-
-      // 2. Guard 1: HorPlus Business Quota (DB-First, Short-Circuit)
-      if (this.prisma && typeof (this.prisma as any).$transaction === 'function') {
-        try {
-          const pushUsageService = new LinePushUsageService(this.prisma);
-          const quotaStatus = await pushUsageService.getQuotaStatus(dormitoryId);
-          if (!quotaStatus.isAvailable) {
-            console.warn(`[LineOaService] Push blocked: HorPlus quota exhausted for dormitory ${dormitoryId}`);
-            return false;
-          }
-        } catch (quotaErr: any) {
-          console.warn('[LineOaService] Could not verify HorPlus quota status:', quotaErr.message);
-        }
-      }
-
-      // 3. Guard 2: LINE Platform Quota (Cached with 15-min TTL)
-      const platformQuota = await this.getLinePlatformQuotaStatus(dormitoryId);
-      if (!platformQuota.available) {
-        console.warn(`[LineOaService] Push blocked: LINE platform quota exhausted for dormitory ${dormitoryId}`);
-        return false;
-      }
-
-      // 4. Resolve Token and Dispatch
-      const accessToken = await this.resolveAccessToken(dormitoryId);
-      if (!accessToken) return false;
-      const retryKey = crypto.randomUUID();
-      const res = await this.lineAdapter.pushMessage(toLineUserId, flexMessage, accessToken, retryKey);
-      const isAccepted = res.outcome === 'ACCEPTED' || res.outcome === 'ALREADY_ACCEPTED';
-
-      // 5. Update usage count if accepted
-      if (isAccepted && this.prisma && typeof (this.prisma as any).$transaction === 'function') {
-        try {
-          const pushUsageService = new LinePushUsageService(this.prisma);
-          const dorm = await this.prisma.dormitory?.findUnique?.({
-            where: { id: dormitoryId },
-            select: { timezone: true },
-          });
-          const timezone = dorm?.timezone || 'Asia/Bangkok';
-          const periodKey = pushUsageService.getCurrentPeriodKey(timezone);
-
-          await this.prisma.$executeRaw`
-            INSERT INTO "line_push_usage" ("id", "dormitory_id", "period_key", "success_count", "reserved_count", "created_at", "updated_at")
-            VALUES (gen_random_uuid(), ${dormitoryId}::uuid, ${periodKey}, 1, 0, NOW(), NOW())
-            ON CONFLICT ("dormitory_id", "period_key")
-            DO UPDATE SET "success_count" = "line_push_usage"."success_count" + 1, "updated_at" = NOW()
-          `;
-
-          // Decrement cached remaining
-          const cached = LINE_QUOTA_CACHE.get(dormitoryId);
-          if (cached && cached.type === 'limited' && cached.remaining > 0) {
-            cached.remaining -= 1;
-            if (cached.totalUsage !== undefined) cached.totalUsage += 1;
-          }
-        } catch (updateErr: any) {
-          console.warn('[LineOaService] Failed to increment line_push_usage on push outcome:', updateErr.message);
-        }
-      }
-
-      return isAccepted;
-    } catch (err: any) {
-      console.warn('Failed to push LINE outcome notification:', err.message);
-      return false;
-    }
+    const res = await this.sendTenantLineNotification({
+      dormitoryId,
+      lineUserId: toLineUserId,
+      eventType: 'OUTCOME',
+      flexMessage,
+    });
+    return res.sent;
   }
 }

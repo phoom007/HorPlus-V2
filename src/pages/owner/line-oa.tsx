@@ -16,6 +16,7 @@ import {
   Eye,
   EyeOff,
   LayoutGrid,
+  AlertTriangle,
 } from 'lucide-react';
 import { Task009ApiAdapter } from '../../data/adapters/task009';
 import { LineLogo } from '../../components/LineLogo';
@@ -136,10 +137,10 @@ export const OwnerLineOaPage: React.FC<OwnerLineOaPageProps> = ({
     return clean ? `@${clean}` : '';
   };
 
-  const loadConfig = async () => {
+  const loadConfig = async (refresh: boolean = true) => {
     try {
       setLoading(true);
-      const res = await Task009ApiAdapter.getLineOaConfig(dormId);
+      const res = await Task009ApiAdapter.getLineOaConfig(dormId, refresh);
       if (res.data) {
         setConfig({
           ...res.data,
@@ -157,7 +158,7 @@ export const OwnerLineOaPage: React.FC<OwnerLineOaPageProps> = ({
   };
 
   useEffect(() => {
-    loadConfig();
+    loadConfig(true);
   }, [dormId]);
 
   const handleTestLineConnection = async () => {
@@ -772,6 +773,42 @@ export const OwnerLineOaPage: React.FC<OwnerLineOaPageProps> = ({
         <>
           {/* 1. Status Card with Quota, Edit Button & Disconnect */}
           <div className="p-5 bg-white rounded-3xl border border-slate-200/80 shadow-xs space-y-4">
+            {/* Quota Exhaustion Warning (PO Decision A1) */}
+            {config.remainingQuota === 0 && (
+              <div
+                data-testid="line-quota-exhausted-banner"
+                className="p-4 bg-rose-50 border-2 border-rose-300 rounded-2xl flex items-start gap-3 text-rose-900"
+              >
+                <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+                <div className="space-y-1">
+                  <h4 className="text-xs font-black text-rose-800">
+                    จำนวนการส่งข้อความเดือนนี้หมดแล้ว (0/{config.monthlyQuota})
+                  </h4>
+                  <p className="text-[11px] text-rose-700 leading-relaxed font-medium">
+                    ดำเนินการในระบบต่อได้ตามปกติ (ออกบิล/บันทึกประกาศสำเร็จ) แต่ระบบจะไม่ส่งข้อความ LINE ไปยังผู้เช่าจนกว่าจะถึงรอบรีเซ็ตในวันที่ 1 ของเดือนถัดไป
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Quota Warning Threshold (PO Decision A2: <= 5) */}
+            {config.remainingQuota > 0 && config.remainingQuota <= 5 && (
+              <div
+                data-testid="line-quota-warning-banner"
+                className="p-4 bg-amber-50 border-2 border-amber-300 rounded-2xl flex items-start gap-3 text-amber-900"
+              >
+                <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                <div className="space-y-1">
+                  <h4 className="text-xs font-black text-amber-800">
+                    จำนวนการส่งข้อความใกล้หมดแล้ว (เหลือ {config.remainingQuota} ข้อความ)
+                  </h4>
+                  <p className="text-[11px] text-amber-700 leading-relaxed font-medium">
+                    ระบบแจ้งเตือนเมื่อเหลือ ≤ 5 ข้อความ กรุณาบริหารจัดการการส่งข้อความ หรือติดต่อเพื่อปรับเปลี่ยนแพ็กเกจ
+                  </p>
+                </div>
+              </div>
+            )}
+
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
                 <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 block mb-1">
@@ -787,7 +824,7 @@ export const OwnerLineOaPage: React.FC<OwnerLineOaPageProps> = ({
 
               <div className="flex items-center gap-2">
                 <span className="text-xs font-bold text-slate-600 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200">
-                  โควตาเดือนนี้: <strong className="text-emerald-600">{config.remainingQuota}/{config.monthlyQuota}</strong>
+                  จำนวนการส่งข้อความคงเหลือเดือนนี้: <strong className={config.remainingQuota === 0 ? "text-rose-600 font-black" : (config.remainingQuota <= 5 ? "text-amber-600 font-black" : "text-emerald-600 font-black")}>{config.remainingQuota}/{config.monthlyQuota}</strong>
                 </span>
                 <button
                   onClick={() => setIsEditingCredentials(true)}

@@ -162,7 +162,8 @@ export function createLineOaRoutes(
         const dormId = await getDormitoryId(req);
         const baseUrl = resolveWebhookBaseUrl(req);
         setActiveAppOrigin(baseUrl);
-        const config = await lineOaService.getDormitoryLineConfig(dormId, baseUrl);
+        const forceRefresh = req.query.refresh === 'true' || req.query.force === 'true';
+        const config = await lineOaService.getDormitoryLineConfig(dormId, baseUrl, { forceRefresh });
         return res.status(200).json({ success: true, data: config, config });
       } catch (err) {
         next(err);

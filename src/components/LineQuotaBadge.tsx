@@ -285,6 +285,42 @@ export const LineQuotaBadge: React.FC<LineQuotaBadgeProps> = ({
               {isConfigured ? (
                 /* Configured View */
                 <>
+                  {/* Quota Exhaustion Warning (PO Decision A1) */}
+                  {isExhausted && (
+                    <div
+                      data-testid="badge-quota-exhausted-banner"
+                      className="p-3.5 bg-rose-50 border border-rose-200 rounded-2xl flex items-start gap-2.5 text-rose-900"
+                    >
+                      <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                      <div className="space-y-0.5">
+                        <strong className="text-xs font-black text-rose-800 block">
+                          จำนวนการส่งข้อความเดือนนี้หมดแล้ว
+                        </strong>
+                        <p className="text-[11px] text-rose-700 leading-relaxed font-medium">
+                          ดำเนินการในระบบต่อได้ตามปกติ แต่ระบบจะไม่ส่งข้อความ LINE จนกว่าจะถึงรอบรีเซ็ตถัดไป
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Quota Warning Threshold (PO Decision A2: <= 5) */}
+                  {isWarning && (
+                    <div
+                      data-testid="badge-quota-warning-banner"
+                      className="p-3.5 bg-amber-50 border border-amber-200 rounded-2xl flex items-start gap-2.5 text-amber-900"
+                    >
+                      <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                      <div className="space-y-0.5">
+                        <strong className="text-xs font-black text-amber-800 block">
+                          จำนวนการส่งข้อความใกล้หมดแล้ว (เหลือ ≤ 5 ข้อความ)
+                        </strong>
+                        <p className="text-[11px] text-amber-700 leading-relaxed font-medium">
+                          จำนวนการส่งข้อความคงเหลือ {lineConfig.remainingQuota}/{lineConfig.monthlyQuota} ข้อความ
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
                   <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100 space-y-3">
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-bold text-slate-500">จำนวนการส่งข้อความคงเหลือเดือนนี้</span>

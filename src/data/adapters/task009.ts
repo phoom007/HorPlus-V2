@@ -84,6 +84,10 @@ export interface LineOaConfigResponse {
   monthlyQuota?: number;
   usedQuota?: number;
   remainingQuota?: number;
+  isQuotaExhausted?: boolean;
+  isQuotaWarning?: boolean;
+  quotaWarningMessage?: string | null;
+  quotaLabel?: string;
 }
 
 export interface RedeemResult {
@@ -217,9 +221,10 @@ export const Task009ApiAdapter = {
   /**
    * Read LINE OA Config for a dormitory
    */
-  async getLineOaConfig(dormId: string): Promise<{ success: boolean; data?: LineOaConfigResponse; error?: any }> {
+  async getLineOaConfig(dormId: string, refresh: boolean = false): Promise<{ success: boolean; data?: LineOaConfigResponse; error?: any }> {
     try {
-      const res = await httpRequest<any>('GET', `/dormitories/${dormId}/line-oa/config`);
+      const url = refresh ? `/dormitories/${dormId}/line-oa/config?refresh=true` : `/dormitories/${dormId}/line-oa/config`;
+      const res = await httpRequest<any>('GET', url);
       return { success: true, data: res.data || res };
     } catch (err: any) {
       return {
