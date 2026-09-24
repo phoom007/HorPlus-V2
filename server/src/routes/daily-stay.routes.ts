@@ -42,6 +42,51 @@ export function createDailyStayRouter(
     return dormId;
   };
 
+  const verifyDormitoryAccess = async (req: Request, targetDormId: string, prisma: any): Promise<boolean> => {
+    const userId = req.auth?.userId;
+    if (!userId || !targetDormId) return false;
+
+    // 1. ACCESS_GRANT session (LINE user - strictly bound to grant's dormitory)
+    const accessGrantId =
+      req.auth?.session?.accessGrantId ||
+      (userId.startsWith('ag_user_') ? userId.replace('ag_user_', '') :
+      (userId.startsWith('ag_') ? userId.replace('ag_', '') : null));
+    if (accessGrantId) {
+      const grant = await prisma.dormitoryAccessGrant.findUnique({
+        where: { id: accessGrantId },
+        select: { dormitoryId: true, status: true },
+      });
+      return grant?.dormitoryId === targetDormId && grant?.status === 'ACTIVE';
+    }
+
+    // 2. User has active memberships
+    const activeMemberships = (req.auth?.memberships || []).filter(
+      (m: any) => (m.status || '').toLowerCase() === 'active'
+    );
+    if (activeMemberships.length > 0) {
+      return activeMemberships.some((m: any) => m.dormitoryId === targetDormId);
+    }
+
+    // 3. User UUID linked to active tenant in database
+    if (/^[0-9a-fA-F-]{36}$/.test(userId)) {
+      const tenants = await prisma.tenant.findMany({
+        where: {
+          linkedUserId: userId,
+          status: 'active',
+          deletedAt: null,
+        },
+        select: { dormitoryId: true },
+      });
+      if (tenants.length > 0) {
+        return tenants.some((t: any) => t.dormitoryId === targetDormId);
+      }
+    }
+
+    // 4. Pure guest / pre-link user with NO affiliations to any dormitory
+    return true;
+  };
+
+
   const handleServiceError = (res: Response, err: any, req: Request) => {
     let statusCode = err.statusCode || err.status || 500;
     let code = err.code || 'DAILY_STAY_OPERATION_FAILED';
@@ -133,6 +178,18 @@ export function createDailyStayRouter(
 
       const { getPrismaClient } = await import('../db/prisma.js');
       const prisma = getPrismaClient();
+
+      const hasAccess = await verifyDormitoryAccess(req, dormId, prisma);
+      if (!hasAccess) {
+        return res.status(403).json({
+          error: {
+            code: 'FORBIDDEN',
+            message: 'คุณไม่มีสิทธิ์เข้าถึงหรือส่งคำขอในหอพักนี้',
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
 
       const roomWhere: any = {
         dormitoryId: dormId,
@@ -253,6 +310,21 @@ export function createDailyStayRouter(
           error: {
             code: 'DORMITORY_ID_MISMATCH',
             message: 'รหัสหอพักใน Header และ Body ไม่ตรงกัน',
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+
+      const { getPrismaClient } = await import('../db/prisma.js');
+      const prisma = getPrismaClient();
+
+      const hasAccess = await verifyDormitoryAccess(req, parsed.dormitoryId, prisma);
+      if (!hasAccess) {
+        return res.status(403).json({
+          error: {
+            code: 'FORBIDDEN',
+            message: 'คุณไม่มีสิทธิ์เข้าถึงหรือส่งคำขอในหอพักนี้',
             requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
             timestamp: new Date().toISOString(),
           },

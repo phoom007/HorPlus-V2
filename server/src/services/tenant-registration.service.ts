@@ -205,21 +205,8 @@ export class TenantRegistrationService {
     });
     const termMonths = building?.termMonths || 6;
 
-    let ownerSignature: string | null = null;
-    try {
-      const sigStorage = new SignatureStorageService(prisma);
-      const sigRecord = await sigStorage.getLatestSignatureRecord(dormitoryId);
-      if (sigRecord) {
-        const stream = await sigStorage.getSignatureStream(sigRecord.objectKey);
-        const chunks: Buffer[] = [];
-        for await (const chunk of stream) {
-          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-        }
-        ownerSignature = `data:${sigRecord.mimeType || 'image/png'};base64,${Buffer.concat(chunks).toString('base64')}`;
-      }
-    } catch {
-      ownerSignature = null;
-    }
+    // S6-1: Never expose owner signature or private credentials on public policy endpoint
+    const ownerSignature: string | null = null;
 
     return {
       dormitoryId,
@@ -279,7 +266,7 @@ export class TenantRegistrationService {
       savedDocumentKey = identityDocument?.objectKey;
       const createdReq = await prisma.$transaction(async (tx) => {
         let targetDormitoryId = dormitoryId;
-        let lineFollowerId: string | null = payload.lineFollowerId || null;
+        let lineFollowerId: string | null = payload.inviteToken ? null : (payload.lineFollowerId || null);
 
         if (payload.inviteToken) {
           const inviteResult = await tenantRegistrationInviteService.consumeInviteInTransaction(payload.inviteToken, tx);
@@ -351,21 +338,9 @@ export class TenantRegistrationService {
           throw new AppError('ไม่พบห้องพักที่ระบุในหอพักนี้', 404, 'ROOM_NOT_FOUND');
         }
 
-        // Resolve LINE displayName if lineFollowerId or active LINE friend exists
+        // Resolve LINE displayName strictly from verified lineFollowerId
         let resolvedLineDisplayName = payload.lineDisplayName?.trim() || null;
-        if (!lineFollowerId) {
-          const matchedFriend = await tx.dormitoryLineFriend.findFirst({
-            where: {
-              dormitoryId: targetDormitoryId,
-              ...(resolvedLineDisplayName ? { displayName: resolvedLineDisplayName } : {}),
-            },
-            orderBy: { updatedAt: 'desc' },
-          });
-          if (matchedFriend) {
-            lineFollowerId = matchedFriend.id;
-            if (!resolvedLineDisplayName) resolvedLineDisplayName = matchedFriend.displayName;
-          }
-        } else if (!resolvedLineDisplayName) {
+        if (lineFollowerId && !resolvedLineDisplayName) {
           const friendRecord = await tx.dormitoryLineFriend.findUnique({
             where: { id: lineFollowerId },
             select: { displayName: true },
@@ -643,7 +618,7 @@ export class TenantRegistrationService {
 
     return requests.map((req) => {
       const snap = (req.acceptanceSnapshot as any) || {};
-      const matchedFriend = (req.lineFollowerId ? friendById.get(req.lineFollowerId) : null) || latestTenantFriend;
+      const matchedFriend = req.lineFollowerId ? friendById.get(req.lineFollowerId) : null;
       const resolvedLineName =
         matchedFriend?.displayName ||
         snap.lineDisplayName ||

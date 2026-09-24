@@ -485,7 +485,7 @@ export function createTenantRegistrationRouter(
       const newReq = await registrationService.createRequest(dormId, {
         dormitoryId: dormId || undefined,
         inviteToken: validData.inviteToken || undefined,
-        lineFollowerId: lineCtx.lineFriendId || validData.lineFollowerId,
+        lineFollowerId: lineCtx.lineFriendId || undefined,
         lineDisplayName: lineCtx.lineDisplayName || validData.lineDisplayName,
         requestedRoomId: validData.requestedRoomId,
         prefix: validData.prefix,
@@ -554,7 +554,7 @@ export function createTenantRegistrationRouter(
       }
       const result = await registrationService.resubmitRequest(req.params.id, dormId, {
         ...parseResult.data,
-        lineFollowerId: lineCtx.lineFriendId || parseResult.data.lineFollowerId,
+        lineFollowerId: lineCtx.lineFriendId || undefined,
         lineDisplayName: lineCtx.lineDisplayName || parseResult.data.lineDisplayName,
       });
       res.json({ data: result });

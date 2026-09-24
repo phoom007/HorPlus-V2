@@ -198,6 +198,7 @@ export function createApiRouter(deps: AppApiDependencies | AuthenticationService
     protectedRouter.use('/notifications', createNotificationRouter(undefined, fullDeps.authService));
 
     router.use('/daily-stays', createDailyStayRouter(fullDeps.authService, dailyStayService));
+    router.use('/daily-stay', createDailyStayRouter(fullDeps.authService, dailyStayService));
     router.use('/tenant-claims', createTenantClaimRouter(fullDeps.authService, tenantClaimService));
     router.use('/', protectedRouter);
     router.use('/', staffRoutes.protectedRouter);
