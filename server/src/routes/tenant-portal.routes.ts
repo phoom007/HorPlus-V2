@@ -375,7 +375,7 @@ async function resolveTenantContext(req: Request): Promise<TenantContextResult> 
   });
 }
 
-async function getTenantBillWhere(prisma: any, ctx: { dormitoryId: string; tenant: { id: string }; roomId?: string; isCandidate?: boolean }, asOfDate: Date = new Date()) {
+async function getTenantBillWhere(prisma: any, ctx: { dormitoryId: string; tenant: { id: string; linkedUserId?: string | null }; roomId?: string; isCandidate?: boolean }, asOfDate: Date = new Date()) {
   if (ctx.isCandidate || !/^[0-9a-fA-F-]{36}$/.test(ctx.tenant.id)) {
     return {
       dormitoryId: ctx.dormitoryId,
@@ -383,26 +383,65 @@ async function getTenantBillWhere(prisma: any, ctx: { dormitoryId: string; tenan
       status: 'none',
     };
   }
+
+  const linkedUserId = ctx.tenant.linkedUserId;
+  let allTenantIds = [ctx.tenant.id];
+  if (linkedUserId && /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(linkedUserId)) {
+    const userTenants = await prisma.tenant.findMany({
+      where: { linkedUserId, dormitoryId: ctx.dormitoryId, deletedAt: null },
+      select: { id: true }
+    });
+    if (userTenants.length > 0) {
+      allTenantIds = userTenants.map((t: any) => t.id);
+    }
+  }
+
+  // Strictly find active/relevant contracts for this tenant
   const contractWhere: any = {
-    tenantId: ctx.tenant.id,
+    tenantId: { in: allTenantIds },
     dormitoryId: ctx.dormitoryId,
+    status: { in: ['active', 'approved_scheduled', 'expiring_soon', 'waiting_extension'] }
   };
   if (ctx.roomId) {
     contractWhere.roomId = ctx.roomId;
   }
   const contracts = await prisma.contract.findMany({
     where: contractWhere,
-    select: { id: true }
+    select: { id: true, startDate: true, endDate: true }
   });
   const contractIds = contracts.map((c: any) => c.id);
   const cutoffDate = getTenantRentCutoffDate(asOfDate);
 
-  const orConditions: any[] = [{ tenantId: ctx.tenant.id }];
-  if (ctx.roomId) {
-    orConditions.push({ roomId: ctx.roomId, OR: [{ tenantId: ctx.tenant.id }, { tenantId: null }] });
-  }
+  const orConditions: any[] = [];
   if (contractIds.length > 0) {
     orConditions.push({ contractId: { in: contractIds } });
+  }
+
+  if (contracts.length > 0) {
+    const earliestStart = new Date(Math.min(...contracts.map((c: any) => new Date(c.startDate).getTime())));
+    const startOfMonth = new Date(earliestStart.getFullYear(), earliestStart.getMonth(), 1);
+
+    // Bills explicitly assigned to this tenant that are either tied to contract or within active tenancy period
+    orConditions.push({
+      tenantId: { in: allTenantIds },
+      OR: [
+        { contractId: { in: contractIds } },
+        { contractId: null, billingDate: { gte: startOfMonth } }
+      ]
+    });
+
+    // Room-level bills without tenantId are ONLY visible if issued during active tenancy period
+    if (ctx.roomId) {
+      orConditions.push({
+        roomId: ctx.roomId,
+        tenantId: null,
+        contractId: null,
+        billingDate: { gte: earliestStart }
+      });
+    }
+  } else {
+    // No active contracts - only bills explicitly assigned to tenant
+    orConditions.push({ tenantId: { in: allTenantIds } });
   }
 
   return {
@@ -424,7 +463,7 @@ async function getTenantBillWhere(prisma: any, ctx: { dormitoryId: string; tenan
   };
 }
 
-async function checkBillOwnership(prisma: any, billId: string, ctx: { dormitoryId: string; tenant: { id: string; linkedUserId?: string | null } }, asOfDate: Date = new Date()) {
+async function checkBillOwnership(prisma: any, billId: string, ctx: { dormitoryId: string; tenant: { id: string; linkedUserId?: string | null }; roomId?: string }, asOfDate: Date = new Date()) {
   const bill = await prisma.bill.findUnique({
     where: { id: billId },
     include: {
@@ -459,12 +498,35 @@ async function checkBillOwnership(prisma: any, billId: string, ctx: { dormitoryI
   }
 
   const contracts = await prisma.contract.findMany({
-    where: { tenantId: { in: allTenantIds }, dormitoryId: ctx.dormitoryId },
-    select: { id: true }
+    where: {
+      tenantId: { in: allTenantIds },
+      dormitoryId: ctx.dormitoryId,
+      status: { in: ['active', 'approved_scheduled', 'expiring_soon', 'waiting_extension'] }
+    },
+    select: { id: true, startDate: true, endDate: true }
   });
   const contractIds = contracts.map((c: any) => c.id);
 
-  const isOwned = allTenantIds.includes(bill.tenantId) || (bill.contractId && contractIds.includes(bill.contractId));
+  let isOwned = false;
+  if (bill.contractId && contractIds.includes(bill.contractId)) {
+    isOwned = true;
+  } else if (bill.tenantId && allTenantIds.includes(bill.tenantId)) {
+    if (contracts.length > 0) {
+      const earliestStart = new Date(Math.min(...contracts.map((c: any) => new Date(c.startDate).getTime())));
+      const startOfMonth = new Date(earliestStart.getFullYear(), earliestStart.getMonth(), 1);
+      if (bill.billingDate >= startOfMonth || (bill.contractId && contractIds.includes(bill.contractId))) {
+        isOwned = true;
+      }
+    } else {
+      isOwned = true;
+    }
+  } else if (!bill.tenantId && ctx.roomId && bill.roomId === ctx.roomId && contracts.length > 0) {
+    const earliestStart = new Date(Math.min(...contracts.map((c: any) => new Date(c.startDate).getTime())));
+    if (bill.billingDate >= earliestStart) {
+      isOwned = true;
+    }
+  }
+
   if (!isOwned) return null;
 
   return bill;
@@ -488,6 +550,11 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
   // 0. Tenant Active Rooms & Available Rooms for Renting Additional Room
   router.get('/rooms', async (req: Request, res: Response) => {
     try {
+      const ctx = await resolveTenantContext(req);
+      if (ctx.error) {
+        return res.status(ctx.error.statusCode).json({ error: { code: ctx.error.code, message: ctx.error.message, requestId: req.requestId } });
+      }
+
       const userId = req.auth?.userId;
       if (!userId) {
         return res.status(401).json({ error: { code: 'UNAUTHORIZED', message: 'Not logged in' } });
@@ -496,7 +563,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
       const isUuid = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(userId);
       let tenants = isUuid
         ? await prisma.tenant.findMany({
-            where: { linkedUserId: userId, deletedAt: null },
+            where: { linkedUserId: userId, dormitoryId: ctx.dormitoryId, deletedAt: null },
             include: {
               dormitory: true,
               contracts: {
@@ -539,9 +606,11 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
         if (candidateGrantId) {
           const grant = await prisma.dormitoryAccessGrant.findUnique({
             where: { id: candidateGrantId },
-            select: { lineFriendId: true },
+            select: { lineFriendId: true, dormitoryId: true },
           });
-          targetLineFriendId = grant?.lineFriendId || null;
+          if (grant?.dormitoryId === ctx.dormitoryId) {
+            targetLineFriendId = grant?.lineFriendId || null;
+          }
         }
 
         const phone = req.auth?.user?.phone || (req as any).user?.phone;
@@ -557,6 +626,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
         if (orFilters.length > 0) {
           tenants = await prisma.tenant.findMany({
             where: {
+              dormitoryId: ctx.dormitoryId,
               OR: orFilters,
               deletedAt: null,
               status: 'active',
@@ -677,7 +747,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
               where: { id: ctx.roomId },
               include: { building: true, dormitory: true }
             });
-            if (foundRoom) {
+            if (foundRoom && foundRoom.dormitoryId === ctx.dormitoryId) {
               roomList.push({
                 roomId: foundRoom.id,
                 roomNumber: foundRoom.roomNumber,
@@ -778,17 +848,29 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
           dormitoryId: ctx.dormitoryId,
           roomId: ctx.roomId,
           tenantId: ctx.tenant.id,
+          status: { in: ['active', 'approved_scheduled', 'expiring_soon', 'waiting_extension'] }
         },
         orderBy: { startDate: 'asc' },
-        select: { startDate: true }
+        select: { startDate: true, endDate: true }
       });
       const earliestStartDate = tenantContracts.length > 0 ? tenantContracts[0].startDate : (ctx.contract?.startDate || null);
+      const latestEndDate = tenantContracts.length > 0 && tenantContracts.every(c => c.endDate)
+        ? new Date(Math.max(...tenantContracts.map(c => new Date(c.endDate!).getTime())))
+        : null;
+
+      const dateFilters: any = {};
+      if (earliestStartDate) {
+        dateFilters.gte = earliestStartDate;
+      }
+      if (latestEndDate && latestEndDate < new Date()) {
+        dateFilters.lte = latestEndDate;
+      }
 
       const readings = await prisma.meterReading.findMany({
         where: {
           dormitoryId: ctx.dormitoryId,
           roomId: ctx.roomId,
-          ...(earliestStartDate ? { readAt: { gte: earliestStartDate } } : {})
+          ...(Object.keys(dateFilters).length > 0 ? { readAt: dateFilters } : {})
         },
         orderBy: { readAt: 'desc' },
         take: 24
@@ -1350,6 +1432,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
       const bills = await prisma.bill.findMany({
         where: billWhere,
         orderBy: { createdAt: 'desc' },
+        take: 50,
         include: {
           items: true,
           Payment: {
@@ -1507,21 +1590,46 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
 
       let qrAmount = '0.00';
       const billIdParam = req.params.billId;
-      if (req.query.amount) {
-        qrAmount = Number(req.query.amount).toFixed(2);
-      } else if (billIdParam.includes(',')) {
+      const targetBills: any[] = [];
+
+      if (billIdParam.includes(',')) {
         const ids = billIdParam.split(',').filter(Boolean);
-        const bills = await prisma.bill.findMany({
-          where: { id: { in: ids }, dormitoryId: ctx.dormitoryId }
-        });
-        const sum = bills.reduce((acc: number, b: any) => acc + Number(b.totalAmount || 0), 0);
-        qrAmount = sum.toFixed(2);
+        for (const id of ids) {
+          const b = await checkBillOwnership(prisma, id, ctx);
+          if (!b) {
+            return res.status(404).json({ error: { code: 'TENANT_BILL_NOT_FOUND', message: 'ไม่พบรายการบิลนี้หรือไม่มีสิทธิ์เข้าถึง', requestId: req.requestId } });
+          }
+          targetBills.push(b);
+        }
       } else {
         const bill = await checkBillOwnership(prisma, billIdParam, ctx);
         if (!bill) {
           return res.status(404).json({ error: { code: 'TENANT_BILL_NOT_FOUND', message: 'ไม่พบรายการบิลนี้', requestId: req.requestId } });
         }
-        qrAmount = bill.totalAmount.toString();
+        targetBills.push(bill);
+      }
+
+      const totalOutstanding = targetBills.reduce((acc: number, b: any) => {
+        const out = b.outstandingAmount !== null && b.outstandingAmount !== undefined ? Number(b.outstandingAmount) : Number(b.totalAmount || 0);
+        return acc + out;
+      }, 0);
+
+      qrAmount = totalOutstanding.toFixed(2);
+      if (req.query.amount) {
+        const requestedAmount = Number(req.query.amount);
+        if (isNaN(requestedAmount) || requestedAmount <= 0) {
+          return res.status(400).json({ error: { code: 'INVALID_PAYMENT_AMOUNT', message: 'จำนวนเงินที่ระบุไม่ถูกต้อง', requestId: req.requestId } });
+        }
+        if (requestedAmount > totalOutstanding) {
+          return res.status(400).json({
+            error: {
+              code: 'AMOUNT_EXCEEDS_OUTSTANDING',
+              message: `จำนวนเงินที่ระบุ (${requestedAmount.toFixed(2)}) เกินยอดค้างชำระ (${totalOutstanding.toFixed(2)})`,
+              requestId: req.requestId
+            }
+          });
+        }
+        qrAmount = requestedAmount.toFixed(2);
       }
 
       const settings = await prisma.dormitoryBillingSettings.findUnique({
@@ -1563,18 +1671,34 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
 
       if (req.query.billIds) {
         const ids = (req.query.billIds as string).split(',').filter(Boolean);
-        const bills = await prisma.bill.findMany({
-          where: { id: { in: ids }, dormitoryId: ctx.dormitoryId, status: { not: 'cancelled' } }
-        });
-        const total = bills.reduce((sum: number, b: any) => sum + Number(b.totalAmount || 0), 0);
+        const ownedBills: any[] = [];
+        for (const id of ids) {
+          const b = await checkBillOwnership(prisma, id, ctx);
+          if (!b) {
+            return res.status(404).json({ error: { code: 'TENANT_BILL_NOT_FOUND', message: 'ไม่พบรายการบิลนี้หรือไม่มีสิทธิ์เข้าถึง', requestId: req.requestId } });
+          }
+          ownedBills.push(b);
+        }
+        const total = ownedBills.reduce((sum: number, b: any) => {
+          const out = b.outstandingAmount !== null && b.outstandingAmount !== undefined ? Number(b.outstandingAmount) : Number(b.totalAmount || 0);
+          return sum + out;
+        }, 0);
         targetAmount = total.toFixed(2);
         targetBillId = ids.join(',');
       } else if (req.params.billId && req.params.billId.includes(',')) {
         const ids = req.params.billId.split(',').filter(Boolean);
-        const bills = await prisma.bill.findMany({
-          where: { id: { in: ids }, dormitoryId: ctx.dormitoryId, status: { not: 'cancelled' } }
-        });
-        const total = bills.reduce((sum: number, b: any) => sum + Number(b.totalAmount || 0), 0);
+        const ownedBills: any[] = [];
+        for (const id of ids) {
+          const b = await checkBillOwnership(prisma, id, ctx);
+          if (!b) {
+            return res.status(404).json({ error: { code: 'TENANT_BILL_NOT_FOUND', message: 'ไม่พบรายการบิลนี้หรือไม่มีสิทธิ์เข้าถึง', requestId: req.requestId } });
+          }
+          ownedBills.push(b);
+        }
+        const total = ownedBills.reduce((sum: number, b: any) => {
+          const out = b.outstandingAmount !== null && b.outstandingAmount !== undefined ? Number(b.outstandingAmount) : Number(b.totalAmount || 0);
+          return sum + out;
+        }, 0);
         targetAmount = total.toFixed(2);
         targetBillId = ids.join(',');
       } else if (req.params.billId) {
@@ -1582,19 +1706,21 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
         if (!bill) {
           return res.status(404).json({ error: { code: 'TENANT_BILL_NOT_FOUND', message: 'ไม่พบรายการบิลนี้', requestId: req.requestId } });
         }
-        targetAmount = bill.totalAmount.toString();
+        const out = bill.outstandingAmount !== null && bill.outstandingAmount !== undefined ? Number(bill.outstandingAmount) : Number(bill.totalAmount || 0);
+        targetAmount = out.toFixed(2);
         targetBillId = bill.id;
       } else {
         const billWhere = await getTenantBillWhere(prisma, ctx);
         const bill = await prisma.bill.findFirst({
           where: {
             ...billWhere,
-            status: { in: ['ISSUED', 'ISSUED_OVERDUE', 'REJECTED', 'issued', 'pending', 'overdue', 'rejected'] }
+            status: { in: ['ISSUED', 'ISSUED_OVERDUE', 'REJECTED', 'issued', 'pending', 'overdue', 'rejected', 'partially_paid', 'PARTIALLY_PAID'] }
           },
           orderBy: { createdAt: 'desc' }
         });
         if (bill) {
-          targetAmount = bill.totalAmount.toString();
+          const out = bill.outstandingAmount !== null && bill.outstandingAmount !== undefined ? Number(bill.outstandingAmount) : Number(bill.totalAmount || 0);
+          targetAmount = out.toFixed(2);
           targetBillId = bill.id;
         }
       }
@@ -1685,12 +1811,10 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
       const payments = await prisma.payment.findMany({
         where: {
           dormitoryId: ctx.dormitoryId,
-          OR: [
-            { tenantId: ctx.tenant.id },
-            { bill: billWhere }
-          ]
+          bill: billWhere,
         },
         orderBy: { createdAt: 'desc' },
+        take: 50,
         include: {
           bill: { select: { id: true, billNumber: true, totalAmount: true } },
           receipt: { select: { id: true, receiptNumber: true, isVoided: true, voidReason: true } }
@@ -1740,6 +1864,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
           bill: billWhere
         },
         orderBy: { createdAt: 'desc' },
+        take: 50,
         include: {
           bill: { select: { id: true, billNumber: true, totalAmount: true } }
         }
