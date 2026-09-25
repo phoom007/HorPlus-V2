@@ -101,12 +101,12 @@ export class MoveOutService {
     // Also mark contract status as checking_out so Owner contract/tenant cards show move-out notice badge
     if (occupancy.contractId) {
       await prisma.contract.updateMany({
-        where: { id: occupancy.contractId, dormitoryId, status: { in: ['active', 'expiring_soon'] } },
+        where: { id: occupancy.contractId, dormitoryId, status: { in: ['active', 'expiring_soon', 'expired'] } },
         data: { status: 'checking_out' },
       });
     } else {
       await prisma.contract.updateMany({
-        where: { dormitoryId, tenantId, roomId, status: { in: ['active', 'expiring_soon'] }, deletedAt: null },
+        where: { dormitoryId, tenantId, roomId, status: { in: ['active', 'expiring_soon', 'expired'] }, deletedAt: null },
         data: { status: 'checking_out' },
       });
     }
@@ -356,7 +356,7 @@ export class MoveOutService {
               dormitoryId,
               roomId: reqRecord.roomId,
               tenantId: reqRecord.tenantId,
-              status: { in: ['active', 'expiring_soon', 'checking_out'] },
+              status: { in: ['active', 'expiring_soon', 'checking_out', 'expired'] },
               deletedAt: null,
             },
           });
@@ -590,7 +590,7 @@ export class MoveOutService {
       });
 
       // 7. Transition active contract to checked_out
-      if (contractToClose && ['active', 'expiring_soon', 'checking_out'].includes(contractToClose.status)) {
+      if (contractToClose && ['active', 'expiring_soon', 'checking_out', 'expired'].includes(contractToClose.status)) {
         await tx.contract.update({
           where: { id: contractToClose.id },
           data: {

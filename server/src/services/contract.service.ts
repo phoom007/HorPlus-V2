@@ -600,7 +600,7 @@ export class ContractService {
       return contract;
     }
 
-    if (!['active', 'expiring_soon', 'waiting_extension'].includes(contract.status)) {
+    if (!['active', 'expiring_soon', 'waiting_extension', 'expired'].includes(contract.status)) {
       const err = new Error(`ไม่สามารถต่อสัญญาที่อยู่ในสถานะ ${contract.status} ได้`);
       (err as any).code = 'INVALID_CONTRACT_STATUS_TRANSITION';
       (err as any).statusCode = 400;
@@ -743,7 +743,7 @@ export class ContractService {
       return contract;
     }
 
-    if (!['active', 'expiring_soon', 'waiting_extension', 'checking_out'].includes(contract.status)) {
+    if (!['active', 'expiring_soon', 'waiting_extension', 'checking_out', 'expired'].includes(contract.status)) {
       const err = new Error(`ไม่สามารถยกเลิกสัญญาที่อยู่ในสถานะ ${contract.status} ได้`);
       (err as any).code = 'INVALID_CONTRACT_STATUS_TRANSITION';
       (err as any).statusCode = 400;
@@ -928,7 +928,9 @@ export class ContractService {
             return { contract: updatedContract, renewed: true };
           }
 
-          // End Occupancy and Vacate Room
+          // PO-12 & Card C4: ถึงวันสิ้นสุดสัญญาโดยไม่ต่อ
+          // สัญญายังค้างจนเจ้าของทำเรื่องย้ายออก (C3)
+          // ไม่ปิดสัญญา/occupancy/ห้องพักอัตโนมัติ สัญญาและการพักอาศัยยังคงอยู่จนกว่าเจ้าของทำเรื่องย้ายออก
           const occupancy = await tx.occupancy.findFirst({
             where: {
               dormitoryId: contractRecord.dormitoryId,
@@ -938,46 +940,7 @@ export class ContractService {
             }
           });
 
-          let updatedOccupancy = null;
-          if (occupancy) {
-            updatedOccupancy = await tx.occupancy.update({
-              where: { id: occupancy.id },
-              data: {
-                status: 'ENDED',
-                endedAt: contractRecord.endDate,
-                endedReason: 'สัญญาเช่าสิ้นสุด (ระบบอัตโนมัติ)'
-              }
-            });
-
-            // Cancel any pending/scheduled move-out requests attached to this occupancy
-            const activeSchedules = await tx.tenantMoveOutRequest.findMany({
-              where: {
-                occupancyId: occupancy.id,
-                status: { in: ['SCHEDULED', 'PENDING_OWNER_CONFIRMATION'] }
-              }
-            });
-            for (const sched of activeSchedules) {
-              await tx.tenantMoveOutRequest.update({
-                where: { id: sched.id },
-                data: {
-                  status: 'CANCELLED',
-                  reason: 'Contract expired prior to scheduled move-out date'
-                }
-              });
-            }
-          }
-
-          await tx.room.update({
-            where: { id: contractRecord.roomId },
-            data: { status: 'vacant', currentTenantId: null, currentContractId: null }
-          });
-
-          await tx.tenant.update({
-            where: { id: contractRecord.tenantId },
-            data: { status: 'former' }
-          }).catch(() => {});
-
-          return { contract: updatedContract, occupancy: updatedOccupancy, renewed: false };
+          return { contract: updatedContract, occupancy, renewed: false };
         });
 
         if (res) results.push(res);

@@ -279,6 +279,22 @@ export const TenantContractView: React.FC<TenantContractViewProps> = ({
                   </div>
                 </div>
 
+                {/* Expired Contract Banner (Card C4 / PO-12 / OQ-27) */}
+                {(con.status === 'expired' || (con.endDate && new Date(con.endDate).getTime() < new Date().getTime())) && (
+                  <div
+                    data-testid="tenant-contract-expired-view-banner"
+                    className="p-3 bg-amber-50 border border-amber-200/80 rounded-2xl flex items-start gap-2.5 text-amber-800"
+                  >
+                    <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                    <div className="space-y-0.5 text-[10px] leading-relaxed">
+                      <p className="font-extrabold text-amber-900">สัญญาเช่าสิ้นสุดแล้ว</p>
+                      <p className="text-amber-800">
+                        สัญญาเช่าฉบับนี้สิ้นสุดลงแล้วเมื่อ {formatToBeFullDate(con.endDate)} คุณยังคงสามารถเข้าใช้งานพอร์ทัล ดูบิล ชำระเงิน หรือแจ้งย้ายออกได้ตามปกติ
+                      </p>
+                    </div>
+                  </div>
+                )}
+
                 <div className="pt-3 border-t border-slate-100">
                   {con.status === 'approved_scheduled' ? (
                     <span className="px-3 py-1 bg-amber-50 text-amber-700 border border-amber-200/50 rounded-full text-[9px] font-bold">
@@ -287,6 +303,10 @@ export const TenantContractView: React.FC<TenantContractViewProps> = ({
                   ) : con.status === 'cancelled' ? (
                     <span className="px-3 py-1 bg-rose-50 text-rose-700 border border-rose-200/50 rounded-full text-[9px] font-bold">
                       สถานะ: สัญญายกเลิก
+                    </span>
+                  ) : con.status === 'expired' || (con.endDate && new Date(con.endDate).getTime() < new Date().getTime()) ? (
+                    <span className="px-3 py-1 bg-rose-50 text-rose-700 border border-rose-200/50 rounded-full text-[9px] font-bold" data-testid="tenant-contract-expired-badge">
+                      สถานะ: สัญญาหมดอายุแล้ว
                     </span>
                   ) : (
                     <span className="px-3 py-1 bg-emerald-50 text-emerald-700 border border-emerald-200/50 rounded-full text-[9px] font-bold">

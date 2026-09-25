@@ -326,7 +326,7 @@ async function resolveTenantContext(req: Request): Promise<TenantContextResult> 
     const contracts = await tx.contract.findMany({
       where: {
         tenantId: { in: tenantIds },
-        status: { in: ['active', 'approved_scheduled', 'expiring_soon', 'waiting_extension'] }
+        status: { in: ['active', 'approved_scheduled', 'expiring_soon', 'waiting_extension', 'expired'] }
       }
     });
 
@@ -405,7 +405,7 @@ async function getTenantBillWhere(prisma: any, ctx: { dormitoryId: string; tenan
   const contractWhere: any = {
     tenantId: { in: allTenantIds },
     dormitoryId: ctx.dormitoryId,
-    status: { in: ['active', 'approved_scheduled', 'expiring_soon', 'waiting_extension'] }
+    status: { in: ['active', 'approved_scheduled', 'expiring_soon', 'waiting_extension', 'expired'] }
   };
   if (ctx.roomId) {
     contractWhere.roomId = ctx.roomId;
@@ -532,7 +532,7 @@ async function checkBillOwnership(prisma: any, billId: string, ctx: { dormitoryI
     where: {
       tenantId: { in: allTenantIds },
       dormitoryId: ctx.dormitoryId,
-      status: { in: ['active', 'approved_scheduled', 'expiring_soon', 'waiting_extension'] }
+      status: { in: ['active', 'approved_scheduled', 'expiring_soon', 'waiting_extension', 'expired'] }
     },
     select: { id: true, startDate: true, endDate: true }
   });
@@ -598,7 +598,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
             include: {
               dormitory: true,
               contracts: {
-                where: { status: { in: ['active', 'approved_scheduled', 'expiring_soon', 'waiting_extension'] } },
+                where: { status: { in: ['active', 'approved_scheduled', 'expiring_soon', 'waiting_extension', 'expired'] } },
                 include: {
                   room: {
                     include: {
@@ -665,7 +665,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
             include: {
               dormitory: true,
               contracts: {
-                where: { status: { in: ['active', 'approved_scheduled', 'expiring_soon', 'waiting_extension'] } },
+                where: { status: { in: ['active', 'approved_scheduled', 'expiring_soon', 'waiting_extension', 'expired'] } },
                 include: {
                   room: {
                     include: {

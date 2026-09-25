@@ -1691,6 +1691,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                   onStartRegister={() => setSubView('register')}
                   onRefresh={() => refreshData()}
                   onZoomImage={(url) => setZoomedImage(url)}
+                  activeContract={contracts[0] || (localTenant as any)?.activeContract}
                 />
               )}
 

@@ -60,6 +60,7 @@ export interface TenantHomeTabProps {
   onStartRegister: () => void;
   onRefresh: () => void;
   onZoomImage?: (url: string) => void;
+  activeContract?: any;
 }
 
 export const TenantHomeTab: React.FC<TenantHomeTabProps> = ({
@@ -89,7 +90,17 @@ export const TenantHomeTab: React.FC<TenantHomeTabProps> = ({
   onStartRegister,
   onRefresh,
   onZoomImage,
+  activeContract,
 }) => {
+  const effectiveContract = activeContract || (localTenant as any)?.activeContract || (localTenant as any)?.contracts?.[0];
+  const isContractExpired = Boolean(
+    hasRoom &&
+    effectiveContract &&
+    (
+      effectiveContract.status === 'expired' ||
+      (effectiveContract.endDate && new Date(effectiveContract.endDate).getTime() < new Date().getTime())
+    )
+  );
   const filteredAnnouncements = announcements || [];
   const [isDailyStayModalOpen, setIsDailyStayModalOpen] = React.useState(false);
 
@@ -562,6 +573,42 @@ export const TenantHomeTab: React.FC<TenantHomeTabProps> = ({
           );
         })()}
       </div>
+
+      {/* Contract Expired Warning Banner (PO-12 & OQ-27 Option A) */}
+      {isContractExpired && (
+        <div
+          data-testid="tenant-contract-expired-banner"
+          className="mx-4 p-4 rounded-2xl bg-amber-50 border border-amber-200/90 text-amber-900 shadow-sm flex flex-col gap-2.5 animate-in fade-in duration-200"
+        >
+          <div className="flex items-start gap-2.5">
+            <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+            <div className="space-y-0.5 min-w-0">
+              <h4 className="text-xs font-black text-amber-900">สัญญาเช่าสิ้นสุดแล้ว</h4>
+              <p className="text-[11px] text-amber-800 leading-relaxed font-medium">
+                สัญญาเช่าของคุณสิ้นสุดแล้ว{effectiveContract?.endDate ? `เมื่อวันที่ ${formatToBeDate(effectiveContract.endDate)}` : ''} กรุณาติดต่อเจ้าของหอพัก หรือหากต้องการย้ายออกสามารถยื่นแจ้งย้ายออกได้
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 pt-0.5">
+            <button
+              type="button"
+              data-testid="tenant-expired-moveout-btn"
+              onClick={onOpenMoveOut ? onOpenMoveOut : onOpenContract}
+              className="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-700 active:scale-95 text-white rounded-xl text-xs font-black transition-all shadow-xs cursor-pointer flex items-center gap-1.5"
+            >
+              <span>แจ้งย้ายออก</span>
+            </button>
+            <button
+              type="button"
+              data-testid="tenant-expired-view-contract-btn"
+              onClick={onOpenContract}
+              className="px-3.5 py-1.5 bg-white hover:bg-amber-100/60 active:scale-95 text-amber-900 border border-amber-300 rounded-xl text-xs font-bold transition-all cursor-pointer"
+            >
+              <span>ดูรายละเอียดสัญญา</span>
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* 4. Quick Action Grid (6 Key Functions) */}
       <div>

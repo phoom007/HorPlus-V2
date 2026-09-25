@@ -259,7 +259,7 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({ status, type }) => {
         break;
       case 'expired':
         label = 'หมดอายุแล้ว';
-        classes = 'bg-gray-200 text-gray-500 border-gray-300';
+        classes = 'bg-rose-50 text-rose-700 border-rose-200';
         break;
       case 'terminated':
         label = 'ยกเลิกก่อนกำหนด';

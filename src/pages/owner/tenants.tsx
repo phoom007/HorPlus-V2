@@ -572,13 +572,25 @@ export function getContractStatusBadgeInfo(
   status: string,
   endDate?: string | Date | null
 ): { label: string; bg: string; text: string; border: string } {
+  let isPastEndDate = false;
+  let diffDays: number | null = null;
+  if (endDate) {
+    const today = new Date();
+    const curDay = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    const endD = new Date(endDate);
+    const endDay = new Date(endD.getFullYear(), endD.getMonth(), endD.getDate());
+    diffDays = Math.ceil((endDay.getTime() - curDay.getTime()) / (1000 * 60 * 60 * 24));
+    if (diffDays <= 0) {
+      isPastEndDate = true;
+    }
+  }
+
+  if (status === 'expired' || isPastEndDate) {
+    return { label: 'หมดอายุแล้ว', bg: 'bg-rose-50', text: 'text-rose-700', border: 'border-rose-200' };
+  }
+
   const getExpiringLabel = () => {
-    if (endDate) {
-      const today = new Date();
-      const curDay = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-      const endD = new Date(endDate);
-      const endDay = new Date(endD.getFullYear(), endD.getMonth(), endD.getDate());
-      const diffDays = Math.ceil((endDay.getTime() - curDay.getTime()) / (1000 * 60 * 60 * 24));
+    if (diffDays !== null) {
       return diffDays > 0 ? `เหลือ ${diffDays} วัน` : 'หมดอายุแล้ว';
     }
     return 'ใกล้หมดอายุ';
@@ -587,7 +599,7 @@ export function getContractStatusBadgeInfo(
   const statusMap: Record<string, { label: string; bg: string; text: string; border: string }> = {
     active: { label: 'กำลังใช้งาน', bg: 'bg-emerald-50', text: 'text-emerald-700', border: 'border-emerald-200' },
     expiring_soon: { label: getExpiringLabel(), bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-200' },
-    expired: { label: 'หมดอายุแล้ว', bg: 'bg-slate-100', text: 'text-slate-600', border: 'border-slate-200' },
+    expired: { label: 'หมดอายุแล้ว', bg: 'bg-rose-50', text: 'text-rose-700', border: 'border-rose-200' },
     ended: { label: 'เลิกสัญญาแล้ว', bg: 'bg-rose-50', text: 'text-rose-700', border: 'border-rose-200' },
     terminated: { label: 'เลิกสัญญาแล้ว', bg: 'bg-rose-50', text: 'text-rose-700', border: 'border-rose-200' },
   };
@@ -5243,7 +5255,10 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                                         <span className="font-extrabold text-slate-900 text-sm">
                                           {headerTitle}
                                         </span>
-                                        <span className={`px-2 py-0.5 text-[10px] font-bold rounded-lg border ${statusInfo.bg} ${statusInfo.text} ${statusInfo.border}`}>
+                                        <span
+                                          data-testid="owner-contract-status-badge"
+                                          className={`px-2 py-0.5 text-[10px] font-bold rounded-lg border ${statusInfo.bg} ${statusInfo.text} ${statusInfo.border}`}
+                                        >
                                           {statusInfo.label}
                                         </span>
                                         {isTenantLineBound(selectedTenant) && (
