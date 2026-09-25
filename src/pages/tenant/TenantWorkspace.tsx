@@ -1480,7 +1480,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
       }
 
       if (isCombined) {
-        const totalAmount = targetBills.reduce((acc, b) => acc + Number(b.totalAmount || 0), 0);
+        const totalAmount = targetBills.reduce((acc, b) => acc + Number(b.outstandingAmount ?? b.totalAmount ?? 0), 0);
         const submitRes = await fetch('/api/v1/payments/submit-combined-slip', {
           method: 'POST',
           headers: {
@@ -1510,7 +1510,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
           body: JSON.stringify({
             dormitoryId: localTenant.dormitoryId,
             billId: singleBill.id,
-            amount: singleBill.totalAmount.toString(),
+            amount: (singleBill.outstandingAmount ?? singleBill.totalAmount).toString(),
             paymentDate: new Date().toISOString(),
             intentId: intent.intentId,
           }),
@@ -1660,8 +1660,9 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                     }
                     setSubView('invoice');
                   }}
-                  onOpenPayment={() => {
-                    setSelectedPaymentBillIds(activeUnpaidBill ? [activeUnpaidBill.id] : []);
+                  onOpenPayment={(billId) => {
+                    const targetId = billId || (activeUnpaidBill ? activeUnpaidBill.id : undefined);
+                    setSelectedPaymentBillIds(targetId ? [targetId] : []);
                     setSubView('payment');
                   }}
                   onBack={() => setActiveTab('home')}

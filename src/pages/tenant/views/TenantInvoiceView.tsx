@@ -138,7 +138,7 @@ export const TenantInvoiceView: React.FC<TenantInvoiceViewProps> = ({
   }, [unpaidBills, selectedBillIds]);
 
   const combinedTotal = useMemo(() => {
-    return selectedBills.reduce((sum, b) => sum + Number(b.totalAmount || 0), 0);
+    return selectedBills.reduce((sum, b) => sum + Number(b.outstandingAmount ?? b.totalAmount ?? 0), 0);
   }, [selectedBills]);
 
   const paidBills = useMemo(() => {
@@ -231,19 +231,28 @@ export const TenantInvoiceView: React.FC<TenantInvoiceViewProps> = ({
                             ค่าใช้จ่ายเดือน {formatToBeFullDate(bill.createdAt)}
                           </span>
                           <h2 className="text-xl font-black text-slate-900 mt-1 leading-none">
-                            ฿ {Number(bill.totalAmount).toLocaleString('th-TH', {
+                            ฿ {Number(bill.outstandingAmount ?? bill.totalAmount).toLocaleString('th-TH', {
                               minimumFractionDigits: 2,
                               maximumFractionDigits: 2,
                             })}
                           </h2>
+                          {Number(bill.outstandingAmount ?? bill.totalAmount) < Number(bill.totalAmount) && (
+                            <span className="text-[10px] text-slate-400 font-bold block mt-1">
+                              (ยอดเต็ม <span className="line-through">฿ {Number(bill.totalAmount).toLocaleString('th-TH', { minimumFractionDigits: 2 })}</span> • ชำระแล้ว ฿ {Number(bill.paidAmount || 0).toLocaleString('th-TH', { minimumFractionDigits: 2 })})
+                            </span>
+                          )}
                           <span className="text-[9px] text-slate-400 block mt-2">
                             กำหนดชำระ: {formatToBeDate(bill.dueDate)}
                           </span>
                         </div>
                       </div>
 
-                      <span className="px-2.5 py-0.5 rounded-full text-[9px] font-bold bg-orange-50 text-orange-600 shrink-0">
-                        รอชำระ
+                      <span className={`px-2.5 py-0.5 rounded-full text-[9px] font-bold shrink-0 ${
+                        bill.status === 'partially_paid' || bill.status === 'PARTIALLY_PAID'
+                          ? 'bg-amber-50 text-amber-700 border border-amber-200'
+                          : 'bg-orange-50 text-orange-600'
+                      }`}>
+                        {bill.status === 'partially_paid' || bill.status === 'PARTIALLY_PAID' ? 'ชำระบางส่วน' : 'รอชำระ'}
                       </span>
                     </div>
 

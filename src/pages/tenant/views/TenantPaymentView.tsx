@@ -72,7 +72,10 @@ export const TenantPaymentView: React.FC<TenantPaymentViewProps> = ({
     ? selectedBills
     : (activeUnpaidBill ? [activeUnpaidBill] : []);
 
-  const totalAmountToPay = effectiveBills.reduce((acc, b) => acc + Number(b.totalAmount || 0), 0);
+  const totalAmountToPay = effectiveBills.reduce(
+    (acc, b) => acc + Number(b.outstandingAmount ?? b.totalAmount ?? 0),
+    0
+  );
 
   const handleCopy = (text: string, type: 'promptpay' | 'bank') => {
     if (navigator?.clipboard) {
@@ -88,11 +91,9 @@ export const TenantPaymentView: React.FC<TenantPaymentViewProps> = ({
     }
   };
 
-  const rejectedPay = activeUnpaidBill
-    ? (activeUnpaidBill.payments || (activeUnpaidBill as any).Payment || []).find(
-      (p: any) => p.status === 'REJECTED'
-    )
-    : null;
+  const rejectedPay = (effectiveBills[0]?.payments || (effectiveBills[0] as any)?.Payment || []).find(
+    (p: any) => p.status === 'REJECTED'
+  ) || (activeUnpaidBill ? (activeUnpaidBill.payments || (activeUnpaidBill as any).Payment || []).find((p: any) => p.status === 'REJECTED') : null);
 
   const bankBadge = getBankBadgeInfo(paymentOptions?.bankCode || '');
 
@@ -389,7 +390,7 @@ export const TenantPaymentView: React.FC<TenantPaymentViewProps> = ({
       <div className="p-4 bg-white/95 backdrop-blur-md border-t border-slate-100 fixed bottom-0 left-0 right-0 max-w-md mx-auto z-40">
         <button
           type="button"
-          disabled={!activeUnpaidBill || !slipFile || isSubmittingSlip}
+          disabled={effectiveBills.length === 0 || !slipFile || isSubmittingSlip}
           onClick={onSubmitPaymentSlip}
           className="w-full py-3.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white font-black text-xs rounded-2xl shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer active:scale-98"
         >

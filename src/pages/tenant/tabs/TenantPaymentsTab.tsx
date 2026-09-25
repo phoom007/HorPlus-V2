@@ -16,7 +16,7 @@ export interface TenantPaymentsTabProps {
   roomNumber?: string;
   tenantBills: Bill[];
   onOpenInvoice: (billId?: string) => void;
-  onOpenPayment: () => void;
+  onOpenPayment: (billId?: string) => void;
   onBack?: () => void;
 }
 
@@ -28,6 +28,12 @@ const renderBillStatusBadge = (status: string) => {
       return (
         <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-emerald-50 text-emerald-700 border border-emerald-200">
           ชำระแล้ว
+        </span>
+      );
+    case 'partially_paid':
+      return (
+        <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-amber-50 text-amber-700 border border-amber-200">
+          ชำระบางส่วน
         </span>
       );
     case 'unpaid':
@@ -148,10 +154,17 @@ export const TenantPaymentsTab: React.FC<TenantPaymentsTabProps> = ({
           </div>
 
           <div className="text-right">
-            <span className="text-[10px] font-bold text-slate-400 block">ยอดรวม</span>
-            <span className="font-black text-sm text-indigo-700">
-              {formatBaht(b.totalAmount)}
+            <span className="text-[10px] font-bold text-slate-400 block">
+              {Number(b.outstandingAmount ?? b.totalAmount) < Number(b.totalAmount) ? 'ยอดค้างชำระ' : 'ยอดรวม'}
             </span>
+            <span className="font-black text-sm text-indigo-700">
+              {formatBaht(b.outstandingAmount ?? b.totalAmount)}
+            </span>
+            {Number(b.outstandingAmount ?? b.totalAmount) < Number(b.totalAmount) && (
+              <span className="text-[9px] text-slate-400 line-through block">
+                {formatBaht(b.totalAmount)}
+              </span>
+            )}
           </div>
         </div>
 
@@ -184,7 +197,7 @@ export const TenantPaymentsTab: React.FC<TenantPaymentsTabProps> = ({
               <button
                 type="button"
                 data-testid={`btn-pay-bill-${b.id}`}
-                onClick={onOpenPayment}
+                onClick={() => onOpenPayment(b.id)}
                 className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-[10px] rounded-lg shadow-3xs cursor-pointer transition-all active:scale-95"
               >
                 ชำระเงิน
