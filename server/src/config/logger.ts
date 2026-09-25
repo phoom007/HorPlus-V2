@@ -16,11 +16,14 @@ export const logger = pino({
   redact: {
     paths: [
       'req.headers.authorization',
+      'req.headers["x-authorization"]',
       'req.headers.cookie',
       'req.headers["x-csrf-token"]',
       'password',
       'secret',
       'token',
+      'apiKey',
+      'SLIPOK_API_KEY',
       'DATABASE_URL',
       'REDIS_URL',
     ],

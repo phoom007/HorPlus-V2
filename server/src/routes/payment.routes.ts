@@ -638,6 +638,17 @@ export function createPaymentRouter(authService: AuthenticationService) {
 
       resetSlipRateLimit(dormitoryId, auth.userId);
 
+      if (payment.status === 'REJECTED') {
+        return res.status(400).json({
+          error: {
+            code: 'SLIP_REJECTED',
+            message: payment.rejectedReason || 'ผลการตรวจสอบสลิปไม่ผ่านเกณฑ์',
+            paymentId: payment.id,
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+
       res.json(payment);
     } catch (err: any) {
       handlePaymentError(res, req, err);
@@ -749,7 +760,7 @@ export function createPaymentRouter(authService: AuthenticationService) {
       if (paymentRecord.dormitoryId !== dormitoryId) return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'ไม่มีสิทธิ์' } });
 
       if (!ensureOwnerOrManager(req, res, dormitoryId)) {
-        return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'ไม่มีสิทธิ์' } });
+        return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'ไม่มีสิทธิ์อนุมัติการชำระเงิน' } });
       }
 
       const idempotencyKey = (req.headers['x-idempotency-key'] || req.headers['idempotency-key']) as string | undefined;
@@ -758,7 +769,7 @@ export function createPaymentRouter(authService: AuthenticationService) {
         dormitoryId,
         paymentId: req.params.paymentId,
         userId: auth.userId,
-        overrideReason: req.body?.overrideReason,
+        overrideReason: req.body?.overrideReason || req.body?.reason,
         notes: req.body?.notes,
         idempotencyKey,
       });
@@ -1038,6 +1049,18 @@ export function createPaymentRouter(authService: AuthenticationService) {
 
       resetSlipRateLimit(dormitoryId, auth.userId);
 
+      const resAny = result as any;
+      if (resAny.status === 'REJECTED' || resAny.group?.status === 'REJECTED') {
+        return res.status(400).json({
+          error: {
+            code: 'SLIP_REJECTED',
+            message: resAny.rejectedReason || resAny.group?.rejectedReason || 'ผลการตรวจสอบสลิปไม่ผ่านเกณฑ์',
+            groupId: resAny.groupId,
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+
       res.json(result);
     } catch (err: any) {
       handlePaymentError(res, req, err);
@@ -1058,14 +1081,14 @@ export function createPaymentRouter(authService: AuthenticationService) {
         const dormitoryId = context.dormitoryId;
 
         if (!ensureOwnerOrManager(req, res, dormitoryId)) {
-          return res.status(403).json({ error: 'Forbidden' });
+          return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'ไม่มีสิทธิ์อนุมัติการชำระเงิน' } });
         }
 
         const result = await paymentService.approvePaymentGroup({
           dormitoryId,
           groupId: req.params.id,
           userId: auth.userId,
-          overrideReason: req.body?.overrideReason,
+          overrideReason: req.body?.overrideReason || req.body?.reason,
           notes: req.body?.notes,
           idempotencyKey: (req.headers['x-idempotency-key'] || req.headers['idempotency-key']) as string | undefined,
         });

@@ -1528,8 +1528,16 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
       refreshData();
     } catch (err: any) {
       let msg = err.message || '';
-      if (msg.includes('DUPLICATE_PAYMENT_EVIDENCE')) {
-        msg = 'รูปสลิปนี้เคยถูกส่งเข้าระบบแล้ว (ห้ามใช้สลิปซ้ำ)';
+      try {
+        const parsed = JSON.parse(msg);
+        if (parsed?.error?.message) {
+          msg = parsed.error.message;
+        } else if (parsed?.message) {
+          msg = parsed.message;
+        }
+      } catch {}
+      if (msg.includes('DUPLICATE_PAYMENT_EVIDENCE') || msg.includes('สลิปซ้ำ')) {
+        msg = 'รูปสลิปนี้เคยถูกส่งเข้าระบบแล้ว (สลิปซ้ำ)';
       } else if (msg.includes('ACTIVE_REVIEW_EXISTS')) {
         msg = 'มีรายการชำระเงินที่อยู่ระหว่างการตรวจสอบอยู่แล้ว';
       }

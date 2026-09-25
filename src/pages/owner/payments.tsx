@@ -855,6 +855,14 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
   const [customCashAmount, setCustomCashAmount] = useState('');
   const [isSubmittingCash, setIsSubmittingCash] = useState(false);
 
+  // Manual Override Approve Modal state
+  const [overrideModalTarget, setOverrideModalTarget] = useState<{
+    item: { isGroup: boolean; groupId?: string; paymentId?: string; roomNum: string; id?: string };
+    isRejectedTab?: boolean;
+  } | null>(null);
+  const [overrideReason, setOverrideReason] = useState('');
+  const [isSubmittingOverride, setIsSubmittingOverride] = useState(false);
+
   // Countdown timers for Cash and Slip Approval
   const [pendingCashMap, setPendingCashMap] = useState<Record<string, number>>({});
   const cashTimersRef = useRef<Record<string, NodeJS.Timeout>>({});
@@ -1777,16 +1785,20 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
   };
 
     // 1. Approve Slip Payment / Group (Stable Idempotency Key)
-  const handleConfirmApprove = async (item: { isGroup: boolean; groupId?: string; paymentId?: string; roomNum: string }) => {
+  const handleConfirmApprove = async (
+    item: { isGroup: boolean; groupId?: string; paymentId?: string; roomNum: string; id?: string },
+    reasonText?: string
+  ) => {
     if (!dormitoryId) return;
     const opId = item.isGroup ? `approve-group:${item.groupId}` : `approve:${item.paymentId}`;
     const endpoint = item.isGroup ? `/payments/combined-groups/${item.groupId}/approve` : `/payments/${item.paymentId}/approve`;
     const idempotencyKey = getIdempotencyKey(opId);
     try {
+      setIsSubmittingOverride(true);
       await httpRequest(
         'POST',
         endpoint,
-        {},
+        reasonText ? { overrideReason: reasonText, reason: reasonText } : {},
         {
           headers: {
             'x-dormitory-id': dormitoryId,
@@ -1796,15 +1808,23 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
       );
 
       clearIdempotencyKey(opId);
-      onAddLog('อนุมัติสลิปโอนเงิน', `ยืนยันความถูกต้องสลิปและปรับปรุงสถานะห้อง ${item.roomNum} ชำระแล้ว`, 'Payment', item.groupId || item.paymentId);
+      onAddLog('อนุมัติสลิปโอนเงิน', `ยืนยันความถูกต้องสลิปและปรับปรุงสถานะห้อง ${item.roomNum} ชำระแล้ว${reasonText ? ` (เหตุผล: ${reasonText})` : ''}`, 'Payment', item.groupId || item.paymentId);
       triggerToast(`อนุมัติสลิปโอนเงิน ห้อง ${item.roomNum} เรียบร้อยแล้ว`);
       const cardKey = (item as any).id || (item.isGroup ? item.groupId : item.paymentId) || '';
       await animateCardExit(cardKey, () => {
         invalidateFinancialCaches();
       });
+      setOverrideModalTarget(null);
+      setOverrideReason('');
     } catch (err: any) {
       console.error('Failed to approve payment:', err);
+      if (err.code === 'OVERRIDE_REASON_REQUIRED' || err.message?.includes('ต้องระบุเหตุผล') || err.message?.includes('OVERRIDE_REASON_REQUIRED')) {
+        setOverrideModalTarget({ item });
+        return;
+      }
       triggerToast(`เกิดข้อผิดพลาดในการอนุมัติสลิป: ${err.message || 'กรุณาลองใหม่อีกครั้ง'}`);
+    } finally {
+      setIsSubmittingOverride(false);
     }
   };
 
@@ -3011,42 +3031,65 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                       </button>
                     </div>
                   ) : (
-                    <div className="grid grid-cols-2 gap-2 pt-1">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setTargetScrollTenantId(p.tenantId || p.bill?.tenantId || null);
-                          setIsLineModalOpen(true);
-                        }}
-                        className="py-2.5 bg-[#06C755] hover:bg-[#05b34c] text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-1 shadow-2xs transition-all cursor-pointer"
-                      >
-                        <LineIcon className="w-3.5 h-3.5" />
-                        ให้แนบใหม่
-                      </button>
-                      {p.bill && (
-                        (() => {
-                          const isBillSettled = p.bill.status === 'PAID' || p.bill.status === 'paid' || Number(p.bill.outstandingAmount ?? 0) <= 0;
-                          if (isBillSettled) {
-                            return (
-                              <div className="py-2.5 bg-emerald-50 text-emerald-700 font-extrabold text-xs rounded-xl flex items-center justify-center gap-1 border border-emerald-200">
-                                <CheckCircle className="w-4 h-4 text-emerald-600" />
-                                ชำระครบแล้ว
-                              </div>
-                            );
-                          }
-
-                          return (
-                            <button
-                              type="button"
-                              onClick={() => startCashPaymentWithCountdown(p.bill as any)}
-                              className="py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-1 shadow-xs transition-all cursor-pointer"
-                            >
-                              <DollarSign className="w-4 h-4" />
-                              รับเงินสด
-                            </button>
-                          );
-                        })()
+                    <div className="space-y-1.5 pt-1">
+                      {!isBillSettled && (
+                        <button
+                          type="button"
+                          data-testid="override-approve-button"
+                          onClick={() => {
+                            setOverrideModalTarget({
+                              item: {
+                                isGroup: false,
+                                paymentId: p.id,
+                                roomNum,
+                                id: p.id,
+                              },
+                              isRejectedTab: true,
+                            });
+                          }}
+                          className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-1.5 shadow-xs transition-all cursor-pointer"
+                        >
+                          <CheckCircle className="w-4 h-4" />
+                          รับเงิน / ยืนยันการชำระ (Override)
+                        </button>
                       )}
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setTargetScrollTenantId(p.tenantId || p.bill?.tenantId || null);
+                            setIsLineModalOpen(true);
+                          }}
+                          className="py-2.5 bg-[#06C755] hover:bg-[#05b34c] text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-1 shadow-2xs transition-all cursor-pointer"
+                        >
+                          <LineIcon className="w-3.5 h-3.5" />
+                          ให้แนบใหม่
+                        </button>
+                        {p.bill && (
+                          (() => {
+                            const isBillSettled = p.bill.status === 'PAID' || p.bill.status === 'paid' || Number(p.bill.outstandingAmount ?? 0) <= 0;
+                            if (isBillSettled) {
+                              return (
+                                <div className="py-2.5 bg-emerald-50 text-emerald-700 font-extrabold text-xs rounded-xl flex items-center justify-center gap-1 border border-emerald-200">
+                                  <CheckCircle className="w-4 h-4 text-emerald-600" />
+                                  ชำระครบแล้ว
+                                </div>
+                              );
+                            }
+
+                            return (
+                              <button
+                                type="button"
+                                onClick={() => startCashPaymentWithCountdown(p.bill as any)}
+                                className="py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-1 shadow-xs transition-all cursor-pointer"
+                              >
+                                <DollarSign className="w-4 h-4" />
+                                รับเงินสด
+                              </button>
+                            );
+                          })()
+                        )}
+                      </div>
                     </div>
                   )}
                 </div>
@@ -3898,6 +3941,87 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
         onShowToast={(msg) => triggerToast(msg)}
         onNavigateToLineConfig={onNavigateToLineConfig}
       />
+
+      {/* Override Reason Modal */}
+      <Modal
+        isOpen={Boolean(overrideModalTarget)}
+        onClose={() => {
+          if (!isSubmittingOverride) {
+            setOverrideModalTarget(null);
+            setOverrideReason('');
+          }
+        }}
+        title={`ระบุเหตุผลในการอนุมัติ (Override) — ห้อง ${overrideModalTarget?.item.roomNum}`}
+        size="md"
+      >
+        {overrideModalTarget && (
+          <div className="space-y-4 text-xs">
+            <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-2xl text-amber-900 space-y-1">
+              <p className="font-extrabold flex items-center gap-1.5 text-amber-950">
+                <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                {overrideModalTarget.isRejectedTab
+                  ? 'อนุมัติสลิปที่ถูกปฏิเสธ / สลิปผิดพลาด'
+                  : 'อนุมัติสลิปที่ผลตรวจ SlipOK ไม่สมบูรณ์'}
+              </p>
+              <p className="text-[11px] leading-relaxed">
+                เนื่องจากรายการนี้ไม่ผ่านการตรวจสอบอัตโนมัติ (เช่น เป็นสลิปแบบไม่มี QR, ผลตรวจไม่ตรง หรืออยู่ในแท็บสลิปผิดพลาด)
+                ระบบกำหนดให้ต้องระบุเหตุผลในการอนุมัติ เพื่อบันทึกเป็นประวัติการตรวจสอบ (Audit Log)
+              </p>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="block font-bold text-slate-700 text-xs">
+                เหตุผลในการอนุมัติ (จำเป็น) <span className="text-rose-500">*</span>
+              </label>
+              <textarea
+                data-testid="override-reason-textarea"
+                rows={3}
+                placeholder="เช่น ตรวจสอบยอดเงินเข้าบัญชีจริงแล้ว, สลิปธนาคารไม่มี QR Code ชัดเจน แต่ยอดเงินและเวลาถูกต้อง"
+                value={overrideReason}
+                onChange={e => setOverrideReason(e.target.value)}
+                className="w-full p-3 border border-slate-300 rounded-xl text-xs focus:outline-none focus:border-indigo-600 focus:ring-1 focus:ring-indigo-600 bg-white"
+              />
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                disabled={isSubmittingOverride}
+                onClick={() => {
+                  setOverrideModalTarget(null);
+                  setOverrideReason('');
+                }}
+                className="px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl transition-all cursor-pointer"
+              >
+                ยกเลิก
+              </button>
+              <button
+                type="button"
+                data-testid="confirm-override-button"
+                disabled={isSubmittingOverride || !overrideReason.trim()}
+                onClick={() => {
+                  if (overrideReason.trim()) {
+                    handleConfirmApprove(overrideModalTarget.item, overrideReason.trim());
+                  }
+                }}
+                className="px-5 py-2.5 text-xs font-extrabold bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl shadow-xs transition-all cursor-pointer flex items-center gap-1.5"
+              >
+                {isSubmittingOverride ? (
+                  <>
+                    <RotateCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>กำลังบันทึก...</span>
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle className="w-3.5 h-3.5" />
+                    <span>ยืนยันอนุมัติ (Override)</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
 
       {/* Slip Viewer Overlay */}
       {viewingSlipUrl && (

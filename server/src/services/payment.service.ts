@@ -161,10 +161,23 @@ export class PaymentService {
 
           if (intent.sha256) {
             const existingVerification = await tx.paymentEvidenceVerification.findFirst({
-              where: { payloadHash: intent.sha256 },
+              where: {
+                payloadHash: intent.sha256,
+                status: { in: ['VERIFIED', 'APPROVED'] },
+              },
             });
             if (existingVerification) {
-              throw new AppError('มีการแนบหลักฐานการชำระเงินนี้ไปแล้ว', 409, 'DUPLICATE_PAYMENT_EVIDENCE');
+              throw new AppError('มีการแนบหลักฐานการชำระเงินนี้ไปแล้ว (สลิปซ้ำ)', 409, 'DUPLICATE_PAYMENT_EVIDENCE');
+            }
+
+            const existingPayment = await tx.payment.findFirst({
+              where: {
+                fileHash: intent.sha256,
+                status: { in: ['UNDER_REVIEW', 'APPROVED'] },
+              },
+            });
+            if (existingPayment) {
+              throw new AppError('มีการแนบหลักฐานการชำระเงินนี้ไปแล้ว (สลิปซ้ำ)', 409, 'DUPLICATE_PAYMENT_EVIDENCE');
             }
           }
 
@@ -180,34 +193,7 @@ export class PaymentService {
             );
           }
 
-          // 2. Create Payment record (PENDING/UNDER_REVIEW)
-          const payment = await tx.payment.create({
-            data: {
-              dormitoryId: input.dormitoryId,
-              billId: bill.id,
-              tenantId: input.tenantId,
-              method: 'BANK_TRANSFER',
-              amount: new Prisma.Decimal(submitAmount.toFixed(2)),
-              status: 'UNDER_REVIEW',
-              paymentDate: input.paymentDate,
-              evidenceUrl: intent.objectKey,
-              fileHash: intent.sha256,
-              idempotencyKey: input.idempotencyKey || null,
-              metadata: { intentId: input.intentId },
-            },
-          });
-
-          await tx.paymentStatusHistory.create({
-            data: {
-              dormitoryId: input.dormitoryId,
-              paymentId: payment.id,
-              fromStatus: null,
-              toStatus: 'UNDER_REVIEW',
-              changedByUserId: input.actorUserId,
-            },
-          });
-
-          // 3. Record verification metadata with SlipOK adapter
+          // 2. Record verification metadata with SlipOK adapter
           let verificationResult: PaymentEvidenceVerificationResult = {
             provider: 'SLIPOK',
             status: 'UNVERIFIED',
@@ -231,6 +217,53 @@ export class PaymentService {
               // Gracefully fallback to UNVERIFIED on external error
             }
           }
+
+          // Fallback 3: SlipOK outage / network error -> return Thai error advising to re-attach
+          if (verificationResult.status === 'ERROR') {
+            throw new AppError(
+              verificationResult.errorReason || 'ระบบตรวจสอบสลิปขัดข้องชั่วคราว กรุณาแนบสลิปใหม่อีกครั้ง',
+              502,
+              'VERIFICATION_OUTAGE'
+            );
+          }
+
+          // Determine initial payment status:
+          // If SlipOK rejected (e.g. non-standard slip, no QR, amount mismatch, duplicate), record as REJECTED so it appears in Tab 4 "สลิปผิดพลาด" for Owner override
+          const initialPaymentStatus = verificationResult.status === 'REJECTED' ? 'REJECTED' : 'UNDER_REVIEW';
+          const rejectedReason = verificationResult.status === 'REJECTED' ? (verificationResult.errorReason || 'สลิปไม่ผ่านการตรวจสอบ') : null;
+
+          // 3. Create Payment record
+          const payment = await tx.payment.create({
+            data: {
+              dormitoryId: input.dormitoryId,
+              billId: bill.id,
+              tenantId: input.tenantId,
+              method: 'BANK_TRANSFER',
+              amount: new Prisma.Decimal(submitAmount.toFixed(2)),
+              status: initialPaymentStatus,
+              rejectedReason,
+              paymentDate: input.paymentDate,
+              evidenceUrl: intent.objectKey,
+              fileHash: intent.sha256,
+              idempotencyKey: input.idempotencyKey || null,
+              metadata: {
+                intentId: input.intentId,
+                verificationStatus: verificationResult.status,
+                errorReason: verificationResult.errorReason,
+              },
+            },
+          });
+
+          await tx.paymentStatusHistory.create({
+            data: {
+              dormitoryId: input.dormitoryId,
+              paymentId: payment.id,
+              fromStatus: null,
+              toStatus: initialPaymentStatus,
+              reason: verificationResult.errorReason || null,
+              changedByUserId: input.actorUserId,
+            },
+          });
 
           await paymentVerificationService.recordVerificationInTx(tx, {
             dormitoryId: input.dormitoryId,
@@ -552,58 +585,27 @@ export class PaymentService {
 
           if (intent.sha256) {
             const existingVerification = await tx.paymentEvidenceVerification.findFirst({
-              where: { payloadHash: intent.sha256 },
+              where: {
+                payloadHash: intent.sha256,
+                status: { in: ['VERIFIED', 'APPROVED'] },
+              },
             });
             if (existingVerification) {
-              throw new AppError('มีการแนบหลักฐานการชำระเงินนี้ไปแล้ว', 409, 'DUPLICATE_PAYMENT_EVIDENCE');
+              throw new AppError('มีการแนบหลักฐานการชำระเงินนี้ไปแล้ว (สลิปซ้ำ)', 409, 'DUPLICATE_PAYMENT_EVIDENCE');
+            }
+
+            const existingPayment = await tx.payment.findFirst({
+              where: {
+                fileHash: { startsWith: intent.sha256 },
+                status: { in: ['UNDER_REVIEW', 'APPROVED'] },
+              },
+            });
+            if (existingPayment) {
+              throw new AppError('มีการแนบหลักฐานการชำระเงินนี้ไปแล้ว (สลิปซ้ำ)', 409, 'DUPLICATE_PAYMENT_EVIDENCE');
             }
           }
 
-          // 2. Update CombinedPaymentGroup
-          await tx.combinedPaymentGroup.update({
-            where: { id: group.id },
-            data: {
-              totalAmount: new Prisma.Decimal(submitAmount.toFixed(2)),
-              status: 'UNDER_REVIEW',
-              paymentDate: input.paymentDate,
-            },
-          });
-
-          // 3. Create child Payments ONLY for bills receiving non-zero allocation
-          // SUM(child Payment.amount) == Group.totalAmount
-          const now = new Date();
-          for (const aff of allocationPlan.affectedBills) {
-            if (aff.allocatedAmount.greaterThan(0)) {
-              const payment = await tx.payment.create({
-                data: {
-                  dormitoryId: input.dormitoryId,
-                  billId: aff.id,
-                  tenantId: input.tenantId,
-                  paymentGroupId: group.id,
-                  method: 'BANK_TRANSFER',
-                  amount: new Prisma.Decimal(aff.allocatedAmount.toFixed(2)),
-                  status: 'UNDER_REVIEW',
-                  paymentDate: input.paymentDate,
-                  evidenceUrl: intent.objectKey,
-                  fileHash: intent.sha256 ? `${intent.sha256}-${aff.id}` : null,
-                  metadata: { intentId: input.intentId, groupId: group.id },
-                },
-              });
-
-              await tx.paymentStatusHistory.create({
-                data: {
-                  dormitoryId: input.dormitoryId,
-                  paymentId: payment.id,
-                  fromStatus: null,
-                  toStatus: 'UNDER_REVIEW',
-                  changedByUserId: input.actorUserId,
-                  effectiveAt: now,
-                },
-              });
-            }
-          }
-
-          // 4. Record verification metadata for group with SlipOK adapter
+          // 2. Record verification metadata for group with SlipOK adapter
           let groupVerificationResult: PaymentEvidenceVerificationResult = {
             provider: 'SLIPOK',
             status: 'UNVERIFIED',
@@ -628,6 +630,70 @@ export class PaymentService {
             }
           }
 
+          if (groupVerificationResult.status === 'ERROR') {
+            throw new AppError(
+              groupVerificationResult.errorReason || 'ระบบตรวจสอบสลิปขัดข้องชั่วคราว กรุณาแนบสลิปใหม่อีกครั้ง',
+              502,
+              'VERIFICATION_OUTAGE'
+            );
+          }
+
+          const initialGroupStatus = groupVerificationResult.status === 'REJECTED' ? 'REJECTED' : 'UNDER_REVIEW';
+          const groupRejectedReason = groupVerificationResult.status === 'REJECTED' ? (groupVerificationResult.errorReason || 'สลิปไม่ผ่านการตรวจสอบ') : null;
+
+          // 3. Update CombinedPaymentGroup
+          await tx.combinedPaymentGroup.update({
+            where: { id: group.id },
+            data: {
+              totalAmount: new Prisma.Decimal(submitAmount.toFixed(2)),
+              status: initialGroupStatus,
+              notes: groupRejectedReason || undefined,
+              metadata: groupRejectedReason ? { rejectedReason: groupRejectedReason } : undefined,
+              paymentDate: input.paymentDate,
+            },
+          });
+
+          // 4. Create child Payments ONLY for bills receiving non-zero allocation
+          // SUM(child Payment.amount) == Group.totalAmount
+          const now = new Date();
+          for (const aff of allocationPlan.affectedBills) {
+            if (aff.allocatedAmount.greaterThan(0)) {
+              const payment = await tx.payment.create({
+                data: {
+                  dormitoryId: input.dormitoryId,
+                  billId: aff.id,
+                  tenantId: input.tenantId,
+                  paymentGroupId: group.id,
+                  method: 'BANK_TRANSFER',
+                  amount: new Prisma.Decimal(aff.allocatedAmount.toFixed(2)),
+                  status: initialGroupStatus,
+                  rejectedReason: groupRejectedReason,
+                  paymentDate: input.paymentDate,
+                  evidenceUrl: intent.objectKey,
+                  fileHash: intent.sha256 ? `${intent.sha256}-${aff.id}` : null,
+                  metadata: {
+                    intentId: input.intentId,
+                    groupId: group.id,
+                    verificationStatus: groupVerificationResult.status,
+                    errorReason: groupVerificationResult.errorReason,
+                  },
+                },
+              });
+
+              await tx.paymentStatusHistory.create({
+                data: {
+                  dormitoryId: input.dormitoryId,
+                  paymentId: payment.id,
+                  fromStatus: null,
+                  toStatus: initialGroupStatus,
+                  reason: groupVerificationResult.errorReason || null,
+                  changedByUserId: input.actorUserId,
+                  effectiveAt: now,
+                },
+              });
+            }
+          }
+
           await paymentVerificationService.recordVerificationInTx(tx, {
             dormitoryId: input.dormitoryId,
             paymentGroupId: group.id,
@@ -646,7 +712,12 @@ export class PaymentService {
             },
           });
 
-          return { success: true, groupId: group.id };
+          return {
+            success: true,
+            groupId: group.id,
+            status: initialGroupStatus,
+            rejectedReason: groupRejectedReason,
+          };
         });
       },
     });
@@ -691,7 +762,7 @@ export class PaymentService {
           if (group.status === 'APPROVED') {
             return { success: true, group };
           }
-          if (group.status !== 'PENDING' && group.status !== 'UNDER_REVIEW') {
+          if (group.status !== 'PENDING' && group.status !== 'UNDER_REVIEW' && group.status !== 'REJECTED') {
             throw new AppError('สถานะกลุ่มรายการไม่ถูกต้องสำหรับการอนุมัติ', 400, 'INVALID_GROUP_STATE');
           }
 
@@ -702,7 +773,7 @@ export class PaymentService {
             verification = await tx.paymentEvidenceVerification.findFirst({
               where: { paymentGroupId: group.id },
             });
-            if (!verification || verification.status !== 'VERIFIED') {
+            if (group.status === 'REJECTED' || !verification || verification.status !== 'VERIFIED') {
               isOverride = true;
               if (!input.overrideReason || !input.overrideReason.trim()) {
                 throw new AppError('ต้องระบุเหตุผลในการอนุมัติสลิปที่ไม่ผ่านการตรวจสอบ', 400, 'OVERRIDE_REASON_REQUIRED');
@@ -1363,7 +1434,7 @@ export class PaymentService {
           }
 
           if (payment.status === 'APPROVED') return payment;
-          if (payment.status !== 'PENDING' && payment.status !== 'UNDER_REVIEW') {
+          if (payment.status !== 'PENDING' && payment.status !== 'UNDER_REVIEW' && payment.status !== 'REJECTED') {
             throw new AppError('สถานะรายการไม่ถูกต้อง', 400, 'INVALID_STATE');
           }
 
@@ -1374,7 +1445,7 @@ export class PaymentService {
             verification = await tx.paymentEvidenceVerification.findFirst({
               where: { paymentId: payment.id },
             });
-            if (!verification || verification.status !== 'VERIFIED') {
+            if (payment.status === 'REJECTED' || !verification || verification.status !== 'VERIFIED') {
               isOverride = true;
               if (!input.overrideReason || !input.overrideReason.trim()) {
                 throw new AppError('ต้องระบุเหตุผลในการอนุมัติสลิปที่ไม่ผ่านการตรวจสอบ', 400, 'OVERRIDE_REASON_REQUIRED');
@@ -1386,7 +1457,10 @@ export class PaymentService {
             throw new AppError('รายการนี้ไม่ได้เชื่อมโยงกับบิลรายเดือน', 400, 'INVALID_PAYMENT_TARGET');
           }
 
-          await tx.$executeRaw`SELECT "id" FROM "bills" WHERE "id" = ${payment.billId}::uuid FOR UPDATE`;
+          if (typeof tx.$executeRaw === 'function') {
+            await tx.$executeRaw`SELECT "id" FROM "payments" WHERE "id" = ${payment.id}::uuid FOR UPDATE`;
+            await tx.$executeRaw`SELECT "id" FROM "bills" WHERE "id" = ${payment.billId}::uuid FOR UPDATE`;
+          }
           const bill = await tx.bill.findUnique({
             where: { id: payment.billId },
             include: {
@@ -1458,6 +1532,7 @@ export class PaymentService {
             where: { id: payment.id },
             data: {
               status: 'APPROVED',
+              rejectedReason: null,
               reviewedByUserId: safeUserId,
               reviewedAt: now,
               metadata: updatedMeta,

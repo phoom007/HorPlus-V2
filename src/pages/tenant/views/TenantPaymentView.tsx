@@ -14,7 +14,8 @@ import {
   Check,
   QrCode,
   CreditCard,
-  Building as BuildingIcon
+  Building as BuildingIcon,
+  X
 } from 'lucide-react';
 import { Bill } from '../../../types';
 import { formatToBeDate, getBankBadgeInfo, formatThaiCycle } from '../tenantHelpers';
@@ -352,12 +353,27 @@ export const TenantPaymentView: React.FC<TenantPaymentViewProps> = ({
               }}
             />
             {slipFile ? (
-              <div className="flex items-center gap-2 text-emerald-600 font-bold text-xs">
-                <Check className="w-4 h-4" />
-                <span className="truncate max-w-[200px]">{slipFile.name}</span>
-                <span className="text-[9px] text-slate-400 font-normal">
-                  ({(slipFile.size / 1024).toFixed(0)} KB)
-                </span>
+              <div className="flex items-center justify-between w-full px-1">
+                <div className="flex items-center gap-2 text-emerald-600 font-bold text-xs truncate">
+                  <Check className="w-4 h-4 shrink-0" />
+                  <span className="truncate max-w-[140px] sm:max-w-[200px]">{slipFile.name}</span>
+                  <span className="text-[9px] text-slate-400 font-normal shrink-0">
+                    ({(slipFile.size / 1024).toFixed(0)} KB)
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  data-testid="cancel-slip-button"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setSlipFile(null);
+                  }}
+                  className="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1 shrink-0"
+                >
+                  <X className="w-3.5 h-3.5" />
+                  ยกเลิกส่งรูป
+                </button>
               </div>
             ) : (
               <>

@@ -26,6 +26,109 @@ function cleanDigits(value: string | null | undefined): string {
   return value.replace(/\D/g, '');
 }
 
+export function normalizeThaiName(name: string | null | undefined): string {
+  if (!name) return '';
+  let str = name.trim().toLowerCase();
+  // Strip common Thai titles / honorifics
+  const prefixes = [
+    /^นางสาว\s*/,
+    /^น\.ส\.\s*/,
+    /^น\.ส\s*/,
+    /^นาย\s*/,
+    /^นาง\s*/,
+    /^ด\.ช\.\s*/,
+    /^ด\.ญ\.\s*/,
+    /^เด็กชาย\s*/,
+    /^เด็กหญิง\s*/,
+    /^บจก\.\s*/,
+    /^บจก\s*/,
+    /^บริษัท\s*/,
+    /^หจก\.\s*/,
+    /^หจก\s*/,
+    /^ห้างหุ้นส่วนจำกัด\s*/,
+    /^mr\.\s*/,
+    /^mr\s*/,
+    /^miss\s*/,
+    /^ms\.\s*/,
+    /^ms\s*/,
+    /^mrs\.\s*/,
+    /^mrs\s*/,
+  ];
+  for (const prefix of prefixes) {
+    str = str.replace(prefix, '');
+  }
+  // Replace punctuation/dots with space, and collapse whitespace
+  return str.replace(/[.,\-_/\\()]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+export function isSmartRecipientNameMatch(
+  configuredName: string | null | undefined,
+  slipReceiverName: string | null | undefined
+): boolean {
+  if (!configuredName || !slipReceiverName) return false;
+
+  const normConf = normalizeThaiName(configuredName);
+  const normSlip = normalizeThaiName(slipReceiverName);
+
+  if (!normConf || !normSlip) return false;
+
+  // 1. Exact match (without spaces)
+  const compactConf = normConf.replace(/\s+/g, '');
+  const compactSlip = normSlip.replace(/\s+/g, '');
+  if (compactConf === compactSlip) return true;
+
+  // 2. Tokenized matching (e.g. "ภูวนาท ทานาลาด" vs "ภูวนาท ท" or "ภูวนาท")
+  const confTokens = normConf.split(' ').filter(t => t.length > 0);
+  const slipTokens = normSlip.split(' ').filter(t => t.length > 0);
+
+  if (confTokens.length === 0 || slipTokens.length === 0) return false;
+
+  const confFirst = confTokens[0];
+  const slipFirst = slipTokens[0];
+
+  // If first names match (must be at least 2 chars)
+  if (confFirst.length >= 2 && slipFirst.length >= 2 && (confFirst === slipFirst || confFirst.includes(slipFirst) || slipFirst.includes(confFirst))) {
+    // If either side has only 1 token (e.g. "ภูวนาท"), and first name matches (>= 3 chars)
+    if (confTokens.length === 1 || slipTokens.length === 1) {
+      if (confFirst === slipFirst || (confFirst.length >= 3 && slipFirst.length >= 3 && (confFirst.startsWith(slipFirst) || slipFirst.startsWith(confFirst)))) {
+        return true;
+      }
+    }
+
+    // Both have last name tokens
+    const confLast = confTokens.slice(1).join('');
+    const slipLast = slipTokens.slice(1).join('');
+
+    // Last name matches, or one is prefix of the other (e.g. "ท" is prefix of "ทานาลาด")
+    if (confLast && slipLast) {
+      const confStrip = confLast.replace(/^[เแโใไ]/, '');
+      const slipStrip = slipLast.replace(/^[เแโใไ]/, '');
+      if (
+        confLast === slipLast ||
+        confLast.startsWith(slipLast) ||
+        slipLast.startsWith(confLast) ||
+        confStrip.startsWith(slipLast) ||
+        slipStrip.startsWith(confLast) ||
+        confLast.startsWith(slipStrip) ||
+        slipLast.startsWith(confStrip) ||
+        confStrip.startsWith(slipStrip) ||
+        slipStrip.startsWith(confStrip)
+      ) {
+        return true;
+      }
+    }
+  }
+
+  // Check substring containment if long enough (>= 4 chars)
+  if (compactConf.length >= 4 && compactSlip.length >= 4) {
+    if (compactConf.includes(compactSlip) || compactSlip.includes(compactConf)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 function mapSlipOkError(code: number | string | undefined, defaultMsg?: string): string {
   const c = String(code);
   switch (c) {
@@ -34,7 +137,7 @@ function mapSlipOkError(code: number | string | undefined, defaultMsg?: string):
     case '1002':
       return 'ขนาดไฟล์สลิปเกินขีดจำกัดที่กำหนด';
     case '1003':
-      return 'ไม่พบคิวอาร์โค้ดในสลิป (QR Code Not Found)';
+      return 'ไม่พบคิวอาร์โค้ดในสลิป หรือไม่ใช่สลิปธนาคารมาตรฐาน';
     case '1004':
       return 'คิวอาร์โค้ดในสลิปไม่ถูกต้องหรือหมดอายุการใช้งาน';
     case '1005':
@@ -46,7 +149,7 @@ function mapSlipOkError(code: number | string | undefined, defaultMsg?: string):
     case '1008':
       return 'บัญชีธนาคารปลายทางไม่ตรงกับเงื่อนไข';
     case '1011':
-      return 'สลิปนี้เคยถูกส่งตรวจสอบไปแล้ว (Duplicate Slip on Gateway)';
+      return 'สลิปนี้เคยถูกส่งตรวจสอบไปแล้ว (สลิปซ้ำ)';
     case '1012':
       return 'เครือข่ายธนาคารขัดข้องชั่วคราว ไม่สามารถตรวจสอบสลิปได้';
     case '1013':
@@ -57,8 +160,24 @@ function mapSlipOkError(code: number | string | undefined, defaultMsg?: string):
 }
 
 export class SlipOkPaymentEvidenceVerifier implements PaymentEvidenceVerifier {
-  private prisma = getPrismaClient();
+  private prisma: any;
   private fetchFn: SlipOkFetchFn = fetch;
+  private branchId?: string;
+  private apiKey?: string;
+
+  constructor(options?: {
+    branchId?: string;
+    apiKey?: string;
+    prismaClient?: any;
+    fetchFn?: SlipOkFetchFn;
+  }) {
+    this.branchId = options?.branchId;
+    this.apiKey = options?.apiKey;
+    this.prisma = options?.prismaClient || getPrismaClient();
+    if (options?.fetchFn) {
+      this.fetchFn = options.fetchFn;
+    }
+  }
 
   /**
    * For testing or custom mock fetch injection
@@ -71,7 +190,7 @@ export class SlipOkPaymentEvidenceVerifier implements PaymentEvidenceVerifier {
     const { dormitoryId, evidenceObjectKey, evidenceBuffer, expectedAmount, claimedTransferAt } = input;
 
     // 1. Obtain slip buffer
-    let buffer: Buffer | null = evidenceBuffer || null;
+    let buffer: Buffer | null = evidenceBuffer || (input as any).fileBuffer || null;
     if (!buffer && evidenceObjectKey) {
       try {
         buffer = await localStorageProvider.getFile(evidenceObjectKey);
@@ -151,8 +270,8 @@ export class SlipOkPaymentEvidenceVerifier implements PaymentEvidenceVerifier {
     }
 
     // 3. Check API credentials (fail-safe to UNVERIFIED if unconfigured)
-    const branchId = (process.env.SLIPOK_BRANCH_ID || '').trim();
-    const apiKey = (process.env.SLIPOK_API_KEY || '').trim();
+    const branchId = (this.branchId || process.env.SLIPOK_BRANCH_ID || '').trim();
+    const apiKey = (this.apiKey || process.env.SLIPOK_API_KEY || '').trim();
 
     if (!branchId || !apiKey) {
       return {
@@ -214,7 +333,7 @@ export class SlipOkPaymentEvidenceVerifier implements PaymentEvidenceVerifier {
         verifiedAmount: null,
         providerReference: null,
         payloadHash,
-        errorReason: fetchErr.name === 'AbortError' ? 'VERIFICATION_TIMEOUT' : 'VERIFICATION_NETWORK_ERROR',
+        errorReason: 'ระบบตรวจสอบสลิปขัดข้องชั่วคราว กรุณาแนบสลิปใหม่อีกครั้ง',
       };
     } finally {
       clearTimeout(timeoutId);
@@ -232,12 +351,34 @@ export class SlipOkPaymentEvidenceVerifier implements PaymentEvidenceVerifier {
         verifiedAmount: null,
         providerReference: null,
         payloadHash,
-        errorReason: 'VERIFICATION_INVALID_RESPONSE',
+        errorReason: 'ระบบตรวจสอบสลิปขัดข้องชั่วคราว กรุณาแนบสลิปใหม่อีกครั้ง',
       };
     }
 
     const isSlipOkCode1014WithData = (json.code === 1014 || json.code === '1014') && json.data && json.data.transRef;
     if ((!response.ok || json.success === false) && !isSlipOkCode1014WithData) {
+      // Fallback 2: Quota exhausted (HTTP 402, 429, or quota-related codes/messages)
+      const isQuotaError =
+        response.status === 402 ||
+        response.status === 429 ||
+        String(json?.code) === '1009' ||
+        String(json?.code) === '1010' ||
+        String(json?.message || '').toLowerCase().includes('quota') ||
+        String(json?.message || '').toLowerCase().includes('credit');
+
+      if (isQuotaError) {
+        return {
+          provider: 'SLIPOK',
+          status: 'UNVERIFIED',
+          claimedTransferAt: claimedTransferAt ?? null,
+          verifiedTransferAt: null,
+          verifiedAmount: null,
+          providerReference: json.data?.transRef || null,
+          payloadHash,
+          errorReason: 'SLIPOK_QUOTA_EXHAUSTED: โควตา SlipOK ของระบบหมด กรุณาตรวจสอบสลิปด้วยตนเอง',
+        };
+      }
+
       const errorText = mapSlipOkError(json.code, json.message);
       return {
         provider: 'SLIPOK',
@@ -271,32 +412,70 @@ export class SlipOkPaymentEvidenceVerifier implements PaymentEvidenceVerifier {
       }
     }
 
-    // 7. Dimension 2: Receiver PromptPay / Bank Account Validation (Authoritative Dormitory Only, N-03)
+    // 7. Dimension 2: Receiver PromptPay / Bank Account Validation & Smart Recipient Name Matching
     const receiverProxy = cleanDigits(slipData.receiver?.proxy?.value);
-    const receiverAccNo = cleanDigits(slipData.receiver?.account?.value);
+    const receiverAccNo = cleanDigits(slipData.receiver?.account?.value || slipData.receiver?.account?.number);
 
-    let isReceiverMatched = false;
+    const slipReceiverNameTh =
+      slipData.receiver?.displayName ||
+      slipData.receiver?.name ||
+      slipData.receiver?.account?.name?.th ||
+      slipData.receiver?.account?.name ||
+      '';
+    const slipReceiverNameEn =
+      slipData.receiver?.account?.name?.en ||
+      slipData.receiver?.name ||
+      slipData.receiver?.displayName ||
+      '';
+
+    const isPromptPayNameMatched =
+      isSmartRecipientNameMatch(settings?.promptPayAccountName, slipReceiverNameTh) ||
+      isSmartRecipientNameMatch(settings?.promptPayAccountName, slipReceiverNameEn);
+    const isBankAccountNameMatched =
+      isSmartRecipientNameMatch(settings?.bankAccountName, slipReceiverNameTh) ||
+      isSmartRecipientNameMatch(settings?.bankAccountName, slipReceiverNameEn);
+
+    const isNameMatched = isPromptPayNameMatched || isBankAccountNameMatched;
+
+    let isAccountMatched = false;
     if (dormPromptPay && dormPromptPay.length >= 4) {
       if (
         (receiverProxy && (dormPromptPay.endsWith(receiverProxy) || receiverProxy.endsWith(dormPromptPay.slice(-4)))) ||
         (receiverAccNo && (dormPromptPay.endsWith(receiverAccNo) || receiverAccNo.endsWith(dormPromptPay.slice(-4))))
       ) {
-        isReceiverMatched = true;
+        isAccountMatched = true;
       }
     }
 
-    if (!isReceiverMatched && dormBankAcc && dormBankAcc.length >= 4) {
+    if (!isAccountMatched && dormBankAcc && dormBankAcc.length >= 4) {
       if (
         (receiverAccNo && (dormBankAcc.endsWith(receiverAccNo) || receiverAccNo.endsWith(dormBankAcc.slice(-4)))) ||
         (receiverProxy && (dormBankAcc.endsWith(receiverProxy) || receiverProxy.endsWith(dormBankAcc.slice(-4))))
       ) {
-        isReceiverMatched = true;
+        isAccountMatched = true;
       }
+    }
+
+    let isReceiverMatched = false;
+    if (isAccountMatched && isNameMatched) {
+      isReceiverMatched = true;
+    } else if (isAccountMatched && !settings?.promptPayAccountName && !settings?.bankAccountName) {
+      // Dormitory didn't configure account names, but account number matched
+      isReceiverMatched = true;
+    } else if (isAccountMatched && !slipReceiverNameTh && !slipReceiverNameEn) {
+      // Slip didn't return receiver name, but account number matched
+      isReceiverMatched = true;
+    } else if (!isAccountMatched && isNameMatched) {
+      // Name matched smartly (even if account numbers were masked or proxy differed)
+      isReceiverMatched = true;
+    } else if (isAccountMatched && (settings?.promptPayAccountName || settings?.bankAccountName) && (slipReceiverNameTh || slipReceiverNameEn)) {
+      // Account number matched last digits, BUT names are explicitly present and do NOT match!
+      isReceiverMatched = false;
     }
 
     // If neither PromptPay nor Bank Account is configured on dormitory, or neither matched
     if (!isReceiverMatched) {
-      if (!dormPromptPay && !dormBankAcc) {
+      if (!dormPromptPay && !dormBankAcc && !settings?.promptPayAccountName && !settings?.bankAccountName) {
         // Dormitory has not configured receiver accounts in settings
         return {
           provider: 'SLIPOK',
@@ -318,8 +497,51 @@ export class SlipOkPaymentEvidenceVerifier implements PaymentEvidenceVerifier {
         verifiedAmount: !isNaN(slipAmount) ? new Decimal(slipAmount.toFixed(2)) : null,
         providerReference: slipData.transRef || null,
         payloadHash,
-        errorReason: 'RECEIVER_MISMATCH: บัญชีผู้รับเงินในสลิปไม่ตรงกับบัญชีของหอพัก',
+        errorReason: 'RECEIVER_MISMATCH: บัญชีผู้รับเงินหรือชื่อผู้รับในสลิปไม่ตรงกับบัญชีของหอพัก',
       };
+    }
+
+    // 8. Dimension 3: Duplicate Slip Prevention
+    if (slipData.transRef) {
+      const existingRef = await this.prisma.paymentEvidenceVerification.findFirst({
+        where: {
+          providerReference: slipData.transRef,
+          status: { in: ['VERIFIED', 'APPROVED'] },
+        },
+      });
+      if (existingRef) {
+        return {
+          provider: 'SLIPOK',
+          status: 'REJECTED',
+          claimedTransferAt: claimedTransferAt ?? null,
+          verifiedTransferAt: null,
+          verifiedAmount: !isNaN(slipAmount) ? new Decimal(slipAmount.toFixed(2)) : null,
+          providerReference: slipData.transRef,
+          payloadHash,
+          errorReason: 'สลิปนี้เคยถูกส่งตรวจสอบไปแล้ว (สลิปซ้ำ)',
+        };
+      }
+    }
+
+    if (payloadHash) {
+      const existingHash = await this.prisma.paymentEvidenceVerification.findFirst({
+        where: {
+          payloadHash,
+          status: { in: ['VERIFIED', 'APPROVED'] },
+        },
+      });
+      if (existingHash) {
+        return {
+          provider: 'SLIPOK',
+          status: 'REJECTED',
+          claimedTransferAt: claimedTransferAt ?? null,
+          verifiedTransferAt: null,
+          verifiedAmount: !isNaN(slipAmount) ? new Decimal(slipAmount.toFixed(2)) : null,
+          providerReference: slipData.transRef || null,
+          payloadHash,
+          errorReason: 'สลิปนี้เคยถูกส่งตรวจสอบไปแล้ว (สลิปซ้ำ)',
+        };
+      }
     }
 
     // Parse verified transfer date
