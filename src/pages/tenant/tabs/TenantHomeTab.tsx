@@ -250,33 +250,90 @@ export const TenantHomeTab: React.FC<TenantHomeTabProps> = ({
                       </div>
                     )}
                     {(() => {
-                      const rejectedPay = (activeUnpaidBill.payments || (activeUnpaidBill as any).Payment || []).find((p: any) => p.status === 'REJECTED');
+                      const paymentsList = activeUnpaidBill.payments || (activeUnpaidBill as any).Payment || [];
+                      const isChecking = paymentsList.some((p: any) => p.status === 'UNDER_REVIEW' || p.status === 'checking') || activeUnpaidBill.status === 'checking';
+                      if (isChecking) return null;
+                      const rejectedPay = paymentsList.find((p: any) => p.status === 'REJECTED');
                       if (!rejectedPay) return null;
                       return (
                         <div className="bg-rose-50 border border-rose-200 rounded-xl p-2.5 text-xs text-rose-800 font-bold flex flex-col gap-1 mt-2">
                           <div className="flex items-center gap-1.5 text-rose-700">
                             <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 stroke-[2]" />
-                            <span>สลิปถูกปฏิเสธ: {rejectedPay.rejectedReason || 'สลิปไม่ชัดเจน กรุณาแนบภาพใหม่'}</span>
+                            <span>สลิปถูกปฏิเสธ: {rejectedPay.rejectedReason || (rejectedPay as any).rejectionReason || 'สลิปไม่ชัดเจน กรุณาแนบภาพใหม่'}</span>
                           </div>
                         </div>
                       );
                     })()}
                   </div>
-                  <span className="px-3 py-1 rounded-full text-[10px] font-black bg-amber-50 border border-amber-200 text-amber-800 shrink-0 shadow-3xs">
-                    รอชำระ
-                  </span>
+                  {(() => {
+                    const paymentsList = activeUnpaidBill.payments || (activeUnpaidBill as any).Payment || [];
+                    const isChecking = paymentsList.some((p: any) => p.status === 'UNDER_REVIEW' || p.status === 'checking') || activeUnpaidBill.status === 'checking';
+                    const isRejected = !isChecking && (paymentsList.some((p: any) => p.status === 'REJECTED') || activeUnpaidBill.status === 'rejected');
+
+                    if (isChecking) {
+                      return (
+                        <span className="px-3 py-1 rounded-full text-[10px] font-black bg-indigo-50 border border-indigo-200 text-indigo-700 shrink-0 shadow-3xs animate-pulse">
+                          รอตรวจสอบ
+                        </span>
+                      );
+                    }
+                    if (isRejected) {
+                      return (
+                        <span className="px-3 py-1 rounded-full text-[10px] font-black bg-rose-50 border border-rose-200 text-rose-700 shrink-0 shadow-3xs">
+                          ปฏิเสธสลิป
+                        </span>
+                      );
+                    }
+                    return (
+                      <span className="px-3 py-1 rounded-full text-[10px] font-black bg-amber-50 border border-amber-200 text-amber-800 shrink-0 shadow-3xs">
+                        รอชำระ
+                      </span>
+                    );
+                  })()}
                 </div>
 
                 <div className="pt-1">
-                  <button
-                    type="button"
-                    data-testid="tenant-pay-btn"
-                    onClick={onOpenPayment}
-                    className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-black py-3 px-4 rounded-xl text-center transition-all text-xs shadow-md shadow-indigo-600/20 flex items-center justify-center gap-2 cursor-pointer active:scale-98"
-                  >
-                    <CreditCard className="w-4 h-4 text-indigo-200 stroke-[2.2]" />
-                    <span>ชำระเงิน</span>
-                  </button>
+                  {(() => {
+                    const paymentsList = activeUnpaidBill.payments || (activeUnpaidBill as any).Payment || [];
+                    const isChecking = paymentsList.some((p: any) => p.status === 'UNDER_REVIEW' || p.status === 'checking') || activeUnpaidBill.status === 'checking';
+                    const isRejected = !isChecking && (paymentsList.some((p: any) => p.status === 'REJECTED') || activeUnpaidBill.status === 'rejected');
+
+                    if (isChecking) {
+                      return (
+                        <div
+                          data-testid="tenant-checking-banner"
+                          className="w-full bg-indigo-50 border border-indigo-200 text-indigo-700 font-extrabold py-3 px-4 rounded-xl text-center text-xs flex items-center justify-center gap-2"
+                        >
+                          <Clock className="w-4 h-4 text-indigo-600 animate-spin" />
+                          <span>อยู่ระหว่างรอตรวจสอบสลิป</span>
+                        </div>
+                      );
+                    }
+                    if (isRejected) {
+                      return (
+                        <button
+                          type="button"
+                          data-testid="tenant-pay-btn"
+                          onClick={onOpenPayment}
+                          className="w-full bg-rose-600 hover:bg-rose-700 text-white font-black py-3 px-4 rounded-xl text-center transition-all text-xs shadow-md shadow-rose-600/20 flex items-center justify-center gap-2 cursor-pointer active:scale-98"
+                        >
+                          <CreditCard className="w-4 h-4 text-rose-200 stroke-[2.2]" />
+                          <span>ส่งสลิปใหม่</span>
+                        </button>
+                      );
+                    }
+                    return (
+                      <button
+                        type="button"
+                        data-testid="tenant-pay-btn"
+                        onClick={onOpenPayment}
+                        className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-black py-3 px-4 rounded-xl text-center transition-all text-xs shadow-md shadow-indigo-600/20 flex items-center justify-center gap-2 cursor-pointer active:scale-98"
+                      >
+                        <CreditCard className="w-4 h-4 text-indigo-200 stroke-[2.2]" />
+                        <span>ชำระเงิน</span>
+                      </button>
+                    );
+                  })()}
                 </div>
               </div>
             ) : (

@@ -1463,6 +1463,14 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
         const effectivePaidAt = b.paidAt
           ? b.paidAt.toISOString()
           : (mappedPayments.find((p: any) => p.status === 'APPROVED')?.paymentDate || mappedPayments[0]?.paymentDate || null);
+        const hasUnderReviewPayment = mappedPayments.some(
+          (p: any) => p.status === 'UNDER_REVIEW' || p.status === 'checking'
+        );
+        const latestPayment = mappedPayments[0];
+        const isRejected = !hasUnderReviewPayment && latestPayment?.status === 'REJECTED' && b.status !== 'paid' && b.status !== 'PAID';
+        const effectiveStatus = hasUnderReviewPayment
+          ? 'checking'
+          : (isRejected ? 'rejected' : b.status);
 
         return {
           id: b.id,
@@ -1475,7 +1483,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
           dueDate: b.dueDate ? b.dueDate.toISOString() : null,
           paidAt: effectivePaidAt,
           createdAt: b.createdAt.toISOString(),
-          status: b.status,
+          status: effectiveStatus,
           totalAmount: b.totalAmount.toString(),
           paidAmount: b.paidAmount.toString(),
           outstandingAmount: b.outstandingAmount.toString(),
@@ -1543,6 +1551,15 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
         ? bill.paidAt.toISOString()
         : (mappedPayments.find((p: any) => p.status === 'APPROVED')?.paymentDate || mappedPayments[0]?.paymentDate || null);
 
+      const hasUnderReviewPayment = mappedPayments.some(
+        (p: any) => p.status === 'UNDER_REVIEW' || p.status === 'checking'
+      );
+      const latestPayment = mappedPayments[0];
+      const isRejected = !hasUnderReviewPayment && latestPayment?.status === 'REJECTED' && bill.status !== 'paid' && bill.status !== 'PAID';
+      const effectiveStatus = hasUnderReviewPayment
+        ? 'checking'
+        : (isRejected ? 'rejected' : bill.status);
+
       return res.json({
         success: true,
         data: {
@@ -1553,7 +1570,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
           billingDate: bill.billingDate.toISOString(),
           dueDate: bill.dueDate ? bill.dueDate.toISOString() : null,
           paidAt: effectivePaidAt,
-          status: bill.status,
+          status: effectiveStatus,
           totalAmount: bill.totalAmount.toString(),
           paidAmount: bill.paidAmount.toString(),
           outstandingAmount: bill.outstandingAmount.toString(),

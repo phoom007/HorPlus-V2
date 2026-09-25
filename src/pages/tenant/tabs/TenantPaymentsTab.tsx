@@ -127,6 +127,11 @@ export const TenantPaymentsTab: React.FC<TenantPaymentsTabProps> = ({
     const rejectedPay = paymentsList.find((p: any) => p.status === 'REJECTED');
     const approvedPay = paymentsList.find((p: any) => p.status === 'APPROVED' && p.receipt);
     const isPaid = b.status === 'PAID' || b.status === 'paid' || b.status === 'settled' || b.status === 'SETTLED';
+    const hasUnderReviewPayment = paymentsList.some((p: any) => p.status === 'UNDER_REVIEW' || p.status === 'checking');
+    const isChecking = b.status === 'checking' || hasUnderReviewPayment;
+    const isRejected = !isChecking && (b.status === 'rejected' || Boolean(rejectedPay));
+    const effectiveStatus = isChecking ? 'checking' : (isRejected ? 'rejected' : b.status);
+
     const billKindTitle = getCanonicalBillKindLabel(b);
     const paidTimestamp = b.paidAt || approvedPay?.paymentDate || approvedPay?.reviewedAt || paymentsList.find((p: any) => p.status === 'APPROVED' || p.status === 'approved')?.paymentDate || paymentsList[0]?.paymentDate;
     const formattedPaidTime = isPaid && paidTimestamp ? formatPaymentDateTime(paidTimestamp) : null;
@@ -143,7 +148,7 @@ export const TenantPaymentsTab: React.FC<TenantPaymentsTabProps> = ({
               <span className="text-[10px] font-bold text-slate-400">
                 {b.invoiceNumber || (b as any).billNumber || `BILL-${b.id.slice(0, 6)}`}
               </span>
-              {renderBillStatusBadge(b.status)}
+              {renderBillStatusBadge(effectiveStatus)}
             </div>
             <h5 className="font-extrabold text-sm text-slate-800 mt-1">
               {billKindTitle}
@@ -194,14 +199,29 @@ export const TenantPaymentsTab: React.FC<TenantPaymentsTabProps> = ({
             </button>
 
             {!isPaid && (
-              <button
-                type="button"
-                data-testid={`btn-pay-bill-${b.id}`}
-                onClick={() => onOpenPayment(b.id)}
-                className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-[10px] rounded-lg shadow-3xs cursor-pointer transition-all active:scale-95"
-              >
-                ชำระเงิน
-              </button>
+              isChecking ? (
+                <span className="px-2.5 py-1 bg-indigo-50 text-indigo-700 font-extrabold text-[10px] rounded-lg border border-indigo-200">
+                  รอตรวจสอบ
+                </span>
+              ) : isRejected ? (
+                <button
+                  type="button"
+                  data-testid={`btn-pay-bill-${b.id}`}
+                  onClick={() => onOpenPayment(b.id)}
+                  className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-[10px] rounded-lg shadow-3xs cursor-pointer transition-all active:scale-95"
+                >
+                  ส่งสลิปใหม่
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  data-testid={`btn-pay-bill-${b.id}`}
+                  onClick={() => onOpenPayment(b.id)}
+                  className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-[10px] rounded-lg shadow-3xs cursor-pointer transition-all active:scale-95"
+                >
+                  ชำระเงิน
+                </button>
+              )
             )}
           </div>
         </div>

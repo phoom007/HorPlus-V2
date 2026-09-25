@@ -157,6 +157,19 @@ export const TenantPaymentView: React.FC<TenantPaymentViewProps> = ({
           </div>
         )}
 
+        {/* Rejection Alert Box (Prominent at top) */}
+        {rejectedPay && (
+          <div className="bg-rose-50 border border-rose-200 rounded-2xl p-4 space-y-1 text-xs text-left" data-testid="tenant-rejection-banner">
+            <div className="flex items-center gap-2 text-rose-800 font-black">
+              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+              <span>สลิปก่อนหน้านี้ถูกปฏิเสธ</span>
+            </div>
+            <p className="text-rose-700 pl-6 text-xs leading-relaxed font-semibold">
+              {(rejectedPay as any).rejectedReason || rejectedPay.rejectionReason || 'โปรดตรวจสอบยอดเงิน หรืออัปโหลดสลิปที่ถูกต้องอีกครั้ง'}
+            </p>
+          </div>
+        )}
+
         {/* Payment Methods Card with Segmented Toggle (PO Q2=A) */}
         <div className="bg-white rounded-3xl p-5 border border-slate-100 shadow-xs space-y-4 text-center">
           <div className="flex items-center justify-between">
@@ -395,7 +408,7 @@ export const TenantPaymentView: React.FC<TenantPaymentViewProps> = ({
                 <span>สลิปก่อนหน้านี้ถูกปฏิเสธ</span>
               </div>
               <p className="text-[9px] text-rose-700 pl-5">
-                {rejectedPay.rejectionReason || 'โปรดตรวจสอบยอดเงิน หรืออัปโหลดสลิปที่ถูกต้องอีกครั้ง'}
+                {(rejectedPay as any).rejectedReason || rejectedPay.rejectionReason || 'โปรดตรวจสอบยอดเงิน หรืออัปโหลดสลิปที่ถูกต้องอีกครั้ง'}
               </p>
             </div>
           )}

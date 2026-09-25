@@ -3031,65 +3031,42 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
                       </button>
                     </div>
                   ) : (
-                    <div className="space-y-1.5 pt-1">
-                      {!isBillSettled && (
-                        <button
-                          type="button"
-                          data-testid="override-approve-button"
-                          onClick={() => {
-                            setOverrideModalTarget({
-                              item: {
-                                isGroup: false,
-                                paymentId: p.id,
-                                roomNum,
-                                id: p.id,
-                              },
-                              isRejectedTab: true,
-                            });
-                          }}
-                          className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-1.5 shadow-xs transition-all cursor-pointer"
-                        >
-                          <CheckCircle className="w-4 h-4" />
-                          รับเงิน / ยืนยันการชำระ (Override)
-                        </button>
-                      )}
-                      <div className="grid grid-cols-2 gap-2">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setTargetScrollTenantId(p.tenantId || p.bill?.tenantId || null);
-                            setIsLineModalOpen(true);
-                          }}
-                          className="py-2.5 bg-[#06C755] hover:bg-[#05b34c] text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-1 shadow-2xs transition-all cursor-pointer"
-                        >
-                          <LineIcon className="w-3.5 h-3.5" />
-                          ให้แนบใหม่
-                        </button>
-                        {p.bill && (
-                          (() => {
-                            const isBillSettled = p.bill.status === 'PAID' || p.bill.status === 'paid' || Number(p.bill.outstandingAmount ?? 0) <= 0;
-                            if (isBillSettled) {
-                              return (
-                                <div className="py-2.5 bg-emerald-50 text-emerald-700 font-extrabold text-xs rounded-xl flex items-center justify-center gap-1 border border-emerald-200">
-                                  <CheckCircle className="w-4 h-4 text-emerald-600" />
-                                  ชำระครบแล้ว
-                                </div>
-                              );
-                            }
-
+                    <div className="grid grid-cols-2 gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setTargetScrollTenantId(p.tenantId || p.bill?.tenantId || null);
+                          setIsLineModalOpen(true);
+                        }}
+                        className="py-2.5 bg-[#06C755] hover:bg-[#05b34c] text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-1 shadow-2xs transition-all cursor-pointer"
+                      >
+                        <LineIcon className="w-3.5 h-3.5" />
+                        ให้แนบใหม่
+                      </button>
+                      {p.bill && (
+                        (() => {
+                          const isBillSettled = p.bill.status === 'PAID' || p.bill.status === 'paid' || Number(p.bill.outstandingAmount ?? 0) <= 0;
+                          if (isBillSettled) {
                             return (
-                              <button
-                                type="button"
-                                onClick={() => startCashPaymentWithCountdown(p.bill as any)}
-                                className="py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-1 shadow-xs transition-all cursor-pointer"
-                              >
-                                <DollarSign className="w-4 h-4" />
-                                รับเงินสด
-                              </button>
+                              <div className="py-2.5 bg-emerald-50 text-emerald-700 font-extrabold text-xs rounded-xl flex items-center justify-center gap-1 border border-emerald-200">
+                                <CheckCircle className="w-4 h-4 text-emerald-600" />
+                                ชำระครบแล้ว
+                              </div>
                             );
-                          })()
-                        )}
-                      </div>
+                          }
+
+                          return (
+                            <button
+                              type="button"
+                              onClick={() => startCashPaymentWithCountdown(p.bill as any)}
+                              className="py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-1 shadow-xs transition-all cursor-pointer"
+                            >
+                              <DollarSign className="w-4 h-4" />
+                              รับเงินสด
+                            </button>
+                          );
+                        })()
+                      )}
                     </div>
                   )}
                 </div>
@@ -3959,12 +3936,10 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
             <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-2xl text-amber-900 space-y-1">
               <p className="font-extrabold flex items-center gap-1.5 text-amber-950">
                 <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
-                {overrideModalTarget.isRejectedTab
-                  ? 'อนุมัติสลิปที่ถูกปฏิเสธ / สลิปผิดพลาด'
-                  : 'อนุมัติสลิปที่ผลตรวจ SlipOK ไม่สมบูรณ์'}
+                อนุมัติสลิปที่ผลตรวจ SlipOK ไม่สมบูรณ์
               </p>
               <p className="text-[11px] leading-relaxed">
-                เนื่องจากรายการนี้ไม่ผ่านการตรวจสอบอัตโนมัติ (เช่น เป็นสลิปแบบไม่มี QR, ผลตรวจไม่ตรง หรืออยู่ในแท็บสลิปผิดพลาด)
+                เนื่องจากรายการนี้ไม่ผ่านการตรวจสอบอัตโนมัติ (เช่น เป็นสลิปแบบไม่มี QR หรือผลตรวจไม่ตรง)
                 ระบบกำหนดให้ต้องระบุเหตุผลในการอนุมัติ เพื่อบันทึกเป็นประวัติการตรวจสอบ (Audit Log)
               </p>
             </div>

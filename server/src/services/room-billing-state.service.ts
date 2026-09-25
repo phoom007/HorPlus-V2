@@ -14,14 +14,25 @@ export interface RoomBillingStateSummary {
 }
 
 export class RoomBillingStateService {
+  private prismaClient?: any;
+
+  constructor(prismaClient?: any) {
+    this.prismaClient = prismaClient;
+  }
+
+  private getPrisma() {
+    return this.prismaClient || getPrismaClient();
+  }
+
   async getRoomBillingState(dormitoryId: string, roomId: string): Promise<RoomBillingStateSummary> {
-    const prisma = getPrismaClient();
+    const prisma = this.getPrisma();
     const activeBills = await prisma.bill.findMany({
       where: {
         dormitoryId,
         roomId,
         status: { not: 'cancelled' }
       },
+      include: { Payment: true },
       orderBy: { createdAt: 'desc' }
     });
 
@@ -36,9 +47,11 @@ export class RoomBillingStateService {
     const latestBill = activeBills[0];
 
     // Check if there are any payments pending verification (checking) for this room/bill
-    const checkingPayment: any[] = [];
+    const hasUnderReviewPayment = (latestBill.Payment || []).some(
+      (p: any) => p.status === 'UNDER_REVIEW' || p.status === 'checking'
+    );
 
-    if (latestBill.status === 'checking' || checkingPayment) {
+    if (latestBill.status === 'checking' || hasUnderReviewPayment) {
       return {
         state: 'checking_payment',
         currentBillId: latestBill.id,
@@ -94,12 +107,12 @@ export class RoomBillingStateService {
     tenantId: string,
     asOfDate: Date = new Date()
   ): Promise<RoomBillingStateSummary> {
-    const prisma = getPrismaClient();
+    const prisma = this.getPrisma();
     const contracts = await prisma.contract.findMany({
       where: { tenantId, dormitoryId },
       select: { id: true }
     });
-    const contractIds = contracts.map((c) => c.id);
+    const contractIds = contracts.map((c: any) => c.id);
 
     const activeBills = await prisma.bill.findMany({
       where: {
@@ -112,13 +125,17 @@ export class RoomBillingStateService {
         ]
       },
       include: {
-        billingCycle: true
+        billingCycle: true,
+        Payment: {
+          select: { id: true, status: true, rejectedReason: true, createdAt: true },
+          orderBy: { createdAt: 'desc' }
+        }
       },
       orderBy: { createdAt: 'desc' }
     });
 
     const { isBillVisibleToTenant } = await import('../utils/tenant-visibility.util.js');
-    const visibleBills = activeBills.filter((b) => isBillVisibleToTenant(b, asOfDate));
+    const visibleBills = activeBills.filter((b: any) => isBillVisibleToTenant(b, asOfDate));
 
     if (visibleBills.length === 0) {
       return {
@@ -132,7 +149,7 @@ export class RoomBillingStateService {
     // 1. billingCycle.periodStart DESC
     // 2. billingDate DESC
     // 3. createdAt DESC
-    visibleBills.sort((a, b) => {
+    visibleBills.sort((a: any, b: any) => {
       const aPeriodStart = a.billingCycle?.periodStart ? new Date(a.billingCycle.periodStart).getTime() : 0;
       const bPeriodStart = b.billingCycle?.periodStart ? new Date(b.billingCycle.periodStart).getTime() : 0;
       if (aPeriodStart !== bPeriodStart) {
@@ -150,7 +167,11 @@ export class RoomBillingStateService {
 
     const latestBill = visibleBills[0];
 
-    if (latestBill.status === 'checking') {
+    const hasUnderReviewPayment = (latestBill.Payment || []).some(
+      (p: any) => p.status === 'UNDER_REVIEW' || p.status === 'checking'
+    );
+
+    if (latestBill.status === 'checking' || hasUnderReviewPayment) {
       return {
         state: 'checking_payment',
         currentBillId: latestBill.id,

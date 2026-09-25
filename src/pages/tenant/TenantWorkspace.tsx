@@ -1128,17 +1128,37 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
       'pending',
       'overdue',
       'rejected',
+      'checking',
       'issued',
       'partially_paid',
       'UNPAID',
       'PENDING',
       'OVERDUE',
       'REJECTED',
+      'CHECKING',
       'ISSUED',
       'PARTIALLY_PAID',
     ].includes(b.status)
   );
-  const activeUnpaidBill = allUnpaidBills[0] || null;
+  const activeUnpaidBill =
+    allUnpaidBills.find((b) => {
+      const pList = b.payments || (b as any).Payment || [];
+      return (
+        b.status === 'checking' ||
+        b.status === 'CHECKING' ||
+        pList.some((p: any) => p.status === 'UNDER_REVIEW' || p.status === 'checking')
+      );
+    }) ||
+    allUnpaidBills.find((b) => {
+      const pList = b.payments || (b as any).Payment || [];
+      return (
+        b.status === 'rejected' ||
+        b.status === 'REJECTED' ||
+        pList.some((p: any) => p.status === 'REJECTED')
+      );
+    }) ||
+    allUnpaidBills[0] ||
+    null;
   const totalUnpaidAmount = allUnpaidBills.reduce(
     (sum, b) => sum + Number(b.outstandingAmount ?? b.totalAmount ?? 0),
     0
@@ -1620,11 +1640,9 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                     setSubView('invoice');
                   }}
                   onOpenPayment={() => {
-                    setInvoiceTab('current');
-                    setSelectedInvoiceBillId(
-                      activeUnpaidBill ? activeUnpaidBill.id : (allUnpaidBills[0]?.id || null)
-                    );
-                    setSubView('invoice');
+                    const targetId = activeUnpaidBill ? activeUnpaidBill.id : (allUnpaidBills[0]?.id || null);
+                    setSelectedPaymentBillIds(targetId ? [targetId] : []);
+                    setSubView('payment');
                   }}
                   onOpenRepairs={() => setSubView('repairs')}
                   onOpenUtilities={() => setSubView('utilities')}

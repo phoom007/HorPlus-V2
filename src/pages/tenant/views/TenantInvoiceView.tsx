@@ -13,7 +13,8 @@ import {
   Building as BuildingIcon,
   FileText,
   Coins,
-  Check
+  Check,
+  Clock
 } from 'lucide-react';
 import { Bill, filterNonZeroBillItems } from '../../../types';
 import { TierBreakdownView } from '../../../components/bills/TierBreakdownView';
@@ -101,6 +102,11 @@ export const TenantInvoiceView: React.FC<TenantInvoiceViewProps> = ({
     );
   };
 
+  const isBillChecking = (b: any) => {
+    const pList = b?.payments || b?.Payment || [];
+    return pList.some((p: any) => p.status === 'UNDER_REVIEW' || p.status === 'checking') || b?.status === 'checking';
+  };
+
   // Compute unpaid bills list
   const unpaidBills = useMemo(() => {
     const list = tenantBills.filter((b) => b.status !== 'paid' && b.status !== 'PAID');
@@ -110,24 +116,26 @@ export const TenantInvoiceView: React.FC<TenantInvoiceViewProps> = ({
     return list;
   }, [tenantBills, activeUnpaidBill]);
 
-  // Selected bill IDs for payment (circular checkboxes)
+  // Selected bill IDs for payment (circular checkboxes, excluding bills currently under review)
   const [selectedBillIds, setSelectedBillIds] = useState<string[]>(() => {
-    if (selectedBillId && unpaidBills.some((b) => b.id === selectedBillId)) {
+    if (selectedBillId && unpaidBills.some((b) => b.id === selectedBillId && !isBillChecking(b))) {
       return [selectedBillId];
     }
-    return unpaidBills.map((b) => b.id);
+    return unpaidBills.filter((b) => !isBillChecking(b)).map((b) => b.id);
   });
 
   // Synchronize when unpaidBills or selectedBillId changes
   useEffect(() => {
-    if (selectedBillId && unpaidBills.some((b) => b.id === selectedBillId)) {
+    if (selectedBillId && unpaidBills.some((b) => b.id === selectedBillId && !isBillChecking(b))) {
       setSelectedBillIds([selectedBillId]);
     } else if (unpaidBills.length > 0 && selectedBillIds.length === 0) {
-      setSelectedBillIds(unpaidBills.map((b) => b.id));
+      setSelectedBillIds(unpaidBills.filter((b) => !isBillChecking(b)).map((b) => b.id));
     }
   }, [selectedBillId, unpaidBills]);
 
   const toggleBillSelection = (id: string) => {
+    const target = unpaidBills.find((b) => b.id === id);
+    if (target && isBillChecking(target)) return;
     setSelectedBillIds((prev) =>
       prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
     );
@@ -196,30 +204,43 @@ export const TenantInvoiceView: React.FC<TenantInvoiceViewProps> = ({
           unpaidBills.length > 0 ? (
             <div className="space-y-4">
               {unpaidBills.map((bill) => {
-                const isSelected = selectedBillIds.includes(bill.id);
+                const paymentsList = bill.payments || (bill as any).Payment || [];
+                const isChecking = paymentsList.some((p: any) => p.status === 'UNDER_REVIEW' || p.status === 'checking') || bill.status === 'checking';
+                const isRejected = !isChecking && (paymentsList.some((p: any) => p.status === 'REJECTED') || bill.status === 'rejected');
+                const isSelected = !isChecking && selectedBillIds.includes(bill.id);
+
                 return (
                   <div
                     key={bill.id}
                     data-testid={`current-unpaid-bill-${bill.id}`}
-                    onClick={() => toggleBillSelection(bill.id)}
-                    className={`bg-white rounded-3xl p-5 border transition-all cursor-pointer relative shadow-xs ${isSelected
-                      ? 'border-indigo-300 ring-2 ring-indigo-500/20'
-                      : 'border-slate-100 hover:border-slate-200'
-                      }`}
+                    onClick={() => !isChecking && toggleBillSelection(bill.id)}
+                    className={`bg-white rounded-3xl p-5 border transition-all relative shadow-xs ${
+                      isChecking ? 'border-indigo-100 opacity-95 cursor-default' : 'cursor-pointer hover:border-slate-200'
+                    } ${isSelected ? 'border-indigo-300 ring-2 ring-indigo-500/20' : 'border-slate-100'}`}
                   >
                     {/* Bill Card Heading with Circular Checkbox */}
                     <div className="flex justify-between items-start gap-3">
                       <div className="flex items-start gap-3 min-w-0">
-                        {/* Circular Checkbox */}
-                        <div
-                          data-testid={`checkbox-bill-${bill.id}`}
-                          className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 mt-0.5 transition-all ${isSelected
-                            ? 'bg-indigo-600 text-white shadow-xs'
-                            : 'border-2 border-slate-300 bg-white hover:border-indigo-400'
-                            }`}
-                        >
-                          {isSelected && <Check className="w-3.5 h-3.5 stroke-[3]" />}
-                        </div>
+                        {/* Circular Checkbox / Checking Indicator */}
+                        {isChecking ? (
+                          <div
+                            data-testid={`checking-indicator-bill-${bill.id}`}
+                            className="w-6 h-6 rounded-full flex items-center justify-center shrink-0 mt-0.5 bg-indigo-50 border border-indigo-200 text-indigo-600 shadow-2xs"
+                            title="อยู่ระหว่างรอตรวจสอบสลิป"
+                          >
+                            <Clock className="w-3.5 h-3.5 animate-spin" />
+                          </div>
+                        ) : (
+                          <div
+                            data-testid={`checkbox-bill-${bill.id}`}
+                            className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 mt-0.5 transition-all ${isSelected
+                              ? 'bg-indigo-600 text-white shadow-xs'
+                              : 'border-2 border-slate-300 bg-white hover:border-indigo-400'
+                              }`}
+                          >
+                            {isSelected && <Check className="w-3.5 h-3.5 stroke-[3]" />}
+                          </div>
+                        )}
 
                         <div className="min-w-0">
                           <div className="flex items-center gap-1.5 text-[10px] text-slate-500 font-bold mb-1">
@@ -247,13 +268,23 @@ export const TenantInvoiceView: React.FC<TenantInvoiceViewProps> = ({
                         </div>
                       </div>
 
-                      <span className={`px-2.5 py-0.5 rounded-full text-[9px] font-bold shrink-0 ${
-                        bill.status === 'partially_paid' || bill.status === 'PARTIALLY_PAID'
-                          ? 'bg-amber-50 text-amber-700 border border-amber-200'
-                          : 'bg-orange-50 text-orange-600'
-                      }`}>
-                        {bill.status === 'partially_paid' || bill.status === 'PARTIALLY_PAID' ? 'ชำระบางส่วน' : 'รอชำระ'}
-                      </span>
+                      {isChecking ? (
+                        <span className="px-2.5 py-0.5 rounded-full text-[9px] font-black shrink-0 bg-indigo-50 border border-indigo-200 text-indigo-700 animate-pulse">
+                          รอตรวจสอบ
+                        </span>
+                      ) : isRejected ? (
+                        <span className="px-2.5 py-0.5 rounded-full text-[9px] font-black shrink-0 bg-rose-50 border border-rose-200 text-rose-700">
+                          ปฏิเสธสลิป
+                        </span>
+                      ) : (
+                        <span className={`px-2.5 py-0.5 rounded-full text-[9px] font-bold shrink-0 ${
+                          bill.status === 'partially_paid' || bill.status === 'PARTIALLY_PAID'
+                            ? 'bg-amber-50 text-amber-700 border border-amber-200'
+                            : 'bg-orange-50 text-orange-600'
+                        }`}>
+                          {bill.status === 'partially_paid' || bill.status === 'PARTIALLY_PAID' ? 'ชำระบางส่วน' : 'รอชำระ'}
+                        </span>
+                      )}
                     </div>
 
                     {/* Collapsible item details */}
