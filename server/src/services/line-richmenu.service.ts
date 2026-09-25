@@ -503,6 +503,16 @@ export class LineRichMenuService {
   }
 
   /**
+   * Unlink the Active Tenant Rich Menu from a moved-out tenant so they revert to the default Registration Rich Menu (Card C3 / AC C3-6)
+   */
+  async unlinkActiveTenantRichMenu(dormitoryId: string, lineUserId: string): Promise<boolean> {
+    const accessToken = await this.resolveAccessToken(dormitoryId);
+    if (!accessToken) return false;
+
+    return await this.lineAdapter.unlinkRichMenuFromUser(lineUserId, accessToken);
+  }
+
+  /**
    * Create a single-use, short-lived (60s) Direct Entry Ticket for seamless owner dashboard access
    */
   createDirectEntryTicket(params: {

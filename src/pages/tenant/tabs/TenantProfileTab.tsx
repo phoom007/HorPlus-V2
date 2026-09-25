@@ -259,6 +259,19 @@ export const TenantProfileTab: React.FC<TenantProfileTabProps> = ({
                   <span className="text-slate-400">เลขประจำตัวประชาชน:</span>{' '}
                   <span className="font-bold text-slate-800">{localTenant?.citizenId || '-'}</span>
                 </p>
+                <p>
+                  <span className="text-slate-400">วันเกิด:</span>{' '}
+                  <span className="font-bold text-slate-800">{localTenant.birthDate ? formatToBeFullDate(localTenant.birthDate) : '-'}</span>
+                </p>
+                <p>
+                  <span className="text-slate-400">ที่อยู่:</span>{' '}
+                  <span className="font-bold text-slate-800 whitespace-pre-wrap">{localTenant.address || '-'}</span>
+                </p>
+                <p>
+                  <span className="text-slate-400">ผู้ติดต่อฉุกเฉิน:</span>{' '}
+                  <span className="font-bold text-slate-800">{localTenant.emergencyContact
+                    ? `${localTenant.emergencyContact.name} (${localTenant.emergencyContact.relationship}) ${localTenant.emergencyContact.phone}` : '-'}</span>
+                </p>
                 <div>
                   <span className="text-slate-400">ยานพาหนะ:</span>{' '}
                   {editVehicles.length > 0 ? (

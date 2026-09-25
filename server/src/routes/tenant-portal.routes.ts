@@ -190,7 +190,48 @@ async function resolveTenantContext(req: Request): Promise<TenantContextResult> 
         }
       }
 
+      if (!pendingRequest && (req.auth?.user?.phone || (req as any).user?.phone)) {
+        const phone = req.auth?.user?.phone || (req as any).user?.phone;
+        pendingRequest = await tx.tenantRegistrationRequest.findFirst({
+          where: {
+            dormitoryId: membership.dormitoryId,
+            phone,
+            status: { in: ['pending_owner_approval', 'awaiting_tenant_confirmation', 'approved', 'rejected'] },
+          },
+          orderBy: { createdAt: 'desc' },
+        });
+      }
+
+      if (pendingRequest?.status === 'approved') {
+        const approvedFromPending = pendingRequest.approvedTenantId
+          ? await tx.tenant.findFirst({
+              where: {
+                id: pendingRequest.approvedTenantId,
+                dormitoryId: membership.dormitoryId,
+                deletedAt: null,
+                status: 'active',
+              },
+            })
+          : null;
+        if (approvedFromPending) {
+          if (candidateGrantId && !approvedFromPending.lineFriendId) {
+            const grant = await tx.dormitoryAccessGrant.findUnique({ where: { id: candidateGrantId } });
+            if (grant?.lineFriendId) {
+              await tx.tenant.update({
+                where: { id: approvedFromPending.id },
+                data: { lineFriendId: grant.lineFriendId },
+              });
+            }
+          }
+          tenants.push(approvedFromPending);
+        } else {
+          // GA-NOTE-1 / AC C3-9: Old approved registration pointing to a former/moved-out tenant must not block re-registration
+          pendingRequest = null;
+        }
+      }
+
       // Check if user is a former tenant whose tenancy has ended (REQUIREMENTS-LOCK §8:156)
+      // Note: If the user holds an ACTIVE registration grant (`candidateGrantId`) or a new pending registration request, allow candidate re-registration (AC C3-9)
       const userPhone = req.auth?.user?.phone || (req as any).user?.phone;
       const formerConditions: any[] = [
         ...(isUuid ? [{ linkedUserId: userId }] : []),
@@ -206,7 +247,7 @@ async function resolveTenantContext(req: Request): Promise<TenantContextResult> 
         },
       }) : null;
 
-      if (formerTenant && tenants.length === 0) {
+      if (formerTenant && tenants.length === 0 && !candidateGrantId && !pendingRequest) {
         const hasActiveOccupancy = await tx.occupancy.findFirst({
           where: { dormitoryId: membership.dormitoryId, tenantId: formerTenant.id, status: 'ACTIVE' },
         });
@@ -221,42 +262,6 @@ async function resolveTenantContext(req: Request): Promise<TenantContextResult> 
               statusCode: 403,
             },
           };
-        }
-      }
-
-
-      if (!pendingRequest && (req.auth?.user?.phone || (req as any).user?.phone)) {
-        const phone = req.auth?.user?.phone || (req as any).user?.phone;
-        pendingRequest = await tx.tenantRegistrationRequest.findFirst({
-          where: {
-            dormitoryId: membership.dormitoryId,
-            phone,
-            status: { in: ['pending_owner_approval', 'awaiting_tenant_confirmation', 'approved', 'rejected'] },
-          },
-          orderBy: { createdAt: 'desc' },
-        });
-      }
-
-      if (pendingRequest?.approvedTenantId && pendingRequest.status === 'approved') {
-        const approvedFromPending = await tx.tenant.findFirst({
-          where: {
-            id: pendingRequest.approvedTenantId,
-            dormitoryId: membership.dormitoryId,
-            deletedAt: null,
-            status: 'active',
-          },
-        });
-        if (approvedFromPending) {
-          if (candidateGrantId && !approvedFromPending.lineFriendId) {
-            const grant = await tx.dormitoryAccessGrant.findUnique({ where: { id: candidateGrantId } });
-            if (grant?.lineFriendId) {
-              await tx.tenant.update({
-                where: { id: approvedFromPending.id },
-                data: { lineFriendId: grant.lineFriendId },
-              });
-            }
-          }
-          tenants.push(approvedFromPending);
         }
       }
 
@@ -589,7 +594,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
       const isUuid = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(userId);
       let tenants = isUuid
         ? await prisma.tenant.findMany({
-            where: { linkedUserId: userId, dormitoryId: ctx.dormitoryId, deletedAt: null },
+            where: { linkedUserId: userId, dormitoryId: ctx.dormitoryId, deletedAt: null, status: 'active' },
             include: {
               dormitory: true,
               contracts: {
@@ -1075,6 +1080,16 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
       const hasOwnerSignature = Boolean(contract?.ownerSignature || latestOwnerSigRecord);
       const hasTenantSignature = Boolean(contract?.tenantSignature);
 
+      const activeMoveOutRequest = await prisma.tenantMoveOutRequest.findFirst({
+        where: {
+          dormitoryId: ctx.dormitoryId,
+          tenantId: tenant.id,
+          ...(room?.id ? { roomId: room.id } : {}),
+          status: { in: ['SCHEDULED', 'PENDING_OWNER_CONFIRMATION'] },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+
       res.json({
         id: tenant.id,
         tenantNumber: tenant.tenantNumber,
@@ -1150,6 +1165,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
           relationship: c.relationship,
           phone: c.phone
         })),
+        moveOutRequest: activeMoveOutRequest || null,
         activeContract: contract ? {
           id: contract.id,
           contractNumber: contract.contractNumber,
@@ -1165,8 +1181,8 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
           terms: contract.terms || propDefaults?.defaultTerms || null,
           tenantSignature: hasTenantSignature ? '/api/v1/tenant-portal/contract/signatures/tenant' : null,
           ownerSignature: hasOwnerSignature ? '/api/v1/tenant-portal/contract/signatures/owner' : null,
-          coOccupantsCount: coOccupants.length
-        } : null
+          coOccupantsCount: coOccupants.length,
+        } : null,
       });
     } catch (err: any) {
       return res.status(500).json({

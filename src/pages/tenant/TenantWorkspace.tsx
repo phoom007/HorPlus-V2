@@ -355,6 +355,21 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
               setDormitoryPetPolicy(profile.dormitory.petPolicy);
             }
           }
+          setMoveOutRequest(
+            profile.moveOutRequest
+              ? {
+                  ...profile.moveOutRequest,
+                  desiredDate:
+                    profile.moveOutRequest.intendedMoveOutDate ||
+                    profile.moveOutRequest.desiredDate ||
+                    profile.moveOutRequest.moveOutDate,
+                  bankInfo: profile.moveOutRequest.refundBankName || profile.moveOutRequest.bankInfo,
+                  accountInfo: profile.moveOutRequest.refundAccountNumber
+                    ? `${profile.moveOutRequest.refundAccountNumber} (${profile.moveOutRequest.refundAccountName || ''})`
+                    : profile.moveOutRequest.accountInfo,
+                }
+              : null
+          );
         }
         if (
           profile.room ||
@@ -1295,12 +1310,35 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
     }
   };
 
-  const handleCancelMoveOutRequest = () => {
-    showToast(
-      'error',
-      'ไม่สามารถดำเนินการได้',
-      'ฟังก์ชันยกเลิกคำขอแจ้งย้ายออกยังไม่พร้อมใช้งานในระบบขณะนี้'
-    );
+  const handleCancelMoveOutRequest = async () => {
+    if (!moveOutRequest?.id) return;
+    try {
+      const dormId = tenantRoom?.dormitoryId || tenant.dormitoryId || (typeof localStorage !== 'undefined' ? localStorage.getItem('selected_dormitory_id') || '' : '');
+      const csrf = getCsrfTokenFromCookie() || '';
+      const response = await fetch(`/api/v1/tenant-move-out-requests/${moveOutRequest.id}/cancel`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(csrf ? { 'x-csrf-token': csrf } : {}),
+          ...(dormId ? { 'x-dormitory-id': dormId } : {}),
+        },
+      });
+      if (!response.ok) {
+        let errMsg = 'ไม่สามารถยกเลิกคำขอแจ้งย้ายออกได้';
+        try {
+          const errData = await response.json();
+          if (errData?.error?.message) errMsg = errData.error.message;
+        } catch {}
+        showToast('error', 'ไม่สามารถดำเนินการได้', errMsg);
+        return;
+      }
+      setMoveOutRequest(null);
+      showToast('success', 'ยกเลิกคำขอแจ้งย้ายออกเรียบร้อยแล้ว', 'คุณสามารถส่งคำขอแจ้งย้ายออกใหม่ได้ตามต้องการ');
+      refreshData();
+    } catch {
+      showToast('error', 'ไม่สามารถดำเนินการได้', 'เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์');
+    }
   };
 
   // Document download handler

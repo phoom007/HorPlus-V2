@@ -48,17 +48,23 @@ export class SettlementService {
     });
 
     if (!settlement) {
-      // Calculate unpaid bills for contract / room
+      // Calculate unpaid non-deposit bills for contract / room (OQ-7: unpaid DEPOSIT bills are voided upon move-out, not counted as debt)
       const unpaidBills = await prisma.bill.findMany({
         where: {
           dormitoryId,
           contractId,
-          status: { in: ['unpaid', 'overdue'] },
+          billKind: { not: 'DEPOSIT' },
+          status: { in: ['unpaid', 'overdue', 'partially_paid', 'PARTIALLY_PAID'] },
         },
       });
 
       const unpaidBillTotal = unpaidBills.reduce(
-        (sum, b) => sum.add(new Prisma.Decimal(b.totalAmount || 0)),
+        (sum, b) => {
+          const total = new Prisma.Decimal(b.totalAmount || 0);
+          const paid = new Prisma.Decimal(b.paidAmount || 0);
+          const remaining = total.sub(paid);
+          return remaining.gt(0) ? sum.add(remaining) : sum;
+        },
         new Prisma.Decimal(0)
       );
 
@@ -119,12 +125,18 @@ export class SettlementService {
           where: {
             dormitoryId,
             contractId,
-            status: { in: ['unpaid', 'overdue'] },
+            billKind: { not: 'DEPOSIT' },
+            status: { in: ['unpaid', 'overdue', 'partially_paid', 'PARTIALLY_PAID'] },
           },
         });
 
         const unpaidBillTotal = unpaidBills.reduce(
-          (sum, b) => sum.add(new Prisma.Decimal(b.totalAmount || 0)),
+          (sum, b) => {
+            const total = new Prisma.Decimal(b.totalAmount || 0);
+            const paid = new Prisma.Decimal(b.paidAmount || 0);
+            const remaining = total.sub(paid);
+            return remaining.gt(0) ? sum.add(remaining) : sum;
+          },
           new Prisma.Decimal(0)
         );
 
@@ -202,8 +214,8 @@ export class SettlementService {
     }
 
     const numAmount = Number(amount);
-    if (isNaN(numAmount) || numAmount <= 0) {
-      throw new AppError('จำนวนเงินค่าเสียหายต้องมากกว่า 0', 400, 'INVALID_AMOUNT');
+    if (isNaN(numAmount) || numAmount === 0) {
+      throw new AppError('จำนวนเงินต้องไม่เป็น 0', 400, 'INVALID_AMOUNT');
     }
 
     const prisma = getPrismaClient();
@@ -277,7 +289,7 @@ export class SettlementService {
     }
     if (amount !== undefined) {
       const numAmount = Number(amount);
-      if (isNaN(numAmount) || numAmount <= 0) throw new AppError('จำนวนเงินค่าเสียหายต้องมากกว่า 0', 400, 'INVALID_AMOUNT');
+      if (isNaN(numAmount) || numAmount === 0) throw new AppError('จำนวนเงินต้องไม่เป็น 0', 400, 'INVALID_AMOUNT');
       dataToUpdate.amount = new Prisma.Decimal(numAmount);
     }
     if (evidenceUrl !== undefined) {

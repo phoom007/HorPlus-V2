@@ -1,6 +1,10 @@
+import { Prisma } from '@prisma/client';
 import { getPrismaClient } from '../db/prisma.js';
 import { logger } from '../config/logger.js';
 import { auditService } from './audit.service.js';
+import { LineOaService } from './line-oa.service.js';
+import { LineRichMenuService } from './line-richmenu.service.js';
+import { decryptText } from '../utils/crypto-encryption.js';
 
 export interface SubmitMoveOutRequestInput {
   dormitoryId: string;
@@ -26,6 +30,7 @@ export class MoveOutService {
   /**
    * Tenant Submits Move-Out Request
    * Note: Does NOT end tenancy, release room, or touch contract!
+   * Per OQ-6: No minimum notice days required; tenant can cancel and re-submit until Owner confirms.
    */
   async submitMoveOutRequest(input: SubmitMoveOutRequestInput) {
     const { dormitoryId, tenantId, roomId, intendedMoveOutDate, refundBankName, refundAccountNumber, refundAccountName, reason } = input;
@@ -47,22 +52,6 @@ export class MoveOutService {
       throw err;
     }
 
-    // 2. Check for existing open move-out request
-    const existingOpen = await prisma.tenantMoveOutRequest.findFirst({
-      where: {
-        occupancyId: occupancy.id,
-        status: { in: ['SCHEDULED', 'PENDING_OWNER_CONFIRMATION'] }
-      }
-    });
-
-    if (existingOpen) {
-      // Idempotently return existing open request
-      return {
-        request: existingOpen,
-        message: 'ส่งคำขอแจ้งย้ายออกเรียบร้อยแล้ว การเช่าจะยังไม่สิ้นสุดจนกว่าจะถึงวันที่กำหนด'
-      };
-    }
-
     const moveOutDate = new Date(intendedMoveOutDate);
     if (isNaN(moveOutDate.getTime())) {
       const err: any = new Error('INVALID_DATE: วันที่ประสงค์จะย้ายออกไม่ถูกต้อง');
@@ -71,35 +60,56 @@ export class MoveOutService {
       throw err;
     }
 
-    // 3. Notice Period Validation: Must be >= 30 days from today (Asia/Bangkok)
-    const now = new Date();
-    const minAllowedDate = new Date(now);
-    minAllowedDate.setDate(minAllowedDate.getDate() + 30);
-    minAllowedDate.setHours(0, 0, 0, 0);
-
-    // Note: For backwards compatibility with test fixtures, notice check is enforced when configured or when requested date is in the future
-    if (process.env.STRICT_30_DAY_NOTICE === 'true' && moveOutDate < minAllowedDate) {
-      const err: any = new Error('MINIMUM_NOTICE_REQUIRED: การแจ้งย้ายออกต้องล่วงหน้าอย่างน้อย 30 วัน');
-      err.code = 'MINIMUM_NOTICE_REQUIRED';
-      err.status = 400;
-      throw err;
-    }
-
-    // 4. Persist TenantMoveOutRequest in PostgreSQL
-    const request = await prisma.tenantMoveOutRequest.create({
-      data: {
-        dormitoryId,
+    // 2. Check for existing open move-out request
+    const existingOpen = await prisma.tenantMoveOutRequest.findFirst({
+      where: {
         occupancyId: occupancy.id,
-        tenantId,
-        roomId,
-        intendedMoveOutDate: moveOutDate,
-        refundBankName: refundBankName?.trim() || null,
-        refundAccountNumber: refundAccountNumber?.trim() || null,
-        refundAccountName: refundAccountName?.trim() || null,
-        reason: reason?.trim() || null,
-        status: 'SCHEDULED'
+        status: { in: ['SCHEDULED', 'PENDING_OWNER_CONFIRMATION'] }
       }
     });
+
+    let request;
+    if (existingOpen) {
+      request = await prisma.tenantMoveOutRequest.update({
+        where: { id: existingOpen.id },
+        data: {
+          intendedMoveOutDate: moveOutDate,
+          refundBankName: refundBankName?.trim() ?? existingOpen.refundBankName,
+          refundAccountNumber: refundAccountNumber?.trim() ?? existingOpen.refundAccountNumber,
+          refundAccountName: refundAccountName?.trim() ?? existingOpen.refundAccountName,
+          reason: reason?.trim() ?? existingOpen.reason,
+        },
+      });
+    } else {
+      // Persist TenantMoveOutRequest in PostgreSQL (OQ-6: no 30-day minimum notice restriction)
+      request = await prisma.tenantMoveOutRequest.create({
+        data: {
+          dormitoryId,
+          occupancyId: occupancy.id,
+          tenantId,
+          roomId,
+          intendedMoveOutDate: moveOutDate,
+          refundBankName: refundBankName?.trim() || null,
+          refundAccountNumber: refundAccountNumber?.trim() || null,
+          refundAccountName: refundAccountName?.trim() || null,
+          reason: reason?.trim() || null,
+          status: 'SCHEDULED'
+        }
+      });
+    }
+
+    // Also mark contract status as checking_out so Owner contract/tenant cards show move-out notice badge
+    if (occupancy.contractId) {
+      await prisma.contract.updateMany({
+        where: { id: occupancy.contractId, dormitoryId, status: { in: ['active', 'expiring_soon'] } },
+        data: { status: 'checking_out' },
+      });
+    } else {
+      await prisma.contract.updateMany({
+        where: { dormitoryId, tenantId, roomId, status: { in: ['active', 'expiring_soon'] }, deletedAt: null },
+        data: { status: 'checking_out' },
+      });
+    }
 
     logger.info({
       event: 'SECURITY_AUDIT',
@@ -269,13 +279,18 @@ export class MoveOutService {
       throw err;
     }
 
-    // Check Role Authorization: Owner or Manager only
+    // Check Role Authorization: Owner or Manager only (AC C3-3: Staff gets 403 Forbidden)
     if (actorRole !== 'OWNER' && actorRole !== 'MANAGER') {
       const err: any = new Error('FORBIDDEN: เฉพาะเจ้าของหอพักหรือผู้จัดการเท่านั้นที่สามารถยืนยันสิ้นสุดการเช่าได้');
       err.code = 'FORBIDDEN';
       err.status = 403;
       throw err;
     }
+
+    const safeReviewedByUserId =
+      reviewedByUserId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(reviewedByUserId)
+        ? reviewedByUserId
+        : null;
 
     const reqRecord = await prisma.tenantMoveOutRequest.findUnique({
       where: { id: requestId }
@@ -293,6 +308,11 @@ export class MoveOutService {
       const occupancy = await prisma.occupancy.findUnique({ where: { id: reqRecord.occupancyId } });
       return { request: reqRecord, occupancy, status: 'ALREADY_COMPLETED' };
     }
+
+    let tenantLineUserIdToNotify: string | null = null;
+    let finalSettlementSummaryText = '';
+    let finalReceiptRecord: any = null;
+    let finalSettlementRecord: any = null;
 
     // Execute ATOMIC TRANSACTION
     const result = await prisma.$transaction(async (tx) => {
@@ -313,31 +333,22 @@ export class MoveOutService {
         throw err;
       }
 
-      // actualEndedAt is validated above; parsedActualEndDate is the owner-confirmed end date
       const actualDate = parsedActualEndDate;
 
-      // 2. Transition Occupancy to ENDED
-      const updatedOccupancy = await tx.occupancy.update({
-        where: { id: occupancy.id },
-        data: {
-          status: 'ENDED',
-          endedAt: actualDate,
-          endedByUserId: reviewedByUserId,
-          endedReason: reqRecord.reason || 'ย้ายออกตามคำขอผู้เช่า'
-        }
+      // Capture tenant's current LINE binding before unbinding so we can send Final Receipt & unlink Rich Menu (OQ-8, C3-6)
+      const existingTenant = await tx.tenant.findUnique({
+        where: { id: reqRecord.tenantId },
+        include: { lineFriend: true },
       });
+      const originalLineFriendId = existingTenant?.lineFriendId || null;
+      const originalLinkedUserId = existingTenant?.linkedUserId || null;
+      const rawFriend: any = existingTenant?.lineFriend;
+      tenantLineUserIdToNotify =
+        rawFriend?.lineUserId ||
+        (rawFriend?.lineUserIdEncrypted ? decryptText(rawFriend.lineUserIdEncrypted) : null) ||
+        null;
 
-      // 3. Transition Room to vacant
-      await tx.room.update({
-        where: { id: reqRecord.roomId },
-        data: {
-          status: 'vacant',
-          currentTenantId: null,
-          currentContractId: null
-        }
-      });
-
-      // 4. Transition active contract to checked_out
+      // 2. Locate contract to close
       const contractToClose = occupancy.contractId
         ? await tx.contract.findUnique({ where: { id: occupancy.contractId } })
         : await tx.contract.findFirst({
@@ -350,6 +361,235 @@ export class MoveOutService {
             },
           });
 
+      // 3. OQ-7: Void any unpaid DEPOSIT bills (`paidAmount = 0`) upon move-out
+      const unpaidDepositBills = await tx.bill.findMany({
+        where: {
+          dormitoryId,
+          OR: [
+            ...(contractToClose ? [{ contractId: contractToClose.id }] : []),
+            { tenantId: reqRecord.tenantId, roomId: reqRecord.roomId },
+          ],
+          billKind: 'DEPOSIT',
+          status: { in: ['unpaid', 'overdue', 'DRAFT', 'ISSUED'] },
+        },
+      });
+
+      const voidedDepositBillIds: string[] = [];
+      for (const depBill of unpaidDepositBills) {
+        const paidSoFar = new Prisma.Decimal(depBill.paidAmount || 0);
+        if (paidSoFar.lte(0)) {
+          await tx.bill.update({
+            where: { id: depBill.id },
+            data: {
+              status: 'void',
+            },
+          });
+          voidedDepositBillIds.push(depBill.id);
+        }
+      }
+
+      // 4. OQ-7 & AC C3-4: Calculate Final Settlement, deduct unpaid non-deposit bills from paid deposit, mark covered bills paid, and issue Final Settlement Receipt
+      const paidDepositBills = await tx.bill.findMany({
+        where: {
+          dormitoryId,
+          OR: [
+            ...(contractToClose ? [{ contractId: contractToClose.id }] : []),
+            { tenantId: reqRecord.tenantId, roomId: reqRecord.roomId },
+          ],
+          billKind: 'DEPOSIT',
+          status: { not: 'void' },
+        },
+      });
+
+      let paidDepositTotal = new Prisma.Decimal(0);
+      for (const dbill of paidDepositBills) {
+        const p = dbill.paidAmount && !new Prisma.Decimal(dbill.paidAmount).isZero()
+          ? new Prisma.Decimal(dbill.paidAmount)
+          : (dbill.status === 'paid' ? new Prisma.Decimal(dbill.totalAmount || 0) : new Prisma.Decimal(0));
+        paidDepositTotal = paidDepositTotal.add(p);
+      }
+
+      const unpaidNormalBills = await tx.bill.findMany({
+        where: {
+          dormitoryId,
+          OR: [
+            ...(contractToClose ? [{ contractId: contractToClose.id }] : []),
+            { tenantId: reqRecord.tenantId, roomId: reqRecord.roomId },
+          ],
+          billKind: { not: 'DEPOSIT' },
+          status: { in: ['unpaid', 'overdue', 'partially_paid', 'PARTIALLY_PAID'] },
+        },
+        orderBy: { dueDate: 'asc' },
+      });
+
+      let unpaidBillTotal = new Prisma.Decimal(0);
+      const deductedBillIds: string[] = [];
+      let remainingDepositPool = new Prisma.Decimal(paidDepositTotal);
+
+      for (const ub of unpaidNormalBills) {
+        const total = new Prisma.Decimal(ub.totalAmount || 0);
+        const paid = new Prisma.Decimal(ub.paidAmount || 0);
+        const outstanding = total.sub(paid);
+        if (outstanding.gt(0)) {
+          unpaidBillTotal = unpaidBillTotal.add(outstanding);
+          // OQ-7: Automatically deduct from paid deposit and close covered bills as paid
+          if (remainingDepositPool.gte(outstanding)) {
+            remainingDepositPool = remainingDepositPool.sub(outstanding);
+            await tx.bill.update({
+              where: { id: ub.id },
+              data: {
+                status: 'paid',
+                paidAmount: total,
+                paidAt: new Date(),
+              },
+            });
+            deductedBillIds.push(ub.id);
+          } else if (remainingDepositPool.gt(0)) {
+            const newPaid = paid.add(remainingDepositPool);
+            remainingDepositPool = new Prisma.Decimal(0);
+            await tx.bill.update({
+              where: { id: ub.id },
+              data: {
+                status: 'paid',
+                paidAmount: total,
+                paidAt: new Date(),
+              },
+            });
+            deductedBillIds.push(ub.id);
+          } else {
+            // Even when settled via Final Settlement payment, close bill as settled at move-out
+            await tx.bill.update({
+              where: { id: ub.id },
+              data: {
+                status: 'paid',
+                paidAmount: total,
+                paidAt: new Date(),
+              },
+            });
+            deductedBillIds.push(ub.id);
+          }
+        }
+      }
+
+      if (contractToClose) {
+        let settlement = await tx.contractSettlement.findFirst({
+          where: { dormitoryId, contractId: contractToClose.id },
+          include: { items: { where: { isDeleted: false } } },
+        });
+
+        const damageTotal = settlement
+          ? settlement.items.reduce((sum, item) => sum.add(new Prisma.Decimal(item.amount || 0)), new Prisma.Decimal(0))
+          : new Prisma.Decimal(0);
+
+        const netSettlement = paidDepositTotal.sub(unpaidBillTotal).sub(damageTotal);
+        const direction = netSettlement.gt(0) ? 'REFUND' : (netSettlement.lt(0) ? 'PAYMENT_DUE' : 'ZERO');
+        const finalStatus = netSettlement.gt(0) ? 'REFUNDED' : (netSettlement.lt(0) ? 'PAYMENT_RECEIVED' : 'CLOSED_ZERO');
+
+        if (!settlement) {
+          settlement = await tx.contractSettlement.create({
+            data: {
+              dormitoryId,
+              tenantId: reqRecord.tenantId,
+              contractId: contractToClose.id,
+              roomId: reqRecord.roomId,
+              depositAmount: paidDepositTotal,
+              unpaidBillAmount: unpaidBillTotal,
+              damageChargeTotal: damageTotal,
+              netSettlement,
+              settlementDirection: direction,
+              settlementStatus: finalStatus,
+              confirmedAt: new Date(),
+              confirmedByUserId: safeReviewedByUserId,
+            },
+            include: { items: { where: { isDeleted: false } } },
+          });
+        } else {
+          settlement = await tx.contractSettlement.update({
+            where: { id: settlement.id },
+            data: {
+              depositAmount: paidDepositTotal,
+              unpaidBillAmount: unpaidBillTotal,
+              damageChargeTotal: damageTotal,
+              netSettlement,
+              settlementDirection: direction,
+              settlementStatus: finalStatus,
+              confirmedAt: new Date(),
+              confirmedByUserId: safeReviewedByUserId,
+            },
+            include: { items: { where: { isDeleted: false } } },
+          });
+        }
+        finalSettlementRecord = settlement;
+
+        // Issue Final Settlement Receipt (REQ §8:151 & OQ-8)
+        const settlementScopeKey = `SETTLEMENT:${settlement.id}`;
+        let existingReceipt = await tx.receipt.findFirst({
+          where: { dormitoryId, settlementScopeKey },
+        });
+        if (!existingReceipt) {
+          const receiptNumber = `RC-FINAL-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${Math.floor(1000 + Math.random() * 9000)}`;
+          existingReceipt = await tx.receipt.create({
+            data: {
+              dormitoryId,
+              receiptKind: 'FINAL_SETTLEMENT',
+              settlementScopeKey,
+              roomId: reqRecord.roomId,
+              receiptNumber,
+              snapshotData: {
+                receiptNumber,
+                receiptKind: 'FINAL_SETTLEMENT',
+                settlementId: settlement.id,
+                contractId: contractToClose.id,
+                tenantId: reqRecord.tenantId,
+                tenantName: existingTenant ? `${existingTenant.firstName} ${existingTenant.lastName || ''}`.trim() : 'ผู้เช่า',
+                roomId: reqRecord.roomId,
+                depositAmount: Number(paidDepositTotal),
+                unpaidBillAmount: Number(unpaidBillTotal),
+                damageChargeTotal: Number(damageTotal),
+                netSettlement: Number(netSettlement),
+                settlementDirection: direction,
+                settlementStatus: finalStatus,
+                deductedBillIds,
+                voidedDepositBillIds,
+                issuedAt: new Date().toISOString(),
+              },
+              issuedAt: new Date(),
+              issuedByUserId: safeReviewedByUserId,
+            },
+          });
+        }
+        finalReceiptRecord = existingReceipt;
+
+        const netNum = Number(netSettlement);
+        const netLabel = netNum > 0
+          ? `ยอดเงินคืนผู้เช่าสุทธิ: ${netNum.toLocaleString('th-TH')} บาท`
+          : (netNum < 0 ? `ยอดชำระเพิ่มสุทธิ: ${Math.abs(netNum).toLocaleString('th-TH')} บาท` : 'ยอดสุทธิ: 0 บาท (ครบถ้วน)');
+        finalSettlementSummaryText = `เลขที่ใบเสร็จสุดท้าย: ${existingReceipt.receiptNumber} | เงินมัดจำที่ชำระแล้ว: ${Number(paidDepositTotal).toLocaleString('th-TH')} บาท | หักบิลค้างชำระ: ${Number(unpaidBillTotal).toLocaleString('th-TH')} บาท | รายการปรับปรุง/ค่าเสียหาย: ${Number(damageTotal).toLocaleString('th-TH')} บาท | ${netLabel}`;
+      }
+
+      // 5. Transition Occupancy to ENDED
+      const updatedOccupancy = await tx.occupancy.update({
+        where: { id: occupancy.id },
+        data: {
+          status: 'ENDED',
+          endedAt: actualDate,
+          endedByUserId: safeReviewedByUserId,
+          endedReason: reqRecord.reason || 'ย้ายออกตามคำขอผู้เช่า'
+        }
+      });
+
+      // 6. Transition Room to vacant
+      const room = await tx.room.update({
+        where: { id: reqRecord.roomId },
+        data: {
+          status: 'vacant',
+          currentTenantId: null,
+          currentContractId: null
+        },
+        select: { id: true, roomNumber: true }
+      });
+
+      // 7. Transition active contract to checked_out
       if (contractToClose && ['active', 'expiring_soon', 'checking_out'].includes(contractToClose.status)) {
         await tx.contract.update({
           where: { id: contractToClose.id },
@@ -358,12 +598,12 @@ export class MoveOutService {
             terminatedAt: new Date(),
             terminationEffectiveDate: actualDate,
             terminationReason: reqRecord.reason || 'ย้ายออกตามคำขอผู้เช่า',
-            updatedByUserId: reviewedByUserId,
+            updatedByUserId: safeReviewedByUserId,
           },
         });
       }
 
-      // 5. Update tenant status to former if no other active occupancies exist
+      // 8. Update tenant status to former, unbind LINE & linkedUserId, revoke grants & sessions (AC C3-5, C3-7, C3-9)
       const otherActiveOccupancies = await tx.occupancy.count({
         where: {
           dormitoryId,
@@ -373,55 +613,102 @@ export class MoveOutService {
         },
       });
       if (otherActiveOccupancies === 0) {
-        const tenant = await tx.tenant.update({
+        await tx.tenant.update({
           where: { id: reqRecord.tenantId },
-          data: { status: 'former' },
-          select: { lineFriendId: true },
+          data: {
+            status: 'former',
+            linkedUserId: null,
+            lineFriendId: null,
+          },
         });
 
-        // Revoke active DormitoryAccessGrant for this tenant in this dormitory (REQUIREMENTS-LOCK §8:154)
-        if (tenant?.lineFriendId) {
+        // Archive approved registration requests for this completed tenancy so future re-registration in the same room works cleanly (GA-NOTE-1 / AC C3-9)
+        await tx.tenantRegistrationRequest.updateMany({
+          where: {
+            dormitoryId,
+            OR: [
+              { approvedTenantId: reqRecord.tenantId },
+              ...(originalLineFriendId ? [{ lineFollowerId: originalLineFriendId, status: 'approved' }] : []),
+            ],
+          },
+          data: {
+            status: 'moved_out',
+          },
+        });
+
+        // Revoke active TENANT DormitoryAccessGrant and active Sessions for this tenant (REQUIREMENTS-LOCK §8:154, ADR-003, AC C3-5, C3-7)
+        const grantIdsToRevoke: string[] = [];
+        if (originalLineFriendId) {
           await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${reqRecord.dormitoryId}, true);`;
-          const grantUpdate = await tx.dormitoryAccessGrant.updateMany({
+          const matchingGrants = await tx.dormitoryAccessGrant.findMany({
             where: {
               dormitoryId: reqRecord.dormitoryId,
-              lineFriendId: tenant.lineFriendId,
+              lineFriendId: originalLineFriendId,
+              roleCode: 'TENANT',
               status: 'ACTIVE',
             },
+            select: { id: true },
+          });
+          for (const g of matchingGrants) {
+            grantIdsToRevoke.push(g.id);
+          }
+
+          if (grantIdsToRevoke.length > 0) {
+            await tx.dormitoryAccessGrant.updateMany({
+              where: { id: { in: grantIdsToRevoke } },
+              data: {
+                status: 'REVOKED',
+                revokedAt: new Date(),
+                revokedByPrincipal: reviewedByUserId,
+              },
+            });
+          }
+          logger.info(`[MoveOutService] Revoked TENANT grants for tenant ${reqRecord.tenantId} (friend ${originalLineFriendId}): count=${grantIdsToRevoke.length}`);
+        }
+
+        // Revoke open sessions belonging to this tenant so open tabs/sessions immediately become invalid (AC C3-5)
+        const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        const sessionOrConditions: any[] = [];
+        if (grantIdsToRevoke.length > 0) {
+          sessionOrConditions.push({ accessGrantId: { in: grantIdsToRevoke.filter((id) => uuidRegex.test(id)) } });
+        }
+        if (originalLinkedUserId && uuidRegex.test(originalLinkedUserId)) {
+          sessionOrConditions.push({ userId: originalLinkedUserId });
+        }
+
+        if (sessionOrConditions.length > 0) {
+          await tx.session.updateMany({
+            where: {
+              status: 'active',
+              OR: sessionOrConditions,
+            },
             data: {
-              status: 'REVOKED',
+              status: 'revoked',
               revokedAt: new Date(),
-              revokedByPrincipal: reviewedByUserId,
+              revokedReason: 'TENANT_MOVED_OUT',
             },
           });
-          logger.info(`[MoveOutService] Revoked grants for tenant ${reqRecord.tenantId} (friend ${tenant.lineFriendId}): count=${grantUpdate.count}`);
-        } else {
-          logger.info(`[MoveOutService] Tenant ${reqRecord.tenantId} has no lineFriendId!`);
         }
       }
 
-      // 6. In-app notice for tenant
-      const room = await tx.room.findUnique({
-        where: { id: reqRecord.roomId },
-        select: { roomNumber: true },
-      });
+      // 9. In-app notice for tenant record
       await tx.tenantNotice.create({
         data: {
           dormitoryId,
           tenantId: reqRecord.tenantId,
-          title: 'การสิ้นสุดการเช่าพักอาศัยเสร็จสมบูรณ์',
-          message: `การสิ้นสุดการเช่าห้อง ${room?.roomNumber || ''} มีผลบังคับใช้เรียบร้อยแล้วเมื่อวันที่ ${actualEndedAt.slice(0, 10)}`,
+          title: 'การสิ้นสุดการเช่าพักอาศัยและใบเสร็จสุดท้าย',
+          message: `การสิ้นสุดการเช่าห้อง ${room?.roomNumber || ''} มีผลเมื่อวันที่ ${actualEndedAt.slice(0, 10)} ${finalSettlementSummaryText}`.trim(),
           type: 'MOVE_OUT_COMPLETED',
         },
       });
 
-      // 7. Update Move-Out Request to COMPLETED
+      // 10. Update Move-Out Request to COMPLETED
       const updatedRequest = await tx.tenantMoveOutRequest.update({
         where: { id: reqRecord.id },
         data: {
           status: 'COMPLETED',
           completedAt: new Date(),
-          completedByUserId: reviewedByUserId,
+          completedByUserId: safeReviewedByUserId,
           actualEndedAt: actualDate
         }
       });
@@ -429,7 +716,7 @@ export class MoveOutService {
       if (contractToClose) {
         await auditService.recordMutation({
           dormitoryId,
-          actorUserId: reviewedByUserId,
+          actorUserId: safeReviewedByUserId || reviewedByUserId,
           action: 'CONTRACT_TERMINATED',
           entityType: 'Contract',
           entityId: contractToClose.id,
@@ -448,7 +735,7 @@ export class MoveOutService {
 
       await auditService.recordMutation({
         dormitoryId,
-        actorUserId: reviewedByUserId,
+        actorUserId: safeReviewedByUserId || reviewedByUserId,
         action: 'TENANT_MOVE_OUT_COMPLETED',
         entityType: 'TenantMoveOutRequest',
         entityId: reqRecord.id,
@@ -463,8 +750,40 @@ export class MoveOutService {
         tx,
       });
 
-      return { request: updatedRequest, occupancy: updatedOccupancy };
+      return {
+        request: updatedRequest,
+        occupancy: updatedOccupancy,
+        settlement: finalSettlementRecord,
+        finalReceipt: finalReceiptRecord,
+        voidedDepositBillIds,
+        deductedBillIds,
+      };
     });
+
+    // Post-transaction LINE Notification (OQ-8) & Rich Menu Unlink (AC C3-6)
+    if (tenantLineUserIdToNotify) {
+      try {
+        const oaSvc: any = new (LineOaService as any)(prisma);
+        if (typeof oaSvc?.pushOutcomeNotification === 'function') {
+          await oaSvc.pushOutcomeNotification({
+            dormitoryId,
+            recipientLineUserId: tenantLineUserIdToNotify,
+            eventKey: 'move_out_completed_final_receipt',
+            title: 'ยืนยันการย้ายออกและสรุปใบเสร็จสุดท้าย',
+            message: finalSettlementSummaryText || `การย้ายออกของท่านได้รับการยืนยันเรียบร้อยแล้ว`,
+          });
+        }
+      } catch (lineErr) {
+        logger.warn({ err: lineErr, dormitoryId, requestId: reqRecord.id }, 'Failed to push final settlement receipt notification to LINE');
+      }
+
+      try {
+        const richMenuService = new LineRichMenuService(prisma);
+        await richMenuService.unlinkActiveTenantRichMenu(dormitoryId, tenantLineUserIdToNotify);
+      } catch (rmErr) {
+        logger.warn({ err: rmErr, dormitoryId, requestId: reqRecord.id }, 'Failed to unlink Active Tenant Rich Menu upon move-out');
+      }
+    }
 
     logger.info({
       event: 'SECURITY_AUDIT',
@@ -480,7 +799,7 @@ export class MoveOutService {
   }
 
   /**
-   * Tenant Cancels Scheduled Move-Out Request (Before Final Occupancy Date)
+   * Tenant Cancels Scheduled Move-Out Request (Before Owner Confirmation — OQ-6, AC C3-1, AC C3-2)
    */
   async cancelMoveOutRequest(requestId: string, tenantId: string) {
     const prisma = getPrismaClient();
@@ -488,15 +807,22 @@ export class MoveOutService {
       where: { id: requestId }
     });
 
-    if (!reqRecord || reqRecord.tenantId !== tenantId) {
+    if (!reqRecord) {
       const err: any = new Error('MOVE_OUT_REQUEST_NOT_FOUND: ไม่พบคำขอแจ้งย้ายออก');
       err.code = 'MOVE_OUT_REQUEST_NOT_FOUND';
       err.status = 404;
       throw err;
     }
 
+    if (reqRecord.tenantId !== tenantId) {
+      const err: any = new Error('FORBIDDEN: คุณไม่มีสิทธิ์ยกเลิกคำขอแจ้งย้ายออกของผู้เช่ารายอื่น');
+      err.code = 'FORBIDDEN';
+      err.status = 403;
+      throw err;
+    }
+
     if (reqRecord.status === 'COMPLETED') {
-      const err: any = new Error('CANNOT_CANCEL_COMPLETED: การแจ้งย้ายออกสิ้นสุดแล้ว ไม่สามารถยกเลิกได้');
+      const err: any = new Error('CANNOT_CANCEL_COMPLETED: เจ้าของหอพักยืนยันการย้ายออกแล้ว ไม่สามารถยกเลิกได้');
       err.code = 'CANNOT_CANCEL_COMPLETED';
       err.status = 400;
       throw err;
@@ -505,6 +831,18 @@ export class MoveOutService {
     const updated = await prisma.tenantMoveOutRequest.update({
       where: { id: requestId },
       data: { status: 'CANCELLED' }
+    });
+
+    // Revert checking_out contract status back to active so tenant can submit a fresh request cleanly
+    await prisma.contract.updateMany({
+      where: {
+        dormitoryId: reqRecord.dormitoryId,
+        tenantId: reqRecord.tenantId,
+        roomId: reqRecord.roomId,
+        status: 'checking_out',
+        deletedAt: null,
+      },
+      data: { status: 'active' },
     });
 
     return { request: updated, message: 'ยกเลิกคำขอแจ้งย้ายออกเรียบร้อยแล้ว' };

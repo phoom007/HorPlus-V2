@@ -4,8 +4,27 @@ import { requirePermission } from '../middleware/permission.middleware.js';
 import { requireDormitoryPermission } from '../middleware/permission.js';
 import { requireDormitoryWriteEntitlement } from '../middleware/entitlement.js';
 import { AppError } from '../types/index.js';
+import { getPrismaClient } from '../db/prisma.js';
+import { resolveAuthoritativeTenantContext, getTenantIdsForPortalContext } from '../utils/tenant-resolution.util.js';
+import { CsrfService } from '../services/csrf.service.js';
+
+import { getEnv } from '../config/env.js';
 
 export const moveOutRouter = Router();
+const csrfService = new CsrfService(getEnv().CSRF_SIGNING_KEY);
+
+const verifyTenantCsrf = (req: Request, res: Response): boolean => {
+  const csrfHeader = (req.headers['x-csrf-token'] as string | undefined)?.trim();
+  const sessionId = req.auth?.sessionId || req.auth?.session?.id;
+  if (!csrfHeader || !sessionId || !csrfService.verifyCsrfToken(csrfHeader, sessionId)) {
+    res.status(403).json({
+      success: false,
+      error: { code: 'CSRF_INVALID', message: 'เซสชันความปลอดภัยไม่ถูกต้อง กรุณารีเฟรชหน้าจอแล้วลองใหม่' },
+    });
+    return false;
+  }
+  return true;
+};
 
 const mutationGuard = (permission: string) => [
   requireDormitoryPermission(permission),
@@ -26,15 +45,155 @@ const getDormitoryId = (req: Request): string => {
   throw new AppError('ไม่พบข้อมูลหอพักในบริบทคำขอ', 400, 'DORMITORY_CONTEXT_REQUIRED');
 };
 
-// POST /api/v1/tenant-move-out-requests (Tenant Submission Endpoint)
+// GET /api/v1/tenant-move-out-requests/my (Tenant Reload Persistence — AC C3-1)
+moveOutRouter.get(
+  '/tenant-move-out-requests/my',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const ctx: any = await resolveAuthoritativeTenantContext(req);
+      if (ctx.error || !ctx.tenant) {
+        res.status(ctx.error?.statusCode || 403).json({
+          success: false,
+          error: { code: ctx.error?.code || 'FORBIDDEN', message: ctx.error?.message || 'ไม่มีสิทธิ์เข้าถึงข้อมูลผู้เช่า' },
+        });
+        return;
+      }
+
+      const allowedTenantIds = getTenantIdsForPortalContext(ctx);
+      const prisma = getPrismaClient();
+      const activeRequest = await prisma.tenantMoveOutRequest.findFirst({
+        where: {
+          dormitoryId: ctx.dormitoryId,
+          tenantId: { in: allowedTenantIds },
+          status: { in: ['SCHEDULED', 'PENDING_OWNER_CONFIRMATION'] },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      res.json({ success: true, data: activeRequest || null });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// POST /api/v1/tenant-move-out-requests (Tenant Submission Endpoint — AC C3-1, AC C3-2, OQ-6)
 moveOutRouter.post(
   '/tenant-move-out-requests',
-  mutationGuard('moveout:write'),
   async (req: Request, res: Response, next: NextFunction) => {
-    res.status(403).json({
-      success: false,
-      error: { code: 'DEFERRED_BY_PRODUCT_POLICY', message: 'Tenant-facing move-out submission is deferred in Release 1.' }
-    });
+    try {
+      if (!verifyTenantCsrf(req, res)) return;
+
+      const ctx: any = await resolveAuthoritativeTenantContext(req);
+      if (ctx.error || !ctx.tenant) {
+        res.status(ctx.error?.statusCode || 403).json({
+          success: false,
+          error: { code: ctx.error?.code || 'FORBIDDEN', message: ctx.error?.message || 'ไม่มีสิทธิ์ส่งคำขอแจ้งย้ายออก' },
+        });
+        return;
+      }
+
+      const allowedTenantIds = getTenantIdsForPortalContext(ctx);
+      const prisma = getPrismaClient();
+
+      // Cross-tenant isolation check (AC C3-2): reject if body specifies another tenant's tenantId
+      const requestedTenantId = req.body?.tenantId ? String(req.body.tenantId).trim() : null;
+      if (requestedTenantId && !allowedTenantIds.includes(requestedTenantId)) {
+        res.status(403).json({
+          success: false,
+          error: { code: 'FORBIDDEN', message: 'คุณไม่มีสิทธิ์ส่งคำขอแจ้งย้ายออกแทนผู้เช่ารายอื่น' },
+        });
+        return;
+      }
+
+      const targetTenantId = requestedTenantId || String(ctx.tenant.id);
+      const requestedRoomId = req.body?.roomId ? String(req.body.roomId).trim() : null;
+
+      // Verify occupancy belongs to the authenticated tenant (AC C3-2)
+      const activeOccupancies = await prisma.occupancy.findMany({
+        where: {
+          dormitoryId: ctx.dormitoryId,
+          tenantId: { in: allowedTenantIds },
+          status: 'ACTIVE',
+        },
+      });
+
+      if (requestedRoomId && !activeOccupancies.some((o) => o.roomId === requestedRoomId)) {
+        res.status(403).json({
+          success: false,
+          error: { code: 'FORBIDDEN', message: 'คุณไม่มีสิทธิ์ส่งคำขอแจ้งย้ายออกสำหรับห้องพักของผู้อื่น' },
+        });
+        return;
+      }
+
+      const targetOccupancy = requestedRoomId
+        ? activeOccupancies.find((o) => o.roomId === requestedRoomId)
+        : activeOccupancies.find((o) => o.tenantId === targetTenantId) || activeOccupancies[0];
+
+      if (!targetOccupancy) {
+        res.status(404).json({
+          success: false,
+          error: { code: 'ACTIVE_OCCUPANCY_NOT_FOUND', message: 'ไม่พบข้อมูลการเข้าพักที่ยังมีผลบังคับใช้' },
+        });
+        return;
+      }
+
+      const intendedMoveOutDate = req.body?.intendedMoveOutDate || req.body?.moveOutDate;
+      if (!intendedMoveOutDate) {
+        res.status(400).json({
+          success: false,
+          error: { code: 'INVALID_DATE', message: 'กรุณาระบุวันที่ต้องการย้ายออก' },
+        });
+        return;
+      }
+
+      const result = await moveOutService.submitMoveOutRequest({
+        dormitoryId: ctx.dormitoryId,
+        tenantId: targetOccupancy.tenantId,
+        roomId: targetOccupancy.roomId,
+        intendedMoveOutDate: String(intendedMoveOutDate),
+        refundBankName: req.body?.refundBankName,
+        refundAccountNumber: req.body?.refundAccountNumber,
+        refundAccountName: req.body?.refundAccountName,
+        reason: req.body?.reason,
+      });
+
+      res.status(201).json({ success: true, data: result.request, message: result.message });
+    } catch (err: any) {
+      if (err.code) {
+        res.status(err.status || 400).json({ success: false, error: { code: err.code, message: err.message } });
+        return;
+      }
+      next(err);
+    }
+  }
+);
+
+// POST /api/v1/tenant-move-out-requests/:requestId/cancel (Tenant Cancel Move-Out Request — OQ-6, AC C3-1, AC C3-2)
+moveOutRouter.post(
+  '/tenant-move-out-requests/:requestId/cancel',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      if (!verifyTenantCsrf(req, res)) return;
+
+      const ctx: any = await resolveAuthoritativeTenantContext(req);
+      if (ctx.error || !ctx.tenant) {
+        res.status(ctx.error?.statusCode || 403).json({
+          success: false,
+          error: { code: ctx.error?.code || 'FORBIDDEN', message: ctx.error?.message || 'ไม่มีสิทธิ์ยกเลิกคำขอแจ้งย้ายออก' },
+        });
+        return;
+      }
+
+      const result = await moveOutService.cancelMoveOutRequest(req.params.requestId, String(ctx.tenant.id));
+      res.json({ success: true, data: result.request, message: result.message });
+    } catch (err: any) {
+      if (err.code) {
+        res.status(err.status || 400).json({ success: false, error: { code: err.code, message: err.message } });
+        return;
+      }
+      next(err);
+    }
   }
 );
 
