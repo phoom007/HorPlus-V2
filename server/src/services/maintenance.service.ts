@@ -8,10 +8,11 @@ import {
   MaintenanceStatus,
   MaintenanceFilterQuery
 } from '../db/repositories/maintenance.repository.js';
-import { IMembershipRepository, InMemoryMembershipRepository } from '../db/repositories/membership.repository.js';
-import { InMemoryRoomRepository } from '../db/repositories/room.repository.js';
-import { InMemoryTenantRepository } from '../db/repositories/tenant.repository.js';
+import { IMembershipRepository, PrismaMembershipRepository, InMemoryMembershipRepository } from '../db/repositories/membership.repository.js';
+import { IRoomRepository, PrismaRoomRepository, InMemoryRoomRepository } from '../db/repositories/room.repository.js';
+import { ITenantRepository, PrismaTenantRepository, InMemoryTenantRepository } from '../db/repositories/tenant.repository.js';
 import { NotificationService } from './notification.service.js';
+import { getPrismaClient } from '../db/prisma.js';
 
 export interface CreateMaintenanceInput {
   dormitoryId: string;
@@ -52,9 +53,9 @@ export interface UpdateMaintenanceStatusInput {
 export class MaintenanceService {
   constructor(
     private maintenanceRepo: IMaintenanceRepository = new PrismaMaintenanceRepository(),
-    private roomRepo: InMemoryRoomRepository = new InMemoryRoomRepository(),
-    private tenantRepo: InMemoryTenantRepository = new InMemoryTenantRepository(),
-    private membershipRepo: IMembershipRepository = new InMemoryMembershipRepository(),
+    private roomRepo: IRoomRepository = new PrismaRoomRepository(getPrismaClient()),
+    private tenantRepo: ITenantRepository = new PrismaTenantRepository(getPrismaClient()),
+    private membershipRepo: IMembershipRepository = new PrismaMembershipRepository(getPrismaClient()),
     private notificationService: NotificationService = new NotificationService()
   ) {}
 
@@ -85,11 +86,11 @@ export class MaintenanceService {
 
     if (actorType === 'tenant') {
       if (next === 'cancelled') {
-        if (current !== 'submitted' && current !== 'acknowledged') {
-          throw new Error('FORBIDDEN: Tenants can only cancel maintenance requests before work is in progress');
+        if (current !== 'submitted' && current !== 'acknowledged' && (current as string) !== 'pending') {
+          throw new Error('BAD_REQUEST: สามารถยกเลิกได้เฉพาะก่อนที่ช่างจะเริ่มดำเนินงานซ่อม');
         }
       } else {
-        throw new Error('FORBIDDEN: Tenants are only permitted to cancel their requests');
+        throw new Error('FORBIDDEN: ผู้เช่าสามารถดำเนินการได้เฉพาะการยกเลิกคำขอแจ้งซ่อมเท่านั้น');
       }
       return;
     }
@@ -154,7 +155,7 @@ export class MaintenanceService {
     });
 
     // Create In-App Notification for Owner/Manager staff
-    const room = await this.roomRepo.findById(input.dormitoryId, input.roomId);
+    const room = await this.roomRepo.findById(input.roomId, input.dormitoryId);
     await this.notificationService.createInAppNotification({
       dormitoryId: input.dormitoryId,
       targetType: 'staff',
@@ -173,7 +174,10 @@ export class MaintenanceService {
 
   public async getTenantRequestById(dormitoryId: string, tenantId: string, requestId: string) {
     const req = await this.maintenanceRepo.findById(dormitoryId, requestId);
-    if (!req || req.tenantId !== tenantId) return null;
+    if (!req) return null;
+    if (req.tenantId && req.tenantId !== tenantId) {
+      throw new Error('FORBIDDEN: คุณไม่มีสิทธิ์เข้าถึงรายการแจ้งซ่อมของผู้เช่าท่านอื่น');
+    }
 
     const updates = await this.maintenanceRepo.getUpdates(dormitoryId, requestId, true);
     const comments = await this.maintenanceRepo.getComments(dormitoryId, requestId, true);
@@ -185,8 +189,11 @@ export class MaintenanceService {
 
   public async cancelByTenant(dormitoryId: string, tenantId: string, requestId: string, reason?: string) {
     const req = await this.maintenanceRepo.findById(dormitoryId, requestId);
-    if (!req || req.tenantId !== tenantId) {
-      throw new Error('RESOURCE_NOT_FOUND: Maintenance request not found');
+    if (!req) {
+      throw new Error('RESOURCE_NOT_FOUND: ไม่พบรายการแจ้งซ่อมนี้');
+    }
+    if (req.tenantId && req.tenantId !== tenantId) {
+      throw new Error('FORBIDDEN: คุณไม่มีสิทธิ์ยกเลิกรายการแจ้งซ่อมของผู้เช่าท่านอื่น');
     }
 
     this.validateStatusTransition(req.status, 'cancelled', 'tenant');
@@ -311,7 +318,7 @@ export class MaintenanceService {
       changedByUserId: input.assignedByUserId
     });
 
-    const room = req.roomId ? await this.roomRepo.findById(input.dormitoryId, req.roomId) : null;
+    const room = req.roomId ? await this.roomRepo.findById(req.roomId, input.dormitoryId) : null;
 
     await this.maintenanceRepo.createUpdate({
       dormitoryId: input.dormitoryId,
@@ -407,7 +414,7 @@ export class MaintenanceService {
         reopened: 'เปิดงานอีกครั้ง',
       };
       const translatedStatus = statusMapTh[input.status] || input.status;
-      const room = req.roomId ? await this.roomRepo.findById(input.dormitoryId, req.roomId) : null;
+      const room = req.roomId ? await this.roomRepo.findById(req.roomId, input.dormitoryId) : null;
       await this.notificationService.createInAppNotification({
         dormitoryId: input.dormitoryId,
         targetType: 'tenant',
@@ -434,6 +441,10 @@ export class MaintenanceService {
   }) {
     const req = await this.maintenanceRepo.findById(dormitoryId, requestId);
     if (!req) throw new Error('RESOURCE_NOT_FOUND: Maintenance request not found');
+
+    if (input.senderType === 'tenant' && input.senderTenantId && req.tenantId && req.tenantId !== input.senderTenantId) {
+      throw new Error('FORBIDDEN: คุณไม่มีสิทธิ์แสดงความคิดเห็นในรายการแจ้งซ่อมของผู้เช่าท่านอื่น');
+    }
 
     return this.maintenanceRepo.createComment({
       dormitoryId,

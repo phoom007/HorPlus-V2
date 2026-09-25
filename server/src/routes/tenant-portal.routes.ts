@@ -2238,6 +2238,9 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
 
       return res.json({ success: true, data: detail });
     } catch (err: any) {
+      if (err.message?.startsWith('FORBIDDEN')) {
+        return res.status(403).json({ error: { code: 'FORBIDDEN', message: err.message.replace(/^FORBIDDEN:\s*/, ''), requestId: req.requestId } });
+      }
       return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: safeTenantPortalErrorMessage(err), requestId: req.requestId } });
     }
   });
@@ -2266,6 +2269,9 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
 
       return res.status(201).json({ success: true, data: comment });
     } catch (err: any) {
+      if (err.message?.startsWith('FORBIDDEN')) {
+        return res.status(403).json({ error: { code: 'FORBIDDEN', message: err.message.replace(/^FORBIDDEN:\s*/, ''), requestId: req.requestId } });
+      }
       return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: safeTenantPortalErrorMessage(err), requestId: req.requestId } });
     }
   });
@@ -2281,7 +2287,12 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
       const cancelled = await maintenanceService.cancelByTenant(ctx.dormitoryId, ctx.tenant.id, req.params.requestId, reason);
       return res.json({ success: true, data: cancelled });
     } catch (err: any) {
-      return res.status(400).json({ error: { code: 'BAD_REQUEST', message: err.message, requestId: req.requestId } });
+      const isForbidden = err.message?.startsWith('FORBIDDEN');
+      const isNotFound = err.message?.startsWith('RESOURCE_NOT_FOUND');
+      const status = isForbidden ? 403 : isNotFound ? 404 : 400;
+      const code = isForbidden ? 'FORBIDDEN' : isNotFound ? 'RESOURCE_NOT_FOUND' : 'BAD_REQUEST';
+      const cleanMsg = err.message?.replace(/^(FORBIDDEN|RESOURCE_NOT_FOUND|BAD_REQUEST):\s*/, '') || err.message;
+      return res.status(status).json({ error: { code, message: cleanMsg, requestId: req.requestId } });
     }
   });
 

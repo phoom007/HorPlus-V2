@@ -39,6 +39,8 @@ export interface TenantRepairsViewProps {
   handleRepairRemoveFile: () => void;
   handleCreateRepair: (e: React.FormEvent) => void;
   isSubmittingRepair?: boolean;
+  onCancelRepair?: (requestId: string) => void;
+  isCancellingRepairId?: string | null;
   onBack: () => void;
   onZoomImage: (url: string) => void;
 }
@@ -62,6 +64,8 @@ export const TenantRepairsView: React.FC<TenantRepairsViewProps> = ({
   handleRepairRemoveFile,
   handleCreateRepair,
   isSubmittingRepair = false,
+  onCancelRepair,
+  isCancellingRepairId = null,
   onBack,
   onZoomImage,
 }) => {
@@ -193,6 +197,19 @@ export const TenantRepairsView: React.FC<TenantRepairsViewProps> = ({
                         )}
                       </div>
                     </div>
+                    {['submitted', 'pending', 'acknowledged'].includes(rep.status) && onCancelRepair && (
+                      <div className="pt-2 border-t border-slate-100 flex justify-end">
+                        <button
+                          type="button"
+                          onClick={() => onCancelRepair(rep.id)}
+                          disabled={isCancellingRepairId === rep.id}
+                          data-testid={`cancel-repair-btn-${rep.id}`}
+                          className="px-3 py-1.5 text-[10px] font-bold text-red-600 hover:text-red-700 hover:bg-red-50 border border-red-200 rounded-lg transition-colors cursor-pointer disabled:opacity-50"
+                        >
+                          {isCancellingRepairId === rep.id ? 'กำลังยกเลิก...' : 'ยกเลิกการแจ้งซ่อม'}
+                        </button>
+                      </div>
+                    )}
                   </div>
                 ))
               ) : (

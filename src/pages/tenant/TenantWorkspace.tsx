@@ -183,6 +183,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
   const [slipFile, setSlipFile] = useState<File | null>(null);
   const [isSubmittingSlip, setIsSubmittingSlip] = useState(false);
   const [isSubmittingRepair, setIsSubmittingRepair] = useState(false);
+  const [isCancellingRepairId, setIsCancellingRepairId] = useState<string | null>(null);
   const [paymentOptions, setPaymentOptions] = useState<{
     configured?: boolean;
     promptPayConfigured?: boolean;
@@ -1467,6 +1468,36 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
     }
   };
 
+  const handleCancelRepair = async (requestId: string) => {
+    if (!requestId || isCancellingRepairId) return;
+    setIsCancellingRepairId(requestId);
+    try {
+      const csrf = getCsrfTokenFromCookie() || '';
+      const res = await fetch(`/api/v1/tenant-portal/maintenance/${requestId}/cancel`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(csrf ? { 'x-csrf-token': csrf } : {}),
+        },
+        body: JSON.stringify({ reason: 'ผู้เช่ายกเลิกคำขอ' }),
+      });
+
+      const data = await res.json();
+      if (res.ok && data.success) {
+        showToast('success', 'ยกเลิกการแจ้งซ่อมเรียบร้อยแล้ว', 'รายการแจ้งซ่อมถูกย้ายไปยังประวัติการแจ้ง');
+        refreshData();
+      } else {
+        const errorMsg = data?.error?.message || 'ไม่สามารถยกเลิกการแจ้งซ่อมได้';
+        showToast('error', 'ไม่สามารถยกเลิกได้', errorMsg);
+      }
+    } catch (err: any) {
+      showToast('error', 'เกิดข้อผิดพลาดในการเชื่อมต่อ', err?.message || 'ไม่สามารถติดต่อเซิร์ฟเวอร์ได้');
+    } finally {
+      setIsCancellingRepairId(null);
+    }
+  };
+
   const getCsrfToken = () => {
     const match = document.cookie.match(/(?:csrf-token|horplus_csrf)=([^;]+)/);
     return match ? decodeURIComponent(match[1]) : (window as any).__CSRF_TOKEN || '';
@@ -1836,6 +1867,8 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                   handleRepairRemoveFile={handleRepairRemoveFile}
                   handleCreateRepair={handleCreateRepair}
                   isSubmittingRepair={isSubmittingRepair}
+                  onCancelRepair={handleCancelRepair}
+                  isCancellingRepairId={isCancellingRepairId}
                   onBack={() => setSubView(null)}
                   onZoomImage={(url) => setZoomedImage(url)}
                 />
