@@ -172,8 +172,9 @@ async function main() {
   ]);
 
   const tenantPage = await tenantContext.newPage();
-  await tenantPage.goto(`${APP_URL}/tenant`, { waitUntil: 'domcontentloaded', timeout: 45000 });
-  await tenantPage.waitForTimeout(2500);
+  await tenantPage.goto(`${APP_URL}/tenant`, { waitUntil: 'commit', timeout: 45000 });
+  await tenantPage.waitForLoadState('domcontentloaded', { timeout: 30000 });
+  await tenantPage.waitForTimeout(3000);
 
   // 1.1 Test AC R4-3: Request occupied room (Room 101) to verify real error alert
   console.log('Testing AC R4-3: Submitting occupied room 101 via real UI...');
@@ -242,7 +243,8 @@ async function main() {
   });
 
   const ownerPage = await ownerContext.newPage();
-  await ownerPage.goto(`${APP_URL}/owner/tenants`, { waitUntil: 'domcontentloaded', timeout: 45000 });
+  await ownerPage.goto(`${APP_URL}/owner/tenants`, { waitUntil: 'commit', timeout: 45000 });
+  await ownerPage.waitForLoadState('domcontentloaded', { timeout: 30000 });
   await ownerPage.waitForTimeout(3000);
 
   // Switch to "รอตรวจสอบ" (pending) tab
