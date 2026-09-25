@@ -162,6 +162,10 @@ export interface ApproveRegistrationDto {
   confirmReplacement?: boolean;
   requireTenantConfirmation?: boolean;
   legacyDirectApproval?: boolean;
+  firstName?: string;
+  lastName?: string;
+  prefix?: string;
+  termsDiff?: Array<{ field: string; label?: string; oldValue?: any; newValue?: any }>;
 }
 
 export class TenantRegistrationService {
@@ -1213,15 +1217,94 @@ export class TenantRegistrationService {
 
       // Two-Phase Registration: Move to awaiting_tenant_confirmation only when terms were modified or explicitly required
       const snapTerms = (req.acceptanceSnapshot as any) || {};
+      const originalFirst = (req.firstName || '').trim();
+      const originalLast = req.lastName && req.lastName !== '-' ? req.lastName.trim() : '';
+      const originalPrefix = (snapTerms.prefix || '').trim();
+
+      const computedDiff: Array<{ field: string; label: string; oldValue: any; newValue: any }> = [];
+
+      if (payload.roomId && payload.roomId !== req.requestedRoomId) {
+        const oldRoom = req.requestedRoomId ? await tx.room.findUnique({ where: { id: req.requestedRoomId }, select: { roomNumber: true } }) : null;
+        const newRoom = await tx.room.findUnique({ where: { id: payload.roomId }, select: { roomNumber: true } });
+        computedDiff.push({
+          field: 'roomId',
+          label: 'ห้องพัก',
+          oldValue: oldRoom ? `ห้อง ${oldRoom.roomNumber}` : 'เดิม',
+          newValue: newRoom ? `ห้อง ${newRoom.roomNumber}` : 'ใหม่',
+        });
+      }
+
+      const origRent = snapTerms.proposedRent !== undefined ? snapTerms.proposedRent : snapTerms.rentAmount;
+      if (payload.rentAmount !== undefined && origRent !== undefined && Number(payload.rentAmount) !== Number(origRent)) {
+        computedDiff.push({
+          field: 'rentAmount',
+          label: 'ค่าเช่าต่อเดือน',
+          oldValue: `${Number(origRent).toLocaleString()} บาท`,
+          newValue: `${Number(payload.rentAmount).toLocaleString()} บาท`,
+        });
+      }
+
+      const origDeposit = snapTerms.proposedDeposit !== undefined ? snapTerms.proposedDeposit : snapTerms.depositAmount;
+      if (payload.depositAmount !== undefined && origDeposit !== undefined && Number(payload.depositAmount) !== Number(origDeposit)) {
+        computedDiff.push({
+          field: 'depositAmount',
+          label: 'เงินประกันห้อง',
+          oldValue: `${Number(origDeposit).toLocaleString()} บาท`,
+          newValue: `${Number(payload.depositAmount).toLocaleString()} บาท`,
+        });
+      }
+
+      if (payload.startDate && snapTerms.startDate && payload.startDate !== snapTerms.startDate) {
+        computedDiff.push({
+          field: 'startDate',
+          label: 'วันที่เริ่มสัญญา',
+          oldValue: snapTerms.startDate,
+          newValue: payload.startDate,
+        });
+      }
+
+      if (payload.durationMonths !== undefined && snapTerms.durationMonths !== undefined && Number(payload.durationMonths) !== Number(snapTerms.durationMonths)) {
+        computedDiff.push({
+          field: 'durationMonths',
+          label: 'ระยะเวลาสัญญา',
+          oldValue: `${snapTerms.durationMonths} เดือน`,
+          newValue: `${payload.durationMonths} เดือน`,
+        });
+      }
+
+      const isNameModified = Boolean(
+        (payload.firstName && payload.firstName.trim() !== originalFirst) ||
+        (payload.lastName !== undefined && payload.lastName.trim() !== originalLast) ||
+        (payload.prefix && payload.prefix.trim() !== originalPrefix)
+      );
+
+      if (isNameModified) {
+        const newFirst = payload.firstName ? payload.firstName.trim() : originalFirst;
+        const newLast = payload.lastName !== undefined ? payload.lastName.trim() : originalLast;
+        const newPfx = payload.prefix ? payload.prefix.trim() : originalPrefix;
+        computedDiff.push({
+          field: 'applicantName',
+          label: 'ชื่อ-นามสกุลผู้เช่า',
+          oldValue: `${originalPrefix} ${originalFirst} ${originalLast}`.trim(),
+          newValue: `${newPfx} ${newFirst} ${newLast}`.trim(),
+        });
+      }
+
+      const explicitDiff = Array.isArray(payload.termsDiff) && payload.termsDiff.length > 0 ? payload.termsDiff : [];
+      const finalTermsDiff = explicitDiff.length > 0 ? explicitDiff : computedDiff;
+
       const termsModified = Boolean(
+        computedDiff.length > 0 ||
+        explicitDiff.length > 0 ||
+        isNameModified ||
         (payload.roomId && payload.roomId !== req.requestedRoomId) ||
-        (payload.rentAmount !== undefined && snapTerms.proposedRent !== undefined && Number(payload.rentAmount) !== Number(snapTerms.proposedRent)) ||
-        (payload.depositAmount !== undefined && snapTerms.proposedDeposit !== undefined && Number(payload.depositAmount) !== Number(snapTerms.proposedDeposit)) ||
+        (payload.rentAmount !== undefined && origRent !== undefined && Number(payload.rentAmount) !== Number(origRent)) ||
+        (payload.depositAmount !== undefined && origDeposit !== undefined && Number(payload.depositAmount) !== Number(origDeposit)) ||
         (payload.startDate && snapTerms.startDate && payload.startDate !== snapTerms.startDate) ||
         (payload.durationMonths !== undefined && snapTerms.durationMonths !== undefined && Number(payload.durationMonths) !== Number(snapTerms.durationMonths))
       );
 
-      const shouldRequireConfirmation = payload.requireTenantConfirmation === true || (payload.requireTenantConfirmation !== false && termsModified);
+      const shouldRequireConfirmation = payload.requireTenantConfirmation === true || termsModified;
 
       if (shouldRequireConfirmation) {
         const approvedTerms = {
@@ -1231,7 +1314,16 @@ export class TenantRegistrationService {
           rentAmount: String(payload.rentAmount),
           depositAmount: String(payload.depositAmount),
           advancePaymentAmount: String(payload.advancePaymentAmount),
+          depositDeclaredStatus: (payload as any).depositDeclaredStatus || snapTerms.depositDeclaredStatus || 'UNPAID',
+          rentalPlan: (payload.rentalType || payload.rentalPlan || snapTerms.rentalType || snapTerms.rentalPlan || 'monthly').toLowerCase(),
+          totalDays: payload.totalDays,
+          dailyRate: payload.dailyRate,
           terms: payload.terms || null,
+          roomId: effectiveRoomId,
+          firstName: payload.firstName ? payload.firstName.trim() : req.firstName,
+          lastName: payload.lastName !== undefined ? payload.lastName.trim() : req.lastName,
+          prefix: payload.prefix ? payload.prefix.trim() : snapTerms.prefix,
+          termsDiff: finalTermsDiff,
           approvedAt: new Date().toISOString(),
           approvedByUserId: safeActorId,
         };
@@ -1240,6 +1332,7 @@ export class TenantRegistrationService {
         const updatedSnapshot = {
           ...currentSnapshot,
           approvedTerms,
+          termsDiff: finalTermsDiff,
         };
 
         const updatedReq = await tx.tenantRegistrationRequest.update({
@@ -1249,6 +1342,8 @@ export class TenantRegistrationService {
             reviewedAt: new Date(),
             reviewedByUserId: safeActorId,
             approvedRoomId: effectiveRoomId,
+            firstName: payload.firstName ? payload.firstName.trim() : req.firstName,
+            lastName: payload.lastName !== undefined ? payload.lastName.trim() : req.lastName,
             acceptanceSnapshot: updatedSnapshot,
           },
         });
@@ -1256,6 +1351,7 @@ export class TenantRegistrationService {
         return {
           request: updatedReq,
           status: 'awaiting_tenant_confirmation',
+          termsDiff: finalTermsDiff,
           message: 'เจ้าของหอพักอนุมัติเงื่อนไขแล้ว รอผู้เช่าตรวจสอบและลงนามสัญญา',
         };
       }
@@ -1822,24 +1918,37 @@ export class TenantRegistrationService {
             const room = targetRoomId
               ? await prisma.room.findUnique({ where: { id: targetRoomId }, select: { roomNumber: true } })
               : null;
-            const { LineOaService, buildTenantApprovalOutcomeFlexMessage, getPublicAppOrigin } = await import('./line-oa.service.js');
+            const { LineOaService, buildTenantApprovalOutcomeFlexMessage, buildTenantAwaitingConfirmationFlexMessage, getPublicAppOrigin } = await import('./line-oa.service.js');
             const lineOaService = new LineOaService(prisma);
-            const flexMsg = buildTenantApprovalOutcomeFlexMessage(
-              dorm?.name || 'หอพัก',
-              room?.roomNumber || 'ไม่ระบุ',
-              true,
-              undefined,
-              getPublicAppOrigin()
-            );
-            await lineOaService.pushOutcomeNotification(dormitoryId, lineUserId, flexMsg);
 
-            // R1: Link Active Tenant Rich Menu upon approval
-            try {
-              const { LineRichMenuService } = await import('./line-richmenu.service.js');
-              const richMenuService = new LineRichMenuService(prisma);
-              await richMenuService.linkActiveTenantRichMenu(dormitoryId, lineUserId);
-            } catch (rmErr: any) {
-              logger.warn({ event: 'LINE_ACTIVE_TENANT_RICHMENU_LINK_SKIPPED', error: rmErr.message });
+            if ((resTx as any)?.status === 'awaiting_tenant_confirmation') {
+              const snap = ((resTx as any)?.request?.acceptanceSnapshot as any) || {};
+              const diffs = snap.termsDiff || snap.approvedTerms?.termsDiff || (resTx as any)?.termsDiff || [];
+              const flexMsg = buildTenantAwaitingConfirmationFlexMessage(
+                dorm?.name || 'หอพัก',
+                room?.roomNumber || 'ไม่ระบุ',
+                diffs,
+                getPublicAppOrigin()
+              );
+              await lineOaService.pushOutcomeNotification(dormitoryId, lineUserId, flexMsg);
+            } else {
+              const flexMsg = buildTenantApprovalOutcomeFlexMessage(
+                dorm?.name || 'หอพัก',
+                room?.roomNumber || 'ไม่ระบุ',
+                true,
+                undefined,
+                getPublicAppOrigin()
+              );
+              await lineOaService.pushOutcomeNotification(dormitoryId, lineUserId, flexMsg);
+
+              // R1: Link Active Tenant Rich Menu upon approval
+              try {
+                const { LineRichMenuService } = await import('./line-richmenu.service.js');
+                const richMenuService = new LineRichMenuService(prisma);
+                await richMenuService.linkActiveTenantRichMenu(dormitoryId, lineUserId);
+              } catch (rmErr: any) {
+                logger.warn({ event: 'LINE_ACTIVE_TENANT_RICHMENU_LINK_SKIPPED', error: rmErr.message });
+              }
             }
           }
         }
@@ -1910,21 +2019,72 @@ export class TenantRegistrationService {
       await acquireRoomAvailabilityLock(tx, dormitoryId, roomId);
 
       const tenantNumber = await generateNextTenantNumber(dormitoryId, tx);
-      const displayName = `${req.firstName} ${req.lastName}`.trim();
+      const rawPrefix = approvedTerms.prefix || snap.prefix || '';
+      const effectivePrefix = rawPrefix === 'ระบุเอง' || rawPrefix === 'กำหนดเอง'
+        ? (snap.customPrefix?.trim() || '')
+        : rawPrefix.trim();
+      const rawFirst = (approvedTerms.firstName || req.firstName || '').trim();
+      const rawLast = approvedTerms.lastName !== undefined
+        ? (approvedTerms.lastName !== '-' ? approvedTerms.lastName.trim() : '')
+        : (req.lastName && req.lastName !== '-' ? req.lastName.trim() : '');
+      const fullName = `${rawFirst} ${rawLast}`.trim();
+      const displayName = effectivePrefix
+        ? (fullName.startsWith(effectivePrefix) ? fullName : `${effectivePrefix} ${fullName}`.trim())
+        : fullName;
 
-      const tenant = await tx.tenant.create({
-        data: {
-          dormitoryId,
-          tenantNumber,
-          firstName: req.firstName,
-          lastName: req.lastName,
-          displayName,
-          phone: req.phone,
-          email: (req as any).email || snap.email || null,
-          lineFriendId: req.lineFollowerId || null,
-          status: 'active',
-        },
-      });
+      let tenant = null;
+      if (req.approvedTenantId) {
+        tenant = await tx.tenant.findFirst({
+          where: { id: req.approvedTenantId, dormitoryId },
+        });
+      }
+      if (!tenant && req.phone) {
+        tenant = await tx.tenant.findFirst({
+          where: { dormitoryId, phone: req.phone, status: 'pending' },
+        });
+      }
+
+      const emailToSave = (req as any).email || snap.email || null;
+
+      if (tenant) {
+        tenant = await tx.tenant.update({
+          where: { id: tenant.id },
+          data: {
+            status: 'active',
+            firstName: rawFirst || req.firstName,
+            lastName: rawLast || req.lastName,
+            displayName,
+            phone: req.phone,
+            ...(emailToSave ? { email: emailToSave } : {}),
+            lineFriendId: req.lineFollowerId || tenant.lineFriendId || null,
+          },
+        });
+      } else {
+        tenant = await tx.tenant.create({
+          data: {
+            dormitoryId,
+            tenantNumber,
+            firstName: rawFirst || req.firstName,
+            lastName: rawLast || req.lastName,
+            displayName,
+            phone: req.phone,
+            email: emailToSave,
+            lineFriendId: req.lineFollowerId || null,
+            status: 'active',
+          },
+        });
+      }
+
+      if (req.phone) {
+        await tx.tenant.deleteMany({
+          where: {
+            dormitoryId,
+            phone: req.phone,
+            status: 'pending',
+            id: { not: tenant.id },
+          },
+        });
+      }
 
       const tenantUpdateData: Prisma.TenantUpdateInput = {
         address: snap.address ?? null,
@@ -2023,6 +2183,12 @@ export class TenantRegistrationService {
         }
       }
 
+      const rentalPlan = (approvedTerms.rentalPlan || approvedTerms.rentalType || snap.rentalType || snap.rentalPlan || 'monthly').toLowerCase();
+      const isTerm = rentalPlan === 'term';
+      const isDaily = rentalPlan === 'daily';
+      const agreementType = isDaily ? 'DAILY' : (isTerm ? 'TERM' : 'MONTHLY');
+      const depositDeclaredStatus = approvedTerms.depositDeclaredStatus || snap.depositDeclaredStatus || 'UNPAID';
+
       const contractCount = await tx.contract.count({ where: { dormitoryId } });
       const contractNumber = `CTR-${Date.now()}-${(contractCount + 1).toString().padStart(4, '0')}`;
 
@@ -2042,7 +2208,7 @@ export class TenantRegistrationService {
           status: 'active',
           startDate: new Date(approvedTerms.startDate),
           endDate: new Date(approvedTerms.endDate),
-          durationMonths: Number(approvedTerms.durationMonths),
+          durationMonths: Number(approvedTerms.durationMonths || (isTerm ? 4 : 12)),
           rentAmount: String(approvedTerms.rentAmount),
           depositAmount: String(approvedTerms.depositAmount),
           advancePaymentAmount: String(approvedTerms.advancePaymentAmount || '0'),
@@ -2081,10 +2247,10 @@ export class TenantRegistrationService {
           roomId,
           tenantId: tenant.id,
           contractId: contract.id,
-          agreementType: 'MONTHLY',
+          agreementType: agreementType as any,
           startDate: new Date(approvedTerms.startDate),
           depositAmount: approvedTerms.depositAmount,
-          depositDeclaredStatus: 'UNPAID',
+          depositDeclaredStatus,
           actorUserId: req.reviewedByUserId || undefined,
         });
       }
@@ -2095,15 +2261,14 @@ export class TenantRegistrationService {
           roomId,
           tenantId: tenant.id,
           contractId: contract.id,
-          agreementType: 'MONTHLY',
+          agreementType: agreementType as any,
           startDate: new Date(approvedTerms.startDate),
-          endDate: new Date(approvedTerms.endDate),
+          endDate: approvedTerms.endDate ? new Date(approvedTerms.endDate) : null,
           unitRentAmount: approvedTerms.rentAmount,
           totalRentAmount: approvedTerms.rentAmount,
           termInstallmentCount: 1,
           actorUserId: req.reviewedByUserId || undefined,
         });
-
       }
 
       const updatedReq = await tx.tenantRegistrationRequest.update({
@@ -2188,6 +2353,50 @@ export class TenantRegistrationService {
       logger.error({ event: 'OUTBOX_DISPATCH_AFTER_CONFIRM_SIGNATURE_ERROR', error: err.message });
     }
 
+    try {
+      const dormConfig = await prisma.dormitoryLineConfig.findUnique({
+        where: { dormitoryId },
+      });
+      if (dormConfig?.notifyTenantApproved !== false) {
+        let lineFollowerId = (resTx as any)?.request?.lineFollowerId || (resTx as any)?.tenant?.lineFriendId;
+        if (lineFollowerId) {
+          const lineFriend = await prisma.dormitoryLineFriend.findUnique({
+            where: { id: lineFollowerId },
+          });
+          if (lineFriend && lineFriend.lineUserIdEncrypted) {
+            const { decryptText } = await import('../utils/crypto-encryption.js');
+            const lineUserId = decryptText(lineFriend.lineUserIdEncrypted);
+            const dorm = await prisma.dormitory.findUnique({ where: { id: dormitoryId }, select: { name: true } });
+            const targetRoomId = (resTx as any)?.occupancy?.roomId || (resTx as any)?.tenant?.roomId;
+            const room = targetRoomId
+              ? await prisma.room.findUnique({ where: { id: targetRoomId }, select: { roomNumber: true } })
+              : null;
+            const { LineOaService, buildTenantApprovalOutcomeFlexMessage, getPublicAppOrigin } = await import('./line-oa.service.js');
+            const lineOaService = new LineOaService(prisma);
+            const flexMsg = buildTenantApprovalOutcomeFlexMessage(
+              dorm?.name || 'หอพัก',
+              room?.roomNumber || 'ไม่ระบุ',
+              true,
+              undefined,
+              getPublicAppOrigin()
+            );
+            await lineOaService.pushOutcomeNotification(dormitoryId, lineUserId, flexMsg);
+
+            // Link Active Tenant Rich Menu upon confirmation
+            try {
+              const { LineRichMenuService } = await import('./line-richmenu.service.js');
+              const richMenuService = new LineRichMenuService(prisma);
+              await richMenuService.linkActiveTenantRichMenu(dormitoryId, lineUserId);
+            } catch (rmErr: any) {
+              logger.warn({ event: 'LINE_ACTIVE_TENANT_RICHMENU_LINK_SKIPPED', error: rmErr.message });
+            }
+          }
+        }
+      }
+    } catch (pushErr: any) {
+      logger.warn({ event: 'LINE_APPROVAL_PUSH_SKIPPED', error: pushErr.message });
+    }
+
     return resTx;
   }
 
@@ -2206,6 +2415,9 @@ export class TenantRegistrationService {
     reason?: string,
     actorUserId?: string
   ) {
+    if (!reason || !reason.trim()) {
+      throw new AppError('กรุณาระบุเหตุผลในการปฏิเสธคำขอ', 400, 'VALIDATION_ERROR');
+    }
     const req = await this.getRequestById(id, dormitoryId);
     if (req.status !== 'pending_owner_approval' && req.status !== 'pending') {
       const err = new Error('INVALID_REQUEST_STATUS');

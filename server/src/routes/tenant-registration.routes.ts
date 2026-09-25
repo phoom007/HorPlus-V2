@@ -569,7 +569,46 @@ export function createTenantRegistrationRouter(
     dormitoryId: z.string().uuid().optional(),
   });
 
-  router.post('/:id/confirm-signature', async (req: Request, res: Response) => {
+  // 2. PROTECTED PRIVATE ENDPOINTS
+  const privateRouter = Router();
+  privateRouter.use(requireSession);
+  privateRouter.use(resolveDormitoryContextMiddleware);
+
+  privateRouter.post('/:id/confirm-signature', async (req: Request, res: Response, next) => {
+    if (!verifyCsrf(req, res)) return;
+    if ((req as any).dormitoryContext?.roleCode !== 'TENANT') {
+      return requireDormitoryPermission('tenant:write')(req, res, next);
+    }
+    try {
+      const dormId = getAuthoritativeDormitoryId(req);
+      const grantId = req.auth?.session?.accessGrantId;
+      const ownsRequest = grantId && await getPrismaClient().$transaction(async tx => {
+        await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormId}, true)`;
+        const grant = await tx.dormitoryAccessGrant.findFirst({
+          where: { id: grantId, dormitoryId: dormId, roleCode: 'TENANT', status: 'ACTIVE' },
+          select: { lineFriendId: true },
+        });
+        if (!grant?.lineFriendId) return false;
+        return Boolean(await tx.tenantRegistrationRequest.findFirst({
+          where: { id: req.params.id, dormitoryId: dormId, lineFollowerId: grant.lineFriendId },
+          select: { id: true },
+        }));
+      });
+      if (!ownsRequest) {
+        return res.status(403).json({
+          error: {
+            code: 'FORBIDDEN',
+            message: 'ไม่สามารถเข้าถึงหรือยืนยันคำขอลงทะเบียนนี้ได้',
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+      next();
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  }, async (req: Request, res: Response) => {
     try {
       const parsed = ConfirmSignatureSchema.safeParse(req.body);
       if (!parsed.success) {
@@ -582,10 +621,7 @@ export function createTenantRegistrationRouter(
           },
         });
       }
-      let dormId = parsed.data.dormitoryId;
-      if (!dormId) {
-        dormId = getPublicDormitoryId(req);
-      }
+      const dormId = getAuthoritativeDormitoryId(req);
       const result = await registrationService.confirmApprovedRegistration(
         req.params.id,
         dormId,
@@ -596,11 +632,6 @@ export function createTenantRegistrationRouter(
       handleServiceError(res, err, req);
     }
   });
-
-  // 2. PROTECTED PRIVATE ENDPOINTS
-  const privateRouter = Router();
-  privateRouter.use(requireSession);
-  privateRouter.use(resolveDormitoryContextMiddleware);
 
   const mutationGuard = (permission: string) => [
     requireDormitoryPermission(permission),

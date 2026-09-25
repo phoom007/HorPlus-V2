@@ -43,9 +43,11 @@ export interface TenantEntity {
   acceptanceSnapshot?: any | null;
   coOccupants?: TenantCoOccupantEntity[];
   vehicles?: TenantVehicleEntity[];
+  emergencyContacts?: TenantEmergencyContactEntity[];
   lineFriendId?: string | null;
   lineFriend?: { id: string; displayName: string; pictureUrl?: string | null } | null;
   lineDisplayName?: string | null;
+  hasIdentityDocument?: boolean;
   version: number;
   createdAt: Date;
   updatedAt: Date;
@@ -518,7 +520,19 @@ export class PrismaTenantRepository implements ITenantRepository {
       acceptanceSnapshot: t.acceptanceSnapshot ?? null,
       lineFriendId: t.lineFriendId ?? null,
       lineFriend: t.lineFriend ? { id: t.lineFriend.id, displayName: t.lineFriend.displayName, pictureUrl: t.lineFriend.pictureUrl } : null,
-      lineDisplayName: t.lineFriend?.displayName ?? null,
+      lineDisplayName: t.lineFriend?.displayName ?? t.lineDisplayName ?? null,
+      hasIdentityDocument: Boolean(t.idCardObjectKey || t.hasIdentityDocument),
+      emergencyContacts: Array.isArray(t.emergencyContacts) ? t.emergencyContacts.map((ec: any) => ({
+        id: ec.id,
+        dormitoryId: ec.dormitoryId,
+        tenantId: ec.tenantId,
+        name: ec.name,
+        phone: ec.phone || '',
+        relationship: ec.relationship || '',
+        isPrimary: Boolean(ec.isPrimary),
+        createdAt: ec.createdAt,
+        updatedAt: ec.updatedAt,
+      })) : undefined,
       coOccupants: Array.isArray(t.coOccupants) ? t.coOccupants.map((c: any) => ({
         id: c.id,
         dormitoryId: c.dormitoryId,
@@ -556,6 +570,107 @@ export class PrismaTenantRepository implements ITenantRepository {
     };
   }
 
+  private hydratePendingTenantFromRegistration(target: any, reg: any): any {
+    const snap = (reg.acceptanceSnapshot as any) || {};
+    const rawCitizenId = typeof snap.citizenId === 'string' ? snap.citizenId.replace(/\D/g, '') : '';
+    const maskedCitizenId = rawCitizenId.length === 13
+      ? rawCitizenId.replace(/^(\d)(\d{4})(\d{5})(\d{2})(\d)$/, '$1-$2-XXXXX-$4-$5')
+      : (snap.citizenId || null);
+    const idCardKey = snap.idCardDocument?.objectKey || snap.idCardImageUrl || snap.idCardImage || null;
+
+    target.requestedRoomId = reg.requestedRoomId;
+    target.roomId = target.roomId || reg.requestedRoomId;
+    target.registrationRequestId = reg.id;
+    target.email = target.email || snap.email || null;
+    target.nationalIdMasked = target.nationalIdMasked || maskedCitizenId;
+    target.dateOfBirth = target.dateOfBirth || (snap.birthDate ? new Date(snap.birthDate) : null);
+    target.address = target.address || snap.address || null;
+    target.notes = target.notes || reg.note || snap.note || null;
+    target.lineFriendId = target.lineFriendId || reg.lineFollowerId || null;
+    target.lineDisplayName = target.lineDisplayName || snap.lineDisplayName || (reg.lineFollowerId ? 'เชื่อมต่อ LINE แล้ว' : null);
+    target.idCardObjectKey = target.idCardObjectKey || idCardKey;
+    target.hasIdentityDocument = Boolean(target.idCardObjectKey || idCardKey);
+    target.petInfo = target.petInfo || (
+      Array.isArray(snap.pets) && snap.pets.length > 0
+        ? {
+            hasPet: true,
+            pets: snap.pets,
+            type: snap.pets[0]?.type || 'other',
+            details: snap.pets.map((p: any) => p?.details).filter(Boolean).join(', '),
+          }
+        : (snap.pet || null)
+    );
+    target.emergencyContacts = Array.isArray(target.emergencyContacts) && target.emergencyContacts.length > 0
+      ? target.emergencyContacts
+      : (snap.emergencyContact?.name
+          ? [{
+              id: `${reg.id}-ec-0`,
+              tenantId: reg.id,
+              dormitoryId: reg.dormitoryId,
+              name: snap.emergencyContact.name,
+              phone: snap.emergencyContact.phone || '',
+              relationship: snap.emergencyContact.relationship || snap.emergencyContact.relation || '',
+              isPrimary: true,
+              createdAt: reg.createdAt,
+              updatedAt: reg.updatedAt,
+            }]
+          : []);
+    target.coOccupants = Array.isArray(target.coOccupants) && target.coOccupants.length > 0
+      ? target.coOccupants
+      : (Array.isArray(snap.coOccupants)
+          ? snap.coOccupants.map((c: any, idx: number) => ({
+              id: c.id || `${reg.id}-co-${idx}`,
+              tenantId: reg.id,
+              dormitoryId: reg.dormitoryId,
+              name: c.name || '',
+              phone: c.phone || null,
+              relationship: c.relationship || c.relation || null,
+              status: 'active',
+              createdAt: reg.createdAt,
+              updatedAt: reg.updatedAt,
+            }))
+          : []);
+    target.vehicles = Array.isArray(target.vehicles) && target.vehicles.length > 0
+      ? target.vehicles
+      : (Array.isArray(snap.vehicles) && snap.vehicles.length > 0
+          ? snap.vehicles.map((v: any, idx: number) => ({
+              id: v.id || `${reg.id}-veh-${idx}`,
+              tenantId: reg.id,
+              dormitoryId: reg.dormitoryId,
+              type: v.type || 'car',
+              licensePlate: v.licensePlate || v.plate || '',
+              brand: v.brand || v.details || null,
+              status: 'active',
+              createdAt: reg.createdAt,
+              updatedAt: reg.updatedAt,
+            }))
+          : (snap.vehicle && snap.vehicle.type && snap.vehicle.type !== 'none'
+              ? [{
+                  id: `${reg.id}-veh-0`,
+                  tenantId: reg.id,
+                  dormitoryId: reg.dormitoryId,
+                  type: snap.vehicle.type,
+                  licensePlate: snap.vehicle.licensePlate || snap.vehicle.plate || '',
+                  brand: snap.vehicle.brand || snap.vehicle.details || null,
+                  status: 'active',
+                  createdAt: reg.createdAt,
+                  updatedAt: reg.updatedAt,
+                }]
+              : []));
+    target.rentalType = snap.rentalType || snap.rentalPlan || 'MONTHLY';
+    target.rentalPlan = snap.rentalPlan || snap.rentalType || 'MONTHLY';
+    target.requestedRent = snap.proposedRent ?? snap.rentAmount ?? (snap.dailyRate ? snap.dailyRate * (snap.totalDays || 1) : null);
+    target.requestedDeposit = snap.proposedDeposit ?? snap.depositAmount ?? null;
+    target.requestedStartDate = snap.startDate ?? snap.checkInDate ?? null;
+    target.requestedEndDate = snap.endDate ?? snap.checkOutDate ?? null;
+    target.requestedDurationMonths = snap.durationMonths ?? null;
+    target.requestedDays = snap.totalDays ?? null;
+    target.requestedDailyRate = snap.dailyRate ?? null;
+    target.requestedAttachments = snap.attachments ?? null;
+    target.acceptanceSnapshot = snap;
+    return target;
+  }
+
   public async findById(id: string, dormitoryId?: string): Promise<TenantEntity | null> {
     const isUuid = (str?: string | null) => !!str && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
     const where: any = { id };
@@ -563,6 +678,7 @@ export class PrismaTenantRepository implements ITenantRepository {
     const t = await this.prisma.tenant.findFirst({
       where,
       include: {
+        emergencyContacts: true,
         coOccupants: { where: { deletedAt: null, status: 'active' } },
         vehicles: { where: { deletedAt: null } },
         lineFriend: { select: { id: true, displayName: true, pictureUrl: true } },
@@ -573,8 +689,7 @@ export class PrismaTenantRepository implements ITenantRepository {
       if (dormitoryId) regWhere.dormitoryId = dormitoryId;
       const reg = await this.prisma.tenantRegistrationRequest.findFirst({ where: regWhere });
       if (reg) {
-        const snap = (reg.acceptanceSnapshot as any) || {};
-        return {
+        const synthetic = this.hydratePendingTenantFromRegistration({
           id: reg.id,
           dormitoryId: reg.dormitoryId,
           tenantNumber: 'REQ-' + reg.id.slice(0, 8).toUpperCase(),
@@ -584,24 +699,11 @@ export class PrismaTenantRepository implements ITenantRepository {
           name: `${reg.firstName} ${reg.lastName || ''}`.trim(),
           phone: reg.phone,
           status: 'pending',
-          requestedRoomId: reg.requestedRoomId,
-          roomId: reg.requestedRoomId,
-          registrationRequestId: reg.id,
-          rentalType: snap.rentalType || snap.rentalPlan || 'MONTHLY',
-          rentalPlan: snap.rentalPlan || snap.rentalType || 'MONTHLY',
-          requestedRent: snap.proposedRent ?? snap.rentAmount ?? (snap.dailyRate ? snap.dailyRate * (snap.totalDays || 1) : null),
-          requestedDeposit: snap.proposedDeposit ?? snap.depositAmount ?? null,
-          requestedStartDate: snap.startDate ?? snap.checkInDate ?? null,
-          requestedEndDate: snap.endDate ?? snap.checkOutDate ?? null,
-          requestedDurationMonths: snap.durationMonths ?? null,
-          requestedDays: snap.totalDays ?? null,
-          requestedDailyRate: snap.dailyRate ?? null,
-          requestedAttachments: snap.attachments ?? null,
-          acceptanceSnapshot: snap,
           version: reg.version || 1,
           createdAt: reg.createdAt,
           updatedAt: reg.updatedAt,
-        };
+        }, reg);
+        return this.mapTenantToEntity(synthetic);
       }
       return null;
     }
@@ -619,20 +721,7 @@ export class PrismaTenantRepository implements ITenantRepository {
         },
       });
       if (matchedReg) {
-        (t as any).requestedRoomId = matchedReg.requestedRoomId;
-        (t as any).registrationRequestId = matchedReg.id;
-        const snap = (matchedReg.acceptanceSnapshot as any) || {};
-        (t as any).rentalType = snap.rentalType || snap.rentalPlan || 'MONTHLY';
-        (t as any).rentalPlan = snap.rentalPlan || snap.rentalType || 'MONTHLY';
-        (t as any).requestedRent = snap.proposedRent ?? snap.rentAmount ?? (snap.dailyRate ? snap.dailyRate * (snap.totalDays || 1) : null);
-        (t as any).requestedDeposit = snap.proposedDeposit ?? snap.depositAmount ?? null;
-        (t as any).requestedStartDate = snap.startDate ?? snap.checkInDate ?? null;
-        (t as any).requestedEndDate = snap.endDate ?? snap.checkOutDate ?? null;
-        (t as any).requestedDurationMonths = snap.durationMonths ?? null;
-        (t as any).requestedDays = snap.totalDays ?? null;
-        (t as any).requestedDailyRate = snap.dailyRate ?? null;
-        (t as any).requestedAttachments = snap.attachments ?? null;
-        (t as any).acceptanceSnapshot = snap;
+        this.hydratePendingTenantFromRegistration(t, matchedReg);
       }
     } else {
       const [provTerm, dailyStay, contract] = await Promise.all([
@@ -745,6 +834,7 @@ export class PrismaTenantRepository implements ITenantRepository {
     const t = await this.prisma.tenant.findFirst({
       where: { dormitoryId, tenantNumber },
       include: {
+        emergencyContacts: true,
         coOccupants: { where: { deletedAt: null, status: 'active' } },
         vehicles: { where: { deletedAt: null } },
         lineFriend: { select: { id: true, displayName: true, pictureUrl: true } },
@@ -764,6 +854,7 @@ export class PrismaTenantRepository implements ITenantRepository {
       this.prisma.tenant.findMany({
         where,
         include: {
+          emergencyContacts: true,
           coOccupants: { where: { deletedAt: null, status: 'active' } },
           vehicles: { where: { deletedAt: null } },
           lineFriend: { select: { id: true, displayName: true, pictureUrl: true } },
@@ -777,7 +868,7 @@ export class PrismaTenantRepository implements ITenantRepository {
 
     const pendingRegs = (!filter.status || filter.status === 'pending')
       ? await this.prisma.tenantRegistrationRequest.findMany({
-          where: { dormitoryId, status: { in: ['pending', 'pending_owner_approval'] } },
+          where: { dormitoryId, status: { in: ['pending', 'pending_owner_approval', 'awaiting_tenant_confirmation'] } },
         })
       : [];
 
@@ -794,8 +885,7 @@ export class PrismaTenantRepository implements ITenantRepository {
             ))
         );
         if (!isMatched) {
-          const snap = (reg.acceptanceSnapshot as any) || {};
-          const syntheticPendingTenant: any = {
+          const syntheticPendingTenant: any = this.hydratePendingTenantFromRegistration({
             id: reg.id,
             dormitoryId: reg.dormitoryId,
             tenantNumber: 'REQ-' + reg.id.slice(0, 8).toUpperCase(),
@@ -805,24 +895,10 @@ export class PrismaTenantRepository implements ITenantRepository {
             name: `${reg.firstName} ${reg.lastName || ''}`.trim(),
             phone: reg.phone,
             status: 'pending',
-            requestedRoomId: reg.requestedRoomId,
-            roomId: reg.requestedRoomId,
-            registrationRequestId: reg.id,
-            rentalType: snap.rentalType || snap.rentalPlan || 'MONTHLY',
-            rentalPlan: snap.rentalPlan || snap.rentalType || 'MONTHLY',
-            requestedRent: snap.proposedRent ?? snap.rentAmount ?? (snap.dailyRate ? snap.dailyRate * (snap.totalDays || 1) : null),
-            requestedDeposit: snap.proposedDeposit ?? snap.depositAmount ?? null,
-            requestedStartDate: snap.startDate ?? snap.checkInDate ?? null,
-            requestedEndDate: snap.endDate ?? snap.checkOutDate ?? null,
-            requestedDurationMonths: snap.durationMonths ?? null,
-            requestedDays: snap.totalDays ?? null,
-            requestedDailyRate: snap.dailyRate ?? null,
-            requestedAttachments: snap.attachments ?? null,
-            acceptanceSnapshot: snap,
             version: reg.version || 1,
             createdAt: reg.createdAt,
             updatedAt: reg.updatedAt,
-          };
+          }, reg);
           items.push(syntheticPendingTenant);
         }
       }
@@ -837,20 +913,7 @@ export class PrismaTenantRepository implements ITenantRepository {
               `${r.firstName} ${r.lastName || ''}`.trim() === (item.displayName || '').trim()
           );
           if (matchedReg) {
-            (item as any).requestedRoomId = matchedReg.requestedRoomId;
-            (item as any).registrationRequestId = matchedReg.id;
-            const snap = (matchedReg.acceptanceSnapshot as any) || {};
-            (item as any).rentalType = snap.rentalType || snap.rentalPlan || 'MONTHLY';
-            (item as any).rentalPlan = snap.rentalPlan || snap.rentalType || 'MONTHLY';
-            (item as any).requestedRent = snap.proposedRent ?? snap.rentAmount ?? (snap.dailyRate ? snap.dailyRate * (snap.totalDays || 1) : null);
-            (item as any).requestedDeposit = snap.proposedDeposit ?? snap.depositAmount ?? null;
-            (item as any).requestedStartDate = snap.startDate ?? snap.checkInDate ?? null;
-            (item as any).requestedEndDate = snap.endDate ?? snap.checkOutDate ?? null;
-            (item as any).requestedDurationMonths = snap.durationMonths ?? null;
-            (item as any).requestedDays = snap.totalDays ?? null;
-            (item as any).requestedDailyRate = snap.dailyRate ?? null;
-            (item as any).requestedAttachments = snap.attachments ?? null;
-            (item as any).acceptanceSnapshot = snap;
+            this.hydratePendingTenantFromRegistration(item, matchedReg);
           }
         }
       }

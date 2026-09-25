@@ -1814,6 +1814,11 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                   dormitoryId={activeDormitoryId}
                   inviteToken={searchParams.get('t') || searchParams.get('token') || undefined}
                   initialViewState={(localTenant as any)?.pendingRequest ? 'form' : 'room_picker'}
+                  initialStep={
+                    (localTenant as any)?.pendingRequest?.status === 'awaiting_tenant_confirmation'
+                      ? (((localTenant as any)?.pendingRequest?.rentalPlan || 'monthly') === 'daily' ? 2 : 5)
+                      : undefined
+                  }
                   existingTenantProfile={localTenant}
                   revisionRequest={(localTenant as any)?.pendingRequest}
                   onBack={() => setSubView(null)}

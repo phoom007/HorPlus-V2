@@ -114,9 +114,15 @@ export const TenantRejectSheet: React.FC<TenantRejectSheetProps> = ({
 
   const backdropOpacity = Math.max(0, 1 - dragOffsetY / 320);
 
-  const finalReason = selectedReason === 'อื่นๆ' ? (customReason.trim() || 'อื่นๆ') : selectedReason;
+  const isReasonValid = Boolean(
+    selectedReason &&
+    (selectedReason !== 'อื่นๆ' || customReason.trim().length > 0)
+  );
+
+  const finalReason = selectedReason === 'อื่นๆ' ? customReason.trim() : selectedReason;
 
   const handleConfirmClick = () => {
+    if (!isReasonValid || !finalReason) return;
     onConfirm(finalReason);
   };
 
@@ -233,7 +239,7 @@ export const TenantRejectSheet: React.FC<TenantRejectSheetProps> = ({
           <button
             type="button"
             data-testid="reject-sheet-confirm-btn"
-            disabled={isSubmitting}
+            disabled={isSubmitting || !isReasonValid}
             onClick={handleConfirmClick}
             className="px-4 py-2 bg-rose-600 hover:bg-rose-700 disabled:bg-rose-300 text-white font-black rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition-all cursor-pointer"
           >

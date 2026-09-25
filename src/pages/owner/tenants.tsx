@@ -1144,6 +1144,9 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
   const [approveDailyRate, setApproveDailyRate] = useState<string>('0');
   const [approveDeposit, setApproveDeposit] = useState<string>('');
   const [approveRent, setApproveRent] = useState<string>('');
+  const [approvePrefix, setApprovePrefix] = useState<string>('');
+  const [approveFirstName, setApproveFirstName] = useState<string>('');
+  const [approveLastName, setApproveLastName] = useState<string>('');
   const [approveDepositDeclaredStatus, setApproveDepositDeclaredStatus] = useState<'UNPAID' | 'PAID'>('UNPAID');
   const [approveIdCardFile, setApproveIdCardFile] = useState<File | null>(null);
   const [approveIdCardPreview, setApproveIdCardPreview] = useState<string | null>(null);
@@ -2503,6 +2506,18 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
       }
     }
 
+    const snap = (tenant as any).acceptanceSnapshot || {};
+    const pfx = (tenant as any).prefix || snap.prefix || '';
+    const fName = (tenant as any).firstName || snap.firstName || (tenant.name ? tenant.name.split(' ')[0] : '');
+    const lName = (tenant as any).lastName !== undefined && (tenant as any).lastName !== '-'
+      ? (tenant as any).lastName
+      : (snap.lastName !== undefined && snap.lastName !== '-'
+        ? snap.lastName
+        : (tenant.name ? tenant.name.split(' ').slice(1).join(' ') : ''));
+    setApprovePrefix(pfx);
+    setApproveFirstName(fName);
+    setApproveLastName(lName);
+
     // Attachments
     const rawAtts = tenant.requestedAttachments || tenant.acceptanceSnapshot?.attachments || [];
     setApproveAttachments(rawAtts);
@@ -2527,6 +2542,67 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
     let effectiveContractId: string | undefined;
     if (reqId) {
       try {
+        const snap = (selectedTenant as any).acceptanceSnapshot || {};
+        const origFirst = ((selectedTenant as any).firstName || snap.firstName || (selectedTenant.name ? selectedTenant.name.split(' ')[0] : '')).trim();
+        const origLast = ((selectedTenant as any).lastName !== undefined && (selectedTenant as any).lastName !== '-'
+          ? (selectedTenant as any).lastName
+          : (snap.lastName !== undefined && snap.lastName !== '-'
+            ? snap.lastName
+            : (selectedTenant.name ? selectedTenant.name.split(' ').slice(1).join(' ') : ''))).trim();
+        const origPrefix = ((selectedTenant as any).prefix || snap.prefix || '').trim();
+
+        const diffList: Array<{ field: string; label: string; oldValue: any; newValue: any }> = [];
+        if (approveRoomId && approveRoomId !== (selectedTenant.requestedRoomId || selectedTenant.roomId)) {
+          const oldRoom = rooms.find(r => r.id === (selectedTenant.requestedRoomId || selectedTenant.roomId));
+          const newRoom = rooms.find(r => r.id === approveRoomId);
+          diffList.push({
+            field: 'roomId',
+            label: 'ห้องพัก',
+            oldValue: oldRoom ? `ห้อง ${oldRoom.roomNumber}` : 'เดิม',
+            newValue: newRoom ? `ห้อง ${newRoom.roomNumber}` : 'ใหม่',
+          });
+        }
+        if (approveRent !== undefined && approveRent !== '' && Number(approveRent) !== Number(selectedTenant.requestedRent ?? snap.proposedRent ?? 0)) {
+          diffList.push({
+            field: 'rentAmount',
+            label: 'ค่าเช่าต่อเดือน',
+            oldValue: `${Number(selectedTenant.requestedRent ?? snap.proposedRent ?? 0).toLocaleString()} บาท`,
+            newValue: `${Number(approveRent).toLocaleString()} บาท`,
+          });
+        }
+        if (approveDeposit !== undefined && approveDeposit !== '' && Number(approveDeposit) !== Number(selectedTenant.requestedDeposit ?? snap.proposedDeposit ?? 0)) {
+          diffList.push({
+            field: 'depositAmount',
+            label: 'เงินประกันห้อง',
+            oldValue: `${Number(selectedTenant.requestedDeposit ?? snap.proposedDeposit ?? 0).toLocaleString()} บาท`,
+            newValue: `${Number(approveDeposit).toLocaleString()} บาท`,
+          });
+        }
+        if (approveStartDate && approveStartDate !== (selectedTenant.requestedStartDate || snap.startDate)) {
+          diffList.push({
+            field: 'startDate',
+            label: 'วันที่เริ่มสัญญา',
+            oldValue: selectedTenant.requestedStartDate || snap.startDate,
+            newValue: approveStartDate,
+          });
+        }
+        if (approveDurationMonths && Number(approveDurationMonths) !== Number(selectedTenant.requestedDurationMonths || snap.durationMonths)) {
+          diffList.push({
+            field: 'durationMonths',
+            label: 'ระยะเวลาสัญญา',
+            oldValue: `${selectedTenant.requestedDurationMonths || snap.durationMonths} เดือน`,
+            newValue: `${approveDurationMonths} เดือน`,
+          });
+        }
+        if ((approveFirstName.trim() && approveFirstName.trim() !== origFirst) || (approveLastName.trim() !== origLast) || (approvePrefix.trim() !== origPrefix)) {
+          diffList.push({
+            field: 'applicantName',
+            label: 'ชื่อ-นามสกุลผู้เช่า',
+            oldValue: `${origPrefix} ${origFirst} ${origLast}`.trim(),
+            newValue: `${approvePrefix.trim()} ${approveFirstName.trim()} ${approveLastName.trim()}`.trim(),
+          });
+        }
+
         const payload: any = {
           roomId: approveRoomId,
           rentalType: approveRentalType,
@@ -2539,7 +2615,11 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
           depositAmount: approveDeposit !== undefined && approveDeposit !== '' ? Number(approveDeposit) : 0,
           depositDeclaredStatus: approveDepositDeclaredStatus,
           advancePaymentAmount: approveRentalType === 'DAILY' ? 0 : (approveRent !== undefined && approveRent !== '' ? Number(approveRent) : 0),
-          requireTenantConfirmation: false,
+          requireTenantConfirmation: diffList.length > 0 ? true : undefined,
+          firstName: approveFirstName.trim() || undefined,
+          lastName: approveLastName.trim() || undefined,
+          prefix: approvePrefix.trim() || undefined,
+          termsDiff: diffList.length > 0 ? diffList : undefined,
         };
 
         if (approveRentalType === 'DAILY') {
@@ -2555,6 +2635,33 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
           setTenantActionToast(errMsg);
           return;
         }
+
+        if (approveRes?.data?.status === 'awaiting_tenant_confirmation' || approveRes?.data?.request?.status === 'awaiting_tenant_confirmation') {
+          const updatedTenants = tenants.map(t => {
+            if (t.id === selectedTenant.id || t.id === reqId) {
+              return {
+                ...t,
+                status: 'awaiting_tenant_confirmation' as any,
+                registrationRequestStatus: 'awaiting_tenant_confirmation',
+                acceptanceSnapshot: approveRes.data?.request?.acceptanceSnapshot || t.acceptanceSnapshot,
+              };
+            }
+            return t;
+          });
+          onSaveTenants(updatedTenants);
+          setIsApproveOpen(false);
+          setSelectedTenant(null);
+          setTenantActionToast('บันทึกเงื่อนไขที่ปรับแก้และส่งให้ผู้สมัครลงนามยืนยันแล้ว');
+          onAddLog('อนุมัติและปรับแก้เงื่อนไข', `ส่งเงื่อนไขที่ปรับแก้ให้คุณ ${selectedTenant.name} ยืนยันสัญญา`, 'Tenant', selectedTenant.id);
+          if (queryClient && effectiveDormId) {
+            await Promise.all([
+              queryClient.invalidateQueries({ queryKey: queryKeys.tenants(effectiveDormId) }),
+              queryClient.invalidateQueries({ queryKey: queryKeys.rooms(effectiveDormId) }),
+            ]);
+          }
+          return;
+        }
+
         if (approveRes?.data?.tenantId) {
           effectiveTenantId = approveRes.data.tenantId;
         } else if (approveRes?.data?.tenant?.id) {
@@ -2744,6 +2851,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
   };
 
   const handleOpenReject = (tenant: Tenant) => {
+    setSelectedTenant(tenant);
     setRejectReason('ข้อมูลเอกสารไม่ครบถ้วน');
     setIsRejectOpen(true);
   };
@@ -2751,7 +2859,11 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
   const handleConfirmReject = async (reasonOverride?: string) => {
     if (!selectedTenant) return;
 
-    const finalReason = reasonOverride || rejectReason || 'ข้อมูลเอกสารไม่ครบถ้วน';
+    const finalReason = reasonOverride || rejectReason;
+    if (!finalReason || !finalReason.trim()) {
+      setTenantActionToast('กรุณาระบุเหตุผลในการปฏิเสธคำขอ');
+      return;
+    }
     const reqId = (selectedTenant as any).registrationRequestId || (selectedTenant as any).requestId || selectedTenant.id;
     if (reqId) {
       try {
@@ -4306,9 +4418,14 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                 <div className="mt-4 border-b border-gray-100">
                   {(() => {
                     const hasIdCard = !!(
-                      selectedTenant.idCardPhotoMock &&
-                      selectedTenant.idCardPhotoMock.trim() !== '' &&
-                      selectedTenant.idCardPhotoMock !== 'MOCK_ID_CARD_BASE64'
+                      (selectedTenant as any).hasIdentityDocument ||
+                      (selectedTenant as any).idCardObjectKey ||
+                      (selectedTenant.idCardPhotoMock &&
+                        selectedTenant.idCardPhotoMock.trim() !== '' &&
+                        selectedTenant.idCardPhotoMock !== 'MOCK_ID_CARD_BASE64') ||
+                      (selectedTenant.acceptanceSnapshot as any)?.idCardDocument?.objectKey ||
+                      (selectedTenant.acceptanceSnapshot as any)?.idCardImageUrl ||
+                      (selectedTenant.acceptanceSnapshot as any)?.idCardImage
                     );
 
                     return (
@@ -4408,26 +4525,48 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                         </div>
                       </div>
 
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+                        <div>
+                          <span className="text-gray-400 font-bold text-[10px]">วันเกิด</span>
+                          <p className="font-extrabold text-slate-800">{(() => {
+                            const date = selectedTenant.birthDate || (selectedTenant as any).dateOfBirth || selectedTenant.acceptanceSnapshot?.birthDate;
+                            return date ? new Date(date).toLocaleDateString('th-TH') : '-';
+                          })()}</p>
+                        </div>
+                        <div>
+                          <span className="text-gray-400 font-bold text-[10px]">ที่อยู่</span>
+                          <p className="font-extrabold text-slate-800 whitespace-pre-wrap">{selectedTenant.address || selectedTenant.acceptanceSnapshot?.address || '-'}</p>
+                        </div>
+                      </div>
+
                       {/* Emergency Contact */}
                       <div className="pt-4 border-t border-gray-100 space-y-2.5">
                         <h4 className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
                           <Users className="w-4 h-4 text-indigo-600 shrink-0" />
                           ข้อมูลผู้ติดต่อกรณีฉุกเฉิน
                         </h4>
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
-                          <div className="flex flex-col gap-0.5">
-                            <span className="text-gray-400 font-medium text-[10px]">ชื่อผู้ติดต่อ:</span>
-                            <p className="font-extrabold text-slate-800 text-[11px] sm:text-xs break-all">{selectedTenant.emergencyContact?.name || '-'}</p>
-                          </div>
-                          <div className="flex flex-col gap-0.5">
-                            <span className="text-gray-400 font-medium text-[10px]">ความสัมพันธ์:</span>
-                            <p className="font-extrabold text-slate-800 text-[11px] sm:text-xs break-all">{selectedTenant.emergencyContact?.relationship || '-'}</p>
-                          </div>
-                          <div className="flex flex-col gap-0.5">
-                            <span className="text-gray-400 font-medium text-[10px]">เบอร์โทรติดต่อ:</span>
-                            <p className="font-extrabold text-indigo-600 text-[11px] sm:text-xs break-all">{formatPhone(selectedTenant.emergencyContact?.phone) || '-'}</p>
-                          </div>
-                        </div>
+                        {(() => {
+                          const ec = selectedTenant.emergencyContact ||
+                            (selectedTenant as any).emergencyContacts?.[0] ||
+                            tenantDetailsData?.emergencyContacts?.[0] ||
+                            (selectedTenant.acceptanceSnapshot as any)?.emergencyContact;
+                          return (
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+                              <div className="flex flex-col gap-0.5">
+                                <span className="text-gray-400 font-medium text-[10px]">ชื่อผู้ติดต่อ:</span>
+                                <p className="font-extrabold text-slate-800 text-[11px] sm:text-xs break-all">{ec?.name || '-'}</p>
+                              </div>
+                              <div className="flex flex-col gap-0.5">
+                                <span className="text-gray-400 font-medium text-[10px]">ความสัมพันธ์:</span>
+                                <p className="font-extrabold text-slate-800 text-[11px] sm:text-xs break-all">{ec?.relationship || ec?.relation || '-'}</p>
+                              </div>
+                              <div className="flex flex-col gap-0.5">
+                                <span className="text-gray-400 font-medium text-[10px]">เบอร์โทรติดต่อ:</span>
+                                <p className="font-extrabold text-indigo-600 text-[11px] sm:text-xs break-all">{formatPhone(ec?.phone) || '-'}</p>
+                              </div>
+                            </div>
+                          );
+                        })()}
                       </div>
 
                       {/* Vehicles and Pets */}
@@ -4506,7 +4645,7 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
                                 </div>
                                 <div className="flex items-center justify-between">
                                   <span className="text-gray-400 text-[10px]">ชื่อสัตว์เลี้ยง:</span>
-                                  <span className="font-extrabold text-slate-800">{petItem.name || '-'}</span>
+                                  <span className="font-extrabold text-slate-800">{petItem.name || (petItem as any).details || '-'}</span>
                                 </div>
                               </div>
                             </div>
@@ -6813,6 +6952,51 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
             </div>
 
             <div className="space-y-3 pt-1">
+              {/* Editable Name & Prefix Fields for Owner Correction */}
+              <div className="p-3.5 bg-slate-50 border border-slate-200/80 rounded-2xl space-y-2">
+                <span className="block text-xs font-black text-slate-800">
+                  ข้อมูลชื่อผู้สมัคร (เจ้าของสามารถแก้ไขได้หากสะกดผิด)
+                </span>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 mb-1">คำนำหน้า</label>
+                    <select
+                      data-testid="owner-approve-prefix-select"
+                      value={approvePrefix}
+                      onChange={(e) => setApprovePrefix(e.target.value)}
+                      className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
+                    >
+                      <option value="">-- ไม่ระบุ --</option>
+                      <option value="นาย">นาย</option>
+                      <option value="นางสาว">นางสาว</option>
+                      <option value="นาง">นาง</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 mb-1">ชื่อจริง *</label>
+                    <input
+                      type="text"
+                      data-testid="owner-approve-firstname-input"
+                      value={approveFirstName}
+                      onChange={(e) => setApproveFirstName(e.target.value)}
+                      className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
+                      placeholder="ชื่อจริง"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 mb-1">นามสกุล</label>
+                    <input
+                      type="text"
+                      data-testid="owner-approve-lastname-input"
+                      value={approveLastName}
+                      onChange={(e) => setApproveLastName(e.target.value)}
+                      className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
+                      placeholder="นามสกุล"
+                    />
+                  </div>
+                </div>
+              </div>
+
               <div>
                 <label htmlFor="approve-room-select" className="block text-xs font-bold text-slate-700 mb-1">
                   เลือกห้องพักที่ต้องการจัดสรร <span className="text-rose-500">*</span>

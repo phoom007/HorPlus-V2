@@ -920,6 +920,16 @@ export async function getPublicDormitoryPolicy(dormitoryId?: string): Promise<Da
 }
 
 export interface ApproveRegistrationPayload {
+  roomId?: string;
+  rentalType?: 'MONTHLY' | 'TERM' | 'DAILY';
+  rentalPlan?: string;
+  totalDays?: number;
+  dailyRate?: number;
+  depositDeclaredStatus?: 'PAID' | 'UNPAID';
+  firstName?: string;
+  lastName?: string;
+  prefix?: string;
+  termsDiff?: Array<{ field: string; label?: string; oldValue?: any; newValue?: any }>;
   startDate: string;
   endDate: string;
   durationMonths: number;

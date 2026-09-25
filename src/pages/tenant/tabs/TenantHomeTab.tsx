@@ -99,11 +99,33 @@ export const TenantHomeTab: React.FC<TenantHomeTabProps> = ({
     ? `${localTenant.firstName} ${localTenant.lastName && localTenant.lastName !== '-' ? localTenant.lastName : ''}`.trim()
     : '';
 
-  let rawName = localTenant.displayName || registeredFullName || localTenant.name || 'ผู้เช่า';
+  const isPending =
+    (localTenant as any)?.status === 'pending_owner_approval' ||
+    (localTenant as any)?.pendingRequest?.status === 'pending_owner_approval';
+  const isAwaiting =
+    (localTenant as any)?.status === 'awaiting_tenant_confirmation' ||
+    (localTenant as any)?.pendingRequest?.status === 'awaiting_tenant_confirmation';
+  const isRejected =
+    (localTenant as any)?.status === 'rejected' ||
+    (localTenant as any)?.pendingRequest?.status === 'rejected';
+
+  let rawName =
+    registeredFullName ||
+    (localTenant.displayName !== 'ยังไม่ได้ลงทะเบียน' ? localTenant.displayName : null) ||
+    localTenant.lineDisplayName ||
+    (localTenant.name !== 'ยังไม่ได้ลงทะเบียน' ? localTenant.name : null) ||
+    'ผู้เช่า';
+
   if (rawName.startsWith('คุณ ')) {
     rawName = rawName.slice(4).trim();
   }
-  const isUnregistered = !hasRoom || (localTenant as any)?.status === 'unregistered' || rawName === 'ยังไม่ได้ลงทะเบียน';
+
+  const isUnregistered =
+    !hasRoom &&
+    !isPending &&
+    !isAwaiting &&
+    !isRejected &&
+    ((localTenant as any)?.status === 'unregistered' || !(localTenant as any)?.status || rawName === 'ยังไม่ได้ลงทะเบียน');
   let greetingName = 'ผู้เช่า';
   if (isUnregistered) {
     greetingName = 'ยังไม่ได้ลงทะเบียน';
@@ -288,7 +310,25 @@ export const TenantHomeTab: React.FC<TenantHomeTabProps> = ({
             )
           );
 
-          if (hasRoom || (localTenant as any)?.status === 'active' || (localTenant as any)?.pendingRequest?.status === 'approved' || isAwaitingConfirmation) {
+          let hasLocalPending = false;
+          if (typeof window !== 'undefined' && window.localStorage) {
+            try {
+              const raw = window.localStorage.getItem('pending_tenant_registration');
+              if (raw) {
+                const parsed = JSON.parse(raw);
+                if (parsed && (parsed.status === 'pending_owner_approval' || parsed.id)) {
+                  hasLocalPending = true;
+                }
+              }
+            } catch {}
+          }
+
+          const isAuthoritativelyUnregistered =
+            (localTenant as any)?.status === 'unregistered' &&
+            !(localTenant as any)?.pendingRequest &&
+            !hasLocalPending;
+
+          if (hasRoom || ((localTenant as any)?.status === 'active' && hasRoom) || (localTenant as any)?.pendingRequest?.status === 'approved' || isAwaitingConfirmation) {
             try {
               if (typeof window !== 'undefined' && window.localStorage) {
                 window.localStorage.removeItem('pending_tenant_registration');
@@ -317,6 +357,32 @@ export const TenantHomeTab: React.FC<TenantHomeTabProps> = ({
                     รอคุณยืนยัน
                   </span>
                 </div>
+
+                {(() => {
+                  const snap = req?.acceptanceSnapshot || {};
+                  const diffList = snap.termsDiff || snap.approvedTerms?.termsDiff || [];
+                  if (!Array.isArray(diffList) || diffList.length === 0) return null;
+                  return (
+                    <div className="bg-amber-50/90 border border-amber-200/80 rounded-2xl p-3 space-y-2 text-xs" data-testid="tenant-terms-diff-box">
+                      <div className="flex items-center gap-1.5 font-bold text-amber-900 text-[11px]">
+                        <AlertCircle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                        <span>รายการที่เจ้าของหอพักปรับแก้เงื่อนไข:</span>
+                      </div>
+                      <div className="space-y-1.5 divide-y divide-amber-200/60 pt-0.5">
+                        {diffList.map((d: any, idx: number) => (
+                          <div key={idx} className="flex justify-between items-center pt-1.5 text-[11px]">
+                            <span className="text-amber-800 font-semibold">{d.label || d.field}:</span>
+                            <div className="flex items-center gap-1.5 font-black">
+                              <span className="line-through text-slate-400 font-normal">{String(d.oldValue ?? '-')}</span>
+                              <span className="text-amber-600">➔</span>
+                              <span className="text-emerald-700 bg-emerald-100/80 px-1.5 py-0.5 rounded-md">{String(d.newValue ?? '-')}</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 <button
                   type="button"
@@ -380,7 +446,7 @@ export const TenantHomeTab: React.FC<TenantHomeTabProps> = ({
             (!hasRoom && !isAwaitingConfirmation && !isRejectedRegistration && (
               (localTenant as any)?.status === 'pending_owner_approval' ||
               (localTenant as any)?.pendingRequest?.status === 'pending_owner_approval' ||
-              (typeof window !== 'undefined' && typeof window.localStorage !== 'undefined' && window.localStorage?.getItem?.('pending_tenant_registration'))
+              hasLocalPending
             ))
           );
 

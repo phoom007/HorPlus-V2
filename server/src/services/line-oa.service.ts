@@ -363,6 +363,172 @@ export function buildTenantApprovalOutcomeFlexMessage(
   };
 }
 
+export function buildTenantAwaitingConfirmationFlexMessage(
+  dormitoryName: string,
+  roomNumber: string,
+  termsDiff: Array<{ field: string; label?: string; oldValue?: any; newValue?: any }>,
+  appUrl?: string
+) {
+  const origin = (appUrl || getPublicAppOrigin()).trim().replace(/\/+$/, '');
+  const tenantLiffId = process.env.LINE_TENANT_LIFF_ID || process.env.VITE_LINE_TENANT_LIFF_ID || process.env.VITE_LINE_LIFF_ID || process.env.LINE_LIFF_ID;
+  const targetUrl = tenantLiffId && tenantLiffId.trim()
+    ? `https://liff.line.me/${tenantLiffId.trim()}`
+    : `${origin}/tenant`;
+
+  const bodyContents: any[] = [
+    {
+      type: 'box',
+      layout: 'horizontal',
+      contents: [
+        {
+          type: 'text',
+          text: 'สถานะ',
+          size: 'sm',
+          color: '#64748B',
+          flex: 2,
+        },
+        {
+          type: 'text',
+          text: 'รอผู้สมัครยืนยันและลงนาม',
+          size: 'sm',
+          color: '#D97706',
+          weight: 'bold',
+          flex: 4,
+          align: 'end',
+        },
+      ],
+    },
+    {
+      type: 'box',
+      layout: 'horizontal',
+      contents: [
+        {
+          type: 'text',
+          text: 'ห้องพัก',
+          size: 'sm',
+          color: '#64748B',
+          flex: 2,
+        },
+        {
+          type: 'text',
+          text: `ห้อง ${roomNumber}`,
+          size: 'sm',
+          color: '#0F172A',
+          weight: 'bold',
+          flex: 4,
+          align: 'end',
+        },
+      ],
+    },
+  ];
+
+  if (Array.isArray(termsDiff) && termsDiff.length > 0) {
+    bodyContents.push({
+      type: 'separator',
+      margin: 'md',
+    });
+    bodyContents.push({
+      type: 'text',
+      text: 'รายการที่มีการปรับแก้เงื่อนไข:',
+      size: 'xs',
+      weight: 'bold',
+      color: '#334155',
+      margin: 'sm',
+    });
+
+    termsDiff.forEach((d) => {
+      bodyContents.push({
+        type: 'box',
+        layout: 'horizontal',
+        margin: 'xs',
+        contents: [
+          {
+            type: 'text',
+            text: d.label || d.field,
+            size: 'xs',
+            color: '#64748B',
+            flex: 3,
+          },
+          {
+            type: 'text',
+            text: `${d.oldValue ?? '-'} ➔ ${d.newValue ?? '-'}`,
+            size: 'xs',
+            color: '#0F172A',
+            weight: 'bold',
+            flex: 5,
+            align: 'end',
+            wrap: true,
+          },
+        ],
+      });
+    });
+  }
+
+  bodyContents.push({
+    type: 'text',
+    text: 'กรุณาตรวจสอบเงื่อนไขที่เปลี่ยนแปลง และลงนามยืนยันสัญญาเพื่อเปิดใช้งานห้องพัก',
+    size: 'xs',
+    color: '#64748B',
+    wrap: true,
+    margin: 'md',
+  });
+
+  return {
+    type: 'flex',
+    altText: `แจ้งปรับแก้เงื่อนไขคำขอเช่าห้องพัก ${roomNumber} - ${dormitoryName}`,
+    contents: {
+      type: 'bubble',
+      header: {
+        type: 'box',
+        layout: 'vertical',
+        backgroundColor: '#D97706',
+        paddingAll: '20px',
+        contents: [
+          {
+            type: 'text',
+            text: dormitoryName,
+            color: '#FFFFFF',
+            size: 'xs',
+            weight: 'regular',
+          },
+          {
+            type: 'text',
+            text: 'แจ้งปรับแก้เงื่อนไขคำขอเช่า',
+            color: '#FFFFFF',
+            size: 'md',
+            weight: 'bold',
+            wrap: true,
+          },
+        ],
+      },
+      body: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'sm',
+        paddingAll: '20px',
+        contents: bodyContents,
+      },
+      footer: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'sm',
+        contents: [
+          {
+            type: 'button',
+            style: 'primary',
+            color: '#D97706',
+            action: {
+              type: 'uri',
+              label: 'ตรวจสอบและลงนามสัญญา',
+              uri: targetUrl,
+            },
+          },
+        ],
+      },
+    },
+  };
+}
+
 export function buildOwnerDirectEntryFlexMessage(dormitoryName: string, directEntryUrl: string) {
   let targetUrl = directEntryUrl;
   if (!targetUrl.includes('openExternalBrowser=1')) {

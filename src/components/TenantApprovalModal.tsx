@@ -63,6 +63,10 @@ export interface TenantApprovalModalProps {
     days?: number;
     dailyRate?: number;
     durationMonths?: number;
+    applicantPrefix?: string;
+    applicantFirstName?: string;
+    applicantLastName?: string;
+    termsDiff?: any[];
   }) => void | Promise<void>;
   onReject: (reason: string) => void | Promise<void>;
   isApproving?: boolean;
@@ -87,6 +91,9 @@ export const TenantApprovalModal: React.FC<TenantApprovalModalProps> = ({
   const [rentAmount, setRentAmount] = useState<string>('');
   const [depositAmount, setDepositAmount] = useState<string>('');
   const [depositStatus, setDepositStatus] = useState<'UNPAID' | 'PAID'>('UNPAID');
+  const [applicantPrefix, setApplicantPrefix] = useState<string>('');
+  const [applicantFirstName, setApplicantFirstName] = useState<string>('');
+  const [applicantLastName, setApplicantLastName] = useState<string>('');
 
   // Daily specific
   const [dailyDays, setDailyDays] = useState<number>(1);
@@ -203,6 +210,17 @@ export const TenantApprovalModal: React.FC<TenantApprovalModalProps> = ({
     }
 
     setDepositStatus(tenant.depositDeclaredStatus === 'PAID' ? 'PAID' : 'UNPAID');
+    const snap = tenant.acceptanceSnapshot || {};
+    const pfx = tenant.prefix || snap.prefix || '';
+    const fName = tenant.firstName || snap.firstName || (tenant.name ? tenant.name.split(' ')[0] : '');
+    const lName = tenant.lastName !== undefined && tenant.lastName !== '-'
+      ? tenant.lastName
+      : (snap.lastName !== undefined && snap.lastName !== '-'
+        ? snap.lastName
+        : (tenant.name ? tenant.name.split(' ').slice(1).join(' ') : ''));
+    setApplicantPrefix(pfx);
+    setApplicantFirstName(fName);
+    setApplicantLastName(lName);
     setIsRejectSheetOpen(false);
   }, [isOpen, tenant, rooms]);
 
@@ -248,6 +266,29 @@ export const TenantApprovalModal: React.FC<TenantApprovalModalProps> = ({
 
   const handleConfirmApprove = () => {
     if (!selectedRoomId) return;
+    const snap = tenant.acceptanceSnapshot || {};
+    const origPrefix = tenant.prefix || snap.prefix || '';
+    const origFirst = tenant.firstName || snap.firstName || (tenant.name ? tenant.name.split(' ')[0] : '');
+    const origLast = tenant.lastName !== undefined && tenant.lastName !== '-'
+      ? tenant.lastName
+      : (snap.lastName !== undefined && snap.lastName !== '-'
+        ? snap.lastName
+        : (tenant.name ? tenant.name.split(' ').slice(1).join(' ') : ''));
+
+    const diff = [];
+    if (
+      (applicantFirstName.trim() && applicantFirstName.trim() !== origFirst) ||
+      (applicantLastName.trim() !== origLast) ||
+      (applicantPrefix.trim() !== origPrefix)
+    ) {
+      diff.push({
+        field: 'applicantName',
+        label: 'ชื่อ-นามสกุลผู้เช่า',
+        oldValue: `${origPrefix} ${origFirst} ${origLast}`.trim(),
+        newValue: `${applicantPrefix.trim()} ${applicantFirstName.trim()} ${applicantLastName.trim()}`.trim(),
+      });
+    }
+
     onApprove({
       roomId: selectedRoomId,
       rentalType,
@@ -259,6 +300,10 @@ export const TenantApprovalModal: React.FC<TenantApprovalModalProps> = ({
       days: rentalType === 'DAILY' ? dailyDays : undefined,
       dailyRate: rentalType === 'DAILY' ? Number(dailyRate) : undefined,
       durationMonths: rentalType !== 'DAILY' ? durationMonths : undefined,
+      applicantPrefix: applicantPrefix.trim() || undefined,
+      applicantFirstName: applicantFirstName.trim() || undefined,
+      applicantLastName: applicantLastName.trim() || undefined,
+      termsDiff: diff.length > 0 ? diff : undefined,
     });
   };
 
@@ -567,6 +612,46 @@ export const TenantApprovalModal: React.FC<TenantApprovalModalProps> = ({
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {/* Editable applicant name fields */}
+                <div className="sm:col-span-2 grid grid-cols-1 sm:grid-cols-3 gap-3 p-3.5 bg-white rounded-2xl border border-slate-200/80 mb-1">
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 mb-1">คำนำหน้า</label>
+                    <select
+                      data-testid="modal-approve-prefix-select"
+                      value={applicantPrefix}
+                      onChange={(e) => setApplicantPrefix(e.target.value)}
+                      className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
+                    >
+                      <option value="">-- ไม่ระบุ --</option>
+                      <option value="นาย">นาย</option>
+                      <option value="นางสาว">นางสาว</option>
+                      <option value="นาง">นาง</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 mb-1">ชื่อจริง *</label>
+                    <input
+                      type="text"
+                      data-testid="modal-approve-firstname-input"
+                      value={applicantFirstName}
+                      onChange={(e) => setApplicantFirstName(e.target.value)}
+                      className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
+                      placeholder="ชื่อจริง"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 mb-1">นามสกุล</label>
+                    <input
+                      type="text"
+                      data-testid="modal-approve-lastname-input"
+                      value={applicantLastName}
+                      onChange={(e) => setApplicantLastName(e.target.value)}
+                      className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-600 bg-white text-slate-800 font-semibold"
+                      placeholder="นามสกุล"
+                    />
+                  </div>
+                </div>
+
                 {/* Field 1: Room Selection */}
                 <div>
                   <label

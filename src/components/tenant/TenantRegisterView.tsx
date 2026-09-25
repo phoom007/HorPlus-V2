@@ -844,7 +844,9 @@ export const TenantRegisterView: React.FC<TenantRegisterViewProps> = ({
   }, [selectedRoomId, rentPlan]);
 
   // Active step tracking & navigation (Steps 1 to 5 for long-term, 1 to 3 for daily)
-  const [activeStep, setActiveStep] = useState<number>(initialStep || 1);
+  const [activeStep, setActiveStep] = useState<number>(
+    initialStep || (revisionRequest?.status === 'awaiting_tenant_confirmation' ? (rentPlan === 'daily' ? 2 : 5) : 1)
+  );
   const [invalidSteps, setInvalidSteps] = useState<number[]>([]);
 
   const stepsList = rentPlan === 'daily' ? [
@@ -1183,7 +1185,9 @@ export const TenantRegisterView: React.FC<TenantRegisterViewProps> = ({
       const snap = revisionRequest.acceptanceSnapshot || {};
       const approved = snap.approvedTerms || revisionRequest.approvedTerms || {};
 
-      if (snap.requestedRoomId) setSelectedRoomId(snap.requestedRoomId);
+      if (revisionRequest.approvedRoomId) setSelectedRoomId(revisionRequest.approvedRoomId);
+      else if (approved.roomId) setSelectedRoomId(approved.roomId);
+      else if (snap.requestedRoomId) setSelectedRoomId(snap.requestedRoomId);
 
       // Restore prefix and customPrefix
       const KNOWN_PREFIXES = ['นางสาว', 'เด็กหญิง', 'เด็กชาย', 'นาย', 'นาง'];
@@ -1349,6 +1353,12 @@ export const TenantRegisterView: React.FC<TenantRegisterViewProps> = ({
             count: snap.pet.count || 1,
           },
         ]);
+      }
+
+      if (revisionRequest.status === 'awaiting_tenant_confirmation') {
+        const effectivePlan = (approved.rentalType || approved.rentalPlan || snap.rentalPlan || 'monthly').toLowerCase();
+        setActiveStep(effectivePlan === 'daily' ? 2 : 5);
+        setIsAgreedTerms(true);
       }
     }
   }, [revisionRequest]);
@@ -2472,16 +2482,43 @@ export const TenantRegisterView: React.FC<TenantRegisterViewProps> = ({
         <div id="tenant-registration-scroll-body" className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-4 space-y-5">
           {/* Two-Phase Approved Confirmation Notice */}
           {isAwaitingTenantConfirmation && (
-            <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-3xl flex items-start gap-3 text-emerald-900 text-xs animate-in fade-in duration-200">
-              <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
-              <div className="space-y-1">
-                <h5 className="font-extrabold text-emerald-950 text-xs flex items-center gap-1.5">
-                  <span>เจ้าของหอพักอนุมัติคำขอของคุณแล้ว (กรุณาตรวจสอบและยืนยัน)</span>
-                </h5>
-                <p className="text-[11px] text-emerald-800">
-                  กรุณาตรวจสอบเงื่อนไขสัญญาเช่า และลงนามดิจิทัลในขั้นตอนที่ 5 เพื่อยืนยันการเปิดใช้งานห้องพัก
-                </p>
+            <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-3xl space-y-3 text-emerald-900 text-xs animate-in fade-in duration-200">
+              <div className="flex items-start gap-3">
+                <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+                <div className="space-y-1">
+                  <h5 className="font-extrabold text-emerald-950 text-xs flex items-center gap-1.5">
+                    <span>เจ้าของหอพักอนุมัติคำขอของคุณแล้ว (กรุณาตรวจสอบและยืนยัน)</span>
+                  </h5>
+                  <p className="text-[11px] text-emerald-800">
+                    เจ้าของหอพักได้ปรับแก้เงื่อนไข กรุณาตรวจสอบรายละเอียดที่เปลี่ยนแปลงด้านล่าง และลงนามเพื่อยืนยันสัญญาเช่า
+                  </p>
+                </div>
               </div>
+              {(() => {
+                const snap = revisionRequest?.acceptanceSnapshot || {};
+                const diffList = snap.termsDiff || snap.approvedTerms?.termsDiff || [];
+                if (!Array.isArray(diffList) || diffList.length === 0) return null;
+                return (
+                  <div className="bg-white/80 border border-emerald-200/80 rounded-2xl p-3 space-y-2 text-xs" data-testid="register-terms-diff-box">
+                    <div className="flex items-center gap-1.5 font-bold text-slate-800 text-[11px]">
+                      <AlertCircle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                      <span>รายการที่เจ้าของหอพักปรับแก้:</span>
+                    </div>
+                    <div className="space-y-1.5 divide-y divide-slate-100 pt-0.5">
+                      {diffList.map((d: any, idx: number) => (
+                        <div key={idx} className="flex justify-between items-center pt-1.5 text-[11px]">
+                          <span className="text-slate-600 font-semibold">{d.label || d.field}:</span>
+                          <div className="flex items-center gap-1.5 font-black">
+                            <span className="line-through text-slate-400 font-normal">{String(d.oldValue ?? '-')}</span>
+                            <span className="text-amber-600">➔</span>
+                            <span className="text-emerald-700 bg-emerald-100/80 px-1.5 py-0.5 rounded-md">{String(d.newValue ?? '-')}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           )}
 
@@ -4038,8 +4075,8 @@ export const TenantRegisterView: React.FC<TenantRegisterViewProps> = ({
                     <button
                       type="submit"
                       data-testid="tenant-registration-submit-btn"
-                      disabled={submittingRegistration || (isClaimCandidateRoom && !isClaimVerified)}
-                      className={`w-full py-3.5 font-black text-xs rounded-2xl shadow-lg flex items-center justify-center gap-2 transition-all ${submittingRegistration || (isClaimCandidateRoom && !isClaimVerified)
+                      disabled={submittingRegistration || (!isAwaitingTenantConfirmation && isClaimCandidateRoom && !isClaimVerified)}
+                      className={`w-full py-3.5 font-black text-xs rounded-2xl shadow-lg flex items-center justify-center gap-2 transition-all ${submittingRegistration || (!isAwaitingTenantConfirmation && isClaimCandidateRoom && !isClaimVerified)
                         ? 'bg-slate-300 text-slate-500 cursor-not-allowed'
                         : 'bg-indigo-600 hover:bg-indigo-700 text-white active:scale-98 cursor-pointer'
                         }`}
@@ -4049,15 +4086,15 @@ export const TenantRegisterView: React.FC<TenantRegisterViewProps> = ({
                           <Clock className="w-4 h-4 animate-spin text-white" />
                           <span>กำลังบันทึกข้อมูล...</span>
                         </>
-                      ) : isClaimCandidateRoom && isClaimVerified ? (
-                        <>
-                          <CheckCircle2 className="w-4 h-4 text-emerald-300" />
-                          <span>ยืนยันสิทธิ์และบันทึกข้อมูล (ลงทะเบียนสำเร็จทันที)</span>
-                        </>
                       ) : isAwaitingTenantConfirmation ? (
                         <>
                           <CheckCircle2 className="w-4 h-4 text-emerald-300" />
                           <span>ลงนามและยืนยันสัญญาเช่า (เปิดใช้งานห้องพัก)</span>
+                        </>
+                      ) : isClaimCandidateRoom && isClaimVerified ? (
+                        <>
+                          <CheckCircle2 className="w-4 h-4 text-emerald-300" />
+                          <span>ยืนยันสิทธิ์และบันทึกข้อมูล (ลงทะเบียนสำเร็จทันที)</span>
                         </>
                       ) : revisionRequest && revisionRequest.status !== 'pending_owner_approval' ? (
                         <>

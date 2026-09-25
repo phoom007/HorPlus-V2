@@ -263,6 +263,15 @@ export const ApproveRegistrationSchema = z.object({
   confirmReplacement: z.boolean().optional(),
   requireTenantConfirmation: z.boolean().optional(),
   legacyDirectApproval: z.boolean().optional(),
+  firstName: z.string().optional(),
+  lastName: z.string().optional(),
+  prefix: z.string().optional(),
+  termsDiff: z.array(z.object({
+    field: z.string(),
+    label: z.string().optional(),
+    oldValue: z.any().optional(),
+    newValue: z.any().optional(),
+  })).optional(),
 }).strict();
 
 export const PetPolicySchema = z.object({
