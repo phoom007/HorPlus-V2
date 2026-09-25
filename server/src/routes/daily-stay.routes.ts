@@ -294,6 +294,8 @@ export function createDailyStayRouter(
       dailyRateAmount: MoneyDecimalStringSchema.optional(),
       depositAmount: MoneyDecimalStringSchema.optional(),
       depositDeclaredStatus: z.enum(['PAID', 'UNPAID']).optional(),
+      paymentMethod: z.enum(['CASH', 'BANK_TRANSFER']).optional().nullable(),
+      slipObjectKey: z.string().max(500).optional().nullable(),
     })
     .refine((data) => !!data.roomId || !!data.roomNumber, {
       message: 'กรุณาระบุห้องพัก (roomId หรือ roomNumber)',
@@ -331,12 +333,20 @@ export function createDailyStayRouter(
         });
       }
 
-      const requesterUserId = req.auth!.userId;
+      const rawUserId = req.auth?.userId;
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(rawUserId || '');
+      const requesterUserId = isUuid ? rawUserId : undefined;
+
+      const accessGrantId =
+        req.auth?.session?.accessGrantId ||
+        (rawUserId?.startsWith('ag_user_') ? rawUserId.replace('ag_user_', '') :
+        (rawUserId?.startsWith('ag_') ? rawUserId.replace('ag_', '') : null));
 
       const stay = await dailyStayService.createTenantDailyStayRequest(
         parsed.dormitoryId,
         parsed,
-        requesterUserId
+        requesterUserId,
+        accessGrantId || undefined
       );
 
       res.status(201).json({

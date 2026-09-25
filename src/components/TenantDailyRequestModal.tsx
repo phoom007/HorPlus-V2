@@ -28,10 +28,12 @@ export const TenantDailyRequestModal: React.FC<TenantDailyRequestModalProps> = (
   roomId,
   onSuccess,
 }) => {
+  const [currentRoomNumber, setCurrentRoomNumber] = useState(roomNumber || '205');
+  const [currentRoomId, setCurrentRoomId] = useState(roomId);
   const [applicantFullName, setApplicantFullName] = useState('');
   const [applicantPhone, setApplicantPhone] = useState('');
   const [startDate, setStartDate] = useState(() => new Date().toISOString().slice(0, 10));
-  const [endDate, setEndDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [endDate, setEndDate] = useState(() => new Date(Date.now() + 2 * 24 * 3600 * 1000).toISOString().slice(0, 10));
 
   // Authoritative financial state
   const [dailyRate, setDailyRate] = useState<number>(0);
@@ -42,16 +44,21 @@ export const TenantDailyRequestModal: React.FC<TenantDailyRequestModalProps> = (
   const [submitting, setSubmitting] = useState(false);
   const [errorText, setErrorText] = useState<string | null>(null);
 
+  useEffect(() => {
+    if (roomNumber) setCurrentRoomNumber(roomNumber);
+    if (roomId) setCurrentRoomId(roomId);
+  }, [roomNumber, roomId]);
+
   // Fetch authoritative rates from pre-link daily request context
   useEffect(() => {
-    if (isOpen && (roomNumber || roomId)) {
+    if (isOpen && currentRoomNumber) {
       setErrorText(null);
       setContextState('loading');
       const dormId = dormitoryId || (typeof localStorage !== 'undefined' ? localStorage.getItem('selected_dormitory_id') || '' : '');
       const query = new URLSearchParams();
       if (dormId) query.set('dormitoryId', dormId);
-      if (roomNumber) query.set('roomNumber', roomNumber);
-      if (roomId) query.set('roomId', roomId);
+      if (currentRoomNumber) query.set('roomNumber', currentRoomNumber);
+      if (currentRoomId) query.set('roomId', currentRoomId);
 
       httpRequest<{ data: { roomId: string; roomNumber: string; dailyRateAmount: string; depositDefaultAmount: string } }>(
         'GET',
@@ -66,6 +73,7 @@ export const TenantDailyRequestModal: React.FC<TenantDailyRequestModalProps> = (
             const dep = data.depositDefaultAmount ? Number(data.depositDefaultAmount) : 0;
             setDailyRate(rate);
             setDepositAmount(dep);
+            if (data.roomId) setCurrentRoomId(data.roomId);
             setContextState('ready');
           } else {
             setContextState('error');
@@ -79,22 +87,25 @@ export const TenantDailyRequestModal: React.FC<TenantDailyRequestModalProps> = (
     } else if (!isOpen) {
       setContextState('idle');
     }
-  }, [isOpen, roomNumber, roomId, dormitoryId]);
+  }, [isOpen, currentRoomNumber, dormitoryId]);
+
+  const [paymentMethod, setPaymentMethod] = useState<'CASH' | 'BANK_TRANSFER'>('CASH');
+  const [slipFileName, setSlipFileName] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
-  const calculateDays = (s: string, e: string) => {
+  const calculateNights = (s: string, e: string) => {
     if (!s || !e) return 1;
     const [sy, sm, sd] = s.split('-').map(Number);
     const [ey, em, ed] = e.split('-').map(Number);
     const startUtc = Date.UTC(sy, sm - 1, sd);
     const endUtc = Date.UTC(ey, em - 1, ed);
-    if (endUtc < startUtc) return 1;
-    return Math.round((endUtc - startUtc) / (24 * 3600 * 1000)) + 1;
+    if (endUtc <= startUtc) return 1;
+    return Math.max(1, Math.round((endUtc - startUtc) / (24 * 3600 * 1000)));
   };
 
-  const daysCount = calculateDays(startDate, endDate);
-  const totalRent = dailyRate * daysCount;
+  const nightsCount = calculateNights(startDate, endDate);
+  const totalRent = dailyRate * nightsCount;
   const safeDeposit = isNaN(depositAmount) || depositAmount < 0 ? 0 : depositAmount;
   const totalAgreed = totalRent + safeDeposit;
   const outstanding = depositDeclaredStatus === 'PAID' ? totalRent : totalAgreed;
@@ -117,14 +128,16 @@ export const TenantDailyRequestModal: React.FC<TenantDailyRequestModalProps> = (
     try {
       await httpRequest('POST', '/api/v1/daily-stays/request', {
         dormitoryId,
-        roomNumber,
-        roomId: roomId || undefined,
+        roomNumber: currentRoomNumber,
+        roomId: currentRoomId || undefined,
         applicantFullName: applicantFullName.trim(),
         applicantPhone: applicantPhone.trim() || undefined,
         startDate,
         endDate,
         depositAmount: safeDeposit.toFixed(2),
         depositDeclaredStatus,
+        paymentMethod,
+        slipObjectKey: paymentMethod === 'BANK_TRANSFER' && slipFileName ? `slips/daily-req-${Date.now()}.webp` : undefined,
       }, {
         headers: dormitoryId ? { 'x-dormitory-id': dormitoryId } : {},
       });
@@ -146,7 +159,7 @@ export const TenantDailyRequestModal: React.FC<TenantDailyRequestModalProps> = (
           <div>
             <h2 className="text-base font-extrabold text-slate-800 flex items-center gap-2">
               <BedDouble className="w-5 h-5 text-amber-600" />
-              <span>ขอเข้าพักรายวันห้อง {roomNumber || ''}</span>
+              <span>ขอเข้าพักรายวันห้อง {currentRoomNumber || ''}</span>
             </h2>
             <p className="text-xs text-slate-500 mt-0.5 font-medium">
               ส่งคำขอเข้าพักรายวันเพื่อรอการอนุมัติจากเจ้าของหอพัก
@@ -163,7 +176,7 @@ export const TenantDailyRequestModal: React.FC<TenantDailyRequestModalProps> = (
 
         {/* Error notification */}
         {errorText && (
-          <div className="mx-5 mt-4 p-3 rounded-2xl bg-rose-50 border border-rose-200 flex items-center gap-2 text-xs font-bold text-rose-700">
+          <div data-testid="tenant-daily-error-alert" className="mx-5 mt-4 p-3 rounded-2xl bg-rose-50 border border-rose-200 flex items-center gap-2 text-xs font-bold text-rose-700">
             <AlertCircle className="w-4 h-4 shrink-0 text-rose-500" />
             <span>{errorText}</span>
           </div>
@@ -185,6 +198,24 @@ export const TenantDailyRequestModal: React.FC<TenantDailyRequestModalProps> = (
             <>
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">
+                  หมายเลขห้องพัก <span className="text-rose-500">*</span>
+                </label>
+                <div className="relative">
+                  <BedDouble className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+                  <input
+                    type="text"
+                    required
+                    data-testid="tenant-daily-room-input"
+                    placeholder="เช่น 205"
+                    value={currentRoomNumber}
+                    onChange={(e) => setCurrentRoomNumber(e.target.value)}
+                    className="w-full pl-9 pr-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-amber-600 bg-white text-slate-800 font-semibold"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
                   ชื่อ-นามสกุล ผู้ขอเข้าพัก <span className="text-rose-500">*</span>
                 </label>
                 <div className="relative">
@@ -192,6 +223,7 @@ export const TenantDailyRequestModal: React.FC<TenantDailyRequestModalProps> = (
                   <input
                     type="text"
                     required
+                    data-testid="tenant-daily-name-input"
                     placeholder="เช่น นายสมชาย ใจดี"
                     value={applicantFullName}
                     onChange={(e) => setApplicantFullName(e.target.value)}
@@ -208,6 +240,7 @@ export const TenantDailyRequestModal: React.FC<TenantDailyRequestModalProps> = (
                   <Phone className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
                   <input
                     type="tel"
+                    data-testid="tenant-daily-phone-input"
                     placeholder="08X-XXX-XXXX"
                     value={applicantPhone}
                     onChange={(e) => setApplicantPhone(e.target.value)}
@@ -226,6 +259,7 @@ export const TenantDailyRequestModal: React.FC<TenantDailyRequestModalProps> = (
                     <input
                       type="date"
                       required
+                      data-testid="tenant-daily-start-date"
                       value={startDate}
                       onChange={(e) => setStartDate(e.target.value)}
                       className="w-full pl-9 pr-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-amber-600 bg-white text-slate-800 font-semibold"
@@ -242,6 +276,7 @@ export const TenantDailyRequestModal: React.FC<TenantDailyRequestModalProps> = (
                     <input
                       type="date"
                       required
+                      data-testid="tenant-daily-end-date"
                       min={startDate}
                       value={endDate}
                       onChange={(e) => setEndDate(e.target.value)}
@@ -255,11 +290,11 @@ export const TenantDailyRequestModal: React.FC<TenantDailyRequestModalProps> = (
               <div className="p-3.5 bg-amber-50/60 border border-amber-200 rounded-2xl space-y-2 text-xs">
                 <div className="flex items-center justify-between font-medium text-slate-700">
                   <span>อัตราค่าเช่ารายวัน (ตามที่หอพักกำหนด):</span>
-                  <span className="font-extrabold text-slate-900">{formatBaht(dailyRate)} / วัน</span>
+                  <span className="font-extrabold text-slate-900">{formatBaht(dailyRate)} / คืน</span>
                 </div>
                 <div className="flex items-center justify-between font-medium text-slate-700">
-                  <span>จำนวนวันเข้าพัก (รวม):</span>
-                  <span className="font-bold text-amber-800">{daysCount} วัน</span>
+                  <span>จำนวนคืนเข้าพัก:</span>
+                  <span className="font-bold text-amber-800">{nightsCount} คืน</span>
                 </div>
                 <div className="flex items-center justify-between font-medium text-slate-700">
                   <span>รวมค่าเช่า:</span>
@@ -282,35 +317,73 @@ export const TenantDailyRequestModal: React.FC<TenantDailyRequestModalProps> = (
                   />
                 </div>
 
-                {/* Deposit Declared Status */}
+                {/* Payment Method Selection */}
                 <div className="pt-2 border-t border-amber-200/60 space-y-1">
                   <span className="text-[11px] font-bold text-slate-700 block">
-                    แจ้งสถานะการชำระเงินมัดจำ (แจ้งล่วงหน้า):
+                    รูปแบบการชำระเงิน:
                   </span>
                   <div className="grid grid-cols-2 gap-2">
                     <button
                       type="button"
-                      onClick={() => setDepositDeclaredStatus('UNPAID')}
+                      data-testid="tenant-daily-cash-btn"
+                      onClick={() => {
+                        setPaymentMethod('CASH');
+                        setDepositDeclaredStatus('UNPAID');
+                      }}
                       className={`py-1.5 px-2 rounded-lg text-[11px] font-bold border transition-all cursor-pointer ${
-                        depositDeclaredStatus === 'UNPAID'
+                        paymentMethod === 'CASH'
                           ? 'bg-amber-600 text-white border-amber-600 shadow-xs'
                           : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
                       }`}
                     >
-                      ยังไม่ชำระมัดจำ
+                      ชำระเงินสดตอนเช็คอิน
                     </button>
                     <button
                       type="button"
-                      onClick={() => setDepositDeclaredStatus('PAID')}
+                      data-testid="tenant-daily-transfer-btn"
+                      onClick={() => {
+                        setPaymentMethod('BANK_TRANSFER');
+                        setDepositDeclaredStatus('PAID');
+                      }}
                       className={`py-1.5 px-2 rounded-lg text-[11px] font-bold border transition-all cursor-pointer ${
-                        depositDeclaredStatus === 'PAID'
+                        paymentMethod === 'BANK_TRANSFER'
                           ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
                           : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
                       }`}
                     >
-                      ชำระมัดจำแล้ว (แจ้งสถานะ)
+                      โอนเงินชำระล่วงหน้า
                     </button>
                   </div>
+
+                  {paymentMethod === 'BANK_TRANSFER' && (
+                    <div className="pt-2 space-y-1">
+                      <label className="text-[11px] font-bold text-slate-700 block">
+                        แนบสลิปการโอนเงิน (สลิปชำระเงิน):
+                      </label>
+                      <input
+                        type="file"
+                        data-testid="tenant-daily-slip-input"
+                        accept="image/jpeg,image/png,image/webp,image/heic,.jpg,.jpeg,.png,.webp,.heic"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) {
+                            if (file.size > 5 * 1024 * 1024) {
+                              setErrorText('ขนาดไฟล์สลิปต้องไม่เกิน 5MB');
+                              return;
+                            }
+                            setSlipFileName(file.name);
+                            setErrorText(null);
+                          }
+                        }}
+                        className="w-full text-xs text-slate-500 file:mr-2 file:py-1 file:px-2.5 file:rounded-lg file:border-0 file:text-[11px] file:font-semibold file:bg-emerald-50 file:text-emerald-700 hover:file:bg-emerald-100 cursor-pointer"
+                      />
+                      {slipFileName && (
+                        <div className="text-[10px] text-emerald-700 font-bold flex items-center gap-1">
+                          ✓ แนบสลิปแล้ว: {slipFileName}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 {/* Financial Summary */}

@@ -38,6 +38,8 @@ export interface CreateTenantDailyStayRequestDto {
   dailyRateAmount?: string | number;
   depositAmount?: string | number;
   depositDeclaredStatus?: 'PAID' | 'UNPAID';
+  paymentMethod?: 'CASH' | 'BANK_TRANSFER' | null;
+  slipObjectKey?: string | null;
 }
 
 export interface OwnerQuickAddDailyStayDto {
@@ -286,7 +288,8 @@ export class DailyStayService {
   public async createTenantDailyStayRequest(
     dormitoryId: string,
     data: CreateTenantDailyStayRequestDto,
-    requesterUserId?: string
+    requesterUserId?: string,
+    accessGrantId?: string
   ) {
     const fullNameClean = data.applicantFullName?.trim();
     if (!fullNameClean) {
@@ -339,6 +342,21 @@ export class DailyStayService {
     // Validate operational room entitlement & existence
     await this.entitlementService.assertRoomOperationalEntitlement(dormitoryId, room.id);
 
+    // Validate room availability across contracts, provisional terms, and daily stays
+    const stayInterval = { start: checkInAt, end: checkOutAt };
+    const availability = await this.checkRoomAvailability(
+      dormitoryId,
+      room.id,
+      stayInterval.start,
+      stayInterval.end
+    );
+    if (!availability.available) {
+      const err = new Error('ห้องพักไม่ว่างในช่วงวันและเวลาดังกล่าว');
+      (err as any).statusCode = 409;
+      (err as any).code = 'ROOM_NOT_AVAILABLE';
+      throw err;
+    }
+
     const { defaultsService } = await import('./defaults.service.js');
     const effective = await defaultsService.resolveEffectiveRoomDefaults(
       dormitoryId,
@@ -374,14 +392,44 @@ export class DailyStayService {
     const startDate = new Date(Date.UTC(sy, sm - 1, sd));
     const endDate = new Date(Date.UTC(ey, em - 1, ed));
 
+    const isUuid = requesterUserId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(requesterUserId);
+    const safeRequesterUserId = isUuid ? requesterUserId : null;
+
+    let existingTenantId: string | null = null;
+    if (accessGrantId) {
+      const grant = await this.prisma.dormitoryAccessGrant.findUnique({
+        where: { id: accessGrantId },
+        include: { lineFriend: true },
+      });
+      const targetFriendId = grant?.lineFriendId || grant?.lineFriend?.id;
+      if (targetFriendId) {
+        const existingTenant = await this.prisma.tenant.findFirst({
+          where: { dormitoryId, lineFriendId: targetFriendId, deletedAt: null, status: 'active' },
+          select: { id: true },
+        });
+        if (existingTenant) {
+          existingTenantId = existingTenant.id;
+        }
+      }
+    } else if (safeRequesterUserId) {
+      const existingTenant = await this.prisma.tenant.findFirst({
+        where: { dormitoryId, linkedUserId: safeRequesterUserId, deletedAt: null, status: 'active' },
+        select: { id: true },
+      });
+      if (existingTenant) {
+        existingTenantId = existingTenant.id;
+      }
+    }
+
     return this.prisma.dailyStay.create({
       data: {
         dormitoryId,
         roomId: room.id,
+        tenantId: existingTenantId,
         requestSource: 'TENANT',
         applicantFullName: fullNameClean,
         applicantPhone: phoneClean,
-        requesterUserId: requesterUserId || null,
+        requesterUserId: safeRequesterUserId,
         startDate,
         endDate,
         checkInAt,
@@ -667,6 +715,83 @@ export class DailyStayService {
         }
       }
 
+      // 6.1 Issue Bill with billKind 'DAILY' to ensure seamless visibility in Tenant Portal and Billing
+      let cycle = await tx.billingCycle.findFirst({
+        where: {
+          dormitoryId,
+          periodStart: { lte: stay.startDate },
+          periodEnd: { gte: stay.startDate },
+        },
+      });
+
+      if (!cycle) {
+        cycle = await tx.billingCycle.findFirst({
+          where: { dormitoryId },
+          orderBy: { periodStart: 'desc' },
+        });
+      }
+
+      if (cycle) {
+        const existingBill = await tx.bill.findFirst({
+          where: {
+            dormitoryId,
+            roomId: stay.roomId,
+            tenantId,
+            billKind: 'DAILY',
+            billNumber: invoice.invoiceNumber,
+          },
+        });
+
+        if (!existingBill) {
+          const isBillPaid = invoice.status === 'PAID';
+          const totalAgreedDec = toDecimal(totalAgreed);
+          const outstandingDec = toDecimal(invoice.outstandingAmount ? String(invoice.outstandingAmount) : '0.00');
+          const paidDec = isBillPaid ? totalAgreedDec : toDecimal('0.00');
+          await tx.bill.create({
+            data: {
+              dormitoryId,
+              billingCycleId: cycle.id,
+              roomId: stay.roomId,
+              tenantId,
+              billNumber: invoice.invoiceNumber,
+              billKind: 'DAILY',
+              status: isBillPaid ? 'paid' : 'unpaid',
+              billingDate: new Date(),
+              dueDate: stay.endDate,
+              subtotal: totalAgreedDec,
+              totalAmount: totalAgreedDec,
+              paidAmount: paidDec,
+              outstandingAmount: outstandingDec,
+              paidAt: isBillPaid ? new Date() : null,
+              items: {
+                create: [
+                  {
+                    dormitoryId,
+                    type: 'daily_rent',
+                    description: `ค่าเช่าห้องพักรายวัน (${stay.inclusiveDayCount} วัน)`,
+                    amount: toDecimal(totalRent),
+                    unitPrice: toDecimal(stay.dailyRateAmount),
+                    quantity: toDecimal(stay.inclusiveDayCount.toString()),
+                  },
+                  ...(toDecimal(deposit).greaterThan(0)
+                    ? [
+                        {
+                          dormitoryId,
+                          type: 'deposit',
+                          description: 'เงินประกัน/มัดจำรายวัน',
+                          amount: toDecimal(deposit),
+                          unitPrice: toDecimal(deposit),
+                          quantity: toDecimal('1.00'),
+                        },
+                      ]
+                    : []),
+                ],
+              },
+            },
+          });
+        }
+      }
+
       // 7. Update DailyStay record
       const updatedStay = await tx.dailyStay.update({
         where: { id: stay.id },
@@ -699,6 +824,24 @@ export class DailyStayService {
             data: { status: 'reserved' },
           });
         }
+      }
+
+      // 9. Non-blocking Rich Menu link for LINE User
+      try {
+        const { LineRichMenuService } = await import('./line-richmenu.service.js');
+        const richMenuService = new LineRichMenuService(this.prisma);
+        const tenantWithLine = await tx.tenant.findUnique({
+          where: { id: tenantId },
+          include: { lineFriend: true },
+        });
+        const targetLineUserId = tenantWithLine?.lineFriend?.lineUserId || null;
+        if (targetLineUserId) {
+          richMenuService.linkActiveTenantRichMenu(dormitoryId, targetLineUserId).catch((err: any) => {
+            console.error('[DAILY STAY APPROVAL] Failed to link active tenant rich menu:', err);
+          });
+        }
+      } catch (rmErr) {
+        console.error('[DAILY STAY APPROVAL] Error initializing rich menu service:', rmErr);
       }
 
       if (this.auditService) {

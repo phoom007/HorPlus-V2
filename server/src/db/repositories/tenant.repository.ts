@@ -705,6 +705,39 @@ export class PrismaTenantRepository implements ITenantRepository {
         }, reg);
         return this.mapTenantToEntity(synthetic);
       }
+
+      const dailyStay = await this.prisma.dailyStay.findFirst({
+        where: { id, dormitoryId, status: 'PENDING_APPROVAL', deletedAt: null },
+        include: { room: true },
+      });
+      if (dailyStay) {
+        return this.mapTenantToEntity({
+          id: dailyStay.id,
+          dormitoryId: dailyStay.dormitoryId,
+          tenantNumber: 'REQ-DAY-' + dailyStay.id.slice(0, 6).toUpperCase(),
+          firstName: dailyStay.applicantFullName || 'ผู้ขอพักรายวัน',
+          lastName: null,
+          displayName: dailyStay.applicantFullName || 'ผู้ขอพักรายวัน',
+          name: dailyStay.applicantFullName || 'ผู้ขอพักรายวัน',
+          phone: dailyStay.applicantPhone || '',
+          status: 'pending',
+          rentalType: 'DAILY',
+          rentalPlan: 'daily',
+          requestedRoomId: dailyStay.roomId,
+          roomId: dailyStay.roomId,
+          requestedDays: dailyStay.inclusiveDayCount,
+          requestedDailyRate: Number(dailyStay.dailyRateAmount),
+          requestedRent: Number(dailyStay.totalRentAmount),
+          requestedDeposit: Number(dailyStay.depositAmount),
+          requestedStartDate: dailyStay.startDate ? (dailyStay.startDate instanceof Date ? dailyStay.startDate.toISOString().slice(0, 10) : String(dailyStay.startDate).slice(0, 10)) : null,
+          requestedEndDate: dailyStay.endDate ? (dailyStay.endDate instanceof Date ? dailyStay.endDate.toISOString().slice(0, 10) : String(dailyStay.endDate).slice(0, 10)) : null,
+          dailyStayId: dailyStay.id,
+          version: 1,
+          createdAt: dailyStay.createdAt,
+          updatedAt: dailyStay.updatedAt,
+        });
+      }
+
       return null;
     }
     if (t.status === 'pending') {
@@ -915,6 +948,48 @@ export class PrismaTenantRepository implements ITenantRepository {
           if (matchedReg) {
             this.hydratePendingTenantFromRegistration(item, matchedReg);
           }
+        }
+      }
+    }
+
+    const pendingDailyStays = (!filter.status || filter.status === 'pending')
+      ? await this.prisma.dailyStay.findMany({
+          where: { dormitoryId, status: 'PENDING_APPROVAL', deletedAt: null },
+          include: { room: true },
+        })
+      : [];
+
+    if (pendingDailyStays.length > 0) {
+      for (const ds of pendingDailyStays) {
+        const isMatched = items.some((t) => t.id === ds.id || (t as any).dailyStayId === ds.id);
+        if (!isMatched) {
+          const syntheticDailyPending: any = {
+            id: ds.id,
+            dormitoryId: ds.dormitoryId,
+            tenantNumber: 'REQ-DAY-' + ds.id.slice(0, 6).toUpperCase(),
+            firstName: ds.applicantFullName || 'ผู้ขอพักรายวัน',
+            lastName: null,
+            displayName: ds.applicantFullName || 'ผู้ขอพักรายวัน',
+            name: ds.applicantFullName || 'ผู้ขอพักรายวัน',
+            phone: ds.applicantPhone || '',
+            status: 'pending',
+            rentalType: 'DAILY',
+            rentalPlan: 'daily',
+            requestedRoomId: ds.roomId,
+            roomId: ds.roomId,
+            roomNumber: ds.room?.roomNumber || '',
+            requestedDays: ds.inclusiveDayCount,
+            requestedDailyRate: Number(ds.dailyRateAmount),
+            requestedRent: Number(ds.totalRentAmount),
+            requestedDeposit: Number(ds.depositAmount),
+            requestedStartDate: ds.startDate ? (ds.startDate instanceof Date ? ds.startDate.toISOString().slice(0, 10) : String(ds.startDate).slice(0, 10)) : null,
+            requestedEndDate: ds.endDate ? (ds.endDate instanceof Date ? ds.endDate.toISOString().slice(0, 10) : String(ds.endDate).slice(0, 10)) : null,
+            dailyStayId: ds.id,
+            version: 1,
+            createdAt: ds.createdAt,
+            updatedAt: ds.updatedAt,
+          };
+          items.push(syntheticDailyPending);
         }
       }
     }

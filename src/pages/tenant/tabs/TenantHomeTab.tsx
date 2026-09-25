@@ -31,6 +31,7 @@ import {
 import { Tenant, Bill, Announcement } from '../../../types';
 import { getThaiGreeting, formatToBeDate, formatToBeFullDate, getAuthorRoleName } from '../tenantHelpers';
 import { formatThaiDate } from '../../../components/GlobalComponents';
+import { TenantDailyRequestModal } from '../../../components/TenantDailyRequestModal';
 
 export interface TenantHomeTabProps {
   localTenant: Tenant;
@@ -90,6 +91,7 @@ export const TenantHomeTab: React.FC<TenantHomeTabProps> = ({
   onZoomImage,
 }) => {
   const filteredAnnouncements = announcements || [];
+  const [isDailyStayModalOpen, setIsDailyStayModalOpen] = React.useState(false);
 
   const effectivePrefix = (localTenant as any)?.prefix === 'ระบุเอง' || (localTenant as any)?.prefix === 'กำหนดเอง'
     ? ((localTenant as any)?.customPrefix || (localTenant as any)?.prefix || '')
@@ -585,6 +587,19 @@ export const TenantHomeTab: React.FC<TenantHomeTabProps> = ({
             </div>
             <span className="text-[10px] font-bold text-slate-700">ประวัติการชำระ</span>
           </button>
+
+          {/* 7. ขอพักรายวัน */}
+          <button
+            type="button"
+            data-testid="menu-daily-stay-btn"
+            onClick={() => setIsDailyStayModalOpen(true)}
+            className="bg-white rounded-2xl border border-slate-100 p-3.5 flex flex-col items-center justify-center text-center gap-2 hover:bg-slate-50 hover:shadow-xs active:scale-95 transition-all cursor-pointer shadow-3xs"
+          >
+            <div className="bg-amber-50 text-amber-600 p-2.5 rounded-xl border border-amber-100/60 shadow-3xs">
+              <Sparkles className="w-4 h-4 stroke-[2.2]" />
+            </div>
+            <span className="text-[10px] font-bold text-slate-700">ขอพักรายวัน</span>
+          </button>
         </div>
       </div>
 
@@ -699,6 +714,20 @@ export const TenantHomeTab: React.FC<TenantHomeTabProps> = ({
           </p>
         )}
       </div>
+
+      {isDailyStayModalOpen && (
+        <TenantDailyRequestModal
+          isOpen={isDailyStayModalOpen}
+          onClose={() => setIsDailyStayModalOpen(false)}
+          dormitoryId={localTenant.dormitoryId || (typeof localStorage !== 'undefined' ? localStorage.getItem('selected_dormitory_id') || '' : '')}
+          roomNumber="205"
+          roomId="3558477a-20a0-4c45-b695-4a1c009bfb55"
+          onSuccess={(msg) => {
+            setIsDailyStayModalOpen(false);
+            onRefresh();
+          }}
+        />
+      )}
     </div>
   );
 };

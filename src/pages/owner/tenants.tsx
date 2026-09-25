@@ -2537,6 +2537,72 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
     const chosenRoom = rooms.find(r => r.id === approveRoomId);
     const roomNum = chosenRoom ? chosenRoom.roomNumber : '';
 
+    const isDailyStay = selectedTenant.rentalType === 'DAILY' || (selectedTenant as any).dailyStayId || (selectedTenant as any).stayType === 'DAILY';
+    if (isDailyStay) {
+      const dailyStayId = (selectedTenant as any).dailyStayId || selectedTenant.id;
+      try {
+        if (approveDailyRate || approveDeposit) {
+          try {
+            await httpRequest('PUT', `/api/v1/daily-stays/${dailyStayId}`, {
+              dailyRateAmount: approveDailyRate ? String(approveDailyRate) : undefined,
+              depositAmount: approveDeposit ? String(approveDeposit) : undefined,
+              depositDeclaredStatus: approveDepositDeclaredStatus,
+            });
+          } catch (putErr) {
+            console.warn('Could not update pending daily stay fields before approve:', putErr);
+          }
+        }
+
+        const approveRes = await httpRequest<any>('POST', `/api/v1/daily-stays/${dailyStayId}/approve`, {});
+        if (approveRes && (approveRes as any).error) {
+          const errMsg = (approveRes as any).error?.message || 'ไม่สามารถอนุมัติคำขอพักรายวันได้';
+          setTenantActionToast(errMsg);
+          return;
+        }
+
+        const approvedData = (approveRes as any)?.data || {};
+        const effectiveDailyTenantId = approvedData.tenant?.id || approvedData.stay?.tenantId || selectedTenant.id;
+
+        const approvedTenant: Tenant = {
+          ...selectedTenant,
+          id: effectiveDailyTenantId,
+          status: 'active' as const,
+          roomId: approveRoomId,
+          rentalType: 'DAILY',
+          rentalPlan: 'daily',
+          requestedRent: approveRent !== undefined && approveRent !== '' ? Number(approveRent) : (selectedTenant.requestedRent ?? 0),
+          requestedDeposit: approveDeposit !== undefined && approveDeposit !== '' ? Number(approveDeposit) : (selectedTenant.requestedDeposit ?? 0),
+          requestedStartDate: approveStartDate,
+          requestedEndDate: approveEndDate,
+          requestedDays: approveDays,
+          requestedDailyRate: Number(approveDailyRate) || 0,
+          updatedAt: new Date().toISOString()
+        };
+
+        const filteredTenants = tenants.filter(t => t.id !== selectedTenant.id && t.id !== dailyStayId && t.id !== effectiveDailyTenantId);
+        onSaveTenants([...filteredTenants, approvedTenant]);
+        setSelectedTenant(approvedTenant);
+        setIsApproveOpen(false);
+        setActiveStatusTab('active');
+        setTenantActionToast('อนุมัติคำขอพักรายวันและสร้างบิลค่าเช่ารายวันเรียบร้อยแล้ว');
+        onAddLog('อนุมัติผู้เช่ารายวัน', `อนุมัติคำขอพักรายวันคุณ ${selectedTenant.name} เข้าห้องพัก ${roomNum}`, 'Tenant', effectiveDailyTenantId);
+
+        if (queryClient && effectiveDormId) {
+          await Promise.all([
+            queryClient.invalidateQueries({ queryKey: queryKeys.tenants(effectiveDormId) }),
+            queryClient.invalidateQueries({ queryKey: queryKeys.rooms(effectiveDormId) }),
+            queryClient.invalidateQueries({ queryKey: queryKeys.bills(effectiveDormId) }),
+          ]);
+        }
+        return;
+      } catch (err: any) {
+        console.error('Failed to approve daily stay request via API:', err);
+        const errMsg = err?.message || 'ไม่สามารถอนุมัติคำขอพักรายวันได้ กรุณาลองใหม่อีกครั้ง';
+        setTenantActionToast(errMsg);
+        return;
+      }
+    }
+
     const reqId = (selectedTenant as any).registrationRequestId || (selectedTenant as any).requestId || (selectedTenant.status === 'pending' ? selectedTenant.id : undefined);
     let effectiveTenantId = selectedTenant.id;
     let effectiveContractId: string | undefined;
@@ -2864,6 +2930,31 @@ export const OwnerTenants: React.FC<OwnerTenantsProps> = ({
       setTenantActionToast('กรุณาระบุเหตุผลในการปฏิเสธคำขอ');
       return;
     }
+    const isDailyStay = selectedTenant.rentalType === 'DAILY' || (selectedTenant as any).dailyStayId || (selectedTenant as any).stayType === 'DAILY';
+    if (isDailyStay) {
+      const dailyStayId = (selectedTenant as any).dailyStayId || selectedTenant.id;
+      try {
+        await httpRequest('POST', `/api/v1/daily-stays/${dailyStayId}/reject`, {});
+        const filteredTenants = tenants.filter(t => t.id !== selectedTenant.id && t.id !== dailyStayId);
+        onSaveTenants(filteredTenants);
+        setTenantActionToast('ปฏิเสธคำขอเข้าพักรายวันเรียบร้อยแล้ว');
+        setIsRejectOpen(false);
+        setSelectedTenant(null);
+        if (queryClient && effectiveDormId) {
+          await Promise.all([
+            queryClient.invalidateQueries({ queryKey: queryKeys.tenants(effectiveDormId) }),
+            queryClient.invalidateQueries({ queryKey: queryKeys.rooms(effectiveDormId) }),
+          ]);
+        }
+        return;
+      } catch (err: any) {
+        console.error('Failed to reject daily stay request via API:', err);
+        const errMsg = err?.message || 'ไม่สามารถปฏิเสธคำขอเข้าพักรายวันได้ กรุณาลองใหม่อีกครั้ง';
+        setTenantActionToast(errMsg);
+        return;
+      }
+    }
+
     const reqId = (selectedTenant as any).registrationRequestId || (selectedTenant as any).requestId || selectedTenant.id;
     if (reqId) {
       try {

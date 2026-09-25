@@ -280,6 +280,9 @@ export function getCanonicalBillKindLabel(bill: Bill | any): string {
   if (kind === 'RENT') {
     return 'บิลค่าเช่า';
   }
+  if (kind === 'DAILY') {
+    return 'บิลค่าเช่ารายวัน';
+  }
   if (kind === 'MONTHLY_UTILITY' || kind === 'LEGACY_COMBINED' || kind === 'COMBINED') {
     return 'บิลรายเดือน';
   }
