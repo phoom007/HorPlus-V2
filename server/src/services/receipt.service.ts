@@ -50,33 +50,85 @@ export class ReceiptService {
       where: { id: billId, dormitoryId },
       select: { id: true, roomId: true, billingCycleId: true },
     });
-    if (!bill || !bill.roomId || !bill.billingCycleId) {
+    if (!bill) {
+      return null;
+    }
+
+    const receiptInclude = {
+      bill: {
+        include: {
+          items: true,
+          room: true,
+        },
+      },
+      dormitory: true,
+    };
+
+    if (bill.roomId && bill.billingCycleId) {
+      const settlementScopeKey = `ROOM_CYCLE:${bill.roomId}:${bill.billingCycleId}`;
+      const scopeReceipt = await prisma.receipt.findFirst({
+        where: {
+          dormitoryId,
+          settlementScopeKey,
+          receiptKind: 'FINAL_SETTLEMENT',
+          isVoided: false,
+        },
+        orderBy: { createdAt: 'desc' },
+        include: receiptInclude,
+      });
+      if (scopeReceipt) {
+        return scopeReceipt;
+      }
+    }
+
+    // Check direct bill receipt
+    const directReceipt = await prisma.receipt.findFirst({
+      where: {
+        dormitoryId,
+        billId,
+        isVoided: false,
+      },
+      orderBy: { createdAt: 'desc' },
+      include: receiptInclude,
+    });
+    if (directReceipt) {
+      return directReceipt;
+    }
+
+    // Check combined payment group receipt covering this bill (OQ-20)
+    const groupTarget = await prisma.combinedPaymentGroupBillTarget.findFirst({
+      where: {
+        billId,
+        paymentGroup: {
+          dormitoryId,
+          receipts: {
+            some: { isVoided: false },
+          },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+      include: {
+        paymentGroup: {
+          include: {
+            receipts: {
+              where: { isVoided: false },
+              orderBy: { createdAt: 'desc' },
+              include: receiptInclude,
+            },
+          },
+        },
+      },
+    });
+    const combinedReceipt = groupTarget?.paymentGroup?.receipts?.[0] || null;
+    if (combinedReceipt) {
+      return combinedReceipt;
+    }
+
+    if (!bill.roomId || !bill.billingCycleId) {
       return null;
     }
 
     const settlementScopeKey = `ROOM_CYCLE:${bill.roomId}:${bill.billingCycleId}`;
-    let receipt = await prisma.receipt.findFirst({
-      where: {
-        dormitoryId,
-        settlementScopeKey,
-        receiptKind: 'FINAL_SETTLEMENT',
-        isVoided: false,
-      },
-      orderBy: { createdAt: 'desc' },
-      include: {
-        bill: {
-          include: {
-            items: true,
-            room: true,
-          },
-        },
-        dormitory: true,
-      },
-    });
-    if (receipt) {
-      return receipt;
-    }
-
     // VOID/reissue preservation: If final receipts exist in this scope and are all voided, do not auto-recover on read
     const anyExisting = await prisma.receipt.findFirst({
       where: {
@@ -103,7 +155,7 @@ export class ReceiptService {
       console.warn('[LAZY_RECEIPT_RECOVERY_BILL_WARN]', err?.message);
     }
 
-    receipt = await prisma.receipt.findFirst({
+    const receipt = await prisma.receipt.findFirst({
       where: {
         dormitoryId,
         settlementScopeKey,

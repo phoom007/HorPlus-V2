@@ -547,13 +547,14 @@ export function renderReceiptHtml(receiptRecord: any, options?: { hasCurrentLogo
           throw new AppError(`Receipt financial value malformed for bill ${group.billNumber || group.billId}: ${canonicalSettledRaw}`, 500, 'CANONICAL_FINANCIAL_VALUE_MALFORMED');
         }
 
-        if (group.billTotal === undefined || group.billTotal === null || String(group.billTotal).trim() === '') {
+        const rawBillTotal = group.billTotal ?? group.totalAmount ?? group.subtotal ?? group.allocatedAmount;
+        if (rawBillTotal === undefined || rawBillTotal === null || String(rawBillTotal).trim() === '') {
           throw new AppError(`Receipt billTotal missing for bill ${group.billNumber || group.billId}`, 500, 'CANONICAL_FINANCIAL_VALUE_MISSING');
         }
 
-        const billTotalNum = Number(group.billTotal);
+        const billTotalNum = Number(rawBillTotal);
         if (isNaN(billTotalNum) || !isFinite(billTotalNum)) {
-          throw new AppError(`Receipt billTotal malformed for bill ${group.billNumber || group.billId}: ${group.billTotal}`, 500, 'CANONICAL_FINANCIAL_VALUE_MALFORMED');
+          throw new AppError(`Receipt billTotal malformed for bill ${group.billNumber || group.billId}: ${rawBillTotal}`, 500, 'CANONICAL_FINANCIAL_VALUE_MALFORMED');
         }
 
         const nonZeroItems = (group.items || []).filter((i: any) => isNonZeroAmount(i.amount));
@@ -877,8 +878,10 @@ export function renderReceiptHtml(receiptRecord: any, options?: { hasCurrentLogo
 <html>
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>${isVatActive ? 'Tax Invoice' : 'Receipt'} ${escapeHTML(receiptRecord.receiptNumber)}</title>
   <style>
+    * { box-sizing: border-box; }
     @media print {
       @page { size: A4; margin: 10mm 12mm; }
       body { margin: 0 !important; padding: 0 !important; border: none !important; box-shadow: none !important; max-width: 100% !important; background: #fff !important; }
@@ -886,32 +889,47 @@ export function renderReceiptHtml(receiptRecord: any, options?: { hasCurrentLogo
       .sheet { page-break-after: always; break-after: page; border: none !important; padding: 0 !important; margin: 0 0 0 0 !important; box-shadow: none !important; }
       .sheet:last-child { page-break-after: avoid; break-after: avoid; }
     }
-    body { font-family: 'Sarabun', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #1e293b; max-width: 820px; margin: 24px auto; padding: 0; background: #f8fafc; }
-    .sheet { background: #fff; padding: 28px; border: 1px solid #e2e8f0; border-radius: 12px; margin-bottom: 32px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+    body { font-family: 'Sarabun', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #1e293b; max-width: 820px; margin: 24px auto; padding: 0 12px; background: #f8fafc; overflow-x: hidden; }
+    .sheet { background: #fff; padding: 28px; border: 1px solid #e2e8f0; border-radius: 12px; margin-bottom: 32px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); max-width: 100%; overflow-x: hidden; }
     .sheet:last-child { margin-bottom: 0; }
     .header { text-align: center; margin-bottom: 24px; }
     .header h1 { margin: 0; color: #4338ca; font-size: 22px; }
     .header p { margin: 4px 0 0; color: #64748b; font-size: 13px; font-weight: bold; }
     .void-banner { color: #dc2626; background: #fee2e2; border: 1px solid #f87171; text-align: center; font-weight: bold; padding: 12px; margin-bottom: 20px; border-radius: 8px; }
     .meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px; font-size: 13px; }
-    .meta-card { background: #f8fafc; padding: 14px; border-radius: 8px; border: 1px solid #e2e8f0; }
+    .meta-card { background: #f8fafc; padding: 14px; border-radius: 8px; border: 1px solid #e2e8f0; overflow-wrap: anywhere; word-break: break-word; }
     .meta-card p { margin: 4px 0; }
-    table { width: 100%; border-collapse: collapse; margin-bottom: 16px; font-size: 13px; }
+    table { width: 100%; border-collapse: collapse; margin-bottom: 16px; font-size: 13px; table-layout: auto; word-break: break-word; }
     th, td { border: 1px solid #e2e8f0; padding: 8px 10px; text-align: left; }
     th { background: #f1f5f9; color: #334155; }
     .num { text-align: right; }
     .group-box { margin-bottom: 16px; border: 1px solid #cbd5e1; border-radius: 8px; padding: 10px; background: #fff; }
-    .group-header { font-weight: bold; font-size: 13px; margin-bottom: 6px; color: #1e293b; display: flex; justify-content: space-between; }
-    .totals-area { margin-top: 16px; display: flex; flex-direction: column; align-items: flex-end; font-size: 14px; }
+    .group-header { font-weight: bold; font-size: 13px; margin-bottom: 6px; color: #1e293b; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 4px; }
+    .totals-area { margin-top: 16px; display: flex; flex-direction: column; align-items: flex-end; font-size: 14px; width: 100%; }
     .total-row { display: flex; justify-content: space-between; align-items: baseline; min-width: 440px; width: 440px; max-width: 100%; padding: 4px 0; gap: 16px; }
     .total-row span:first-child { white-space: nowrap; }
     .total-row span:last-child { white-space: nowrap; text-align: right; font-variant-numeric: tabular-nums; }
     .grand-total { font-weight: 900; font-size: 16px; color: #4338ca; border-top: 2px solid #cbd5e1; padding-top: 8px; margin-top: 4px; }
+    @media (max-width: 640px) {
+      html, body { margin: 0; padding: 8px; width: 100%; max-width: 100vw; overflow-x: hidden; }
+      .sheet { padding: 16px 12px; border-radius: 10px; margin-bottom: 16px; }
+      .header { flex-direction: column !important; gap: 8px !important; margin-bottom: 16px !important; }
+      .header h1 { font-size: 18px !important; }
+      .meta-grid { grid-template-columns: 1fr; gap: 10px; margin-bottom: 14px; font-size: 12px; }
+      .meta-card { padding: 10px; }
+      table { font-size: 11px; }
+      th, td { padding: 6px 5px; width: auto !important; }
+      .total-row { min-width: 0 !important; width: 100% !important; gap: 8px; font-size: 13px; }
+      .total-row span:first-child { white-space: normal; }
+      .grand-total { font-size: 15px; }
+      .signature-section { grid-template-columns: 1fr !important; gap: 20px !important; margin-top: 24px !important; }
+      .signature-box { font-size: 12px !important; overflow-wrap: anywhere; }
+    }
   </style>
 </head>
 <body>
-  <div class="no-print" style="text-align: right; margin-bottom: 20px; padding: 0 4px;">
-    <button id="printReceiptBtn" type="button" style="padding: 8px 16px; background: #4f46e5; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold;">พิมพ์เอกสาร</button>
+  <div class="no-print" style="display: flex; justify-content: flex-end; margin-bottom: 14px; padding: 0 4px;">
+    <button id="printReceiptBtn" type="button" style="padding: 10px 18px; background: #4f46e5; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; font-size: 14px; box-shadow: 0 2px 6px rgba(79,70,229,0.25);">พิมพ์ / บันทึกเป็น PDF</button>
   </div>
   ${receiptRecord.isVoided ? `<div class="void-banner">ยกเลิกแล้ว (VOIDED): ${escapeHTML(receiptRecord.voidReason || 'ไม่มีระบุเหตุผล')}</div>` : ''}
   ${isVatActive ? renderSheetContent('TAX_INVOICE') : renderSheetContent('RECEIPT')}

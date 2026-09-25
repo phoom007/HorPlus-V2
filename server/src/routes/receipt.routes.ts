@@ -41,9 +41,57 @@ export function createReceiptRouter(authService: AuthenticationService) {
     );
   };
 
+  const isTenantAuthorizedForBill = (bill: any, tenantId: string, tenantContractIds: string[]) => {
+    if (!bill) return false;
+    if (bill.tenantId === tenantId) return true;
+    if (!bill.tenantId && bill.contractId && tenantContractIds.includes(bill.contractId)) return true;
+    return false;
+  };
+
+  const isTenantAuthorizedForReceipt = async (receiptRecord: any, tenantId: string) => {
+    const tenantContracts = await prisma.contract.findMany({
+      where: { tenantId, dormitoryId: receiptRecord.dormitoryId },
+      select: { id: true },
+    });
+    const tenantContractIds = tenantContracts.map((c: any) => c.id);
+
+    if (receiptRecord.billId) {
+      const bill = await prisma.bill.findUnique({ where: { id: receiptRecord.billId } });
+      if (isTenantAuthorizedForBill(bill, tenantId, tenantContractIds)) {
+        return true;
+      }
+    }
+    if (receiptRecord.paymentGroupId) {
+      const targets = await prisma.combinedPaymentGroupBillTarget.findMany({
+        where: { paymentGroupId: receiptRecord.paymentGroupId },
+        include: { bill: true },
+      });
+      if (targets.some((t: any) => isTenantAuthorizedForBill(t.bill, tenantId, tenantContractIds))) {
+        return true;
+      }
+    }
+    if (receiptRecord.dailyStayInvoiceId) {
+      const dinv = await prisma.dailyStayInvoice.findUnique({
+        where: { id: receiptRecord.dailyStayInvoiceId },
+        include: { dailyStay: true },
+      });
+      if (dinv?.dailyStay?.tenantId === tenantId) {
+        return true;
+      }
+    }
+    if (receiptRecord.paymentId) {
+      const p = await prisma.payment.findUnique({
+        where: { id: receiptRecord.paymentId },
+      });
+      if (p?.tenantId === tenantId) {
+        return true;
+      }
+    }
+    return false;
+  };
+
   router.get('/:receiptId', requireAuth, async (req, res) => {
     try {
-      const auth = (req as any).auth;
       const receiptId = req.params.receiptId;
       const receiptRecord = await prisma.receipt.findUnique({ where: { id: receiptId } });
       
@@ -60,39 +108,7 @@ export function createReceiptRouter(authService: AuthenticationService) {
       } else {
         const tenant = await ensureTenant(req, res, dormitoryId);
         if (tenant) {
-          if (receiptRecord.billId) {
-            const bill = await prisma.bill.findUnique({ where: { id: receiptRecord.billId } });
-            if (bill) {
-              const tenantContracts = await prisma.contract.findMany({ where: { tenantId: tenant.id }, select: { id: true } });
-              const tenantContractIds = tenantContracts.map(c => c.id);
-              if (bill.tenantId === tenant.id || (bill.contractId && tenantContractIds.includes(bill.contractId))) {
-                authorized = true;
-              }
-            }
-          } else if (receiptRecord.paymentGroupId) {
-            const targets = await prisma.combinedPaymentGroupBillTarget.findMany({
-              where: { paymentGroupId: receiptRecord.paymentGroupId },
-              include: { bill: true },
-            });
-            if (targets.some(t => t.bill.tenantId === tenant.id)) {
-              authorized = true;
-            }
-          } else if (receiptRecord.dailyStayInvoiceId) {
-            const dinv = await prisma.dailyStayInvoice.findUnique({
-              where: { id: receiptRecord.dailyStayInvoiceId },
-              include: { dailyStay: true },
-            });
-            if (dinv?.dailyStay?.tenantId === tenant.id) {
-              authorized = true;
-            }
-          } else if (receiptRecord.paymentId) {
-            const p = await prisma.payment.findUnique({
-              where: { id: receiptRecord.paymentId },
-            });
-            if (p?.tenantId === tenant.id) {
-              authorized = true;
-            }
-          }
+          authorized = await isTenantAuthorizedForReceipt(receiptRecord, tenant.id);
         }
       }
 
@@ -114,7 +130,6 @@ export function createReceiptRouter(authService: AuthenticationService) {
 
   const handleReceiptHtml = async (req: Request, res: Response) => {
     try {
-      const auth = (req as any).auth;
       const receiptId = req.params.receiptId;
       const receiptRecord = await prisma.receipt.findUnique({ where: { id: receiptId } });
       
@@ -129,39 +144,7 @@ export function createReceiptRouter(authService: AuthenticationService) {
       } else {
         const tenant = await ensureTenant(req, res, dormitoryId);
         if (tenant) {
-          if (receiptRecord.billId) {
-            const bill = await prisma.bill.findUnique({ where: { id: receiptRecord.billId } });
-            if (bill) {
-              const tenantContracts = await prisma.contract.findMany({ where: { tenantId: tenant.id }, select: { id: true } });
-              const tenantContractIds = tenantContracts.map(c => c.id);
-              if (bill.tenantId === tenant.id || (bill.contractId && tenantContractIds.includes(bill.contractId))) {
-                authorized = true;
-              }
-            }
-          } else if (receiptRecord.paymentGroupId) {
-            const targets = await prisma.combinedPaymentGroupBillTarget.findMany({
-              where: { paymentGroupId: receiptRecord.paymentGroupId },
-              include: { bill: true },
-            });
-            if (targets.some(t => t.bill.tenantId === tenant.id)) {
-              authorized = true;
-            }
-          } else if (receiptRecord.dailyStayInvoiceId) {
-            const dinv = await prisma.dailyStayInvoice.findUnique({
-              where: { id: receiptRecord.dailyStayInvoiceId },
-              include: { dailyStay: true },
-            });
-            if (dinv?.dailyStay?.tenantId === tenant.id) {
-              authorized = true;
-            }
-          } else if (receiptRecord.paymentId) {
-            const p = await prisma.payment.findUnique({
-              where: { id: receiptRecord.paymentId },
-            });
-            if (p?.tenantId === tenant.id) {
-              authorized = true;
-            }
-          }
+          authorized = await isTenantAuthorizedForReceipt(receiptRecord, tenant.id);
         }
       }
 
@@ -199,7 +182,15 @@ export function createReceiptRouter(authService: AuthenticationService) {
       const isOwner = ensureOwnerOrManager(req, res, bill.dormitoryId);
       if (!isOwner) {
         const tenant = await ensureTenant(req, res, bill.dormitoryId);
-        if (!tenant || (bill.tenantId !== tenant.id)) {
+        if (!tenant) {
+          return res.status(403).json({ error: 'Forbidden' });
+        }
+        const tenantContracts = await prisma.contract.findMany({
+          where: { tenantId: tenant.id, dormitoryId: bill.dormitoryId },
+          select: { id: true },
+        });
+        const tenantContractIds = tenantContracts.map((c: any) => c.id);
+        if (!isTenantAuthorizedForBill(bill, tenant.id, tenantContractIds)) {
           return res.status(403).json({ error: 'Forbidden' });
         }
       }

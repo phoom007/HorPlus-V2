@@ -337,7 +337,7 @@ export const TenantInvoiceView: React.FC<TenantInvoiceViewProps> = ({
                   const isExpanded = expandedHistoryBillIds.includes(b.id);
                   const receipt =
                     (b as any).receipt ||
-                    (b.payments || []).find((p: any) => p.status === 'APPROVED' || p.status === 'approved')?.receipt;
+                    ((b as any).payments || (b as any).Payment || []).find((p: any) => p.receipt)?.receipt;
                   const cycleTitle = `รอบบิล ${formatThaiCycle(
                     b.cycleId || (b as any).billingCycleId || b.billNumber,
                     (b as any).billingDate || b.createdAt
@@ -346,12 +346,12 @@ export const TenantInvoiceView: React.FC<TenantInvoiceViewProps> = ({
 
                   return (
                     <div key={b.id} data-testid={`history-bill-${b.id}`} className="transition-all">
-                      <button
-                        type="button"
-                        onClick={() => toggleHistoryBillExpanded(b.id)}
-                        className="w-full p-4 flex justify-between items-center text-left hover:bg-slate-50/80 transition-colors cursor-pointer"
-                      >
-                        <div className="min-w-0 pr-2">
+                      <div className="w-full p-4 flex justify-between items-center text-left hover:bg-slate-50/80 transition-colors">
+                        <button
+                          type="button"
+                          onClick={() => toggleHistoryBillExpanded(b.id)}
+                          className="min-w-0 pr-2 flex-1 text-left cursor-pointer"
+                        >
                           <div className="flex items-center gap-2">
                             <h5 className="font-extrabold text-slate-800 text-xs truncate">
                               {cycleTitle} • {billKindTitle}
@@ -363,16 +363,38 @@ export const TenantInvoiceView: React.FC<TenantInvoiceViewProps> = ({
                           <p className="text-[9px] text-slate-400 mt-1">
                             ยอดสุทธิ {formatBaht(b.totalAmount)}
                             {b.billNumber ? ` • เลขที่ ${b.billNumber}` : ''}
+                            {receipt?.receiptNumber ? ` • ใบเสร็จ ${receipt.receiptNumber}` : ''}
                           </p>
-                        </div>
-                        <div className="p-1 text-slate-400 shrink-0">
-                          {isExpanded ? (
-                            <ChevronUp className="w-4 h-4 text-indigo-600" />
-                          ) : (
-                            <ChevronDown className="w-4 h-4 text-slate-400" />
+                        </button>
+                        <div className="flex items-center gap-2 shrink-0">
+                          {receipt && (
+                            <button
+                              type="button"
+                              data-testid={`btn-history-receipt-${b.id}`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                window.open(`/api/v1/receipts/${receipt.id}/html`, '_blank');
+                              }}
+                              className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-[9px] rounded-lg transition-colors cursor-pointer flex items-center gap-1 shadow-2xs"
+                            >
+                              <FileText className="w-3 h-3" />
+                              <span>ดูใบเสร็จ</span>
+                            </button>
                           )}
+                          <button
+                            type="button"
+                            onClick={() => toggleHistoryBillExpanded(b.id)}
+                            className="p-1 text-slate-400 cursor-pointer"
+                            aria-label="ดูรายละเอียดบิล"
+                          >
+                            {isExpanded ? (
+                              <ChevronUp className="w-4 h-4 text-indigo-600" />
+                            ) : (
+                              <ChevronDown className="w-4 h-4 text-slate-400" />
+                            )}
+                          </button>
                         </div>
-                      </button>
+                      </div>
 
                       {isExpanded && (
                         <div className="px-4 pb-4 pt-1 border-t border-slate-100 space-y-2.5 bg-slate-50/50 animate-in fade-in duration-150">

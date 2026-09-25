@@ -189,6 +189,21 @@ export const TenantPaymentsTab: React.FC<TenantPaymentsTabProps> = ({
           )}
 
           <div className="flex items-center gap-2">
+            {isPaid && ((b as any).receipt || ((b as any).payments || (b as any).Payment || []).find((p: any) => p.receipt)?.receipt) && (() => {
+              const billReceipt = (b as any).receipt || ((b as any).payments || (b as any).Payment || []).find((p: any) => p.receipt)?.receipt;
+              return (
+                <button
+                  type="button"
+                  data-testid={`btn-view-receipt-${b.id}`}
+                  onClick={() => window.open(`/api/v1/receipts/${billReceipt.id}/html`, '_blank')}
+                  className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-[10px] rounded-lg shadow-3xs cursor-pointer transition-all active:scale-95 flex items-center gap-1"
+                >
+                  <FileText className="w-3 h-3" />
+                  <span>ดูใบเสร็จ</span>
+                </button>
+              );
+            })()}
+
             <button
               type="button"
               data-testid={`btn-view-invoice-${b.id}`}

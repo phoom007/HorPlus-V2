@@ -469,8 +469,34 @@ async function checkBillOwnership(prisma: any, billId: string, ctx: { dormitoryI
     include: {
       items: true,
       billingCycle: true,
+      Receipt: {
+        where: { isVoided: false },
+        orderBy: { createdAt: 'desc' }
+      },
+      paymentGroupBillTargets: {
+        include: {
+          paymentGroup: {
+            include: {
+              receipts: {
+                where: { isVoided: false },
+                orderBy: { createdAt: 'desc' }
+              }
+            }
+          }
+        }
+      },
       Payment: {
-        include: { receipt: true },
+        include: {
+          receipt: true,
+          paymentGroup: {
+            include: {
+              receipts: {
+                where: { isVoided: false },
+                orderBy: { createdAt: 'desc' }
+              }
+            }
+          }
+        },
         orderBy: { createdAt: 'desc' }
       }
     }
@@ -1435,30 +1461,77 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
         take: 50,
         include: {
           items: true,
+          Receipt: {
+            where: { isVoided: false },
+            orderBy: { createdAt: 'desc' }
+          },
+          paymentGroupBillTargets: {
+            include: {
+              paymentGroup: {
+                include: {
+                  receipts: {
+                    where: { isVoided: false },
+                    orderBy: { createdAt: 'desc' }
+                  }
+                }
+              }
+            }
+          },
           Payment: {
-            include: { receipt: true },
+            include: {
+              receipt: true,
+              paymentGroup: {
+                include: {
+                  receipts: {
+                    where: { isVoided: false },
+                    orderBy: { createdAt: 'desc' }
+                  }
+                }
+              }
+            },
             orderBy: { createdAt: 'desc' }
           }
         }
       });
 
-      const formatted = bills.map((b) => {
-        const mappedPayments = (b.Payment || []).map((p) => ({
-          id: p.id,
-          method: p.method,
-          amount: p.amount.toString(),
-          status: p.status,
-          paymentDate: p.paymentDate ? p.paymentDate.toISOString() : null,
-          rejectedReason: p.rejectedReason || null,
-          reversalReason: p.reversalReason || null,
-          reviewedAt: p.reviewedAt ? p.reviewedAt.toISOString() : null,
-          createdAt: p.createdAt.toISOString(),
-          receipt: p.receipt ? {
-            id: p.receipt.id,
-            receiptNumber: p.receipt.receiptNumber,
-            isVoided: p.receipt.isVoided
-          } : null
-        }));
+      const formatted = bills.map((b: any) => {
+        const directBillReceipt = (b.Receipt || []).find((r: any) => !r.isVoided) || null;
+        const groupTargetReceipt = (b.paymentGroupBillTargets || [])
+          .flatMap((bt: any) => bt.paymentGroup?.receipts || [])
+          .find((r: any) => !r.isVoided) || null;
+
+        const mappedPayments = (b.Payment || []).map((p: any) => {
+          const pGroupReceipt = (p.paymentGroup?.receipts || []).find((r: any) => !r.isVoided) || null;
+          const resolvedReceipt = (p.receipt && !p.receipt.isVoided ? p.receipt : null)
+            || pGroupReceipt
+            || (p.status === 'APPROVED' ? (directBillReceipt || groupTargetReceipt) : null)
+            || p.receipt
+            || null;
+
+          return {
+            id: p.id,
+            method: p.method,
+            amount: p.amount.toString(),
+            status: p.status,
+            paymentDate: p.paymentDate ? p.paymentDate.toISOString() : null,
+            rejectedReason: p.rejectedReason || null,
+            reversalReason: p.reversalReason || null,
+            reviewedAt: p.reviewedAt ? p.reviewedAt.toISOString() : null,
+            createdAt: p.createdAt.toISOString(),
+            receipt: resolvedReceipt ? {
+              id: resolvedReceipt.id,
+              receiptNumber: resolvedReceipt.receiptNumber,
+              receiptKind: resolvedReceipt.receiptKind || null,
+              paymentGroupId: resolvedReceipt.paymentGroupId || null,
+              isVoided: Boolean(resolvedReceipt.isVoided)
+            } : null
+          };
+        });
+
+        const topLevelReceipt = directBillReceipt
+          || groupTargetReceipt
+          || mappedPayments.find((mp: any) => mp.receipt && !mp.receipt.isVoided)?.receipt
+          || null;
 
         const effectivePaidAt = b.paidAt
           ? b.paidAt.toISOString()
@@ -1487,6 +1560,13 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
           totalAmount: b.totalAmount.toString(),
           paidAmount: b.paidAmount.toString(),
           outstandingAmount: b.outstandingAmount.toString(),
+          receipt: topLevelReceipt ? {
+            id: topLevelReceipt.id,
+            receiptNumber: topLevelReceipt.receiptNumber,
+            receiptKind: topLevelReceipt.receiptKind || null,
+            paymentGroupId: topLevelReceipt.paymentGroupId || null,
+            isVoided: Boolean(topLevelReceipt.isVoided)
+          } : null,
           items: b.items.map((item: any) => ({
             id: item.id,
             type: item.itemType || item.type,
@@ -1521,7 +1601,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
         return res.status(ctx.error.statusCode).json({ error: { code: ctx.error.code, message: ctx.error.message, requestId: req.requestId } });
       }
 
-      const bill = await checkBillOwnership(prisma, req.params.billId, ctx);
+      const bill: any = await checkBillOwnership(prisma, req.params.billId, ctx);
       if (!bill) {
         return res.status(404).json({
           error: { code: 'TENANT_BILL_NOT_FOUND', message: 'ไม่พบรายการบิลนี้', requestId: req.requestId }
@@ -1529,23 +1609,43 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
       }
 
       const room = bill.roomId ? await prisma.room.findUnique({ where: { id: bill.roomId } }) : null;
+      const directBillReceipt = (bill.Receipt || []).find((r: any) => !r.isVoided) || null;
+      const groupTargetReceipt = (bill.paymentGroupBillTargets || [])
+        .flatMap((bt: any) => bt.paymentGroup?.receipts || [])
+        .find((r: any) => !r.isVoided) || null;
 
-      const mappedPayments = (bill.Payment || []).map((p: any) => ({
-        id: p.id,
-        method: p.method,
-        amount: p.amount.toString(),
-        status: p.status,
-        paymentDate: p.paymentDate.toISOString(),
-        rejectedReason: p.rejectedReason || null,
-        reversalReason: p.reversalReason || null,
-        reviewedAt: p.reviewedAt ? p.reviewedAt.toISOString() : null,
-        createdAt: p.createdAt.toISOString(),
-        receipt: p.receipt ? {
-          id: p.receipt.id,
-          receiptNumber: p.receipt.receiptNumber,
-          isVoided: p.receipt.isVoided
-        } : null
-      }));
+      const mappedPayments = (bill.Payment || []).map((p: any) => {
+        const pGroupReceipt = (p.paymentGroup?.receipts || []).find((r: any) => !r.isVoided) || null;
+        const resolvedReceipt = (p.receipt && !p.receipt.isVoided ? p.receipt : null)
+          || pGroupReceipt
+          || (p.status === 'APPROVED' ? (directBillReceipt || groupTargetReceipt) : null)
+          || p.receipt
+          || null;
+
+        return {
+          id: p.id,
+          method: p.method,
+          amount: p.amount.toString(),
+          status: p.status,
+          paymentDate: p.paymentDate.toISOString(),
+          rejectedReason: p.rejectedReason || null,
+          reversalReason: p.reversalReason || null,
+          reviewedAt: p.reviewedAt ? p.reviewedAt.toISOString() : null,
+          createdAt: p.createdAt.toISOString(),
+          receipt: resolvedReceipt ? {
+            id: resolvedReceipt.id,
+            receiptNumber: resolvedReceipt.receiptNumber,
+            receiptKind: resolvedReceipt.receiptKind || null,
+            paymentGroupId: resolvedReceipt.paymentGroupId || null,
+            isVoided: Boolean(resolvedReceipt.isVoided)
+          } : null
+        };
+      });
+
+      const topLevelReceipt = directBillReceipt
+        || groupTargetReceipt
+        || mappedPayments.find((mp: any) => mp.receipt && !mp.receipt.isVoided)?.receipt
+        || null;
 
       const effectivePaidAt = bill.paidAt
         ? bill.paidAt.toISOString()
@@ -1575,6 +1675,13 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
           paidAmount: bill.paidAmount.toString(),
           outstandingAmount: bill.outstandingAmount.toString(),
           roomNumber: room?.roomNumber || 'ไม่ระบุ',
+          receipt: topLevelReceipt ? {
+            id: topLevelReceipt.id,
+            receiptNumber: topLevelReceipt.receiptNumber,
+            receiptKind: topLevelReceipt.receiptKind || null,
+            paymentGroupId: topLevelReceipt.paymentGroupId || null,
+            isVoided: Boolean(topLevelReceipt.isVoided)
+          } : null,
           items: bill.items.map((it: any) => ({
             id: it.id,
             type: it.type || it.itemType || 'other',
@@ -1833,30 +1940,57 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
         orderBy: { createdAt: 'desc' },
         take: 50,
         include: {
-          bill: { select: { id: true, billNumber: true, totalAmount: true } },
-          receipt: { select: { id: true, receiptNumber: true, isVoided: true, voidReason: true } }
+          bill: {
+            select: {
+              id: true,
+              billNumber: true,
+              totalAmount: true,
+              Receipt: {
+                where: { isVoided: false },
+                orderBy: { createdAt: 'desc' },
+                select: { id: true, receiptNumber: true, isVoided: true, voidReason: true }
+              }
+            }
+          },
+          receipt: { select: { id: true, receiptNumber: true, isVoided: true, voidReason: true } },
+          paymentGroup: {
+            include: {
+              receipts: {
+                where: { isVoided: false },
+                orderBy: { createdAt: 'desc' },
+                select: { id: true, receiptNumber: true, isVoided: true, voidReason: true }
+              }
+            }
+          }
         }
       });
 
-      const formatted = payments.map((p) => ({
-        id: p.id,
-        billId: p.billId,
-        billNumber: p.bill?.billNumber || 'ไม่ระบุ',
-        method: p.method,
-        amount: p.amount.toString(),
-        status: p.status,
-        paymentDate: p.paymentDate ? p.paymentDate.toISOString() : null,
-        rejectedReason: p.rejectedReason || null,
-        reversalReason: p.reversalReason || null,
-        reviewedAt: p.reviewedAt ? p.reviewedAt.toISOString() : null,
-        createdAt: p.createdAt.toISOString(),
-        receipt: p.receipt ? {
-          id: p.receipt.id,
-          receiptNumber: p.receipt.receiptNumber,
-          isVoided: p.receipt.isVoided,
-          voidReason: p.receipt.voidReason || null
-        } : null
-      }));
+      const formatted = payments.map((p: any) => {
+        const resolvedReceipt = (p.receipt && !p.receipt.isVoided ? p.receipt : null)
+          || p.paymentGroup?.receipts?.[0]
+          || (p.status === 'APPROVED' ? p.bill?.Receipt?.[0] : null)
+          || p.receipt
+          || null;
+        return {
+          id: p.id,
+          billId: p.billId,
+          billNumber: p.bill?.billNumber || 'ไม่ระบุ',
+          method: p.method,
+          amount: p.amount.toString(),
+          status: p.status,
+          paymentDate: p.paymentDate ? p.paymentDate.toISOString() : null,
+          rejectedReason: p.rejectedReason || null,
+          reversalReason: p.reversalReason || null,
+          reviewedAt: p.reviewedAt ? p.reviewedAt.toISOString() : null,
+          createdAt: p.createdAt.toISOString(),
+          receipt: resolvedReceipt ? {
+            id: resolvedReceipt.id,
+            receiptNumber: resolvedReceipt.receiptNumber,
+            isVoided: Boolean(resolvedReceipt.isVoided),
+            voidReason: resolvedReceipt.voidReason || null
+          } : null
+        };
+      });
 
       return res.json({ success: true, data: formatted });
     } catch (err: any) {
@@ -1878,26 +2012,73 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
       const receipts = await prisma.receipt.findMany({
         where: {
           dormitoryId: ctx.dormitoryId,
-          bill: billWhere
+          isVoided: false,
+          OR: [
+            { bill: billWhere },
+            {
+              paymentGroup: {
+                billTargets: {
+                  some: {
+                    bill: billWhere
+                  }
+                }
+              }
+            },
+            {
+              payment: {
+                tenantId: ctx.tenant.id
+              }
+            }
+          ]
         },
         orderBy: { createdAt: 'desc' },
         take: 50,
         include: {
-          bill: { select: { id: true, billNumber: true, totalAmount: true } }
+          bill: { select: { id: true, billNumber: true, totalAmount: true } },
+          paymentGroup: {
+            include: {
+              billTargets: {
+                include: {
+                  bill: { select: { id: true, billNumber: true, totalAmount: true } }
+                }
+              }
+            }
+          }
         }
       });
 
-      const formatted = receipts.map((r) => ({
-        id: r.id,
-        receiptNumber: r.receiptNumber,
-        billId: r.billId,
-        billNumber: r.bill?.billNumber || 'ไม่ระบุ',
-        totalAmount: r.bill?.totalAmount ? r.bill.totalAmount.toString() : '0.00',
-        isVoided: r.isVoided,
-        voidedAt: r.voidedAt ? r.voidedAt.toISOString() : null,
-        voidReason: r.voidReason || null,
-        createdAt: r.createdAt.toISOString()
-      }));
+      const formatted = receipts.map((r: any) => {
+        const snap = (r.snapshotData && typeof r.snapshotData === 'object') ? r.snapshotData : {};
+        const groupBills = (r.paymentGroup?.billTargets || [])
+          .map((bt: any) => bt.bill)
+          .filter(Boolean);
+        const billNumbers = r.bill?.billNumber
+          ? [r.bill.billNumber]
+          : groupBills.length > 0
+            ? groupBills.map((gb: any) => gb.billNumber)
+            : (snap.invoiceNo ? String(snap.invoiceNo).split(',').map((s: string) => s.trim()) : []);
+        const resolvedTotal = r.bill?.totalAmount !== undefined && r.bill?.totalAmount !== null
+          ? Number(r.bill.totalAmount)
+          : (snap.total !== undefined && snap.total !== null
+              ? Number(snap.total)
+              : groupBills.reduce((acc: number, gb: any) => acc + Number(gb.totalAmount || 0), 0));
+
+        return {
+          id: r.id,
+          receiptNumber: r.receiptNumber,
+          receiptKind: r.receiptKind || null,
+          paymentGroupId: r.paymentGroupId || null,
+          billId: r.billId || groupBills[0]?.id || null,
+          billIds: r.billId ? [r.billId] : groupBills.map((gb: any) => gb.id),
+          billNumber: billNumbers.length > 0 ? billNumbers.join(', ') : 'ไม่ระบุ',
+          billNumbers,
+          totalAmount: Number(resolvedTotal || 0).toFixed(2),
+          isVoided: r.isVoided,
+          voidedAt: r.voidedAt ? r.voidedAt.toISOString() : null,
+          voidReason: r.voidReason || null,
+          createdAt: r.createdAt.toISOString()
+        };
+      });
 
       return res.json({ success: true, data: formatted });
     } catch (err: any) {
@@ -1925,7 +2106,24 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
       const latestReceipt = await prisma.receipt.findFirst({
         where: {
           dormitoryId: ctx.dormitoryId,
-          bill: billWhere
+          isVoided: false,
+          OR: [
+            { bill: billWhere },
+            {
+              paymentGroup: {
+                billTargets: {
+                  some: {
+                    bill: billWhere
+                  }
+                }
+              }
+            },
+            {
+              payment: {
+                tenantId: ctx.tenant.id
+              }
+            }
+          ]
         },
         orderBy: { createdAt: 'desc' }
       });
