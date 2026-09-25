@@ -2403,10 +2403,55 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
 
   // POST /api/v1/tenant-portal/id-card-photo
   router.post('/id-card-photo', async (req: Request, res: Response) => {
+    // Canonical CSRF verification
+    const csrfHeader = req.headers['x-csrf-token'] as string | undefined;
+    const csrfCookie = req.cookies?.['horplus_csrf'];
+    const requestId = (req.headers['x-request-id'] as string) || req.requestId || 'req-unknown';
+
+    if (!csrfHeader) {
+      return res.status(403).json({
+        error: {
+          code: 'CSRF_TOKEN_REQUIRED',
+          message: 'ไม่พบ CSRF token ในคำขอ (X-CSRF-Token header missing)',
+          fieldErrors: null,
+          requestId,
+          timestamp: new Date().toISOString(),
+        },
+      });
+    }
+
+    const sessionId = req.auth?.sessionId;
+    if (!sessionId) {
+      return res.status(401).json({
+        error: {
+          code: 'SESSION_REQUIRED',
+          message: 'ไม่พบข้อมูลเซสชันสำหรับตรวจสอบ CSRF token',
+          fieldErrors: null,
+          requestId,
+          timestamp: new Date().toISOString(),
+        },
+      });
+    }
+
+    if (authService) {
+      const isValid = authService.verifyCsrf(csrfHeader, sessionId);
+      if (!isValid || (csrfCookie && csrfCookie !== csrfHeader)) {
+        return res.status(403).json({
+          error: {
+            code: 'CSRF_TOKEN_INVALID',
+            message: 'CSRF token ไม่ถูกต้องหรือไม่สัมพันธ์กับเซสชันปัจจุบัน',
+            fieldErrors: null,
+            requestId,
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+    }
+
     try {
       const ctx = await resolveTenantContext(req);
       if (ctx.error) {
-        return res.status(ctx.error.statusCode).json({ error: { code: ctx.error.code, message: ctx.error.message, requestId: req.requestId } });
+        return res.status(ctx.error.statusCode).json({ error: { code: ctx.error.code, message: ctx.error.message, requestId } });
       }
 
       let buffer: Buffer | null = null;
@@ -2453,7 +2498,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
         error: {
           code,
           message: err instanceof AppError ? err.message : 'ระบบไม่สามารถดำเนินการได้ กรุณาลองใหม่อีกครั้ง',
-          requestId: req.requestId
+          requestId
         }
       });
     }

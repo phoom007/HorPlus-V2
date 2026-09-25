@@ -155,11 +155,26 @@ export function createApiRouter(deps: AppApiDependencies | AuthenticationService
     const tenantRegService = new TenantRegistrationService();
     router.use('/tenant-registrations', createTenantRegistrationRouter(fullDeps.authService, tenantRegService));
 
+    const isSignedDocumentRequest = (req: any) =>
+      req.path.includes('/identity-document') && (Boolean(req.query.sig) || Boolean(req.query.expires));
+
     const protectedRouter = Router();
-    protectedRouter.use(requireSession);
-    protectedRouter.use(resolveDormitoryContextMiddleware);
-    protectedRouter.use(requireActiveDormitory);
-    protectedRouter.use(createCsrfMiddleware(fullDeps.authService));
+    protectedRouter.use((req, res, next) => {
+      if (isSignedDocumentRequest(req)) return next();
+      return requireSession(req, res, next);
+    });
+    protectedRouter.use((req, res, next) => {
+      if (isSignedDocumentRequest(req)) return next();
+      return resolveDormitoryContextMiddleware(req, res, next);
+    });
+    protectedRouter.use((req, res, next) => {
+      if (isSignedDocumentRequest(req)) return next();
+      return requireActiveDormitory(req, res, next);
+    });
+    protectedRouter.use((req, res, next) => {
+      if (isSignedDocumentRequest(req)) return next();
+      return createCsrfMiddleware(fullDeps.authService)(req, res, next);
+    });
 
     if (fullDeps.buildingService && fullDeps.roomService) {
       protectedRouter.use('/properties', createPropertyRouter(fullDeps.authService, fullDeps.buildingService, fullDeps.roomService));

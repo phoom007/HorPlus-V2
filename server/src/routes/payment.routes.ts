@@ -5,7 +5,7 @@ import { paymentService } from '../services/payment.service.js';
 import { localStorageProvider } from '../services/local-storage.service.js';
 import { AuthenticationService } from '../services/auth.service.js';
 import { createCsrfMiddleware } from '../middleware/csrf.js';
-import { createSlipUploadRateLimiter } from '../middleware/rate-limiter.js';
+import { createSlipUploadRateLimiter, resetSlipRateLimit } from '../middleware/rate-limiter.js';
 import { requireDormitoryPermission } from '../middleware/permission.js';
 import { requireDormitoryWriteEntitlement } from '../middleware/entitlement.js';
 import { resolveAuthoritativeDormitoryContext } from '../middleware/dormitory-context.js';
@@ -13,19 +13,65 @@ import { logger } from '../config/logger.js';
 import { AppError } from '../types/index.js';
 import { getPrismaClient } from '../db/prisma.js';
 import { findAuthoritativeActiveTenant } from '../utils/tenant-resolution.util.js';
+import { processAndSecureSlipImage } from '../services/image-security.service.js';
 import multer from 'multer';
 
 const upload = multer({
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit per PO decision
   fileFilter: (req, file, cb) => {
-    const allowedMimes = ['image/jpeg', 'image/png', 'image/webp'];
-    if (allowedMimes.includes(file.mimetype)) {
+    const originalName = (file.originalname || '').toLowerCase();
+    if (file.mimetype === 'application/pdf' || originalName.endsWith('.pdf')) {
+      return cb(new Error('PDF_NOT_ALLOWED'));
+    }
+    const allowedMimes = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'];
+    if (allowedMimes.includes(file.mimetype) || originalName.match(/\.(jpe?g|png|webp|heic|heif)$/)) {
       cb(null, true);
     } else {
       cb(new Error('INVALID_MIME_TYPE'));
     }
   }
 });
+
+const handleSlipUploadSingle = (req: Request, res: Response, next: any) => {
+  upload.single('file')(req, res, (err: any) => {
+    if (err) {
+      const requestId = (req.headers['x-request-id'] as string) || (req as any).id || (req as any).requestId || 'req-unknown';
+      const timestamp = new Date().toISOString();
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(400).json({
+          error: {
+            code: 'FILE_TOO_LARGE',
+            message: 'ขนาดไฟล์สลิปเกินขีดจำกัดสูงสุด 5MB กรุณาเลือกไฟล์รูปภาพที่มีขนาดไม่เกิน 5MB',
+            fieldErrors: null,
+            requestId,
+            timestamp,
+          },
+        });
+      }
+      if (err.message === 'PDF_NOT_ALLOWED' || (err.message && err.message.includes('PDF'))) {
+        return res.status(400).json({
+          error: {
+            code: 'PDF_NOT_ALLOWED',
+            message: 'ระบบไม่รองรับไฟล์ PDF สำหรับสลิปชำระเงิน กรุณาแนบไฟล์รูปภาพ (JPEG, PNG, WebP) เท่านั้น',
+            fieldErrors: null,
+            requestId,
+            timestamp,
+          },
+        });
+      }
+      return res.status(400).json({
+        error: {
+          code: 'INVALID_FILE_TYPE',
+          message: 'รองรับเฉพาะไฟล์รูปภาพ (JPEG, PNG, WebP, HEIC) ขนาดไม่เกิน 5MB',
+          fieldErrors: null,
+          requestId,
+          timestamp,
+        },
+      });
+    }
+    next();
+  });
+};
 
 const prisma = getPrismaClient();
 
@@ -424,11 +470,34 @@ export function createPaymentRouter(authService: AuthenticationService) {
       const tenant = await ensureTenant(req, res, dormitoryId);
       if (!tenant) return res.status(403).json({ error: 'Forbidden' });
 
+      if (req.body?.mimeType === 'application/pdf' || req.body?.fileName?.toLowerCase()?.endsWith('.pdf')) {
+        return res.status(400).json({
+          error: {
+            code: 'PDF_NOT_ALLOWED',
+            message: 'ระบบไม่รองรับไฟล์ PDF สำหรับสลิปชำระเงิน กรุณาแนบไฟล์รูปภาพ (JPEG, PNG, WebP) เท่านั้น',
+            fieldErrors: null,
+            requestId: (req.headers['x-request-id'] as string) || (req as any).id || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          }
+        });
+      }
+      if (req.body?.fileSize && Number(req.body.fileSize) > 5 * 1024 * 1024) {
+        return res.status(400).json({
+          error: {
+            code: 'FILE_TOO_LARGE',
+            message: 'ขนาดไฟล์สลิปเกินขีดจำกัดสูงสุด 5MB กรุณาเลือกไฟล์รูปภาพที่มีขนาดไม่เกิน 5MB',
+            fieldErrors: null,
+            requestId: (req.headers['x-request-id'] as string) || (req as any).id || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          }
+        });
+      }
+
       const schema = z.object({
         billId: z.string(),
         fileName: z.string(),
-        mimeType: z.enum(['image/jpeg', 'image/png', 'image/webp']),
-        fileSize: z.number().int().positive()
+        mimeType: z.enum(['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif']),
+        fileSize: z.number().int().positive().max(5 * 1024 * 1024, 'ขนาดไฟล์สลิปเกินขีดจำกัดสูงสุด 5MB')
       });
       const data = schema.parse(req.body);
 
@@ -473,7 +542,7 @@ export function createPaymentRouter(authService: AuthenticationService) {
   });
 
   // Secure multipart upload
-  router.post('/slip/upload/:intentId', slipRateLimiter, requireAuth, requireDormitoryWriteEntitlement, requireCsrf, upload.single('file'), async (req, res) => {
+  router.post('/slip/upload/:intentId', slipRateLimiter, requireAuth, requireDormitoryWriteEntitlement, requireCsrf, handleSlipUploadSingle, async (req, res) => {
     let objectKey: string | null = null;
     try {
       if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
@@ -485,8 +554,8 @@ export function createPaymentRouter(authService: AuthenticationService) {
       if (intent.status !== 'CREATED') return res.status(400).json({ error: 'Intent already used or invalid' });
       if (intent.expiresAt < new Date()) return res.status(400).json({ error: 'Intent expired' });
 
-      const validation = detectAndValidateImage(req.file.buffer, intent.expectedMimeType);
-      const hash = crypto.createHash('sha256').update(req.file.buffer).digest('hex');
+      const secureImage = await processAndSecureSlipImage(req.file.buffer);
+      const hash = secureImage.sha256;
 
       const existingVerification = await prisma.paymentEvidenceVerification.findFirst({
         where: { payloadHash: hash }
@@ -513,9 +582,9 @@ export function createPaymentRouter(authService: AuthenticationService) {
         });
       }
 
-      const ext = validation.extension;
+      const ext = secureImage.extension;
       objectKey = `slips/${intent.dormitoryId}/${intent.id}${ext}`;
-      await localStorageProvider.saveFile(objectKey, req.file.buffer);
+      await localStorageProvider.saveFile(objectKey, secureImage.buffer);
 
       await prisma.paymentUploadIntent.update({
         where: { id: intent.id },
@@ -523,8 +592,8 @@ export function createPaymentRouter(authService: AuthenticationService) {
           status: 'UPLOADED',
           objectKey,
           sha256: hash,
-          verifiedMimeType: validation.mimeType,
-          verifiedSize: validation.size,
+          verifiedMimeType: secureImage.mimeType,
+          verifiedSize: secureImage.byteSize,
           uploadedAt: new Date()
         }
       });
@@ -566,6 +635,8 @@ export function createPaymentRouter(authService: AuthenticationService) {
         idempotencyKey,
         actorUserId: auth.userId
       });
+
+      resetSlipRateLimit(dormitoryId, auth.userId);
 
       res.json(payment);
     } catch (err: any) {
@@ -891,6 +962,29 @@ export function createPaymentRouter(authService: AuthenticationService) {
         return res.status(400).json({ error: 'billIds array is required' });
       }
 
+      if (mimeType === 'application/pdf') {
+        return res.status(400).json({
+          error: {
+            code: 'PDF_NOT_ALLOWED',
+            message: 'ระบบไม่รองรับไฟล์ PDF สำหรับสลิปชำระเงิน กรุณาแนบไฟล์รูปภาพ (JPEG, PNG, WebP) เท่านั้น',
+            fieldErrors: null,
+            requestId: (req.headers['x-request-id'] as string) || (req as any).id || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          }
+        });
+      }
+      if (fileSize && Number(fileSize) > 5 * 1024 * 1024) {
+        return res.status(400).json({
+          error: {
+            code: 'FILE_TOO_LARGE',
+            message: 'ขนาดไฟล์สลิปเกินขีดจำกัดสูงสุด 5MB กรุณาเลือกไฟล์รูปภาพที่มีขนาดไม่เกิน 5MB',
+            fieldErrors: null,
+            requestId: (req.headers['x-request-id'] as string) || (req as any).id || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          }
+        });
+      }
+
       const tenant = await findAuthoritativeActiveTenant({
         dormitoryId,
         auth,
@@ -941,6 +1035,8 @@ export function createPaymentRouter(authService: AuthenticationService) {
         actorUserId: auth.userId,
         idempotencyKey: (req.headers['x-idempotency-key'] || req.headers['idempotency-key']) as string | undefined,
       });
+
+      resetSlipRateLimit(dormitoryId, auth.userId);
 
       res.json(result);
     } catch (err: any) {

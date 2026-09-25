@@ -46,11 +46,11 @@ export const MAX_PDF_PAGE_COUNT = 10;
  */
 export async function processAndSecureTenantDocument(rawBuffer: Buffer): Promise<SecuredDocumentResult> {
   if (!rawBuffer || rawBuffer.length === 0) {
-    throw new AppError('File buffer is missing or empty', 400, 'INVALID_FILE_INPUT');
+    throw new AppError('กรุณาเลือกไฟล์เอกสารสำเนาบัตรประชาชน', 400, 'INVALID_FILE_INPUT');
   }
 
   if (rawBuffer.length > MAX_DOCUMENT_FILE_SIZE) {
-    throw new AppError(`File size exceeds maximum limit of 5 MB (${rawBuffer.length} bytes)`, 400, 'FILE_TOO_LARGE');
+    throw new AppError('ขนาดไฟล์เอกสารเกินขีดจำกัดสูงสุด 5MB', 400, 'FILE_TOO_LARGE');
   }
 
   // Check magic bytes for PDF
@@ -212,13 +212,13 @@ export async function processAndSecureTenantIdCardImage(rawBuffer: Buffer): Prom
   return processAndSecureTenantDocument(rawBuffer);
 }
 
-export const MAX_SLIP_FILE_SIZE = 4 * 1024 * 1024; // 4 MB
+export const MAX_SLIP_FILE_SIZE = 5 * 1024 * 1024; // 5 MB per PO decision
 
 /**
  * Bank Slip Image Security Boundary & High-Fidelity Sanitization:
- * 1. Strictly limits raw input size to 4MB.
+ * 1. Strictly limits raw input size to 5MB.
  * 2. Pre-checks magic bytes against non-image vectors (HTML, PHP, SVG, XML, EXE, ZIP).
- * 3. Enforces valid JPEG, PNG, or WebP magic bytes.
+ * 3. Enforces valid JPEG, PNG, WebP, or HEIC magic bytes (strictly rejects PDF).
  * 4. Protects against Decompression Bombs (limitInputPixels: 16MP, max dimensions 4096x4096px).
  * 5. Re-encodes with auto-rotation, stripping all EXIF, GPS, comments, and polyglots.
  * 6. Preserves high quality (quality 95) and dimensions so SlipOK QR decoding is not degraded.
@@ -229,11 +229,15 @@ export async function processAndSecureSlipImage(rawBuffer: Buffer): Promise<Secu
   }
 
   if (rawBuffer.length > MAX_SLIP_FILE_SIZE) {
-    throw new AppError(`ขนาดไฟล์รูปภาพสลิปเกินขีดจำกัดสูงสุด 4MB (${rawBuffer.length} bytes)`, 400, 'FILE_TOO_LARGE');
+    throw new AppError(`ขนาดไฟล์รูปภาพสลิปเกินขีดจำกัดสูงสุด 5MB (${rawBuffer.length} bytes)`, 400, 'FILE_TOO_LARGE');
   }
 
   // Pre-check magic bytes against non-image vectors (HTML, XML, SVG, PHP, EXE, ELF, ZIP)
   const header = rawBuffer.subarray(0, 64).toString('ascii');
+  if (header.startsWith('%PDF') || rawBuffer.subarray(0, 4).toString('ascii') === '%PDF') {
+    throw new AppError('ระบบไม่รองรับไฟล์ PDF สำหรับสลิปชำระเงิน กรุณาแนบไฟล์รูปภาพ (JPEG, PNG, WebP) เท่านั้น', 400, 'INVALID_IMAGE_FORMAT');
+  }
+
   if (
     header.toLowerCase().includes('<svg') ||
     header.toLowerCase().includes('<?xml') ||
@@ -253,8 +257,13 @@ export async function processAndSecureSlipImage(rawBuffer: Buffer): Promise<Secu
   const isWebp = rawBuffer.length >= 12 &&
     rawBuffer.subarray(0, 4).toString('ascii') === 'RIFF' &&
     rawBuffer.subarray(8, 12).toString('ascii') === 'WEBP';
+  const isHeic = rawBuffer.length >= 12 &&
+    rawBuffer.subarray(4, 8).toString('ascii') === 'ftyp' &&
+    ['heic', 'heix', 'mif1', 'msf1', 'hevc', 'avif'].some(brand =>
+      rawBuffer.subarray(8, 12).toString('ascii').toLowerCase().includes(brand)
+    );
 
-  if (!isJpeg && !isPng && !isWebp) {
+  if (!isJpeg && !isPng && !isWebp && !isHeic) {
     throw new AppError('รูปแบบไฟล์รูปภาพไม่ถูกต้อง รองรับเฉพาะ JPEG, PNG หรือ WebP เท่านั้น', 400, 'INVALID_IMAGE_FORMAT');
   }
 

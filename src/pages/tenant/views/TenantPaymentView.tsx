@@ -321,17 +321,32 @@ export const TenantPaymentView: React.FC<TenantPaymentViewProps> = ({
               <Upload className="w-3.5 h-3.5 text-indigo-500" />
               หลักฐานการโอนเงิน (สลิป) *
             </span>
-            <span className="text-[9px] text-slate-400">JPG, PNG, PDF &le; 5MB</span>
+            <span className="text-[9px] text-slate-400">JPG, PNG, WebP, HEIC &le; 5MB (ไม่รับ PDF)</span>
           </div>
 
           <label className="border border-dashed border-slate-200 hover:border-indigo-400 hover:bg-indigo-50/5 transition-all rounded-2xl p-4 text-center flex flex-col items-center justify-center cursor-pointer gap-2 bg-slate-50/50 block">
             <input
               type="file"
-              accept="image/*,application/pdf"
+              accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.jpg,.jpeg,.png,.webp,.heic,.heif"
               className="hidden"
               onChange={(e) => {
                 if (e.target.files && e.target.files[0]) {
-                  setSlipFile(e.target.files[0]);
+                  const selected = e.target.files[0];
+                  if (selected.type === 'application/pdf' || selected.name.toLowerCase().endsWith('.pdf')) {
+                    if (onShowToast) {
+                      onShowToast('error', 'ไม่รองรับไฟล์ PDF', 'ระบบไม่รองรับไฟล์ PDF สำหรับสลิปชำระเงิน กรุณาแนบไฟล์รูปภาพ (JPEG, PNG, WebP, HEIC) เท่านั้น');
+                    }
+                    e.target.value = '';
+                    return;
+                  }
+                  if (selected.size > 5 * 1024 * 1024) {
+                    if (onShowToast) {
+                      onShowToast('error', 'ขนาดไฟล์เกินกำหนด', 'ขนาดไฟล์สลิปต้องไม่เกิน 5MB กรุณาเลือกไฟล์รูปภาพใหม่');
+                    }
+                    e.target.value = '';
+                    return;
+                  }
+                  setSlipFile(selected);
                 }
               }}
             />

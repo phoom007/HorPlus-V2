@@ -221,9 +221,8 @@ export function createRateLimiterMiddleware(options: RateLimiterOptions = {}) {
 
 /**
  * Two-Tier Slip Upload Rate Limiter Middleware:
- * - Tier 1: User / Dormitory limit: 5 uploads per minute
- * - Tier 2: IP address limit: 15 uploads per 5 minutes
- * - Cooldown: 5-second mandatory cooldown between consecutive uploads per user
+ * - Tier 1: User / Dormitory limit: 3 requests per 15 minutes per tenant (PO decision)
+ * - Tier 2: IP address limit: 30 requests per 15 minutes
  */
 export function createSlipUploadRateLimiter(store: DistributedRateLimiterStore = distributedRateLimiterStore) {
   return async (req: Request, res: Response, next: NextFunction) => {
@@ -246,29 +245,14 @@ export function createSlipUploadRateLimiter(store: DistributedRateLimiterStore =
       }
     }
 
-    // 1. Mandatory 5-Second Cooldown (Anti-rapid bursts / UI double-click)
-    const cooldownKey = `cooldown:slip:${dormitoryId}:${userId}`;
-    const cooldownAllowed = await store.checkCooldown(cooldownKey, 5000);
-    if (!cooldownAllowed) {
-      return res.status(429).json({
-        error: {
-          code: 'COOLDOWN_ACTIVE',
-          message: 'กรุณารอ 5 วินาทีก่อนส่งตรวจสอบสลิปอีกครั้ง',
-          fieldErrors: null,
-          requestId,
-          timestamp: new Date().toISOString(),
-        },
-      });
-    }
-
-    // 2. Tier 1: 5 uploads / 60 seconds per User / Dormitory
+    // 1. Tier 1: 3 uploads / 15 minutes (15 * 60 * 1000 ms) per User / Dormitory (PO Decision)
     const userLimitKey = `rate_limit:slip:user:${dormitoryId}:${userId}`;
-    const userAllowed = await store.isAllowed(userLimitKey, 5, 60 * 1000);
+    const userAllowed = await store.isAllowed(userLimitKey, 3, 15 * 60 * 1000);
     if (!userAllowed) {
       return res.status(429).json({
         error: {
           code: 'RATE_LIMIT_EXCEEDED',
-          message: 'คุณส่งคำขอตรวจสอบสลิปถี่เกินไป (จำกัด 5 ครั้งต่อนาที) กรุณารอสักครู่แล้วลองใหม่อีกครั้ง',
+          message: 'คุณส่งคำขออัปโหลดสลิปถี่เกินไป (จำกัด 3 ครั้งต่อ 15 นาที) กรุณารอสักครู่แล้วลองใหม่อีกครั้ง',
           fieldErrors: null,
           requestId,
           timestamp: new Date().toISOString(),
@@ -276,14 +260,14 @@ export function createSlipUploadRateLimiter(store: DistributedRateLimiterStore =
       });
     }
 
-    // 3. Tier 2: 15 uploads / 300 seconds per IP address
+    // 2. Tier 2: 30 uploads / 15 minutes per IP address
     const ipLimitKey = `rate_limit:slip:ip:${ip}`;
-    const ipAllowed = await store.isAllowed(ipLimitKey, 15, 5 * 60 * 1000);
+    const ipAllowed = await store.isAllowed(ipLimitKey, 30, 15 * 60 * 1000);
     if (!ipAllowed) {
       return res.status(429).json({
         error: {
           code: 'RATE_LIMIT_EXCEEDED',
-          message: 'IP ของคุณส่งคำขอตรวจสอบสลิปถี่เกินไป (จำกัด 15 ครั้งต่อ 5 นาที) กรุณารอสักครู่แล้วลองใหม่อีกครั้ง',
+          message: 'IP ของคุณส่งคำขออัปโหลดสลิปถี่เกินไป (จำกัด 30 ครั้งต่อ 15 นาที) กรุณารอสักครู่แล้วลองใหม่อีกครั้ง',
           fieldErrors: null,
           requestId,
           timestamp: new Date().toISOString(),
@@ -293,6 +277,11 @@ export function createSlipUploadRateLimiter(store: DistributedRateLimiterStore =
 
     next();
   };
+}
+
+export function resetSlipRateLimit(dormitoryId: string, userId: string, store: DistributedRateLimiterStore = distributedRateLimiterStore): void {
+  const userLimitKey = `rate_limit:slip:user:${dormitoryId}:${userId}`;
+  store.resetKey(userLimitKey);
 }
 
 /**

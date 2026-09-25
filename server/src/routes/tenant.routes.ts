@@ -1,5 +1,7 @@
 import { Router, Request, Response } from 'express';
 import multer from 'multer';
+import crypto from 'crypto';
+import { getPrismaClient } from '../db/prisma.js';
 import { AuthenticationService } from '../services/auth.service.js';
 import { TenantService } from '../services/tenant.service.js';
 import { createRequireSessionMiddleware } from '../middleware/require-session.js';
@@ -28,6 +30,13 @@ import {
 } from '../mappers/tenant-api.mapper.js';
 import { AppError } from '../types/index.js';
 
+const prisma = getPrismaClient();
+
+export function generateTenantDocumentSignature(tenantId: string, dormitoryId: string, expires: number): string {
+  const secret = process.env.SESSION_SECRET || 'horplus-identity-doc-secret';
+  return crypto.createHmac('sha256', secret).update(`${tenantId}:${dormitoryId}:${expires}`).digest('hex');
+}
+
 export function createTenantRouter(
   authService: AuthenticationService,
   tenantService: TenantService
@@ -37,6 +46,10 @@ export function createTenantRouter(
 
   // Hard deny TENANT membership role from accessing any Owner Tenant API
   router.use(async (req: Request, res: Response, next: any) => {
+    // If request contains signed URL parameters for identity document, allow through so the route handler evaluates sig/expiration
+    if (req.path.includes('/identity-document') && req.query.sig && req.query.expires) {
+      return next();
+    }
     let context = (req as any).dormitoryContext;
     if (!context && req.auth) {
       try {
@@ -256,6 +269,171 @@ export function createTenantRouter(
   // GET /api/v1/tenants/:id/identity-document
   router.get(
     '/:id/identity-document',
+    async (req: Request, res: Response) => {
+      const requestId = (req.headers['x-request-id'] as string) || 'req-unknown';
+      const timestamp = new Date().toISOString();
+
+      // Path A: Signed URL access
+      const { sig, expires } = req.query;
+      if (sig || expires) {
+        if (!sig || !expires) {
+          return res.status(403).json({
+            error: {
+              code: 'INVALID_SIGNATURE',
+              message: 'พารามิเตอร์ของลิงก์เอกสารไม่ครบถ้วน',
+              requestId,
+              timestamp,
+            },
+          });
+        }
+
+        const expNum = Number(expires);
+        if (isNaN(expNum) || Date.now() > expNum) {
+          return res.status(403).json({
+            error: {
+              code: 'EXPIRED_SIGNED_URL',
+              message: 'ลิงก์เอกสารหมดอายุแล้ว กรุณารีเฟรชเพื่อรับลิงก์ใหม่',
+              requestId,
+              timestamp,
+            },
+          });
+        }
+
+        const tenant = await prisma.tenant.findUnique({ where: { id: req.params.id } });
+        if (!tenant) {
+          return res.status(404).json({
+            error: {
+              code: 'TENANT_NOT_FOUND',
+              message: 'ไม่พบข้อมูลผู้เช่า',
+              requestId,
+              timestamp,
+            },
+          });
+        }
+
+        const expectedSig = generateTenantDocumentSignature(tenant.id, tenant.dormitoryId, expNum);
+        if (sig !== expectedSig) {
+          return res.status(403).json({
+            error: {
+              code: 'INVALID_SIGNATURE',
+              message: 'ลายเซ็นดิจิทัลของลิงก์ไม่ถูกต้อง',
+              requestId,
+              timestamp,
+            },
+          });
+        }
+
+        if (!tenant.idCardObjectKey) {
+          return res.status(404).json({
+            error: {
+              code: 'IDENTITY_DOCUMENT_NOT_FOUND',
+              message: 'ผู้เช่ารายนี้ยังไม่ได้อัปโหลดเอกสารสำเนาบัตรประชาชน',
+              requestId,
+              timestamp,
+            },
+          });
+        }
+
+        try {
+          const fileBuffer = await localStorageProvider.getFile(tenant.idCardObjectKey);
+          const isPdf = tenant.idCardMimeType === 'application/pdf' || tenant.idCardObjectKey.endsWith('.pdf');
+          res.setHeader('Content-Type', isPdf ? 'application/pdf' : (tenant.idCardMimeType || 'image/webp'));
+          res.setHeader('X-Content-Type-Options', 'nosniff');
+          res.setHeader('Cache-Control', 'private, no-store, no-cache, must-revalidate');
+          res.setHeader('Pragma', 'no-cache');
+          res.setHeader('Expires', '0');
+          res.setHeader('Content-Disposition', `inline; filename="tenant-id-document.${isPdf ? 'pdf' : 'webp'}"`);
+
+          return res.send(fileBuffer);
+        } catch (err: any) {
+          return res.status(404).json({
+            error: {
+              code: 'IDENTITY_DOCUMENT_NOT_FOUND',
+              message: 'ไม่พบไฟล์เอกสารสำเนาบัตรประชาชน',
+              requestId,
+              timestamp,
+            },
+          });
+        }
+      }
+
+      // Path B: Direct Session access (Owner/Staff with permission)
+      requireSession(req, res, async () => {
+        let context = (req as any).dormitoryContext;
+        if (!context && req.auth) {
+          try {
+            context = await resolveAuthoritativeDormitoryContext(req);
+            (req as any).dormitoryContext = context;
+          } catch {}
+        }
+        if (context?.roleCode === 'TENANT') {
+          return res.status(403).json({
+            error: {
+              code: 'FORBIDDEN',
+              message: 'ผู้เช่าไม่ได้รับอนุญาตให้เข้าถึง API จัดการผู้เช่าของเจ้าของหอพัก',
+              requestId,
+              timestamp,
+            },
+          });
+        }
+
+        requireDormitoryPermission('tenants:document:read')(req, res, async () => {
+          try {
+            const dormId = getDormitoryId(req);
+            const tenant = await tenantService.getTenantById(req.params.id, dormId);
+            if (!tenant || tenant.dormitoryId !== dormId) {
+              return res.status(404).json({
+                error: {
+                  code: 'TENANT_NOT_FOUND',
+                  message: 'ไม่พบข้อมูลผู้เช่า',
+                  requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+                  timestamp: new Date().toISOString(),
+                },
+              });
+            }
+
+            if (!tenant.idCardObjectKey) {
+              return res.status(404).json({
+                error: {
+                  code: 'IDENTITY_DOCUMENT_NOT_FOUND',
+                  message: 'ผู้เช่ารายนี้ยังไม่ได้อัปโหลดเอกสารสำเนาบัตรประชาชน',
+                  requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+                  timestamp: new Date().toISOString(),
+                },
+              });
+            }
+
+            const fileBuffer = await localStorageProvider.getFile(tenant.idCardObjectKey);
+            const isPdf = tenant.idCardMimeType === 'application/pdf' || tenant.idCardObjectKey.endsWith('.pdf');
+            res.setHeader('Content-Type', isPdf ? 'application/pdf' : (tenant.idCardMimeType || 'image/webp'));
+            res.setHeader('X-Content-Type-Options', 'nosniff');
+            res.setHeader('Cache-Control', 'private, no-store, no-cache, must-revalidate');
+            res.setHeader('Pragma', 'no-cache');
+            res.setHeader('Expires', '0');
+            res.setHeader('Content-Disposition', `inline; filename="tenant-id-document.${isPdf ? 'pdf' : 'webp'}"`);
+
+            return res.send(fileBuffer);
+          } catch (err: any) {
+            if (err?.code === 'FILE_NOT_FOUND' || err?.message?.includes('not found')) {
+              return res.status(404).json({
+                error: {
+                  code: 'IDENTITY_DOCUMENT_NOT_FOUND',
+                  message: 'ไม่พบไฟล์เอกสารสำเนาบัตรประชาชน',
+                  requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+                  timestamp: new Date().toISOString(),
+                },
+              });
+            }
+            handleServiceError(res, err, req);
+          }
+        });
+      });
+    }
+  );
+
+  // GET /api/v1/tenants/:id/identity-document/signed-url
+  router.get(
+    '/:id/identity-document/signed-url',
     requireSession,
     requireDormitoryPermission('tenants:document:read'),
     async (req: Request, res: Response) => {
@@ -273,38 +451,19 @@ export function createTenantRouter(
           });
         }
 
-        if (!tenant.idCardObjectKey) {
-          return res.status(404).json({
-            error: {
-              code: 'IDENTITY_DOCUMENT_NOT_FOUND',
-              message: 'ผู้เช่ารายนี้ยังไม่ได้อัปโหลดเอกสารสำเนาบัตรประชาชน',
-              requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
-              timestamp: new Date().toISOString(),
-            },
-          });
-        }
+        const ttlMs = 15 * 60 * 1000; // 15 minutes TTL
+        const expires = Date.now() + ttlMs;
+        const sig = generateTenantDocumentSignature(tenant.id, tenant.dormitoryId, expires);
+        const signedUrl = `/api/v1/tenants/${encodeURIComponent(tenant.id)}/identity-document?expires=${expires}&sig=${sig}`;
 
-        const fileBuffer = await localStorageProvider.getFile(tenant.idCardObjectKey);
-        const isPdf = tenant.idCardMimeType === 'application/pdf' || tenant.idCardObjectKey.endsWith('.pdf');
-        res.setHeader('Content-Type', isPdf ? 'application/pdf' : (tenant.idCardMimeType || 'image/webp'));
-        res.setHeader('X-Content-Type-Options', 'nosniff');
-        res.setHeader('Cache-Control', 'private, no-store, no-cache, must-revalidate');
-        res.setHeader('Pragma', 'no-cache');
-        res.setHeader('Expires', '0');
-        res.setHeader('Content-Disposition', `inline; filename="tenant-id-document.${isPdf ? 'pdf' : 'webp'}"`);
-
-        return res.send(fileBuffer);
-      } catch (err: any) {
-        if (err?.code === 'FILE_NOT_FOUND' || err?.message?.includes('not found')) {
-          return res.status(404).json({
-            error: {
-              code: 'IDENTITY_DOCUMENT_NOT_FOUND',
-              message: 'ไม่พบไฟล์เอกสารสำเนาบัตรประชาชน',
-              requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
-              timestamp: new Date().toISOString(),
-            },
-          });
-        }
+        res.json({
+          data: {
+            signedUrl,
+            expiresAt: new Date(expires).toISOString(),
+            expiresInSeconds: 900,
+          },
+        });
+      } catch (err) {
         handleServiceError(res, err, req);
       }
     }

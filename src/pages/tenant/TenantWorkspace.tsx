@@ -1566,7 +1566,8 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
             }));
             showToast('success', 'อัปโหลดสำเร็จ', 'อัปโหลดภาพสำเนาบัตรประชาชนเรียบร้อยแล้ว');
           } else {
-            showToast('error', 'เกิดข้อผิดพลาด', 'ไม่สามารถอัปโหลดภาพสำเนาบัตรประชาชนได้');
+            const errJson = await res.json().catch(() => null);
+            showToast('error', 'เกิดข้อผิดพลาด', errJson?.error?.message || 'ไม่สามารถอัปโหลดภาพสำเนาบัตรประชาชนได้');
           }
         } catch (err: any) {
           showToast('error', 'เกิดข้อผิดพลาด', err.message || 'ไม่สามารถอัปโหลดภาพได้');
