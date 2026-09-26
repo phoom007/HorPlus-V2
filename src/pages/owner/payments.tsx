@@ -232,6 +232,7 @@ export interface PaymentsOwnerViewProps {
   onUpdateBills?: () => void;
   onNavigateToLineConfig?: () => void;
   initialTab?: 'paid' | 'checking' | 'cash' | 'rejected';
+  userRole?: string | null;
 }
 
 /* =========================================================================
@@ -792,6 +793,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
   onUpdateBills = () => {},
   onNavigateToLineConfig,
   initialTab,
+  userRole,
 }) => {
   const queryClient = useQueryClient();
 
@@ -3917,6 +3919,7 @@ export const PaymentsOwnerView: React.FC<PaymentsOwnerViewProps> = ({
         targetScrollTenantId={targetScrollTenantId}
         onShowToast={(msg) => triggerToast(msg)}
         onNavigateToLineConfig={onNavigateToLineConfig}
+        userRole={userRole || (sessionData?.membership?.roleCode?.toLowerCase() === 'staff' ? 'staff' : (sessionData?.user?.roleCode?.toLowerCase() === 'staff' ? 'staff' : 'owner'))}
       />
 
       {/* Override Reason Modal */}

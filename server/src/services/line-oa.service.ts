@@ -3451,21 +3451,27 @@ export class LineOaService {
       const timezone = dorm?.timezone || 'Asia/Bangkok';
       const periodKey = pushUsageService.getCurrentPeriodKey(timezone);
 
-      await this.prisma.$executeRaw`
-        INSERT INTO "line_push_usage" ("id", "dormitory_id", "period_key", "success_count", "reserved_count", "created_at", "updated_at")
-        VALUES (gen_random_uuid(), ${dormitoryId}::uuid, ${periodKey}, 0, 1, NOW(), NOW())
-        ON CONFLICT ("dormitory_id", "period_key")
-        DO UPDATE SET "reserved_count" = "line_push_usage"."reserved_count" + 1, "updated_at" = NOW()
-      `;
+      await this.prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
+        await tx.$executeRaw`
+          INSERT INTO "line_push_usage" ("id", "dormitory_id", "period_key", "success_count", "reserved_count", "created_at", "updated_at")
+          VALUES (gen_random_uuid(), ${dormitoryId}::uuid, ${periodKey}, 0, 1, NOW(), NOW())
+          ON CONFLICT ("dormitory_id", "period_key")
+          DO UPDATE SET "reserved_count" = "line_push_usage"."reserved_count" + 1, "updated_at" = NOW()
+        `;
+      });
 
       // 6. Resolve Token and Dispatch
       const accessToken = await this.resolveAccessToken(dormitoryId);
       if (!accessToken) {
-        await this.prisma.$executeRaw`
-          UPDATE "line_push_usage"
-          SET "reserved_count" = GREATEST("reserved_count" - 1, 0), "updated_at" = NOW()
-          WHERE "dormitory_id" = ${dormitoryId}::uuid AND "period_key" = ${periodKey}
-        `;
+        await this.prisma.$transaction(async (tx) => {
+          await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
+          await tx.$executeRaw`
+            UPDATE "line_push_usage"
+            SET "reserved_count" = GREATEST("reserved_count" - 1, 0), "updated_at" = NOW()
+            WHERE "dormitory_id" = ${dormitoryId}::uuid AND "period_key" = ${periodKey}
+          `;
+        });
         return { sent: false, reason: 'TOKEN_ERROR' };
       }
 
@@ -3476,13 +3482,16 @@ export class LineOaService {
 
       if (isAccepted) {
         // Success: success_count + 1, reserved_count - 1
-        await this.prisma.$executeRaw`
-          UPDATE "line_push_usage"
-          SET "success_count" = "line_push_usage"."success_count" + 1,
-              "reserved_count" = GREATEST("line_push_usage"."reserved_count" - 1, 0),
-              "updated_at" = NOW()
-          WHERE "dormitory_id" = ${dormitoryId}::uuid AND "period_key" = ${periodKey}
-        `;
+        await this.prisma.$transaction(async (tx) => {
+          await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
+          await tx.$executeRaw`
+            UPDATE "line_push_usage"
+            SET "success_count" = "line_push_usage"."success_count" + 1,
+                "reserved_count" = GREATEST("line_push_usage"."reserved_count" - 1, 0),
+                "updated_at" = NOW()
+            WHERE "dormitory_id" = ${dormitoryId}::uuid AND "period_key" = ${periodKey}
+          `;
+        });
 
         if (eventId) {
           PROCESSED_NOTIFICATION_EVENTS.add(`${dormitoryId}:${eventId}`);
@@ -3502,12 +3511,15 @@ export class LineOaService {
         };
       } else {
         // Failed: reserved_count - 1, success_count NOT incremented
-        await this.prisma.$executeRaw`
-          UPDATE "line_push_usage"
-          SET "reserved_count" = GREATEST("line_push_usage"."reserved_count" - 1, 0),
-              "updated_at" = NOW()
-          WHERE "dormitory_id" = ${dormitoryId}::uuid AND "period_key" = ${periodKey}
-        `;
+        await this.prisma.$transaction(async (tx) => {
+          await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
+          await tx.$executeRaw`
+            UPDATE "line_push_usage"
+            SET "reserved_count" = GREATEST("line_push_usage"."reserved_count" - 1, 0),
+                "updated_at" = NOW()
+            WHERE "dormitory_id" = ${dormitoryId}::uuid AND "period_key" = ${periodKey}
+          `;
+        });
 
         return {
           sent: false,

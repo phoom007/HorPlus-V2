@@ -1482,6 +1482,203 @@ export class BillingService {
       }
     }
   }
+
+  public async sendManualBillLineNotifications(input: {
+    dormitoryId: string;
+    cycleId?: string;
+    tenantIds: string[];
+    billIds?: string[];
+    actor?: any;
+  }): Promise<{
+    success: boolean;
+    sentCount: number;
+    failedCount: number;
+    unboundCount: number;
+    warning?: string;
+    results: Array<{
+      tenantId: string;
+      roomNumber?: string;
+      billCount?: number;
+      status: 'SENT' | 'NO_LINE_BINDING' | 'QUOTA_EXHAUSTED' | 'NOT_FOUND' | 'ERROR';
+      message?: string;
+    }>;
+  }> {
+    const { dormitoryId, cycleId, tenantIds, billIds } = input;
+    const db = getPrismaClient();
+
+    // 1. Fetch dormitory name once (Rule 57: no query inside loop)
+    const dorm = await db.dormitory.findUnique({
+      where: { id: dormitoryId },
+      select: { name: true },
+    });
+    const dormitoryName = dorm?.name || 'หอพัก';
+
+    // 2. Fetch all matching unpaid bills with room details in ONE single query (Rule 57: no query inside loop)
+    const billsWhere: any = {
+      dormitoryId,
+      tenantId: { in: tenantIds },
+      status: { notIn: ['paid', 'cancelled'] },
+    };
+    const UUID_REGEX = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+    if (billIds && billIds.length > 0) {
+      billsWhere.id = { in: billIds };
+    } else if (cycleId) {
+      if (UUID_REGEX.test(cycleId)) {
+        billsWhere.billingCycleId = cycleId;
+      } else {
+        billsWhere.billingCycle = { cycleCode: cycleId.trim() };
+      }
+    }
+
+    let unpaidBills = await db.bill.findMany({
+      where: billsWhere,
+      include: {
+        room: { select: { id: true, roomNumber: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    if (unpaidBills.length === 0 && cycleId) {
+      const fallbackWhere = { ...billsWhere };
+      delete fallbackWhere.billingCycleId;
+      delete fallbackWhere.billingCycle;
+      unpaidBills = await db.bill.findMany({
+        where: fallbackWhere,
+        include: {
+          room: { select: { id: true, roomNumber: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+    }
+
+    // 3. Group bills by tenantId
+    const billsByTenant = new Map<string, typeof unpaidBills>();
+    for (const b of unpaidBills) {
+      if (b.tenantId) {
+        if (!billsByTenant.has(b.tenantId)) {
+          billsByTenant.set(b.tenantId, []);
+        }
+        billsByTenant.get(b.tenantId)!.push(b);
+      }
+    }
+
+    const { lineOaService, buildTenantInvoiceFlexMessage } = await import('./line-oa.service.js');
+
+    let sentCount = 0;
+    let failedCount = 0;
+    let unboundCount = 0;
+    let warning: string | undefined = undefined;
+    const results: Array<{
+      tenantId: string;
+      roomNumber?: string;
+      billCount?: number;
+      status: 'SENT' | 'NO_LINE_BINDING' | 'QUOTA_EXHAUSTED' | 'NOT_FOUND' | 'ERROR';
+      message?: string;
+    }> = [];
+
+    // 4. Iterate over requested tenantIds
+    for (const tId of tenantIds) {
+      const tenantBills = billsByTenant.get(tId);
+      if (!tenantBills || tenantBills.length === 0) {
+        results.push({
+          tenantId: tId,
+          status: 'NOT_FOUND',
+          message: 'ไม่พบบิลค้างชำระสำหรับผู้เช่ารายนี้',
+        });
+        continue;
+      }
+
+      const roomNumber = tenantBills[0].room?.roomNumber || 'GEN';
+      const combinedTotal = tenantBills.reduce(
+        (sum, b) => sum + Number(b.outstandingAmount ?? b.totalAmount ?? 0),
+        0
+      );
+      const dueDates = tenantBills
+        .map((b) => (b.dueDate ? new Date(b.dueDate).getTime() : Infinity))
+        .filter((t) => t !== Infinity);
+      const effectiveDueDate = dueDates.length > 0 ? new Date(Math.min(...dueDates)) : null;
+
+      const flexMessage = buildTenantInvoiceFlexMessage(
+        dormitoryName,
+        roomNumber,
+        tenantBills.map((b) => ({
+          billNumber: b.billNumber,
+          billKind: b.billKind,
+          totalAmount: Number(b.outstandingAmount ?? b.totalAmount ?? 0),
+          dueDate: b.dueDate,
+        })),
+        combinedTotal,
+        effectiveDueDate
+      );
+
+      try {
+        const sendRes = await lineOaService.sendTenantLineNotification({
+          dormitoryId,
+          tenantId: tId,
+          eventType: 'INVOICE',
+          eventId: `manual-bill-reminder:${cycleId || 'manual'}:${tId}:${Date.now()}`,
+          flexMessage,
+        });
+
+        if (sendRes.sent) {
+          sentCount++;
+          results.push({
+            tenantId: tId,
+            roomNumber,
+            billCount: tenantBills.length,
+            status: 'SENT',
+            message: 'ส่งแจ้งเตือนผ่าน LINE สำเร็จ',
+          });
+        } else if (sendRes.reason === 'NO_LINE_BINDING') {
+          unboundCount++;
+          results.push({
+            tenantId: tId,
+            roomNumber,
+            billCount: tenantBills.length,
+            status: 'NO_LINE_BINDING',
+            message: 'ผู้เช่ายังไม่ได้ผูก LINE',
+          });
+        } else if (sendRes.reason === 'QUOTA_EXHAUSTED' || sendRes.warningMessage) {
+          failedCount++;
+          warning = sendRes.warningMessage || 'จำนวนการส่งข้อความเดือนนี้หมดแล้ว';
+          results.push({
+            tenantId: tId,
+            roomNumber,
+            billCount: tenantBills.length,
+            status: 'QUOTA_EXHAUSTED',
+            message: warning,
+          });
+        } else {
+          failedCount++;
+          results.push({
+            tenantId: tId,
+            roomNumber,
+            billCount: tenantBills.length,
+            status: 'ERROR',
+            message: sendRes.reason || 'ส่งไม่สำเร็จ',
+          });
+        }
+      } catch (err: any) {
+        failedCount++;
+        results.push({
+          tenantId: tId,
+          roomNumber,
+          billCount: tenantBills.length,
+          status: 'ERROR',
+          message: err?.message || 'เกิดข้อผิดพลาดในการส่งข้อความ',
+        });
+      }
+    }
+
+    return {
+      success: true,
+      sentCount,
+      failedCount,
+      unboundCount,
+      warning,
+      results,
+    };
+  }
 }
 
 export interface BillRecalculationEligibilityResult {

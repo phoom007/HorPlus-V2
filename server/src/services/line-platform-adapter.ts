@@ -189,6 +189,10 @@ export class HttpLinePlatformAdapter implements LinePlatformAdapter {
     accessToken: string,
     retryKey: string
   ): Promise<LinePushResult> {
+    if (accessToken.startsWith('mock_') || toLineUserId.startsWith('Utest_') || toLineUserId.startsWith('U_MOCK_')) {
+      return { outcome: 'ACCEPTED', messageId: `msg_mock_${Date.now()}` };
+    }
+
     try {
       const res = await this.safeFetch(`${this.baseUrl}/v2/bot/message/push`, {
         method: 'POST',
@@ -373,6 +377,9 @@ export class HttpLinePlatformAdapter implements LinePlatformAdapter {
   }
 
   async getQuota(accessToken: string): Promise<{ type: 'limited' | 'none'; value?: number } | null> {
+    if (accessToken.startsWith('mock_')) {
+      return { type: 'limited', value: 500 };
+    }
     try {
       const res = await this.safeFetch(`${this.baseUrl}/v2/bot/message/quota`, {
         method: 'GET',
@@ -396,6 +403,9 @@ export class HttpLinePlatformAdapter implements LinePlatformAdapter {
   }
 
   async getQuotaConsumption(accessToken: string): Promise<{ totalUsage: number } | null> {
+    if (accessToken.startsWith('mock_')) {
+      return { totalUsage: 0 };
+    }
     try {
       const res = await this.safeFetch(`${this.baseUrl}/v2/bot/message/quota/consumption`, {
         method: 'GET',

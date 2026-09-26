@@ -210,6 +210,41 @@ export function createBillingRouter(
     }
   });
 
+  // POST /api/v1/bills/send-line-notifications
+  router.post('/send-line-notifications', mutationGuard('billing:write'), async (req: Request, res: Response) => {
+    if (!verifyCsrf(req, res)) return;
+    try {
+      const dormId = getDormitoryId(req);
+      const { cycleId, tenantIds, billIds } = req.body || {};
+
+      if (!Array.isArray(tenantIds) || tenantIds.length === 0) {
+        return res.status(400).json({
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'ต้องระบุผู้เช่าที่ต้องการส่งแจ้งเตือนอย่างน้อย 1 ราย',
+            fieldErrors: [{ field: 'tenantIds', message: 'ต้องระบุผู้เช่าอย่างน้อย 1 ราย' }],
+            requestId: (req.headers['x-request-id'] as string) || 'req-unknown',
+            timestamp: new Date().toISOString(),
+          },
+        });
+      }
+
+      const result = await billingService.sendManualBillLineNotifications({
+        dormitoryId: dormId,
+        cycleId,
+        tenantIds,
+        billIds,
+        actor: req.auth,
+      });
+
+      res.status(200).json({
+        data: result,
+      });
+    } catch (err) {
+      handleServiceError(res, err, req);
+    }
+  });
+
   // GET /api/v1/bills/summary
   router.get('/summary', requireDormitoryPermission('billing:view'), async (req: Request, res: Response) => {
     try {

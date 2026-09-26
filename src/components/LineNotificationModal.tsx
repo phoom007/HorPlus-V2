@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { Modal, formatBaht, formatThaiDate } from './GlobalComponents';
 import { Bill, Tenant, Room, Contract } from '../types';
+import { getCsrfTokenFromCookie } from '../data/httpClient';
 
 export function formatCycleThaiShort(cycle: string) {
   if (!cycle) return '';
@@ -80,6 +81,7 @@ interface LineNotificationModalProps {
   targetScrollTenantId?: string | null;
   onShowToast?: (msg: string) => void;
   onNavigateToLineConfig?: () => void;
+  userRole?: string | null;
 }
 
 export const LineNotificationModal: React.FC<LineNotificationModalProps> = ({
@@ -94,7 +96,8 @@ export const LineNotificationModal: React.FC<LineNotificationModalProps> = ({
   onAddLog,
   targetScrollTenantId,
   onShowToast,
-  onNavigateToLineConfig
+  onNavigateToLineConfig,
+  userRole,
 }) => {
   const [lineFilterTab, setLineFilterTab] = useState<'all' | 'unsent' | 'sent' | 'unpaid'>('unsent');
   const [selectedTenantIdsForLine, setSelectedTenantIdsForLine] = useState<string[]>([]);
@@ -131,11 +134,18 @@ export const LineNotificationModal: React.FC<LineNotificationModalProps> = ({
   // Compute cycle bills from ONLY real persisted issued bills for selectedCycle (excluding draft or cancelled)
   const cycleBillsMap = new Map<string, Bill>();
 
-  const realIssuedBills = (bills || []).filter(b =>
-    (b.cycleId === selectedCycle || (b as any).billingCycleId === selectedCycle) &&
-    b.status !== 'draft' &&
-    b.status !== 'cancelled'
-  );
+  let realIssuedBills = (bills || []).filter(b => {
+    const billCycleCode = (b as any).billingCycle?.cycleCode || (b as any).cycleCode;
+    const isCycleMatch = !selectedCycle ||
+      b.cycleId === selectedCycle ||
+      (b as any).billingCycleId === selectedCycle ||
+      billCycleCode === selectedCycle;
+    return isCycleMatch && b.status !== 'draft' && b.status !== 'cancelled';
+  });
+
+  if (realIssuedBills.length === 0) {
+    realIssuedBills = (bills || []).filter(b => b.status !== 'draft' && b.status !== 'cancelled' && b.status !== 'paid');
+  }
 
   realIssuedBills.forEach(bill => {
     // Only unpaid / pending / overdue / checking / paid bills that actually exist
@@ -191,55 +201,104 @@ export const LineNotificationModal: React.FC<LineNotificationModalProps> = ({
     }
   }, [isOpen, targetScrollTenantId]);
 
-  const handleSendLineNotifications = () => {
-    if (selectedTenantIdsForLine.length === 0) return;
+  const handleSendLineNotifications = async () => {
+    if (selectedTenantIdsForLine.length === 0 || isSendingLine) return;
+
+    if (userRole === 'staff') {
+      const staffMsg = 'พนักงานทั่วไปไม่มีสิทธิ์ส่งแจ้งเตือนบิลผ่าน LINE';
+      if (onShowToast) onShowToast(staffMsg);
+      else setLineToastSuccess(staffMsg);
+      return;
+    }
 
     setIsSendingLine(true);
 
-    setTimeout(() => {
-      const nowStr = formatThaiDate(new Date().toISOString(), true);
+    try {
+      const dormId = dormitoryId || (typeof window !== 'undefined' ? (localStorage.getItem('selected_dormitory_id') || sessionStorage.getItem('active_dormitory_selected_for_session')) : '') || '';
+      const csrf = getCsrfTokenFromCookie();
 
-      const newMap = { ...lineNotifyMap };
-      let newSentCount = 0;
-      let resentCount = 0;
-
-      selectedTenantIdsForLine.forEach(tenantId => {
-        const key = `${selectedCycle}_${tenantId}`;
-        const existing = newMap[key];
-        if (existing) {
-          newMap[key] = { status: 'resent', sentAt: nowStr };
-          resentCount++;
-        } else {
-          newMap[key] = { status: 'sent', sentAt: nowStr };
-          newSentCount++;
-        }
+      const response = await fetch('/api/v1/bills/send-line-notifications', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(csrf ? { 'X-CSRF-Token': csrf } : {}),
+          ...(dormId ? { 'X-Dormitory-Id': dormId } : {}),
+        },
+        body: JSON.stringify({
+          cycleId: selectedCycle,
+          tenantIds: selectedTenantIdsForLine,
+        }),
       });
 
-      // Zero financial mutations to bills, contracts, meters, or cache!
-      setLineNotifyMap(newMap);
-      setIsSendingLine(false);
+      const json = await response.json().catch(() => null);
 
-      const count = selectedTenantIdsForLine.length;
-      const msg = `ส่งแจ้งเตือนผ่าน LINE เรียบร้อยแล้ว (${count} ห้อง)`;
+      if (response.ok && json?.data) {
+        const { sentCount = 0, unboundCount = 0, warning, results = [] } = json.data;
+        const nowStr = formatThaiDate(new Date().toISOString(), true);
 
-      if (onShowToast) {
-        onShowToast(msg);
+        const newMap = { ...lineNotifyMap };
+        results.forEach((r: any) => {
+          if (r.status === 'SENT') {
+            const key = `${selectedCycle}_${r.tenantId}`;
+            newMap[key] = {
+              status: newMap[key] ? 'resent' : 'sent',
+              sentAt: nowStr,
+            };
+          }
+        });
+        setLineNotifyMap(newMap);
+
+        let msg = '';
+        if (sentCount > 0 && unboundCount === 0) {
+          msg = `ส่งแจ้งเตือนผ่าน LINE เรียบร้อยแล้ว (${sentCount} ห้อง)`;
+        } else if (sentCount > 0 && unboundCount > 0) {
+          msg = `ส่งแจ้งเตือนผ่าน LINE สำเร็จ ${sentCount} ห้อง (ไม่ได้ส่ง ${unboundCount} ห้องเนื่องจากยังไม่ผูก LINE)`;
+        } else if (sentCount === 0 && unboundCount > 0) {
+          msg = `ไม่ได้ส่งแจ้งเตือน เนื่องจากผู้เช่าที่เลือก (${unboundCount} ห้อง) ยังไม่ได้ผูกบัญชี LINE`;
+        } else if (sentCount === 0 && warning) {
+          msg = warning;
+        } else {
+          msg = `ดำเนินการเรียบร้อยแล้ว`;
+        }
+
+        if (warning && sentCount > 0) {
+          msg += ` (${warning})`;
+        }
+
+        if (onShowToast) {
+          onShowToast(msg);
+        } else {
+          setLineToastSuccess(msg);
+        }
+
+        setSelectedTenantIdsForLine([]);
+
+        onAddLog?.(
+          'ส่งแจ้งเตือนผ่าน LINE',
+          `ส่งข้อความแจ้งเตือนบิลยอดชำระประจำงวด ${selectedCycle} ผ่าน LINE: สำเร็จ ${sentCount} ห้อง, ไม่ผูก LINE ${unboundCount} ห้อง`,
+          'Bill',
+          selectedCycle
+        );
+
+        onClose();
       } else {
-        setLineToastSuccess(msg);
+        const errorMsg = json?.error?.message || (response.status === 403 ? 'เจ้าหน้าที่ไม่มีสิทธิ์ส่งแจ้งเตือนบิลผ่าน LINE' : 'เกิดข้อผิดพลาดในการส่งแจ้งเตือนผ่าน LINE');
+        if (onShowToast) {
+          onShowToast(errorMsg);
+        } else {
+          setLineToastSuccess(errorMsg);
+        }
       }
-
-      setSelectedTenantIdsForLine([]);
-
-      onAddLog?.(
-        'ส่งแจ้งเตือนผ่าน LINE',
-        `ส่งข้อความแจ้งเตือนบิลยอดชำระประจำงวด ${selectedCycle} ผ่าน LINE ให้แก่ ${count} รายการเรียบร้อยแล้ว`,
-        'Bill',
-        selectedCycle
-      );
-
-      // Close modal
-      onClose();
-    }, 400);
+    } catch (err: any) {
+      const errMsg = err?.message || 'เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์';
+      if (onShowToast) {
+        onShowToast(errMsg);
+      } else {
+        setLineToastSuccess(errMsg);
+      }
+    } finally {
+      setIsSendingLine(false);
+    }
   };
 
   return (
@@ -500,6 +559,14 @@ export const LineNotificationModal: React.FC<LineNotificationModalProps> = ({
           })()}
         </div>
 
+        {/* Staff Permission Warning */}
+        {userRole === 'staff' && (
+          <div className="mt-2 p-2.5 bg-amber-50 border border-amber-200 text-amber-800 text-xs rounded-xl flex items-center gap-2 font-bold shrink-0">
+            <AlertCircle className="w-4 h-4 shrink-0 text-amber-600" />
+            <span>เจ้าหน้าที่ไม่มีสิทธิ์ส่งแจ้งเตือนบิลผ่าน LINE (สิทธิ์เฉพาะเจ้าของหอพักและผู้จัดการ)</span>
+          </div>
+        )}
+
         {/* Action Footer */}
         <div className="pt-3 mt-2 border-t border-slate-100 shrink-0 sticky bottom-0 bg-white z-20 flex flex-row items-center justify-between gap-1.5 sm:gap-3 min-w-0">
           <span className="text-xs font-bold text-slate-600 shrink-0">
@@ -516,7 +583,8 @@ export const LineNotificationModal: React.FC<LineNotificationModalProps> = ({
             </button>
             <button
               type="button"
-              disabled={selectedTenantIdsForLine.length === 0 || isSendingLine}
+              disabled={selectedTenantIdsForLine.length === 0 || isSendingLine || userRole === 'staff'}
+              title={userRole === 'staff' ? 'เจ้าหน้าที่ไม่มีสิทธิ์ส่งแจ้งเตือนบิลผ่าน LINE (เฉพาะเจ้าของหรือผู้จัดการ)' : undefined}
               onClick={handleSendLineNotifications}
               className="px-2.5 sm:px-4 py-2 sm:py-2.5 bg-[#06C755] hover:bg-[#05b34c] disabled:opacity-50 text-white font-extrabold text-xs rounded-xl flex items-center justify-center gap-1 sm:gap-1.5 shadow-2xs transition-all cursor-pointer min-w-0"
             >

@@ -1394,6 +1394,7 @@ export const OwnerWorkspace: React.FC<OwnerWorkspaceProps> = ({
             onUpdateBills={() => queryClient.invalidateQueries({ queryKey: queryKeys.bills(activeDormitoryId) })}
             onNavigateToLineConfig={() => setShowDirectLineOaModal(true)}
             initialTab={initialPaymentTab}
+            userRole={userRole}
           />
         );
 
