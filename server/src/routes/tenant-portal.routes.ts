@@ -43,7 +43,7 @@ async function resolveTenantContext(req: Request): Promise<TenantContextResult> 
   const prisma = getPrismaClient();
   const userId = req.auth?.userId;
   if (!userId) {
-    return { error: { code: 'UNAUTHORIZED', message: 'Not logged in', statusCode: 401 } };
+    return { error: { code: 'UNAUTHORIZED', message: 'ยังไม่ได้เข้าสู่ระบบ', statusCode: 401 } };
   }
 
   // Check req.auth.memberships first (includes synthetic memberships for ACCESS_GRANT sessions)
@@ -588,7 +588,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
 
       const userId = req.auth?.userId;
       if (!userId) {
-        return res.status(401).json({ error: { code: 'UNAUTHORIZED', message: 'Not logged in' } });
+        return res.status(401).json({ error: { code: 'UNAUTHORIZED', message: 'ยังไม่ได้เข้าสู่ระบบ' } });
       }
 
       const isUuid = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(userId);
@@ -2200,7 +2200,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
 
       const targetRoomId = req.body?.roomId || ctx.roomId;
       if (!targetRoomId) {
-        return res.status(400).json({ error: { code: 'INVALID_INPUT', message: 'Room context missing for tenant', requestId: req.requestId } });
+        return res.status(400).json({ error: { code: 'INVALID_INPUT', message: 'ไม่พบข้อมูลห้องพักของผู้เช่า', requestId: req.requestId } });
       }
 
       const request = await maintenanceService.createRequestByTenant({
@@ -2254,7 +2254,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
 
       const { message } = req.body;
       if (!message) {
-        return res.status(400).json({ error: { code: 'INVALID_INPUT', message: 'Message is required', requestId: req.requestId } });
+        return res.status(400).json({ error: { code: 'INVALID_INPUT', message: 'กรุณาระบุข้อความ', requestId: req.requestId } });
       }
 
       const senderName = `${ctx.tenant.firstName} ${ctx.tenant.lastName}`.trim() || 'ผู้เช่า';
@@ -2754,7 +2754,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
         return res.status(ctx.error.statusCode).json({ error: { code: ctx.error.code, message: ctx.error.message, requestId: req.requestId } });
       }
       if (!ctx.contract || !ctx.contract.tenantSignature) {
-        return res.status(404).json({ error: { message: 'Tenant signature not found' } });
+        return res.status(404).json({ error: { message: 'ไม่พบลายเซ็นของผู้เช่า' } });
       }
       if (ctx.contract.tenantSignature.startsWith('data:')) {
         const match = ctx.contract.tenantSignature.match(/^data:([^;]+);base64,(.+)$/);
@@ -2773,7 +2773,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
       res.setHeader('Cache-Control', 'private, max-age=3600');
       stream.pipe(res);
     } catch (err: any) {
-      return res.status(err.statusCode || 404).json({ error: { message: err.message || 'Signature not found' } });
+      return res.status(err.statusCode || 404).json({ error: { message: err.message || 'ไม่พบข้อมูลลายเซ็น' } });
     }
   });
 
@@ -2785,7 +2785,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
         return res.status(ctx.error.statusCode).json({ error: { code: ctx.error.code, message: ctx.error.message, requestId: req.requestId } });
       }
       if (!ctx.contract) {
-        return res.status(404).json({ error: { message: 'Contract not found' } });
+        return res.status(404).json({ error: { message: 'ไม่พบข้อมูลสัญญาเช่า' } });
       }
       const signatureService = new SignatureStorageService(prisma);
       let objectKey = ctx.contract.ownerSignature;
@@ -2794,7 +2794,7 @@ export function createTenantPortalRouter(authService?: AuthenticationService, in
         objectKey = latestOwnerSig?.objectKey || null;
       }
       if (!objectKey) {
-        return res.status(404).json({ error: { message: 'Owner signature not found' } });
+        return res.status(404).json({ error: { message: 'ไม่พบลายเซ็นของผู้ให้เช่า' } });
       }
       if (objectKey.startsWith('data:')) {
         const match = objectKey.match(/^data:([^;]+);base64,(.+)$/);

@@ -424,7 +424,7 @@ export const TenantApprovalModal: React.FC<TenantApprovalModalProps> = ({
   const tenantLineName =
     rawLineCandidate && rawLineCandidate !== tenantName && rawLineCandidate !== tenant.firstName
       ? rawLineCandidate
-      : 'Phoom';
+      : '-';
   const tenantEmail =
     tenant.email ||
     tenant.acceptanceSnapshot?.email ||

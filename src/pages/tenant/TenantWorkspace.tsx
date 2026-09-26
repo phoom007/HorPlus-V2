@@ -279,297 +279,315 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
     }
   }, [toast?.visible]);
 
+  const inFlightRefreshRef = useRef<Promise<void> | null>(null);
+  const lastRefreshTargetRef = useRef<string | undefined>(undefined);
+
   const refreshData = async (targetRoomId?: string) => {
-    setFinancialLoading(true);
-    setFinancialError(null);
-
-    const activeRoomId = targetRoomId || selectedRoomId;
-    const reqHeaders: Record<string, string> = {};
-    if (activeRoomId) {
-      reqHeaders['x-room-id'] = activeRoomId;
+    // Deduplicate concurrent in-flight requests for the same targetRoomId
+    if (inFlightRefreshRef.current && lastRefreshTargetRef.current === targetRoomId) {
+      return inFlightRefreshRef.current;
     }
 
-    try {
-      // 1. Fetch all tenant active rooms
-      const roomsRes = await fetch('/api/v1/tenant-portal/rooms', { credentials: 'include', headers: reqHeaders });
-      let currentActiveRoomId = activeRoomId;
-      if (roomsRes.ok) {
-        const roomsJson = await roomsRes.json();
-        const loadedRooms = Array.isArray(roomsJson.rooms) ? roomsJson.rooms : [];
-        setTenantRooms(loadedRooms);
-        if (loadedRooms.length > 0) {
-          if (!currentActiveRoomId || !loadedRooms.some((r: any) => r.roomId === currentActiveRoomId)) {
-            currentActiveRoomId = loadedRooms[0].roomId;
-            setSelectedRoomId(currentActiveRoomId);
-            if (typeof sessionStorage !== 'undefined') {
-              sessionStorage.setItem('tenant_selected_room_id', currentActiveRoomId);
-            }
-          }
-          reqHeaders['x-room-id'] = currentActiveRoomId;
-        } else {
-          currentActiveRoomId = '';
-          setSelectedRoomId('');
-          if (typeof sessionStorage !== 'undefined') {
-            sessionStorage.removeItem('tenant_selected_room_id');
-          }
-          delete reqHeaders['x-room-id'];
-        }
+    lastRefreshTargetRef.current = targetRoomId;
+    const task = (async () => {
+      setFinancialLoading(true);
+      setFinancialError(null);
+
+      const activeRoomId = targetRoomId || selectedRoomId;
+      const reqHeaders: Record<string, string> = {};
+      if (activeRoomId) {
+        reqHeaders['x-room-id'] = activeRoomId;
       }
-    } catch (err) {
-      console.warn('Could not fetch tenant rooms:', err);
-    }
 
-    try {
-      const profileRes = await fetch('/api/v1/tenant-portal/profile', {
-        credentials: 'include',
-        headers: reqHeaders,
-      });
-      if (profileRes.ok) {
-        const profile = await profileRes.json();
-        if (profile) {
-          const profileName =
-            profile.displayName ||
-            `${profile.firstName || ''} ${profile.lastName || ''}`.trim() ||
-            'ผู้เช่า';
-          setLocalTenant((prev: any) => ({
-            ...prev,
-            id: profile.id || prev?.id || '',
-            name: profileName,
-            dormitoryId: profile.dormitory?.id || profile.dormitoryId || prev?.dormitoryId,
-            dormitory: profile.dormitory || prev?.dormitory,
-            status: profile.status || prev?.status,
-            pendingRequest: profile.pendingRequest ?? null,
-            registrationRequestStatus: profile.pendingRequest?.status || profile.status || null,
-            phone: profile.phone || prev?.phone || '-',
-            citizenId: profile.citizenId || profile.nationalIdMasked || prev?.citizenId || '-',
-            email: profile.email || prev?.email || '-',
-            hasIdentityDocument: profile.hasIdentityDocument ?? prev?.hasIdentityDocument ?? false,
-            idCardPhotoMock: profile.idCardPhotoMock || prev?.idCardPhotoMock || null,
-            idCardPhotoUrl: profile.idCardPhotoUrl || prev?.idCardPhotoUrl || null,
-            emergencyContact: profile.emergencyContact || prev?.emergencyContact || null,
-            emergencyContacts: profile.emergencyContacts || prev?.emergencyContacts || [],
-            vehicle: profile.vehicle || prev?.vehicle || null,
-            vehicles: profile.vehicles || prev?.vehicles || (profile.vehicle ? [profile.vehicle] : []),
-            pet: profile.pet || prev?.pet || { hasPet: false, type: '', name: '' },
-            pets: profile.pets || prev?.pets || (profile.pet?.hasPet ? [profile.pet] : []),
-            coOccupants: profile.coOccupants || prev?.coOccupants || [],
-            address: profile.address || prev?.address || '-',
-            birthDate: profile.birthDate || prev?.birthDate || undefined,
-          }));
-          if (profile.dormitory) {
-            setDormitoryInfo(profile.dormitory);
-            if (profile.dormitory.petPolicy) {
-              setDormitoryPetPolicy(profile.dormitory.petPolicy);
+      let currentActiveRoomId = activeRoomId;
+
+      // 1. Fetch rooms first to establish authoritative active room context
+      try {
+        const roomsRes = await fetch('/api/v1/tenant-portal/rooms', { credentials: 'include', headers: reqHeaders });
+        if (roomsRes.ok) {
+          const roomsJson = await roomsRes.json();
+          const loadedRooms = Array.isArray(roomsJson.rooms) ? roomsJson.rooms : [];
+          setTenantRooms(loadedRooms);
+          if (loadedRooms.length > 0) {
+            if (!currentActiveRoomId || !loadedRooms.some((r: any) => r.roomId === currentActiveRoomId)) {
+              currentActiveRoomId = loadedRooms[0].roomId;
+              setSelectedRoomId(currentActiveRoomId);
+              if (typeof sessionStorage !== 'undefined') {
+                sessionStorage.setItem('tenant_selected_room_id', currentActiveRoomId);
+              }
             }
-          }
-          setMoveOutRequest(
-            profile.moveOutRequest
-              ? {
-                  ...profile.moveOutRequest,
-                  desiredDate:
-                    profile.moveOutRequest.intendedMoveOutDate ||
-                    profile.moveOutRequest.desiredDate ||
-                    profile.moveOutRequest.moveOutDate,
-                  bankInfo: profile.moveOutRequest.refundBankName || profile.moveOutRequest.bankInfo,
-                  accountInfo: profile.moveOutRequest.refundAccountNumber
-                    ? `${profile.moveOutRequest.refundAccountNumber} (${profile.moveOutRequest.refundAccountName || ''})`
-                    : profile.moveOutRequest.accountInfo,
-                }
-              : null
-          );
-        }
-        if (
-          profile.room ||
-          profile.hasRoom ||
-          profile.status === 'active' ||
-          profile.pendingRequest?.status === 'approved' ||
-          profile.pendingRequest?.status === 'pending_owner_approval' ||
-          profile.status === 'pending_owner_approval'
-        ) {
-          setSubView((prev) => (prev === 'register' ? null : prev));
-          if (profile.room) {
-            setRooms([
-              {
-                id: profile.room.id,
-                roomNumber: profile.room.roomNumber,
-                buildingId: profile.room.buildingId,
-                currentTenantId: profile.id,
-              } as any,
-            ]);
-          }
-          if (profile.status === 'active' || profile.hasRoom || profile.pendingRequest?.status === 'approved') {
-            try {
-              localStorage.removeItem('pending_tenant_registration');
-            } catch {}
-          }
-          // Clean query params (?sub=register, t, token) if present
-          if (typeof window !== 'undefined') {
-            const sp = new URLSearchParams(window.location.search);
-            if (sp.get('sub') === 'register' || sp.has('t') || sp.has('token')) {
-              navigate('/tenant', { replace: true });
+            reqHeaders['x-room-id'] = currentActiveRoomId;
+          } else {
+            currentActiveRoomId = '';
+            setSelectedRoomId('');
+            if (typeof sessionStorage !== 'undefined') {
+              sessionStorage.removeItem('tenant_selected_room_id');
             }
-          }
-        } else {
-          setRooms([]);
-          if (!profile.pendingRequest && (profile.status === 'unregistered' || !profile.status)) {
-            try {
-              localStorage.removeItem('pending_tenant_registration');
-            } catch {}
+            delete reqHeaders['x-room-id'];
           }
         }
-      } else {
+      } catch (err) {
+        console.warn('Could not fetch tenant rooms:', err);
+      }
+
+      setContracts([]);
+      setRepairs([]);
+      setAnnouncements([]);
+      setBuildings([]);
+
+      // 2. Fetch independent endpoints in parallel for optimal mobile performance & deduplication
+      const [profileResult, contractResult, billsResult, utilitiesResult, repairsResult, announcementsResult, noticesResult] = await Promise.allSettled([
+        fetch('/api/v1/tenant-portal/profile', { credentials: 'include', headers: reqHeaders }),
+        fetch('/api/v1/tenant-portal/contract', { credentials: 'include', headers: reqHeaders }),
+        fetch('/api/v1/tenant-portal/bills', { credentials: 'include', headers: reqHeaders }),
+        fetch('/api/v1/tenant-portal/utilities', { credentials: 'include', headers: reqHeaders }),
+        fetch('/api/v1/tenant-portal/maintenance', { credentials: 'include', headers: reqHeaders }),
+        fetch('/api/v1/tenant-portal/announcements', { credentials: 'include', headers: reqHeaders }),
+        httpRequest<any>('GET', '/api/v1/tenant-portal/notices')
+      ]);
+
+      // Handle Profile
+      if (profileResult.status === 'fulfilled' && profileResult.value.ok) {
+        try {
+          const profile = await profileResult.value.json();
+          if (profile) {
+            const profileName =
+              profile.displayName ||
+              `${profile.firstName || ''} ${profile.lastName || ''}`.trim() ||
+              'ผู้เช่า';
+            setLocalTenant((prev: any) => ({
+              ...prev,
+              id: profile.id || prev?.id || '',
+              name: profileName,
+              dormitoryId: profile.dormitory?.id || profile.dormitoryId || prev?.dormitoryId,
+              dormitory: profile.dormitory || prev?.dormitory,
+              status: profile.status || prev?.status,
+              pendingRequest: profile.pendingRequest ?? null,
+              registrationRequestStatus: profile.pendingRequest?.status || profile.status || null,
+              phone: profile.phone || prev?.phone || '-',
+              citizenId: profile.citizenId || profile.nationalIdMasked || prev?.citizenId || '-',
+              email: profile.email || prev?.email || '-',
+              hasIdentityDocument: profile.hasIdentityDocument ?? prev?.hasIdentityDocument ?? false,
+              idCardPhotoMock: profile.idCardPhotoMock || prev?.idCardPhotoMock || null,
+              idCardPhotoUrl: profile.idCardPhotoUrl || prev?.idCardPhotoUrl || null,
+              emergencyContact: profile.emergencyContact || prev?.emergencyContact || null,
+              emergencyContacts: profile.emergencyContacts || prev?.emergencyContacts || [],
+              vehicle: profile.vehicle || prev?.vehicle || null,
+              vehicles: profile.vehicles || prev?.vehicles || (profile.vehicle ? [profile.vehicle] : []),
+              pet: profile.pet || prev?.pet || { hasPet: false, type: '', name: '' },
+              pets: profile.pets || prev?.pets || (profile.pet?.hasPet ? [profile.pet] : []),
+              coOccupants: profile.coOccupants || prev?.coOccupants || [],
+              address: profile.address || prev?.address || '-',
+              birthDate: profile.birthDate || prev?.birthDate || undefined,
+            }));
+            if (profile.dormitory) {
+              setDormitoryInfo(profile.dormitory);
+              if (profile.dormitory.petPolicy) {
+                setDormitoryPetPolicy(profile.dormitory.petPolicy);
+              }
+            }
+            setMoveOutRequest(
+              profile.moveOutRequest
+                ? {
+                    ...profile.moveOutRequest,
+                    desiredDate:
+                      profile.moveOutRequest.intendedMoveOutDate ||
+                      profile.moveOutRequest.desiredDate ||
+                      profile.moveOutRequest.moveOutDate,
+                    bankInfo: profile.moveOutRequest.refundBankName || profile.moveOutRequest.bankInfo,
+                    accountInfo: profile.moveOutRequest.refundAccountNumber
+                      ? `${profile.moveOutRequest.refundAccountNumber} (${profile.moveOutRequest.refundAccountName || ''})`
+                      : profile.moveOutRequest.accountInfo,
+                  }
+                : null
+            );
+          }
+          if (
+            profile.room ||
+            profile.hasRoom ||
+            profile.status === 'active' ||
+            profile.pendingRequest?.status === 'approved' ||
+            profile.pendingRequest?.status === 'pending_owner_approval' ||
+            profile.status === 'pending_owner_approval'
+          ) {
+            setSubView((prev) => (prev === 'register' ? null : prev));
+            if (profile.room) {
+              setRooms([
+                {
+                  id: profile.room.id,
+                  roomNumber: profile.room.roomNumber,
+                  buildingId: profile.room.buildingId,
+                  currentTenantId: profile.id,
+                } as any,
+              ]);
+            }
+            if (profile.status === 'active' || profile.hasRoom || profile.pendingRequest?.status === 'approved') {
+              try {
+                localStorage.removeItem('pending_tenant_registration');
+              } catch {}
+            }
+            if (typeof window !== 'undefined') {
+              const sp = new URLSearchParams(window.location.search);
+              if (sp.get('sub') === 'register' || sp.has('t') || sp.has('token')) {
+                navigate('/tenant', { replace: true });
+              }
+            }
+          } else {
+            setRooms([]);
+            if (!profile.pendingRequest && (profile.status === 'unregistered' || !profile.status)) {
+              try {
+                localStorage.removeItem('pending_tenant_registration');
+              } catch {}
+            }
+          }
+        } catch (e: any) {
+          console.error('[TenantPortal] Technical error parsing profile:', e);
+        }
+      } else if (profileResult.status === 'fulfilled' && !profileResult.value.ok) {
         setRooms([]);
         setFinancialError('ไม่สามารถโหลดข้อมูลผู้เช่าจากระบบได้');
-        console.error('[TenantPortal] Technical error loading profile status:', profileRes.status);
+        console.error('[TenantPortal] Technical error loading profile status:', profileResult.value.status);
+      } else {
+        setRooms([]);
+        setFinancialError('ไม่สามารถเชื่อมต่อระบบเพื่อดึงข้อมูลผู้เช่าได้');
       }
-    } catch (e: any) {
-      setRooms([]);
-      setFinancialError('ไม่สามารถเชื่อมต่อระบบเพื่อดึงข้อมูลผู้เช่าได้');
-      console.error('[TenantPortal] Technical error loading profile:', e?.message || 'Network error');
-    }
 
-    setContracts([]);
-    setRepairs([]);
-    setAnnouncements([]);
-    setBuildings([]);
+      // Handle Contract
+      if (contractResult.status === 'fulfilled' && contractResult.value.ok) {
+        try {
+          const ctrJson = await contractResult.value.json();
+          if (ctrJson.data) {
+            const ctrData = ctrJson.data;
+            const activeContract = {
+              id: ctrData.id,
+              contractNumber: ctrData.contractNumber,
+              dormitoryId: ctrData.dormitoryId,
+              tenantId: tenant.id,
+              roomId: ctrData.roomId || '',
+              roomNumber: ctrData.roomNumber,
+              startDate: ctrData.startDate,
+              endDate: ctrData.endDate,
+              durationMonths: ctrData.durationMonths || 6,
+              rentBillingType: ctrData.rentBillingType || 'monthly',
+              monthlyRent: Number(ctrData.rentAmount || 5000),
+              rentAmount: Number(ctrData.rentAmount || 5000),
+              depositAmount: Number(ctrData.depositAmount || 10000),
+              terms: ctrData.terms || undefined,
+              tenantSignature: ctrData.tenantSignature || null,
+              ownerSignature: ctrData.ownerSignature || null,
+              signedByTenantAt: ctrData.signedByTenantAt || null,
+              signedByOwnerAt: ctrData.signedByOwnerAt || null,
+              occupantCount: 1 + Number(ctrData.coOccupantsCount || 0),
+              status: ctrData.status || 'active',
+            };
+            setContracts([activeContract as any]);
 
-    try {
-      const ctrRes = await fetch('/api/v1/tenant-portal/contract', {
-        credentials: 'include',
-        headers: reqHeaders,
-      });
-      if (ctrRes.ok) {
-        const ctrJson = await ctrRes.json();
-        if (ctrJson.data) {
-          const ctrData = ctrJson.data;
-          const activeContract = {
-            id: ctrData.id,
-            contractNumber: ctrData.contractNumber,
-            dormitoryId: ctrData.dormitoryId,
-            tenantId: tenant.id,
-            roomId: ctrData.roomId || '',
-            roomNumber: ctrData.roomNumber,
-            startDate: ctrData.startDate,
-            endDate: ctrData.endDate,
-            durationMonths: ctrData.durationMonths || 6,
-            rentBillingType: ctrData.rentBillingType || 'monthly',
-            monthlyRent: Number(ctrData.rentAmount || 5000),
-            rentAmount: Number(ctrData.rentAmount || 5000),
-            depositAmount: Number(ctrData.depositAmount || 10000),
-            terms: ctrData.terms || undefined,
-            tenantSignature: ctrData.tenantSignature || null,
-            ownerSignature: ctrData.ownerSignature || null,
-            signedByTenantAt: ctrData.signedByTenantAt || null,
-            signedByOwnerAt: ctrData.signedByOwnerAt || null,
-            occupantCount: 1 + Number(ctrData.coOccupantsCount || 0),
-            status: ctrData.status || 'active',
-          };
-          setContracts([activeContract as any]);
-
-          httpRequest<any>(
-            'GET',
-            `/api/v1/contract-renewals/eligibility?contractId=${activeContract.id}`
-          )
-            .then((res) => {
-              const elig = res?.data || res;
-              setRenewalEligibility(elig);
-              const rawEnd = elig?.eligibleContract?.endDate || elig?.contract?.endDate || activeContract.endDate;
-              if (rawEnd) {
-                const str = String(rawEnd).split('T')[0];
-                const [y, m, d] = str.split('-').map(Number);
-                if (y && m && d) {
-                  setRequestedStartDate(new Date(Date.UTC(y, m - 1, d + 1)).toISOString().split('T')[0]);
-                } else {
-                  setRequestedStartDate(str);
+            httpRequest<any>(
+              'GET',
+              `/api/v1/contract-renewals/eligibility?contractId=${activeContract.id}`
+            )
+              .then((res) => {
+                const elig = res?.data || res;
+                setRenewalEligibility(elig);
+                const rawEnd = elig?.eligibleContract?.endDate || elig?.contract?.endDate || activeContract.endDate;
+                if (rawEnd) {
+                  const str = String(rawEnd).split('T')[0];
+                  const [y, m, d] = str.split('-').map(Number);
+                  if (y && m && d) {
+                    setRequestedStartDate(new Date(Date.UTC(y, m - 1, d + 1)).toISOString().split('T')[0]);
+                  } else {
+                    setRequestedStartDate(str);
+                  }
                 }
-              }
-            })
-            .catch(() => setRenewalEligibility(null));
-        }
+              })
+              .catch(() => setRenewalEligibility(null));
+          }
+        } catch (e) {}
       }
-    } catch (e) {}
 
-    try {
-      const res = await fetch('/api/v1/tenant-portal/bills', {
-        credentials: 'include',
-        headers: reqHeaders,
-      });
-      if (res.ok) {
-        const json = await res.json();
-        if (json.data) {
-          const rawBills = Array.isArray(json.data) ? json.data : json.data.bills || [];
-          const formatted = rawBills.map((b: any) => ({
-            ...b,
-            totalAmount: Number(b.totalAmount),
-            paidAmount: Number(b.paidAmount),
-            outstandingAmount: Number(b.outstandingAmount),
-            items: (b.items || []).map((i: any) => ({ ...i, amount: Number(i.amount) })),
-          }));
-          setBills(formatted);
-        } else {
+      // Handle Bills
+      if (billsResult.status === 'fulfilled' && billsResult.value.ok) {
+        try {
+          const json = await billsResult.value.json();
+          if (json.data) {
+            const rawBills = Array.isArray(json.data) ? json.data : json.data.bills || [];
+            const formatted = rawBills.map((b: any) => ({
+              ...b,
+              totalAmount: Number(b.totalAmount),
+              paidAmount: Number(b.paidAmount),
+              outstandingAmount: Number(b.outstandingAmount),
+              items: (b.items || []).map((i: any) => ({ ...i, amount: Number(i.amount) })),
+            }));
+            setBills(formatted);
+          } else {
+            setBills([]);
+          }
+        } catch (e) {
           setBills([]);
         }
-      } else {
+      } else if (billsResult.status === 'fulfilled' && !billsResult.value.ok) {
         setBills([]);
         setFinancialError('ไม่สามารถโหลดข้อมูลบิลจากระบบได้');
-        console.error('[TenantPortal] Technical error loading bills status:', res.status);
       }
-    } catch (err: any) {
-      setBills([]);
-      setFinancialError('ไม่สามารถเชื่อมต่อระบบเพื่อดึงข้อมูลบิลได้');
-      console.error('[TenantPortal] Technical error loading bills:', err?.message || 'Network error');
+
+      // Handle Utilities
+      if (utilitiesResult.status === 'fulfilled' && utilitiesResult.value.ok) {
+        try {
+          const utilJson = await utilitiesResult.value.json();
+          if (utilJson.data) {
+            setUtilitiesData(utilJson.data);
+          }
+        } catch (e) {}
+      }
+
+      // Handle Maintenance / Repairs
+      if (repairsResult.status === 'fulfilled' && repairsResult.value.ok) {
+        try {
+          const repJson = await repairsResult.value.json();
+          const loadedRepairs = Array.isArray(repJson.data)
+            ? repJson.data
+            : Array.isArray(repJson.requests)
+              ? repJson.requests
+              : Array.isArray(repJson)
+                ? repJson
+                : [];
+          setRepairs(loadedRepairs);
+        } catch (e) {}
+      }
+
+      // Handle Announcements
+      if (announcementsResult.status === 'fulfilled' && announcementsResult.value.ok) {
+        try {
+          const annJson = await announcementsResult.value.json();
+          const loadedAnnouncements = Array.isArray(annJson.data)
+            ? annJson.data
+            : Array.isArray(annJson.announcements)
+              ? annJson.announcements
+              : Array.isArray(annJson)
+                ? annJson
+                : [];
+          setAnnouncements(loadedAnnouncements);
+        } catch (e) {}
+      }
+
+      // Handle Notices
+      if (noticesResult.status === 'fulfilled') {
+        const res = noticesResult.value;
+        const list = Array.isArray(res) ? res : Array.isArray(res?.data) ? res.data : [];
+        setNotices(list);
+      }
+
+      setFinancialLoading(false);
+    })();
+
+    inFlightRefreshRef.current = task;
+    try {
+      await task;
+    } finally {
+      if (inFlightRefreshRef.current === task) {
+        inFlightRefreshRef.current = null;
+      }
     }
-
-    try {
-      const utilRes = await fetch('/api/v1/tenant-portal/utilities', {
-        credentials: 'include',
-        headers: reqHeaders,
-      });
-      if (utilRes.ok) {
-        const utilJson = await utilRes.json();
-        if (utilJson.data) {
-          setUtilitiesData(utilJson.data);
-        }
-      }
-    } catch (e) {}
-
-    try {
-      const repRes = await fetch('/api/v1/tenant-portal/maintenance', {
-        credentials: 'include',
-        headers: reqHeaders,
-      });
-      if (repRes.ok) {
-        const repJson = await repRes.json();
-        const loadedRepairs = Array.isArray(repJson.data)
-          ? repJson.data
-          : Array.isArray(repJson.requests)
-            ? repJson.requests
-            : Array.isArray(repJson)
-              ? repJson
-              : [];
-        setRepairs(loadedRepairs);
-      }
-    } catch (e) {}
-
-    try {
-      const annRes = await fetch('/api/v1/tenant-portal/announcements', {
-        credentials: 'include',
-        headers: reqHeaders,
-      });
-      if (annRes.ok) {
-        const annJson = await annRes.json();
-        const loadedAnnouncements = Array.isArray(annJson.data)
-          ? annJson.data
-          : Array.isArray(annJson.announcements)
-            ? annJson.announcements
-            : Array.isArray(annJson)
-              ? annJson
-              : [];
-        setAnnouncements(loadedAnnouncements);
-      }
-    } catch (e) {}
-
-    setFinancialLoading(false);
   };
 
   const loadAvailableVacantRooms = async () => {
@@ -770,15 +788,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
   useEffect(() => {
     refreshData();
     setLocalTenant(tenant);
-
-    // Fetch persistent notices for tenant
-    httpRequest<any>('GET', '/api/v1/tenant-portal/notices')
-      .then((res: any) => {
-        const list = Array.isArray(res) ? res : Array.isArray(res?.data) ? res.data : [];
-        setNotices(list);
-      })
-      .catch(() => setNotices([]));
-  }, [tenant]);
+  }, [tenant?.id]);
 
   // Visibilitychange and focus sync (no polling loop, scalable for 10,000 dorms)
   useEffect(() => {

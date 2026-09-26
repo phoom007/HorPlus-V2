@@ -225,7 +225,8 @@ ROLLBACK;
 | L2 | ส่ง LINE เมื่อบิลออก และเมื่อยืนยัน/ปฏิเสธการชำระ | ใช่ | L1, B1, B4, B5 | READY FOR UAT | 20260926-tenant-l2 | 5621fd6 |
 | L3 | ส่ง LINE เมื่ออัปเดตงานซ่อมและประกาศ | ใช่ | L1, P2, P3 | READY FOR UAT | 20260926-tenant-l3 | b08225f |
 | L4 | ปุ่ม "ส่งแจ้งเตือนผ่าน LINE" ของเจ้าของต้องส่งจริง | ใช่ | L1 | READY FOR UAT | 20260926-tenant-l4 | |
-| Z1 | ตรวจรวมก่อน production (ตรวจอย่างเดียว) | ไม่ต้องใช้ | ทุกการ์ด | TODO | | |
+| Z1 | ตรวจรวมก่อน production (ตรวจอย่างเดียว) | ไม่ต้องใช้ | ทุกการ์ด | DONE | 20260926-tenant-z1 | – |
+| Z2 | ปรับปรุงก่อน production (แก้ hardcode, แปล error ภาษาไทย, ลด API ซ้ำซ้อน) | ใช่ | Z1 | READY FOR UAT | 20260926-tenant-z2 | |
 
 สถานะที่ใช้: TODO / IN PROGRESS / BLOCKED / READY FOR UAT / ACCEPTED และ DONE สำหรับการ์ดตรวจอย่างเดียว (T0, Z1) หลัง PO ยืนยันผล
 

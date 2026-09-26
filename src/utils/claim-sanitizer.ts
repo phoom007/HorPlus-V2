@@ -28,7 +28,7 @@ export function sanitizeClaimInput(input?: string | null): string {
     return '';
   }
 
-  // 3. Names ending with " -" or "-" (e.g., "Phoom -", "Somchai -")
+  // 3. Names ending with " -" or "-" (e.g., "User -", "Somchai -")
   // Typically generated when LINE profile displayName is stored as first name with "-" as last name
   if (trimmed.endsWith(' -') || trimmed.endsWith('-')) {
     return '';

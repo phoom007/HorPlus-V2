@@ -114,11 +114,11 @@ export function getPublicAppOrigin(): string {
   return origin || 'http://localhost:5173';
 }
 
-export const CANONICAL_OWNER_LIFF_ID = '2011672957-NOfBsIcJ';
+export const CANONICAL_OWNER_LIFF_ID = '';
 
 export function getOwnerLiffId(): string {
   const envVal = process.env.LINE_OWNER_LIFF_ID || process.env.VITE_LINE_OWNER_LIFF_ID;
-  return (envVal && envVal.trim()) ? envVal.trim() : CANONICAL_OWNER_LIFF_ID;
+  return (envVal && envVal.trim()) ? envVal.trim() : '';
 }
 
 export function getTenantLiffId(): string {
