@@ -499,15 +499,88 @@ export class PrismaAnnouncementRepository implements IAnnouncementRepository {
   }
 
   public async getRecipientForTenant(dormitoryId: string, announcementId: string, tenantId: string): Promise<AnnouncementRecipientEntity | null> {
-    return this.fallbackMemory.getRecipientForTenant(dormitoryId, announcementId, tenantId);
+    try {
+      const noticeKey = `announcement:${announcementId}:${tenantId}`;
+      const notice = await this.prisma.tenantNotice.findUnique({
+        where: { sourceOutboxId: noticeKey },
+      });
+      if (notice) {
+        return {
+          id: notice.id,
+          dormitoryId,
+          announcementId,
+          tenantId,
+          deliveryStatus: 'in_app_only',
+          readAt: notice.isRead ? (notice.readAt || notice.updatedAt) : null,
+          createdAt: notice.createdAt,
+          updatedAt: notice.updatedAt,
+        };
+      }
+      return this.fallbackMemory.getRecipientForTenant(dormitoryId, announcementId, tenantId);
+    } catch {
+      return this.fallbackMemory.getRecipientForTenant(dormitoryId, announcementId, tenantId);
+    }
   }
 
   public async recordReadReceipt(dormitoryId: string, announcementId: string, tenantId: string): Promise<AnnouncementReadReceiptEntity> {
-    return this.fallbackMemory.recordReadReceipt(dormitoryId, announcementId, tenantId);
+    const now = new Date();
+    try {
+      const noticeKey = `announcement:${announcementId}:${tenantId}`;
+      const notice = await this.prisma.tenantNotice.upsert({
+        where: { sourceOutboxId: noticeKey },
+        update: {
+          isRead: true,
+          readAt: now,
+          updatedAt: now,
+        },
+        create: {
+          dormitoryId,
+          tenantId,
+          title: 'ประกาศ',
+          message: 'อ่านประกาศแล้ว',
+          type: 'ANNOUNCEMENT_READ',
+          isRead: true,
+          readAt: now,
+          sourceOutboxId: noticeKey,
+        },
+      });
+      try {
+        await this.fallbackMemory.recordReadReceipt(dormitoryId, announcementId, tenantId);
+      } catch {}
+      return {
+        id: notice.id,
+        dormitoryId,
+        announcementId,
+        tenantId,
+        readAt: now,
+      };
+    } catch {
+      return this.fallbackMemory.recordReadReceipt(dormitoryId, announcementId, tenantId);
+    }
   }
 
   public async getReadReceipts(dormitoryId: string, announcementId: string): Promise<AnnouncementReadReceiptEntity[]> {
-    return this.fallbackMemory.getReadReceipts(dormitoryId, announcementId);
+    try {
+      const notices = await this.prisma.tenantNotice.findMany({
+        where: {
+          dormitoryId,
+          sourceOutboxId: { startsWith: `announcement:${announcementId}:` },
+          isRead: true,
+        },
+      });
+      if (notices.length > 0) {
+        return notices.map((n) => ({
+          id: n.id,
+          dormitoryId,
+          announcementId,
+          tenantId: n.tenantId,
+          readAt: n.readAt || n.updatedAt,
+        }));
+      }
+      return this.fallbackMemory.getReadReceipts(dormitoryId, announcementId);
+    } catch {
+      return this.fallbackMemory.getReadReceipts(dormitoryId, announcementId);
+    }
   }
 
   public async findScheduledForDispatch(now: Date = new Date()): Promise<AnnouncementEntity[]> {

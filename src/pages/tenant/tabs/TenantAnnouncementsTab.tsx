@@ -25,6 +25,8 @@ export interface TenantAnnouncementsTabProps {
   hasRoom?: boolean;
   onZoomImage: (url: string) => void;
   onBack?: () => void;
+  onMarkAsRead?: (id: string) => void;
+  onMarkAllAsRead?: () => void;
 }
 
 export const TenantAnnouncementsTab: React.FC<TenantAnnouncementsTabProps> = ({
@@ -32,6 +34,8 @@ export const TenantAnnouncementsTab: React.FC<TenantAnnouncementsTabProps> = ({
   hasRoom = true,
   onZoomImage,
   onBack,
+  onMarkAsRead,
+  onMarkAllAsRead,
 }) => {
   const filteredAnnouncements = announcements || [];
 
@@ -83,9 +87,21 @@ export const TenantAnnouncementsTab: React.FC<TenantAnnouncementsTabProps> = ({
       </div>
 
       <div className="p-4 space-y-4">
-        <h4 className="text-xs font-black text-slate-900 uppercase tracking-wider">
-          ข่าวสารและประกาศนิติบุคคล ({filteredAnnouncements.length})
-        </h4>
+        <div className="flex items-center justify-between">
+          <h4 className="text-xs font-black text-slate-900 uppercase tracking-wider">
+            ข่าวสารและประกาศนิติบุคคล ({filteredAnnouncements.length})
+          </h4>
+          {filteredAnnouncements.some((a) => !a.isRead) && onMarkAllAsRead && (
+            <button
+              type="button"
+              data-testid="btn-mark-all-announcements-read"
+              onClick={onMarkAllAsRead}
+              className="text-[10px] font-black text-indigo-600 hover:text-indigo-800 bg-indigo-50 hover:bg-indigo-100 px-2.5 py-1 rounded-lg transition-all cursor-pointer"
+            >
+              อ่านทั้งหมด
+            </button>
+          )}
+        </div>
 
       <div className="grid grid-cols-1 gap-4">
         {filteredAnnouncements.map((ann) => {
@@ -124,6 +140,7 @@ export const TenantAnnouncementsTab: React.FC<TenantAnnouncementsTabProps> = ({
           return (
             <div
               key={ann.id}
+              data-testid={`tenant-announcement-card-${ann.id}`}
               className="bg-white border border-slate-100 rounded-3xl overflow-hidden shadow-2xs hover:shadow-xs transition-all flex flex-col justify-between"
             >
               <div>
@@ -138,6 +155,21 @@ export const TenantAnnouncementsTab: React.FC<TenantAnnouncementsTabProps> = ({
                 )}
                 <div className="p-4 space-y-3">
                   <div className="flex items-center gap-1.5 flex-wrap">
+                    {ann.isRead ? (
+                      <span
+                        data-testid={`badge-announcement-read-${ann.id}`}
+                        className="inline-flex items-center gap-0.5 text-[8px] bg-slate-100 text-slate-500 font-bold px-2 py-0.5 rounded-md"
+                      >
+                        อ่านแล้ว
+                      </span>
+                    ) : (
+                      <span
+                        data-testid={`badge-announcement-unread-${ann.id}`}
+                        className="inline-flex items-center gap-0.5 text-[8px] bg-blue-600 text-white font-black px-2 py-0.5 rounded-md"
+                      >
+                        ใหม่
+                      </span>
+                    )}
                     {ann.isPinned && (
                       <span className="inline-flex items-center gap-0.5 text-[8px] bg-violet-600 text-white font-black px-2 py-0.5 rounded-md">
                         <Pin className="w-2 h-2 fill-white text-white" />
@@ -197,9 +229,21 @@ export const TenantAnnouncementsTab: React.FC<TenantAnnouncementsTabProps> = ({
                     </div>
                     <span className="font-bold text-slate-500">โดย {authorRole}</span>
                   </div>
-                  <span className="font-bold">
-                    {formatThaiDate(ann.publishDate || ann.createdAt.split('T')[0])}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    {!ann.isRead && onMarkAsRead && (
+                      <button
+                        type="button"
+                        data-testid={`btn-mark-announcement-read-${ann.id}`}
+                        onClick={() => onMarkAsRead(ann.id)}
+                        className="text-[9px] font-bold text-indigo-600 hover:text-indigo-800 bg-indigo-50 hover:bg-indigo-100 px-2 py-0.5 rounded cursor-pointer transition-all"
+                      >
+                        อ่านแล้ว
+                      </button>
+                    )}
+                    <span className="font-bold">
+                      {formatThaiDate(ann.publishDate || ann.createdAt.split('T')[0])}
+                    </span>
+                  </div>
                 </div>
               </div>
             </div>

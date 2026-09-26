@@ -83,7 +83,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
   const querySub = searchParams.get('tab') || searchParams.get('sub');
 
   const mapPathToState = (seg: string) => {
-    if (seg === 'announcements' || querySub === 'announcements')
+    if (seg === 'announcements' || querySub === 'announcements' || querySub === 'announcements_tab')
       return { tab: 'announcements' as const, sub: null };
     if (seg === 'profile' || querySub === 'profile')
       return { tab: 'profile' as const, sub: null };
@@ -132,7 +132,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
     const nextState = mapPathToState(pathSeg);
     setActiveTab(nextState.tab);
     setSubView(nextState.sub);
-  }, [pathSeg]);
+  }, [pathSeg, location.search]);
 
   // Data layers
   const [rooms, setRooms] = useState<Room[]>([]);
@@ -824,6 +824,32 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
     } catch (e) {}
   };
 
+  const handleMarkAnnouncementAsRead = async (announcementId: string) => {
+    try {
+      await httpRequest('POST', `/api/v1/tenant-portal/announcements/${announcementId}/read`);
+      setAnnouncements((prev) =>
+        prev.map((a) => (a.id === announcementId ? { ...a, isRead: true, readAt: new Date().toISOString() } : a))
+      );
+    } catch (e) {}
+  };
+
+  const handleMarkAllAnnouncementsAsRead = async () => {
+    try {
+      await Promise.all([
+        httpRequest('POST', '/api/v1/tenant-portal/announcements/read-all'),
+        httpRequest('POST', '/api/v1/tenant-portal/notices/read-all'),
+      ]);
+      setAnnouncements((prev) => prev.map((a) => ({ ...a, isRead: true, readAt: new Date().toISOString() })));
+      setNotices((prev) => prev.map((n) => ({ ...n, isRead: true })));
+      setAcknowledgedAlertIds((prev) => [
+        ...prev,
+        ...unreadBills.map((b) => `bill-${b.id}`),
+        ...activeRepairs.map((r) => `repair-${r.id}`),
+        ...filteredAnnouncements.map((a) => `announcement-${a.id}`),
+      ]);
+    } catch (e) {}
+  };
+
   const handleSubmitRenewal = async () => {
     const activeCtr =
       tenantContracts.find(
@@ -1109,9 +1135,12 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
       if (ann.targetType === 'rooms') {
         if (tenantRoom?.roomNumber) {
           const cleanRoom = tenantRoom.roomNumber.trim().toUpperCase();
+          const targetRoomsList = Array.isArray(ann.targetRooms)
+            ? ann.targetRooms
+            : (typeof ann.targetRooms === 'string' ? ann.targetRooms.split(',').map((r: string) => r.trim()).filter(Boolean) : []);
           if (
-            ann.targetRooms &&
-            ann.targetRooms.some((r) => (r || '').trim().toUpperCase() === cleanRoom)
+            targetRoomsList.length > 0 &&
+            targetRoomsList.some((r: any) => (r || '').trim().toUpperCase() === cleanRoom)
           ) {
             return true;
           }
@@ -1248,12 +1277,13 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
   const activeRepairs = tenantRepairs.filter(
     (r) => r.status === 'in_progress' || r.status === 'pending'
   );
+  const unreadAnnouncements = filteredAnnouncements.filter((a) => !a.isRead);
   const urgentAnnouncements = filteredAnnouncements.filter((a) => a.isUrgent || a.isPinned);
   const unreadNoticesCount = notices.filter((n) => !n.isRead).length;
 
   const unacknowledgedBills = unreadBills.filter((b) => !acknowledgedAlertIds.includes(`bill-${b.id}`));
   const unacknowledgedRepairs = activeRepairs.filter((r) => !acknowledgedAlertIds.includes(`repair-${r.id}`));
-  const unacknowledgedAnnouncements = urgentAnnouncements.filter((a) => !acknowledgedAlertIds.includes(`announcement-${a.id}`));
+  const unacknowledgedAnnouncements = unreadAnnouncements.filter((a) => !acknowledgedAlertIds.includes(`announcement-${a.id}`));
 
   const totalNotificationsCount =
     unacknowledgedBills.length + unacknowledgedRepairs.length + unacknowledgedAnnouncements.length + unreadNoticesCount;
@@ -1733,6 +1763,8 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
                   hasRoom={hasRoom}
                   onZoomImage={(url) => setZoomedImage(url)}
                   onBack={() => setActiveTab('home')}
+                  onMarkAsRead={handleMarkAnnouncementAsRead}
+                  onMarkAllAsRead={handleMarkAllAnnouncementsAsRead}
                 />
               )}
 
@@ -2099,6 +2131,7 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
           setSubView(null);
         }}
         handleMarkNoticeAsRead={handleMarkNoticeAsRead}
+        handleMarkAllAsRead={handleMarkAllAnnouncementsAsRead}
         onAcknowledgeAlert={handleAcknowledgeAlert}
         acknowledgedAlertIds={acknowledgedAlertIds}
       />

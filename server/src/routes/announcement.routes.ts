@@ -4,6 +4,7 @@ import { extractUnifiedActor } from '../middleware/unified-actor.middleware.js';
 import { requireDormitoryPermission } from '../middleware/permission.js';
 import { requireDormitoryWriteEntitlement } from '../middleware/entitlement.js';
 import { AppError } from '../types/index.js';
+import { getPrismaClient } from '../db/prisma.js';
 
 function safeErrorMessage(err: any): string {
   if (err instanceof AppError) return err.message;
@@ -84,6 +85,36 @@ export function createAnnouncementRouter(announcementService: AnnouncementServic
         return res.status(400).json({ error: { code: 'INVALID_INPUT', message: 'Title and content are required' } });
       }
 
+      let resolvedAudiences = audiences;
+      if (!resolvedAudiences && (targetType === 'rooms' || targetType === 'room' || targetRooms)) {
+        const roomNumbers = Array.isArray(targetRooms)
+          ? targetRooms.map((r: any) => String(r).trim())
+          : (typeof targetRooms === 'string' ? targetRooms.split(',').map((r: string) => r.trim()).filter(Boolean) : []);
+
+        if (roomNumbers.length > 0) {
+          const prisma = getPrismaClient();
+          const foundRooms = await prisma.room.findMany({
+            where: {
+              dormitoryId,
+              roomNumber: { in: roomNumbers },
+              deletedAt: null,
+            },
+            select: { id: true, roomNumber: true },
+          });
+          if (foundRooms.length > 0) {
+            resolvedAudiences = foundRooms.map((rm) => ({
+              targetType: 'room' as const,
+              roomId: rm.id,
+            }));
+          }
+        }
+      } else if (!resolvedAudiences && targetType === 'building' && targetBuildingId) {
+        resolvedAudiences = [{
+          targetType: 'building' as const,
+          buildingId: targetBuildingId,
+        }];
+      }
+
       const targetStatus = status || 'published';
       const announcement = await announcementService.createDraft({
         dormitoryId,
@@ -103,7 +134,7 @@ export function createAnnouncementRouter(announcementService: AnnouncementServic
         createdByUserId: actor?.userId || undefined,
         status: targetStatus === 'published' ? 'draft' : targetStatus,
         publishDate: publishDate ? new Date(publishDate) : new Date(),
-        audiences: audiences || [{ targetType: 'all_tenants' }]
+        audiences: resolvedAudiences || [{ targetType: 'all_tenants' }]
       });
 
       if (targetStatus === 'published') {

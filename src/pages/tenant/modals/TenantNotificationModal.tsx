@@ -23,6 +23,7 @@ export interface TenantNotificationModalProps {
   onSelectRepairTrack: () => void;
   onSelectAnnouncement: () => void;
   handleMarkNoticeAsRead: (id: string) => void;
+  handleMarkAllAsRead?: () => void;
   onAcknowledgeAlert?: (id: string) => void;
   acknowledgedAlertIds?: string[];
 }
@@ -70,6 +71,7 @@ export const TenantNotificationModal: React.FC<TenantNotificationModalProps> = (
   onSelectRepairTrack,
   onSelectAnnouncement,
   handleMarkNoticeAsRead,
+  handleMarkAllAsRead,
   onAcknowledgeAlert,
   acknowledgedAlertIds = [],
 }) => {
@@ -86,6 +88,18 @@ export const TenantNotificationModal: React.FC<TenantNotificationModalProps> = (
       maxHeightClass="max-h-[85vh]"
     >
       <div className="space-y-4 font-sans text-xs">
+        {totalNotificationsCount > 0 && handleMarkAllAsRead && (
+          <div className="flex justify-end pb-1">
+            <button
+              type="button"
+              data-testid="btn-mark-all-notices-read"
+              onClick={handleMarkAllAsRead}
+              className="text-[11px] font-black text-indigo-600 hover:text-indigo-800 bg-indigo-50 hover:bg-indigo-100 px-3 py-1 rounded-xl transition-all cursor-pointer"
+            >
+              อ่านทั้งหมด
+            </button>
+          </div>
+        )}
 
         <div className="space-y-2.5 max-h-80 overflow-y-auto pr-1">
           {/* Unpaid Bills */}

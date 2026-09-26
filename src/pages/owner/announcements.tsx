@@ -61,6 +61,12 @@ interface OwnerAnnouncementsProps {
 
 const ANNOUNCEMENTS_PER_PAGE = 2;
 
+const getTargetRoomsArray = (targetRooms: any): string[] => {
+  if (Array.isArray(targetRooms)) return targetRooms;
+  if (typeof targetRooms === 'string') return targetRooms.split(',').map((r: string) => r.trim()).filter(Boolean);
+  return [];
+};
+
 // Helper function to compress images using HTML5 Canvas to prevent localStorage quota issues
 const compressImage = (dataUrl: string, maxWidth = 800, maxHeight = 800, quality = 0.6): Promise<string> => {
   return new Promise((resolve) => {
@@ -755,8 +761,9 @@ export const OwnerAnnouncements: React.FC<OwnerAnnouncementsProps> = ({
       }
       if (ann.targetType === 'rooms') {
         const bldRooms = rooms.filter(r => r.buildingId === bldId).map(r => (r?.roomNumber || '').trim().toUpperCase());
-        if (ann.targetRooms && ann.targetRooms.length > 0) {
-          return ann.targetRooms.some(rNum => bldRooms.includes((rNum || '').trim().toUpperCase()));
+        const roomsArr = getTargetRoomsArray(ann.targetRooms);
+        if (roomsArr.length > 0) {
+          return roomsArr.some(rNum => bldRooms.includes((rNum || '').trim().toUpperCase()));
         }
         if (ann.customTarget) {
           const cleanCustom = (ann.customTarget || '').toUpperCase();
@@ -785,7 +792,8 @@ export const OwnerAnnouncements: React.FC<OwnerAnnouncementsProps> = ({
       }
 
       if (ann.targetType === 'rooms') {
-        if (ann.targetRooms && ann.targetRooms.some(r => (r || '').trim().toUpperCase() === cleanRoom)) {
+        const roomsArr = getTargetRoomsArray(ann.targetRooms);
+        if (roomsArr.some(r => (r || '').trim().toUpperCase() === cleanRoom)) {
           return true;
         }
         if (ann.customTarget) {
@@ -1567,7 +1575,7 @@ export const OwnerAnnouncements: React.FC<OwnerAnnouncementsProps> = ({
                                           <span>
                                             {ann.targetType === 'all' && 'ทุกอาคาร'}
                                             {ann.targetType === 'building' && `ตึก ${buildings.find(b => b.id === ann.targetBuildingId)?.name?.replace('อาคาร ', '') || ann.customTarget || 'ทุกอาคาร'}`}
-                                            {ann.targetType === 'rooms' && (ann.targetRooms ? ann.targetRooms.join(', ') : ann.customTarget)}
+                                            {ann.targetType === 'rooms' && (getTargetRoomsArray(ann.targetRooms).length > 0 ? getTargetRoomsArray(ann.targetRooms).join(', ') : (ann.customTarget || 'ระบุห้อง'))}
                                           </span>
                                         </div>
                                       </div>

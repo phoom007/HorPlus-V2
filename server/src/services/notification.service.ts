@@ -46,6 +46,7 @@ export class NotificationService {
     title: string;
     body: string;
     metadata?: Record<string, any> | null;
+    sourceOutboxId?: string | null;
   }) {
     if (this.repo instanceof PrismaNotificationRepository) {
       if (data.targetType === 'tenant' && data.targetTenantId) {
@@ -56,6 +57,7 @@ export class NotificationService {
           title: data.title,
           message: data.body,
           type: data.category,
+          sourceOutboxId: data.sourceOutboxId || null,
         });
       } else if (data.targetType === 'staff') {
         if (data.targetUserId) {

@@ -92,14 +92,59 @@ export class AnnouncementRecipientResolver {
 
   public async resolveRecipients(dormitoryId: string, audiences: AnnouncementAudienceEntity[]) {
     // Find all active tenants in dormitory
-    const activeTenantsRes = await this.tenantRepo.findAll(dormitoryId, { pageSize: 1000 } as any);
-    const activeTenants: any[] = (activeTenantsRes as any).items || (Array.isArray(activeTenantsRes) ? activeTenantsRes : []);
+    const activeTenantsRes = await this.tenantRepo.findAll(dormitoryId, { status: 'active', pageSize: 1000 } as any);
+    const allTenantsList: any[] = (activeTenantsRes as any).items || (Array.isArray(activeTenantsRes) ? activeTenantsRes : []);
+    const activeTenants: any[] = allTenantsList.filter((t: any) => t.status === 'active');
 
     const activeContracts = await this.contractRepo.findAll(dormitoryId, { status: 'active', pageSize: 1000 } as any);
-    const tenantRoomMap = new Map<string, string>();
+    const tenantRoomsMap = new Map<string, Set<string>>();
+    const addTenantRoom = (tId: string, rId: string) => {
+      if (!tenantRoomsMap.has(tId)) {
+        tenantRoomsMap.set(tId, new Set());
+      }
+      tenantRoomsMap.get(tId)!.add(rId);
+    };
+
     const contractList = (activeContracts as any).items || (Array.isArray(activeContracts) ? activeContracts : []);
     for (const c of contractList) {
-      tenantRoomMap.set(c.tenantId, c.roomId);
+      if (c.tenantId && c.roomId) {
+        addTenantRoom(c.tenantId, c.roomId);
+      }
+    }
+
+    for (const st of ['expiring_soon', 'waiting_extension', 'approved_scheduled']) {
+      try {
+        const extraContracts = await this.contractRepo.findAll(dormitoryId, { status: st, pageSize: 1000 } as any);
+        const extraList = (extraContracts as any).items || (Array.isArray(extraContracts) ? extraContracts : []);
+        for (const c of extraList) {
+          if (c.tenantId && c.roomId) {
+            addTenantRoom(c.tenantId, c.roomId);
+          }
+        }
+      } catch {}
+    }
+
+    for (const t of activeTenants) {
+      if (t.roomId) {
+        addTenantRoom(t.id, t.roomId);
+      }
+    }
+
+    let prisma: any = null;
+    try { prisma = getPrismaClient(); } catch {}
+    const isUuid = /^[0-9a-fA-F-]{36}$/.test(dormitoryId);
+    if (prisma && isUuid) {
+      try {
+        const occupancies = await prisma.occupancy.findMany({
+          where: { dormitoryId, status: 'ACTIVE' },
+          select: { tenantId: true, roomId: true },
+        });
+        for (const occ of occupancies) {
+          if (occ.tenantId && occ.roomId) {
+            addTenantRoom(occ.tenantId, occ.roomId);
+          }
+        }
+      } catch {}
     }
 
     const roomsRes = await this.roomRepo.findAll(dormitoryId, { pageSize: 1000 } as any);
@@ -112,35 +157,45 @@ export class AnnouncementRecipientResolver {
     let targetTenantIds = new Set<string>();
 
     for (const aud of audiences) {
-      if (aud.targetType === 'all_tenants') {
+      if (aud.targetType === 'all_tenants' || (aud.targetType as string) === 'all') {
         activeTenants.forEach((t: any) => targetTenantIds.add(t.id));
       } else if (aud.targetType === 'building' && aud.buildingId) {
         for (const t of activeTenants) {
-          const roomId = tenantRoomMap.get(t.id);
-          const room: any = roomId ? roomMap.get(roomId) : null;
-          if (room && room.buildingId === aud.buildingId) {
-            targetTenantIds.add(t.id);
+          const tRooms = tenantRoomsMap.get(t.id);
+          if (tRooms) {
+            for (const rId of tRooms) {
+              const room: any = roomMap.get(rId);
+              if (room && room.buildingId === aud.buildingId) {
+                targetTenantIds.add(t.id);
+                break;
+              }
+            }
           }
         }
       } else if (aud.targetType === 'floor' && aud.buildingId && aud.floor) {
         for (const t of activeTenants) {
-          const roomId = tenantRoomMap.get(t.id);
-          const room: any = roomId ? roomMap.get(roomId) : null;
-          if (room && room.buildingId === aud.buildingId) {
-            const b = buildings.find((bld: any) => bld.id === aud.buildingId);
-            const bConfig = b ? { code: b.code, numberingPattern: b.numberingPattern, floorCount: b.floorCount } : { code: null, numberingPattern: null, floorCount: 1 };
-            const parsed = parseRoomIdentifier(bConfig as any, room.roomNumber);
-            if (aud.floor !== undefined) {
-              if (parsed.isValid && String(parsed.derivedFloor) === String(aud.floor)) {
-                targetTenantIds.add(t.id);
+          const tRooms = tenantRoomsMap.get(t.id);
+          if (tRooms) {
+            for (const rId of tRooms) {
+              const room: any = roomMap.get(rId);
+              if (room && room.buildingId === aud.buildingId) {
+                const b = buildings.find((bld: any) => bld.id === aud.buildingId);
+                const bConfig = b ? { code: b.code, numberingPattern: b.numberingPattern, floorCount: b.floorCount } : { code: null, numberingPattern: null, floorCount: 1 };
+                const parsed = parseRoomIdentifier(bConfig as any, room.roomNumber);
+                if (aud.floor !== undefined) {
+                  if (parsed.isValid && String(parsed.derivedFloor) === String(aud.floor)) {
+                    targetTenantIds.add(t.id);
+                    break;
+                  }
+                }
               }
             }
           }
         }
       } else if (aud.targetType === 'room' && aud.roomId) {
         for (const t of activeTenants) {
-          const roomId = tenantRoomMap.get(t.id);
-          if (roomId === aud.roomId) {
+          const tRooms = tenantRoomsMap.get(t.id);
+          if (tRooms && tRooms.has(aud.roomId)) {
             targetTenantIds.add(t.id);
           }
         }
@@ -156,8 +211,9 @@ export class AnnouncementRecipientResolver {
       const tenant = activeTenants.find((t: any) => t.id === tenantId);
       if (!tenant) continue;
 
-      const roomId = tenantRoomMap.get(tenantId);
-      const room: any = roomId ? roomMap.get(roomId) : null;
+      const tRooms = tenantRoomsMap.get(tenantId);
+      const firstRoomId = tRooms && tRooms.size > 0 ? tRooms.values().next().value : null;
+      const room: any = firstRoomId ? roomMap.get(firstRoomId) : null;
 
       resolved.push({
         tenantId,
@@ -175,8 +231,15 @@ export class AnnouncementService {
     private announcementRepo: IAnnouncementRepository = new PrismaAnnouncementRepository(),
     private recipientResolver: AnnouncementRecipientResolver = new AnnouncementRecipientResolver(),
     private notificationService: NotificationService = new NotificationService(),
-    private quotaService: LinePushUsageService = new LinePushUsageService(getPrismaClient())
-  ) {}
+    private quotaService: LinePushUsageService = new LinePushUsageService(getPrismaClient()),
+    private tenantRepo?: ITenantRepository
+  ) {
+    if (!this.tenantRepo) {
+      let prisma: any = null;
+      try { prisma = getPrismaClient(); } catch {}
+      this.tenantRepo = prisma ? new PrismaTenantRepository(prisma) : new InMemoryTenantRepository();
+    }
+  }
 
   public setQuotaService(quotaService: LinePushUsageService) {
     this.quotaService = quotaService;
@@ -310,7 +373,8 @@ export class AnnouncementService {
         category: 'ANNOUNCEMENT_PUBLISHED',
         title: announcement.title,
         body: announcement.summary || announcement.content.slice(0, 100),
-        metadata: { announcementId: announcement.id, priority: announcement.priority }
+        metadata: { announcementId: announcement.id, priority: announcement.priority },
+        sourceOutboxId: `announcement:${announcement.id}:${r.tenantId}`
       });
     }
 
@@ -385,10 +449,28 @@ export class AnnouncementService {
 
   // --- Tenant Operations ---
   public async getTenantAnnouncements(dormitoryId: string, tenantId: string) {
-    // Get all published announcements for dormitory
+    // 1. Verify tenant exists and is active (REQUIREMENTS-LOCK §8:156)
+    let tenant: any = null;
+    if (this.tenantRepo) {
+      tenant = await this.tenantRepo.findById(tenantId, dormitoryId);
+    }
+    if (!tenant) {
+      const isIdUuid = /^[0-9a-fA-F-]{36}$/.test(dormitoryId) && /^[0-9a-fA-F-]{36}$/.test(tenantId);
+      if (isIdUuid) {
+        try {
+          const prisma = getPrismaClient();
+          tenant = await prisma.tenant.findFirst({ where: { id: tenantId, dormitoryId } });
+        } catch {}
+      }
+    }
+    if (!tenant || tenant.status !== 'active') {
+      return [];
+    }
+
+    // 2. Get all published announcements for dormitory
     const all = await this.announcementRepo.findAll(dormitoryId, { status: 'published' });
 
-    // Filter announcements eligible for this tenant
+    // 3. Filter announcements eligible for this tenant
     const eligibleIds: string[] = [];
     for (const ann of all.items) {
       const annAudiences = await this.announcementRepo.getAudiences(dormitoryId, ann.id);
@@ -402,6 +484,18 @@ export class AnnouncementService {
           eligibleIds.push(ann.id);
         }
         continue;
+      }
+
+      if (ann.targetRooms || ann.targetType === 'rooms') {
+        const roomNumbers = (ann.targetRooms || '').split(',').map((r: string) => r.trim()).filter(Boolean);
+        if (roomNumbers.length > 0) {
+          const resolved = await this.recipientResolver.resolveRecipients(dormitoryId, [{ targetType: 'all_tenants' }]);
+          const tenantEntry = resolved.find(r => r.tenantId === tenantId);
+          if (tenantEntry && roomNumbers.includes(tenantEntry.roomNumber)) {
+            eligibleIds.push(ann.id);
+            continue;
+          }
+        }
       }
 
       if (!ann.targetType || ann.targetType === 'all' || ann.targetType === 'all_tenants') {
@@ -430,8 +524,47 @@ export class AnnouncementService {
   }
 
   public async getTenantAnnouncementById(dormitoryId: string, tenantId: string, announcementId: string) {
+    // 1. Verify tenant exists and is active (REQUIREMENTS-LOCK §8:156)
+    let tenant: any = null;
+    if (this.tenantRepo) {
+      tenant = await this.tenantRepo.findById(tenantId, dormitoryId);
+    }
+    if (!tenant) {
+      const isIdUuid = /^[0-9a-fA-F-]{36}$/.test(dormitoryId) && /^[0-9a-fA-F-]{36}$/.test(tenantId);
+      if (isIdUuid) {
+        try {
+          const prisma = getPrismaClient();
+          tenant = await prisma.tenant.findFirst({ where: { id: tenantId, dormitoryId } });
+        } catch {}
+      }
+    }
+    if (!tenant || tenant.status !== 'active') {
+      return null;
+    }
+
     const ann = await this.announcementRepo.findById(dormitoryId, announcementId);
     if (!ann || ann.status !== 'published') return null;
+
+    // Check eligibility
+    const annAudiences = await this.announcementRepo.getAudiences(dormitoryId, ann.id);
+    if (annAudiences && annAudiences.length > 0) {
+      const isAll = annAudiences.some(a => a.targetType === 'all_tenants' || (a.targetType as string) === 'all');
+      if (!isAll) {
+        const resolved = await this.recipientResolver.resolveRecipients(dormitoryId, annAudiences);
+        if (!resolved.some(r => r.tenantId === tenantId)) {
+          return null;
+        }
+      }
+    } else if (ann.targetRooms || ann.targetType === 'rooms') {
+      const roomNumbers = (ann.targetRooms || '').split(',').map((r: string) => r.trim()).filter(Boolean);
+      if (roomNumbers.length > 0) {
+        const resolved = await this.recipientResolver.resolveRecipients(dormitoryId, [{ targetType: 'all_tenants' }]);
+        const tenantEntry = resolved.find(r => r.tenantId === tenantId);
+        if (!tenantEntry || !roomNumbers.includes(tenantEntry.roomNumber)) {
+          return null;
+        }
+      }
+    }
 
     const rec = await this.announcementRepo.getRecipientForTenant(dormitoryId, announcementId, tenantId);
 
