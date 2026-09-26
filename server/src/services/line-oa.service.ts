@@ -6,6 +6,7 @@
  */
 
 import { PrismaClient } from '@prisma/client';
+import { getPrismaClient } from '../db/prisma.js';
 import {
   encryptText,
   decryptText,
@@ -1071,6 +1072,361 @@ export function buildTenantRenewalOutcomeFlexMessage(
   };
 }
 
+export function buildTenantInvoiceFlexMessage(
+  dormitoryName: string,
+  roomNumber: string,
+  bills: Array<{ billNumber: string; billKind?: string; totalAmount: string | number; dueDate?: string | Date | null }>,
+  totalAmount: string | number,
+  effectiveDueDate?: string | Date | null,
+  appUrl?: string,
+  tenantLiffId?: string
+) {
+  const origin = (appUrl || getPublicAppOrigin()).trim().replace(/\/+$/, '');
+  const liffId = (tenantLiffId || process.env.LINE_TENANT_LIFF_ID || process.env.VITE_LINE_TENANT_LIFF_ID || process.env.VITE_LINE_LIFF_ID || process.env.LINE_LIFF_ID || '').trim();
+  const targetUrl = liffId
+    ? `https://liff.line.me/${liffId}?sub=payments_tab`
+    : `${origin}/tenant?sub=payments_tab`;
+
+  const totalNum = Number(totalAmount) || 0;
+  const totalFormatted = totalNum.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  const formatDate = (d: any) => {
+    if (!d) return '-';
+    try {
+      const dt = new Date(d);
+      return dt.toLocaleDateString('th-TH', { year: 'numeric', month: 'short', day: 'numeric' });
+    } catch {
+      return String(d);
+    }
+  };
+
+  const isMulti = bills.length > 1;
+  const billKindLabels: Record<string, string> = {
+    RENT: 'ค่าเช่าห้องพัก',
+    UTILITY: 'ค่าน้ำค่าไฟ',
+    LEGACY_COMBINED: 'ค่าเช่าและสาธารณูปโภค',
+    DAILY: 'ค่าเช่ารายวัน',
+    DEPOSIT: 'ค่ามัดจำ/เงินประกัน',
+  };
+
+  const bodyContents: any[] = [
+    {
+      type: 'box',
+      layout: 'horizontal',
+      contents: [
+        { type: 'text', text: 'ห้องพัก', size: 'sm', color: '#64748B', flex: 2 },
+        { type: 'text', text: `ห้อง ${roomNumber}`, size: 'sm', color: '#1E293B', weight: 'bold', flex: 4, align: 'end' },
+      ],
+    },
+    {
+      type: 'box',
+      layout: 'horizontal',
+      margin: 'md',
+      contents: [
+        { type: 'text', text: 'ยอดรวมที่ต้องชำระ', size: 'sm', color: '#64748B', flex: 2 },
+        { type: 'text', text: `฿ ${totalFormatted}`, size: 'md', color: '#4F46E5', weight: 'bold', flex: 4, align: 'end' },
+      ],
+    },
+    {
+      type: 'box',
+      layout: 'horizontal',
+      margin: 'md',
+      contents: [
+        { type: 'text', text: 'ครบกำหนดชำระ', size: 'sm', color: '#64748B', flex: 2 },
+        { type: 'text', text: formatDate(effectiveDueDate), size: 'sm', color: '#DC2626', weight: 'bold', flex: 4, align: 'end' },
+      ],
+    },
+  ];
+
+  if (isMulti) {
+    bodyContents.push({ type: 'separator', margin: 'lg' });
+    bodyContents.push({
+      type: 'text',
+      text: `รายการบิล (${bills.length} ใบ):`,
+      size: 'xs',
+      color: '#64748B',
+      margin: 'md',
+      weight: 'bold',
+    });
+    for (const b of bills) {
+      const bKind = b.billKind ? (billKindLabels[b.billKind] || b.billKind) : 'บิล';
+      const bAmt = Number(b.totalAmount || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      bodyContents.push({
+        type: 'box',
+        layout: 'horizontal',
+        margin: 'sm',
+        contents: [
+          { type: 'text', text: `${bKind} (${b.billNumber})`, size: 'xs', color: '#475569', flex: 3 },
+          { type: 'text', text: `฿ ${bAmt}`, size: 'xs', color: '#1E293B', weight: 'bold', flex: 2, align: 'end' },
+        ],
+      });
+    }
+  } else if (bills.length === 1) {
+    bodyContents.push({
+      type: 'box',
+      layout: 'horizontal',
+      margin: 'md',
+      contents: [
+        { type: 'text', text: 'เลขที่บิล', size: 'sm', color: '#64748B', flex: 2 },
+        { type: 'text', text: bills[0].billNumber, size: 'sm', color: '#1E293B', weight: 'bold', flex: 4, align: 'end' },
+      ],
+    });
+  }
+
+  return {
+    type: 'flex',
+    altText: `แจ้งเตือนบิลใหม่ ห้อง ${roomNumber} ยอดชำระ ${totalFormatted} บาท - ${dormitoryName}`,
+    contents: {
+      type: 'bubble',
+      header: {
+        type: 'box',
+        layout: 'vertical',
+        backgroundColor: '#4F46E5',
+        paddingAll: '20px',
+        contents: [
+          { type: 'text', text: dormitoryName, color: '#E0E7FF', size: 'xs', weight: 'regular' },
+          { type: 'text', text: 'แจ้งเตือนบิลค่าห้องพักและบริการ', color: '#FFFFFF', size: 'md', weight: 'bold', margin: 'xs' },
+        ],
+      },
+      body: {
+        type: 'box',
+        layout: 'vertical',
+        paddingAll: '20px',
+        contents: bodyContents,
+      },
+      footer: {
+        type: 'box',
+        layout: 'vertical',
+        contents: [
+          {
+            type: 'button',
+            style: 'primary',
+            color: '#4F46E5',
+            action: {
+              type: 'uri',
+              label: 'เปิดดูบิลและชำระเงิน',
+              uri: targetUrl,
+            },
+          },
+        ],
+      },
+    },
+  };
+}
+
+export function buildTenantReceiptFlexMessage(
+  dormitoryName: string,
+  roomNumber: string,
+  receiptNumber: string,
+  billNumbers: string[],
+  amountPaid: string | number,
+  paymentDate: string | Date,
+  appUrl?: string,
+  tenantLiffId?: string
+) {
+  const origin = (appUrl || getPublicAppOrigin()).trim().replace(/\/+$/, '');
+  const liffId = (tenantLiffId || process.env.LINE_TENANT_LIFF_ID || process.env.VITE_LINE_TENANT_LIFF_ID || process.env.VITE_LINE_LIFF_ID || process.env.LINE_LIFF_ID || '').trim();
+  const targetUrl = liffId
+    ? `https://liff.line.me/${liffId}?sub=receipts_tab`
+    : `${origin}/tenant?sub=receipts_tab`;
+
+  const amtNum = Number(amountPaid) || 0;
+  const amtFormatted = amtNum.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  const formatDate = (d: any) => {
+    if (!d) return '-';
+    try {
+      const dt = new Date(d);
+      return dt.toLocaleDateString('th-TH', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    } catch {
+      return String(d);
+    }
+  };
+
+  return {
+    type: 'flex',
+    altText: `ยืนยันการรับชำระเงิน ห้อง ${roomNumber} ยอด ${amtFormatted} บาท - ${dormitoryName}`,
+    contents: {
+      type: 'bubble',
+      header: {
+        type: 'box',
+        layout: 'vertical',
+        backgroundColor: '#06C755',
+        paddingAll: '20px',
+        contents: [
+          { type: 'text', text: dormitoryName, color: '#DCFCE7', size: 'xs', weight: 'regular' },
+          { type: 'text', text: 'ยืนยันการรับชำระเงินเรียบร้อยแล้ว', color: '#FFFFFF', size: 'md', weight: 'bold', margin: 'xs' },
+        ],
+      },
+      body: {
+        type: 'box',
+        layout: 'vertical',
+        paddingAll: '20px',
+        contents: [
+          {
+            type: 'box',
+            layout: 'horizontal',
+            contents: [
+              { type: 'text', text: 'ห้องพัก', size: 'sm', color: '#64748B', flex: 2 },
+              { type: 'text', text: `ห้อง ${roomNumber}`, size: 'sm', color: '#1E293B', weight: 'bold', flex: 4, align: 'end' },
+            ],
+          },
+          {
+            type: 'box',
+            layout: 'horizontal',
+            margin: 'md',
+            contents: [
+              { type: 'text', text: 'เลขที่ใบเสร็จ', size: 'sm', color: '#64748B', flex: 2 },
+              { type: 'text', text: receiptNumber, size: 'sm', color: '#06C755', weight: 'bold', flex: 4, align: 'end' },
+            ],
+          },
+          {
+            type: 'box',
+            layout: 'horizontal',
+            margin: 'md',
+            contents: [
+              { type: 'text', text: 'สำหรับบิล', size: 'sm', color: '#64748B', flex: 2 },
+              { type: 'text', text: billNumbers.join(', ') || '-', size: 'sm', color: '#1E293B', weight: 'bold', flex: 4, align: 'end', wrap: true },
+            ],
+          },
+          {
+            type: 'box',
+            layout: 'horizontal',
+            margin: 'md',
+            contents: [
+              { type: 'text', text: 'ยอดเงินที่ชำระ', size: 'sm', color: '#64748B', flex: 2 },
+              { type: 'text', text: `฿ ${amtFormatted}`, size: 'md', color: '#1E293B', weight: 'bold', flex: 4, align: 'end' },
+            ],
+          },
+          {
+            type: 'box',
+            layout: 'horizontal',
+            margin: 'md',
+            contents: [
+              { type: 'text', text: 'วันที่ชำระ', size: 'sm', color: '#64748B', flex: 2 },
+              { type: 'text', text: formatDate(paymentDate), size: 'sm', color: '#64748B', flex: 4, align: 'end' },
+            ],
+          },
+        ],
+      },
+      footer: {
+        type: 'box',
+        layout: 'vertical',
+        contents: [
+          {
+            type: 'button',
+            style: 'primary',
+            color: '#06C755',
+            action: {
+              type: 'uri',
+              label: 'เปิดดูใบเสร็จรับเงิน',
+              uri: targetUrl,
+            },
+          },
+        ],
+      },
+    },
+  };
+}
+
+export function buildTenantPaymentRejectedFlexMessage(
+  dormitoryName: string,
+  roomNumber: string,
+  billNumbers: string[] | string,
+  amount: string | number,
+  reason: string,
+  appUrl?: string,
+  tenantLiffId?: string
+) {
+  const origin = (appUrl || getPublicAppOrigin()).trim().replace(/\/+$/, '');
+  const liffId = (tenantLiffId || process.env.LINE_TENANT_LIFF_ID || process.env.VITE_LINE_TENANT_LIFF_ID || process.env.VITE_LINE_LIFF_ID || process.env.LINE_LIFF_ID || '').trim();
+  const targetUrl = liffId
+    ? `https://liff.line.me/${liffId}?sub=payments_tab`
+    : `${origin}/tenant?sub=payments_tab`;
+
+  const amtNum = Number(amount) || 0;
+  const amtFormatted = amtNum.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  return {
+    type: 'flex',
+    altText: `แจ้งเตือนการชำระเงินไม่ถูกต้อง ห้อง ${roomNumber} - ${dormitoryName}`,
+    contents: {
+      type: 'bubble',
+      header: {
+        type: 'box',
+        layout: 'vertical',
+        backgroundColor: '#EF4444',
+        paddingAll: '20px',
+        contents: [
+          { type: 'text', text: dormitoryName, color: '#FEE2E2', size: 'xs', weight: 'regular' },
+          { type: 'text', text: 'แจ้งเตือนการชำระเงินไม่ถูกต้อง', color: '#FFFFFF', size: 'md', weight: 'bold', margin: 'xs' },
+        ],
+      },
+      body: {
+        type: 'box',
+        layout: 'vertical',
+        paddingAll: '20px',
+        contents: [
+          {
+            type: 'box',
+            layout: 'horizontal',
+            contents: [
+              { type: 'text', text: 'ห้องพัก', size: 'sm', color: '#64748B', flex: 2 },
+              { type: 'text', text: `ห้อง ${roomNumber}`, size: 'sm', color: '#1E293B', weight: 'bold', flex: 4, align: 'end' },
+            ],
+          },
+          {
+            type: 'box',
+            layout: 'horizontal',
+            margin: 'md',
+            contents: [
+              { type: 'text', text: 'บิลที่ชำระ', size: 'sm', color: '#64748B', flex: 2 },
+              { type: 'text', text: Array.isArray(billNumbers) ? billNumbers.join(', ') || '-' : (billNumbers || '-'), size: 'sm', color: '#1E293B', weight: 'bold', flex: 4, align: 'end', wrap: true },
+            ],
+          },
+          {
+            type: 'box',
+            layout: 'horizontal',
+            margin: 'md',
+            contents: [
+              { type: 'text', text: 'ยอดเงินในสลิป', size: 'sm', color: '#64748B', flex: 2 },
+              { type: 'text', text: `฿ ${amtFormatted}`, size: 'sm', color: '#1E293B', weight: 'bold', flex: 4, align: 'end' },
+            ],
+          },
+          {
+            type: 'box',
+            layout: 'vertical',
+            margin: 'lg',
+            paddingAll: '12px',
+            backgroundColor: '#FEF2F2',
+            cornerRadius: '8px',
+            contents: [
+              { type: 'text', text: 'เหตุผลจากเจ้าของหอพัก:', size: 'xs', color: '#991B1B', weight: 'bold' },
+              { type: 'text', text: reason || 'สลิปไม่ถูกต้องหรือไม่พบยอดโอน กรุณาตรวจสอบและแนบใหม่อีกครั้ง', size: 'sm', color: '#DC2626', margin: 'xs', wrap: true },
+            ],
+          },
+        ],
+      },
+      footer: {
+        type: 'box',
+        layout: 'vertical',
+        contents: [
+          {
+            type: 'button',
+            style: 'primary',
+            color: '#EF4444',
+            action: {
+              type: 'uri',
+              label: 'แก้ไขและแนบสลิปใหม่',
+              uri: targetUrl,
+            },
+          },
+        ],
+      },
+    },
+  };
+}
+
 export function buildOwnerGuideCarouselFlexMessage(dormitoryName: string, appOrigin?: string) {
   const origin = (appOrigin || getPublicAppOrigin()).trim().replace(/\/+$/, '');
   const ownerLiffId = getOwnerLiffId();
@@ -1590,9 +1946,9 @@ export class LineOaService {
   private inviteService: TenantRegistrationInviteService;
   private lineAdapter: LinePlatformAdapter;
   private tokenProvider: ILineChannelTokenProvider;
-  private richMenuService: LineRichMenuService;
+  private _richMenuService?: LineRichMenuService;
 
-  constructor(private prisma: PrismaClient, adapter?: LinePlatformAdapter, tokenProvider?: ILineChannelTokenProvider, inviteService?: TenantRegistrationInviteService) {
+  constructor(private prisma: PrismaClient = getPrismaClient(), adapter?: LinePlatformAdapter, tokenProvider?: ILineChannelTokenProvider, inviteService?: TenantRegistrationInviteService) {
     this.friendService = new LineFriendService(prisma);
     this.inviteService = inviteService || new TenantRegistrationInviteService(prisma);
     if (adapter && tokenProvider) {
@@ -1612,18 +1968,20 @@ export class LineOaService {
       this.lineAdapter = createLinePlatformAdapter();
       this.tokenProvider = tokenProvider || new LineChannelTokenProvider();
     }
-    this.richMenuService = new LineRichMenuService(this.prisma, this.lineAdapter, this.tokenProvider);
   }
 
   getRichMenuService(): LineRichMenuService {
-    return this.richMenuService;
+    if (!this._richMenuService) {
+      this._richMenuService = new LineRichMenuService(this.prisma, this.lineAdapter, this.tokenProvider);
+    }
+    return this._richMenuService;
   }
 
   async syncRichMenus(dormitoryId: string, baseUrl?: string, forceRefresh: boolean = false) {
     if (baseUrl) {
       setActiveAppOrigin(baseUrl);
     }
-    return await this.richMenuService.syncDormitoryRichMenus(dormitoryId, forceRefresh);
+    return await this.getRichMenuService().syncDormitoryRichMenus(dormitoryId, forceRefresh);
   }
 
   /**
@@ -1897,7 +2255,7 @@ export class LineOaService {
     });
 
     if (accessTokenVerifiedAt) {
-      this.richMenuService.syncDormitoryRichMenus(dormitoryId).catch((err) => {
+      this.getRichMenuService().syncDormitoryRichMenus(dormitoryId).catch((err) => {
         console.warn('LINE OA Rich Menu auto-sync warning:', err.message);
       });
     }
@@ -2077,7 +2435,7 @@ export class LineOaService {
 
       // Link 3-button Owner Rich Menu to the owner LINE user ID whenever available
       if (ownerLineUserId) {
-        await this.richMenuService.linkOwnerRichMenu(dormitoryId, ownerLineUserId).catch((err) => {
+        await this.getRichMenuService().linkOwnerRichMenu(dormitoryId, ownerLineUserId).catch((err) => {
           console.warn('Failed to link owner rich menu during webhook test:', err.message);
         });
       }
@@ -2432,7 +2790,7 @@ export class LineOaService {
                   });
 
                   if (grant && ['OWNER', 'MANAGER', 'STAFF'].includes(grant.roleCode)) {
-                    const ticket = this.richMenuService.createDirectEntryTicket({
+                    const ticket = this.getRichMenuService().createDirectEntryTicket({
                       dormitoryId: resolvedDormitoryId,
                       lineUserId,
                       roleCode: grant.roleCode,
@@ -2478,7 +2836,7 @@ export class LineOaService {
                         },
                       });
 
-                      const ticket = this.richMenuService.createDirectEntryTicket({
+                      const ticket = this.getRichMenuService().createDirectEntryTicket({
                         dormitoryId: resolvedDormitoryId,
                         lineUserId,
                         roleCode: 'OWNER',
@@ -2626,7 +2984,7 @@ export class LineOaService {
         }
 
         if (action.shouldLinkOwnerMenu) {
-          await this.richMenuService.linkOwnerRichMenu(action.dormitoryId, action.lineUserId).catch(() => {});
+          await this.getRichMenuService().linkOwnerRichMenu(action.dormitoryId, action.lineUserId).catch(() => {});
         }
 
         if (action.type === 'manage_dormitory') {
@@ -2766,9 +3124,12 @@ export class LineOaService {
       let targetLineUserId = options.lineUserId;
       if (!targetLineUserId && options.tenantId) {
         try {
-          const tenant = await this.prisma.tenant.findUnique({
-            where: { id: options.tenantId },
-            include: { lineFriend: true },
+          const tenant = await this.prisma.$transaction(async (tx) => {
+            await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
+            return await tx.tenant.findUnique({
+              where: { id: options.tenantId },
+              include: { lineFriend: true },
+            });
           });
           if (tenant?.lineFriend?.lineUserIdEncrypted && tenant.lineFriend.friendStatus !== 'UNFOLLOWED') {
             const { decryptText } = await import('../utils/crypto-encryption.js');
@@ -2781,9 +3142,12 @@ export class LineOaService {
 
       if (!targetLineUserId && options.accessGrantId) {
         try {
-          const grant = await this.prisma.dormitoryAccessGrant.findUnique({
-            where: { id: options.accessGrantId },
-            include: { lineFriend: true },
+          const grant = await this.prisma.$transaction(async (tx) => {
+            await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
+            return await tx.dormitoryAccessGrant.findUnique({
+              where: { id: options.accessGrantId },
+              include: { lineFriend: true },
+            });
           });
           if (grant?.lineFriend?.lineUserIdEncrypted && grant.lineFriend.friendStatus !== 'UNFOLLOWED') {
             const { decryptText } = await import('../utils/crypto-encryption.js');
@@ -2801,16 +3165,19 @@ export class LineOaService {
 
       // 3. Check Dormitory Preferences & Connection Status
       if (this.prisma && typeof (this.prisma as any).$transaction === 'function') {
-        const config = await this.prisma.dormitoryLineConfig?.findUnique?.({
-          where: { dormitoryId },
-          select: {
-            isConnected: true,
-            notifyPaymentReceived: true,
-            notifyTenantApproved: true,
-            notifyRepairRequest: true,
-            notifyRepairCompleted: true,
-            notifyTenantRegister: true,
-          },
+        const config = await this.prisma.$transaction(async (tx) => {
+          await tx.$executeRaw`SELECT set_config('app.current_dormitory_id', ${dormitoryId}, true)`;
+          return await tx.dormitoryLineConfig.findUnique({
+            where: { dormitoryId },
+            select: {
+              isConnected: true,
+              notifyPaymentReceived: true,
+              notifyTenantApproved: true,
+              notifyRepairRequest: true,
+              notifyRepairCompleted: true,
+              notifyTenantRegister: true,
+            },
+          });
         }).catch(() => null);
 
         if (config && !config.isConnected) {
@@ -2942,3 +3309,5 @@ export class LineOaService {
     return res.sent;
   }
 }
+
+export const lineOaService = new LineOaService();

@@ -611,7 +611,8 @@ export class BillingService {
     data: GenerateBillDto,
     userId?: string,
     issuanceTimestamp?: Date,
-    existingTx?: any
+    existingTx?: any,
+    options?: { suppressLineNotification?: boolean }
   ): Promise<{ bill: BillEntity; items: BillItemEntity[]; created: boolean }> {
     const cycle = await this.billingCycleRepo.findById(data.billingCycleId, dormitoryId);
     if (!cycle) {
@@ -841,10 +842,49 @@ export class BillingService {
       return { bill, items, created: true };
     };
 
-    if (existingTx) {
-      return executeInTx(existingTx);
+    const result = existingTx ? await executeInTx(existingTx) : await this.billRepo.withTransaction(executeInTx);
+
+    if (result.created && !options?.suppressLineNotification && result.bill?.tenantId) {
+      try {
+        const { lineOaService, buildTenantInvoiceFlexMessage } = await import('./line-oa.service.js');
+        const db = getPrismaClient();
+        const dorm = await db.dormitory.findUnique({
+          where: { id: dormitoryId },
+          select: { name: true },
+        });
+        const room = await db.room.findUnique({
+          where: { id: data.roomId },
+          select: { roomNumber: true },
+        });
+        const dormitoryName = dorm?.name || 'หอพัก';
+        const roomNumber = room?.roomNumber || 'GEN';
+
+        await lineOaService.sendTenantLineNotification({
+          dormitoryId,
+          tenantId: result.bill.tenantId,
+          eventType: 'INVOICE',
+          eventId: `bill-issued:${result.bill.id}`,
+          flexMessage: buildTenantInvoiceFlexMessage(
+            dormitoryName,
+            roomNumber,
+            [
+              {
+                billNumber: result.bill.billNumber,
+                billKind: result.bill.billKind,
+                totalAmount: result.bill.totalAmount,
+                dueDate: result.bill.dueDate,
+              },
+            ],
+            result.bill.totalAmount,
+            result.bill.dueDate
+          ),
+        });
+      } catch (err: any) {
+        console.warn(`[BillingService] Failed to send bill notification for bill ${result.bill.id}:`, err.message);
+      }
     }
-    return this.billRepo.withTransaction(executeInTx);
+
+    return result;
   }
 
   public async bulkGenerateBills(
@@ -930,7 +970,8 @@ export class BillingService {
               { billingCycleId, roomId, billKind: targetBillKind },
               userId,
               issuanceNow,
-              tx
+              tx,
+              { suppressLineNotification: true }
             );
             if (created) {
               generatedBills.push(bill);
@@ -978,7 +1019,9 @@ export class BillingService {
               billKind: targetBillKind,
             },
             userId,
-            issuanceNow
+            issuanceNow,
+            undefined,
+            { suppressLineNotification: true }
           );
           if (created) {
             generatedBills.push(bill);
@@ -1015,6 +1058,73 @@ export class BillingService {
         status: 'generated',
         generatedAt: issuanceNow,
       });
+    }
+
+    // Send grouped LINE notifications per tenant (PO Decision A1)
+    if (generatedBills.length > 0) {
+      try {
+        const { lineOaService, buildTenantInvoiceFlexMessage } = await import('./line-oa.service.js');
+        const db = getPrismaClient();
+        const dorm = await db.dormitory.findUnique({
+          where: { id: dormitoryId },
+          select: { name: true },
+        });
+        const dormitoryName = dorm?.name || 'หอพัก';
+
+        const tenantBillsMap = new Map<string, BillEntity[]>();
+        for (const bill of generatedBills) {
+          if (bill.tenantId) {
+            if (!tenantBillsMap.has(bill.tenantId)) {
+              tenantBillsMap.set(bill.tenantId, []);
+            }
+            tenantBillsMap.get(bill.tenantId)!.push(bill);
+          }
+        }
+
+        for (const [tId, billsForTenant] of tenantBillsMap.entries()) {
+          try {
+            const firstRoomId = billsForTenant[0].roomId;
+            const room = await db.room.findUnique({
+              where: { id: firstRoomId },
+              select: { roomNumber: true },
+            });
+            const roomNumber = room?.roomNumber || 'GEN';
+
+            const combinedTotal = billsForTenant.reduce(
+              (sum, b) => sum + Number(b.totalAmount || 0),
+              0
+            );
+
+            const dueDates = billsForTenant
+              .map((b) => (b.dueDate ? new Date(b.dueDate).getTime() : Infinity))
+              .filter((t) => t !== Infinity);
+            const effectiveDueDate = dueDates.length > 0 ? new Date(Math.min(...dueDates)) : null;
+
+            await lineOaService.sendTenantLineNotification({
+              dormitoryId,
+              tenantId: tId,
+              eventType: 'INVOICE',
+              eventId: `bulk-bill:${billingCycleId}:${tId}`,
+              flexMessage: buildTenantInvoiceFlexMessage(
+                dormitoryName,
+                roomNumber,
+                billsForTenant.map((b) => ({
+                  billNumber: b.billNumber,
+                  billKind: b.billKind,
+                  totalAmount: b.totalAmount,
+                  dueDate: b.dueDate,
+                })),
+                combinedTotal,
+                effectiveDueDate
+              ),
+            });
+          } catch (tErr: any) {
+            console.warn(`[BillingService] Failed to send bulk bill notification to tenant ${tId}:`, tErr.message);
+          }
+        }
+      } catch (lineErr: any) {
+        console.warn('[BillingService] Failed to process bulk bill notifications:', lineErr.message);
+      }
     }
 
     return {

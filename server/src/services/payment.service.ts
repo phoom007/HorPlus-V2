@@ -734,7 +734,7 @@ export class PaymentService {
     overrideReason?: string;
     idempotencyKey?: string | null;
   }) {
-    return await idempotencyService.runWithIdempotency({
+    const result: any = await idempotencyService.runWithIdempotency({
       actorUserId: input.userId,
       operation: 'approvePaymentGroup',
       idempotencyKey: input.idempotencyKey,
@@ -1108,6 +1108,46 @@ export class PaymentService {
         });
       },
     });
+
+    if (result && result.group) {
+      try {
+        const { lineOaService, buildTenantReceiptFlexMessage } = await import('./line-oa.service.js');
+        const dorm = await this.client.dormitory.findUnique({
+          where: { id: input.dormitoryId },
+          select: { name: true },
+        });
+        const dormitoryName = dorm?.name || 'หอพัก';
+
+        const groupBills = await this.client.bill.findMany({
+          where: { id: { in: (result.affectedBills || []).map((b: any) => b.id) } },
+          include: { room: true },
+        });
+        const roomNumber = groupBills[0]?.room?.roomNumber || 'GEN';
+        const billNumbers = groupBills.map((b) => b.billNumber).filter(Boolean);
+        const effectiveTenantId = result.group.tenantId || groupBills[0]?.tenantId;
+
+        if (effectiveTenantId) {
+          await lineOaService.sendTenantLineNotification({
+            dormitoryId: input.dormitoryId,
+            tenantId: effectiveTenantId,
+            eventType: 'PAYMENT_RECEIPT',
+            eventId: `payment-approved:${result.group.id}`,
+            flexMessage: buildTenantReceiptFlexMessage(
+              dormitoryName,
+              roomNumber,
+              result.receipt?.receiptNumber || `RC-${result.group.id.slice(0, 8)}`,
+              billNumbers,
+              result.group.totalAmount,
+              result.group.paymentDate || new Date()
+            ),
+          });
+        }
+      } catch (notifErr: any) {
+        console.warn('[PaymentService] Failed to send group payment receipt notification:', notifErr.message);
+      }
+    }
+
+    return result;
   }
 
   /**
@@ -1121,7 +1161,7 @@ export class PaymentService {
     notes?: string;
     idempotencyKey?: string | null;
   }) {
-    return await idempotencyService.runWithIdempotency({
+    const result: any = await idempotencyService.runWithIdempotency({
       actorUserId: input.userId,
       operation: 'rejectPaymentGroup',
       idempotencyKey: input.idempotencyKey,
@@ -1219,6 +1259,53 @@ export class PaymentService {
         });
       },
     });
+
+    if (result && result.success) {
+      try {
+        const { lineOaService, buildTenantPaymentRejectedFlexMessage } = await import('./line-oa.service.js');
+        const dorm = await this.client.dormitory.findUnique({
+          where: { id: input.dormitoryId },
+          select: { name: true },
+        });
+        const dormitoryName = dorm?.name || 'หอพัก';
+
+        const group = await this.client.combinedPaymentGroup.findUnique({
+          where: { id: input.groupId },
+          include: {
+            billTargets: {
+              include: {
+                bill: {
+                  include: { room: true },
+                },
+              },
+            },
+          },
+        });
+
+        if (group && group.tenantId) {
+          const firstRoomNumber = group.billTargets?.[0]?.bill?.room?.roomNumber || 'GEN';
+          const billNumbers = (group.billTargets || []).map((bt: any) => bt.bill?.billNumber).filter(Boolean).join(', ');
+
+          await lineOaService.sendTenantLineNotification({
+            dormitoryId: input.dormitoryId,
+            tenantId: group.tenantId,
+            eventType: 'PAYMENT_REJECTED',
+            eventId: `payment-rejected:${input.groupId}`,
+            flexMessage: buildTenantPaymentRejectedFlexMessage(
+              dormitoryName,
+              firstRoomNumber,
+              billNumbers || '-',
+              group.totalAmount ? group.totalAmount.toString() : 0,
+              input.reason
+            ),
+          });
+        }
+      } catch (notifErr: any) {
+        console.warn('[PaymentService] Failed to send group payment rejection notification:', notifErr.message);
+      }
+    }
+
+    return result;
   }
 
   /**
@@ -1413,7 +1500,7 @@ export class PaymentService {
     overrideReason?: string;
     idempotencyKey?: string | null;
   }) {
-    return await idempotencyService.runWithIdempotency({
+    const result: any = await idempotencyService.runWithIdempotency({
       actorUserId: input.userId,
       operation: 'approvePayment',
       idempotencyKey: input.idempotencyKey,
@@ -1633,6 +1720,54 @@ export class PaymentService {
         });
       },
     });
+
+    if (result && result.id) {
+      try {
+        const { lineOaService, buildTenantReceiptFlexMessage } = await import('./line-oa.service.js');
+        const dorm = await this.client.dormitory.findUnique({
+          where: { id: input.dormitoryId },
+          select: { name: true },
+        });
+        const dormitoryName = dorm?.name || 'หอพัก';
+
+        const bill = result.billId
+          ? await this.client.bill.findUnique({
+              where: { id: result.billId },
+              include: { room: true },
+            })
+          : null;
+
+        const receipt = await this.client.receipt.findFirst({
+          where: { paymentId: result.id, dormitoryId: input.dormitoryId },
+        });
+
+        const roomNumber = bill?.room?.roomNumber || 'GEN';
+        const receiptNumber = receipt?.receiptNumber || `RC-${result.id.slice(0, 8)}`;
+        const billNumbers = bill?.billNumber ? [bill.billNumber] : [];
+        const effectiveTenantId = result.tenantId || bill?.tenantId;
+
+        if (effectiveTenantId) {
+          await lineOaService.sendTenantLineNotification({
+            dormitoryId: input.dormitoryId,
+            tenantId: effectiveTenantId,
+            eventType: 'PAYMENT_RECEIPT',
+            eventId: `payment-approved:${result.id}`,
+            flexMessage: buildTenantReceiptFlexMessage(
+              dormitoryName,
+              roomNumber,
+              receiptNumber,
+              billNumbers,
+              result.amount ? result.amount.toString() : 0,
+              result.paymentDate || new Date()
+            ),
+          });
+        }
+      } catch (notifErr: any) {
+        console.warn('[PaymentService] Failed to send single payment receipt notification:', notifErr.message);
+      }
+    }
+
+    return result;
   }
 
   /**
@@ -1645,7 +1780,7 @@ export class PaymentService {
     reason: string;
     idempotencyKey?: string | null;
   }) {
-    return await idempotencyService.runWithIdempotency({
+    const result: any = await idempotencyService.runWithIdempotency({
       actorUserId: input.userId,
       operation: 'rejectPayment',
       idempotencyKey: input.idempotencyKey,
@@ -1723,6 +1858,47 @@ export class PaymentService {
         });
       },
     });
+
+    if (result && result.id) {
+      try {
+        const { lineOaService, buildTenantPaymentRejectedFlexMessage } = await import('./line-oa.service.js');
+        const dorm = await this.client.dormitory.findUnique({
+          where: { id: input.dormitoryId },
+          select: { name: true },
+        });
+        const dormitoryName = dorm?.name || 'หอพัก';
+
+        const bill = result.billId
+          ? await this.client.bill.findUnique({
+              where: { id: result.billId },
+              include: { room: true },
+            })
+          : null;
+
+        const roomNumber = bill?.room?.roomNumber || 'GEN';
+        const effectiveTenantId = result.tenantId || bill?.tenantId;
+
+        if (effectiveTenantId) {
+          await lineOaService.sendTenantLineNotification({
+            dormitoryId: input.dormitoryId,
+            tenantId: effectiveTenantId,
+            eventType: 'PAYMENT_REJECTED',
+            eventId: `payment-rejected:${result.id}`,
+            flexMessage: buildTenantPaymentRejectedFlexMessage(
+              dormitoryName,
+              roomNumber,
+              bill?.billNumber || '-',
+              result.amount ? result.amount.toString() : 0,
+              input.reason
+            ),
+          });
+        }
+      } catch (notifErr: any) {
+        console.warn('[PaymentService] Failed to send payment rejection notification:', notifErr.message);
+      }
+    }
+
+    return result;
   }
 
   /**

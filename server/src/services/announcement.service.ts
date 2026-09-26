@@ -489,7 +489,7 @@ export class AnnouncementService {
       if (ann.targetRooms || ann.targetType === 'rooms') {
         const roomNumbers = (ann.targetRooms || '').split(',').map((r: string) => r.trim()).filter(Boolean);
         if (roomNumbers.length > 0) {
-          const resolved = await this.recipientResolver.resolveRecipients(dormitoryId, [{ targetType: 'all_tenants' }]);
+          const resolved = await this.recipientResolver.resolveRecipients(dormitoryId, [{ targetType: 'all_tenants' } as any]);
           const tenantEntry = resolved.find(r => r.tenantId === tenantId);
           if (tenantEntry && roomNumbers.includes(tenantEntry.roomNumber)) {
             eligibleIds.push(ann.id);
@@ -558,7 +558,7 @@ export class AnnouncementService {
     } else if (ann.targetRooms || ann.targetType === 'rooms') {
       const roomNumbers = (ann.targetRooms || '').split(',').map((r: string) => r.trim()).filter(Boolean);
       if (roomNumbers.length > 0) {
-        const resolved = await this.recipientResolver.resolveRecipients(dormitoryId, [{ targetType: 'all_tenants' }]);
+        const resolved = await this.recipientResolver.resolveRecipients(dormitoryId, [{ targetType: 'all_tenants' } as any]);
         const tenantEntry = resolved.find(r => r.tenantId === tenantId);
         if (!tenantEntry || !roomNumbers.includes(tenantEntry.roomNumber)) {
           return null;

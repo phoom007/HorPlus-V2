@@ -87,7 +87,13 @@ export const TenantWorkspace: React.FC<TenantWorkspaceProps> = ({
       return { tab: 'announcements' as const, sub: null };
     if (seg === 'profile' || querySub === 'profile')
       return { tab: 'profile' as const, sub: null };
-    if (seg === 'payments_tab' || querySub === 'payments_tab')
+    if (
+      seg === 'payments_tab' ||
+      querySub === 'payments_tab' ||
+      seg === 'receipts_tab' ||
+      querySub === 'receipts_tab' ||
+      querySub === 'receipts'
+    )
       return { tab: 'payments_tab' as const, sub: null };
 
     if (seg === 'bills' || seg === 'invoice' || querySub === 'bills' || querySub === 'invoice')

@@ -11,7 +11,10 @@ import crypto from 'crypto';
 import { LinePlatformAdapter, HttpLinePlatformAdapter } from './line-platform-adapter.js';
 import { ILineChannelTokenProvider, LineChannelTokenProvider, FakeLineTokenProvider } from './line-channel-token-provider.js';
 import { decryptText } from '../utils/crypto-encryption.js';
-import { getTenantLiffId } from './line-oa.service.js';
+function getTenantLiffId(): string {
+  const envVal = process.env.LINE_TENANT_LIFF_ID || process.env.VITE_LINE_TENANT_LIFF_ID || process.env.VITE_LINE_LIFF_ID || process.env.LINE_LIFF_ID;
+  return (envVal && envVal.trim()) ? envVal.trim() : '';
+}
 
 export interface DirectEntryTicket {
   ticket: string;
