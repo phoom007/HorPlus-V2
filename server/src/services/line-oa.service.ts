@@ -1427,6 +1427,231 @@ export function buildTenantPaymentRejectedFlexMessage(
   };
 }
 
+export function buildTenantMaintenanceCompletedFlexMessage(
+  dormitoryName: string,
+  roomNumber: string,
+  title: string,
+  category: string,
+  completedDate: string,
+  note?: string,
+  appUrl?: string,
+  tenantLiffId?: string
+) {
+  const origin = (appUrl || getPublicAppOrigin()).trim().replace(/\/+$/, '');
+  const liffId = (tenantLiffId || process.env.LINE_TENANT_LIFF_ID || process.env.VITE_LINE_TENANT_LIFF_ID || process.env.VITE_LINE_LIFF_ID || process.env.LINE_LIFF_ID || '').trim();
+  const targetUrl = liffId
+    ? `https://liff.line.me/${liffId}?sub=repairs`
+    : `${origin}/tenant?sub=repairs`;
+
+  const bodyContents: any[] = [
+    {
+      type: 'box',
+      layout: 'horizontal',
+      contents: [
+        { type: 'text', text: 'ห้องพัก', size: 'sm', color: '#64748B', flex: 2 },
+        { type: 'text', text: `ห้อง ${roomNumber}`, size: 'sm', color: '#1E293B', weight: 'bold', flex: 4, align: 'end' },
+      ],
+    },
+    {
+      type: 'box',
+      layout: 'horizontal',
+      margin: 'md',
+      contents: [
+        { type: 'text', text: 'หัวข้องานซ่อม', size: 'sm', color: '#64748B', flex: 2 },
+        { type: 'text', text: title, size: 'sm', color: '#1E293B', weight: 'bold', flex: 4, align: 'end', wrap: true },
+      ],
+    },
+    {
+      type: 'box',
+      layout: 'horizontal',
+      margin: 'md',
+      contents: [
+        { type: 'text', text: 'หมวดหมู่', size: 'sm', color: '#64748B', flex: 2 },
+        { type: 'text', text: category, size: 'sm', color: '#1E293B', weight: 'bold', flex: 4, align: 'end' },
+      ],
+    },
+    {
+      type: 'box',
+      layout: 'horizontal',
+      margin: 'md',
+      contents: [
+        { type: 'text', text: 'สถานะ', size: 'sm', color: '#64748B', flex: 2 },
+        { type: 'text', text: 'เสร็จสิ้น', size: 'sm', color: '#059669', weight: 'bold', flex: 4, align: 'end' },
+      ],
+    },
+    {
+      type: 'box',
+      layout: 'horizontal',
+      margin: 'md',
+      contents: [
+        { type: 'text', text: 'วันที่เสร็จสิ้น', size: 'sm', color: '#64748B', flex: 2 },
+        { type: 'text', text: completedDate, size: 'sm', color: '#1E293B', weight: 'bold', flex: 4, align: 'end' },
+      ],
+    },
+  ];
+
+  if (note && note.trim()) {
+    bodyContents.push({
+      type: 'box',
+      layout: 'vertical',
+      margin: 'lg',
+      paddingAll: '12px',
+      backgroundColor: '#F0FDF4',
+      cornerRadius: '8px',
+      contents: [
+        { type: 'text', text: 'บันทึกการซ่อม:', size: 'xs', color: '#166534', weight: 'bold' },
+        { type: 'text', text: note.trim(), size: 'sm', color: '#15803D', margin: 'xs', wrap: true },
+      ],
+    });
+  }
+
+  return {
+    type: 'flex',
+    altText: `แจ้งเตือนงานซ่อมเสร็จสิ้น ห้อง ${roomNumber} - ${title}`,
+    contents: {
+      type: 'bubble',
+      header: {
+        type: 'box',
+        layout: 'vertical',
+        backgroundColor: '#059669',
+        paddingAll: '20px',
+        contents: [
+          { type: 'text', text: dormitoryName, color: '#D1FAE5', size: 'xs', weight: 'regular' },
+          { type: 'text', text: 'แจ้งเตือนงานซ่อมเสร็จสิ้น', color: '#FFFFFF', size: 'md', weight: 'bold', margin: 'xs' },
+        ],
+      },
+      body: {
+        type: 'box',
+        layout: 'vertical',
+        paddingAll: '20px',
+        contents: bodyContents,
+      },
+      footer: {
+        type: 'box',
+        layout: 'vertical',
+        contents: [
+          {
+            type: 'button',
+            style: 'primary',
+            color: '#059669',
+            action: {
+              type: 'uri',
+              label: 'เปิดดูรายละเอียดงานแจ้งซ่อม',
+              uri: targetUrl,
+            },
+          },
+        ],
+      },
+    },
+  };
+}
+
+export function buildTenantAnnouncementFlexMessage(
+  dormitoryName: string,
+  title: string,
+  summary: string,
+  priority: string = 'normal',
+  publishedDate: string,
+  appUrl?: string,
+  tenantLiffId?: string
+) {
+  const origin = (appUrl || getPublicAppOrigin()).trim().replace(/\/+$/, '');
+  const liffId = (tenantLiffId || process.env.LINE_TENANT_LIFF_ID || process.env.VITE_LINE_TENANT_LIFF_ID || process.env.VITE_LINE_LIFF_ID || process.env.LINE_LIFF_ID || '').trim();
+  const targetUrl = liffId
+    ? `https://liff.line.me/${liffId}?sub=announcements_tab`
+    : `${origin}/tenant?sub=announcements_tab`;
+
+  const isUrgent = priority === 'urgent' || priority === 'high';
+  const headerBgColor = isUrgent ? '#DC2626' : '#4F46E5';
+  const headerSubColor = isUrgent ? '#FEE2E2' : '#C7D2FE';
+  const priorityText = isUrgent ? 'ด่วนมาก' : (priority === 'low' ? 'ทั่วไป' : 'ปกติ');
+  const priorityColor = isUrgent ? '#DC2626' : '#4F46E5';
+
+  const bodyContents: any[] = [
+    {
+      type: 'box',
+      layout: 'horizontal',
+      contents: [
+        { type: 'text', text: 'หัวข้อประกาศ', size: 'sm', color: '#64748B', flex: 2 },
+        { type: 'text', text: title, size: 'sm', color: '#1E293B', weight: 'bold', flex: 4, align: 'end', wrap: true },
+      ],
+    },
+    {
+      type: 'box',
+      layout: 'horizontal',
+      margin: 'md',
+      contents: [
+        { type: 'text', text: 'ระดับความสำคัญ', size: 'sm', color: '#64748B', flex: 2 },
+        { type: 'text', text: priorityText, size: 'sm', color: priorityColor, weight: 'bold', flex: 4, align: 'end' },
+      ],
+    },
+    {
+      type: 'box',
+      layout: 'horizontal',
+      margin: 'md',
+      contents: [
+        { type: 'text', text: 'วันที่ประกาศ', size: 'sm', color: '#64748B', flex: 2 },
+        { type: 'text', text: publishedDate, size: 'sm', color: '#1E293B', weight: 'bold', flex: 4, align: 'end' },
+      ],
+    },
+  ];
+
+  if (summary && summary.trim()) {
+    bodyContents.push({
+      type: 'box',
+      layout: 'vertical',
+      margin: 'lg',
+      paddingAll: '12px',
+      backgroundColor: isUrgent ? '#FEF2F2' : '#F8FAFC',
+      cornerRadius: '8px',
+      contents: [
+        { type: 'text', text: 'เนื้อหาสรุป:', size: 'xs', color: '#64748B', weight: 'bold' },
+        { type: 'text', text: summary.trim(), size: 'sm', color: '#334155', margin: 'xs', wrap: true },
+      ],
+    });
+  }
+
+  return {
+    type: 'flex',
+    altText: `ประกาศจากหอพัก: ${title}`,
+    contents: {
+      type: 'bubble',
+      header: {
+        type: 'box',
+        layout: 'vertical',
+        backgroundColor: headerBgColor,
+        paddingAll: '20px',
+        contents: [
+          { type: 'text', text: dormitoryName, color: headerSubColor, size: 'xs', weight: 'regular' },
+          { type: 'text', text: '📢 ประกาศจากหอพัก', color: '#FFFFFF', size: 'md', weight: 'bold', margin: 'xs' },
+        ],
+      },
+      body: {
+        type: 'box',
+        layout: 'vertical',
+        paddingAll: '20px',
+        contents: bodyContents,
+      },
+      footer: {
+        type: 'box',
+        layout: 'vertical',
+        contents: [
+          {
+            type: 'button',
+            style: 'primary',
+            color: headerBgColor,
+            action: {
+              type: 'uri',
+              label: 'เปิดดูประกาศ',
+              uri: targetUrl,
+            },
+          },
+        ],
+      },
+    },
+  };
+}
+
 export function buildOwnerGuideCarouselFlexMessage(dormitoryName: string, appOrigin?: string) {
   const origin = (appOrigin || getPublicAppOrigin()).trim().replace(/\/+$/, '');
   const ownerLiffId = getOwnerLiffId();
@@ -3191,6 +3416,11 @@ export class LineOaService {
         }
 
         if (config && eventType === 'PAYMENT_RECEIPT' && config.notifyPaymentReceived === false) {
+          return { sent: false, reason: 'PREFERENCE_DISABLED' };
+        }
+
+        if (config && eventType === 'MAINTENANCE' && config.notifyRepairCompleted === false) {
+          console.info(`[LineOaService] Push skipped: notifyRepairCompleted disabled for dormitory ${dormitoryId}`);
           return { sent: false, reason: 'PREFERENCE_DISABLED' };
         }
       }

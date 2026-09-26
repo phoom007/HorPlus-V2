@@ -13,6 +13,7 @@ import { IRoomRepository, PrismaRoomRepository, InMemoryRoomRepository } from '.
 import { ITenantRepository, PrismaTenantRepository, InMemoryTenantRepository } from '../db/repositories/tenant.repository.js';
 import { NotificationService } from './notification.service.js';
 import { getPrismaClient } from '../db/prisma.js';
+import { lineOaService, buildTenantMaintenanceCompletedFlexMessage } from './line-oa.service.js';
 
 export interface CreateMaintenanceInput {
   dormitoryId: string;
@@ -426,7 +427,37 @@ export class MaintenanceService {
       });
     }
 
+    // Send LINE Push Notification if status is resolved or completed (PO Decision A1)
+    if (req.tenantId && (input.status === 'resolved' || (input.status as any) === 'completed')) {
+      try {
+        const room = req.roomId ? await this.roomRepo.findById(req.roomId, input.dormitoryId) : null;
+        const roomNumber = room?.roomNumber || (room as any)?.number || (req as any).roomNumber || '-';
+        const prisma = getPrismaClient();
+        const dorm = await prisma.dormitory.findUnique({
+          where: { id: input.dormitoryId },
+          select: { name: true },
+        }).catch(() => null);
+        const dormitoryName = dorm?.name || 'หอพัก';
+        const flexMessage = buildTenantMaintenanceCompletedFlexMessage(
+          dormitoryName,
+          roomNumber,
+          req.title,
+          req.category || 'ทั่วไป',
+          now.toLocaleDateString('th-TH', { year: 'numeric', month: 'short', day: 'numeric' }),
+          input.note
+        );
 
+        await lineOaService.sendTenantLineNotification({
+          dormitoryId: input.dormitoryId,
+          tenantId: req.tenantId,
+          eventType: 'MAINTENANCE',
+          eventId: `maintenance-completed:${req.id}:${input.status}`,
+          flexMessage,
+        });
+      } catch (err: any) {
+        console.warn('[MaintenanceService] LINE notification error:', err?.message || err);
+      }
+    }
 
     return updated!;
   }

@@ -553,6 +553,8 @@ export interface Announcement {
   isUrgent?: boolean;
   author?: string; // 'นิติบุคคล' | 'ช่าง' etc.
   customTarget?: string; // 'อาคาร ก, ข' | 'อาคาร ค' | 'ทุกอาคาร'
+  sendLinePush?: boolean;
+  warning?: string;
   isRead?: boolean;
   readAt?: string | null;
 }

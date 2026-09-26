@@ -31,6 +31,7 @@ export interface AnnouncementEntity {
   createdByUserId?: string | null;
   updatedByUserId?: string | null;
   version: number;
+  warning?: string | null;
   createdAt: Date;
   updatedAt: Date;
   deletedAt?: Date | null;

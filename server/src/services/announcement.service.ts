@@ -19,6 +19,7 @@ import { parseRoomIdentifier } from '../utils/normalization.js';
 import { NotificationService } from './notification.service.js';
 import { getPrismaClient } from '../db/prisma.js';
 import { LinePushUsageService } from './line-push-usage.service.js';
+import { lineOaService, buildTenantAnnouncementFlexMessage } from './line-oa.service.js';
 
 export interface CreateAnnouncementInput {
   dormitoryId: string;
@@ -342,14 +343,6 @@ export class AnnouncementService {
     const audiences = await this.announcementRepo.getAudiences(dormitoryId, announcementId);
     const resolved = await this.recipientResolver.resolveRecipients(dormitoryId, audiences);
 
-    // Consume LINE message quota if LINE push is requested
-    if (resolved.length > 0 && input.sendLinePush) {
-      await this.quotaService.consumeQuota(dormitoryId, resolved.length, {
-        notificationService: this.notificationService,
-        reason: `Broadcast Announcement: ${announcement.title}`,
-      });
-    }
-
     const now = new Date();
     const updated = await this.announcementRepo.updateAnnouncement(dormitoryId, announcementId, {
       status: 'published',
@@ -357,12 +350,56 @@ export class AnnouncementService {
       updatedByUserId: publishedByUserId
     });
 
-    // Create Recipient Records
-    const recipientsData = resolved.map(r => ({
-      tenantId: r.tenantId,
-      deliveryStatus: (input.sendLinePush ? 'line_sent' : 'in_app_only') as AnnouncementDeliveryStatus
-    }));
-    await this.announcementRepo.setRecipients(dormitoryId, announcementId, recipientsData.map(r => ({ ...r, dormitoryId, announcementId })));
+    let quotaWarning: string | undefined = undefined;
+    let flexMessage: any = null;
+
+    if (input.sendLinePush && resolved.length > 0) {
+      const prisma = getPrismaClient();
+      const dorm = await prisma.dormitory.findUnique({
+        where: { id: dormitoryId },
+        select: { name: true },
+      }).catch(() => null);
+      const dormitoryName = dorm?.name || 'หอพัก';
+      flexMessage = buildTenantAnnouncementFlexMessage(
+        dormitoryName,
+        announcement.title,
+        announcement.summary || announcement.content.slice(0, 150),
+        announcement.priority,
+        now.toLocaleDateString('th-TH', { year: 'numeric', month: 'short', day: 'numeric' })
+      );
+    }
+
+    // Process recipient records and individual LINE notifications
+    const recipientsData: { tenantId: string; deliveryStatus: AnnouncementDeliveryStatus }[] = [];
+    for (const r of resolved) {
+      let deliveryStatus: AnnouncementDeliveryStatus = 'in_app_only';
+      if (input.sendLinePush && flexMessage) {
+        try {
+          const sendRes = await lineOaService.sendTenantLineNotification({
+            dormitoryId,
+            tenantId: r.tenantId,
+            eventType: 'ANNOUNCEMENT',
+            eventId: `announcement-published:${announcement.id}:${r.tenantId}`,
+            flexMessage,
+          });
+          if (sendRes.sent) {
+            deliveryStatus = 'line_sent';
+          } else if (sendRes.reason === 'QUOTA_EXHAUSTED' || sendRes.warningMessage) {
+            quotaWarning = sendRes.warningMessage || 'จำนวนการส่งข้อความเดือนนี้หมดแล้ว';
+          }
+        } catch (err: any) {
+          console.warn(`[AnnouncementService] LINE notification error for tenant ${r.tenantId}:`, err?.message || err);
+        }
+      }
+      recipientsData.push({
+        tenantId: r.tenantId,
+        deliveryStatus,
+      });
+    }
+
+    if (recipientsData.length > 0) {
+      await this.announcementRepo.setRecipients(dormitoryId, announcementId, recipientsData.map(r => ({ ...r, dormitoryId, announcementId })));
+    }
 
     // Create In-App Notifications for ALL target tenants
     for (const r of resolved) {
@@ -378,7 +415,11 @@ export class AnnouncementService {
       });
     }
 
-    return updated!;
+    const result = { ...updated! };
+    if (quotaWarning) {
+      result.warning = quotaWarning;
+    }
+    return result;
   }
 
   public async scheduleAnnouncement(input: ScheduleAnnouncementInput): Promise<AnnouncementEntity> {

@@ -144,6 +144,7 @@ export const OwnerAnnouncements: React.FC<OwnerAnnouncementsProps> = ({
   const [currentPage, setCurrentPage] = useState(1);
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
+  const [sendLinePush, setSendLinePush] = useState(true);
 
   // Custom categories / types
   const [annType, setAnnType] = useState<Announcement['type']>('general');
@@ -151,6 +152,19 @@ export const OwnerAnnouncements: React.FC<OwnerAnnouncementsProps> = ({
   // Target Selection - generalized to any string (all, bld-a, bld-b, custom)
   const [targetSelect, setTargetSelect] = useState<string>('all');
   const [customTargetText, setCustomTargetText] = useState('');
+
+  const targetEstimatedCount = useMemo(() => {
+    if (targetSelect === 'all') {
+      const occupied = (rooms || []).filter(r => r.status === 'occupied').length;
+      return occupied > 0 ? occupied : (rooms || []).length || 1;
+    }
+    if (targetSelect === 'custom') {
+      const count = customTargetText.split(',').map(t => t.trim()).filter(Boolean).length;
+      return count > 0 ? count : 1;
+    }
+    const bldOccupied = (rooms || []).filter(r => r.buildingId === targetSelect && r.status === 'occupied').length;
+    return bldOccupied > 0 ? bldOccupied : 1;
+  }, [targetSelect, customTargetText, rooms]);
 
   // Image Upload Selection
   const [attachmentUrl, setAttachmentUrl] = useState('');
@@ -450,6 +464,7 @@ export const OwnerAnnouncements: React.FC<OwnerAnnouncementsProps> = ({
 
     setAttachmentUrl(ann.attachmentUrl || '');
     setLinkUrl(ann.linkUrl || '');
+    setSendLinePush(false);
     setIsAddOpen(true);
   };
 
@@ -465,6 +480,7 @@ export const OwnerAnnouncements: React.FC<OwnerAnnouncementsProps> = ({
     setLinkUrl('');
     setActiveTemplateId(null);
     setErrorText(null);
+    setSendLinePush(true);
     setIsAddOpen(true);
   };
 
@@ -481,6 +497,7 @@ export const OwnerAnnouncements: React.FC<OwnerAnnouncementsProps> = ({
     setLinkUrl('');
     setActiveTemplateId(null);
     setErrorText(null);
+    setSendLinePush(true);
   };
 
   const handleSaveAnnouncement = async (e: React.FormEvent) => {
@@ -566,6 +583,7 @@ export const OwnerAnnouncements: React.FC<OwnerAnnouncementsProps> = ({
           customTarget: finalTarget,
           attachmentUrl: attachmentUrl.trim() || undefined,
           linkUrl: linkUrl.trim() || undefined,
+          sendLinePush,
         }, undefined, dormitoryId);
         if (res.success && res.data) {
           createdAnn = res.data;
@@ -603,14 +621,6 @@ export const OwnerAnnouncements: React.FC<OwnerAnnouncementsProps> = ({
       const updated = [newAnnouncement, ...unpinnedAnnouncements];
       onSaveAnnouncements(updated);
 
-      // Consume 1 LINE Push Quota for broadcasting announcement
-      try {
-        const { consumeLineQuota } = require('../../utils/lineQuota');
-        consumeLineQuota('2026-07', 1);
-      } catch (e) {
-        // ignore
-      }
-
       onAddLog(
         'สร้างประกาศข่าวสารใหม่',
         `ประกาศเรื่อง "${title}" ส่งไปยังเป้าหมาย ${finalTarget} โดย ${finalAuthor}`,
@@ -618,7 +628,11 @@ export const OwnerAnnouncements: React.FC<OwnerAnnouncementsProps> = ({
         newId
       );
 
-      showToast('เผยแพร่ประกาศเรียบร้อยแล้ว', 'success');
+      if ((createdAnn as any)?.warning) {
+        showToast(`เผยแพร่ประกาศเรียบร้อยแล้ว (${(createdAnn as any).warning})`, 'info');
+      } else {
+        showToast('เผยแพร่ประกาศเรียบร้อยแล้ว', 'success');
+      }
 
       // Reset page to 1 so they see the new pinned item at the top
       setCurrentPage(1);
@@ -1138,6 +1152,30 @@ export const OwnerAnnouncements: React.FC<OwnerAnnouncementsProps> = ({
                     />
                   </div>
                 </div>
+
+                {!editingAnnouncement && (
+                  <div className="p-3.5 bg-slate-50 border border-slate-200/90 rounded-xl space-y-2">
+                    <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        data-testid="announcement-send-line-push-checkbox"
+                        checked={sendLinePush}
+                        onChange={(e) => setSendLinePush(e.target.checked)}
+                        className="w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500 cursor-pointer"
+                      />
+                      <span className="font-extrabold text-xs sm:text-sm text-slate-800">
+                        ส่งข้อความไปยังไลน์
+                      </span>
+                    </label>
+                    <div className="pl-6.5 text-[11px] text-slate-500 flex items-center justify-between">
+                      <span>
+                        {sendLinePush
+                          ? `จะใช้โควตา LINE ${targetEstimatedCount} ข้อความ (ส่งถึงผู้เช่าที่ผูก LINE)`
+                          : 'ไม่ส่งข้อความเตือนทาง LINE (ประกาศและระบบแจ้งเตือนจะยังแสดงในเว็บตามปกติ)'}
+                      </span>
+                    </div>
+                  </div>
+                )}
 
                 {errorText && (
                   <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-xl flex items-center gap-2">
